@@ -19,10 +19,15 @@ from saddle.journal import (
     MAX_THINKING_CHARS,
     GateOutput,
     ProofRecord,
+    SpanRecord,
+    SpanRecorder,
     append_record,
+    append_span,
     build_from_gate,
     build_record,
+    build_span,
     read_records,
+    read_spans,
     rebuild_proven,
     scrub_thinking,
     verify_journal,
@@ -41,6 +46,7 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         thinking="",
     )
     payload = {
+        "record_type": "proof",
         "evidence_id": "e1",
         "node_id": "n1",
         "diff_hash": hashlib.sha256(b"diff --git a/n.py b/n.py\n").hexdigest(),
@@ -87,6 +93,7 @@ def test_build_record_seals_thinking_into_hash() -> None:
     )
     assert record.thinking == "extract the helper"
     payload = {
+        "record_type": "proof",
         "evidence_id": "e1",
         "node_id": "n1",
         "diff_hash": hashlib.sha256(b"diff\n").hexdigest(),
@@ -327,3 +334,87 @@ def test_kill_minus_9_mid_run_rebuilds_state(tmp_path: Path) -> None:
     proven = rebuild_proven(path)
     assert len(proven) > 0
     assert all(key.startswith("n") for key in proven)
+
+
+def _span(node_id: str = "n1") -> SpanRecord:
+    return build_span(
+        node_id=node_id,
+        argv=["pytest", "test_n.py"],
+        duration_ms=12,
+        exit_code=0,
+        detail="",
+    )
+
+
+def test_build_span_seals_name_and_args_hash() -> None:
+    span = build_span(
+        node_id="n1",
+        argv=["/usr/bin/pytest", "test_n.py"],
+        duration_ms=12,
+        exit_code=0,
+        detail="",
+    )
+    assert span.name == "pytest"
+    assert span.record_type == "span"
+    expected_args = json.dumps(["/usr/bin/pytest", "test_n.py"])
+    assert span.args_hash == hashlib.sha256(expected_args.encode()).hexdigest()
+    assert span.argv == ["/usr/bin/pytest", "test_n.py"]
+
+
+def test_build_span_empty_argv_names_unknown() -> None:
+    span = build_span(node_id="n1", argv=[], duration_ms=0, exit_code=1, detail="")
+    assert span.name == "?"
+
+
+def test_build_span_scrubs_secrets_and_caps_detail() -> None:
+    secret = "sk-" + "f" * 12
+    span = build_span(
+        node_id="n1",
+        argv=["run", secret],
+        duration_ms=1,
+        exit_code=0,
+        detail="e" * 600,
+    )
+    assert span.argv == ["run", "***"]
+    assert len(span.detail) == 500
+
+
+def test_spans_round_trip_beside_proofs(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    span = _span()
+    proof = _record()
+    append_span(path, span)
+    append_record(path, proof)
+    assert verify_journal(path) == []
+    assert read_spans(path) == [span]
+    assert read_records(path) == [proof]
+    lines = path.read_text().splitlines()
+    assert lines[0] == json.dumps(span.model_dump(), sort_keys=True)
+
+
+def test_verify_catches_tampered_span(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    append_span(path, _span())
+    text = path.read_text()
+    path.write_text(text.replace('"exit_code": 0', '"exit_code": 1'))
+    (issue,) = verify_journal(path)
+    assert issue.code == "bad-hash"
+
+
+def test_verify_rejects_malformed_span_line(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    path.write_text('{"record_type": "span", "node_id": "n1"}\n')
+    (issue,) = verify_journal(path)
+    assert issue.code == "invalid-record"
+    assert issue.message == "line is not a span record"
+
+
+def test_recorder_appends_node_linked_span(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=path, node_id="n7")
+    recorder.record(argv=["pytest", "test_n.py"], duration_ms=3, exit_code=0, detail="")
+    (span,) = read_spans(path)
+    assert span.node_id == "n7"
+    assert span.name == "pytest"
+    assert span.duration_ms == 3
+    assert span.exit_code == 0

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from saddle.dag import Node
 from saddle.evidence import run_argv
+from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import read_sources, run_node_gate
 
 
@@ -81,6 +82,20 @@ def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:
     assert result.passed is True
     assert all(check.passed for check in result.checks)
     assert (tmp_path / ".coverage.tier1").is_file()
+
+
+def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
+    test_body = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body)
+    journal = tmp_path / "proofs.jsonl"
+    result = run_node_gate(_node(), tmp_path, recorder=SpanRecorder(path=journal, node_id="n1"))
+    assert result.passed is True
+    spans = read_spans(journal)
+    assert [span.name for span in spans] == ["git", "coverage", "git", "pytest", "ruff", "ruff"]
+    assert all(span.node_id == "n1" for span in spans)
+    assert [span.exit_code for span in spans] == [0, 0, 0, 4, 0, 0]
 
 
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:

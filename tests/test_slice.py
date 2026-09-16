@@ -13,7 +13,7 @@ import saddle.slice as slice_module
 from saddle.dag import Dag, Node
 from saddle.evidence import run_argv
 from saddle.gates import GateCheck, Tier1Result
-from saddle.journal import ProofRecord, append_record, read_records
+from saddle.journal import ProofRecord, append_record, read_records, read_spans
 from saddle.slice import NodeGateFailedError, _apply_diff, _utcnow, run_slice
 from saddle.vllm import DiffProposal
 
@@ -162,6 +162,17 @@ def test_run_slice_pass_end_to_end(tmp_path: Path) -> None:
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
+    spans = read_spans(journal)
+    assert [span.name for span in spans] == [
+        "git",
+        "git",
+        "coverage",
+        "git",
+        "pytest",
+        "ruff",
+        "ruff",
+    ]
+    assert all(span.node_id == "n1" for span in spans)
 
 
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:

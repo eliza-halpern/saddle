@@ -20,6 +20,7 @@ from saddle.evidence import run_stdin
 from saddle.gates import GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
+    SpanRecorder,
     append_record,
     build_from_gate,
     read_records,
@@ -53,9 +54,11 @@ def _utcnow() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _apply_diff(workdir: Path, diff: str) -> None:
+def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> None:
     """Apply a proposed diff from stdin and stage it; gates diff tracked content."""
-    exit_code = run_stdin(["git", "apply", "--index", "--recount", "-"], workdir, diff)
+    exit_code = run_stdin(
+        ["git", "apply", "--index", "--recount", "-"], workdir, diff, recorder=recorder
+    )
     if exit_code != 0:
         msg = f"worker diff did not apply cleanly in {str(workdir)!r}"
         raise RuntimeError(msg)
@@ -74,8 +77,9 @@ async def _run_node(
     proof map stays consistent without locks.
     """
     proposal = propose(node)
-    _apply_diff(workdir, proposal.diff)
-    result = run_node_gate(node, workdir)
+    recorder = SpanRecorder(path=journal_path, node_id=node.id)
+    _apply_diff(workdir, proposal.diff, recorder=recorder)
+    result = run_node_gate(node, workdir, recorder=recorder)
     if not result.passed:
         raise NodeGateFailedError(result)
     parents = [proofs[dep] for dep in node.dependencies]

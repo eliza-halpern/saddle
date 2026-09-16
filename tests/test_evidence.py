@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import saddle.evidence as evidence_module
 from saddle.evidence import (
     changed_lines,
     covered_lines,
@@ -19,6 +20,7 @@ from saddle.evidence import (
     statement_lines,
     under_coverage,
 )
+from saddle.journal import SpanRecorder, read_spans
 
 
 def _git_repo(root: Path) -> None:
@@ -52,6 +54,49 @@ def test_run_stdin_feeds_text(tmp_path: Path, capfd: pytest.CaptureFixture[str])
 def test_run_shell_splits_command_string(tmp_path: Path) -> None:
     assert run_shell(f"{sys.executable} -c pass", tmp_path) == 0
     assert run_shell(f"{sys.executable} -c 'raise SystemExit(2)'", tmp_path) == 2
+
+
+def test_runners_record_spans_when_given_recorder(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    assert run_argv([sys.executable, "-c", "pass"], tmp_path, recorder=recorder) == 0
+    (tmp_path / "f").write_text("x\n")
+    assert run_stdin(["sh", "-c", "cat f"], tmp_path, "hi\n", recorder=recorder) == 0
+    assert run_shell(f"{sys.executable} -c pass", tmp_path, recorder=recorder) == 0
+    spans = read_spans(journal)
+    assert [span.name for span in spans] == ["python", "sh", "python"]
+    assert all(span.node_id == "n1" for span in spans)
+    assert all(span.exit_code == 0 for span in spans)
+    assert all(span.duration_ms >= 0 for span in spans)
+
+
+def test_runners_write_no_spans_without_recorder(tmp_path: Path) -> None:
+    assert run_argv([sys.executable, "-c", "pass"], tmp_path) == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_record_duration_uses_perf_counter_delta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    ticks = iter([100.0, 110.5])
+    monkeypatch.setattr(evidence_module, "perf_counter", lambda: next(ticks))
+    run_argv([sys.executable, "-c", "pass"], tmp_path, recorder=recorder)
+    (span,) = read_spans(journal)
+    assert span.duration_ms == 10500
+
+
+def test_record_replaces_undecodable_stderr(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    run_argv(
+        [sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'\\xff\\xfe')"],
+        tmp_path,
+        recorder=recorder,
+    )
+    (span,) = read_spans(journal)
+    assert span.detail == "��"
 
 
 def test_changed_lines_modified_file_hunk_range() -> None:
@@ -104,6 +149,23 @@ def test_git_diff_unknown_ref_raises(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     with pytest.raises(RuntimeError, match="no-such-ref"):
         git_diff(tmp_path, "no-such-ref")
+
+
+def test_git_collectors_record_spans_including_failures(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    (tmp_path / "n.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add n"], tmp_path) == 0
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    git_diff(tmp_path, "HEAD", recorder=recorder)
+    materialize_baseline(tmp_path, "HEAD", tmp_path / "base", recorder=recorder)
+    with pytest.raises(RuntimeError, match="no-such-ref"):
+        git_diff(tmp_path, "no-such-ref", recorder=recorder)
+    spans = read_spans(journal)
+    assert [span.name for span in spans] == ["git", "git", "git"]
+    assert [span.exit_code for span in spans] == [0, 0, 128]
+    assert all(span.node_id == "n1" for span in spans)
 
 
 def test_materialize_baseline_extracts_pre_change_tree(tmp_path: Path) -> None:

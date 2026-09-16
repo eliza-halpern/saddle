@@ -15,27 +15,55 @@ import tarfile
 from collections.abc import Collection, Sequence
 from io import BytesIO
 from pathlib import Path
+from time import perf_counter
 
 import coverage
+
+from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
-def run_argv(argv: Sequence[str], cwd: Path) -> int:
+def _record(
+    recorder: SpanRecorder | None,
+    argv: Sequence[str],
+    start: float,
+    proc: subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes],
+) -> None:
+    """Journal one completed invocation; no recorder means no span."""
+    if recorder is None:
+        return
+    err = proc.stderr
+    detail = err.decode(errors="replace") if isinstance(err, bytes) else err
+    recorder.record(
+        argv=list(argv),
+        duration_ms=int((perf_counter() - start) * 1000),
+        exit_code=proc.returncode,
+        detail=detail,
+    )
+
+
+def run_argv(argv: Sequence[str], cwd: Path, *, recorder: SpanRecorder | None = None) -> int:
     """Run `argv` in `cwd`; return its exit code, capturing output."""
+    start = perf_counter()
     proc = subprocess.run(argv, cwd=cwd, capture_output=True)
+    _record(recorder, argv, start, proc)
     return proc.returncode
 
 
-def run_stdin(argv: Sequence[str], cwd: Path, text: str) -> int:
+def run_stdin(
+    argv: Sequence[str], cwd: Path, text: str, *, recorder: SpanRecorder | None = None
+) -> int:
     """Run `argv` with `text` on stdin; return its exit code."""
+    start = perf_counter()
     proc = subprocess.run(argv, input=text, cwd=cwd, capture_output=True, text=True)
+    _record(recorder, argv, start, proc)
     return proc.returncode
 
 
-def run_shell(command: str, cwd: Path) -> int:
+def run_shell(command: str, cwd: Path, *, recorder: SpanRecorder | None = None) -> int:
     """Run a `test_command` string via shlex splitting (never a shell)."""
-    return run_argv(shlex.split(command), cwd)
+    return run_argv(shlex.split(command), cwd, recorder=recorder)
 
 
 def changed_lines(diff: str) -> set[tuple[str, int]]:
@@ -53,25 +81,33 @@ def changed_lines(diff: str) -> set[tuple[str, int]]:
     return changed
 
 
-def git_diff(cwd: Path, ref: str) -> str:
+def git_diff(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> str:
     """Zero-context diff of the worktree at `cwd` against git `ref`."""
+    argv = ["git", "-C", str(cwd), "diff", "-U0", ref, "--", "."]
+    start = perf_counter()
     proc = subprocess.run(
-        ["git", "-C", str(cwd), "diff", "-U0", ref, "--", "."],
+        argv,
         capture_output=True,
         text=True,
     )
+    _record(recorder, argv, start, proc)
     if proc.returncode != 0:
         msg = f"git diff against {ref!r} failed: {proc.stderr.strip()}"
         raise RuntimeError(msg)
     return proc.stdout
 
 
-def materialize_baseline(cwd: Path, ref: str, dest: Path) -> None:
+def materialize_baseline(
+    cwd: Path, ref: str, dest: Path, *, recorder: SpanRecorder | None = None
+) -> None:
     """Extract tracked files at git `ref` into `dest` for the red-phase run."""
+    argv = ["git", "-C", str(cwd), "archive", ref]
+    start = perf_counter()
     proc = subprocess.run(
-        ["git", "-C", str(cwd), "archive", ref],
+        argv,
         capture_output=True,
     )
+    _record(recorder, argv, start, proc)
     if proc.returncode != 0:
         msg = f"git archive of {ref!r} failed: {proc.stderr.decode().strip()}"
         raise RuntimeError(msg)

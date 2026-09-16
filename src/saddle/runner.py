@@ -24,6 +24,7 @@ from saddle.evidence import (
     under_coverage,
 )
 from saddle.gates import Tier1Inputs, Tier1Result, run_tier1
+from saddle.journal import SpanRecorder
 
 
 def read_sources(root: Path, pattern: str) -> dict[str, str]:
@@ -35,7 +36,13 @@ def read_sources(root: Path, pattern: str) -> dict[str, str]:
     }
 
 
-def run_node_gate(node: Node, workdir: Path, *, baseline: str = "HEAD") -> Tier1Result:
+def run_node_gate(
+    node: Node,
+    workdir: Path,
+    *,
+    baseline: str = "HEAD",
+    recorder: SpanRecorder | None = None,
+) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
     The current-tree suite runs once under coverage and its exit code
@@ -52,16 +59,19 @@ def run_node_gate(node: Node, workdir: Path, *, baseline: str = "HEAD") -> Tier1
         for number in statement_lines(source)
     }
     changed = {
-        (str(workdir / path), line) for path, line in changed_lines(git_diff(workdir, baseline))
+        (str(workdir / path), line)
+        for path, line in changed_lines(git_diff(workdir, baseline, recorder=recorder))
     } & statements
     changed_files = sorted({path for path, _ in changed})
     data_file = str(workdir / ".coverage.tier1")
-    current_exit = run_shell(under_coverage(gate.test_command, data_file), workdir)
+    current_exit = run_shell(
+        under_coverage(gate.test_command, data_file), workdir, recorder=recorder
+    )
     covered = covered_lines(data_file, changed_files)
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp)
-        materialize_baseline(workdir, baseline, dest)
-        baseline_exit = run_shell(gate.test_command, dest)
+        materialize_baseline(workdir, baseline, dest, recorder=recorder)
+        baseline_exit = run_shell(gate.test_command, dest, recorder=recorder)
     test_sources = read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")
     inputs = Tier1Inputs(
         sources=sources,
@@ -70,7 +80,7 @@ def run_node_gate(node: Node, workdir: Path, *, baseline: str = "HEAD") -> Tier1
             for path in changed_files
             if path.endswith(".py")
         ],
-        ruff_runner=lambda argv: run_argv(argv, workdir),
+        ruff_runner=lambda argv: run_argv(argv, workdir, recorder=recorder),
         test_runner=lambda _command: current_exit,
         changed=changed,
         covered=covered,

@@ -13,9 +13,11 @@ import hashlib
 import json
 import os
 import re
+import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -34,6 +36,7 @@ class GateOutput(BaseModel):
 class ProofRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    record_type: Literal["proof"] = "proof"
     evidence_id: str
     node_id: str
     diff_hash: str
@@ -41,6 +44,21 @@ class ProofRecord(BaseModel):
     gate_outputs: list[GateOutput]
     requirement_ids: list[str]
     thinking: str
+    record_hash: str
+
+
+class SpanRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_type: Literal["span"] = "span"
+    span_id: str
+    node_id: str
+    name: str
+    argv: list[str]
+    args_hash: str
+    duration_ms: int
+    exit_code: int
+    detail: str
     record_hash: str
 
 
@@ -95,6 +113,7 @@ def build_record(
 ) -> ProofRecord:
     """Seal a record: copy caller data, hash the diff, then the payload."""
     payload: dict[str, Any] = {
+        "record_type": "proof",
         "evidence_id": evidence_id,
         "node_id": node_id,
         "diff_hash": hashlib.sha256(diff.encode()).hexdigest(),
@@ -106,20 +125,103 @@ def build_record(
     return ProofRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
 
 
-def append_record(path: Path, record: ProofRecord) -> None:
-    """Append one record line; fsync before returning so kill -9 keeps it."""
+MAX_SPAN_DETAIL_CHARS: Final = 500
+
+
+def _tool_name(argv: list[str]) -> str:
+    """Basename of the invoked tool, or "?" when argv is empty."""
+    if not argv:
+        return "?"
+    first = argv[0]
+    return first[first.rfind("/") + 1 :]
+
+
+def build_span(
+    *,
+    node_id: str,
+    argv: Sequence[str],
+    duration_ms: int,
+    exit_code: int,
+    detail: str,
+) -> SpanRecord:
+    """Seal one tool invocation: scrubbed argv, hashed args, capped detail."""
+    scrubbed = [scrub_thinking(part) for part in argv]
+    encoded_args = json.dumps(scrubbed).encode()
+    payload: dict[str, Any] = {
+        "record_type": "span",
+        "span_id": uuid.uuid4().hex,
+        "node_id": node_id,
+        "name": _tool_name(scrubbed),
+        "argv": scrubbed,
+        "args_hash": hashlib.sha256(encoded_args).hexdigest(),
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "detail": scrub_thinking(detail)[:MAX_SPAN_DETAIL_CHARS],
+    }
+    return SpanRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
+
+
+def _append_line(path: Path, line: str) -> None:
+    """Append one line; fsync before returning so kill -9 keeps it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record.model_dump(), sort_keys=True) + "\n"
     with path.open("ab") as handle:
-        handle.write(line.encode())
+        handle.write((line + "\n").encode())
         handle.flush()
         os.fsync(handle.fileno())
 
 
-def _load_journal(path: Path) -> tuple[list[ProofRecord], list[JournalIssue]]:
+def append_record(path: Path, record: ProofRecord) -> None:
+    """Append one proof record line."""
+    _append_line(path, json.dumps(record.model_dump(), sort_keys=True))
+
+
+def append_span(path: Path, span: SpanRecord) -> None:
+    """Append one tool-span line."""
+    _append_line(path, json.dumps(span.model_dump(), sort_keys=True))
+
+
+@dataclass(frozen=True)
+class SpanRecorder:
+    """Journal sink for one node's tool spans."""
+
+    path: Path
+    node_id: str
+
+    def record(self, *, argv: Sequence[str], duration_ms: int, exit_code: int, detail: str) -> None:
+        """Seal and append one completed tool invocation."""
+        append_span(
+            self.path,
+            build_span(
+                node_id=self.node_id,
+                argv=list(argv),
+                duration_ms=duration_ms,
+                exit_code=exit_code,
+                detail=detail,
+            ),
+        )
+
+
+def _parse_line(raw: object) -> ProofRecord | SpanRecord:
+    """Validate one decoded line as the record kind it claims to be."""
+    if isinstance(raw, dict) and raw.get("record_type") == "span":
+        try:
+            return SpanRecord.model_validate(raw)
+        except ValidationError as exc:
+            msg = "line is not a span record"
+            raise ValueError(msg) from exc
+    try:
+        return ProofRecord.model_validate(raw)
+    except ValidationError as exc:
+        msg = "line is not a proof record"
+        raise ValueError(msg) from exc
+
+
+def _load_journal(
+    path: Path,
+) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalIssue]]:
     """Read and verify: recompute every hash, check every parent link."""
     if not path.exists():
-        return ([], [])
+        return ([], [], [])
     text = path.read_bytes().decode()
     lines = text.splitlines()
     issues: list[JournalIssue] = []
@@ -131,6 +233,7 @@ def _load_journal(path: Path) -> tuple[list[ProofRecord], list[JournalIssue]]:
         )
         lines = lines[:-1]
     records: list[ProofRecord] = []
+    spans: list[SpanRecord] = []
     seen: set[str] = set()
     for number, line in enumerate(lines, start=1):
         try:
@@ -141,52 +244,57 @@ def _load_journal(path: Path) -> tuple[list[ProofRecord], list[JournalIssue]]:
             )
             continue
         try:
-            record = ProofRecord.model_validate(raw)
-        except ValidationError:
-            issues.append(
-                JournalIssue(
-                    code="invalid-record", line=number, message="line is not a proof record"
-                )
-            )
+            entry = _parse_line(raw)
+        except ValueError as exc:
+            issues.append(JournalIssue(code="invalid-record", line=number, message=str(exc)))
             continue
-        payload = record.model_dump(exclude={"record_hash"})
-        if _canonical_hash(payload) != record.record_hash:
+        payload = entry.model_dump(exclude={"record_hash"})
+        if _canonical_hash(payload) != entry.record_hash:
             issues.append(
                 JournalIssue(
                     code="bad-hash",
                     line=number,
-                    message=f"record hash mismatch for node {record.node_id!r}",
+                    message=f"record hash mismatch for node {entry.node_id!r}",
                 )
             )
             continue
-        if any(parent not in seen for parent in record.parent_proofs):
+        if isinstance(entry, SpanRecord):
+            spans.append(entry)
+            continue
+        if any(parent not in seen for parent in entry.parent_proofs):
             issues.append(
                 JournalIssue(
                     code="unknown-parent",
                     line=number,
-                    message=f"node {record.node_id!r} cites unknown parent proof",
+                    message=f"node {entry.node_id!r} cites unknown parent proof",
                 )
             )
             continue
-        records.append(record)
-        seen.add(record.record_hash)
-    return (records, issues)
+        records.append(entry)
+        seen.add(entry.record_hash)
+    return (records, spans, issues)
 
 
 def verify_journal(path: Path) -> list[JournalIssue]:
     """Verify the journal by recomputation; empty list means valid."""
-    _, issues = _load_journal(path)
+    _, _, issues = _load_journal(path)
     return issues
 
 
-def _verified_records(path: Path) -> list[ProofRecord]:
-    """Verified sealed records; refuses hard corruption (torn tail aside)."""
-    records, issues = _load_journal(path)
+def _verified_contents(path: Path) -> tuple[list[ProofRecord], list[SpanRecord]]:
+    """Verified sealed entries; refuses hard corruption (torn tail aside)."""
+    records, spans, issues = _load_journal(path)
     hard = [issue for issue in issues if issue.code != "torn-tail"]
     if hard:
         codes = ", ".join(f"{issue.code}@line {issue.line}" for issue in hard)
         msg = f"journal {str(path)!r} failed verification: {codes}"
         raise ValueError(msg)
+    return (records, spans)
+
+
+def _verified_records(path: Path) -> list[ProofRecord]:
+    """Verified sealed records; refuses hard corruption (torn tail aside)."""
+    records, _ = _verified_contents(path)
     return records
 
 
@@ -202,6 +310,12 @@ def rebuild_proven(path: Path) -> dict[str, str]:
 def read_records(path: Path) -> list[ProofRecord]:
     """Verified sealed records in journal order, for transcripts and audits."""
     return _verified_records(path)
+
+
+def read_spans(path: Path) -> list[SpanRecord]:
+    """Verified sealed tool spans in journal order, for audits and timelines."""
+    _, spans = _verified_contents(path)
+    return spans
 
 
 def build_from_gate(
