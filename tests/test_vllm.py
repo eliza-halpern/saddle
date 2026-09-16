@@ -127,12 +127,20 @@ def test_emit_rejects_blank_prompt() -> None:
     assert str(exc_info.value) == "prompt must not be empty"
 
 
-def test_emit_rejects_none_reasoning_effort() -> None:
+def test_emit_rejects_non_model_efforts() -> None:
     client, _ = _json_client(_ok_body(content=json.dumps({"nodes": []})))
-    expected = 'reasoning_effort "none" disables thinking; guided DAG emission requires it'
-    with pytest.raises(ValueError, match="disables thinking") as exc_info:
-        client.emit_dag(PLAN_PROMPT, reasoning_effort="none")
-    assert str(exc_info.value) == expected
+    for effort in ("none", "minimal", "high", "max", "bogus"):
+        expected = f"reasoning_effort must be one of low, medium, xhigh; got {effort!r}"
+        with pytest.raises(ValueError, match="must be one of") as exc_info:
+            client.emit_dag(PLAN_PROMPT, reasoning_effort=effort)
+        assert str(exc_info.value) == expected
+
+
+def test_emit_accepts_all_model_efforts() -> None:
+    for effort in ("low", "medium", "xhigh"):
+        client, seen = _json_client(_ok_body(content=json.dumps({"nodes": []})))
+        client.emit_dag(PLAN_PROMPT, reasoning_effort=effort)
+        assert json.loads(seen[0].content)["reasoning_effort"] == effort
 
 
 def test_emit_missing_reasoning_defaults_to_empty() -> None:

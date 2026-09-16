@@ -4,8 +4,9 @@ Sends ``structured_outputs`` carrying the DAG schema (owned by ``saddle.dag``,
 derived from the Pydantic models) so the server's XGrammar backend constrains
 the completion to schema-valid JSON once freeform reasoning ends (vLLM 0.28
 request API; the pre-0.28 ``guided_json`` field is ignored). Thinking is
-requested via first-class ``reasoning_effort``, never template backdoors, so
-the effort level stays explicit and server defaults can't silently change
+requested via first-class ``reasoning_effort`` (low/medium/xhigh — the
+model's template rejects anything else), never template backdoors, so the
+effort level stays explicit and server defaults can't silently change
 the contract.
 """
 
@@ -26,6 +27,7 @@ DEFAULT_TIMEOUT: Final = 300.0
 DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
+REASONING_EFFORTS: Final[tuple[str, ...]] = ("low", "medium", "xhigh")
 
 
 class VllmError(Exception):
@@ -137,15 +139,16 @@ class VllmClient:
     ) -> DagEmission:
         """Emit one schema-constrained DAG plan for *prompt*.
 
-        ``reasoning_effort`` is passed through to the server (which validates
-        it); only ``"none"`` is rejected here because it would disable the
-        reasoning this client's contract requires.
+        ``reasoning_effort`` must be one of low/medium/xhigh: the model's
+        chat template renders anything else into an HTTP 400, so anything
+        else is rejected here instead of wasting a round-trip.
         """
         if not prompt.strip():
             msg = "prompt must not be empty"
             raise ValueError(msg)
-        if reasoning_effort == "none":
-            msg = 'reasoning_effort "none" disables thinking; guided DAG emission requires it'
+        if reasoning_effort not in REASONING_EFFORTS:
+            allowed = ", ".join(REASONING_EFFORTS)
+            msg = f"reasoning_effort must be one of {allowed}; got {reasoning_effort!r}"
             raise ValueError(msg)
         payload = _build_payload(
             model=self._model,

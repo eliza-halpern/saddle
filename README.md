@@ -18,5 +18,6 @@ See "§6 Adoption Strategy" in the architecture doc. First milestone: guided DAG
 ## Requirements (planned)
 
 - Python 3.12+
-- Self-operated vLLM ≥ 0.28 server with guided decoding (XGrammar) + KV offloading
+- Self-operated vLLM ≥ 0.28 server with guided decoding (XGrammar) + KV offloading —
+  the proven setup is [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)
 - pytest, coverage.py, mutmut (Tier-2 sampled)
