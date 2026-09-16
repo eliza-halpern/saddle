@@ -151,19 +151,29 @@ def verify_journal(path: Path) -> list[JournalIssue]:
     return issues
 
 
-def rebuild_proven(path: Path) -> dict[str, str]:
-    """Rebuild scheduler state: proven node ids to their record hashes.
-
-    Refuses a journal with hard corruption (only a crash-torn tail is
-    tolerated); a crash therefore loses at most the in-flight node.
-    """
+def _verified_records(path: Path) -> list[ProofRecord]:
+    """Verified sealed records; refuses hard corruption (torn tail aside)."""
     records, issues = _load_journal(path)
     hard = [issue for issue in issues if issue.code != "torn-tail"]
     if hard:
         codes = ", ".join(f"{issue.code}@line {issue.line}" for issue in hard)
         msg = f"journal {str(path)!r} failed verification: {codes}"
         raise ValueError(msg)
-    return {record.node_id: record.record_hash for record in records}
+    return records
+
+
+def rebuild_proven(path: Path) -> dict[str, str]:
+    """Rebuild scheduler state: proven node ids to their record hashes.
+
+    Refuses a journal with hard corruption (only a crash-torn tail is
+    tolerated); a crash therefore loses at most the in-flight node.
+    """
+    return {record.node_id: record.record_hash for record in _verified_records(path)}
+
+
+def read_records(path: Path) -> list[ProofRecord]:
+    """Verified sealed records in journal order, for transcripts and audits."""
+    return _verified_records(path)
 
 
 def build_from_gate(

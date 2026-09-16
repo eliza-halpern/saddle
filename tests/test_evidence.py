@@ -15,6 +15,7 @@ from saddle.evidence import (
     materialize_baseline,
     run_argv,
     run_shell,
+    run_stdin,
     statement_lines,
     under_coverage,
 )
@@ -38,6 +39,13 @@ def test_run_argv_returns_exit_code(tmp_path: Path) -> None:
 
 def test_run_argv_captures_child_output(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
     assert run_argv([sys.executable, "-c", "print('hi')"], tmp_path) == 0
+    assert capfd.readouterr().out == ""
+
+
+def test_run_stdin_feeds_text(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "f").write_text("x\n")
+    code = run_stdin(["sh", "-c", "cat f && grep -q hi"], tmp_path, "hi\n")
+    assert code == 0
     assert capfd.readouterr().out == ""
 
 

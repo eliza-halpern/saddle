@@ -4,7 +4,7 @@ Sends ``structured_outputs`` carrying the DAG schema (owned by ``saddle.dag``,
 derived from the Pydantic models) so the server's XGrammar backend constrains
 the completion to schema-valid JSON once freeform reasoning ends (vLLM 0.28
 request API; the pre-0.28 ``guided_json`` field is ignored). Thinking is
-requested via first-class ``reasoning_effort`` (low/medium/xhigh — the
+requested via first-class ``reasoning_effort`` (none/low/medium/xhigh — the
 model's template rejects anything else), never template backdoors, so the
 effort level stays explicit and server defaults can't silently change
 the contract.
@@ -27,7 +27,13 @@ DEFAULT_TIMEOUT: Final = 300.0
 DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
-REASONING_EFFORTS: Final[tuple[str, ...]] = ("low", "medium", "xhigh")
+REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
+DIFF_SCHEMA: Final[dict[str, Any]] = {
+    "type": "object",
+    "properties": {"diff": {"type": "string"}},
+    "required": ["diff"],
+    "additionalProperties": False,
+}
 
 
 class VllmError(Exception):
@@ -69,6 +75,20 @@ def _build_payload(
     }
 
 
+def _build_diff_payload(
+    *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
+) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
+        "include_reasoning": True,
+        "structured_outputs": {"json": DIFF_SCHEMA},
+    }
+
+
 def _parse_response(data: object) -> DagEmission:
     if not isinstance(data, dict):
         msg = f"expected a JSON object envelope, got {type(data).__name__}"
@@ -106,6 +126,15 @@ def _parse_response(data: object) -> DagEmission:
     return DagEmission(dag=dag, reasoning=reasoning, raw_content=content)
 
 
+def _parse_diff_response(data: object) -> str:
+    emission = _parse_response(data)
+    diff = emission.dag.get("diff")
+    if not isinstance(diff, str) or not diff.strip():
+        msg = "content has no diff string"
+        raise VllmResponseError(msg)
+    return diff
+
+
 class VllmClient:
     """Sync httpx client for guided DAG emission."""
 
@@ -129,6 +158,25 @@ class VllmClient:
             transport=transport,
         )
 
+    def _post(self, payload: dict[str, Any]) -> Any:
+        """POST one chat payload; map transport and status failures to errors."""
+        try:
+            response = self._client.post("/chat/completions", json=payload)
+        except httpx.HTTPError as exc:
+            msg = f"request failed: {exc}"
+            raise VllmRequestError(msg) from exc
+        if response.status_code in (401, 403):
+            msg = f"server rejected the API key (HTTP {response.status_code})"
+            raise VllmAuthError(msg)
+        if response.status_code >= 400:
+            msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
+            raise VllmRequestError(msg)
+        try:
+            return response.json()
+        except ValueError as exc:
+            msg = f"response is not valid JSON: {exc}"
+            raise VllmResponseError(msg) from exc
+
     def emit_dag(
         self,
         prompt: str,
@@ -139,9 +187,9 @@ class VllmClient:
     ) -> DagEmission:
         """Emit one schema-constrained DAG plan for *prompt*.
 
-        ``reasoning_effort`` must be one of low/medium/xhigh: the model's
-        chat template renders anything else into an HTTP 400, so anything
-        else is rejected here instead of wasting a round-trip.
+        ``reasoning_effort`` must be one of none/low/medium/xhigh: the
+        model's chat template renders anything else into an HTTP 400, so
+        anything else is rejected here instead of wasting a round-trip.
         """
         if not prompt.strip():
             msg = "prompt must not be empty"
@@ -157,23 +205,33 @@ class VllmClient:
             temperature=temperature,
             reasoning_effort=reasoning_effort,
         )
-        try:
-            response = self._client.post("/chat/completions", json=payload)
-        except httpx.HTTPError as exc:
-            msg = f"request failed: {exc}"
-            raise VllmRequestError(msg) from exc
-        if response.status_code in (401, 403):
-            msg = f"server rejected the API key (HTTP {response.status_code})"
-            raise VllmAuthError(msg)
-        if response.status_code >= 400:
-            msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
-            raise VllmRequestError(msg)
-        try:
-            data = response.json()
-        except ValueError as exc:
-            msg = f"response is not valid JSON: {exc}"
-            raise VllmResponseError(msg) from exc
+        data = self._post(payload)
         return _parse_response(data)
+
+    def propose_diff(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = DEFAULT_TEMPERATURE,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    ) -> str:
+        """Propose a unified diff for *prompt*, guided to one JSON string field."""
+        if not prompt.strip():
+            msg = "prompt must not be empty"
+            raise ValueError(msg)
+        if reasoning_effort not in REASONING_EFFORTS:
+            allowed = ", ".join(REASONING_EFFORTS)
+            msg = f"reasoning_effort must be one of {allowed}; got {reasoning_effort!r}"
+            raise ValueError(msg)
+        payload = _build_diff_payload(
+            model=self._model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+        )
+        return _parse_diff_response(self._post(payload))
 
     def close(self) -> None:
         self._client.close()

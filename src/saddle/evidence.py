@@ -27,6 +27,12 @@ def run_argv(argv: Sequence[str], cwd: Path) -> int:
     return proc.returncode
 
 
+def run_stdin(argv: Sequence[str], cwd: Path, text: str) -> int:
+    """Run `argv` with `text` on stdin; return its exit code."""
+    proc = subprocess.run(argv, input=text, cwd=cwd, capture_output=True, text=True)
+    return proc.returncode
+
+
 def run_shell(command: str, cwd: Path) -> int:
     """Run a `test_command` string via shlex splitting (never a shell)."""
     return run_argv(shlex.split(command), cwd)

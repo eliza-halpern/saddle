@@ -11,6 +11,7 @@ import pytest
 from saddle.dag import dag_json_schema
 from saddle.vllm import (
     DEFAULT_MODEL,
+    DIFF_SCHEMA,
     VllmAuthError,
     VllmClient,
     VllmRequestError,
@@ -129,15 +130,15 @@ def test_emit_rejects_blank_prompt() -> None:
 
 def test_emit_rejects_non_model_efforts() -> None:
     client, _ = _json_client(_ok_body(content=json.dumps({"nodes": []})))
-    for effort in ("none", "minimal", "high", "max", "bogus"):
-        expected = f"reasoning_effort must be one of low, medium, xhigh; got {effort!r}"
+    for effort in ("minimal", "high", "max", "bogus", "off"):
+        expected = f"reasoning_effort must be one of none, low, medium, xhigh; got {effort!r}"
         with pytest.raises(ValueError, match="must be one of") as exc_info:
             client.emit_dag(PLAN_PROMPT, reasoning_effort=effort)
         assert str(exc_info.value) == expected
 
 
 def test_emit_accepts_all_model_efforts() -> None:
-    for effort in ("low", "medium", "xhigh"):
+    for effort in ("none", "low", "medium", "xhigh"):
         client, seen = _json_client(_ok_body(content=json.dumps({"nodes": []})))
         client.emit_dag(PLAN_PROMPT, reasoning_effort=effort)
         assert json.loads(seen[0].content)["reasoning_effort"] == effort
@@ -244,3 +245,38 @@ def test_client_context_manager() -> None:
         assert entered is client
     closer = VllmClient(api_key="test-key")
     closer.close()
+
+
+def test_diff_posts_guided_payload() -> None:
+    prompt = "Add a pure add() function with a test."
+    client, seen = _json_client(_ok_body(content=json.dumps({"diff": "diff --git x"})))
+    assert client.propose_diff(prompt) == "diff --git x"
+    assert json.loads(seen[0].content) == {
+        "model": DEFAULT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 4096,
+        "reasoning_effort": "medium",
+        "include_reasoning": True,
+        "structured_outputs": {"json": DIFF_SCHEMA},
+    }
+
+
+def test_diff_rejects_bad_input() -> None:
+    client, _ = _json_client(_ok_body(content=json.dumps({"diff": "x"})))
+    with pytest.raises(ValueError, match="must not be empty") as prompt_info:
+        client.propose_diff("  ")
+    assert str(prompt_info.value) == "prompt must not be empty"
+    with pytest.raises(ValueError, match="must be one of") as effort_info:
+        client.propose_diff("Do x.", reasoning_effort="bogus")
+    assert str(effort_info.value) == (
+        "reasoning_effort must be one of none, low, medium, xhigh; got 'bogus'"
+    )
+
+
+def test_diff_missing_or_blank_content_fails() -> None:
+    for content in ('{"other": 1}', '{"diff": "  "}', '{"diff": 5}'):
+        client, _ = _json_client(_ok_body(content=content))
+        with pytest.raises(VllmResponseError, match="no diff string") as exc_info:
+            client.propose_diff("Do x.")
+        assert str(exc_info.value) == "content has no diff string"

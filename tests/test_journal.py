@@ -21,6 +21,7 @@ from saddle.journal import (
     append_record,
     build_from_gate,
     build_record,
+    read_records,
     rebuild_proven,
     verify_journal,
 )
@@ -159,6 +160,7 @@ def test_rebuild_proven_maps_nodes_to_hashes(tmp_path: Path) -> None:
     append_record(path, child)
     assert rebuild_proven(path) == {"n1": parent.record_hash, "n2": child.record_hash}
     assert rebuild_proven(tmp_path / "missing.jsonl") == {}
+    assert read_records(path) == [parent, child]
 
 
 def test_rebuild_proven_refuses_corruption_keeps_torn_tail(tmp_path: Path) -> None:
