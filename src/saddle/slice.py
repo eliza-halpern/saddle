@@ -28,6 +28,7 @@ from saddle.journal import (
 from saddle.runner import run_node_gate
 from saddle.scheduler import Proof, schedule
 from saddle.transcript import NodeTranscript, RunTranscript, render_transcript
+from saddle.vllm import DiffProposal
 
 
 class NodeGateFailedError(Exception):
@@ -64,7 +65,7 @@ async def _run_node(
     node: Node,
     workdir: Path,
     journal_path: Path,
-    propose: Callable[[Node], str],
+    propose: Callable[[Node], DiffProposal],
     proofs: dict[str, str],
 ) -> Proof:
     """Execute one node: propose a diff, apply, gate, seal, append.
@@ -72,13 +73,15 @@ async def _run_node(
     Fully synchronous inside, so a worker never yields mid-node and the
     proof map stays consistent without locks.
     """
-    diff = propose(node)
-    _apply_diff(workdir, diff)
+    proposal = propose(node)
+    _apply_diff(workdir, proposal.diff)
     result = run_node_gate(node, workdir)
     if not result.passed:
         raise NodeGateFailedError(result)
     parents = [proofs[dep] for dep in node.dependencies]
-    record = build_from_gate(node, diff, result, parents, f"{node.id}#1")
+    record = build_from_gate(
+        node, proposal.diff, result, parents, f"{node.id}#1", thinking=proposal.reasoning
+    )
     append_record(journal_path, record)
     proofs[node.id] = record.record_hash
     return Proof(node_id=node.id)
@@ -107,7 +110,7 @@ def run_slice(
     *,
     workdir: Path,
     journal_path: Path,
-    propose: Callable[[Node], str],
+    propose: Callable[[Node], DiffProposal],
     now: Callable[[], str] = _utcnow,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.

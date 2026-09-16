@@ -12,9 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -39,6 +40,7 @@ class ProofRecord(BaseModel):
     parent_proofs: list[str]
     gate_outputs: list[GateOutput]
     requirement_ids: list[str]
+    thinking: str
     record_hash: str
 
 
@@ -49,6 +51,30 @@ class JournalIssue:
     code: str
     line: int | None
     message: str
+
+
+MAX_THINKING_CHARS: Final = 4000
+STAR: Final = "***"
+_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
+_AWS_PATTERN: Final = re.compile(r"AKIA[0-9A-Z]{16}")
+_NAMED_PATTERN: Final = re.compile(r"(?i)(api[_-]?key|password|secret|token)\s*[:=]\s*([^\s,;]+)")
+
+
+def _scrub_bearer(text: str) -> str:
+    """Replace bearer token values, keeping the scheme word for context."""
+    return re.sub(r"(Bearer)\s+[A-Za-z0-9_.~+/-]+", r"\1 " + STAR, text)
+
+
+def scrub_thinking(text: str) -> str:
+    """Redact secret-shaped spans, then cap length with a truncation marker."""
+    scrubbed = _KEY_PATTERN.sub(STAR, text)
+    scrubbed = _AWS_PATTERN.sub(STAR, scrubbed)
+    scrubbed = _NAMED_PATTERN.sub(r"\1=" + STAR, scrubbed)
+    scrubbed = _scrub_bearer(scrubbed)
+    if len(scrubbed) > MAX_THINKING_CHARS:
+        over = len(scrubbed) - MAX_THINKING_CHARS
+        scrubbed = scrubbed[:MAX_THINKING_CHARS] + f"\n[truncated {over} chars]"
+    return scrubbed
 
 
 def _canonical_hash(payload: dict[str, Any]) -> str:
@@ -65,6 +91,7 @@ def build_record(
     parent_proofs: list[str],
     gate_outputs: list[GateOutput],
     requirement_ids: list[str],
+    thinking: str,
 ) -> ProofRecord:
     """Seal a record: copy caller data, hash the diff, then the payload."""
     payload: dict[str, Any] = {
@@ -74,6 +101,7 @@ def build_record(
         "parent_proofs": list(parent_proofs),
         "gate_outputs": [output.model_dump() for output in gate_outputs],
         "requirement_ids": list(requirement_ids),
+        "thinking": scrub_thinking(thinking),
     }
     return ProofRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
 
@@ -182,6 +210,8 @@ def build_from_gate(
     result: Tier1Result,
     parent_proofs: list[str],
     evidence_id: str,
+    *,
+    thinking: str,
 ) -> ProofRecord:
     """Seal a Tier-1 verdict as the node's proof record."""
     return build_record(
@@ -194,4 +224,5 @@ def build_from_gate(
             for check in result.checks
         ],
         requirement_ids=list(node.requirement_ids),
+        thinking=thinking,
     )

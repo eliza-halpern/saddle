@@ -61,6 +61,14 @@ class DagEmission:
     raw_content: str
 
 
+@dataclass(frozen=True)
+class DiffProposal:
+    """One guided diff plus the worker reasoning that produced it."""
+
+    diff: str
+    reasoning: str
+
+
 def _build_payload(
     *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
 ) -> dict[str, Any]:
@@ -126,13 +134,13 @@ def _parse_response(data: object) -> DagEmission:
     return DagEmission(dag=dag, reasoning=reasoning, raw_content=content)
 
 
-def _parse_diff_response(data: object) -> str:
+def _parse_diff_response(data: object) -> DiffProposal:
     emission = _parse_response(data)
     diff = emission.dag.get("diff")
     if not isinstance(diff, str) or not diff.strip():
         msg = "content has no diff string"
         raise VllmResponseError(msg)
-    return diff
+    return DiffProposal(diff=diff, reasoning=emission.reasoning)
 
 
 class VllmClient:
@@ -215,7 +223,7 @@ class VllmClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
-    ) -> str:
+    ) -> DiffProposal:
         """Propose a unified diff for *prompt*, guided to one JSON string field."""
         if not prompt.strip():
             msg = "prompt must not be empty"

@@ -12,6 +12,7 @@ from saddle.dag import dag_json_schema
 from saddle.vllm import (
     DEFAULT_MODEL,
     DIFF_SCHEMA,
+    DiffProposal,
     VllmAuthError,
     VllmClient,
     VllmRequestError,
@@ -250,7 +251,9 @@ def test_client_context_manager() -> None:
 def test_diff_posts_guided_payload() -> None:
     prompt = "Add a pure add() function with a test."
     client, seen = _json_client(_ok_body(content=json.dumps({"diff": "diff --git x"})))
-    assert client.propose_diff(prompt) == "diff --git x"
+    assert client.propose_diff(prompt) == DiffProposal(
+        diff="diff --git x", reasoning="decomposing the task..."
+    )
     assert json.loads(seen[0].content) == {
         "model": DEFAULT_MODEL,
         "messages": [{"role": "user", "content": prompt}],

@@ -16,6 +16,7 @@ import pytest
 from saddle.dag import Node
 from saddle.gates import GateCheck, Tier1Result
 from saddle.journal import (
+    MAX_THINKING_CHARS,
     GateOutput,
     ProofRecord,
     append_record,
@@ -23,6 +24,7 @@ from saddle.journal import (
     build_record,
     read_records,
     rebuild_proven,
+    scrub_thinking,
     verify_journal,
 )
 
@@ -36,6 +38,7 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         parent_proofs=[],
         gate_outputs=outputs,
         requirement_ids=["REQ-001"],
+        thinking="",
     )
     payload = {
         "evidence_id": "e1",
@@ -44,13 +47,74 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         "parent_proofs": [],
         "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok"}],
         "requirement_ids": ["REQ-001"],
+        "thinking": "",
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
     assert record.diff_hash == payload["diff_hash"]
 
 
-def _record(node_id: str = "n1", parents: list[str] | None = None) -> ProofRecord:
+def test_scrub_thinking_redacts_secrets() -> None:
+    key = "sk-" + "f" * 12
+    bearer = "Bearer " + "g" * 8
+    aws = "AKIA" + "H" * 16
+    text = f"key {key} and {bearer}, password=hunter2, {aws}"
+    assert scrub_thinking(text) == ("key *** and Bearer ***, password=***, ***")
+
+
+def test_scrub_thinking_caps_length() -> None:
+    text = "t" * (MAX_THINKING_CHARS + 7)
+    assert scrub_thinking(text) == "t" * MAX_THINKING_CHARS + "\n[truncated 7 chars]"
+
+
+def test_scrub_thinking_leaves_short_clean_text_alone() -> None:
+    assert scrub_thinking("I will extract the helper.") == "I will extract the helper."
+
+
+def test_scrub_thinking_keeps_exactly_max_chars() -> None:
+    assert scrub_thinking("t" * MAX_THINKING_CHARS) == "t" * MAX_THINKING_CHARS
+
+
+def test_build_record_seals_thinking_into_hash() -> None:
+    record = build_record(
+        evidence_id="e1",
+        node_id="n1",
+        diff="diff\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="extract the helper",
+    )
+    assert record.thinking == "extract the helper"
+    payload = {
+        "evidence_id": "e1",
+        "node_id": "n1",
+        "diff_hash": hashlib.sha256(b"diff\n").hexdigest(),
+        "parent_proofs": [],
+        "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok"}],
+        "requirement_ids": ["REQ-001"],
+        "thinking": "extract the helper",
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_build_record_scrubs_thinking_before_sealing() -> None:
+    record = build_record(
+        evidence_id="e1",
+        node_id="n1",
+        diff="diff\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="t" * (MAX_THINKING_CHARS + 3),
+    )
+    assert record.thinking == "t" * MAX_THINKING_CHARS + "\n[truncated 3 chars]"
+
+
+def _record(
+    node_id: str = "n1", parents: list[str] | None = None, thinking: str = ""
+) -> ProofRecord:
     return build_record(
         evidence_id=f"e-{node_id}",
         node_id=node_id,
@@ -58,6 +122,7 @@ def _record(node_id: str = "n1", parents: list[str] | None = None) -> ProofRecor
         parent_proofs=parents if parents is not None else [],
         gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
         requirement_ids=["REQ-001"],
+        thinking=thinking,
     )
 
 
@@ -216,8 +281,11 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
     parent = _record("n0")
     path = tmp_path / "proofs.jsonl"
     append_record(path, parent)
-    record = build_from_gate(node, "diff n1\n", result, [parent.record_hash], "e1")
+    record = build_from_gate(
+        node, "diff n1\n", result, [parent.record_hash], "e1", thinking="why n1"
+    )
     assert record.node_id == "n1"
+    assert record.thinking == "why n1"
     assert record.requirement_ids == ["REQ-001"]
     assert record.parent_proofs == [parent.record_hash]
     assert record.gate_outputs == [GateOutput(name="tests", passed=True, detail="ok")]
@@ -236,7 +304,8 @@ def test_kill_minus_9_mid_run_rebuilds_state(tmp_path: Path) -> None:
         "out = GateOutput(name='tests', passed=True, detail='ok');"
         "i = 0;\nwhile True:"
         " r = build_record(evidence_id=f'e{i}', node_id=f'n{i}', diff=f'd{i}',"
-        " parent_proofs=[], gate_outputs=[out], requirement_ids=['REQ-001']);"
+        " parent_proofs=[], gate_outputs=[out], requirement_ids=['REQ-001'],"
+        " thinking='');"
         " append_record(p, r);"
         " i += 1"
     )

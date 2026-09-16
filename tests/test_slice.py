@@ -13,8 +13,9 @@ import saddle.slice as slice_module
 from saddle.dag import Dag, Node
 from saddle.evidence import run_argv
 from saddle.gates import GateCheck, Tier1Result
-from saddle.journal import ProofRecord, append_record
+from saddle.journal import ProofRecord, append_record, read_records
 from saddle.slice import NodeGateFailedError, _apply_diff, _utcnow, run_slice
+from saddle.vllm import DiffProposal
 
 
 def _git_repo(root: Path) -> None:
@@ -141,7 +142,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path) -> None:
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node: GOOD_DIFF,
+        propose=lambda node: DiffProposal(GOOD_DIFF, "return two instead"),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True
@@ -160,6 +161,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path) -> None:
     assert "- Gate requirement-binding: PASS (1 requirement(s) bound)\n" in result.transcript
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
+    assert read_records(journal)[0].thinking == "return two instead"
 
 
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:
@@ -171,9 +173,9 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     ).replace("@@ -1,2 +1,2 @@", "@@ -1,2 +1,6 @@")
     seen: list[str] = []
 
-    def propose(node: Node) -> str:
+    def propose(node: Node) -> DiffProposal:
         seen.append(node.id)
-        return bad_diff
+        return DiffProposal(bad_diff, "")
 
     result = run_slice(
         "Fix f.",
@@ -200,7 +202,7 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
         dag,
         workdir=tmp_path,
         journal_path=tmp_path / "proofs.jsonl",
-        propose=lambda node: "not a diff\n",
+        propose=lambda node: DiffProposal("not a diff\n", ""),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is False
@@ -217,7 +219,7 @@ def test_run_slice_refuses_stale_journal(tmp_path: Path) -> None:
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node: GOOD_DIFF,
+        propose=lambda node: DiffProposal(GOOD_DIFF, ""),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert first.passed is True
@@ -228,7 +230,7 @@ def test_run_slice_refuses_stale_journal(tmp_path: Path) -> None:
             dag,
             workdir=tmp_path,
             journal_path=journal,
-            propose=lambda node: GOOD_DIFF,
+            propose=lambda node: DiffProposal(GOOD_DIFF, ""),
         )
 
 
@@ -252,6 +254,6 @@ def test_run_slice_post_write_corruption_raises(
             dag,
             workdir=tmp_path,
             journal_path=journal,
-            propose=lambda node: GOOD_DIFF,
+            propose=lambda node: DiffProposal(GOOD_DIFF, ""),
             now=lambda: "2026-09-16T00:00:00+00:00",
         )
