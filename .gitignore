@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+# Test / build
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.mutmut-cache/
+mutants/
+build/
+dist/
+*.egg-info/
+# Secrets / local
+.env*
+*.key
+*.pem
+# Harness runtime (proof journals stay local unless curated into docs/)
+.proofs/
+*.jsonl

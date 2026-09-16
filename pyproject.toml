@@ -1,0 +1,57 @@
+[project]
+name = "saddle-harness"
+version = "0.1.0"
+description = "Deterministic execution harness for non-deterministic local LLMs."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "rich>=13.9",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.130",
+    "mutmut>=3.0",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+[project.scripts]
+saddle = "saddle.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/saddle"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# mutmut's work copies are generated artifacts, never lint targets.
+exclude = ["mutants"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "EM", "PT", "RUF"]
+
+[tool.mypy]
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=saddle --cov-report=term-missing --cov-fail-under=100"
+
+[tool.coverage.run]
+source = ["saddle"]
+branch = true
+
+[tool.mutmut]
+# Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.
+# mutmut 3.x runs pytest in-process; coverage is disabled for mutant runs
+# (per-run coverage is pure overhead and fails the 100% gate by design).
+source_paths = ["src/saddle/"]
+pytest_add_cli_args = ["-p", "no:cov", "-o", "addopts=", "-q", "-x"]
