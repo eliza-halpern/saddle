@@ -13,7 +13,14 @@ import saddle.slice as slice_module
 from saddle.dag import Dag, Node
 from saddle.evidence import run_argv
 from saddle.gates import GateCheck, Tier1Result
-from saddle.journal import ProofRecord, append_record, read_records, read_spans
+from saddle.journal import (
+    ProofRecord,
+    SpanRecord,
+    append_record,
+    append_span,
+    read_records,
+    read_spans,
+)
 from saddle.slice import NodeGateFailedError, _apply_diff, _utcnow, run_slice
 from saddle.vllm import DiffProposal
 
@@ -133,10 +140,12 @@ def test_apply_diff_garbage_raises(tmp_path: Path) -> None:
         _apply_diff(tmp_path, "not a diff\n")
 
 
-def test_run_slice_pass_end_to_end(tmp_path: Path) -> None:
+def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
+    ticks = iter([0.0, 1.0, 2.0, 3.0])
+    monkeypatch.setattr(slice_module, "perf_counter", lambda: next(ticks))
     result = run_slice(
         "Fix f.",
         dag,
@@ -163,7 +172,8 @@ def test_run_slice_pass_end_to_end(tmp_path: Path) -> None:
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
     spans = read_spans(journal)
-    assert [span.name for span in spans] == [
+    tools = [span for span in spans if span.kind == "tool"]
+    assert [span.name for span in tools] == [
         "git",
         "git",
         "coverage",
@@ -172,7 +182,14 @@ def test_run_slice_pass_end_to_end(tmp_path: Path) -> None:
         "ruff",
         "ruff",
     ]
-    assert all(span.node_id == "n1" for span in spans)
+    assert all(span.node_id == "n1" for span in tools)
+    (worker, run) = [span for span in spans if span.kind == "agent"]
+    assert (worker.name, worker.exit_code, worker.detail) == ("worker:n1", 0, "")
+    assert worker.parent_id == run.span_id
+    assert all(span.parent_id == worker.span_id for span in tools)
+    assert (run.name, run.exit_code, run.parent_id, run.node_id) == ("run", 0, None, "")
+    assert run.detail == "1 proven, 0 failed, 0 undispatched"
+    assert (worker.duration_ms, run.duration_ms) == (1000, 3000)
 
 
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:
@@ -203,6 +220,16 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert "## Node a\n" in result.transcript
     assert "## Node b\n" in result.transcript
     assert "- Gate coverage: FAIL" in result.transcript
+    journal = tmp_path / "proofs.jsonl"
+    spans = read_spans(journal)
+    agents = [span for span in spans if span.kind == "agent"]
+    assert [span.name for span in agents] == ["worker:a", "run"]
+    (worker, run) = agents
+    assert worker.exit_code == 1
+    assert worker.detail == "node 'a' failed its Tier-1 gate"
+    assert worker.parent_id == run.span_id
+    assert run.exit_code == 1
+    assert run.detail == "0 proven, 1 failed, 1 undispatched"
 
 
 def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None:
@@ -252,14 +279,39 @@ def test_run_slice_post_write_corruption_raises(
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
 
+    def sabotage(path: Path, span: SpanRecord) -> None:
+        append_span(path, span)
+        if span.name == "run":
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write('{"half": ')
+
+    monkeypatch.setattr(slice_module, "append_span", sabotage)
+    expected = f"journal {str(journal)!r} has a torn tail after our own writes"
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        run_slice(
+            "Fix f.",
+            dag,
+            workdir=tmp_path,
+            journal_path=journal,
+            propose=lambda node: DiffProposal(GOOD_DIFF, ""),
+            now=lambda: "2026-09-16T00:00:00+00:00",
+        )
+
+
+def test_run_slice_mid_run_corruption_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
     def sabotage(path: Path, record: ProofRecord) -> None:
         append_record(path, record)
         with path.open("a", encoding="utf-8") as handle:
             handle.write('{"half": ')
 
     monkeypatch.setattr(slice_module, "append_record", sabotage)
-    expected = f"journal {str(journal)!r} has a torn tail after our own writes"
-    with pytest.raises(RuntimeError, match=re.escape(expected)):
+    with pytest.raises(ValueError, match="failed verification: unparseable-line"):
         run_slice(
             "Fix f.",
             dag,

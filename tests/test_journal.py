@@ -418,3 +418,61 @@ def test_recorder_appends_node_linked_span(tmp_path: Path) -> None:
     assert span.name == "pytest"
     assert span.duration_ms == 3
     assert span.exit_code == 0
+
+
+def _agent(node_id: str, name: str, parent_id: str | None = None) -> SpanRecord:
+    return build_span(
+        node_id=node_id,
+        argv=[],
+        duration_ms=5,
+        exit_code=0,
+        detail="",
+        kind="agent",
+        name=name,
+        parent_id=parent_id,
+    )
+
+
+def test_agent_spans_link_parent_to_child(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    run = _agent("", "run")
+    worker = _agent("n1", "worker:n1", parent_id=run.span_id)
+    sub = _agent("n1", "subagent:fixup", parent_id=worker.span_id)
+    tool = build_span(
+        node_id="n1",
+        argv=["ruff", "check"],
+        duration_ms=1,
+        exit_code=0,
+        detail="",
+        parent_id=sub.span_id,
+    )
+    for span in (tool, sub, worker, run):
+        append_span(path, span)
+    assert verify_journal(path) == []
+    assert [span.name for span in read_spans(path)] == [
+        "ruff",
+        "subagent:fixup",
+        "worker:n1",
+        "run",
+    ]
+    assert tool.parent_id == sub.span_id
+    assert run.parent_id is None
+
+
+def test_orphan_span_fails_verification(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    append_span(path, _agent("n1", "worker:n1", parent_id="0" * 32))
+    (issue,) = verify_journal(path)
+    assert issue.code == "orphan-span"
+    assert issue.line == 1
+    assert "0" * 32 in issue.message
+
+
+def test_recorder_parents_tool_spans(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    run = _agent("", "run")
+    append_span(path, run)
+    recorder = SpanRecorder(path=path, node_id="n1", parent_id=run.span_id)
+    recorder.record(argv=["pytest"], duration_ms=1, exit_code=0, detail="")
+    (_, tool) = read_spans(path)
+    assert tool.parent_id == run.span_id

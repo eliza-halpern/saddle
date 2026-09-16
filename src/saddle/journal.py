@@ -52,6 +52,8 @@ class SpanRecord(BaseModel):
 
     record_type: Literal["span"] = "span"
     span_id: str
+    parent_id: str | None = None
+    kind: Literal["tool", "agent"] = "tool"
     node_id: str
     name: str
     argv: list[str]
@@ -143,15 +145,21 @@ def build_span(
     duration_ms: int,
     exit_code: int,
     detail: str,
+    kind: Literal["tool", "agent"] = "tool",
+    name: str | None = None,
+    parent_id: str | None = None,
+    span_id: str | None = None,
 ) -> SpanRecord:
-    """Seal one tool invocation: scrubbed argv, hashed args, capped detail."""
+    """Seal one span: scrubbed argv, hashed args, capped detail."""
     scrubbed = [scrub_thinking(part) for part in argv]
     encoded_args = json.dumps(scrubbed).encode()
     payload: dict[str, Any] = {
         "record_type": "span",
-        "span_id": uuid.uuid4().hex,
+        "span_id": span_id if span_id is not None else uuid.uuid4().hex,
+        "parent_id": parent_id,
+        "kind": kind,
         "node_id": node_id,
-        "name": _tool_name(scrubbed),
+        "name": name if name is not None else _tool_name(scrubbed),
         "argv": scrubbed,
         "args_hash": hashlib.sha256(encoded_args).hexdigest(),
         "duration_ms": duration_ms,
@@ -186,6 +194,7 @@ class SpanRecorder:
 
     path: Path
     node_id: str
+    parent_id: str | None = None
 
     def record(self, *, argv: Sequence[str], duration_ms: int, exit_code: int, detail: str) -> None:
         """Seal and append one completed tool invocation."""
@@ -197,6 +206,7 @@ class SpanRecorder:
                 duration_ms=duration_ms,
                 exit_code=exit_code,
                 detail=detail,
+                parent_id=self.parent_id,
             ),
         )
 
@@ -233,7 +243,7 @@ def _load_journal(
         )
         lines = lines[:-1]
     records: list[ProofRecord] = []
-    spans: list[SpanRecord] = []
+    span_entries: list[tuple[int, SpanRecord]] = []
     seen: set[str] = set()
     for number, line in enumerate(lines, start=1):
         try:
@@ -259,7 +269,7 @@ def _load_journal(
             )
             continue
         if isinstance(entry, SpanRecord):
-            spans.append(entry)
+            span_entries.append((number, entry))
             continue
         if any(parent not in seen for parent in entry.parent_proofs):
             issues.append(
@@ -272,6 +282,17 @@ def _load_journal(
             continue
         records.append(entry)
         seen.add(entry.record_hash)
+    spans = [entry for _, entry in span_entries]
+    known = {entry.span_id for entry in spans}
+    for number, entry in span_entries:
+        if entry.parent_id is not None and entry.parent_id not in known:
+            issues.append(
+                JournalIssue(
+                    code="orphan-span",
+                    line=number,
+                    message=f"span {entry.span_id!r} cites unknown parent {entry.parent_id!r}",
+                )
+            )
     return (records, spans, issues)
 
 
@@ -282,9 +303,15 @@ def verify_journal(path: Path) -> list[JournalIssue]:
 
 
 def _verified_contents(path: Path) -> tuple[list[ProofRecord], list[SpanRecord]]:
-    """Verified sealed entries; refuses hard corruption (torn tail aside)."""
+    """Verified sealed entries; refuses hard corruption.
+
+    A torn tail and in-flight orphans (children precede their parents)
+    signal incompleteness, not corruption, so reads tolerate them;
+    `verify_journal` still reports both.
+    """
     records, spans, issues = _load_journal(path)
-    hard = [issue for issue in issues if issue.code != "torn-tail"]
+    soft = ("torn-tail", "orphan-span")
+    hard = [issue for issue in issues if issue.code not in soft]
     if hard:
         codes = ", ".join(f"{issue.code}@line {issue.line}" for issue in hard)
         msg = f"journal {str(path)!r} failed verification: {codes}"

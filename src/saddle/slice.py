@@ -10,10 +10,12 @@ the same path.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 
 from saddle.dag import Dag, ExecutionConstraints, Node
 from saddle.evidence import run_stdin
@@ -22,7 +24,9 @@ from saddle.journal import (
     ProofRecord,
     SpanRecorder,
     append_record,
+    append_span,
     build_from_gate,
+    build_span,
     read_records,
     verify_journal,
 )
@@ -54,6 +58,11 @@ def _utcnow() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _elapsed_ms(start: float) -> int:
+    """Whole milliseconds elapsed since a `perf_counter` reading."""
+    return int((perf_counter() - start) * 1000)
+
+
 def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> None:
     """Apply a proposed diff from stdin and stage it; gates diff tracked content."""
     exit_code = run_stdin(
@@ -70,24 +79,49 @@ async def _run_node(
     journal_path: Path,
     propose: Callable[[Node], DiffProposal],
     proofs: dict[str, str],
+    run_span_id: str,
 ) -> Proof:
     """Execute one node: propose a diff, apply, gate, seal, append.
 
     Fully synchronous inside, so a worker never yields mid-node and the
     proof map stays consistent without locks.
     """
-    proposal = propose(node)
-    recorder = SpanRecorder(path=journal_path, node_id=node.id)
-    _apply_diff(workdir, proposal.diff, recorder=recorder)
-    result = run_node_gate(node, workdir, recorder=recorder)
-    if not result.passed:
-        raise NodeGateFailedError(result)
-    parents = [proofs[dep] for dep in node.dependencies]
-    record = build_from_gate(
-        node, proposal.diff, result, parents, f"{node.id}#1", thinking=proposal.reasoning
-    )
-    append_record(journal_path, record)
-    proofs[node.id] = record.record_hash
+    start = perf_counter()
+    worker_id = uuid.uuid4().hex
+    recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
+
+    def seal(exit_code: int, detail: str) -> None:
+        append_span(
+            journal_path,
+            build_span(
+                node_id=node.id,
+                argv=[],
+                duration_ms=_elapsed_ms(start),
+                exit_code=exit_code,
+                detail=detail,
+                kind="agent",
+                name=f"worker:{node.id}",
+                parent_id=run_span_id,
+                span_id=worker_id,
+            ),
+        )
+
+    try:
+        proposal = propose(node)
+        _apply_diff(workdir, proposal.diff, recorder=recorder)
+        result = run_node_gate(node, workdir, recorder=recorder)
+        if not result.passed:
+            raise NodeGateFailedError(result)
+        parents = [proofs[dep] for dep in node.dependencies]
+        record = build_from_gate(
+            node, proposal.diff, result, parents, f"{node.id}#1", thinking=proposal.reasoning
+        )
+        append_record(journal_path, record)
+        proofs[node.id] = record.record_hash
+    except BaseException as exc:
+        seal(1, str(exc))
+        raise
+    seal(0, "")
     return Proof(node_id=node.id)
 
 
@@ -126,21 +160,40 @@ def run_slice(
         msg = f"journal {str(journal_path)!r} is not fresh; resume is not supported"
         raise ValueError(msg)
     started = now()
+    run_start = perf_counter()
+    run_span_id = uuid.uuid4().hex
     proofs: dict[str, str] = {}
 
     async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
-        return await _run_node(node, workdir, journal_path, propose, proofs)
+        return await _run_node(node, workdir, journal_path, propose, proofs, run_span_id)
 
     outcome = asyncio.run(schedule(dag, worker))
     sealed = {record.node_id: record for record in read_records(journal_path)}
     transcripts = tuple(
         _transcribe(node, sealed.get(node.id), outcome.failures.get(node.id)) for node in dag.nodes
     )
+    passed = not outcome.failures and not outcome.undispatched
+    append_span(
+        journal_path,
+        build_span(
+            node_id="",
+            argv=[],
+            duration_ms=_elapsed_ms(run_start),
+            exit_code=0 if passed else 1,
+            detail=(
+                f"{len(proofs)} proven, "
+                f"{len(outcome.failures)} failed, "
+                f"{len(outcome.undispatched)} undispatched"
+            ),
+            kind="agent",
+            name="run",
+            span_id=run_span_id,
+        ),
+    )
     tail = [issue for issue in verify_journal(journal_path) if issue.code == "torn-tail"]
     if tail:
         msg = f"journal {str(journal_path)!r} has a torn tail after our own writes"
         raise RuntimeError(msg)
-    passed = not outcome.failures and not outcome.undispatched
     text = render_transcript(
         RunTranscript(
             task=task,
