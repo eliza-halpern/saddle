@@ -1,16 +1,16 @@
 """vLLM guided-emission client (OpenAI-compatible chat completions).
 
-Sends ``structured_outputs`` carrying the DAG schema so the server's XGrammar
-backend constrains the completion to schema-valid JSON once freeform reasoning
-ends (vLLM 0.28 request API; the pre-0.28 ``guided_json`` field is ignored).
-Thinking is requested via first-class ``reasoning_effort``, never template
-backdoors, so the effort level stays explicit and server defaults can't
-silently change the contract.
+Sends ``structured_outputs`` carrying the DAG schema (owned by ``saddle.dag``,
+derived from the Pydantic models) so the server's XGrammar backend constrains
+the completion to schema-valid JSON once freeform reasoning ends (vLLM 0.28
+request API; the pre-0.28 ``guided_json`` field is ignored). Thinking is
+requested via first-class ``reasoning_effort``, never template backdoors, so
+the effort level stays explicit and server defaults can't silently change
+the contract.
 """
 
 from __future__ import annotations
 
-import copy
 import json
 from dataclasses import dataclass
 from types import TracebackType
@@ -18,115 +18,14 @@ from typing import Any, Final
 
 import httpx
 
+from saddle.dag import dag_json_schema
+
 DEFAULT_BASE_URL: Final = "http://127.0.0.1:18020/v1"
 DEFAULT_MODEL: Final = "qwen3.8-27b"
 DEFAULT_TIMEOUT: Final = 300.0
 DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
-
-# Wire schema for guided DAG emission (ARCHITECTURE.md §3 Phase 1 node shape).
-# Semantic validation (acyclicity, allowlists, ceilings) belongs to the DAG
-# validator; the client only guarantees "parsed JSON object".
-DAG_JSON_SCHEMA: Final[dict[str, Any]] = {
-    "type": "object",
-    "properties": {
-        "nodes": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 32,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "minLength": 1, "maxLength": 64},
-                    "dependencies": {
-                        "type": "array",
-                        "items": {"type": "string", "minLength": 1},
-                    },
-                    "task_prompt": {"type": "string", "minLength": 1},
-                    "requirement_ids": {
-                        "type": "array",
-                        "items": {"type": "string", "minLength": 1},
-                        "minItems": 1,
-                    },
-                    "execution_constraints": {
-                        "type": "object",
-                        "properties": {
-                            "reasoning_budget": {
-                                "type": "string",
-                                "enum": ["zero", "low", "medium", "high", "xhigh"],
-                            },
-                            "allowed_tools": {
-                                "type": "array",
-                                "items": {"type": "string", "minLength": 1},
-                                "minItems": 1,
-                            },
-                            "max_context_tokens": {
-                                "type": "integer",
-                                "minimum": 1000,
-                                "maximum": 30000,
-                            },
-                        },
-                        "required": [
-                            "reasoning_budget",
-                            "allowed_tools",
-                            "max_context_tokens",
-                        ],
-                        "additionalProperties": False,
-                    },
-                    "deterministic_gate": {
-                        "type": "object",
-                        "properties": {
-                            "test_command": {"type": "string", "minLength": 1},
-                            "changed_line_coverage_min": {
-                                "type": "number",
-                                "minimum": 0,
-                                "maximum": 100,
-                            },
-                            "red_phase_required": {"type": "boolean"},
-                            "mutation_sample": {
-                                "type": "object",
-                                "properties": {
-                                    "scope": {"type": "string", "enum": ["changed-lines"]},
-                                    "max_mutants": {
-                                        "type": "integer",
-                                        "minimum": 1,
-                                        "maximum": 1000,
-                                    },
-                                    "kill_threshold": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 100,
-                                    },
-                                },
-                                "required": ["scope", "max_mutants", "kill_threshold"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "required": [
-                            "test_command",
-                            "changed_line_coverage_min",
-                            "red_phase_required",
-                            "mutation_sample",
-                        ],
-                        "additionalProperties": False,
-                    },
-                },
-                "required": [
-                    "id",
-                    "dependencies",
-                    "task_prompt",
-                    "requirement_ids",
-                    "execution_constraints",
-                    "deterministic_gate",
-                ],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["nodes"],
-    "additionalProperties": False,
-}
 
 
 class VllmError(Exception):
@@ -154,11 +53,6 @@ class DagEmission:
     raw_content: str
 
 
-def dag_schema() -> dict[str, Any]:
-    """Return an independent copy of the guided DAG schema."""
-    return copy.deepcopy(DAG_JSON_SCHEMA)
-
-
 def _build_payload(
     *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
 ) -> dict[str, Any]:
@@ -169,7 +63,7 @@ def _build_payload(
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
         "include_reasoning": True,
-        "structured_outputs": {"json": dag_schema()},
+        "structured_outputs": {"json": dag_json_schema()},
     }
 
 

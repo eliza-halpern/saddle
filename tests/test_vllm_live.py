@@ -13,7 +13,8 @@ from typing import Any
 
 import pytest
 
-from saddle.vllm import VllmClient, dag_schema
+from saddle.dag import dag_json_schema
+from saddle.vllm import VllmClient
 
 jsonschema = pytest.importorskip("jsonschema")
 
@@ -40,7 +41,7 @@ Rules:
 
 def test_live_guided_emission_is_schema_valid_with_reasoning() -> None:
     assert _LIVE_KEY is not None
-    validator: Any = jsonschema.Draft202012Validator(dag_schema())
+    validator: Any = jsonschema.Draft202012Validator(dag_json_schema())
     with VllmClient(api_key=_LIVE_KEY) as client:
         emission = client.emit_dag(LIVE_PROMPT, max_tokens=8192)
     assert len(emission.reasoning.strip()) >= 20

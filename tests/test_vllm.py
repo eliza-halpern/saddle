@@ -8,14 +8,13 @@ from typing import Any
 import httpx
 import pytest
 
+from saddle.dag import dag_json_schema
 from saddle.vllm import (
-    DAG_JSON_SCHEMA,
     DEFAULT_MODEL,
     VllmAuthError,
     VllmClient,
     VllmRequestError,
     VllmResponseError,
-    dag_schema,
 )
 
 PLAN_PROMPT = "Plan a two-node DAG that adds input validation to the login form."
@@ -73,7 +72,7 @@ def test_emit_posts_guided_payload() -> None:
         "max_tokens": 4096,
         "reasoning_effort": "medium",
         "include_reasoning": True,
-        "structured_outputs": {"json": DAG_JSON_SCHEMA},
+        "structured_outputs": {"json": dag_json_schema()},
     }
     assert emission.dag == dag
     assert emission.reasoning == "decomposing the task..."
@@ -229,34 +228,6 @@ def test_emit_malformed_envelopes_raise() -> None:
         with pytest.raises(VllmResponseError) as exc_info:
             client.emit_dag(PLAN_PROMPT)
         assert str(exc_info.value) == expected
-
-
-def test_dag_schema_returns_independent_copy() -> None:
-    first = dag_schema()
-    assert first == DAG_JSON_SCHEMA
-    first["properties"]["nodes"]["minItems"] = 999
-    fresh = dag_schema()
-    assert fresh == DAG_JSON_SCHEMA
-    assert fresh["properties"]["nodes"]["minItems"] == 1
-
-
-def test_dag_schema_has_arch_node_shape() -> None:
-    schema = dag_schema()
-    assert schema["required"] == ["nodes"]
-    node = schema["properties"]["nodes"]["items"]
-    assert node["required"] == [
-        "id",
-        "dependencies",
-        "task_prompt",
-        "requirement_ids",
-        "execution_constraints",
-        "deterministic_gate",
-    ]
-    assert node["properties"]["execution_constraints"]["required"] == [
-        "reasoning_budget",
-        "allowed_tools",
-        "max_context_tokens",
-    ]
 
 
 def test_client_context_manager() -> None:
