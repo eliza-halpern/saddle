@@ -29,7 +29,7 @@ Task: Add email-format validation to the login form and reject blanks.
 Rules:
 - The first node has no dependencies; every other node depends on at least one earlier node.
 - requirement_ids look like REQ-001, REQ-002, ... (at least one per node).
-- reasoning_budget is one of: zero, low, medium, high, xhigh.
+- reasoning_budget is one of: zero, low, medium, xhigh.
 - allowed_tools uses only: read_file, write_file, run_tests, lint.
 - max_context_tokens is between 1000 and 30000.
 - test_command is a pytest invocation, e.g. "pytest tests/test_login.py".
@@ -43,7 +43,7 @@ def test_live_guided_emission_is_schema_valid_with_reasoning() -> None:
     assert _LIVE_KEY is not None
     validator: Any = jsonschema.Draft202012Validator(dag_json_schema())
     with VllmClient(api_key=_LIVE_KEY) as client:
-        emission = client.emit_dag(LIVE_PROMPT, max_tokens=8192)
+        emission = client.emit_dag(LIVE_PROMPT, max_tokens=16384)
     assert len(emission.reasoning.strip()) >= 20
     errors = [
         f"{'/'.join(map(str, e.path))}: {e.message}" for e in validator.iter_errors(emission.dag)

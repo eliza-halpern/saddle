@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 NodeId = Annotated[str, Field(min_length=1, max_length=64)]
-ReasoningBudget = Literal["zero", "low", "medium", "high", "xhigh"]
+ReasoningBudget = Literal["zero", "low", "medium", "xhigh"]
 
 
 class MutationSample(BaseModel):

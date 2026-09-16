@@ -222,13 +222,16 @@ def test_missing_requirement_ids_rejected_with_location() -> None:
 
 
 def test_bad_budget_rejected_as_literal_error() -> None:
-    with pytest.raises(ValidationError) as exc_info:
-        Dag.model_validate({"nodes": [_node("a", budget="turbo")]})
-    errors = exc_info.value.errors()
-    assert ("nodes", 0, "execution_constraints", "reasoning_budget") in [
-        error["loc"] for error in errors
-    ]
-    assert "literal_error" in [error["type"] for error in errors]
+    # "high" is the meaningful near-miss: real vLLM literal, but neither a
+    # node budget nor a wire effort on this model.
+    for budget in ("high", "turbo"):
+        with pytest.raises(ValidationError) as exc_info:
+            Dag.model_validate({"nodes": [_node("a", budget=budget)]})
+        errors = exc_info.value.errors()
+        assert ("nodes", 0, "execution_constraints", "reasoning_budget") in [
+            error["loc"] for error in errors
+        ]
+        assert "literal_error" in [error["type"] for error in errors]
 
 
 def test_extra_key_rejected() -> None:
@@ -257,7 +260,7 @@ def test_number_fields_accept_ints() -> None:
 
 
 def test_all_budgets_parse() -> None:
-    for budget in ("zero", "low", "medium", "high", "xhigh"):
+    for budget in ("zero", "low", "medium", "xhigh"):
         dag = Dag.model_validate({"nodes": [_node("a", budget=budget)]})
         assert dag.nodes[0].execution_constraints.reasoning_budget == budget
 
@@ -299,7 +302,6 @@ def test_derived_schema_has_arch_node_shape() -> None:
         "zero",
         "low",
         "medium",
-        "high",
         "xhigh",
     ]
     gate = node["properties"]["deterministic_gate"]
