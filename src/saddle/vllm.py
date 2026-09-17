@@ -24,6 +24,7 @@ from saddle.dag import dag_json_schema
 DEFAULT_BASE_URL: Final = "http://127.0.0.1:18020/v1"
 DEFAULT_MODEL: Final = "qwen3.8-27b"
 DEFAULT_TIMEOUT: Final = 300.0
+PREFLIGHT_TIMEOUT: Final = 10.0
 DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
@@ -143,6 +144,39 @@ def _parse_diff_response(data: object) -> DiffProposal:
     return DiffProposal(diff=diff, reasoning=emission.reasoning)
 
 
+def _model_ids(data: object) -> list[str]:
+    """Served ids from a /models envelope; malformed envelopes raise."""
+    if not isinstance(data, dict):
+        msg = "models envelope must be an object"
+        raise VllmResponseError(msg)
+    items = data.get("data")
+    if not isinstance(items, list):
+        msg = "models envelope has no data list"
+        raise VllmResponseError(msg)
+    ids: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            msg = "models entry has no string id"
+            raise VllmResponseError(msg)
+        ids.append(item["id"])
+    return ids
+
+
+def _checked_json(response: httpx.Response) -> Any:
+    """Map error statuses to errors; parse the JSON body otherwise."""
+    if response.status_code in (401, 403):
+        msg = f"server rejected the API key (HTTP {response.status_code})"
+        raise VllmAuthError(msg)
+    if response.status_code >= 400:
+        msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
+        raise VllmRequestError(msg)
+    try:
+        return response.json()
+    except ValueError as exc:
+        msg = f"response is not valid JSON: {exc}"
+        raise VllmResponseError(msg) from exc
+
+
 class VllmClient:
     """Sync httpx client for guided DAG emission."""
 
@@ -173,17 +207,7 @@ class VllmClient:
         except httpx.HTTPError as exc:
             msg = f"request failed: {exc}"
             raise VllmRequestError(msg) from exc
-        if response.status_code in (401, 403):
-            msg = f"server rejected the API key (HTTP {response.status_code})"
-            raise VllmAuthError(msg)
-        if response.status_code >= 400:
-            msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
-            raise VllmRequestError(msg)
-        try:
-            return response.json()
-        except ValueError as exc:
-            msg = f"response is not valid JSON: {exc}"
-            raise VllmResponseError(msg) from exc
+        return _checked_json(response)
 
     def emit_dag(
         self,
@@ -240,6 +264,15 @@ class VllmClient:
             reasoning_effort=reasoning_effort,
         )
         return _parse_diff_response(self._post(payload))
+
+    def list_models(self) -> list[str]:
+        """GET /models with a short timeout; return served model ids."""
+        try:
+            response = self._client.get("/models", timeout=PREFLIGHT_TIMEOUT)
+        except httpx.HTTPError as exc:
+            msg = f"request failed: {exc}"
+            raise VllmRequestError(msg) from exc
+        return _model_ids(_checked_json(response))
 
     def close(self) -> None:
         self._client.close()

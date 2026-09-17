@@ -283,3 +283,56 @@ def test_diff_missing_or_blank_content_fails() -> None:
         with pytest.raises(VllmResponseError, match="no diff string") as exc_info:
             client.propose_diff("Do x.")
         assert str(exc_info.value) == "content has no diff string"
+
+
+def test_list_models_returns_served_ids() -> None:
+    payload = {"data": [{"id": "a"}, {"id": "b"}], "object": "list"}
+    client, seen = _json_client(payload)
+    assert client.list_models() == ["a", "b"]
+    assert seen[0].method == "GET"
+    assert seen[0].url.path == "/v1/models"
+    assert seen[0].extensions["timeout"] == {
+        "connect": 10.0,
+        "read": 10.0,
+        "write": 10.0,
+        "pool": 10.0,
+    }
+    empty, _ = _json_client({"data": []})
+    assert empty.list_models() == []
+
+
+def test_list_models_auth_and_server_errors() -> None:
+    for status in (401, 403):
+        client, _ = _client_for(httpx.Response(status, json={"error": "nope"}))
+        with pytest.raises(VllmAuthError) as auth_info:
+            client.list_models()
+        assert str(auth_info.value) == f"server rejected the API key (HTTP {status})"
+    client, _ = _client_for(httpx.Response(503, text="down"))
+    with pytest.raises(VllmRequestError) as req_info:
+        client.list_models()
+    assert str(req_info.value) == "server returned HTTP 503: down"
+
+
+def test_list_models_transport_and_json_errors() -> None:
+    with pytest.raises(VllmRequestError) as req_info:
+        _failing_client(httpx.ConnectError("refused")).list_models()
+    assert str(req_info.value) == "request failed: refused"
+    client, _ = _client_for(httpx.Response(200, text="<html>not json"))
+    with pytest.raises(VllmResponseError) as resp_info:
+        client.list_models()
+    assert str(resp_info.value).startswith("response is not valid JSON: ")
+
+
+def test_list_models_malformed_envelopes_raise() -> None:
+    cases: list[tuple[Any, str]] = [
+        ([{"id": "a"}], "models envelope must be an object"),
+        ({"data": {"id": "a"}}, "models envelope has no data list"),
+        ({"data": ["a"]}, "models entry has no string id"),
+        ({"data": [{"id": 5}]}, "models entry has no string id"),
+        ({"data": [{"name": "a"}]}, "models entry has no string id"),
+    ]
+    for payload, message in cases:
+        client, _ = _json_client(payload)
+        with pytest.raises(VllmResponseError, match=r"models envelope|models entry") as exc:
+            client.list_models()
+        assert str(exc.value) == message

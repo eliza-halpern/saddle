@@ -12,17 +12,27 @@ import httpx
 import pytest
 
 from saddle.cli import (
+    RunError,
     RunOptions,
     build_emit_prompt,
     build_parser,
     build_worker_prompt,
+    check_server,
     main,
+    run_doctor,
     run_task,
 )
 from saddle.dag import Node
 from saddle.evidence import run_argv
 from saddle.journal import read_records, read_spans
-from saddle.vllm import DEFAULT_BASE_URL, DagEmission, DiffProposal, VllmClient
+from saddle.vllm import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DagEmission,
+    DiffProposal,
+    VllmAuthError,
+    VllmClient,
+)
 
 TASK = "Fix f to return 2 and add a passing test."
 
@@ -123,6 +133,21 @@ def _options(repo: Path, **overrides: Any) -> RunOptions:
     return RunOptions(**(base | overrides))
 
 
+def _models_client(payload: Any, *, status: int = 200) -> VllmClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=payload)
+
+    return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+
+
+def _unreachable_client() -> VllmClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        msg = "refused"
+        raise httpx.ConnectError(msg)
+
+    return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+
+
 def test_main_no_args_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
     assert capsys.readouterr().out == ""
@@ -140,7 +165,8 @@ def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -
         main(["--help"])
     out = capsys.readouterr().out
     assert "\nDeterministic harness for local LLMs.\n" in out
-    assert "    run       Drive one mechanical task end to end.\n" in out
+    assert "    doctor      Check the server is usable.\n" in out
+    assert "    run         Drive one mechanical task end to end.\n" in out
 
 
 def test_build_emit_prompt_names_task_and_rules() -> None:
@@ -511,12 +537,61 @@ def test_run_task_auth_error_surfaces(tmp_path: Path) -> None:
     assert "rejected the API key" in out
 
 
+def test_check_server_returns_ids_when_model_served() -> None:
+    client = _models_client({"data": [{"id": "m"}, {"id": "other"}]})
+    assert check_server(client, base_url="http://x/v1", model="m") == ["m", "other"]
+
+
+def test_check_server_maps_client_failures() -> None:
+    cases: list[tuple[VllmClient, str]] = [
+        (_unreachable_client(), "request failed: refused"),
+        (
+            _models_client({"error": "nope"}, status=401),
+            "server rejected the API key (HTTP 401)",
+        ),
+        (_models_client("nope"), "models envelope must be an object"),
+    ]
+    for client, cause in cases:
+        with pytest.raises(RunError) as exc_info:
+            check_server(client, base_url="http://x/v1", model="m")
+        assert str(exc_info.value) == f"preflight failed at http://x/v1: {cause}"
+
+
+def test_check_server_rejects_unserved_model() -> None:
+    client = _models_client({"data": [{"id": "a"}, {"id": "b"}]})
+    with pytest.raises(RunError) as exc_info:
+        check_server(client, base_url="http://x/v1", model="m")
+    assert str(exc_info.value) == (
+        "preflight failed at http://x/v1: model 'm' is not served (served: a, b)"
+    )
+    bare = _models_client({"data": []})
+    with pytest.raises(RunError) as exc_info:
+        check_server(bare, base_url="http://x/v1", model="m")
+    assert str(exc_info.value) == (
+        "preflight failed at http://x/v1: model 'm' is not served (served: (none))"
+    )
+
+
+def test_run_doctor_reports_ok() -> None:
+    client = _models_client({"data": [{"id": "m"}, {"id": "n"}]})
+    out = io.StringIO()
+    assert run_doctor("http://x/v1", "m", client, stdout=out) == 0
+    assert out.getvalue() == "OK: http://x/v1 serves m (models: m, n)\n"
+
+
+def test_run_doctor_reports_failure() -> None:
+    out = io.StringIO()
+    assert run_doctor("http://x/v1", "m", _unreachable_client(), stdout=out) == 1
+    assert out.getvalue() == ("error: preflight failed at http://x/v1: request failed: refused\n")
+
+
 class _FakeClient:
     made: ClassVar[list[dict[str, Any]]] = []
     calls: ClassVar[list[dict[str, Any]]] = []
 
     def __init__(self, **kwargs: Any) -> None:
         _FakeClient.made.append(kwargs)
+        self._model = str(kwargs.get("model", DEFAULT_MODEL))
 
     def __enter__(self) -> _FakeClient:
         return self
@@ -531,6 +606,43 @@ class _FakeClient:
     def propose_diff(self, *args: Any, **kwargs: Any) -> DiffProposal:
         _FakeClient.calls.append({"diff": kwargs})
         return DiffProposal(diff=DIFF, reasoning="work")
+
+    def list_models(self) -> list[str]:
+        return [self._model]
+
+
+def _refusing_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+
+    def boom(self: _FakeClient) -> list[str]:
+        msg = "server rejected the API key (HTTP 401)"
+        raise VllmAuthError(msg)
+
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    monkeypatch.setattr(_FakeClient, "list_models", boom)
+
+
+def test_main_run_preflight_failure_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _refusing_setup(monkeypatch)
+    assert main(["run", "--repo", str(tmp_path), "--yes", TASK]) == 1
+    assert capsys.readouterr().err == (
+        f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
+    )
+    assert not (tmp_path / ".git").exists()
+    assert not (tmp_path / ".saddle").exists()
+
+
+def test_main_run_preflight_failure_uses_explicit_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _refusing_setup(monkeypatch)
+    err = io.StringIO()
+    assert main(["run", "--repo", str(tmp_path), "--yes", TASK], stderr=err) == 1
+    assert err.getvalue() == (
+        f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
+    )
 
 
 def test_main_run_missing_key_reports(
@@ -723,3 +835,51 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                        Emission reasoning effort.\n"
         "  --yes                 Skip the plan confirmation.\n"
     )
+
+
+def test_doctor_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match=r"^0$"):
+        main(["doctor", "--help"])
+    assert capsys.readouterr().out == (
+        "usage: saddle doctor [-h] [--base-url BASE_URL] [--model MODEL]\n"
+        "\n"
+        "options:\n"
+        "  -h, --help           show this help message and exit\n"
+        "  --base-url BASE_URL  vLLM base URL.\n"
+        "  --model MODEL        Model id.\n"
+    )
+
+
+def test_main_doctor_missing_key_reports(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    assert main(["doctor"]) == 1
+    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+
+
+def test_main_doctor_passes_flags_through(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    _FakeClient.made.clear()
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    assert main(["doctor", "--base-url", "http://x/v1", "--model", "m"]) == 0
+    assert _FakeClient.made[0]["api_key"] == "k"
+    assert _FakeClient.made[0]["base_url"] == "http://x/v1"
+    assert _FakeClient.made[0]["model"] == "m"
+    assert capsys.readouterr().out == "OK: http://x/v1 serves m (models: m)\n"
+
+
+def test_main_doctor_uses_defaults(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    _FakeClient.made.clear()
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    assert main(["doctor"]) == 0
+    assert _FakeClient.made[0]["base_url"] == DEFAULT_BASE_URL
+    assert _FakeClient.made[0]["model"] == DEFAULT_MODEL
+    out = capsys.readouterr().out
+    assert out == (f"OK: {DEFAULT_BASE_URL} serves {DEFAULT_MODEL} (models: {DEFAULT_MODEL})\n")

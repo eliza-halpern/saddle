@@ -28,6 +28,7 @@ from saddle.vllm import (
     DiffProposal,
     VllmAuthError,
     VllmClient,
+    VllmError,
     VllmRequestError,
     VllmResponseError,
 )
@@ -219,6 +220,20 @@ def _emit_valid_dag(
     raise RunError(msg)
 
 
+def check_server(client: VllmClient, *, base_url: str, model: str) -> list[str]:
+    """Preflight: reachability, key, model match. Returns served ids."""
+    try:
+        ids = client.list_models()
+    except VllmError as exc:
+        msg = f"preflight failed at {base_url}: {exc}"
+        raise RunError(msg) from exc
+    if model not in ids:
+        served = ", ".join(ids) if ids else "(none)"
+        msg = f"preflight failed at {base_url}: model {model!r} is not served (served: {served})"
+        raise RunError(msg)
+    return ids
+
+
 def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout: IO[str]) -> int:
     """Drive one task: emit, confirm, schedule, gate, seal, transcribe."""
     try:
@@ -270,12 +285,26 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
     return 0 if result.passed else 1
 
 
+def run_doctor(base_url: str, model: str, client: VllmClient, *, stdout: IO[str]) -> int:
+    """Report the server preflight verdict; 0 when the server is usable."""
+    try:
+        ids = check_server(client, base_url=base_url, model=model)
+    except RunError as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    stdout.write(f"OK: {base_url} serves {model} (models: {', '.join(ids)})\n")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
+    doctor = sub.add_parser("doctor", help="Check the server is usable.")
+    doctor.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
+    doctor.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
     run.add_argument("--repo", default=".", help="Directory to work in (repo created if missing).")
@@ -306,12 +335,15 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command != "run":
+    if args.command not in ("run", "doctor"):
         return 0
     key = _api_key()
     if not key:
         print("error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)", file=stderr or sys.stderr)
         return 1
+    if args.command == "doctor":
+        with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
+            return run_doctor(args.base_url, args.model, client, stdout=stdout or sys.stdout)
     repo = Path(args.repo)
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
     options = RunOptions(
@@ -324,6 +356,11 @@ def main(
         yes=args.yes,
     )
     with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
+        try:
+            check_server(client, base_url=args.base_url, model=args.model)
+        except RunError as exc:
+            print(f"error: {exc}", file=stderr or sys.stderr)
+            return 1
         return run_task(
             options,
             client,
