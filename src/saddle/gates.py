@@ -1,9 +1,9 @@
 """Tier-1 per-node gates (ARCHITECTURE.md §3 Phase 3 Tier 1).
 
 Checks run in gate order: lint/syntax, tests, changed-line coverage,
-red-phase, requirement binding. Each check is a small pure function so
-killer fixtures stay fast and deterministic; subprocess runners are
-injected at the boundary, never embedded in the predicates.
+red-phase, requirement binding, sampled mutation. Each check is a small
+pure function so killer fixtures stay fast and deterministic; subprocess
+runners are injected at the boundary, never embedded in the predicates.
 """
 
 from __future__ import annotations
@@ -11,8 +11,12 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from saddle.dag import Node
+
+if TYPE_CHECKING:
+    from saddle.evidence import MutationOutcome
 
 
 @dataclass(frozen=True)
@@ -132,6 +136,7 @@ class Tier1Inputs:
     baseline_runner: Callable[[], int]
     current_runner: Callable[[], int]
     flipped_tests: Mapping[str, str]
+    mutation: MutationOutcome
 
 
 @dataclass(frozen=True)
@@ -143,9 +148,30 @@ class Tier1Result:
     checks: tuple[GateCheck, ...]
 
 
+def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
+    """Sampled changed-line kill-rate must clear `threshold`; never waived."""
+    if outcome.total == 0:
+        if outcome.survivors:
+            cause = ", ".join(sorted(outcome.survivors)[:5])
+            return GateCheck(name="mutation", passed=False, detail=f"no mutants decided: {cause}")
+        if outcome.generated == 0:
+            return GateCheck(name="mutation", passed=True, detail="no mutants on changed lines")
+        return GateCheck(name="mutation", passed=False, detail="no mutants decided")
+    percent = 100.0 * outcome.killed / outcome.total
+    if percent < threshold:
+        shown = ", ".join(sorted(outcome.survivors)[:5])
+        return GateCheck(
+            name="mutation",
+            passed=False,
+            detail=f"{percent:.1f}% < {threshold:.1f}%: survived {shown}",
+        )
+    return GateCheck(name="mutation", passed=True, detail=f"{percent:.1f}% >= {threshold:.1f}%")
+
+
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
-    """Run all five Tier-1 checks against `node`'s gate spec and aggregate."""
+    """Run all seven Tier-1 checks against `node`'s gate spec and aggregate."""
     gate = node.deterministic_gate
+    sample = gate.mutation_sample
     checks = (
         check_syntax(inputs.sources),
         check_ruff(inputs.ruff_files, inputs.ruff_runner),
@@ -155,5 +181,6 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             inputs.baseline_runner, inputs.current_runner, required=gate.red_phase_required
         ),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
+        check_mutation(inputs.mutation, sample.kill_threshold),
     )
     return Tier1Result(node_id=node.id, passed=all(check.passed for check in checks), checks=checks)

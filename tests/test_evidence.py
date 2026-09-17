@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import stat
 import sys
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 import saddle.evidence as evidence_module
 from saddle.evidence import (
+    _MUTATION_TIMEOUT_S,
+    CapturedRun,
+    MutationOutcome,
+    _mutmut_scratch_config,
     changed_lines,
     covered_lines,
     drop_test_caches,
     git_diff,
     git_ls_files,
     materialize_baseline,
+    mutation_sample,
     run_argv,
     run_capture,
     run_shell,
@@ -100,6 +109,19 @@ def test_drop_test_caches_removes_caches_but_keeps_sources(tmp_path: Path) -> No
     assert not (tmp_path / "stray.pyc").exists()
     assert not (tmp_path / ".pytest_cache").exists()
     assert (tmp_path / "keep.py").is_file()
+
+
+def test_drop_test_caches_tolerates_unremovable_caches(tmp_path: Path) -> None:
+    locked = [tmp_path / "pkg" / "__pycache__", tmp_path / ".pytest_cache"]
+    try:
+        for cache in locked:
+            cache.mkdir(parents=True, exist_ok=True)
+            (cache / "x.bin").write_text("x")
+            cache.chmod(0o555)
+        drop_test_caches(tmp_path)
+    finally:
+        for cache in locked:
+            cache.chmod(0o755)
 
 
 def test_runners_record_spans_when_given_recorder(tmp_path: Path) -> None:
@@ -307,6 +329,7 @@ def test_covered_lines_matches_relative_query_to_absolute_data(
     assert run_argv([sys.executable, "-c", prog], tmp_path) == 0
     monkeypatch.chdir(tmp_path)
     assert covered_lines(data_file, ["n.py"]) == {("n.py", 1), ("n.py", 2)}
+    assert covered_lines(data_file, ["missing.py", "n.py"]) == {("n.py", 1), ("n.py", 2)}
 
 
 def test_covered_lines_missing_data_file_yields_empty(tmp_path: Path) -> None:
@@ -325,6 +348,234 @@ def test_covered_lines_ignores_local_config(
     (tmp_path / ".coveragerc").write_text("[run\ninvalid [[[\n")
     monkeypatch.chdir(tmp_path)
     assert covered_lines(str(tmp_path / "nope.coverage"), ["n.py"]) == set()
+
+
+def _stub_mutmut(
+    stub_dir: Path, results: str, shows: dict[str, str], run_body: str = "exit 0"
+) -> None:
+    """Executable `mutmut` stub with canned results and per-name show output."""
+    (stub_dir / "results.txt").write_text(results)
+    for name, diff in shows.items():
+        (stub_dir / f"show_{name}.txt").write_text(diff)
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'STUB_DIR="{stub_dir}"\n'
+        'case "$1" in\n'
+        f"  run) {run_body};;\n"
+        '  results) cat "$STUB_DIR/results.txt";;\n'
+        '  show) cat "$STUB_DIR/show_$2.txt" 2>/dev/null || echo "unparseable";;\n'
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _show_diff(path: str, old: str, new: str = "x = 2") -> str:
+    return f"--- {path}\n+++ {path}\n@@ -1 +1 @@\n-{old}\n+{new}\n"
+
+
+def _mutation_workdir(root: Path) -> Path:
+    workdir = root / "work"
+    (workdir / "tests").mkdir(parents=True)
+    # Line 3 ("-- a.py") is a sentinel: it equals the [1:] slice of the
+    # "--- a.py" header, so any mutant that admits header lines into the
+    # removed-line set flips a miss to a hit. Never imported; text only.
+    (workdir / "a.py").write_text("x = 1\ny = 2\n-- a.py\n")
+    (workdir / "b.py").write_text("z = 3\n")
+    (workdir / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    deep = workdir / "src" / "deep" / "nested"
+    deep.mkdir(parents=True)
+    # Two missing levels: mkdir(parents=False) mutants fail materializing this.
+    (deep / "deep.py").write_text("x = 1\n")
+    cache = workdir / "__pycache__"
+    cache.mkdir()
+    (cache / "q.py").write_text("# cached bytecode source stays out of the scratch copy\n")
+    return workdir
+
+
+def test_mutation_sample_filters_scopes_and_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(
+        stub_dir,
+        "\n".join(
+            [
+                "",
+                "  m_apending: not checked",
+                "  m_file: killed",
+                "  m_ghost: killed",
+                "  m_hit1: killed",
+                "  m_hit2: survived",
+                "  m_hit3: timeout",
+                "  m_line: killed",
+                "  m_noop: killed",
+                "  m_noshow: killed",
+                "  m_zpending: not checked",
+                "  m_zpref: killed",
+                "",
+            ]
+        ),
+        {
+            "m_file": _show_diff("b.py", "z = 3"),
+            "m_ghost": _show_diff("ghost.py", "x = 1"),
+            "m_hit1": _show_diff("a.py", "x = 1"),
+            "m_hit2": _show_diff("a.py", "x = 1"),
+            "m_hit3": _show_diff("a.py", "x = 1"),
+            "m_line": _show_diff("a.py", "y = 2"),
+            "m_noop": "--- a.py\n+++ a.py\n@@ -1 +1 @@\n context only\n",
+            "m_zpref": "--- b/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n",
+        },
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {
+        (str(workdir / "a.py"), 1),
+        (str(workdir / "a.py"), 3),
+        (str(workdir / "ghost.py"), 1),
+    }
+    outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
+    assert outcome == MutationOutcome(killed=3, total=4, generated=6, survivors=("m_hit2",))
+    sampled = mutation_sample(workdir, changed, 2, test_files={"tests/test_a.py"})
+    assert sampled == MutationOutcome(killed=1, total=2, generated=6, survivors=("m_hit2",))
+
+
+def test_mutmut_scratch_config_exact() -> None:
+    assert _mutmut_scratch_config(["a.py", "tests/x.py"]) == (
+        "[tool.mutmut]\n"
+        'source_paths = ["a.py", "tests/x.py"]\n'
+        'pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider"]\n'
+    )
+
+
+def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The collector invokes mutmut with exact argv, scratch cwd, and recorder.
+
+    A recording fake (not the shell stub) observes the invocation shape the
+    stub cannot see: exact argv per call, a saddle-mutation- scratch cwd
+    carrying the config and deep tree but no __pycache__, and recorder
+    pass-through on every call.
+    """
+    workdir = _mutation_workdir(tmp_path)
+    calls: list[tuple[tuple[str, ...], Path | None, SpanRecorder | None]] = []
+
+    def fake(
+        argv: Sequence[str], cwd: Path | None, *, recorder: SpanRecorder | None = None
+    ) -> CapturedRun:
+        assert cwd is not None
+        assert cwd.name.startswith("saddle-mutation-")
+        assert (cwd / "pyproject.toml").is_file()
+        assert not (cwd / "__pycache__").exists()
+        assert (cwd / "src" / "deep" / "nested" / "deep.py").is_file()
+        calls.append((tuple(argv), cwd, recorder))
+        if list(argv[:2]) == ["mutmut", "results"]:
+            return CapturedRun(argv=tuple(argv), exit_code=0, stdout="  m1: killed\n", stderr="")
+        if list(argv[:2]) == ["mutmut", "show"]:
+            return CapturedRun(
+                argv=tuple(argv),
+                exit_code=0,
+                stdout=_show_diff("a.py", "x = 1"),
+                stderr="",
+            )
+        return CapturedRun(argv=tuple(argv), exit_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(evidence_module, "run_capture", fake)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/{name}")
+    rec = SpanRecorder(path=tmp_path / "spans.jsonl", node_id="n1")
+    outcome = mutation_sample(
+        workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set(), recorder=rec
+    )
+    assert outcome == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+    assert [argv for argv, _, _ in calls] == [
+        ("timeout", str(_MUTATION_TIMEOUT_S), "mutmut", "run"),
+        ("mutmut", "results", "--all", "True"),
+        ("mutmut", "show", "m1"),
+    ]
+    cwds = [cwd for _, cwd, _ in calls]
+    assert cwds[0] is not None
+    assert all(cwd == cwds[0] for cwd in cwds)
+    assert [item is rec for _, _, item in calls] == [True, True, True]
+
+
+def test_mutation_sample_missing_tool_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = _mutation_workdir(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    outcome = mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
+    assert outcome == MutationOutcome(
+        killed=0, total=0, generated=0, survivors=("mutmut not on PATH",)
+    )
+
+
+def test_mutation_sample_timeout_yields_undecided(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(stub_dir, "  m1: not checked\n", {}, run_body="sleep 5")
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    outcome = mutation_sample(
+        workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set(), timeout_s=1
+    )
+    assert outcome == MutationOutcome(killed=0, total=0, generated=1, survivors=())
+
+
+def test_mutation_sample_vacuous_without_changes(tmp_path: Path) -> None:
+    workdir = _mutation_workdir(tmp_path)
+    assert mutation_sample(workdir, set(), 10, test_files=set()) == MutationOutcome(
+        killed=0, total=0, generated=0, survivors=()
+    )
+
+
+def test_mutation_sample_vacuous_without_production(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = tmp_path / "work"
+    (workdir / "tests").mkdir(parents=True)
+    (workdir / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(stub_dir, "", {}, run_body=f"touch {stub_dir}/ran && exit 0")
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "tests" / "test_a.py"), 1)}
+    outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
+    assert outcome == MutationOutcome(killed=0, total=0, generated=0, survivors=())
+    assert not (stub_dir / "ran").exists()
+
+
+def test_mutation_sample_vacuous_when_no_mutants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(stub_dir, "\n", {})
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    outcome = mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
+    assert outcome == MutationOutcome(killed=0, total=0, generated=0, survivors=())
+
+
+def test_mutation_sample_skips_test_file_mutants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(
+        stub_dir,
+        "  m_atest: killed\n  m_prod: killed\n",
+        {
+            "m_atest": _show_diff("tests/test_a.py", "def test_a():"),
+            "m_prod": _show_diff("a.py", "x = 1"),
+        },
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), 1), (str(workdir / "tests" / "test_a.py"), 1)}
+    outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
+    assert outcome == MutationOutcome(killed=1, total=1, generated=1, survivors=())
 
 
 def test_statement_lines_skips_blanks_and_comments() -> None:

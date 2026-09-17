@@ -309,6 +309,7 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
         node, "diff n1\n", result, [parent.record_hash], "e1", thinking="why n1"
     )
     assert record.node_id == "n1"
+    assert record.attempts == 1
     assert record.thinking == "why n1"
     assert record.requirement_ids == ["REQ-001"]
     assert record.parent_proofs == [parent.record_hash]

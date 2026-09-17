@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
+
+import pytest
 
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
@@ -11,7 +14,9 @@ from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import read_sources, run_node_gate
 
 
-def _node(test_command: str = "pytest test_n.py") -> Node:
+def _node(
+    test_command: str = "pytest test_n.py", kill_threshold: float = 85.0, max_mutants: int = 10
+) -> Node:
     return Node.model_validate(
         {
             "id": "n1",
@@ -29,8 +34,8 @@ def _node(test_command: str = "pytest test_n.py") -> Node:
                 "red_phase_required": True,
                 "mutation_sample": {
                     "scope": "changed-lines",
-                    "max_mutants": 10,
-                    "kill_threshold": 85.0,
+                    "max_mutants": max_mutants,
+                    "kill_threshold": kill_threshold,
                 },
             },
         }
@@ -85,6 +90,40 @@ def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:
     assert (tmp_path / ".coverage.tier1").is_file()
 
 
+def test_run_node_gate_mutation_check_runs_when_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    test_body = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    (stub_dir / "results.txt").write_text("  m1: killed\n  m2: survived\n")
+    (stub_dir / "show_m1.txt").write_text(
+        "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
+    )
+    (stub_dir / "show_m2.txt").write_text(
+        "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 4\n"
+    )
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'STUB_DIR="{stub_dir}"\n'
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        '  results) cat "$STUB_DIR/results.txt";;\n'
+        '  show) cat "$STUB_DIR/show_$2.txt";;\n'
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    result = run_node_gate(_node(kill_threshold=85.0, max_mutants=1), tmp_path)
+    assert result.passed is True
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["mutation"].detail == "100.0% >= 85.0%"
+
+
 def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
@@ -94,9 +133,19 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     result = run_node_gate(_node(), tmp_path, recorder=SpanRecorder(path=journal, node_id="n1"))
     assert result.passed is True
     spans = read_spans(journal)
-    assert [span.name for span in spans] == ["git", "coverage", "git", "pytest", "ruff", "ruff"]
+    assert [span.name for span in spans] == [
+        "git",
+        "coverage",
+        "git",
+        "pytest",
+        "timeout",
+        "mutmut",
+        "mutmut",
+        "ruff",
+        "ruff",
+    ]
     assert all(span.node_id == "n1" for span in spans)
-    assert [span.exit_code for span in spans] == [0, 0, 0, 4, 0, 0]
+    assert [span.exit_code for span in spans] == [0, 0, 0, 4, 0, 0, 0, 0, 0]
 
 
 def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> None:

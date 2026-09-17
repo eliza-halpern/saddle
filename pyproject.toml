@@ -58,4 +58,6 @@ branch = true
 # mutmut 3.x runs pytest in-process; coverage is disabled for mutant runs
 # (per-run coverage is pure overhead and fails the 100% gate by design).
 source_paths = ["src/saddle/"]
+# Copied into mutants/ unmutated: test_stall_check imports the harness.
+also_copy = ["benchmark/"]
 pytest_add_cli_args = ["-p", "no:cov", "-o", "addopts=", "-q", "-x"]

@@ -199,6 +199,7 @@ async def _run_node(
                     f"attempt {attempt}/{max_attempts}: "
                     "worker re-proposed an identical diff; stopping recovery"
                 )
+                # No tool spans precede this seal, so its span id is unlinkable by design.
                 _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, detail)
                 raise _HaltRecoveryError(last_result, attempt, failure)
             seen.append(proposal.diff)
@@ -426,7 +427,7 @@ def run_slice(
         if not eligible:
             break
         by_id = {node.id: node for node in remaining.nodes}
-        progressed = False
+        progressed = False  # Observed only via `not`; falsy-init mutants are equivalent.
         for node_id, exc in eligible.items():
             try:
                 new = replan(by_id[node_id], format_replan_history(node_id, exc))

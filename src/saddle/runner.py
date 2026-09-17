@@ -20,6 +20,7 @@ from saddle.evidence import (
     drop_test_caches,
     git_diff,
     materialize_baseline,
+    mutation_sample,
     run_capture,
     run_shell,
     run_shell_capture,
@@ -90,6 +91,10 @@ def run_node_gate(
             capture.append(run)
         return run.exit_code
 
+    sample = gate.mutation_sample
+    mutation = mutation_sample(
+        workdir, changed, sample.max_mutants, test_files=test_sources, recorder=recorder
+    )
     inputs = Tier1Inputs(
         sources=sources,
         ruff_files=[
@@ -104,5 +109,6 @@ def run_node_gate(
         baseline_runner=lambda: baseline_exit,
         current_runner=lambda: current_exit,
         flipped_tests=test_sources,
+        mutation=mutation,
     )
     return run_tier1(node, inputs)

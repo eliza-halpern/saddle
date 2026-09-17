@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 from saddle.dag import Node
+from saddle.evidence import MutationOutcome
 from saddle.gates import (
     Tier1Inputs,
     check_changed_line_coverage,
+    check_mutation,
     check_red_phase,
     check_requirement_binding,
     check_ruff,
@@ -54,6 +56,7 @@ def _passing_inputs() -> Tier1Inputs:
         baseline_runner=lambda: 1,
         current_runner=lambda: 0,
         flipped_tests={"test_a": "def test_a():  # REQ-001\n    assert True\n"},
+        mutation=MutationOutcome(killed=9, total=10, generated=10, survivors=("m1",)),
     )
 
 
@@ -224,16 +227,59 @@ def test_run_tier1_all_green_passes() -> None:
         "coverage",
         "red-phase",
         "requirement-binding",
+        "mutation",
     ]
     by_name = {check.name: check for check in result.checks}
     assert by_name["coverage"].detail == "100.0% >= 100.0%"
     assert by_name["red-phase"].detail == "fail pre-change, pass post-change"
+    assert by_name["mutation"].detail == "90.0% >= 85.0%"
 
 
 def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 6
+    assert len(result.checks) == 7
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
+
+
+def test_mutation_below_threshold_fails_with_survivors() -> None:
+    outcome = MutationOutcome(
+        killed=1, total=7, generated=7, survivors=("s6", "s5", "s4", "s3", "s2", "s1")
+    )
+    check = check_mutation(outcome, 85.0)
+    assert check.name == "mutation"
+    assert check.passed is False
+    assert check.detail == "14.3% < 85.0%: survived s1, s2, s3, s4, s5"
+
+
+def test_mutation_boundary_threshold_passes() -> None:
+    outcome = MutationOutcome(killed=17, total=20, generated=20, survivors=("s1",))
+    check = check_mutation(outcome, 85.0)
+    assert check.name == "mutation"
+    assert check.passed is True
+    assert check.detail == "85.0% >= 85.0%"
+
+
+def test_mutation_vacuous_passes_without_mutants() -> None:
+    check = check_mutation(MutationOutcome(killed=0, total=0, generated=0, survivors=()), 85.0)
+    assert check.name == "mutation"
+    assert check.passed is True
+    assert check.detail == "no mutants on changed lines"
+
+
+def test_mutation_undecided_fails_with_cause() -> None:
+    bare = check_mutation(MutationOutcome(killed=0, total=0, generated=3, survivors=()), 85.0)
+    assert bare.name == "mutation"
+    assert bare.passed is False
+    assert bare.detail == "no mutants decided"
+    caused = check_mutation(
+        MutationOutcome(
+            killed=0, total=0, generated=0, survivors=("c6", "c5", "c4", "c3", "c2", "c1")
+        ),
+        85.0,
+    )
+    assert caused.name == "mutation"
+    assert caused.passed is False
+    assert caused.detail == "no mutants decided: c1, c2, c3, c4, c5"

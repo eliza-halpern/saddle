@@ -89,7 +89,9 @@ def _git_repo(root: Path) -> None:
     assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
 
 
-def _node_dict(node_id: str = "n1", budget: str = "low") -> dict[str, Any]:
+def _node_dict(
+    node_id: str = "n1", budget: str = "low", kill_threshold: float = 85.0
+) -> dict[str, Any]:
     return {
         "id": node_id,
         "dependencies": [],
@@ -107,7 +109,7 @@ def _node_dict(node_id: str = "n1", budget: str = "low") -> dict[str, Any]:
             "mutation_sample": {
                 "scope": "changed-lines",
                 "max_mutants": 10,
-                "kill_threshold": 85.0,
+                "kill_threshold": kill_threshold,
             },
         },
     }
@@ -317,8 +319,11 @@ def test_build_repair_prompt_adds_failure_evidence() -> None:
     assert TASK in prompt
     assert "Fix forward" in prompt
     assert "CURRENT tree state" in prompt
+    assert "propose a diff against the CURRENT tree state above that repairs" in prompt
+    assert "repairs the failure below. Do not restate" in prompt
     assert "Attempt 1 of 3 failed 1 gate(s):" in prompt
     assert "Recovery plan:\n1. Change the return value.\n" in prompt
+    assert "1. Change the return value.\n\n\nAttempt 1 of 3" in prompt
     assert "--- n.py ---\ndef f():\n    return 3\n" in prompt
 
 
@@ -330,6 +335,14 @@ def test_build_replan_task_names_scope_and_history() -> None:
     assert "Requirements to cover: REQ-001" in text
     assert "Gate command the new nodes must satisfy: pytest test_n.py" in text
     assert "Failure history (do not repeat it):\nNode 'n1' failed.\n" in text
+
+
+def test_build_replan_task_joins_multiple_requirements() -> None:
+    data = _node_dict()
+    data["requirement_ids"] = ["REQ-001", "REQ-002"]
+    node = Node.model_validate(data)
+    text = build_replan_task(task=TASK, node=node, history="x\n")
+    assert "Requirements to cover: REQ-001, REQ-002" in text
 
 
 def test_build_recovery_plan_prompt_asks_for_diagnosis() -> None:
@@ -344,6 +357,11 @@ def test_build_recovery_plan_prompt_asks_for_diagnosis() -> None:
     assert TASK in prompt
     assert "Diagnose the root cause" in prompt
     assert "numbered plan, no diff" in prompt
+    assert (
+        "against the CURRENT tree state above, then outline the minimal fix steps. "
+        "Write a short numbered plan" in prompt
+    )
+    assert "no commentary outside the plan.\n\nAttempt 1 of 3" in prompt
     assert "Attempt 1 of 3 failed 1 gate(s):" in prompt
 
 
@@ -649,13 +667,17 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
         _diff_response(fix),
     ]
     client = _scripted_client(script, seen)
-    code, out = _run(_options(tmp_path), client)
+    code, out = _run(_options(tmp_path, max_tokens=100, temperature=0.5), client)
     assert code == 0
     assert "- Attempts: 2\n" in out
     assert len(seen) == 4
     assert seen[2]["reasoning_effort"] == "xhigh"
+    assert seen[2]["max_tokens"] == 100
+    assert seen[2]["temperature"] == 0.5
     assert "structured_outputs" not in seen[2]
     assert "Diagnose the root cause" in _prompt(seen[2])
+    assert f"Task: {TASK}" in _prompt(seen[2])
+    assert f"Task: {TASK}" in _prompt(seen[3])
     assert "The previous attempt failed" in _prompt(seen[3])
     assert "Fix forward" in _prompt(seen[3])
     assert "Attempt 1 of 3" in _prompt(seen[3])
@@ -688,8 +710,12 @@ def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
     code, out = _run(_options(tmp_path), client)
     assert code == 0
     assert len(seen) == 6
+    assert seen[4]["max_tokens"] == 8192
+    assert seen[4]["temperature"] == 0.0
     assert "must be re-planned" in _prompt(seen[4])
     assert "Failure history" in _prompt(seen[4])
+    assert f"Original task: {TASK}" in _prompt(seen[4])
+    assert "failed Tier-1 after" in _prompt(seen[4])
     assert "## Node n1\n" in out
     assert "## Node n1.r1\n" in out
     assert out.count("- Attempts: 2\n") == 1
@@ -796,7 +822,7 @@ def test_run_doctor_reports_failure() -> None:
 
 
 def test_render_dag_plan_lists_nodes_with_gates() -> None:
-    first = _node_dict("n1", "low")
+    first = _node_dict("n1", "low", kill_threshold=85.0)
     second = _node_dict("n2", "medium")
     second["dependencies"] = ["n1"]
     second["task_prompt"] = "Wire it up."
@@ -846,7 +872,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
 
 
 def test_render_dag_plan_single_node() -> None:
-    dag = Dag.model_validate({"nodes": [_node_dict("n1", "low")]})
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]})
     assert render_dag_plan("Do it.", dag) == (
         "Task: Do it.\n"
         "Plan: 1 node(s): n1\n"
@@ -865,10 +891,12 @@ def _dag_options() -> DagOptions:
 
 
 def test_run_dag_prints_plan() -> None:
-    second = _node_dict("n2", "low")
+    second = _node_dict("n2", "low", kill_threshold=85.0)
     second["dependencies"] = ["n1"]
     seen: list[httpx.Request] = []
-    client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low"), second]}, seen)
+    client = _dag_client(
+        ["m"], {"nodes": [_node_dict("n1", "low", kill_threshold=85.0), second]}, seen
+    )
     out = io.StringIO()
     assert run_dag(_dag_options(), client, stdout=out) == 0
     body = json.loads(seen[1].content)
@@ -1044,6 +1072,8 @@ def test_main_run_passes_sampling_flags_through(
             "0.5",
             "--reasoning-effort",
             "low",
+            "--worker-effort",
+            "xhigh",
             "--yes",
             TASK,
         ],
@@ -1053,6 +1083,7 @@ def test_main_run_passes_sampling_flags_through(
     assert _FakeClient.calls[0]["emit"]["max_tokens"] == 100
     assert _FakeClient.calls[0]["emit"]["temperature"] == 0.5
     assert _FakeClient.calls[0]["emit"]["reasoning_effort"] == "low"
+    assert _FakeClient.calls[1]["diff"]["reasoning_effort"] == "xhigh"
 
 
 def test_main_run_confirms_through_explicit_streams(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import subprocess
@@ -23,10 +24,13 @@ from saddle.journal import (
     read_spans,
 )
 from saddle.slice import (
+    RECOVERY_OUTPUT_CHARS,
     NodeGateFailedError,
     NodeUnappliableError,
     ReplanFailedError,
     _apply_diff,
+    _HaltRecoveryError,
+    _run_node,
     _schedulable_nodes,
     _utcnow,
     format_attempt_failure,
@@ -150,6 +154,24 @@ def test_node_gate_failed_carries_verdict() -> None:
     assert NodeGateFailedError(result, attempts=3).attempts == 3
 
 
+def test_node_unappliable_carries_evidence() -> None:
+    error = NodeUnappliableError("n1", "no proposed diff applied in 3 attempts", 3, "Attempt 3")
+    assert str(error) == "node 'n1': no proposed diff applied in 3 attempts"
+    assert error.node_id == "n1"
+    assert error.attempts == 3
+    assert error.failure == "Attempt 3"
+    defaulted = NodeUnappliableError("n1", "detail")
+    assert (defaulted.attempts, defaulted.failure) == (1, None)
+
+
+def test_halt_recovery_carries_evidence() -> None:
+    error = _HaltRecoveryError(None, 2, "Attempt 2 evidence")
+    assert str(error) == "worker re-proposed an identical diff"
+    assert error.result is None
+    assert error.attempts == 2
+    assert error.failure == "Attempt 2 evidence"
+
+
 def test_apply_diff_applies_and_stages(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     diff = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
@@ -205,6 +227,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
     assert "- Gate red-phase: PASS (fail pre-change, pass post-change)\n" in result.transcript
     assert "- Gate requirement-binding: PASS (1 requirement(s) bound)\n" in result.transcript
+    assert "- Gate mutation: PASS (no mutants on changed lines)\n" in result.transcript
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
@@ -226,6 +249,9 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "coverage",
         "git",
         "pytest",
+        "timeout",
+        "mutmut",
+        "mutmut",
         "ruff",
         "ruff",
     ]
@@ -288,6 +314,9 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert second.parent_id == run.span_id
     assert run.exit_code == 1
     assert run.detail == "0 proven, 1 failed, 1 undispatched"
+    tools = [span for span in spans if span.kind == "tool"]
+    assert tools
+    assert {tool.parent_id for tool in tools} == {first.span_id}
 
 
 def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None:
@@ -342,6 +371,11 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     workers = [span for span in spans if span.name == "worker:n1"]
     assert len(workers) == 3
     assert all("diff did not apply" in span.detail for span in workers)
+    git_runs = [span for span in spans if span.name == "git"]
+    run = next(span for span in spans if span.name == "run")
+    assert [span.exit_code for span in workers] == [1, 1, 1]
+    assert [span.parent_id for span in workers] == [run.span_id] * 3
+    assert [tool.parent_id for tool in git_runs] == [span.span_id for span in workers]
 
 
 def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
@@ -453,6 +487,84 @@ def test_run_slice_propose_error_seals_worker_span(tmp_path: Path) -> None:
         ("worker:n1", 1, "boom"),
         ("run", 1, "0 proven, 1 failed, 0 undispatched"),
     ]
+    assert agents[0].parent_id == agents[1].span_id
+
+
+def test_run_node_identical_after_nonapply_reports_unappliable(tmp_path: Path) -> None:
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal("not a diff\n", "")
+
+    with pytest.raises(NodeUnappliableError) as caught:
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+    error = caught.value
+    assert error.node_id == "n1"
+    assert error.attempts == 2
+    assert error.failure is not None
+    assert error.failure.startswith("Attempt 1 of 3: diff did not apply: ")
+    assert str(error) == "node 'n1': identical diff re-proposed after 2 non-applying attempt(s)"
+
+
+def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None:
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    diffs = ["garbage one\n", "garbage two\n", "garbage three\n"]
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        return DiffProposal(diffs[len(calls) - 1], "")
+
+    with pytest.raises(NodeUnappliableError) as caught:
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+    error = caught.value
+    assert error.node_id == "n1"
+    assert error.attempts == 3
+    assert error.failure is not None
+    assert error.failure.startswith("Attempt 3 of 3: diff did not apply: ")
+    assert str(error) == "node 'n1': no proposed diff applied in 3 attempts"
+
+
+def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> None:
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    diffs = [BAD_DIFF, JUNK1_DIFF, JUNK2_DIFF]
+    seen: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        seen.append(failure)
+        return DiffProposal(diffs[len(seen) - 1], "")
+
+    with pytest.raises(NodeGateFailedError) as caught:
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+    error = caught.value
+    assert error.attempts == 3
+    assert error.result.passed is False
+    assert error.failure is not None
+    assert "Attempt 3 of 3" in error.failure
+
+
+def test_run_node_missing_proof_seals_attempt_with_tool_linkage(tmp_path: Path) -> None:
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", ["ghost"]))
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(GOOD_DIFF, "")
+
+    with pytest.raises(KeyError):
+        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run-test"))
+    spans = read_spans(journal)
+    tools = [span for span in spans if span.kind == "tool"]
+    workers = [span for span in spans if span.name == "worker:n1"]
+    assert tools
+    assert len(workers) == 1
+    assert workers[0].detail == "'ghost'"
+    assert workers[0].exit_code == 1
+    assert workers[0].parent_id == "run-test"
+    assert {tool.parent_id for tool in tools} == {workers[0].span_id}
 
 
 def _failed_result() -> Tier1Result:
@@ -510,7 +622,31 @@ def test_format_attempt_failure_truncates_long_output() -> None:
 def test_format_attempt_failure_marks_empty_output() -> None:
     captured = [CapturedRun(argv=("pytest",), exit_code=2, stdout="", stderr="")]
     text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
-    assert "(no output)" in text
+    assert text == (
+        "Attempt 1 of 3 failed 1 gate(s):\n"
+        "- tests: 'pytest test_n.py' exited 1\n"
+        "--- `pytest` (exit 2) ---\n"
+        "(no output)\n"
+    )
+
+
+def test_format_attempt_failure_renders_failing_run_after_passing_run() -> None:
+    captured = [
+        CapturedRun(argv=("pytest",), exit_code=0, stdout="ok", stderr=""),
+        CapturedRun(argv=("pytest",), exit_code=1, stdout="traceback here", stderr=""),
+    ]
+    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    assert "--- `pytest` (exit 1) ---" in text
+    assert "traceback here" in text
+
+
+def test_format_attempt_failure_keeps_exact_boundary_output() -> None:
+    captured = [
+        CapturedRun(argv=("pytest",), exit_code=1, stdout="y" * RECOVERY_OUTPUT_CHARS, stderr="")
+    ]
+    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    assert "[earlier output truncated]" not in text
+    assert "y" * RECOVERY_OUTPUT_CHARS in text
 
 
 def test_splice_replan_rewires_dependents_to_new_leaves() -> None:
@@ -521,6 +657,7 @@ def test_splice_replan_rewires_dependents_to_new_leaves() -> None:
                 _node_dict("a", ["z"]),
                 _node_dict("b", ["a"]),
                 _node_dict("c", []),
+                _node_dict("d", ["a", "z"]),
             ]
         }
     )
@@ -528,12 +665,13 @@ def test_splice_replan_rewires_dependents_to_new_leaves() -> None:
     merged, gen_ids = splice_replan(dag, "a", new)
     assert gen_ids == ["a.r1", "a.r2"]
     by_id = {node.id: node for node in merged.nodes}
-    assert [node.id for node in merged.nodes] == ["z", "a", "b", "c", "a.r1", "a.r2"]
+    assert [node.id for node in merged.nodes] == ["z", "a", "b", "c", "d", "a.r1", "a.r2"]
     assert by_id["a"].dependencies == ["z"]
     assert by_id["a.r1"].dependencies == ["z"]
     assert by_id["a.r2"].dependencies == ["a.r1"]
     assert by_id["b"].dependencies == ["a.r2"]
     assert by_id["c"].dependencies == []
+    assert by_id["d"].dependencies == ["a.r2", "z"]
     assert by_id["z"].dependencies == []
 
 
@@ -561,16 +699,19 @@ def test_splice_replan_rejects_leafless_replan() -> None:
 def test_format_replan_history_gate_failure() -> None:
     error = NodeGateFailedError(_failed_result(), 2, "Attempt 2 evidence\n")
     text = format_replan_history("n1", error)
-    assert "Node 'n1' failed Tier-1 after 2 attempt(s):" in text
-    assert "- tests: 'pytest test_n.py' exited 1" in text
-    assert "Last attempt evidence:\nAttempt 2 evidence\n" in text
+    assert text == (
+        "Node 'n1' failed Tier-1 after 2 attempt(s):\n"
+        "- tests: 'pytest test_n.py' exited 1\n"
+        "Last attempt evidence:\n"
+        "Attempt 2 evidence\n"
+        "\n"
+    )
 
 
 def test_format_replan_history_unappliable_without_evidence() -> None:
     error = NodeUnappliableError("n1", "no proposed diff applied in 3 attempts", 3)
     text = format_replan_history("n1", error)
-    assert "Node 'n1' produced no applicable diff after 3 attempt(s)." in text
-    assert "Last attempt" not in text
+    assert text == "Node 'n1' produced no applicable diff after 3 attempt(s).\n"
 
 
 def test_schedulable_nodes_filters_proven_failed_blocked() -> None:
@@ -615,6 +756,8 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
     assert len(replans) == 1
     assert replans[0][0] == "n1"
     assert "failed Tier-1 after 2 attempt(s)" in replans[0][1]
+    assert "Node 'n1' failed Tier-1 after 2 attempt(s):" in replans[0][1]
+    assert "Last attempt evidence:\nAttempt 1 of 3" in replans[0][1]
     assert list(result.proofs) == ["n1.r1"]
     assert "## Node n1\n" in result.transcript
     assert "## Node n1.r1\n" in result.transcript
@@ -679,6 +822,38 @@ def test_run_slice_replan_failure_keeps_node_failed(tmp_path: Path) -> None:
     assert "- Attempts: 2\n" in result.transcript
     run = next(span for span in read_spans(journal) if span.name == "run")
     assert run.detail == "0 proven, 1 failed, 0 undispatched"
+
+
+def test_run_slice_replan_continues_past_failed_emission(tmp_path: Path) -> None:
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("a", []), _node_dict("b", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        if node.id in ("a", "b"):
+            return DiffProposal(BAD_DIFF, "")
+        return DiffProposal(FIX_DIFF, "")
+
+    def replan(node: Node, history: str) -> Dag:
+        calls.append(node.id)
+        if node.id == "a":
+            msg = "emission exhausted"
+            raise ReplanFailedError(msg)
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        replan=replan,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert calls == ["a", "b"]
+    assert list(result.proofs) == ["b.r1"]
+    assert result.passed is False
 
 
 def test_run_slice_pass_with_replan_callback_unused(tmp_path: Path) -> None:

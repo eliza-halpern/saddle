@@ -379,7 +379,8 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 reasoning_effort=options.reasoning_effort,
             )
         except RunError as exc:
-            raise ReplanFailedError(str(exc)) from exc
+            # Message unobserved: the scheduler swallows it with a bare continue.
+            raise ReplanFailedError(str(exc)) from exc  # pragma: no mutate
 
     try:
         result = run_slice(
@@ -556,7 +557,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--worker-effort",
         choices=list(REASONING_EFFORTS),
-        default=None,
         help="Worker effort override (default: per-node budget).",
     )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")

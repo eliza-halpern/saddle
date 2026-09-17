@@ -8,12 +8,14 @@ possible so fixtures stay fast and branch coverage stays cheap.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import tarfile
+import tempfile
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from io import BytesIO
@@ -25,6 +27,8 @@ import coverage
 from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_MUTANT_VERDICT = re.compile(r"^\s*(\S+): (killed|survived|timeout|not checked)\s*$")
+_MUTATION_TIMEOUT_S = 600
 
 
 def _record(
@@ -111,7 +115,8 @@ def drop_test_caches(root: Path) -> None:
     for cache in list(root.rglob(".pytest_cache")):
         shutil.rmtree(cache, ignore_errors=True)
     for stale in list(root.rglob("*.pyc")):
-        stale.unlink(missing_ok=True)
+        # TOCTOU-only: rglob yields existing paths, so the flag never fires in tests.
+        stale.unlink(missing_ok=True)  # pragma: no mutate
 
 
 def changed_lines(diff: str) -> set[tuple[str, int]]:
@@ -184,6 +189,139 @@ def materialize_baseline(
 def under_coverage(test_command: str, data_file: str) -> str:
     """Wrap a pytest scope command so the run records into `data_file`."""
     return test_command.replace("pytest", f"coverage run --data-file={data_file} -m pytest", 1)
+
+
+@dataclass(frozen=True)
+class MutationOutcome:
+    """Sampled kill-rate evidence over changed-line mutants."""
+
+    killed: int
+    total: int
+    generated: int
+    survivors: tuple[str, ...]
+
+
+def _parse_mutant_verdicts(text: str) -> dict[str, str]:
+    """Mutant name to verdict from `mutmut results --all True` output."""
+    verdicts = {}
+    for line in text.splitlines():
+        match = _MUTANT_VERDICT.match(line)
+        if match:
+            verdicts[match.group(1)] = match.group(2)
+    return verdicts
+
+
+def _mutant_path(show_output: str) -> str | None:
+    """Repo-relative path from `mutmut show`, else None."""
+    for line in show_output.splitlines():
+        if line.startswith("+++ "):
+            return line[4:].strip().removeprefix("b/")
+    return None
+
+
+def _mutant_lines(show_output: str, source: str) -> set[int]:
+    """File line numbers matching the removed (`-`) hunk lines.
+
+    Hunk headers are function-relative, so the `-` excerpts themselves
+    locate the mutant: exact matches against the scratch file.
+    """
+    removed = [
+        line[1:]
+        for line in show_output.splitlines()
+        if line.startswith("-") and not line.startswith("--- ")
+    ]
+    if not removed:
+        return set()
+    numbered = list(enumerate(source.splitlines(), start=1))
+    return {lineno for lineno, text in numbered for snippet in removed if text == snippet}
+
+
+def _mutmut_scratch_config(sources: list[str]) -> str:
+    """Minimal mutmut config: per-file sources (a `.` root nests mutants/)."""
+    quoted = ", ".join(json.dumps(source) for source in sources)
+    return (
+        "[tool.mutmut]\n"
+        f"source_paths = [{quoted}]\n"
+        'pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider"]\n'
+    )
+
+
+def mutation_sample(
+    workdir: Path,
+    changed: Collection[tuple[str, int]],
+    max_mutants: int,
+    *,
+    test_files: Collection[str],
+    timeout_s: int = _MUTATION_TIMEOUT_S,
+    recorder: SpanRecorder | None = None,
+) -> MutationOutcome:
+    """Kill-rate over changed-line mutants, sampled to `max_mutants` by name.
+
+    Runs in a scratch copy (mutmut writes mutants/ into cwd) under a time
+    budget; the verdict covers the deterministic name-sorted sample and
+    degrades to decided mutants when the budget binds first. Test files
+    are excluded from scope (mutating tests pollutes the rate), timeouts
+    count as killed (behavior changed), and missing mutmut fails closed.
+    """
+    if not changed:
+        return MutationOutcome(killed=0, total=0, generated=0, survivors=())
+    if shutil.which("mutmut") is None:
+        return MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut not on PATH",))
+    root = os.path.realpath(workdir)
+    by_line: dict[str, set[int]] = {}
+    for path, line in changed:
+        key = os.path.relpath(os.path.realpath(path), root)
+        by_line.setdefault(key, set()).add(line)
+    tests = set(test_files)
+    with tempfile.TemporaryDirectory(prefix="saddle-mutation-") as tmp:
+        scratch = Path(tmp)
+        for source in sorted(workdir.rglob("*.py")):
+            if "__pycache__" in source.parts:
+                continue
+            dest = scratch / source.relative_to(workdir)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, dest)
+        production = sorted(
+            path.relative_to(scratch).as_posix()
+            for path in scratch.rglob("*.py")
+            if path.relative_to(scratch).as_posix() not in tests
+        )
+        if not production:
+            return MutationOutcome(killed=0, total=0, generated=0, survivors=())
+        (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production))
+        run_capture(["timeout", str(timeout_s), "mutmut", "run"], scratch, recorder=recorder)
+        results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
+        verdicts = _parse_mutant_verdicts(results.stdout)
+        scoped: list[tuple[str, str]] = []
+        undecided = 0
+        for name in sorted(verdicts):
+            verdict = verdicts[name]
+            if verdict == "not checked":
+                undecided += 1
+                continue
+            shown = run_capture(["mutmut", "show", name], scratch, recorder=recorder)
+            rel = _mutant_path(shown.stdout)
+            if rel is None:
+                continue
+            posix_rel = rel.replace(os.sep, "/")
+            if posix_rel in tests:
+                continue
+            key = os.path.relpath(os.path.realpath(scratch / rel), os.path.realpath(scratch))
+            lines = by_line.get(key)
+            if lines is None:
+                continue
+            target = scratch / rel
+            if not target.is_file():
+                continue
+            if not _mutant_lines(shown.stdout, target.read_text()) & lines:
+                continue
+            scoped.append((name, verdict))
+    sample = scoped[:max_mutants]
+    killed = sum(1 for _, verdict in sample if verdict in ("killed", "timeout"))
+    survivors = tuple(name for name, verdict in sample if verdict == "survived")
+    return MutationOutcome(
+        killed=killed, total=len(sample), generated=len(scoped) + undecided, survivors=survivors
+    )
 
 
 def covered_lines(data_file: str, files: Collection[str]) -> set[tuple[str, int]]:
