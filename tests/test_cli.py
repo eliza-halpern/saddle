@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -198,6 +199,7 @@ def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -
     assert "    run                 Drive one mechanical task end to end.\n" in out
     assert "    verify              Audit a journal and re-render its transcript.\n" in out
     assert "    tail                Follow a live run as it happens.\n" in out
+    assert "    up                  Open an interactive streaming chat session.\n" in out
 
 
 def test_build_emit_prompt_names_task_and_rules() -> None:
@@ -1484,3 +1486,177 @@ def test_tail_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None
         "options:\n"
         "  -h, --help  show this help message and exit\n"
     )
+
+
+def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match=r"^0$"):
+        main(["up", "--help"])
+    assert capsys.readouterr().out == (
+        "usage: saddle up [-h] [--workdir WORKDIR] [--base-url BASE_URL]\n"
+        "                 [--model MODEL] [--max-tokens MAX_TOKENS]\n"
+        "                 [--temperature TEMPERATURE]\n"
+        "                 [--reasoning-effort {none,low,medium,xhigh}]\n"
+        "\n"
+        "options:\n"
+        "  -h, --help            show this help message and exit\n"
+        "  --workdir WORKDIR     Directory tools run in (default: .).\n"
+        "  --base-url BASE_URL   vLLM base URL.\n"
+        "  --model MODEL         Model id.\n"
+        "  --max-tokens MAX_TOKENS\n"
+        "                        Reply max tokens.\n"
+        "  --temperature TEMPERATURE\n"
+        "                        Sampling temperature.\n"
+        "  --reasoning-effort {none,low,medium,xhigh}\n"
+        "                        Reply reasoning effort.\n"
+    )
+
+
+def test_up_parser_defaults_and_overrides() -> None:
+    parser = build_parser()
+    defaults = parser.parse_args(["up"])
+    assert vars(defaults) == {
+        "command": "up",
+        "workdir": ".",
+        "base_url": DEFAULT_BASE_URL,
+        "model": "qwen3.8-27b",
+        "max_tokens": 8192,
+        "temperature": 0.0,
+        "reasoning_effort": "medium",
+    }
+    full = parser.parse_args(
+        [
+            "up",
+            "--workdir",
+            "/w",
+            "--base-url",
+            "http://x/v1",
+            "--model",
+            "m",
+            "--max-tokens",
+            "100",
+            "--temperature",
+            "0.5",
+            "--reasoning-effort",
+            "low",
+        ]
+    )
+    assert vars(full) == {
+        "command": "up",
+        "workdir": "/w",
+        "base_url": "http://x/v1",
+        "model": "m",
+        "max_tokens": 100,
+        "temperature": 0.5,
+        "reasoning_effort": "low",
+    }
+
+
+def test_main_up_missing_key_reports(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    assert main(["up"]) == 1
+    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+
+
+def test_main_up_preflight_failure_reports(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _refusing_setup(monkeypatch)
+    assert main(["up"]) == 1
+    assert capsys.readouterr().err == (
+        f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
+    )
+
+
+def test_main_up_preflight_failure_uses_explicit_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _refusing_setup(monkeypatch)
+    err = io.StringIO()
+    assert main(["up"], stderr=err) == 1
+    assert err.getvalue() == (
+        f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
+    )
+
+
+def _chat_recorder(seen: list[dict[str, Any]]) -> Any:
+    def record(options: Any, client: Any, *, stdin: Any, stdout: Any) -> int:
+        seen.append({"options": options, "client": client, "stdin": stdin, "stdout": stdout})
+        return 0
+
+    return record
+
+
+def test_main_up_wires_options_and_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeClient.made.clear()
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k1")
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    monkeypatch.setattr("saddle.cli.run_chat", _chat_recorder(seen))
+    out = io.StringIO()
+    stdin = io.StringIO("/quit\n")
+    code = main(["up", "--workdir", str(tmp_path)], stdin=stdin, stdout=out)
+    assert code == 0
+    assert _FakeClient.made[0]["api_key"] == "k1"
+    assert _FakeClient.made[0]["base_url"] == DEFAULT_BASE_URL
+    assert _FakeClient.made[0]["model"] == DEFAULT_MODEL
+    assert len(seen) == 1
+    options = seen[0]["options"]
+    assert options.workdir == tmp_path
+    assert options.max_tokens == 8192
+    assert options.temperature == 0.0
+    assert options.reasoning_effort == "medium"
+    assert seen[0]["stdin"] is stdin
+    assert seen[0]["stdout"] is out
+    assert isinstance(seen[0]["client"], _FakeClient)
+
+
+def test_main_up_passes_flags_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeClient.made.clear()
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k1")
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    monkeypatch.setattr("saddle.cli.run_chat", _chat_recorder(seen))
+    out = io.StringIO()
+    code = main(
+        [
+            "up",
+            "--workdir",
+            str(tmp_path),
+            "--base-url",
+            "http://x/v1",
+            "--model",
+            "m",
+            "--max-tokens",
+            "100",
+            "--temperature",
+            "0.5",
+            "--reasoning-effort",
+            "low",
+        ],
+        stdin=io.StringIO("/quit\n"),
+        stdout=out,
+    )
+    assert code == 0
+    assert _FakeClient.made[0]["base_url"] == "http://x/v1"
+    assert _FakeClient.made[0]["model"] == "m"
+    options = seen[0]["options"]
+    assert options.workdir == tmp_path
+    assert options.max_tokens == 100
+    assert options.temperature == 0.5
+    assert options.reasoning_effort == "low"
+
+
+def test_main_up_uses_default_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeClient.made.clear()
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k1")
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    monkeypatch.setattr("saddle.cli.run_chat", _chat_recorder(seen))
+    assert main(["up"]) == 0
+    assert seen[0]["stdin"] is sys.stdin
+    assert seen[0]["stdout"] is sys.stdout

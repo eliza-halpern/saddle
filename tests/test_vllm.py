@@ -14,6 +14,7 @@ from saddle.vllm import (
     DIFF_SCHEMA,
     DiffProposal,
     StreamToken,
+    ToolCall,
     VllmAuthError,
     VllmClient,
     VllmRequestError,
@@ -443,6 +444,98 @@ def test_stream_chat_malformed_chunks_raise() -> None:
 
 def test_stream_chat_truncated_stream_yields_partial_tokens() -> None:
     client, _ = _sse_client(_chunk({"content": "Hi!"}))
+    assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
+        StreamToken(stream="content", text="Hi!")
+    ]
+
+
+def test_stream_chat_sends_tools_only_when_provided() -> None:
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "add",
+            "description": "add ints",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    client, seen = _sse_client("data: [DONE]\n\n")
+    list(client.stream_chat([{"role": "user", "content": "hi"}], tools=[tool]))
+    body = json.loads(seen[0].content)
+    assert body["tools"] == [tool]
+    assert body["tool_choice"] == "auto"
+    empties: list[list[dict[str, Any]] | None] = [None, []]
+    for omitted in empties:
+        client, seen = _sse_client("data: [DONE]\n\n")
+        list(client.stream_chat([{"role": "user", "content": "hi"}], tools=omitted))
+        body = json.loads(seen[0].content)
+        assert "tools" not in body
+        assert "tool_choice" not in body
+
+
+def test_stream_chat_accumulates_tool_calls_after_tokens() -> None:
+    body = (
+        _chunk({"reasoning": "Let me add. "})
+        + _chunk({"tool_calls": [{"id": "call-1", "index": 0, "function": {"name": "add"}}]})
+        + _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"a": 2, '}}]})
+        + _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '"b": 2}'}}]})
+        + _chunk({"content": "Adding. "})
+        + "data: [DONE]\n\n"
+    )
+    client, _ = _sse_client(body)
+    assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
+        StreamToken(stream="reasoning", text="Let me add. "),
+        StreamToken(stream="content", text="Adding. "),
+        ToolCall(id="call-1", name="add", arguments='{"a": 2, "b": 2}'),
+    ]
+
+
+def test_stream_chat_orders_tool_calls_by_index() -> None:
+    body = (
+        _chunk({"tool_calls": [{"id": "call-b", "index": 1, "function": {"name": "b"}}]})
+        + _chunk({"tool_calls": [{"id": "call-a", "index": 0, "function": {"name": "a"}}]})
+        + _chunk({"tool_calls": [{"index": 2, "function": {"name": "c"}}]})
+        + _chunk({"tool_calls": [{"index": 2, "id": 7, "function": {"name": None}}]})
+        + _chunk({"tool_calls": [{"index": 2, "function": {"arguments": 7}}]})
+        + _chunk({"tool_calls": [{"index": 3, "function": {"arguments": "{}"}}]})
+        + "data: [DONE]\n\n"
+    )
+    client, _ = _sse_client(body)
+    assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
+        ToolCall(id="call-a", name="a", arguments=""),
+        ToolCall(id="call-b", name="b", arguments=""),
+        ToolCall(id="", name="c", arguments=""),
+        ToolCall(id="", name="", arguments="{}"),
+    ]
+
+
+def test_stream_chat_malformed_tool_calls_raise() -> None:
+    cases: list[tuple[dict[str, Any], str]] = [
+        ({"tool_calls": {}}, "stream chunk tool_calls must be a list"),
+        ({"tool_calls": [7]}, "stream chunk tool call must be an object"),
+        (
+            {"tool_calls": [{"function": {}}]},
+            "stream chunk tool call needs an integer index",
+        ),
+        (
+            {"tool_calls": [{"index": "0", "function": {}}]},
+            "stream chunk tool call needs an integer index",
+        ),
+        ({"tool_calls": [{"index": 0}]}, "stream chunk tool call needs a function object"),
+        (
+            {"tool_calls": [{"index": 0, "function": []}]},
+            "stream chunk tool call needs a function object",
+        ),
+    ]
+    for delta, message in cases:
+        client, _ = _sse_client(_chunk(delta))
+        with pytest.raises(VllmResponseError) as exc_info:
+            list(client.stream_chat([{"role": "user", "content": "hi"}]))
+        assert str(exc_info.value) == message
+
+
+def test_stream_chat_ignores_lines_after_done() -> None:
+    body = _chunk({"content": "Hi!"}) + "data: [DONE]\n\n" + _chunk({"content": "Late!"})
+    client, _ = _sse_client(body)
     assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
         StreamToken(stream="content", text="Hi!")
     ]

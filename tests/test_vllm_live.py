@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from saddle.dag import dag_json_schema
-from saddle.vllm import VllmClient
+from saddle.vllm import StreamToken, VllmClient
 
 jsonschema = pytest.importorskip("jsonschema")
 
@@ -54,12 +54,14 @@ def test_live_guided_emission_is_schema_valid_with_reasoning() -> None:
 def test_live_stream_chat_emits_both_streams() -> None:
     assert _LIVE_KEY is not None
     with VllmClient(api_key=_LIVE_KEY) as client:
-        tokens = list(
+        events = list(
             client.stream_chat(
                 [{"role": "user", "content": "Say hi in exactly five words."}],
                 max_tokens=512,
             )
         )
+    tokens = [event for event in events if isinstance(event, StreamToken)]
+    assert len(events) == len(tokens)
     assert len(tokens) > 1
     assert {token.stream for token in tokens} == {"reasoning", "content"}
     assert all(token.text for token in tokens)

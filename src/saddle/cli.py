@@ -18,6 +18,7 @@ from typing import IO, Final
 from pydantic import ValidationError
 
 from saddle import __version__
+from saddle.chat import ChatOptions, run_chat
 from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
 from saddle.journal import read_entries, read_records, read_spans, verify_journal
@@ -457,6 +458,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emission reasoning effort.",
     )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
+    up = sub.add_parser("up", help="Open an interactive streaming chat session.")
+    up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
+    up.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
+    up.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    up.add_argument("--max-tokens", type=int, default=8192, help="Reply max tokens.")
+    up.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
+    up.add_argument(
+        "--reasoning-effort",
+        choices=list(REASONING_EFFORTS),
+        default="medium",
+        help="Reply reasoning effort.",
+    )
     return parser
 
 
@@ -472,7 +485,7 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor", "dag", "verify", "tail"):
+    if args.command not in ("run", "doctor", "dag", "verify", "tail", "up"):
         return 0
     if args.command == "verify":
         return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
@@ -496,6 +509,25 @@ def main(
                 reasoning_effort=args.reasoning_effort,
             )
             return run_dag(dag_options, client, stdout=stdout or sys.stdout)
+    if args.command == "up":
+        with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
+            try:
+                check_server(client, base_url=args.base_url, model=args.model)
+            except RunError as exc:
+                print(f"error: {exc}", file=stderr or sys.stderr)
+                return 1
+            chat_options = ChatOptions(
+                workdir=Path(args.workdir),
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                reasoning_effort=args.reasoning_effort,
+            )
+            return run_chat(
+                chat_options,
+                client,
+                stdin=stdin or sys.stdin,
+                stdout=stdout or sys.stdout,
+            )
     repo = Path(args.repo)
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
     options = RunOptions(

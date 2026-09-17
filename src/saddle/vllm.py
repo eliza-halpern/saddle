@@ -13,7 +13,7 @@ the contract.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final
@@ -79,6 +79,68 @@ class StreamToken:
     text: str
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """One complete tool call: id, function name, raw JSON arguments."""
+
+    id: str
+    name: str
+    arguments: str
+
+
+class _ToolCallAccumulator:
+    """Merges streamed tool_call fragments (keyed by index) into calls."""
+
+    def __init__(self) -> None:
+        self._pending: dict[int, dict[str, str]] = {}
+
+    def add(self, delta: Mapping[str, Any]) -> None:
+        """Fold one delta's tool_calls fragments into the pending calls."""
+        raw = delta.get("tool_calls")
+        if raw is None:
+            return
+        if not isinstance(raw, list):
+            msg = "stream chunk tool_calls must be a list"
+            raise VllmResponseError(msg)
+        for entry in raw:
+            self._add_entry(entry)
+
+    def _add_entry(self, entry: Any) -> None:
+        """Fold one tool_call fragment into its indexed pending call."""
+        if not isinstance(entry, dict):
+            msg = "stream chunk tool call must be an object"
+            raise VllmResponseError(msg)
+        index = entry.get("index")
+        if not isinstance(index, int):
+            msg = "stream chunk tool call needs an integer index"
+            raise VllmResponseError(msg)
+        function = entry.get("function")
+        if not isinstance(function, dict):
+            msg = "stream chunk tool call needs a function object"
+            raise VllmResponseError(msg)
+        pending = self._pending.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        call_id = entry.get("id")
+        if isinstance(call_id, str):
+            pending["id"] = call_id
+        name = function.get("name")
+        if isinstance(name, str):
+            pending["name"] = name
+        arguments = function.get("arguments")
+        if isinstance(arguments, str):
+            pending["arguments"] += arguments
+
+    def complete(self) -> list[ToolCall]:
+        """Pending calls as complete ToolCalls, in index order."""
+        return [
+            ToolCall(
+                id=self._pending[index]["id"],
+                name=self._pending[index]["name"],
+                arguments=self._pending[index]["arguments"],
+            )
+            for index in sorted(self._pending)
+        ]
+
+
 def _checked_effort(reasoning_effort: str) -> None:
     """Reject unknown reasoning efforts before spending a round-trip."""
     if reasoning_effort not in REASONING_EFFORTS:
@@ -118,12 +180,13 @@ def _build_diff_payload(
 def _build_chat_payload(
     *,
     model: str,
-    messages: Sequence[dict[str, str]],
+    messages: Sequence[Mapping[str, Any]],
     max_tokens: int,
     temperature: float,
     reasoning_effort: str,
+    tools: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "model": model,
         "messages": [dict(message) for message in messages],
         "temperature": temperature,
@@ -132,10 +195,14 @@ def _build_chat_payload(
         "include_reasoning": True,
         "stream": True,
     }
+    if tools:
+        payload["tools"] = [dict(tool) for tool in tools]
+        payload["tool_choice"] = "auto"
+    return payload
 
 
-def _stream_tokens(data: object) -> list[StreamToken]:
-    """Reasoning then content tokens from one SSE chunk envelope."""
+def _chunk_delta(data: object) -> dict[str, Any]:
+    """Validated delta mapping from one SSE chunk envelope."""
     if not isinstance(data, dict):
         msg = f"stream chunk must be an object, got {type(data).__name__}"
         raise VllmResponseError(msg)
@@ -148,6 +215,11 @@ def _stream_tokens(data: object) -> list[StreamToken]:
     if not isinstance(delta, dict):
         msg = "stream chunk has no delta"
         raise VllmResponseError(msg)
+    return delta
+
+
+def _delta_tokens(delta: Mapping[str, Any]) -> list[StreamToken]:
+    """Reasoning then content tokens from one validated delta."""
     tokens: list[StreamToken] = []
     for stream in ("reasoning", "content"):
         text = delta.get(stream)
@@ -319,13 +391,14 @@ class VllmClient:
 
     def stream_chat(
         self,
-        messages: Sequence[dict[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
-    ) -> Iterator[StreamToken]:
-        """Stream one chat completion as token events (reasoning plus content)."""
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> Iterator[StreamToken | ToolCall]:
+        """Stream one completion: token events, then any complete tool calls."""
         if not messages:
             msg = "messages must not be empty"
             raise ValueError(msg)
@@ -336,6 +409,7 @@ class VllmClient:
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            tools=tools,
         )
         # httpx upper-cases the method, so case mutants ("post") are
         # behaviorally identical on the wire: unkillable, hence pragma.
@@ -349,18 +423,22 @@ class VllmClient:
                     response.read()
                     msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
                     raise VllmRequestError(msg)
+                calls = _ToolCallAccumulator()
                 for line in response.iter_lines():
                     if not line.startswith("data: "):
                         continue
                     content = line[len("data: ") :]
                     if content == "[DONE]":
-                        return
+                        break
                     try:
                         data = json.loads(content)
                     except json.JSONDecodeError as exc:
                         msg = f"stream chunk is not valid JSON: {exc}"
                         raise VllmResponseError(msg) from exc
-                    yield from _stream_tokens(data)
+                    delta = _chunk_delta(data)
+                    yield from _delta_tokens(delta)
+                    calls.add(delta)
+                yield from calls.complete()
         except httpx.HTTPError as exc:
             msg = f"request failed: {exc}"
             raise VllmRequestError(msg) from exc
