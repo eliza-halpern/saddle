@@ -636,7 +636,7 @@ def main(
                 stdin=stdin or sys.stdin,
                 console=Console(file=stdout or sys.stdout),
             )
-    repo = Path(args.repo)
+    repo = Path(args.repo).resolve()
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
     options = RunOptions(
         task=args.task,

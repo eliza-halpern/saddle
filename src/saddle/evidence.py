@@ -8,6 +8,7 @@ possible so fixtures stay fast and branch coverage stays cheap.
 from __future__ import annotations
 
 import ast
+import os
 import re
 import shlex
 import shutil
@@ -186,16 +187,24 @@ def under_coverage(test_command: str, data_file: str) -> str:
 
 
 def covered_lines(data_file: str, files: Collection[str]) -> set[tuple[str, int]]:
-    """Executed lines per file from a coverage data file (empty when unreadable)."""
+    """Executed lines per file from a coverage data file (empty when unreadable).
+
+    Data keys are absolute while callers may pass workdir-relative paths, so
+    the join normalizes both sides; emitted tuples keep the caller's spelling.
+    """
     cov = coverage.Coverage(data_file=data_file, config_file=False)
     try:
         cov.load()
     except coverage.CoverageException:
         return set()
     data = cov.get_data()
+    by_realpath = {os.path.realpath(measured): measured for measured in data.measured_files()}
     covered: set[tuple[str, int]] = set()
     for filename in files:
-        for number in data.lines(filename) or ():
+        measured = by_realpath.get(os.path.realpath(filename))
+        if measured is None:
+            continue
+        for number in data.lines(measured) or ():
             covered.add((filename, number))
     return covered
 

@@ -291,6 +291,24 @@ def test_covered_lines_reads_subprocess_data_file(tmp_path: Path) -> None:
     assert covered_lines(data_file, []) == set()
 
 
+def test_covered_lines_matches_relative_query_to_absolute_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "n.py"
+    target.write_text("x = 1\ny = 2\n")
+    data_file = str(tmp_path / ".coverage.node")
+    prog = (
+        "import coverage;"
+        f"cov = coverage.Coverage(data_file={data_file!r}, config_file=False);"
+        "cov.start();"
+        f"exec(compile(open({str(target)!r}).read(), {str(target)!r}, 'exec'));"
+        "cov.stop();cov.save()"
+    )
+    assert run_argv([sys.executable, "-c", prog], tmp_path) == 0
+    monkeypatch.chdir(tmp_path)
+    assert covered_lines(data_file, ["n.py"]) == {("n.py", 1), ("n.py", 2)}
+
+
 def test_covered_lines_missing_data_file_yields_empty(tmp_path: Path) -> None:
     assert covered_lines(str(tmp_path / "nope.coverage"), ["n.py"]) == set()
 
