@@ -59,12 +59,18 @@ Saddle slice (see M3-1 for arm harnesses and parity controls):
 
 All arms run local vLLM qwen3.8-27b at thinking level xhigh with a
 completion budget of 81920 tokens: saddle passes
-`--reasoning-effort xhigh --max-tokens 81920`; untouched pi passes
-`--thinking xhigh` (models.json maxTokens 81920); revision roles pin
-`thinking: xhigh` with the same budget. A run ending in
+`--reasoning-effort xhigh --worker-effort xhigh --max-tokens 81920`;
+untouched pi passes `--thinking xhigh` (models.json maxTokens 81920);
+revision roles pin `thinking: xhigh` with the same budget. Exact
+arm conditions: untouched runs stock pi with `-ne -ns -np`
+(no extensions, skills, or prompt templates — built-in tools only);
+revision runs `--role orchestrator --plan-auto-approve` with the
+full extension environment. A run ending in
 finish_reason=length is infra-invalid, not a scored failure: re-run
 with a higher budget (operator ceiling ~90k for extreme xhigh
-sessions) and discard the truncated attempt.
+sessions) and discard the truncated attempt. A run launched under
+the wrong arm condition is void (misconfigured, not scored) and is
+re-run correctly; the voided attempt stays on the record.
 
 ## Decision rule (regime-aware)
 
@@ -91,3 +97,29 @@ runs preceded this change.*
 T4 added (long-horizon task); decision rule made regime-aware (T4 C1
 decisive, T1–T3 C1 diagnostic, C2–C5 binding everywhere); crossover
 hypothesis pre-registered. T1 v1 runs are retained as pilot data only.*
+
+*Amendment record (during T1 v2/v3 scored runs): run-validity rule —
+void only when a run tested nothing (broken operator environment) or
+ran under the wrong arm condition; every run where the system
+returned a verdict is scored, including harness-bug failures, which
+are fixed under new amendments with reruns recorded as new scored
+attempts (prior FAILs stand). Exact arm invocations pinned in the
+parity freeze above. Task prompts pinned in §Task prompts below.*
+
+## Task prompts
+
+Verbatim prompts, identical for all arms on each task:
+
+- **T1:** `Implement the email-format validator stub in validators.py
+  and add pytest coverage for it.`
+- **T2:** `Fix the loop bound in retries.py so that fn is attempted up
+  to attempts times, and repair the stale assertions in
+  tests/test_retries.py so the suite is green.`
+- **T3:** `users.py and groups.py duplicate the same name-validation
+  logic. Extract the shared helper into its own module, update both
+  callers to use it, and keep the test suite green.`
+- **T4:** `Discounted order totals disagree with invoice totals by a
+  penny on some inputs (try prices [2.349, 1.014] at 10% off). Find
+  the root cause across orders.py, discounts.py and invoice.py, fix
+  it in exactly one place, keep the suite green, and add a
+  regression test pinning the agreed total.`
