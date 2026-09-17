@@ -1169,6 +1169,8 @@ def test_run_verify_reports_ok_with_rerendered_transcript(tmp_path: Path) -> Non
     assert "- Verdict: PASS\n" in body
     assert "## Node n1\n" in body
     assert f"- Path: {journal}\n" in body
+    assert "- Timeline:\n" in body
+    assert "  - tool pytest: exit 0 in 3ms: pytest\n" in body
 
 
 def test_run_verify_missing_journal_is_fresh(tmp_path: Path) -> None:

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Final
 
 from saddle.gates import GateCheck
-from saddle.journal import ProofRecord
+from saddle.journal import ProofRecord, SpanRecord, tool_spans_by_node, tool_spans_for_node
+
+MAX_THOUGHT_EXCERPT_CHARS: Final = 200
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,8 @@ class NodeTranscript:
     requirement_ids: tuple[str, ...]
     checks: tuple[GateCheck, ...]
     proof_hash: str | None
+    thinking: str = ""
+    tool_spans: tuple[SpanRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,26 @@ class RunTranscript:
     verdict: str
     nodes: tuple[NodeTranscript, ...]
     journal_path: str
+
+
+def _timeline_lines(node: NodeTranscript) -> list[str]:
+    """Per-node timeline: the thought first, then each tool call in order."""
+    if not node.thinking and not node.tool_spans:
+        return []
+    lines = ["- Timeline:"]
+    if node.thinking:
+        excerpt = node.thinking[:MAX_THOUGHT_EXCERPT_CHARS]
+        if len(node.thinking) > MAX_THOUGHT_EXCERPT_CHARS:
+            excerpt += "..."
+        first, *rest = excerpt.split("\n")
+        lines.append(f"  - thought: {first}")
+        lines.extend(f"    {line}" for line in rest)
+    for span in node.tool_spans:
+        command = " ".join(span.argv)
+        lines.append(
+            f"  - tool {span.name}: exit {span.exit_code} in {span.duration_ms}ms: {command}"
+        )
+    return lines
 
 
 def render_transcript(run: RunTranscript) -> str:
@@ -55,6 +80,7 @@ def render_transcript(run: RunTranscript) -> str:
             mark = "PASS" if check.passed else "FAIL"
             lines.append(f"- Gate {check.name}: {mark} ({check.detail})")
         lines.append(f"- Proof: {node.proof_hash or 'none'}")
+        lines.extend(_timeline_lines(node))
         lines.append("")
     lines.append("## Journal")
     lines.append("")
@@ -65,13 +91,16 @@ def render_transcript(run: RunTranscript) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_journal_transcript(records: Sequence[ProofRecord], journal_path: str) -> str:
+def render_journal_transcript(
+    records: Sequence[ProofRecord], spans: Sequence[SpanRecord], journal_path: str
+) -> str:
     """Re-render a transcript from sealed records alone (the audit view).
 
     Run metadata the journal never stores (task, timestamps) renders as
     "(unknown)"; the verdict is PASS only when every sealed gate output
     passed, so an auditor recomputes it instead of trusting it.
     """
+    tools = tool_spans_by_node(spans)
     nodes = tuple(
         NodeTranscript(
             node_id=record.node_id,
@@ -81,6 +110,8 @@ def render_journal_transcript(records: Sequence[ProofRecord], journal_path: str)
                 for output in record.gate_outputs
             ),
             proof_hash=record.record_hash,
+            thinking=record.thinking,
+            tool_spans=tool_spans_for_node(tools, record.node_id),
         )
         for record in records
     )

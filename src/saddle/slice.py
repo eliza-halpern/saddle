@@ -22,12 +22,16 @@ from saddle.evidence import run_stdin
 from saddle.gates import GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
+    SpanRecord,
     SpanRecorder,
     append_record,
     append_span,
     build_from_gate,
     build_span,
     read_records,
+    read_spans,
+    tool_spans_by_node,
+    tool_spans_for_node,
     verify_journal,
 )
 from saddle.runner import run_node_gate
@@ -126,7 +130,10 @@ async def _run_node(
 
 
 def _transcribe(
-    node: Node, sealed: ProofRecord | None, failure: BaseException | None
+    node: Node,
+    sealed: ProofRecord | None,
+    failure: BaseException | None,
+    tool_spans: tuple[SpanRecord, ...],
 ) -> NodeTranscript:
     """One node's transcript row from its sealed record or its failure."""
     if sealed is not None:
@@ -134,12 +141,19 @@ def _transcribe(
             GateCheck(name=output.name, passed=output.passed, detail=output.detail)
             for output in sealed.gate_outputs
         )
-        return NodeTranscript(node.id, tuple(node.requirement_ids), checks, sealed.record_hash)
+        return NodeTranscript(
+            node.id,
+            tuple(node.requirement_ids),
+            checks,
+            sealed.record_hash,
+            thinking=sealed.thinking,
+            tool_spans=tool_spans,
+        )
     if isinstance(failure, NodeGateFailedError):
         checks = failure.result.checks
     else:
         checks = ()
-    return NodeTranscript(node.id, tuple(node.requirement_ids), checks, None)
+    return NodeTranscript(node.id, tuple(node.requirement_ids), checks, None, tool_spans=tool_spans)
 
 
 def run_slice(
@@ -169,8 +183,15 @@ def run_slice(
 
     outcome = asyncio.run(schedule(dag, worker))
     sealed = {record.node_id: record for record in read_records(journal_path)}
+    tools = tool_spans_by_node(read_spans(journal_path))
     transcripts = tuple(
-        _transcribe(node, sealed.get(node.id), outcome.failures.get(node.id)) for node in dag.nodes
+        _transcribe(
+            node,
+            sealed.get(node.id),
+            outcome.failures.get(node.id),
+            tool_spans_for_node(tools, node.id),
+        )
+        for node in dag.nodes
     )
     passed = not outcome.failures and not outcome.undispatched
     append_span(

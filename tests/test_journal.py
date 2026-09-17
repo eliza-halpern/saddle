@@ -30,6 +30,8 @@ from saddle.journal import (
     read_spans,
     rebuild_proven,
     scrub_thinking,
+    tool_spans_by_node,
+    tool_spans_for_node,
     verify_journal,
 )
 
@@ -476,3 +478,25 @@ def test_recorder_parents_tool_spans(tmp_path: Path) -> None:
     recorder.record(argv=["pytest"], duration_ms=1, exit_code=0, detail="")
     (_, tool) = read_spans(path)
     assert tool.parent_id == run.span_id
+
+
+def test_tool_spans_by_node_groups_tools_in_order() -> None:
+    first = _span("n1")
+    second = _span("n2")
+    third = _span("n1")
+    run = _agent("", "run")
+    worker = _agent("n1", "worker:n1", parent_id=run.span_id)
+    grouped = tool_spans_by_node([first, run, second, worker, third])
+    assert grouped == {"n1": (first, third), "n2": (second,)}
+
+
+def test_tool_spans_by_node_drops_agent_spans() -> None:
+    assert tool_spans_by_node([]) == {}
+    assert tool_spans_by_node([_agent("", "run")]) == {}
+
+
+def test_tool_spans_for_node_returns_tuple_or_empty() -> None:
+    first = _span("n1")
+    grouped = tool_spans_by_node([first])
+    assert tool_spans_for_node(grouped, "n1") == (first,)
+    assert tool_spans_for_node(grouped, "n9") == ()

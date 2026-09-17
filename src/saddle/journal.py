@@ -14,7 +14,7 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -343,6 +343,22 @@ def read_spans(path: Path) -> list[SpanRecord]:
     """Verified sealed tool spans in journal order, for audits and timelines."""
     _, spans = _verified_contents(path)
     return spans
+
+
+def tool_spans_by_node(spans: Sequence[SpanRecord]) -> dict[str, tuple[SpanRecord, ...]]:
+    """Tool spans per node in journal order; agent spans are frames, not calls."""
+    grouped: dict[str, list[SpanRecord]] = {}
+    for span in spans:
+        if span.kind == "tool":
+            grouped.setdefault(span.node_id, []).append(span)
+    return {node_id: tuple(entries) for node_id, entries in grouped.items()}
+
+
+def tool_spans_for_node(
+    grouped: Mapping[str, tuple[SpanRecord, ...]], node_id: str
+) -> tuple[SpanRecord, ...]:
+    """Tool spans sealed for `node_id`; nodes that never ran have none."""
+    return grouped.get(node_id, ())
 
 
 def build_from_gate(

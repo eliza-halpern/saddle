@@ -171,6 +171,16 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
+    assert "  - thought: return two instead\n" in result.transcript
+    assert re.search(
+        r"  - tool git: exit 0 in \d+ms: git apply --index --recount -\n",
+        result.transcript,
+    )
+    assert re.search(
+        r"  - tool pytest: exit [1-9]\d* in \d+ms: pytest test_n.py\n", result.transcript
+    )
+    assert "worker:n1" not in result.transcript
+    assert result.transcript.index("  - thought:") < result.transcript.index("  - tool ")
     spans = read_spans(journal)
     tools = [span for span in spans if span.kind == "tool"]
     assert [span.name for span in tools] == [
@@ -220,6 +230,12 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert "## Node a\n" in result.transcript
     assert "## Node b\n" in result.transcript
     assert "- Gate coverage: FAIL" in result.transcript
+    assert "- Timeline:\n" in result.transcript
+    assert "thought:" not in result.transcript
+    assert re.search(
+        r"  - tool git: exit 0 in \d+ms: git apply --index --recount -\n",
+        result.transcript,
+    )
     journal = tmp_path / "proofs.jsonl"
     spans = read_spans(journal)
     agents = [span for span in spans if span.kind == "agent"]
@@ -246,6 +262,10 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
     assert result.passed is False
     assert "- Gate " not in result.transcript
     assert "- Proof: none\n" in result.transcript
+    assert re.search(
+        r"  - tool git: exit [1-9]\d* in \d+ms: git apply --index --recount -\n",
+        result.transcript,
+    )
 
 
 def test_run_slice_refuses_stale_journal(tmp_path: Path) -> None:

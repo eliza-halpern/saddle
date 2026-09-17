@@ -369,7 +369,7 @@ def run_verify(journal: Path, *, stdout: IO[str]) -> int:
     stdout.write(
         f"OK: {journal}: {len(records)} proof(s), {len(spans)} span(s), chain verifies\n\n"
     )
-    stdout.write(render_journal_transcript(records, str(journal)))
+    stdout.write(render_journal_transcript(records, spans, str(journal)))
     return 0
 
 
