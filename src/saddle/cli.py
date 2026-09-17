@@ -63,6 +63,18 @@ class RunOptions:
     yes: bool = False
 
 
+@dataclass(frozen=True)
+class DagOptions:
+    """Resolved `dag` inputs: task, server, and emission knobs (no repo)."""
+
+    task: str
+    base_url: str
+    model: str
+    max_tokens: int = 8192
+    temperature: float = 0.0
+    reasoning_effort: str = "medium"
+
+
 def build_emit_prompt(task: str) -> str:
     """Decomposition prompt: task plus the DAG vocabulary rules."""
     return f"""Decompose the mechanical coding task below into a DAG of 1 to 4 nodes.
@@ -296,6 +308,53 @@ def run_doctor(base_url: str, model: str, client: VllmClient, *, stdout: IO[str]
     return 0
 
 
+def render_dag_plan(task: str, dag: Dag) -> str:
+    """Render the emitted plan as an indented node list with gates."""
+    ids = ", ".join(node.id for node in dag.nodes)
+    lines = [f"Task: {task}", f"Plan: {len(dag.nodes)} node(s): {ids}"]
+    last = len(dag.nodes) - 1
+    for index, node in enumerate(dag.nodes):
+        branch = "└──" if index == last else "├──"
+        pad = "    " if index == last else "│   "
+        constraints = node.execution_constraints
+        gate = node.deterministic_gate
+        sample = gate.mutation_sample
+        depends = ", ".join(node.dependencies) if node.dependencies else "(none)"
+        red = "required" if gate.red_phase_required else "optional"
+        lines.append(
+            f"{branch} {node.id} [budget: {constraints.reasoning_budget}, "
+            f"context: {constraints.max_context_tokens} tokens]"
+        )
+        lines.append(f"{pad}task: {node.task_prompt}")
+        lines.append(f"{pad}requirements: {', '.join(node.requirement_ids)}")
+        lines.append(f"{pad}depends on: {depends}")
+        lines.append(f"{pad}tools: {', '.join(constraints.allowed_tools)}")
+        lines.append(
+            f"{pad}gate: {gate.test_command} (coverage >= {gate.changed_line_coverage_min}%, "
+            f"red-phase {red}, mutation {sample.max_mutants} @ "
+            f"{sample.kill_threshold}% {sample.scope})"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
+    """Emit the plan and print it; execute nothing."""
+    try:
+        check_server(client, base_url=options.base_url, model=options.model)
+        dag = _emit_valid_dag(
+            client,
+            options.task,
+            max_tokens=options.max_tokens,
+            temperature=options.temperature,
+            reasoning_effort=options.reasoning_effort,
+        )
+    except RunError as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    stdout.write(render_dag_plan(options.task, dag))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -305,6 +364,18 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Check the server is usable.")
     doctor.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     doctor.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    dag = sub.add_parser("dag", help="Show the plan before it runs.")
+    dag.add_argument("task", help="Task description to decompose into a plan.")
+    dag.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
+    dag.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    dag.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
+    dag.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
+    dag.add_argument(
+        "--reasoning-effort",
+        choices=list(REASONING_EFFORTS),
+        default="medium",
+        help="Emission reasoning effort.",
+    )
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
     run.add_argument("--repo", default=".", help="Directory to work in (repo created if missing).")
@@ -335,7 +406,7 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor"):
+    if args.command not in ("run", "doctor", "dag"):
         return 0
     key = _api_key()
     if not key:
@@ -344,6 +415,17 @@ def main(
     if args.command == "doctor":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             return run_doctor(args.base_url, args.model, client, stdout=stdout or sys.stdout)
+    if args.command == "dag":
+        with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
+            dag_options = DagOptions(
+                task=args.task,
+                base_url=args.base_url,
+                model=args.model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                reasoning_effort=args.reasoning_effort,
+            )
+            return run_dag(dag_options, client, stdout=stdout or sys.stdout)
     repo = Path(args.repo)
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
     options = RunOptions(

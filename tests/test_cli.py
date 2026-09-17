@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from saddle.cli import (
+    DagOptions,
     RunError,
     RunOptions,
     build_emit_prompt,
@@ -19,10 +20,12 @@ from saddle.cli import (
     build_worker_prompt,
     check_server,
     main,
+    render_dag_plan,
+    run_dag,
     run_doctor,
     run_task,
 )
-from saddle.dag import Node
+from saddle.dag import Dag, Node
 from saddle.evidence import run_argv
 from saddle.journal import read_records, read_spans
 from saddle.vllm import (
@@ -148,6 +151,19 @@ def _unreachable_client() -> VllmClient:
     return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
 
 
+def _dag_client(
+    models: list[str], dag: dict[str, Any], seen: list[httpx.Request] | None = None
+) -> VllmClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if seen is not None:
+            seen.append(request)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": name} for name in models]})
+        return _emit_response(dag)
+
+    return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+
+
 def test_main_no_args_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
     assert capsys.readouterr().out == ""
@@ -165,8 +181,9 @@ def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -
         main(["--help"])
     out = capsys.readouterr().out
     assert "\nDeterministic harness for local LLMs.\n" in out
-    assert "    doctor      Check the server is usable.\n" in out
-    assert "    run         Drive one mechanical task end to end.\n" in out
+    assert "    dag             Show the plan before it runs.\n" in out
+    assert "    doctor          Check the server is usable.\n" in out
+    assert "    run             Drive one mechanical task end to end.\n" in out
 
 
 def test_build_emit_prompt_names_task_and_rules() -> None:
@@ -585,6 +602,134 @@ def test_run_doctor_reports_failure() -> None:
     assert out.getvalue() == ("error: preflight failed at http://x/v1: request failed: refused\n")
 
 
+def test_render_dag_plan_lists_nodes_with_gates() -> None:
+    first = _node_dict("n1", "low")
+    second = _node_dict("n2", "medium")
+    second["dependencies"] = ["n1"]
+    second["task_prompt"] = "Wire it up."
+    second["requirement_ids"] = ["REQ-001", "REQ-002"]
+    second["execution_constraints"]["allowed_tools"] = ["read_file", "write_file"]
+    second["execution_constraints"]["max_context_tokens"] = 8000
+    second["deterministic_gate"]["test_command"] = "pytest test_w.py"
+    second["deterministic_gate"]["changed_line_coverage_min"] = 80.0
+    second["deterministic_gate"]["red_phase_required"] = False
+    second["deterministic_gate"]["mutation_sample"]["max_mutants"] = 5
+    second["deterministic_gate"]["mutation_sample"]["kill_threshold"] = 90.0
+    third = _node_dict("n3", "xhigh")
+    third["dependencies"] = ["n1", "n2"]
+    third["task_prompt"] = "Polish."
+    third["execution_constraints"]["allowed_tools"] = ["lint"]
+    third["execution_constraints"]["max_context_tokens"] = 12000
+    third["deterministic_gate"]["test_command"] = "pytest test_p.py"
+    third["deterministic_gate"]["changed_line_coverage_min"] = 90.0
+    third["deterministic_gate"]["mutation_sample"]["max_mutants"] = 3
+    third["deterministic_gate"]["mutation_sample"]["kill_threshold"] = 95.0
+    dag = Dag.model_validate({"nodes": [first, second, third]})
+    assert render_dag_plan("Do the thing.", dag) == (
+        "Task: Do the thing.\n"
+        "Plan: 3 node(s): n1, n2, n3\n"
+        "├── n1 [budget: low, context: 5000 tokens]\n"
+        "│   task: Fix f and test it.\n"
+        "│   requirements: REQ-001\n"
+        "│   depends on: (none)\n"
+        "│   tools: read_file\n"
+        "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
+        "mutation 10 @ 85.0% changed-lines)\n"
+        "├── n2 [budget: medium, context: 8000 tokens]\n"
+        "│   task: Wire it up.\n"
+        "│   requirements: REQ-001, REQ-002\n"
+        "│   depends on: n1\n"
+        "│   tools: read_file, write_file\n"
+        "│   gate: pytest test_w.py (coverage >= 80.0%, red-phase optional, "
+        "mutation 5 @ 90.0% changed-lines)\n"
+        "└── n3 [budget: xhigh, context: 12000 tokens]\n"
+        "    task: Polish.\n"
+        "    requirements: REQ-001\n"
+        "    depends on: n1, n2\n"
+        "    tools: lint\n"
+        "    gate: pytest test_p.py (coverage >= 90.0%, red-phase required, "
+        "mutation 3 @ 95.0% changed-lines)\n"
+    )
+
+
+def test_render_dag_plan_single_node() -> None:
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", "low")]})
+    assert render_dag_plan("Do it.", dag) == (
+        "Task: Do it.\n"
+        "Plan: 1 node(s): n1\n"
+        "└── n1 [budget: low, context: 5000 tokens]\n"
+        "    task: Fix f and test it.\n"
+        "    requirements: REQ-001\n"
+        "    depends on: (none)\n"
+        "    tools: read_file\n"
+        "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
+        "mutation 10 @ 85.0% changed-lines)\n"
+    )
+
+
+def _dag_options() -> DagOptions:
+    return DagOptions(task=TASK, base_url="http://x/v1", model="m")
+
+
+def test_run_dag_prints_plan() -> None:
+    second = _node_dict("n2", "low")
+    second["dependencies"] = ["n1"]
+    seen: list[httpx.Request] = []
+    client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low"), second]}, seen)
+    out = io.StringIO()
+    assert run_dag(_dag_options(), client, stdout=out) == 0
+    body = json.loads(seen[1].content)
+    assert body["max_tokens"] == 8192
+    assert body["temperature"] == 0.0
+    assert body["reasoning_effort"] == "medium"
+    assert body["messages"][0]["content"] == build_emit_prompt(TASK)
+    assert out.getvalue() == (
+        f"Task: {TASK}\n"
+        "Plan: 2 node(s): n1, n2\n"
+        "├── n1 [budget: low, context: 5000 tokens]\n"
+        "│   task: Fix f and test it.\n"
+        "│   requirements: REQ-001\n"
+        "│   depends on: (none)\n"
+        "│   tools: read_file\n"
+        "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
+        "mutation 10 @ 85.0% changed-lines)\n"
+        "└── n2 [budget: low, context: 5000 tokens]\n"
+        "    task: Fix f and test it.\n"
+        "    requirements: REQ-001\n"
+        "    depends on: n1\n"
+        "    tools: read_file\n"
+        "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
+        "mutation 10 @ 85.0% changed-lines)\n"
+    )
+
+
+def test_run_dag_preflight_failure_reports() -> None:
+    out = io.StringIO()
+    assert run_dag(_dag_options(), _unreachable_client(), stdout=out) == 1
+    assert out.getvalue() == ("error: preflight failed at http://x/v1: request failed: refused\n")
+
+
+def test_run_dag_model_mismatch_reports() -> None:
+    client = _dag_client(["other"], {"nodes": [_node_dict("n1", "low")]})
+    out = io.StringIO()
+    assert run_dag(_dag_options(), client, stdout=out) == 1
+    assert out.getvalue() == (
+        "error: preflight failed at http://x/v1: model 'm' is not served (served: other)\n"
+    )
+
+
+def test_run_dag_bad_emission_reports() -> None:
+    bad = _node_dict("n1", "low")
+    bad["dependencies"] = ["nope"]
+    client = _dag_client(["m"], {"nodes": [bad]})
+    out = io.StringIO()
+    assert run_dag(_dag_options(), client, stdout=out) == 1
+    single = "unknown-dependency: node 'n1' depends on unknown node 'nope'"
+    assert out.getvalue() == (
+        f"error: could not emit a valid DAG in 3 rounds: {single}; {single}; {single}\n"
+    )
+
+
 class _FakeClient:
     made: ClassVar[list[dict[str, Any]]] = []
     calls: ClassVar[list[dict[str, Any]]] = []
@@ -870,6 +1015,107 @@ def test_main_doctor_passes_flags_through(
     assert _FakeClient.made[0]["base_url"] == "http://x/v1"
     assert _FakeClient.made[0]["model"] == "m"
     assert capsys.readouterr().out == "OK: http://x/v1 serves m (models: m)\n"
+
+
+def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match=r"^0$"):
+        main(["dag", "--help"])
+    assert capsys.readouterr().out == (
+        "usage: saddle dag [-h] [--base-url BASE_URL] [--model MODEL]\n"
+        "                  [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
+        "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
+        "                  task\n"
+        "\n"
+        "positional arguments:\n"
+        "  task                  Task description to decompose into a plan.\n"
+        "\n"
+        "options:\n"
+        "  -h, --help            show this help message and exit\n"
+        "  --base-url BASE_URL   vLLM base URL.\n"
+        "  --model MODEL         Model id.\n"
+        "  --max-tokens MAX_TOKENS\n"
+        "                        Emission max tokens.\n"
+        "  --temperature TEMPERATURE\n"
+        "                        Sampling temperature.\n"
+        "  --reasoning-effort {none,low,medium,xhigh}\n"
+        "                        Emission reasoning effort.\n"
+    )
+
+
+def test_main_dag_missing_key_reports(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    assert main(["dag", "Do it."]) == 1
+    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+
+
+def test_main_dag_passes_flags_through(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    _FakeClient.made.clear()
+    _FakeClient.calls.clear()
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    argv = [
+        "dag",
+        "--base-url",
+        "http://x/v1",
+        "--model",
+        "m",
+        "--max-tokens",
+        "100",
+        "--temperature",
+        "0.5",
+        "--reasoning-effort",
+        "low",
+        "Do it.",
+    ]
+    assert main(argv) == 0
+    assert _FakeClient.made[0]["api_key"] == "k"
+    assert _FakeClient.made[0]["base_url"] == "http://x/v1"
+    assert _FakeClient.made[0]["model"] == "m"
+    assert _FakeClient.calls[0]["emit"]["max_tokens"] == 100
+    assert _FakeClient.calls[0]["emit"]["temperature"] == 0.5
+    assert _FakeClient.calls[0]["emit"]["reasoning_effort"] == "low"
+    assert capsys.readouterr().out == (
+        "Task: Do it.\n"
+        "Plan: 1 node(s): n1\n"
+        "└── n1 [budget: low, context: 5000 tokens]\n"
+        "    task: Fix f and test it.\n"
+        "    requirements: REQ-001\n"
+        "    depends on: (none)\n"
+        "    tools: read_file\n"
+        "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
+        "mutation 10 @ 85.0% changed-lines)\n"
+    )
+
+
+def test_main_dag_uses_defaults(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    _FakeClient.made.clear()
+    _FakeClient.calls.clear()
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    assert main(["dag", "Do it."]) == 0
+    assert _FakeClient.made[0]["base_url"] == DEFAULT_BASE_URL
+    assert _FakeClient.made[0]["model"] == DEFAULT_MODEL
+    assert _FakeClient.calls[0]["emit"]["max_tokens"] == 8192
+    assert _FakeClient.calls[0]["emit"]["temperature"] == 0.0
+    assert _FakeClient.calls[0]["emit"]["reasoning_effort"] == "medium"
+
+
+def test_main_dag_preflight_failure_reports(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _refusing_setup(monkeypatch)
+    argv = ["dag", "--base-url", "http://x/v1", "--model", "m", "Do it."]
+    assert main(argv) == 1
+    assert capsys.readouterr().out == (
+        "error: preflight failed at http://x/v1: server rejected the API key (HTTP 401)\n"
+    )
 
 
 def test_main_doctor_uses_defaults(
