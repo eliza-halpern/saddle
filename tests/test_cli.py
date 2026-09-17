@@ -24,10 +24,19 @@ from saddle.cli import (
     run_dag,
     run_doctor,
     run_task,
+    run_verify,
 )
 from saddle.dag import Dag, Node
 from saddle.evidence import run_argv
-from saddle.journal import read_records, read_spans
+from saddle.journal import (
+    GateOutput,
+    append_record,
+    append_span,
+    build_record,
+    build_span,
+    read_records,
+    read_spans,
+)
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -181,9 +190,10 @@ def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -
         main(["--help"])
     out = capsys.readouterr().out
     assert "\nDeterministic harness for local LLMs.\n" in out
-    assert "    dag             Show the plan before it runs.\n" in out
-    assert "    doctor          Check the server is usable.\n" in out
-    assert "    run             Drive one mechanical task end to end.\n" in out
+    assert "    dag                 Show the plan before it runs.\n" in out
+    assert "    doctor              Check the server is usable.\n" in out
+    assert "    run                 Drive one mechanical task end to end.\n" in out
+    assert "    verify              Audit a journal and re-render its transcript.\n" in out
 
 
 def test_build_emit_prompt_names_task_and_rules() -> None:
@@ -1129,3 +1139,107 @@ def test_main_doctor_uses_defaults(
     assert _FakeClient.made[0]["model"] == DEFAULT_MODEL
     out = capsys.readouterr().out
     assert out == (f"OK: {DEFAULT_BASE_URL} serves {DEFAULT_MODEL} (models: {DEFAULT_MODEL})\n")
+
+
+def _sealed_journal(path: Path) -> None:
+    record = build_record(
+        evidence_id="n1#1",
+        node_id="n1",
+        diff="diff",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="",
+    )
+    append_record(path, record)
+    append_span(
+        path,
+        build_span(node_id="n1", argv=["pytest"], duration_ms=3, exit_code=0, detail=""),
+    )
+
+
+def test_run_verify_reports_ok_with_rerendered_transcript(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    _sealed_journal(journal)
+    out = io.StringIO()
+    assert run_verify(journal, stdout=out) == 0
+    body = out.getvalue()
+    assert body.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), chain verifies\n\n")
+    assert "# Saddle slice transcript\n" in body
+    assert "- Verdict: PASS\n" in body
+    assert "## Node n1\n" in body
+    assert f"- Path: {journal}\n" in body
+
+
+def test_run_verify_missing_journal_is_fresh(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    out = io.StringIO()
+    assert run_verify(journal, stdout=out) == 0
+    assert out.getvalue().startswith(f"OK: {journal}: 0 proof(s), 0 span(s), chain verifies\n\n")
+    assert "- Proven nodes: 0\n" in out.getvalue()
+
+
+def test_run_verify_tampered_record_lists_issue(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    _sealed_journal(journal)
+    journal.write_text(journal.read_text().replace('"n1"', '"n2"', 1))
+    out = io.StringIO()
+    assert run_verify(journal, stdout=out) == 1
+    assert out.getvalue() == "bad-hash@line 1: record hash mismatch for node 'n2'\n"
+
+
+def test_run_verify_orphan_span_lists_issue(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    _sealed_journal(journal)
+    append_span(
+        journal,
+        build_span(
+            node_id="n1",
+            argv=["pytest"],
+            duration_ms=3,
+            exit_code=0,
+            detail="",
+            parent_id="nope",
+            span_id="child",
+        ),
+    )
+    out = io.StringIO()
+    assert run_verify(journal, stdout=out) == 1
+    assert out.getvalue() == "orphan-span@line 3: span 'child' cites unknown parent 'nope'\n"
+
+
+def test_main_verify_needs_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    _sealed_journal(journal)
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    assert main(["verify", str(journal)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), chain verifies\n\n")
+
+
+def test_main_verify_defaults_to_repo_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = tmp_path / ".saddle" / "proofs.jsonl"
+    _sealed_journal(journal)
+    monkeypatch.chdir(tmp_path)
+    out = io.StringIO()
+    assert main(["verify"], stdout=out) == 0
+    assert out.getvalue().startswith("OK: .saddle/proofs.jsonl: 1 proof(s)")
+
+
+def test_verify_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match=r"^0$"):
+        main(["verify", "--help"])
+    assert capsys.readouterr().out == (
+        "usage: saddle verify [-h] [journal]\n"
+        "\n"
+        "positional arguments:\n"
+        "  journal     Journal path (default: .saddle/proofs.jsonl).\n"
+        "\n"
+        "options:\n"
+        "  -h, --help  show this help message and exit\n"
+    )

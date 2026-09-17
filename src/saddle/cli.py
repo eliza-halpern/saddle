@@ -19,7 +19,9 @@ from pydantic import ValidationError
 from saddle import __version__
 from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
+from saddle.journal import read_records, read_spans, verify_journal
 from saddle.slice import run_slice
+from saddle.transcript import render_journal_transcript
 from saddle.ux import ask_confirm
 from saddle.vllm import (
     DEFAULT_BASE_URL,
@@ -355,6 +357,22 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
     return 0
 
 
+def run_verify(journal: Path, *, stdout: IO[str]) -> int:
+    """Audit one journal: chain plus orphan rule, then its transcript."""
+    issues = verify_journal(journal)
+    if issues:
+        for issue in issues:
+            stdout.write(f"{issue.code}@line {issue.line}: {issue.message}\n")
+        return 1
+    records = read_records(journal)
+    spans = read_spans(journal)
+    stdout.write(
+        f"OK: {journal}: {len(records)} proof(s), {len(spans)} span(s), chain verifies\n\n"
+    )
+    stdout.write(render_journal_transcript(records, str(journal)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -375,6 +393,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(REASONING_EFFORTS),
         default="medium",
         help="Emission reasoning effort.",
+    )
+    verify = sub.add_parser("verify", help="Audit a journal and re-render its transcript.")
+    verify.add_argument(
+        "journal",
+        nargs="?",
+        default=".saddle/proofs.jsonl",
+        help="Journal path (default: .saddle/proofs.jsonl).",
     )
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
@@ -406,8 +431,10 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor", "dag"):
+    if args.command not in ("run", "doctor", "dag", "verify"):
         return 0
+    if args.command == "verify":
+        return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
     key = _api_key()
     if not key:
         print("error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)", file=stderr or sys.stderr)

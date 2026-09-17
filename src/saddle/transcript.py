@@ -7,9 +7,11 @@ what the machines checked.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from saddle.gates import GateCheck
+from saddle.journal import ProofRecord
 
 
 @dataclass(frozen=True)
@@ -61,3 +63,35 @@ def render_transcript(run: RunTranscript) -> str:
     lines.append(f"- Proven nodes: {proven}")
     lines.append("- Issues: none (chain verifies)")
     return "\n".join(lines) + "\n"
+
+
+def render_journal_transcript(records: Sequence[ProofRecord], journal_path: str) -> str:
+    """Re-render a transcript from sealed records alone (the audit view).
+
+    Run metadata the journal never stores (task, timestamps) renders as
+    "(unknown)"; the verdict is PASS only when every sealed gate output
+    passed, so an auditor recomputes it instead of trusting it.
+    """
+    nodes = tuple(
+        NodeTranscript(
+            node_id=record.node_id,
+            requirement_ids=tuple(record.requirement_ids),
+            checks=tuple(
+                GateCheck(name=output.name, passed=output.passed, detail=output.detail)
+                for output in record.gate_outputs
+            ),
+            proof_hash=record.record_hash,
+        )
+        for record in records
+    )
+    verdict = "PASS" if all(check.passed for node in nodes for check in node.checks) else "FAIL"
+    return render_transcript(
+        RunTranscript(
+            task="(unknown)",
+            started="(unknown)",
+            finished="(unknown)",
+            verdict=verdict,
+            nodes=nodes,
+            journal_path=journal_path,
+        )
+    )
