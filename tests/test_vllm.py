@@ -13,6 +13,7 @@ from saddle.vllm import (
     DEFAULT_MODEL,
     DIFF_SCHEMA,
     DiffProposal,
+    StreamToken,
     VllmAuthError,
     VllmClient,
     VllmRequestError,
@@ -336,3 +337,112 @@ def test_list_models_malformed_envelopes_raise() -> None:
         with pytest.raises(VllmResponseError, match=r"models envelope|models entry") as exc:
             client.list_models()
         assert str(exc.value) == message
+
+
+def _chunk(delta: dict[str, Any]) -> str:
+    return "data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n"
+
+
+def _sse_client(body: str, *, status: int = 200) -> tuple[VllmClient, list[httpx.Request]]:
+    response = httpx.Response(status, text=body, headers={"Content-Type": "text/event-stream"})
+    return _client_for(response)
+
+
+def test_stream_chat_yields_reasoning_and_content_in_order() -> None:
+    body = (
+        _chunk({"role": "assistant", "content": ""})
+        + _chunk({"reasoning": "Let me "})
+        + _chunk({"reasoning": "think."})
+        + _chunk({"content": "Hi!"})
+        + _chunk({"reasoning": "r", "content": "c"})
+        + _chunk({"reasoning": None})
+        + "data: [DONE]\n\n"
+    )
+    client, seen = _sse_client(body)
+    messages = [{"role": "user", "content": "hi"}]
+    assert list(client.stream_chat(messages)) == [
+        StreamToken(stream="reasoning", text="Let me "),
+        StreamToken(stream="reasoning", text="think."),
+        StreamToken(stream="content", text="Hi!"),
+        StreamToken(stream="reasoning", text="r"),
+        StreamToken(stream="content", text="c"),
+    ]
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/v1/chat/completions"
+    assert json.loads(seen[0].content) == {
+        "model": DEFAULT_MODEL,
+        "messages": messages,
+        "temperature": 0.0,
+        "max_tokens": 4096,
+        "reasoning_effort": "medium",
+        "include_reasoning": True,
+        "stream": True,
+    }
+
+
+def test_stream_chat_rejects_empty_messages_and_bad_effort() -> None:
+    client, _ = _sse_client("data: [DONE]\n\n")
+    with pytest.raises(ValueError, match="messages must not be empty") as empty_info:
+        list(client.stream_chat([]))
+    assert str(empty_info.value) == "messages must not be empty"
+    with pytest.raises(ValueError, match="reasoning_effort must be one of") as effort_info:
+        list(client.stream_chat([{"role": "user", "content": "hi"}], reasoning_effort="bogus"))
+    assert str(effort_info.value) == (
+        "reasoning_effort must be one of none, low, medium, xhigh; got 'bogus'"
+    )
+
+
+def test_stream_chat_maps_auth_and_request_errors() -> None:
+    for status in (401, 403):
+        client, _ = _sse_client("denied", status=status)
+        with pytest.raises(VllmAuthError) as auth_info:
+            list(client.stream_chat([{"role": "user", "content": "hi"}]))
+        assert str(auth_info.value) == f"server rejected the API key (HTTP {status})"
+    client, _ = _sse_client("boom", status=500)
+    with pytest.raises(VllmRequestError) as req_info:
+        list(client.stream_chat([{"role": "user", "content": "hi"}]))
+    assert str(req_info.value) == "server returned HTTP 500: boom"
+    client, _ = _sse_client("bad", status=400)
+    with pytest.raises(VllmRequestError) as bad_info:
+        list(client.stream_chat([{"role": "user", "content": "hi"}]))
+    assert str(bad_info.value) == "server returned HTTP 400: bad"
+    client, _ = _sse_client("x" * 250, status=500)
+    with pytest.raises(VllmRequestError) as long_info:
+        list(client.stream_chat([{"role": "user", "content": "hi"}]))
+    assert str(long_info.value) == f"server returned HTTP 500: {'x' * 200}"
+    failing = _failing_client(httpx.ConnectError("refused"))
+    with pytest.raises(VllmRequestError) as conn_info:
+        list(failing.stream_chat([{"role": "user", "content": "hi"}]))
+    assert str(conn_info.value) == "request failed: refused"
+
+
+def test_stream_chat_malformed_chunks_raise() -> None:
+    client, _ = _sse_client("data: {oops\n\n")
+    with pytest.raises(VllmResponseError) as json_info:
+        list(client.stream_chat([{"role": "user", "content": "hi"}]))
+    assert str(json_info.value).startswith("stream chunk is not valid JSON: ")
+    cases = [
+        ("data: " + json.dumps({"choices": []}) + "\n\n", "stream chunk has no choices"),
+        (
+            "data: " + json.dumps({"choices": [{"delta": None}]}) + "\n\n",
+            "stream chunk has no delta",
+        ),
+        ("data: [1, 2]\n\n", "stream chunk must be an object, got list"),
+        (
+            "data: " + json.dumps({"choices": [7]}) + "\n\n",
+            "stream chunk has no delta",
+        ),
+    ]
+    for body, message in cases:
+        client, _ = _sse_client(body)
+        with pytest.raises(VllmResponseError) as exc_info:
+            list(client.stream_chat([{"role": "user", "content": "hi"}]))
+        assert str(exc_info.value) == message
+
+
+def test_stream_chat_truncated_stream_yields_partial_tokens() -> None:
+    client, _ = _sse_client(_chunk({"content": "Hi!"}))
+    assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
+        StreamToken(stream="content", text="Hi!")
+    ]

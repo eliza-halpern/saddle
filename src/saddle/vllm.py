@@ -13,6 +13,7 @@ the contract.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final
@@ -70,6 +71,22 @@ class DiffProposal:
     reasoning: str
 
 
+@dataclass(frozen=True)
+class StreamToken:
+    """One streamed token: which stream it belongs to plus its text."""
+
+    stream: str
+    text: str
+
+
+def _checked_effort(reasoning_effort: str) -> None:
+    """Reject unknown reasoning efforts before spending a round-trip."""
+    if reasoning_effort not in REASONING_EFFORTS:
+        allowed = ", ".join(REASONING_EFFORTS)
+        msg = f"reasoning_effort must be one of {allowed}; got {reasoning_effort!r}"
+        raise ValueError(msg)
+
+
 def _build_payload(
     *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
 ) -> dict[str, Any]:
@@ -96,6 +113,47 @@ def _build_diff_payload(
         "include_reasoning": True,
         "structured_outputs": {"json": DIFF_SCHEMA},
     }
+
+
+def _build_chat_payload(
+    *,
+    model: str,
+    messages: Sequence[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    reasoning_effort: str,
+) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [dict(message) for message in messages],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
+        "include_reasoning": True,
+        "stream": True,
+    }
+
+
+def _stream_tokens(data: object) -> list[StreamToken]:
+    """Reasoning then content tokens from one SSE chunk envelope."""
+    if not isinstance(data, dict):
+        msg = f"stream chunk must be an object, got {type(data).__name__}"
+        raise VllmResponseError(msg)
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        msg = "stream chunk has no choices"
+        raise VllmResponseError(msg)
+    first = choices[0]
+    delta = first.get("delta") if isinstance(first, dict) else None
+    if not isinstance(delta, dict):
+        msg = "stream chunk has no delta"
+        raise VllmResponseError(msg)
+    tokens: list[StreamToken] = []
+    for stream in ("reasoning", "content"):
+        text = delta.get(stream)
+        if isinstance(text, str) and text:
+            tokens.append(StreamToken(stream=stream, text=text))
+    return tokens
 
 
 def _parse_response(data: object) -> DagEmission:
@@ -226,10 +284,7 @@ class VllmClient:
         if not prompt.strip():
             msg = "prompt must not be empty"
             raise ValueError(msg)
-        if reasoning_effort not in REASONING_EFFORTS:
-            allowed = ", ".join(REASONING_EFFORTS)
-            msg = f"reasoning_effort must be one of {allowed}; got {reasoning_effort!r}"
-            raise ValueError(msg)
+        _checked_effort(reasoning_effort)
         payload = _build_payload(
             model=self._model,
             prompt=prompt,
@@ -252,10 +307,7 @@ class VllmClient:
         if not prompt.strip():
             msg = "prompt must not be empty"
             raise ValueError(msg)
-        if reasoning_effort not in REASONING_EFFORTS:
-            allowed = ", ".join(REASONING_EFFORTS)
-            msg = f"reasoning_effort must be one of {allowed}; got {reasoning_effort!r}"
-            raise ValueError(msg)
+        _checked_effort(reasoning_effort)
         payload = _build_diff_payload(
             model=self._model,
             prompt=prompt,
@@ -264,6 +316,54 @@ class VllmClient:
             reasoning_effort=reasoning_effort,
         )
         return _parse_diff_response(self._post(payload))
+
+    def stream_chat(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = DEFAULT_TEMPERATURE,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    ) -> Iterator[StreamToken]:
+        """Stream one chat completion as token events (reasoning plus content)."""
+        if not messages:
+            msg = "messages must not be empty"
+            raise ValueError(msg)
+        _checked_effort(reasoning_effort)
+        payload = _build_chat_payload(
+            model=self._model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+        )
+        # httpx upper-cases the method, so case mutants ("post") are
+        # behaviorally identical on the wire: unkillable, hence pragma.
+        method = "POST"  # pragma: no mutate
+        try:
+            with self._client.stream(method, "/chat/completions", json=payload) as response:
+                if response.status_code in (401, 403):
+                    msg = f"server rejected the API key (HTTP {response.status_code})"
+                    raise VllmAuthError(msg)
+                if response.status_code >= 400:
+                    response.read()
+                    msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
+                    raise VllmRequestError(msg)
+                for line in response.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    content = line[len("data: ") :]
+                    if content == "[DONE]":
+                        return
+                    try:
+                        data = json.loads(content)
+                    except json.JSONDecodeError as exc:
+                        msg = f"stream chunk is not valid JSON: {exc}"
+                        raise VllmResponseError(msg) from exc
+                    yield from _stream_tokens(data)
+        except httpx.HTTPError as exc:
+            msg = f"request failed: {exc}"
+            raise VllmRequestError(msg) from exc
 
     def list_models(self) -> list[str]:
         """GET /models with a short timeout; return served model ids."""
