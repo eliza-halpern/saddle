@@ -228,10 +228,10 @@ def _parse_line(raw: object) -> ProofRecord | SpanRecord:
 
 def _load_journal(
     path: Path,
-) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalIssue]]:
+) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalIssue], list[ProofRecord | SpanRecord]]:
     """Read and verify: recompute every hash, check every parent link."""
     if not path.exists():
-        return ([], [], [])
+        return ([], [], [], [])
     text = path.read_bytes().decode()
     lines = text.splitlines()
     issues: list[JournalIssue] = []
@@ -244,6 +244,7 @@ def _load_journal(
         lines = lines[:-1]
     records: list[ProofRecord] = []
     span_entries: list[tuple[int, SpanRecord]] = []
+    ordered: list[ProofRecord | SpanRecord] = []
     seen: set[str] = set()
     for number, line in enumerate(lines, start=1):
         try:
@@ -270,6 +271,7 @@ def _load_journal(
             continue
         if isinstance(entry, SpanRecord):
             span_entries.append((number, entry))
+            ordered.append(entry)
             continue
         if any(parent not in seen for parent in entry.parent_proofs):
             issues.append(
@@ -281,6 +283,7 @@ def _load_journal(
             )
             continue
         records.append(entry)
+        ordered.append(entry)
         seen.add(entry.record_hash)
     spans = [entry for _, entry in span_entries]
     known = {entry.span_id for entry in spans}
@@ -293,35 +296,37 @@ def _load_journal(
                     message=f"span {entry.span_id!r} cites unknown parent {entry.parent_id!r}",
                 )
             )
-    return (records, spans, issues)
+    return (records, spans, issues, ordered)
 
 
 def verify_journal(path: Path) -> list[JournalIssue]:
     """Verify the journal by recomputation; empty list means valid."""
-    _, _, issues = _load_journal(path)
+    _, _, issues, _ = _load_journal(path)
     return issues
 
 
-def _verified_contents(path: Path) -> tuple[list[ProofRecord], list[SpanRecord]]:
+def _verified_contents(
+    path: Path,
+) -> tuple[list[ProofRecord], list[SpanRecord], list[ProofRecord | SpanRecord]]:
     """Verified sealed entries; refuses hard corruption.
 
     A torn tail and in-flight orphans (children precede their parents)
     signal incompleteness, not corruption, so reads tolerate them;
     `verify_journal` still reports both.
     """
-    records, spans, issues = _load_journal(path)
+    records, spans, issues, ordered = _load_journal(path)
     soft = ("torn-tail", "orphan-span")
     hard = [issue for issue in issues if issue.code not in soft]
     if hard:
         codes = ", ".join(f"{issue.code}@line {issue.line}" for issue in hard)
         msg = f"journal {str(path)!r} failed verification: {codes}"
         raise ValueError(msg)
-    return (records, spans)
+    return (records, spans, ordered)
 
 
 def _verified_records(path: Path) -> list[ProofRecord]:
     """Verified sealed records; refuses hard corruption (torn tail aside)."""
-    records, _ = _verified_contents(path)
+    records, _, _ = _verified_contents(path)
     return records
 
 
@@ -341,8 +346,14 @@ def read_records(path: Path) -> list[ProofRecord]:
 
 def read_spans(path: Path) -> list[SpanRecord]:
     """Verified sealed tool spans in journal order, for audits and timelines."""
-    _, spans = _verified_contents(path)
+    _, spans, _ = _verified_contents(path)
     return spans
+
+
+def read_entries(path: Path) -> list[ProofRecord | SpanRecord]:
+    """Verified sealed entries in journal order, for live tailing."""
+    _, _, entries = _verified_contents(path)
+    return entries
 
 
 def tool_spans_by_node(spans: Sequence[SpanRecord]) -> dict[str, tuple[SpanRecord, ...]]:

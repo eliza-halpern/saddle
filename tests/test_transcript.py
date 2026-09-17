@@ -8,6 +8,8 @@ from saddle.transcript import (
     MAX_THOUGHT_EXCERPT_CHARS,
     NodeTranscript,
     RunTranscript,
+    is_run_end,
+    render_event,
     render_journal_transcript,
     render_transcript,
 )
@@ -246,3 +248,65 @@ def test_render_timeline_tools_without_thinking() -> None:
     assert "- Timeline:\n" in text
     assert "  - thought:" not in text
     assert "  - tool pytest: exit 1 in 12ms: pytest\n" in text
+
+
+def _agent_span(name: str, node_id: str = "n1", detail: str = "", exit_code: int = 0) -> SpanRecord:
+    return build_span(
+        node_id=node_id,
+        argv=[],
+        duration_ms=30,
+        exit_code=exit_code,
+        detail=detail,
+        kind="agent",
+        name=name,
+    )
+
+
+def test_is_run_end_matches_only_the_run_span() -> None:
+    run = _agent_span("run", node_id="")
+    assert is_run_end(run) is True
+    assert is_run_end(_sealed("n1", True, [])) is False
+    assert is_run_end(_tool(["pytest"])) is False
+    assert is_run_end(_agent_span("worker:n1")) is False
+    assert is_run_end(_agent_span("run", node_id="n1")) is False
+    assert is_run_end(_tool(["run"])) is False
+
+
+def test_render_event_tool_span() -> None:
+    assert render_event(_tool(["pytest", "test_n.py"])) == [
+        "[n1] tool pytest: exit 0 in 12ms: pytest test_n.py"
+    ]
+
+
+def test_render_event_proof_with_thought() -> None:
+    record = _sealed("n1", True, [], thinking="Fix f first.\nThen test it.")
+    assert render_event(record) == [
+        f"[n1] sealed {record.record_hash[:8]} (1/1 gates passed)",
+        "[n1] thought: Fix f first.",
+        "    Then test it.",
+    ]
+
+
+def test_render_event_proof_counts_failed_gates() -> None:
+    record = build_record(
+        evidence_id="n1#1",
+        node_id="n1",
+        diff="diff",
+        parent_proofs=[],
+        gate_outputs=[
+            GateOutput(name="tests", passed=True, detail="ok"),
+            GateOutput(name="ruff", passed=False, detail="dirty"),
+        ],
+        requirement_ids=["REQ-001"],
+        thinking="",
+    )
+    assert render_event(record) == [f"[n1] sealed {record.record_hash[:8]} (1/2 gates passed)"]
+
+
+def test_render_event_agent_spans() -> None:
+    assert render_event(_agent_span("worker:n1")) == ["[n1] worker:n1: exit 0 in 30ms"]
+    assert render_event(_agent_span("worker:n1", detail="boom", exit_code=1)) == [
+        "[n1] worker:n1: exit 1 in 30ms: boom"
+    ]
+    run = _agent_span("run", node_id="", detail="1 proven, 0 failed, 0 undispatched")
+    assert render_event(run) == ["run: exit 0 in 30ms: 1 proven, 0 failed, 0 undispatched"]

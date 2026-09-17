@@ -26,6 +26,7 @@ from saddle.journal import (
     build_from_gate,
     build_record,
     build_span,
+    read_entries,
     read_records,
     read_spans,
     rebuild_proven,
@@ -503,3 +504,32 @@ def test_tool_spans_for_node_returns_tuple_or_empty() -> None:
     grouped = tool_spans_by_node([first])
     assert tool_spans_for_node(grouped, "n1") == (first,)
     assert tool_spans_for_node(grouped, "n9") == ()
+
+
+def test_read_entries_returns_proofs_and_spans_in_order(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    record = _record("n1")
+    tool = _span("n1")
+    child = _record("n2", [record.record_hash])
+    worker = _agent("n1", "worker:n1")
+    append_record(path, record)
+    append_span(path, tool)
+    append_record(path, child)
+    append_span(path, worker)
+    assert read_entries(path) == [record, tool, child, worker]
+    assert read_entries(tmp_path / "missing.jsonl") == []
+
+
+def test_read_entries_refuses_corruption_tolerates_torn_tail(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.jsonl"
+    append_record(bad, _record("n1"))
+    with bad.open("a", encoding="utf-8") as handle:
+        handle.write("garbage\n")
+    with pytest.raises(ValueError, match="unparseable-line@line 2"):
+        read_entries(bad)
+    torn = tmp_path / "torn.jsonl"
+    record = _record("n1")
+    append_record(torn, record)
+    with torn.open("a", encoding="utf-8") as handle:
+        handle.write('{"half": ')
+    assert read_entries(torn) == [record]

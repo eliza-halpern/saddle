@@ -9,7 +9,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Final
@@ -19,9 +20,9 @@ from pydantic import ValidationError
 from saddle import __version__
 from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
-from saddle.journal import read_records, read_spans, verify_journal
+from saddle.journal import read_entries, read_records, read_spans, verify_journal
 from saddle.slice import run_slice
-from saddle.transcript import render_journal_transcript
+from saddle.transcript import is_run_end, render_event, render_journal_transcript
 from saddle.ux import ask_confirm
 from saddle.vllm import (
     DEFAULT_BASE_URL,
@@ -373,6 +374,39 @@ def run_verify(journal: Path, *, stdout: IO[str]) -> int:
     return 0
 
 
+def run_tail(
+    journal: Path,
+    *,
+    stdout: IO[str],
+    sleep: Callable[[float], None] = time.sleep,
+    poll_interval: float = 0.2,
+) -> int:
+    """Follow a journal, rendering each entry as it lands; exit on run end."""
+    if not journal.exists():
+        stdout.write(f"waiting for {journal} to appear...\n")
+    shown = 0
+    try:
+        while True:
+            try:
+                entries = read_entries(journal)
+            except ValueError as exc:
+                stdout.write(f"error: {exc}\n")
+                return 1
+            if len(entries) < shown:
+                stdout.write(f"error: {journal} was truncated; restart tail\n")
+                return 1
+            for entry in entries[shown:]:
+                for line in render_event(entry):
+                    stdout.write(f"{line}\n")
+                stdout.flush()
+                if is_run_end(entry):
+                    return 0
+            shown = len(entries)
+            sleep(poll_interval)
+    except KeyboardInterrupt:
+        return 130
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -393,6 +427,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(REASONING_EFFORTS),
         default="medium",
         help="Emission reasoning effort.",
+    )
+    tail = sub.add_parser("tail", help="Follow a live run as it happens.")
+    tail.add_argument(
+        "journal",
+        nargs="?",
+        default=".saddle/proofs.jsonl",
+        help="Journal path (default: .saddle/proofs.jsonl).",
     )
     verify = sub.add_parser("verify", help="Audit a journal and re-render its transcript.")
     verify.add_argument(
@@ -431,10 +472,12 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor", "dag", "verify"):
+    if args.command not in ("run", "doctor", "dag", "verify", "tail"):
         return 0
     if args.command == "verify":
         return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
+    if args.command == "tail":
+        return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     key = _api_key()
     if not key:
         print("error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)", file=stderr or sys.stderr)

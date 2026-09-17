@@ -41,16 +41,21 @@ class RunTranscript:
     journal_path: str
 
 
+def _thought_excerpt(thinking: str) -> list[str]:
+    """First 200 chars of thinking, split into display lines."""
+    excerpt = thinking[:MAX_THOUGHT_EXCERPT_CHARS]
+    if len(thinking) > MAX_THOUGHT_EXCERPT_CHARS:
+        excerpt += "..."
+    return excerpt.split("\n")
+
+
 def _timeline_lines(node: NodeTranscript) -> list[str]:
     """Per-node timeline: the thought first, then each tool call in order."""
     if not node.thinking and not node.tool_spans:
         return []
     lines = ["- Timeline:"]
     if node.thinking:
-        excerpt = node.thinking[:MAX_THOUGHT_EXCERPT_CHARS]
-        if len(node.thinking) > MAX_THOUGHT_EXCERPT_CHARS:
-            excerpt += "..."
-        first, *rest = excerpt.split("\n")
+        first, *rest = _thought_excerpt(node.thinking)
         lines.append(f"  - thought: {first}")
         lines.extend(f"    {line}" for line in rest)
     for span in node.tool_spans:
@@ -59,6 +64,42 @@ def _timeline_lines(node: NodeTranscript) -> list[str]:
             f"  - tool {span.name}: exit {span.exit_code} in {span.duration_ms}ms: {command}"
         )
     return lines
+
+
+def is_run_end(entry: ProofRecord | SpanRecord) -> bool:
+    """True only for the run span that seals a finished run."""
+    return (
+        isinstance(entry, SpanRecord)
+        and entry.kind == "agent"
+        and entry.name == "run"
+        and entry.node_id == ""
+    )
+
+
+def render_event(entry: ProofRecord | SpanRecord) -> list[str]:
+    """One journal entry as live-tail lines (no trailing newlines)."""
+    if isinstance(entry, ProofRecord):
+        passed = sum(1 for output in entry.gate_outputs if output.passed)
+        total = len(entry.gate_outputs)
+        lines = [
+            f"[{entry.node_id}] sealed {entry.record_hash[:8]} ({passed}/{total} gates passed)"
+        ]
+        if entry.thinking:
+            excerpt = _thought_excerpt(entry.thinking)
+            lines.append(f"[{entry.node_id}] thought: {excerpt[0]}")
+            lines.extend(f"    {rest}" for rest in excerpt[1:])
+        return lines
+    if entry.kind == "tool":
+        command = " ".join(entry.argv)
+        return [
+            f"[{entry.node_id}] tool {entry.name}:"
+            f" exit {entry.exit_code} in {entry.duration_ms}ms: {command}"
+        ]
+    label = entry.name if not entry.node_id else f"[{entry.node_id}] {entry.name}"
+    line = f"{label}: exit {entry.exit_code} in {entry.duration_ms}ms"
+    if entry.detail:
+        line += f": {entry.detail}"
+    return [line]
 
 
 def render_transcript(run: RunTranscript) -> str:

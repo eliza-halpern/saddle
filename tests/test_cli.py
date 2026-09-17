@@ -23,6 +23,7 @@ from saddle.cli import (
     render_dag_plan,
     run_dag,
     run_doctor,
+    run_tail,
     run_task,
     run_verify,
 )
@@ -30,6 +31,8 @@ from saddle.dag import Dag, Node
 from saddle.evidence import run_argv
 from saddle.journal import (
     GateOutput,
+    ProofRecord,
+    SpanRecord,
     append_record,
     append_span,
     build_record,
@@ -194,6 +197,7 @@ def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -
     assert "    doctor              Check the server is usable.\n" in out
     assert "    run                 Drive one mechanical task end to end.\n" in out
     assert "    verify              Audit a journal and re-render its transcript.\n" in out
+    assert "    tail                Follow a live run as it happens.\n" in out
 
 
 def test_build_emit_prompt_names_task_and_rules() -> None:
@@ -1238,6 +1242,241 @@ def test_verify_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> No
         main(["verify", "--help"])
     assert capsys.readouterr().out == (
         "usage: saddle verify [-h] [journal]\n"
+        "\n"
+        "positional arguments:\n"
+        "  journal     Journal path (default: .saddle/proofs.jsonl).\n"
+        "\n"
+        "options:\n"
+        "  -h, --help  show this help message and exit\n"
+    )
+
+
+def _tail_journal(path: Path) -> ProofRecord:
+    run = build_span(
+        node_id="",
+        argv=[],
+        duration_ms=3000,
+        exit_code=0,
+        detail="1 proven, 0 failed, 0 undispatched",
+        kind="agent",
+        name="run",
+    )
+    worker = build_span(
+        node_id="n1",
+        argv=[],
+        duration_ms=30,
+        exit_code=0,
+        detail="",
+        kind="agent",
+        name="worker:n1",
+        parent_id=run.span_id,
+    )
+    record = build_record(
+        evidence_id="n1#1",
+        node_id="n1",
+        diff="diff",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="Fix it.",
+    )
+    append_span(
+        path, build_span(node_id="n1", argv=["pytest"], duration_ms=3, exit_code=0, detail="")
+    )
+    append_record(path, record)
+    append_span(path, worker)
+    append_span(path, run)
+    return record
+
+
+def _tail_expected(record: ProofRecord) -> str:
+    return (
+        "[n1] tool pytest: exit 0 in 3ms: pytest\n"
+        f"[n1] sealed {record.record_hash[:8]} (1/1 gates passed)\n"
+        "[n1] thought: Fix it.\n"
+        "[n1] worker:n1: exit 0 in 30ms\n"
+        "run: exit 0 in 3000ms: 1 proven, 0 failed, 0 undispatched\n"
+    )
+
+
+class _FlushCounter(io.StringIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self) -> None:
+        super().flush()
+        self.flushes += 1
+
+
+def test_run_tail_streams_cold_journal_without_sleeping(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    record = _tail_journal(journal)
+    out = _FlushCounter()
+    sleeps: list[float] = []
+    assert run_tail(journal, stdout=out, sleep=sleeps.append) == 0
+    assert out.getvalue() == _tail_expected(record)
+    assert sleeps == []
+    assert out.flushes == 4
+
+
+def test_run_tail_follows_growing_journal(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    append_span(
+        journal,
+        build_span(node_id="n1", argv=["pytest"], duration_ms=3, exit_code=0, detail=""),
+    )
+    record = build_record(
+        evidence_id="n1#1",
+        node_id="n1",
+        diff="diff",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="Fix it.",
+    )
+    run = build_span(
+        node_id="",
+        argv=[],
+        duration_ms=3000,
+        exit_code=0,
+        detail="",
+        kind="agent",
+        name="run",
+    )
+    pending: list[ProofRecord | SpanRecord] = [record, run]
+
+    def sleep(secs: float) -> None:
+        sleeps.append(secs)
+        entry = pending.pop(0)
+        if isinstance(entry, ProofRecord):
+            append_record(journal, entry)
+        else:
+            append_span(journal, entry)
+
+    sleeps: list[float] = []
+    out = io.StringIO()
+    assert run_tail(journal, stdout=out, sleep=sleep) == 0
+    assert out.getvalue() == (
+        "[n1] tool pytest: exit 0 in 3ms: pytest\n"
+        f"[n1] sealed {record.record_hash[:8]} (1/1 gates passed)\n"
+        "[n1] thought: Fix it.\n"
+        "run: exit 0 in 3000ms\n"
+    )
+    assert sleeps == [0.2, 0.2]
+
+
+def test_run_tail_waits_for_missing_journal_once(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    record = build_record(
+        evidence_id="n1#1",
+        node_id="n1",
+        diff="diff",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="",
+    )
+    run = build_span(
+        node_id="",
+        argv=[],
+        duration_ms=1,
+        exit_code=0,
+        detail="",
+        kind="agent",
+        name="run",
+    )
+    created = False
+
+    def sleep(secs: float) -> None:
+        nonlocal created
+        if not created:
+            created = True
+            append_record(journal, record)
+            append_span(journal, run)
+
+    out = io.StringIO()
+    assert run_tail(journal, stdout=out, sleep=sleep) == 0
+    assert out.getvalue() == (
+        f"waiting for {journal} to appear...\n"
+        f"[n1] sealed {record.record_hash[:8]} (1/1 gates passed)\n"
+        "run: exit 0 in 1ms\n"
+    )
+
+
+def test_run_tail_refuses_corruption(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    journal.write_text("garbage\n")
+    out = io.StringIO()
+    assert run_tail(journal, stdout=out, sleep=lambda secs: None) == 1
+    assert out.getvalue().startswith(f"error: journal {str(journal)!r} failed verification: ")
+
+
+def test_run_tail_refuses_truncation(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    first = _tail_journal(journal)
+    lines = journal.read_text().splitlines()
+    journal.write_text("\n".join(lines[:2]) + "\n")
+    out = io.StringIO()
+    truncated = False
+
+    def sleep(secs: float) -> None:
+        nonlocal truncated
+        if not truncated:
+            truncated = True
+            journal.write_text(lines[0] + "\n")
+
+    assert run_tail(journal, stdout=out, sleep=sleep) == 1
+    assert out.getvalue() == (
+        "[n1] tool pytest: exit 0 in 3ms: pytest\n"
+        f"[n1] sealed {first.record_hash[:8]} (1/1 gates passed)\n"
+        "[n1] thought: Fix it.\n"
+        f"error: {journal} was truncated; restart tail\n"
+    )
+
+
+def test_run_tail_keyboard_interrupt_exits_130(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    append_span(
+        journal,
+        build_span(node_id="n1", argv=["pytest"], duration_ms=3, exit_code=0, detail=""),
+    )
+
+    def sleep(secs: float) -> None:
+        raise KeyboardInterrupt
+
+    out = io.StringIO()
+    assert run_tail(journal, stdout=out, sleep=sleep) == 130
+    assert out.getvalue() == "[n1] tool pytest: exit 0 in 3ms: pytest\n"
+
+
+def test_main_tail_needs_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    record = _tail_journal(journal)
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    assert main(["tail", str(journal)]) == 0
+    assert capsys.readouterr().out == _tail_expected(record)
+
+
+def test_main_tail_defaults_to_repo_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = tmp_path / ".saddle" / "proofs.jsonl"
+    record = _tail_journal(journal)
+    monkeypatch.chdir(tmp_path)
+    out = io.StringIO()
+    assert main(["tail"], stdout=out) == 0
+    assert out.getvalue() == _tail_expected(record)
+
+
+def test_tail_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit, match=r"^0$"):
+        main(["tail", "--help"])
+    assert capsys.readouterr().out == (
+        "usage: saddle tail [-h] [journal]\n"
         "\n"
         "positional arguments:\n"
         "  journal     Journal path (default: .saddle/proofs.jsonl).\n"
