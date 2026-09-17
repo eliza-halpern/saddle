@@ -11,11 +11,15 @@ from typing import Any
 
 import httpx
 import pytest
+from rich.console import Console
 
 from saddle.chat import ChatOptions, _run_turn, _seal_turn, _stream_response, run_chat
 from saddle.journal import read_records, read_spans, verify_journal
+from saddle.timeline import Timeline
 from saddle.tools import TOOLS
 from saddle.vllm import ToolCall, VllmClient
+
+RULE = "─" * 80 + "\n"
 
 _LIVE_KEY = os.environ.get("SADDLE_VLLM_API_KEY") or os.environ.get("VLLM_API_KEY")
 
@@ -51,6 +55,10 @@ def _scripted_client(bodies: list[str], seen: list[httpx.Request] | None = None)
     return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
 
 
+def _display(out: io.StringIO) -> Timeline:
+    return Timeline(Console(file=out, width=80))
+
+
 def test_stream_response_prints_reasoning_then_content() -> None:
     body = (
         _chunk({"reasoning": "Let me "})
@@ -59,64 +67,74 @@ def test_stream_response_prints_reasoning_then_content() -> None:
         + _chunk({"content": "there!"})
         + "data: [DONE]\n\n"
     )
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    text, reasoning, calls = _stream_response(
-        _sse_client(body),
-        [{"role": "user", "content": "hi"}],
-        ChatOptions(),
-        stdout=stdout,
+    with display.live_turn():
+        text, reasoning, calls = _stream_response(
+            _sse_client(body),
+            [{"role": "user", "content": "hi"}],
+            ChatOptions(),
+            display=display,
+        )
+
+    assert out.getvalue() == (
+        "thinking: Let me think. \n" + "saddle> \n" + "Hi there!" + " " * 71 + "\n"
     )
-
-    assert stdout.getvalue() == "thinking: Let me think. \nHi there!\n"
     assert text == "Hi there!"
     assert reasoning == "Let me think. "
     assert calls == []
 
 
 def test_stream_response_content_without_reasoning() -> None:
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    text, reasoning, calls = _stream_response(
-        _sse_client(_chunk({"content": "Hi!"}) + "data: [DONE]\n\n"),
-        [{"role": "user", "content": "hi"}],
-        ChatOptions(),
-        stdout=stdout,
-    )
+    with display.live_turn():
+        text, reasoning, calls = _stream_response(
+            _sse_client(_chunk({"content": "Hi!"}) + "data: [DONE]\n\n"),
+            [{"role": "user", "content": "hi"}],
+            ChatOptions(),
+            display=display,
+        )
 
-    assert stdout.getvalue() == "Hi!\n"
+    assert out.getvalue() == "saddle> \n" + "Hi!" + " " * 77 + "\n"
     assert text == "Hi!"
     assert reasoning == ""
     assert calls == []
 
 
 def test_stream_response_reasoning_without_content() -> None:
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    text, reasoning, calls = _stream_response(
-        _sse_client(_chunk({"reasoning": "Hmm. "}) + "data: [DONE]\n\n"),
-        [{"role": "user", "content": "hi"}],
-        ChatOptions(),
-        stdout=stdout,
-    )
+    with display.live_turn():
+        text, reasoning, calls = _stream_response(
+            _sse_client(_chunk({"reasoning": "Hmm. "}) + "data: [DONE]\n\n"),
+            [{"role": "user", "content": "hi"}],
+            ChatOptions(),
+            display=display,
+        )
 
-    assert stdout.getvalue() == "thinking: Hmm. \n"
+    assert out.getvalue() == "thinking: Hmm. \n"
     assert text == ""
     assert reasoning == "Hmm. "
     assert calls == []
 
 
 def test_stream_response_empty_response_prints_nothing() -> None:
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    text, reasoning, calls = _stream_response(
-        _sse_client("data: [DONE]\n\n"),
-        [{"role": "user", "content": "hi"}],
-        ChatOptions(),
-        stdout=stdout,
-    )
+    with display.live_turn():
+        text, reasoning, calls = _stream_response(
+            _sse_client("data: [DONE]\n\n"),
+            [{"role": "user", "content": "hi"}],
+            ChatOptions(),
+            display=display,
+        )
 
-    assert stdout.getvalue() == ""
+    assert out.getvalue() == ""
     assert text == ""
     assert reasoning == ""
     assert calls == []
@@ -129,16 +147,18 @@ def test_stream_response_collects_tool_calls() -> None:
         + _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"a": 1}'}}]})
         + "data: [DONE]\n\n"
     )
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    text, reasoning, calls = _stream_response(
-        _sse_client(body),
-        [{"role": "user", "content": "hi"}],
-        ChatOptions(),
-        stdout=stdout,
-    )
+    with display.live_turn():
+        text, reasoning, calls = _stream_response(
+            _sse_client(body),
+            [{"role": "user", "content": "hi"}],
+            ChatOptions(),
+            display=display,
+        )
 
-    assert stdout.getvalue() == "Ok. \n"
+    assert out.getvalue() == "saddle> \n" + "Ok." + " " * 77 + "\n"
     assert text == "Ok. "
     assert reasoning == ""
     assert calls == [ToolCall(id="c1", name="add", arguments='{"a": 1}')]
@@ -146,14 +166,14 @@ def test_stream_response_collects_tool_calls() -> None:
 
 def test_stream_response_sends_knobs_and_tools() -> None:
     seen: list[httpx.Request] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
     options = ChatOptions(max_tokens=128, temperature=0.5, reasoning_effort="low")
 
     _stream_response(
         _sse_client("data: [DONE]\n\n", seen),
         [{"role": "user", "content": "hi"}],
         options,
-        stdout=stdout,
+        display=_display(out),
     )
 
     body = json.loads(seen[0].content)
@@ -210,19 +230,21 @@ def test_seal_turn_chains_proofs_with_hashed_turns(tmp_path: Path) -> None:
 def test_run_turn_appends_plain_reply(tmp_path: Path) -> None:
     journal = tmp_path / "chat.jsonl"
     messages: list[dict[str, Any]] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    new_parent = _run_turn(
-        _sse_client(_chunk({"content": "Hi!"}) + "data: [DONE]\n\n"),
-        messages,
-        "hello",
-        ChatOptions(journal=journal),
-        turn=1,
-        parent=None,
-        stdout=stdout,
-    )
+    with display.live_turn():
+        new_parent = _run_turn(
+            _sse_client(_chunk({"content": "Hi!"}) + "data: [DONE]\n\n"),
+            messages,
+            "hello",
+            ChatOptions(journal=journal),
+            turn=1,
+            parent=None,
+            display=display,
+        )
 
-    assert stdout.getvalue() == "Hi!\n"
+    assert out.getvalue() == "saddle> \n" + "Hi!" + " " * 77 + "\n"
     assert messages == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Hi!"},
@@ -264,26 +286,34 @@ def test_run_turn_executes_tool_calls_then_answers(
     monkeypatch.setattr("saddle.chat.perf_counter", lambda: next(ticks))
     seen: list[httpx.Request] = []
     messages: list[dict[str, Any]] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
+    display = _display(out)
 
-    new_parent = _run_turn(
-        _scripted_client([tool_body, final_body], seen),
-        messages,
-        "read it",
-        ChatOptions(workdir=tmp_path, journal=journal),
-        turn=2,
-        parent=parent,
-        stdout=stdout,
-    )
+    with display.live_turn():
+        new_parent = _run_turn(
+            _scripted_client([tool_body, final_body], seen),
+            messages,
+            "read it",
+            ChatOptions(workdir=tmp_path, journal=journal),
+            turn=2,
+            parent=parent,
+            display=display,
+        )
 
-    assert stdout.getvalue() == (
+    assert out.getvalue() == (
         "thinking: R1. \n"
-        "Running. \n"
-        '$ read_file {"path": "note.txt"}\n'
-        "hello\n"
-        "\n"
-        "thinking: R2. \n"
-        "Seen.\n"
+        + "saddle> \n"
+        + "Running."
+        + " " * 72
+        + "\n"
+        + '$ read_file {"path": "note.txt"}\n'
+        + "hello\n"
+        + "\n"
+        + "thinking: R2. \n"
+        + "saddle> \n"
+        + "Seen."
+        + " " * 75
+        + "\n"
     )
     assert messages == [
         {"role": "user", "content": "read it"},
@@ -337,6 +367,46 @@ def test_run_turn_executes_tool_calls_then_answers(
     assert verify_journal(journal) == []
 
 
+def test_run_turn_tool_results_carry_exit_colors(tmp_path: Path) -> None:
+    (tmp_path / "note.txt").write_text("hello\n")
+    tool_body = (
+        _chunk({"content": "Go. "})
+        + _chunk(
+            {
+                "tool_calls": [
+                    {"id": "c1", "index": 0, "function": {"name": "read_file"}},
+                    {"id": "c2", "index": 1, "function": {"name": "read_file"}},
+                ]
+            }
+        )
+        + _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"path": "note.txt"}'}}]})
+        + _chunk({"tool_calls": [{"index": 1, "function": {"arguments": '{"path": "x"}'}}]})
+        + "data: [DONE]\n\n"
+    )
+    final_body = _chunk({"content": "Done."}) + "data: [DONE]\n\n"
+    out = io.StringIO()
+    console = Console(file=out, width=80, force_terminal=True, color_system="truecolor")
+    display = Timeline(console)
+    journal = tmp_path / "chat.jsonl"
+
+    new_parent = _run_turn(
+        _scripted_client([tool_body, final_body]),
+        [],
+        "read both",
+        ChatOptions(workdir=tmp_path, journal=journal),
+        turn=1,
+        parent=None,
+        display=display,
+    )
+
+    console.print(display._render())
+    captured = out.getvalue()
+    assert "\x1b[32mhello\x1b[0m\n" in captured
+    assert "\x1b[31merror: cannot read 'x'\x1b[0m" in captured
+    assert "\x1b[35m$ read_file" in captured
+    assert new_parent == read_records(journal)[0].record_hash
+
+
 def test_run_turn_gives_up_after_ten_tool_rounds(tmp_path: Path) -> None:
     tool_body = (
         _chunk({"tool_calls": [{"id": "c1", "index": 0, "function": {"name": "read_file"}}]})
@@ -353,7 +423,7 @@ def test_run_turn_gives_up_after_ten_tool_rounds(tmp_path: Path) -> None:
         + "data: [DONE]\n\n"
     )
     seen: list[httpx.Request] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
     parent = _seal_turn(
         journal,
@@ -363,21 +433,23 @@ def test_run_turn_gives_up_after_ten_tool_rounds(tmp_path: Path) -> None:
         reasoning="",
         parent=None,
     )
+    display = _display(out)
 
-    new_parent = _run_turn(
-        _sse_client(tool_body, seen),
-        [],
-        "go",
-        ChatOptions(workdir=tmp_path, journal=journal),
-        turn=2,
-        parent=parent,
-        stdout=stdout,
-    )
+    with display.live_turn():
+        new_parent = _run_turn(
+            _sse_client(tool_body, seen),
+            [],
+            "go",
+            ChatOptions(workdir=tmp_path, journal=journal),
+            turn=2,
+            parent=parent,
+            display=display,
+        )
 
     assert len(seen) == 10
-    out = stdout.getvalue()
-    assert out.count("$ read_file") == 10
-    assert out.endswith("error: gave up after 10 tool rounds\n")
+    captured = out.getvalue()
+    assert captured.count("$ read_file") == 10
+    assert captured.endswith("error: gave up after 10 tool rounds\n")
     _, record = read_records(journal)
     assert record.evidence_id == "chat#2"
     assert record.parent_proofs == [parent]
@@ -405,18 +477,22 @@ def test_run_turn_gives_up_after_ten_tool_rounds(tmp_path: Path) -> None:
 
 def test_run_chat_keeps_history_across_turns(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
+    prompt = RULE + "you> "
+    reply = "saddle> \n" + "Hi!" + " " * 77 + "\n"
 
     code = run_chat(
         ChatOptions(journal=journal),
         _sse_client(_chunk({"content": "Hi!"}) + "data: [DONE]\n\n", seen),
         stdin=io.StringIO("one\ntwo\n/quit\n"),
-        stdout=stdout,
+        console=Console(file=out, width=80),
     )
 
     assert code == 0
-    assert stdout.getvalue() == "you> Hi!\nyou> Hi!\nyou> "
+    assert out.getvalue() == (
+        prompt + "you> one\n" + RULE + reply + prompt + "you> two\n" + RULE + reply + prompt
+    )
     assert len(seen) == 2
     assert json.loads(seen[1].content)["messages"] == [
         {"role": "user", "content": "one"},
@@ -431,38 +507,59 @@ def test_run_chat_keeps_history_across_turns(tmp_path: Path) -> None:
     assert verify_journal(journal) == []
 
 
+def test_run_chat_tty_stdin_skips_recap(tmp_path: Path) -> None:
+    class _TtyStdin(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    out = io.StringIO()
+    journal = tmp_path / "chat.jsonl"
+    prompt = RULE + "you> "
+
+    code = run_chat(
+        ChatOptions(journal=journal),
+        _sse_client(_chunk({"content": "Hi!"}) + "data: [DONE]\n\n"),
+        stdin=_TtyStdin("one\n/quit\n"),
+        console=Console(file=out, width=80),
+    )
+
+    assert code == 0
+    assert out.getvalue() == (prompt + RULE + "saddle> \n" + "Hi!" + " " * 77 + "\n" + prompt)
+    assert len(read_records(journal)) == 1
+
+
 def test_run_chat_eof_exits(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
 
     code = run_chat(
         ChatOptions(journal=journal),
         _sse_client("data: [DONE]\n\n", seen),
         stdin=io.StringIO(""),
-        stdout=stdout,
+        console=Console(file=out, width=80),
     )
 
     assert code == 0
-    assert stdout.getvalue() == "you> "
+    assert out.getvalue() == RULE + "you> "
     assert seen == []
     assert not journal.exists()
 
 
 def test_run_chat_skips_blank_lines(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
 
     code = run_chat(
         ChatOptions(journal=journal),
         _sse_client("data: [DONE]\n\n", seen),
         stdin=io.StringIO("\n  \n/quit\n"),
-        stdout=stdout,
+        console=Console(file=out, width=80),
     )
 
     assert code == 0
-    assert stdout.getvalue() == "you> you> you> "
+    assert out.getvalue() == (RULE + "you> ") * 3
     assert seen == []
     assert not journal.exists()
 
@@ -473,18 +570,21 @@ def test_run_chat_server_error_keeps_session(tmp_path: Path) -> None:
         raise httpx.ConnectError(msg)
 
     client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
+    prompt = RULE + "you> "
 
     code = run_chat(
         ChatOptions(journal=journal),
         client,
         stdin=io.StringIO("hi\n/quit\n"),
-        stdout=stdout,
+        console=Console(file=out, width=80),
     )
 
     assert code == 0
-    assert stdout.getvalue() == "you> error: request failed: refused\nyou> "
+    assert out.getvalue() == (
+        prompt + "you> hi\n" + RULE + "error: request failed: refused\n" + prompt
+    )
     assert not journal.exists()
 
 
@@ -504,18 +604,30 @@ def test_run_chat_failed_turn_leaves_gap_then_chains(tmp_path: Path) -> None:
         return ok
 
     client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
+    prompt = RULE + "you> "
 
     code = run_chat(
         ChatOptions(journal=journal),
         client,
         stdin=io.StringIO("one\ntwo\n/quit\n"),
-        stdout=stdout,
+        console=Console(file=out, width=80),
     )
 
+    reply = "saddle> \n" + "Hi!" + " " * 77 + "\n"
     assert code == 0
-    assert stdout.getvalue() == "you> error: server returned HTTP 500: boom\nyou> Hi!\nyou> "
+    assert out.getvalue() == (
+        prompt
+        + "you> one\n"
+        + RULE
+        + "error: server returned HTTP 500: boom\n"
+        + prompt
+        + "you> two\n"
+        + RULE
+        + reply
+        + prompt
+    )
     (record,) = read_records(journal)
     assert record.evidence_id == "chat#2"
     assert record.parent_proofs == []
@@ -527,18 +639,18 @@ def test_run_chat_keyboard_interrupt_returns_130(tmp_path: Path) -> None:
         def readline(self, size: int = -1) -> str:  # type: ignore[override]
             raise KeyboardInterrupt
 
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
 
     code = run_chat(
         ChatOptions(journal=journal),
         _sse_client("data: [DONE]\n\n"),
         stdin=_InterruptingStdin("hi\n"),
-        stdout=stdout,
+        console=Console(file=out, width=80),
     )
 
     assert code == 130
-    assert stdout.getvalue() == "you> \n"
+    assert out.getvalue() == RULE + "you> \n"
     assert not journal.exists()
 
 
@@ -547,19 +659,19 @@ def test_live_chat_session_streams_reasoning_and_tool_calls(tmp_path: Path) -> N
     assert _LIVE_KEY is not None
     (tmp_path / "note.txt").write_text("The launch code is 7-7-0.\n")
     stdin = io.StringIO("Read note.txt and quote the launch code back to me.\n/quit\n")
-    stdout = io.StringIO()
+    out = io.StringIO()
     journal = tmp_path / "chat.jsonl"
     options = ChatOptions(
         workdir=tmp_path, journal=journal, max_tokens=1024, reasoning_effort="low"
     )
 
     with VllmClient(api_key=_LIVE_KEY) as client:
-        code = run_chat(options, client, stdin=stdin, stdout=stdout)
+        code = run_chat(options, client, stdin=stdin, console=Console(file=out, width=80))
 
-    out = stdout.getvalue()
+    captured = out.getvalue()
     assert code == 0
-    assert "thinking: " in out
-    assert "$ read_file" in out
-    assert "7-7-0" in out
+    assert "thinking: " in captured
+    assert "$ read_file" in captured
+    assert "7-7-0" in captured
     assert verify_journal(journal) == []
     assert len(read_records(journal)) == 1

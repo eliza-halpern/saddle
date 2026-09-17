@@ -1587,8 +1587,8 @@ def test_main_up_preflight_failure_uses_explicit_stderr(
 
 
 def _chat_recorder(seen: list[dict[str, Any]]) -> Any:
-    def record(options: Any, client: Any, *, stdin: Any, stdout: Any) -> int:
-        seen.append({"options": options, "client": client, "stdin": stdin, "stdout": stdout})
+    def record(options: Any, client: Any, *, stdin: Any, console: Any) -> int:
+        seen.append({"options": options, "client": client, "stdin": stdin, "console": console})
         return 0
 
     return record
@@ -1617,7 +1617,7 @@ def test_main_up_wires_options_and_defaults(
     assert options.temperature == 0.0
     assert options.reasoning_effort == "medium"
     assert seen[0]["stdin"] is stdin
-    assert seen[0]["stdout"] is out
+    assert seen[0]["console"].file is out
     assert isinstance(seen[0]["client"], _FakeClient)
 
 
@@ -1668,4 +1668,4 @@ def test_main_up_uses_default_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("saddle.cli.run_chat", _chat_recorder(seen))
     assert main(["up"]) == 0
     assert seen[0]["stdin"] is sys.stdin
-    assert seen[0]["stdout"] is sys.stdout
+    assert seen[0]["console"].file is sys.stdout

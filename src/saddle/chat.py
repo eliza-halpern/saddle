@@ -8,7 +8,10 @@ from pathlib import Path
 from time import perf_counter
 from typing import IO, Any, Final
 
+from rich.console import Console
+
 from saddle.journal import append_record, append_span, build_record, build_span
+from saddle.timeline import Timeline
 from saddle.tools import TOOLS, execute_tool
 from saddle.vllm import ToolCall, VllmClient, VllmError
 
@@ -31,12 +34,9 @@ def _stream_response(
     messages: list[dict[str, Any]],
     options: ChatOptions,
     *,
-    stdout: IO[str],
+    display: Timeline,
 ) -> tuple[str, str, list[ToolCall]]:
-    """Stream one response: print tokens live; return text, reasoning, calls."""
-    # None is falsy like False, so None mutants are behaviorally identical
-    # in the truthiness tests below: unkillable, hence pragma (both lines).
-    thinking = False  # pragma: no mutate
+    """Stream one response to the timeline; return text, reasoning, calls."""
     parts: list[str] = []
     thoughts: list[str] = []
     calls: list[ToolCall] = []
@@ -50,24 +50,11 @@ def _stream_response(
         if isinstance(event, ToolCall):
             calls.append(event)
         elif event.stream == "reasoning":
-            if not thinking:
-                stdout.write("thinking: ")
-                thinking = True
-            stdout.write(event.text)
-            stdout.flush()
             thoughts.append(event.text)
+            display.token("reasoning", event.text)
         else:
-            if thinking:
-                stdout.write("\n")
-                thinking = False  # pragma: no mutate
-            stdout.write(event.text)
-            stdout.flush()
             parts.append(event.text)
-    if thinking:
-        stdout.write("\n")
-    if parts:
-        stdout.write("\n")
-    stdout.flush()
+            display.token("content", event.text)
     return "".join(parts), "".join(thoughts), calls
 
 
@@ -104,7 +91,7 @@ def _run_turn(
     *,
     turn: int,
     parent: str | None,
-    stdout: IO[str],
+    display: Timeline,
 ) -> str:
     """Run one user turn: stream, journal tool calls, seal the turn proof."""
     node_id = f"chat#{turn}"
@@ -112,7 +99,7 @@ def _run_turn(
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     for _ in range(MAX_TOOL_ROUNDS):
-        reply, reasoning, calls = _stream_response(client, messages, options, stdout=stdout)
+        reply, reasoning, calls = _stream_response(client, messages, options, display=display)
         thinking.append(reasoning)
         if not calls:
             messages.append({"role": "assistant", "content": reply})
@@ -141,6 +128,7 @@ def _run_turn(
         )
         tools: list[dict[str, Any]] = []
         for call in calls:
+            display.tool_call(call)
             start = perf_counter()
             result = execute_tool(call, workdir=options.workdir)
             duration_ms = int((perf_counter() - start) * 1000)
@@ -148,6 +136,7 @@ def _run_turn(
             # the prefix is the success signal (a file starting that way
             # misreads as failure; the full text stays in the span detail).
             exit_code = 1 if result.startswith("error: ") else 0
+            display.tool_result(result, exit_code)
             append_span(
                 options.journal,
                 build_span(
@@ -159,11 +148,9 @@ def _run_turn(
                 ),
             )
             tools.append({"name": call.name, "arguments": call.arguments, "result": result})
-            stdout.write(f"$ {call.name} {call.arguments}\n{result}\n")
-            stdout.flush()
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
         rounds.append({"reply": reply, "tools": tools})
-    stdout.write(f"error: gave up after {MAX_TOOL_ROUNDS} tool rounds\n")
+    display.show_error(f"gave up after {MAX_TOOL_ROUNDS} tool rounds")
     return _seal_turn(
         options.journal,
         turn=turn,
@@ -174,15 +161,15 @@ def _run_turn(
     )
 
 
-def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], stdout: IO[str]) -> int:
+def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], console: Console) -> int:
     """Read turns until /quit or EOF; stream each reply with its tool calls."""
     messages: list[dict[str, Any]] = []
     turn = 0
     parent: str | None = None
+    display = Timeline(console)
     try:
         while True:
-            stdout.write("you> ")
-            stdout.flush()
+            display.show_prompt()
             line = stdin.readline()
             if not line:
                 return 0
@@ -192,12 +179,22 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], stdout
             if text == "/quit":
                 return 0
             turn += 1
+            if not stdin.isatty():
+                display.user_turn(text)
+            display.show_rule()
             try:
-                parent = _run_turn(
-                    client, messages, text, options, turn=turn, parent=parent, stdout=stdout
-                )
+                with display.live_turn():
+                    parent = _run_turn(
+                        client,
+                        messages,
+                        text,
+                        options,
+                        turn=turn,
+                        parent=parent,
+                        display=display,
+                    )
             except VllmError as exc:
-                stdout.write(f"error: {exc}\n")
+                display.show_error(str(exc))
     except KeyboardInterrupt:
-        stdout.write("\n")
+        console.print()
         return 130

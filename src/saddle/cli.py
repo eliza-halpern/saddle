@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import IO, Final
 
 from pydantic import ValidationError
+from rich.console import Console
 
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
@@ -532,7 +533,7 @@ def main(
                 chat_options,
                 client,
                 stdin=stdin or sys.stdin,
-                stdout=stdout or sys.stdout,
+                console=Console(file=stdout or sys.stdout),
             )
     repo = Path(args.repo)
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
