@@ -1492,14 +1492,15 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match=r"^0$"):
         main(["up", "--help"])
     assert capsys.readouterr().out == (
-        "usage: saddle up [-h] [--workdir WORKDIR] [--base-url BASE_URL]\n"
-        "                 [--model MODEL] [--max-tokens MAX_TOKENS]\n"
-        "                 [--temperature TEMPERATURE]\n"
+        "usage: saddle up [-h] [--workdir WORKDIR] [--journal JOURNAL]\n"
+        "                 [--base-url BASE_URL] [--model MODEL]\n"
+        "                 [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
         "                 [--reasoning-effort {none,low,medium,xhigh}]\n"
         "\n"
         "options:\n"
         "  -h, --help            show this help message and exit\n"
         "  --workdir WORKDIR     Directory tools run in (default: .).\n"
+        "  --journal JOURNAL     Journal path (default: .saddle/chat.jsonl).\n"
         "  --base-url BASE_URL   vLLM base URL.\n"
         "  --model MODEL         Model id.\n"
         "  --max-tokens MAX_TOKENS\n"
@@ -1517,6 +1518,7 @@ def test_up_parser_defaults_and_overrides() -> None:
     assert vars(defaults) == {
         "command": "up",
         "workdir": ".",
+        "journal": ".saddle/chat.jsonl",
         "base_url": DEFAULT_BASE_URL,
         "model": "qwen3.8-27b",
         "max_tokens": 8192,
@@ -1528,6 +1530,8 @@ def test_up_parser_defaults_and_overrides() -> None:
             "up",
             "--workdir",
             "/w",
+            "--journal",
+            "/w/chat.jsonl",
             "--base-url",
             "http://x/v1",
             "--model",
@@ -1543,6 +1547,7 @@ def test_up_parser_defaults_and_overrides() -> None:
     assert vars(full) == {
         "command": "up",
         "workdir": "/w",
+        "journal": "/w/chat.jsonl",
         "base_url": "http://x/v1",
         "model": "m",
         "max_tokens": 100,
@@ -1607,6 +1612,7 @@ def test_main_up_wires_options_and_defaults(
     assert len(seen) == 1
     options = seen[0]["options"]
     assert options.workdir == tmp_path
+    assert options.journal == Path(".saddle/chat.jsonl")
     assert options.max_tokens == 8192
     assert options.temperature == 0.0
     assert options.reasoning_effort == "medium"
@@ -1627,6 +1633,8 @@ def test_main_up_passes_flags_through(tmp_path: Path, monkeypatch: pytest.Monkey
             "up",
             "--workdir",
             str(tmp_path),
+            "--journal",
+            str(tmp_path / "chat.jsonl"),
             "--base-url",
             "http://x/v1",
             "--model",
@@ -1646,6 +1654,7 @@ def test_main_up_passes_flags_through(tmp_path: Path, monkeypatch: pytest.Monkey
     assert _FakeClient.made[0]["model"] == "m"
     options = seen[0]["options"]
     assert options.workdir == tmp_path
+    assert options.journal == tmp_path / "chat.jsonl"
     assert options.max_tokens == 100
     assert options.temperature == 0.5
     assert options.reasoning_effort == "low"

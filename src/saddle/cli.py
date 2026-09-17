@@ -460,6 +460,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
+    up.add_argument(
+        "--journal",
+        default=".saddle/chat.jsonl",
+        help="Journal path (default: .saddle/chat.jsonl).",
+    )
     up.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     up.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     up.add_argument("--max-tokens", type=int, default=8192, help="Reply max tokens.")
@@ -518,6 +523,7 @@ def main(
                 return 1
             chat_options = ChatOptions(
                 workdir=Path(args.workdir),
+                journal=Path(args.journal),
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 reasoning_effort=args.reasoning_effort,
