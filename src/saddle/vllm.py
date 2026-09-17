@@ -201,11 +201,26 @@ def _build_chat_payload(
     return payload
 
 
+def _stream_error(data: dict[str, Any]) -> str | None:
+    """Server message from a mid-stream error object, else None."""
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str) or not message:
+        return None
+    return message
+
+
 def _chunk_delta(data: object) -> dict[str, Any]:
     """Validated delta mapping from one SSE chunk envelope."""
     if not isinstance(data, dict):
         msg = f"stream chunk must be an object, got {type(data).__name__}"
         raise VllmResponseError(msg)
+    detail = _stream_error(data)
+    if detail is not None:
+        msg = f"server error during stream: {detail}"
+        raise VllmRequestError(msg)
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         msg = "stream chunk has no choices"

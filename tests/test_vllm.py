@@ -539,3 +539,32 @@ def test_stream_chat_ignores_lines_after_done() -> None:
     assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
         StreamToken(stream="content", text="Hi!")
     ]
+
+
+def test_stream_chat_midstream_error_object_raises_request_error() -> None:
+    error_line = "data: " + json.dumps(
+        {
+            "error": {
+                "message": "Internal server error",
+                "type": "InternalServerError",
+                "param": None,
+                "code": 500,
+            }
+        }
+    )
+    body = _chunk({"content": "Hi! "}) + error_line + "\n\n"
+    client, _ = _sse_client(body)
+    events = client.stream_chat([{"role": "user", "content": "hi"}])
+    assert next(events) == StreamToken(stream="content", text="Hi! ")
+    with pytest.raises(VllmRequestError) as exc_info:
+        list(events)
+    assert str(exc_info.value) == "server error during stream: Internal server error"
+
+
+def test_stream_chat_unusable_error_objects_fall_through() -> None:
+    for error in ("boom", 7, {}, {"message": 7}, {"message": ""}):
+        body = "data: " + json.dumps({"error": error}) + "\n\n"
+        client, _ = _sse_client(body)
+        with pytest.raises(VllmResponseError) as exc_info:
+            list(client.stream_chat([{"role": "user", "content": "hi"}]))
+        assert str(exc_info.value) == "stream chunk has no choices"
