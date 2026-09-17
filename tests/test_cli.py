@@ -224,6 +224,8 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     prompt = build_emit_prompt("Do the thing.")
     assert "Do the thing." in prompt
     assert "reasoning_budget is one of: zero, low, medium, xhigh." in prompt
+    assert "take low or zero; reserve medium/xhigh" in prompt
+    assert "large contexts only for complex algorithmic nodes" in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
     assert "over test files only" in prompt
     assert "fewest nodes" in prompt
@@ -410,8 +412,23 @@ def test_run_task_honors_sampling_options(tmp_path: Path) -> None:
     assert seen[0]["max_tokens"] == 100
     assert seen[0]["temperature"] == 0.5
     assert seen[0]["reasoning_effort"] == "low"
-    assert seen[1]["max_tokens"] == 100
+    assert seen[1]["max_tokens"] == 5000
     assert seen[1]["temperature"] == 0.5
+
+
+def test_run_task_worker_uses_node_context_ceiling(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    node = _node_dict()
+    node["execution_constraints"]["max_context_tokens"] = 8000
+    script = [_emit_response({"nodes": [node]}), _diff_response()]
+    client = _scripted_client(script, seen)
+    options = _options(tmp_path, max_tokens=100, temperature=0.5)
+    code, _ = _run(options, client)
+    assert code == 0
+    assert seen[0]["max_tokens"] == 100
+    assert seen[1]["max_tokens"] == 8000
+    assert seen[1]["reasoning_effort"] == "low"
 
 
 def test_run_task_worker_effort_overrides_node_budget(tmp_path: Path) -> None:
@@ -671,8 +688,8 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert code == 0
     assert "- Attempts: 2\n" in out
     assert len(seen) == 4
-    assert seen[2]["reasoning_effort"] == "xhigh"
-    assert seen[2]["max_tokens"] == 100
+    assert seen[2]["reasoning_effort"] == "low"
+    assert seen[2]["max_tokens"] == 5000
     assert seen[2]["temperature"] == 0.5
     assert "structured_outputs" not in seen[2]
     assert "Diagnose the root cause" in _prompt(seen[2])

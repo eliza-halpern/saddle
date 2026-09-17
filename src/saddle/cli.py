@@ -93,6 +93,10 @@ Rules:
 - The first node has no dependencies; every other node depends on at least one earlier node.
 - requirement_ids look like REQ-001, REQ-002, ... (at least one per node).
 - reasoning_budget is one of: zero, low, medium, xhigh.
+- Size reasoning_budget to the node: mechanical nodes (implement, wire, test)
+  take low or zero; reserve medium/xhigh for complex algorithmic nodes.
+- Size max_context_tokens to the node: small contexts for mechanical nodes,
+  large contexts only for complex algorithmic nodes.
 - allowed_tools uses only: read_file, write_file, run_tests, lint.
 - max_context_tokens is between 1000 and 30000.
 - test_command is a pytest invocation over test files only,
@@ -333,6 +337,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
     def propose(node: Node, failure: str | None) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
+        ceiling = node.execution_constraints.max_context_tokens
         files = git_ls_files(options.repo)
         contents = {
             name: (options.repo / name).read_text() for name in files if name.endswith(".py")
@@ -350,9 +355,9 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                     contents=contents,
                     failure=failure,
                 ),
-                max_tokens=options.max_tokens,
+                max_tokens=ceiling,
                 temperature=options.temperature,
-                reasoning_effort="xhigh",
+                reasoning_effort=effort,
             )
             prompt = build_repair_prompt(
                 task=options.task,
@@ -364,7 +369,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             )
         return client.propose_diff(
             prompt,
-            max_tokens=options.max_tokens,
+            max_tokens=ceiling,
             temperature=options.temperature,
             reasoning_effort=effort,
         )
