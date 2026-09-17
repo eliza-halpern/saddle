@@ -13,6 +13,7 @@ from saddle.evidence import (
     changed_lines,
     covered_lines,
     git_diff,
+    git_ls_files,
     materialize_baseline,
     run_argv,
     run_shell,
@@ -145,6 +146,18 @@ def test_git_diff_shows_tracked_modification(tmp_path: Path) -> None:
     assert changed_lines(diff) == {("n.py", 2)}
 
 
+def test_git_ls_files_lists_tracked_paths(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    (tmp_path / "n.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    assert git_ls_files(tmp_path) == ["n.py"]
+
+
+def test_git_ls_files_outside_repo_raises(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="git ls-files failed"):
+        git_ls_files(tmp_path)
+
+
 def test_git_diff_unknown_ref_raises(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     with pytest.raises(RuntimeError, match="no-such-ref"):
@@ -195,6 +208,14 @@ def test_materialize_baseline_extracts_without_warnings(tmp_path: Path) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         materialize_baseline(tmp_path, "HEAD", tmp_path / "baseline")
+
+
+def test_materialize_baseline_empty_tree_extracts_nothing(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    dest = tmp_path / "baseline"
+    materialize_baseline(tmp_path, "HEAD", dest)
+    assert dest.is_dir()
+    assert list(dest.iterdir()) == []
 
 
 def test_under_coverage_wraps_pytest_command() -> None:
@@ -250,3 +271,45 @@ def test_statement_lines_skips_blanks_and_comments() -> None:
 
 def test_statement_lines_unparseable_yields_none() -> None:
     assert statement_lines("def broken(:\n") == set()
+
+
+def test_statement_lines_exempts_docstrings_but_keeps_stray_strings() -> None:
+    source = (
+        '"""Module docstring."""\n'
+        "\n"
+        "x = 1\n"
+        "\n"
+        "\n"
+        "def f():\n"
+        '    """Function docstring."""\n'
+        '    "not a docstring"\n'
+        "    return x\n"
+        "\n"
+        "\n"
+        "class C:\n"
+        '    """Class docstring."""\n'
+        "\n"
+        "    def m(self):\n"
+        '        """Method docstring."""\n'
+        "        return 1\n"
+        "\n"
+        "\n"
+        "async def g():\n"
+        '    """Async docstring."""\n'
+        "    return 2\n"
+        "\n"
+        "\n"
+        "def numbers():\n"
+        "    123\n"
+        "    return 3\n"
+        "\n"
+        "\n"
+        "def called():\n"
+        '    print("hi")\n'
+        "    return 4\n"
+    )
+    assert statement_lines(source) == {3, 6, 8, 9, 12, 15, 17, 20, 22, 25, 26, 27, 30, 31, 32}
+
+
+def test_statement_lines_empty_source_yields_none() -> None:
+    assert statement_lines("") == set()

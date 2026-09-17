@@ -81,6 +81,19 @@ def changed_lines(diff: str) -> set[tuple[str, int]]:
     return changed
 
 
+def git_ls_files(cwd: Path) -> list[str]:
+    """Tracked worktree-relative paths at `cwd` for worker prompts."""
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), "ls-files"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        msg = f"git ls-files failed: {proc.stderr.strip()}"
+        raise RuntimeError(msg)
+    return proc.stdout.splitlines()
+
+
 def git_diff(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> str:
     """Zero-context diff of the worktree at `cwd` against git `ref`."""
     argv = ["git", "-C", str(cwd), "diff", "-U0", ref, "--", "."]
@@ -100,7 +113,7 @@ def git_diff(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> st
 def materialize_baseline(
     cwd: Path, ref: str, dest: Path, *, recorder: SpanRecorder | None = None
 ) -> None:
-    """Extract tracked files at git `ref` into `dest` for the red-phase run."""
+    """Extract tracked files at git `ref` into `dest` (empty when the tree is empty)."""
     argv = ["git", "-C", str(cwd), "archive", ref]
     start = perf_counter()
     proc = subprocess.run(
@@ -112,8 +125,12 @@ def materialize_baseline(
         msg = f"git archive of {ref!r} failed: {proc.stderr.decode().strip()}"
         raise RuntimeError(msg)
     dest.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(fileobj=BytesIO(proc.stdout)) as tar:
-        tar.extractall(dest, filter="data")
+    try:
+        with tarfile.open(fileobj=BytesIO(proc.stdout)) as tar:
+            tar.extractall(dest, filter="data")
+    except tarfile.ReadError:
+        # `git archive` of an empty tree is not a readable tar: nothing to extract.
+        return
 
 
 def under_coverage(test_command: str, data_file: str) -> str:
@@ -136,18 +153,35 @@ def covered_lines(data_file: str, files: Collection[str]) -> set[tuple[str, int]
     return covered
 
 
+def _docstring_lines(tree: ast.Module) -> set[int]:
+    """First lines of docstrings: leading strings of modules, classes, functions."""
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                found.add(first.lineno)
+    return found
+
+
 def statement_lines(source: str) -> set[int]:
     """Executable first-lines of `source`; unparseable source yields none.
 
-    Conservative approximation of what coverage can execute (blanks and
-    comments are never statements; `case` lines carry no position of
-    their own and stay exempt). A syntax error means the syntax gate
-    fails the node anyway, so there is nothing coverable to require here.
+    Conservative approximation of what coverage can execute (blanks,
+    comments, and docstrings are never statements; `case` lines carry
+    no position of their own and stay exempt). A syntax error means the
+    syntax gate fails the node anyway, so there is nothing coverable to
+    require here.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return set()
-    return {
+    lines = {
         node.lineno for node in ast.walk(tree) if isinstance(node, (ast.stmt, ast.excepthandler))
     }
+    return lines - _docstring_lines(tree)

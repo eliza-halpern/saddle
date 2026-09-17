@@ -9,11 +9,14 @@ jobs:
       - run: ./check.sh
   mutation:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen
-      # Tier-2 self-mutation (Revamp §3): full run while the codebase is
-      # small; time-boxed so growth degrades to a sampled budget, not hangs.
-      - run: timeout 600 uv run --frozen mutmut run
-      - run: uv run --frozen mutmut results
+      # Tier-2 self-mutation: phase 1 guarantees the diff's modules,
+      # phase 2 samples the rest on rotation. Judged by survivors,
+      # never by the clock, so timeouts degrade instead of failing.
+      - run: ./ci-mutate.sh "${{ github.event.pull_request.base.sha || github.event.before }}"
