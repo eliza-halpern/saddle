@@ -287,6 +287,54 @@ def test_diff_missing_or_blank_content_fails() -> None:
         assert str(exc_info.value) == "content has no diff string"
 
 
+def test_complete_posts_unguided_payload_and_returns_prose() -> None:
+    prompt = "Diagnose this failure and plan the fix."
+    client, seen = _json_client(_ok_body(content="1. Fix the import.\n2. Re-run."))
+    assert client.complete(prompt) == "1. Fix the import.\n2. Re-run."
+    assert json.loads(seen[0].content) == {
+        "model": DEFAULT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 4096,
+        "reasoning_effort": "medium",
+        "include_reasoning": True,
+    }
+
+
+def test_complete_honors_sampling_overrides() -> None:
+    client, seen = _json_client(_ok_body(content="a plan"))
+    client.complete("Do x.", max_tokens=128, temperature=0.5, reasoning_effort="xhigh")
+    body = json.loads(seen[0].content)
+    assert body["max_tokens"] == 128
+    assert body["temperature"] == 0.5
+    assert body["reasoning_effort"] == "xhigh"
+
+
+def test_complete_rejects_bad_input() -> None:
+    client, _ = _json_client(_ok_body(content="a plan"))
+    with pytest.raises(ValueError, match="must not be empty") as prompt_info:
+        client.complete("  ")
+    assert str(prompt_info.value) == "prompt must not be empty"
+    with pytest.raises(ValueError, match="must be one of") as effort_info:
+        client.complete("Do x.", reasoning_effort="bogus")
+    assert str(effort_info.value) == (
+        "reasoning_effort must be one of none, low, medium, xhigh; got 'bogus'"
+    )
+
+
+def test_complete_blank_content_and_truncation_raise() -> None:
+    blank, _ = _json_client(_ok_body(content="  "))
+    with pytest.raises(VllmResponseError, match="no text content") as exc_info:
+        blank.complete("Do x.")
+    assert str(exc_info.value) == "message has no text content"
+    cut, _ = _json_client(_ok_body(content="half", finish_reason="length"))
+    with pytest.raises(VllmResponseError, match="truncated") as cut_info:
+        cut.complete("Do x.")
+    assert str(cut_info.value) == (
+        "completion truncated (finish_reason=length); retry with more max_tokens"
+    )
+
+
 def test_list_models_returns_served_ids() -> None:
     payload = {"data": [{"id": "a"}, {"id": "b"}], "object": "list"}
     client, seen = _json_client(payload)

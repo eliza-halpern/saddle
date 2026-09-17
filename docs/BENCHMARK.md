@@ -22,6 +22,14 @@ human-readable transcript plus a verifying journal.
   helper into its own module, keep the suite green. Expectation: changed-
   line coverage holds across the moved lines; requirement binding names
   both touched requirements.
+- **T4 — cross-module discrepancy (long).** Baseline: three modules
+  (`orders.py`, `discounts.py`, `invoice.py`) with passing tests, plus a
+  planted inconsistency: discounted order totals disagree with invoice
+  totals because one shared rounding step rounds at the wrong stage.
+  Task: find the root cause across modules, fix it in exactly one
+  place, keep the suite green, add a regression test. Expectation: 2–4
+  nodes; a fix localized to the wrong module fails its gates instead
+  of silently shifting the discrepancy.
 
 ## Gate criteria
 
@@ -58,10 +66,18 @@ finish_reason=length is infra-invalid, not a scored failure: re-run
 with a higher budget (operator ceiling ~90k for extreme xhigh
 sessions) and discard the truncated attempt.
 
-## Decision rule
+## Decision rule (regime-aware)
 
-Proceed to phased migration (§6 step 3a) only on a decisive win across all
-three tasks on criteria 1–5. Otherwise stop at step 2 and harvest (§6
+Criterion 1 (wall-clock) is regime-dependent: on the short tasks (T1–T3)
+it is diagnostic — recorded per arm but not decisive, since per-call
+overhead dominates at that scale. On the long task (T4) it is decisive:
+saddle must clock at or under the faster pi arm. Criteria 2–5 bind on
+all four tasks.
+
+Pre-registered crossover hypothesis: saddle loses C1 on T1 and wins C1
+on T4. Proceed to phased migration (§6 step 3a) only when the crossover
+holds, no arm passes a task saddle fails (criterion 2), and criteria
+3–5 hold on every run. Otherwise stop at step 2 and harvest (§6
 step 3b): guided decoding, tool masking, and reasoning budgets port over
 regardless.
 
@@ -70,3 +86,8 @@ parity controls; criterion 5 added (no-progress termination); decision
 rule widened 1–4 → 1–5; parity frozen at xhigh thinking with an 81920
 completion-token budget per arm plus a truncation-rerun rule. No scored
 runs preceded this change.*
+
+*Amendment record (T1 v1 voided as pilot; still before any scored run):
+T4 added (long-horizon task); decision rule made regime-aware (T4 C1
+decisive, T1–T3 C1 diagnostic, C2–C5 binding everywhere); crossover
+hypothesis pre-registered. T1 v1 runs are retained as pilot data only.*

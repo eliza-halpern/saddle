@@ -27,6 +27,7 @@ class NodeTranscript:
     proof_hash: str | None
     thinking: str = ""
     tool_spans: tuple[SpanRecord, ...] = ()
+    attempts: int = 1
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,8 @@ def render_transcript(run: RunTranscript) -> str:
         lines.append(f"## Node {node.node_id}")
         lines.append("")
         lines.append(f"- Requirements: {', '.join(node.requirement_ids)}")
+        if node.attempts > 1:
+            lines.append(f"- Attempts: {node.attempts}")
         for check in node.checks:
             mark = "PASS" if check.passed else "FAIL"
             lines.append(f"- Gate {check.name}: {mark} ({check.detail})")
@@ -153,6 +156,7 @@ def render_journal_transcript(
             proof_hash=record.record_hash,
             thinking=record.thinking,
             tool_spans=tool_spans_for_node(tools, record.node_id),
+            attempts=record.attempts,
         )
         for record in records
     )

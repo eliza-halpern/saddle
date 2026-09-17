@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from saddle.dag import Node
-from saddle.evidence import run_argv
+from saddle.evidence import CapturedRun, run_argv
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import read_sources, run_node_gate
 
@@ -96,6 +97,41 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     assert [span.name for span in spans] == ["git", "coverage", "git", "pytest", "ruff", "ruff"]
     assert all(span.node_id == "n1" for span in spans)
     assert [span.exit_code for span in spans] == [0, 0, 0, 4, 0, 0]
+
+
+def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> None:
+    test_body = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body)
+    captured: list[CapturedRun] = []
+    result = run_node_gate(_node(), tmp_path, capture=captured)
+    assert result.passed is True
+    assert [run.argv[0] for run in captured] == ["coverage", "ruff", "ruff"]
+    assert all(run.exit_code == 0 for run in captured)
+    assert "1 passed" in captured[0].stdout
+
+
+def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
+    passing = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, passing)
+    assert run_node_gate(_node(), tmp_path).passed is True
+    assert list(tmp_path.rglob("__pycache__")), "expected pytest to mint bytecode caches"
+    failing = passing.replace("assert f() == 2", "assert f() == 3")
+    assert len(failing) == len(passing)
+    target = tmp_path / "test_n.py"
+    mtime = target.stat().st_mtime
+    target.write_text(failing)
+    os.utime(target, (mtime, mtime))
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    result = run_node_gate(_node(), tmp_path)
+    assert result.passed is False
+    assert [check.name for check in result.checks if not check.passed] == [
+        "tests",
+        "red-phase",
+    ]
 
 
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:

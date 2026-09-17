@@ -18,6 +18,9 @@ from saddle.cli import (
     RunOptions,
     build_emit_prompt,
     build_parser,
+    build_recovery_plan_prompt,
+    build_repair_prompt,
+    build_replan_task,
     build_worker_prompt,
     check_server,
     main,
@@ -129,6 +132,19 @@ def _emit_response(payload: dict[str, Any]) -> httpx.Response:
 
 def _diff_response(diff: str = DIFF) -> httpx.Response:
     return _emit_response({"diff": diff})
+
+
+def _text_response(text: str) -> httpx.Response:
+    body = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": text, "reasoning": ""},
+                "finish_reason": "stop",
+            }
+        ],
+        "model": "m",
+    }
+    return httpx.Response(200, json=body)
 
 
 def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -> VllmClient:
@@ -260,13 +276,23 @@ def test_build_worker_prompt_joins_requirements_and_context() -> None:
 
 
 def test_build_worker_prompt_truncates_large_context() -> None:
+    from saddle.cli import MAX_CONTEXT_CHARS
+
     node = Node.model_validate(_node_dict())
-    big = "x" * 9000
+    big = "x" * (MAX_CONTEXT_CHARS + 1000)
     prompt = build_worker_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": big})
     assert "[file context truncated]" in prompt
-    assert "x" * 9000 not in prompt
+    assert "x" * (MAX_CONTEXT_CHARS + 1000) not in prompt
     context = prompt.split("File contents:\n")[1].split("\n\nProduce a unified diff")[0]
     assert context.endswith("[file context truncated]")
+
+
+def test_context_budget_is_thirty_k_tokens_at_four_chars_each() -> None:
+    from saddle.cli import CHARS_PER_TOKEN, MAX_CONTEXT_CHARS, NODE_CONTEXT_TOKENS
+
+    assert NODE_CONTEXT_TOKENS == 30000
+    assert CHARS_PER_TOKEN == 4
+    assert MAX_CONTEXT_CHARS == 120000
 
 
 def test_build_worker_prompt_keeps_exactly_max_context() -> None:
@@ -276,6 +302,49 @@ def test_build_worker_prompt_keeps_exactly_max_context() -> None:
     body = "y" * (MAX_CONTEXT_CHARS - len("--- n.py ---\n"))
     prompt = build_worker_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": body})
     assert "[file context truncated]" not in prompt
+
+
+def test_build_repair_prompt_adds_failure_evidence() -> None:
+    node = Node.model_validate(_node_dict())
+    prompt = build_repair_prompt(
+        task=TASK,
+        node=node,
+        files=["n.py"],
+        contents={"n.py": "def f():\n    return 3\n"},
+        failure="Attempt 1 of 3 failed 1 gate(s):\n- tests: exited 1\n",
+        plan="1. Change the return value.\n",
+    )
+    assert TASK in prompt
+    assert "Fix forward" in prompt
+    assert "CURRENT tree state" in prompt
+    assert "Attempt 1 of 3 failed 1 gate(s):" in prompt
+    assert "Recovery plan:\n1. Change the return value.\n" in prompt
+    assert "--- n.py ---\ndef f():\n    return 3\n" in prompt
+
+
+def test_build_replan_task_names_scope_and_history() -> None:
+    node = Node.model_validate(_node_dict())
+    text = build_replan_task(task=TASK, node=node, history="Node 'n1' failed.\n")
+    assert f"Original task: {TASK}" in text
+    assert "Node n1 failed and must be re-planned" in text
+    assert "Requirements to cover: REQ-001" in text
+    assert "Gate command the new nodes must satisfy: pytest test_n.py" in text
+    assert "Failure history (do not repeat it):\nNode 'n1' failed.\n" in text
+
+
+def test_build_recovery_plan_prompt_asks_for_diagnosis() -> None:
+    node = Node.model_validate(_node_dict())
+    prompt = build_recovery_plan_prompt(
+        task=TASK,
+        node=node,
+        files=["n.py"],
+        contents={"n.py": "def f():\n    return 3\n"},
+        failure="Attempt 1 of 3 failed 1 gate(s):\n",
+    )
+    assert TASK in prompt
+    assert "Diagnose the root cause" in prompt
+    assert "numbered plan, no diff" in prompt
+    assert "Attempt 1 of 3 failed 1 gate(s):" in prompt
 
 
 def _run(
@@ -323,7 +392,19 @@ def test_run_task_honors_sampling_options(tmp_path: Path) -> None:
     assert seen[0]["max_tokens"] == 100
     assert seen[0]["temperature"] == 0.5
     assert seen[0]["reasoning_effort"] == "low"
+    assert seen[1]["max_tokens"] == 100
     assert seen[1]["temperature"] == 0.5
+
+
+def test_run_task_worker_effort_overrides_node_budget(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    script = [_emit_response({"nodes": [_node_dict()]}), _diff_response()]
+    client = _scripted_client(script, seen)
+    options = _options(tmp_path, worker_effort="xhigh")
+    code, _ = _run(options, client)
+    assert code == 0
+    assert [call["reasoning_effort"] for call in seen] == ["medium", "xhigh"]
 
 
 def test_run_task_transport_error_surfaces(tmp_path: Path) -> None:
@@ -532,11 +613,107 @@ def test_run_task_commit_failure_reports(tmp_path: Path, monkeypatch: pytest.Mon
 def test_run_task_fail_verdict_returns_one(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
-    script = [_emit_response({"nodes": [_node_dict()]}), _diff_response("not a diff\n")]
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response("not a diff\n"),
+        _text_response("1. Write a real diff.\n"),
+        _diff_response("not a diff\n"),
+        _emit_response({"nodes": []}),
+        _emit_response({"nodes": []}),
+        _emit_response({"nodes": []}),
+    ]
     client = _scripted_client(script, seen)
     code, out = _run(_options(tmp_path), client)
     assert code == 1
     assert "- Verdict: FAIL\n" in out
+    assert len(seen) == 7
+
+
+def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    bad = DIFF.replace("+    return 2\n", "+    return 3\n")
+    fix = (
+        "diff --git a/n.py b/n.py\n"
+        "--- a/n.py\n"
+        "+++ b/n.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        "-    return 3\n"
+        "+    return 2\n"
+    )
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(bad),
+        _text_response("1. Change the return value.\n"),
+        _diff_response(fix),
+    ]
+    client = _scripted_client(script, seen)
+    code, out = _run(_options(tmp_path), client)
+    assert code == 0
+    assert "- Attempts: 2\n" in out
+    assert len(seen) == 4
+    assert seen[2]["reasoning_effort"] == "xhigh"
+    assert "structured_outputs" not in seen[2]
+    assert "Diagnose the root cause" in _prompt(seen[2])
+    assert "The previous attempt failed" in _prompt(seen[3])
+    assert "Fix forward" in _prompt(seen[3])
+    assert "Attempt 1 of 3" in _prompt(seen[3])
+    assert "1. Change the return value." in _prompt(seen[3])
+    assert "The previous attempt failed" not in _prompt(seen[1])
+
+
+def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    bad = DIFF.replace("+    return 2\n", "+    return 3\n")
+    fix = (
+        "diff --git a/n.py b/n.py\n"
+        "--- a/n.py\n"
+        "+++ b/n.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        "-    return 3\n"
+        "+    return 2\n"
+    )
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(bad),
+        _text_response("1. Change the return value.\n"),
+        _diff_response(bad),
+        _emit_response({"nodes": [_node_dict("m1")]}),
+        _diff_response(fix),
+    ]
+    client = _scripted_client(script, seen)
+    code, out = _run(_options(tmp_path), client)
+    assert code == 0
+    assert len(seen) == 6
+    assert "must be re-planned" in _prompt(seen[4])
+    assert "Failure history" in _prompt(seen[4])
+    assert "## Node n1\n" in out
+    assert "## Node n1.r1\n" in out
+    assert out.count("- Attempts: 2\n") == 1
+
+
+def test_run_task_replan_emission_failure_keeps_verdict_fail(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response("nope one\n"),
+        _text_response("1. Write a real diff.\n"),
+        _diff_response("nope two\n"),
+        _text_response("1. Write a real diff.\n"),
+        _diff_response("nope three\n"),
+        _emit_response({"nodes": []}),
+        _emit_response({"nodes": []}),
+        _emit_response({"nodes": []}),
+    ]
+    client = _scripted_client(script, seen)
+    code, out = _run(_options(tmp_path), client)
+    assert code == 1
+    assert "- Verdict: FAIL\n" in out
+    assert len(seen) == 9
 
 
 def test_run_task_zero_budget_maps_to_none(tmp_path: Path) -> None:
@@ -932,6 +1109,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "max_tokens": 8192,
         "temperature": 0.0,
         "reasoning_effort": "medium",
+        "worker_effort": None,
         "yes": False,
     }
     full = parser.parse_args(
@@ -951,6 +1129,8 @@ def test_run_parser_defaults_and_overrides() -> None:
             "0.5",
             "--reasoning-effort",
             "low",
+            "--worker-effort",
+            "xhigh",
             "--yes",
             "Do it.",
         ]
@@ -965,6 +1145,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "max_tokens": 100,
         "temperature": 0.5,
         "reasoning_effort": "low",
+        "worker_effort": "xhigh",
         "yes": True,
     }
 
@@ -976,7 +1157,8 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "usage: saddle run [-h] [--repo REPO] [--journal JOURNAL] [--base-url BASE_URL]\n"
         "                  [--model MODEL] [--max-tokens MAX_TOKENS]\n"
         "                  [--temperature TEMPERATURE]\n"
-        "                  [--reasoning-effort {none,low,medium,xhigh}] [--yes]\n"
+        "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
+        "                  [--worker-effort {none,low,medium,xhigh}] [--yes]\n"
         "                  task\n"
         "\n"
         "positional arguments:\n"
@@ -994,6 +1176,8 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                        Sampling temperature.\n"
         "  --reasoning-effort {none,low,medium,xhigh}\n"
         "                        Emission reasoning effort.\n"
+        "  --worker-effort {none,low,medium,xhigh}\n"
+        "                        Worker effort override (default: per-node budget).\n"
         "  --yes                 Skip the plan confirmation.\n"
     )
 

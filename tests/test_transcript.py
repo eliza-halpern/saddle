@@ -78,6 +78,43 @@ def test_render_fail_transcript_marks_failure() -> None:
     assert "- Gate tests: FAIL (boom)\n" in text
     assert "- Proof: none\n" in text
     assert "- Proven nodes: 0\n" in text
+    assert "- Attempts:" not in text
+
+
+def test_render_transcript_shows_attempts_when_recovered() -> None:
+    run = RunTranscript(
+        task="Add email validation.",
+        started="2026-09-16T00:00:00+00:00",
+        finished="2026-09-16T00:01:00+00:00",
+        verdict="PASS",
+        nodes=(
+            NodeTranscript(
+                node_id="n1",
+                requirement_ids=("REQ-001",),
+                checks=(GateCheck(name="tests", passed=True, detail="ok"),),
+                proof_hash="ab12",
+                attempts=3,
+            ),
+        ),
+        journal_path="/tmp/proofs.jsonl",
+    )
+    text = render_transcript(run)
+    assert "- Requirements: REQ-001\n- Attempts: 3\n- Gate tests: PASS (ok)\n" in text
+
+
+def test_render_journal_transcript_carries_record_attempts() -> None:
+    record = build_record(
+        evidence_id="e1",
+        node_id="n1",
+        diff="diff\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="",
+        attempts=2,
+    )
+    text = render_journal_transcript([record], [], "/tmp/proofs.jsonl")
+    assert "- Attempts: 2\n" in text
     assert "- Issues: none (chain verifies)\n" in text
 
 

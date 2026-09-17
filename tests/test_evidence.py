@@ -12,11 +12,14 @@ import saddle.evidence as evidence_module
 from saddle.evidence import (
     changed_lines,
     covered_lines,
+    drop_test_caches,
     git_diff,
     git_ls_files,
     materialize_baseline,
     run_argv,
+    run_capture,
     run_shell,
+    run_shell_capture,
     run_stdin,
     statement_lines,
     under_coverage,
@@ -55,6 +58,48 @@ def test_run_stdin_feeds_text(tmp_path: Path, capfd: pytest.CaptureFixture[str])
 def test_run_shell_splits_command_string(tmp_path: Path) -> None:
     assert run_shell(f"{sys.executable} -c pass", tmp_path) == 0
     assert run_shell(f"{sys.executable} -c 'raise SystemExit(2)'", tmp_path) == 2
+
+
+def test_run_capture_returns_exit_and_output(tmp_path: Path) -> None:
+    run = run_capture(
+        [sys.executable, "-c", "import sys; print('out'); print('err', file=sys.stderr)"],
+        tmp_path,
+    )
+    assert run.exit_code == 0
+    assert run.stdout == "out\n"
+    assert run.stderr == "err\n"
+    assert run.argv[0] == sys.executable
+    failed = run_capture([sys.executable, "-c", "raise SystemExit(3)"], tmp_path)
+    assert failed.exit_code == 3
+
+
+def test_run_capture_records_span_like_run_argv(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    run = run_capture([sys.executable, "-c", "pass"], tmp_path, recorder=recorder)
+    assert run.exit_code == 0
+    (span,) = read_spans(journal)
+    assert (span.name, span.exit_code, span.node_id) == ("python", 0, "n1")
+
+
+def test_run_shell_capture_splits_and_returns_output(tmp_path: Path) -> None:
+    run = run_shell_capture(f"{sys.executable} -c \"print('hi')\"", tmp_path)
+    assert (run.exit_code, run.stdout) == (0, "hi\n")
+
+
+def test_drop_test_caches_removes_caches_but_keeps_sources(tmp_path: Path) -> None:
+    drop_test_caches(tmp_path)
+    cache = tmp_path / "pkg" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "m.pyc").write_text("x")
+    (tmp_path / "stray.pyc").write_text("x")
+    (tmp_path / ".pytest_cache").mkdir()
+    (tmp_path / "keep.py").write_text("x = 1\n")
+    drop_test_caches(tmp_path)
+    assert not cache.exists()
+    assert not (tmp_path / "stray.pyc").exists()
+    assert not (tmp_path / ".pytest_cache").exists()
+    assert (tmp_path / "keep.py").is_file()
 
 
 def test_runners_record_spans_when_given_recorder(tmp_path: Path) -> None:

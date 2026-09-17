@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
+from typing import Final
 
 from saddle.dag import Dag, ExecutionConstraints, Node
-from saddle.evidence import run_stdin
+from saddle.evidence import CapturedRun, run_stdin
 from saddle.gates import GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
@@ -43,9 +44,48 @@ from saddle.vllm import DiffProposal
 class NodeGateFailedError(Exception):
     """A node worker failed its Tier-1 gate; carries the verdict."""
 
-    def __init__(self, result: Tier1Result) -> None:
+    def __init__(self, result: Tier1Result, attempts: int = 1, failure: str | None = None) -> None:
         super().__init__(f"node {result.node_id!r} failed its Tier-1 gate")
         self.result = result
+        self.attempts = attempts
+        self.failure = failure
+
+
+class NodeUnappliableError(RuntimeError):
+    """No applicable diff emerged; carries attempts and last evidence."""
+
+    def __init__(
+        self, node_id: str, detail: str, attempts: int = 1, failure: str | None = None
+    ) -> None:
+        super().__init__(f"node {node_id!r}: {detail}")
+        self.node_id = node_id
+        self.attempts = attempts
+        self.failure = failure
+
+
+class ReplanFailedError(Exception):
+    """A replan attempt produced nothing schedulable; the node stays failed."""
+
+
+Proposer = Callable[[Node, str | None], DiffProposal]
+"""Propose a diff for a node; `failure` carries prior-attempt evidence."""
+
+Replanner = Callable[[Node, str], Dag]
+"""Re-emit a failed node's scope; history carries the failure evidence."""
+
+MAX_RECOVERY_RETRIES: Final = 2
+RECOVERY_OUTPUT_CHARS: Final = 4000
+
+
+class _HaltRecoveryError(Exception):
+    """Identical re-proposal: the attempt span is sealed, exit the loop."""
+
+    def __init__(self, result: Tier1Result | None, attempts: int, failure: str | None) -> None:
+        msg = "worker re-proposed an identical diff"
+        super().__init__(msg)
+        self.result = result
+        self.attempts = attempts
+        self.failure = failure
 
 
 @dataclass(frozen=True)
@@ -77,56 +117,229 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
         raise RuntimeError(msg)
 
 
+def format_attempt_failure(
+    result: Tier1Result,
+    captured: Sequence[CapturedRun],
+    *,
+    attempt: int,
+    max_attempts: int,
+) -> str:
+    """Render one failed attempt as repair evidence: gates plus failing output."""
+    failed = [check for check in result.checks if not check.passed]
+    lines = [f"Attempt {attempt} of {max_attempts} failed {len(failed)} gate(s):"]
+    lines.extend(f"- {check.name}: {check.detail}" for check in failed)
+    for run in captured:
+        if run.exit_code == 0:
+            continue
+        output = (run.stdout + "\n" + run.stderr).strip()
+        if len(output) > RECOVERY_OUTPUT_CHARS:
+            output = "[earlier output truncated]\n" + output[-RECOVERY_OUTPUT_CHARS:]
+        lines.append(f"--- `{' '.join(run.argv)}` (exit {run.exit_code}) ---")
+        lines.append(output or "(no output)")
+    return "\n".join(lines) + "\n"
+
+
+def _seal_attempt(
+    journal_path: Path,
+    node_id: str,
+    run_span_id: str,
+    worker_id: str,
+    start: float,
+    exit_code: int,
+    detail: str,
+) -> None:
+    """Append one attempt's agent span under the run span."""
+    append_span(
+        journal_path,
+        build_span(
+            node_id=node_id,
+            argv=[],
+            duration_ms=_elapsed_ms(start),
+            exit_code=exit_code,
+            detail=detail,
+            kind="agent",
+            name=f"worker:{node_id}",
+            parent_id=run_span_id,
+            span_id=worker_id,
+        ),
+    )
+
+
 async def _run_node(
     node: Node,
     workdir: Path,
     journal_path: Path,
-    propose: Callable[[Node], DiffProposal],
+    propose: Proposer,
     proofs: dict[str, str],
     run_span_id: str,
 ) -> Proof:
-    """Execute one node: propose a diff, apply, gate, seal, append.
+    """Execute one node: propose, apply, gate, seal — with bounded recovery.
 
-    Fully synchronous inside, so a worker never yields mid-node and the
-    proof map stays consistent without locks.
+    A failed gate (or a diff that does not apply) retries in a fresh
+    worker call carrying the failure evidence, at most
+    MAX_RECOVERY_RETRIES times; an identical re-proposal or exhausted
+    retries fail the node. Fully synchronous inside, so a worker never
+    yields mid-node and the proof map stays consistent without locks.
     """
-    start = perf_counter()
-    worker_id = uuid.uuid4().hex
-    recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
+    max_attempts = 1 + MAX_RECOVERY_RETRIES
+    failure: str | None = None
+    seen: list[str] = []
+    applied: list[str] = []
+    last_result: Tier1Result | None = None
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
+        start = perf_counter()
+        worker_id = uuid.uuid4().hex
+        recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
+        try:
+            proposal = propose(node, failure)
+            if proposal.diff in seen:
+                detail = (
+                    f"attempt {attempt}/{max_attempts}: "
+                    "worker re-proposed an identical diff; stopping recovery"
+                )
+                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, detail)
+                raise _HaltRecoveryError(last_result, attempt, failure)
+            seen.append(proposal.diff)
+            try:
+                _apply_diff(workdir, proposal.diff, recorder=recorder)
+            except RuntimeError as exc:
+                failure = f"Attempt {attempt} of {max_attempts}: diff did not apply: {exc}"
+                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, failure)
+                continue
+            applied.append(proposal.diff)
+            captured: list[CapturedRun] = []
+            result = run_node_gate(node, workdir, recorder=recorder, capture=captured)
+            if result.passed:
+                parents = [proofs[dep] for dep in node.dependencies]
+                record = build_from_gate(
+                    node,
+                    "\n".join(applied),
+                    result,
+                    parents,
+                    f"{node.id}#{attempt}",
+                    thinking=proposal.reasoning,
+                    attempts=attempt,
+                )
+                append_record(journal_path, record)
+                proofs[node.id] = record.record_hash
+                detail = "" if attempt == 1 else f"recovered after {attempt} attempts"
+                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 0, detail)
+                return Proof(node_id=node.id)
+            last_result = result
+            failure = format_attempt_failure(
+                result, captured, attempt=attempt, max_attempts=max_attempts
+            )
+            failed_count = sum(1 for check in result.checks if not check.passed)
+            _seal_attempt(
+                journal_path,
+                node.id,
+                run_span_id,
+                worker_id,
+                start,
+                1,
+                f"attempt {attempt}/{max_attempts}: {failed_count} gate(s) failed",
+            )
+        except _HaltRecoveryError as exc:
+            if exc.result is None:
+                detail = f"identical diff re-proposed after {exc.attempts} non-applying attempt(s)"
+                raise NodeUnappliableError(node.id, detail, exc.attempts, exc.failure) from exc
+            raise NodeGateFailedError(exc.result, exc.attempts, exc.failure) from exc
+        except BaseException as exc:
+            _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, str(exc))
+            raise
+    if last_result is None:
+        detail = f"no proposed diff applied in {max_attempts} attempts"
+        raise NodeUnappliableError(node.id, detail, max_attempts, failure)
+    raise NodeGateFailedError(last_result, max_attempts, failure)
 
-    def seal(exit_code: int, detail: str) -> None:
-        append_span(
-            journal_path,
-            build_span(
-                node_id=node.id,
-                argv=[],
-                duration_ms=_elapsed_ms(start),
-                exit_code=exit_code,
-                detail=detail,
-                kind="agent",
-                name=f"worker:{node.id}",
-                parent_id=run_span_id,
-                span_id=worker_id,
-            ),
-        )
 
-    try:
-        proposal = propose(node)
-        _apply_diff(workdir, proposal.diff, recorder=recorder)
-        result = run_node_gate(node, workdir, recorder=recorder)
-        if not result.passed:
-            raise NodeGateFailedError(result)
-        parents = [proofs[dep] for dep in node.dependencies]
-        record = build_from_gate(
-            node, proposal.diff, result, parents, f"{node.id}#1", thinking=proposal.reasoning
+def splice_replan(dag: Dag, failed_id: str, new: Dag) -> tuple[Dag, list[str]]:
+    """Replace `failed_id` with `new`'s nodes, rewiring dependents to new leaves.
+
+    New ids are namespaced under the failed id; new roots inherit its
+    dependencies. The failed node itself stays put so the transcript
+    keeps its verdict. Acyclicity survives splicing: every new edge runs
+    from proven nodes to new nodes, or new nodes to downstream nodes.
+    """
+    existing = {node.id for node in dag.nodes}
+    mapping = {node.id: f"{failed_id}.r{index}" for index, node in enumerate(new.nodes, 1)}
+    if set(mapping.values()) & existing:
+        msg = f"replan for node {failed_id!r} collides with existing node ids"
+        raise ReplanFailedError(msg)
+    internal = {node.id for node in new.nodes}
+    for node in new.nodes:
+        for dep in node.dependencies:
+            if dep not in internal:
+                msg = f"replan node {node.id!r} depends on unknown node {dep!r}"
+                raise ReplanFailedError(msg)
+    failed = next(node for node in dag.nodes if node.id == failed_id)
+    remapped = [
+        node.model_copy(
+            update={
+                "id": mapping[node.id],
+                "dependencies": (
+                    [mapping[dep] for dep in node.dependencies]
+                    if node.dependencies
+                    else list(failed.dependencies)
+                ),
+            }
         )
-        append_record(journal_path, record)
-        proofs[node.id] = record.record_hash
-    except BaseException as exc:
-        seal(1, str(exc))
-        raise
-    seal(0, "")
-    return Proof(node_id=node.id)
+        for node in new.nodes
+    ]
+    leaves = {node.id for node in remapped} - {
+        dep for node in remapped for dep in node.dependencies
+    }
+    if not leaves:
+        msg = f"replan for node {failed_id!r} has no leaf nodes"
+        raise ReplanFailedError(msg)
+    merged = []
+    for node in dag.nodes:
+        if failed_id not in node.dependencies:
+            merged.append(node)
+            continue
+        deps: list[str] = []
+        for dep in node.dependencies:
+            deps.extend(sorted(leaves) if dep == failed_id else [dep])
+        merged.append(node.model_copy(update={"dependencies": deps}))
+    merged.extend(remapped)
+    return Dag(nodes=merged), [node.id for node in remapped]
+
+
+def format_replan_history(node_id: str, error: NodeGateFailedError | NodeUnappliableError) -> str:
+    """One-paragraph failure history for a replan prompt."""
+    if isinstance(error, NodeGateFailedError):
+        failed = [check for check in error.result.checks if not check.passed]
+        lines = [f"Node {node_id!r} failed Tier-1 after {error.attempts} attempt(s):"]
+        lines.extend(f"- {check.name}: {check.detail}" for check in failed)
+    else:
+        lines = [f"Node {node_id!r} produced no applicable diff after {error.attempts} attempt(s)."]
+    if error.failure is not None:
+        lines.extend(["Last attempt evidence:", error.failure])
+    return "\n".join(lines) + "\n"
+
+
+def _schedulable_nodes(
+    dag: Dag, proofs: dict[str, str], ever_failed: dict[str, BaseException]
+) -> list[Node]:
+    """Nodes ready to (re)schedule: unproven, never failed, unblocked.
+
+    Proven dependencies strip out since their proofs already exist;
+    anything behind a failure stays out so proof-gating holds.
+    """
+    ready = []
+    for node in dag.nodes:
+        if node.id in proofs or node.id in ever_failed:
+            continue
+        if any(dep in ever_failed for dep in node.dependencies):
+            continue
+        ready.append(
+            node.model_copy(
+                update={"dependencies": [dep for dep in node.dependencies if dep not in proofs]}
+            )
+        )
+    return ready
 
 
 def _transcribe(
@@ -148,12 +361,20 @@ def _transcribe(
             sealed.record_hash,
             thinking=sealed.thinking,
             tool_spans=tool_spans,
+            attempts=sealed.attempts,
         )
     if isinstance(failure, NodeGateFailedError):
         checks = failure.result.checks
+        attempts = failure.attempts
+    elif isinstance(failure, NodeUnappliableError):
+        checks = ()
+        attempts = failure.attempts
     else:
         checks = ()
-    return NodeTranscript(node.id, tuple(node.requirement_ids), checks, None, tool_spans=tool_spans)
+        attempts = 1
+    return NodeTranscript(
+        node.id, tuple(node.requirement_ids), checks, None, tool_spans=tool_spans, attempts=attempts
+    )
 
 
 def run_slice(
@@ -162,13 +383,16 @@ def run_slice(
     *,
     workdir: Path,
     journal_path: Path,
-    propose: Callable[[Node], DiffProposal],
+    propose: Proposer,
+    replan: Replanner | None = None,
     now: Callable[[], str] = _utcnow,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
     The journal must be fresh: resuming onto existing proofs would append
-    duplicate records, so that waits for the resume design.
+    duplicate records, so that waits for the resume design. When `replan`
+    is given, each exhausted node recompiles once into a replacement
+    subgraph; replanned nodes that fail again stay failed.
     """
     if read_records(journal_path):
         msg = f"journal {str(journal_path)!r} is not fresh; resume is not supported"
@@ -177,23 +401,57 @@ def run_slice(
     run_start = perf_counter()
     run_span_id = uuid.uuid4().hex
     proofs: dict[str, str] = {}
+    remaining = dag
+    replanned_from: set[str] = set()
+    generated: set[str] = set()
+    ever_failed: dict[str, BaseException] = {}
 
     async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
         return await _run_node(node, workdir, journal_path, propose, proofs, run_span_id)
 
-    outcome = asyncio.run(schedule(dag, worker))
+    while True:
+        schedulable = Dag(nodes=_schedulable_nodes(remaining, proofs, ever_failed))
+        outcome = asyncio.run(schedule(schedulable, worker))
+        ever_failed.update(outcome.failures)
+        if replan is None:
+            break
+        eligible: dict[str, NodeGateFailedError | NodeUnappliableError] = {}
+        for node_id, exc in outcome.failures.items():
+            if (
+                isinstance(exc, (NodeGateFailedError, NodeUnappliableError))
+                and node_id not in replanned_from
+                and node_id not in generated
+            ):
+                eligible[node_id] = exc
+        if not eligible:
+            break
+        by_id = {node.id: node for node in remaining.nodes}
+        progressed = False
+        for node_id, exc in eligible.items():
+            try:
+                new = replan(by_id[node_id], format_replan_history(node_id, exc))
+                remaining, gen_ids = splice_replan(remaining, node_id, new)
+            except ReplanFailedError:
+                continue
+            replanned_from.add(node_id)
+            generated.update(gen_ids)
+            progressed = True
+        if not progressed:
+            break
     sealed = {record.node_id: record for record in read_records(journal_path)}
     tools = tool_spans_by_node(read_spans(journal_path))
     transcripts = tuple(
         _transcribe(
             node,
             sealed.get(node.id),
-            outcome.failures.get(node.id),
+            ever_failed.get(node.id),
             tool_spans_for_node(tools, node.id),
         )
-        for node in dag.nodes
+        for node in remaining.nodes
     )
-    passed = not outcome.failures and not outcome.undispatched
+    failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
+    undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
+    passed = not failed_unexcused and not undispatched
     append_span(
         journal_path,
         build_span(
@@ -203,8 +461,8 @@ def run_slice(
             exit_code=0 if passed else 1,
             detail=(
                 f"{len(proofs)} proven, "
-                f"{len(outcome.failures)} failed, "
-                f"{len(outcome.undispatched)} undispatched"
+                f"{len(failed_unexcused)} failed, "
+                f"{len(undispatched)} undispatched"
             ),
             kind="agent",
             name="run",

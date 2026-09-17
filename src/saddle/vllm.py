@@ -177,6 +177,19 @@ def _build_diff_payload(
     }
 
 
+def _build_text_payload(
+    *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
+) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
+        "include_reasoning": True,
+    }
+
+
 def _build_chat_payload(
     *,
     model: str,
@@ -243,7 +256,8 @@ def _delta_tokens(delta: Mapping[str, Any]) -> list[StreamToken]:
     return tokens
 
 
-def _parse_response(data: object) -> DagEmission:
+def _parse_message(data: object) -> tuple[str, str]:
+    """Validated (content, reasoning) from a chat envelope; truncations raise."""
     if not isinstance(data, dict):
         msg = f"expected a JSON object envelope, got {type(data).__name__}"
         raise VllmResponseError(msg)
@@ -266,6 +280,14 @@ def _parse_response(data: object) -> DagEmission:
     if not isinstance(content, str) or not content.strip():
         msg = "message has no text content"
         raise VllmResponseError(msg)
+    # vLLM 0.28 surfaces the think block as `reasoning` (not `reasoning_content`).
+    raw_reasoning = message.get("reasoning")
+    reasoning = raw_reasoning if isinstance(raw_reasoning, str) else ""
+    return content, reasoning
+
+
+def _parse_response(data: object) -> DagEmission:
+    content, reasoning = _parse_message(data)
     try:
         dag = json.loads(content)
     except json.JSONDecodeError as exc:
@@ -274,10 +296,13 @@ def _parse_response(data: object) -> DagEmission:
     if not isinstance(dag, dict):
         msg = "content JSON must be an object"
         raise VllmResponseError(msg)
-    # vLLM 0.28 surfaces the think block as `reasoning` (not `reasoning_content`).
-    raw_reasoning = message.get("reasoning")
-    reasoning = raw_reasoning if isinstance(raw_reasoning, str) else ""
     return DagEmission(dag=dag, reasoning=reasoning, raw_content=content)
+
+
+def _parse_text_response(data: object) -> str:
+    """Free-text content from a chat envelope; prose needs no JSON parse."""
+    content, _ = _parse_message(data)
+    return content
 
 
 def _parse_diff_response(data: object) -> DiffProposal:
@@ -403,6 +428,32 @@ class VllmClient:
             reasoning_effort=reasoning_effort,
         )
         return _parse_diff_response(self._post(payload))
+
+    def complete(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float = DEFAULT_TEMPERATURE,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    ) -> str:
+        """One free-text completion for *prompt* (recovery planning).
+
+        No guided schema: the plan is prose, so there is nothing to
+        mis-parse — only envelope, truncation, and blank-content errors.
+        """
+        if not prompt.strip():
+            msg = "prompt must not be empty"
+            raise ValueError(msg)
+        _checked_effort(reasoning_effort)
+        payload = _build_text_payload(
+            model=self._model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+        )
+        return _parse_text_response(self._post(payload))
 
     def stream_chat(
         self,

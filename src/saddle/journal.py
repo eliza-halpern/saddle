@@ -44,6 +44,7 @@ class ProofRecord(BaseModel):
     gate_outputs: list[GateOutput]
     requirement_ids: list[str]
     thinking: str
+    attempts: int = 1
     record_hash: str
 
 
@@ -112,6 +113,7 @@ def build_record(
     gate_outputs: list[GateOutput],
     requirement_ids: list[str],
     thinking: str,
+    attempts: int = 1,
 ) -> ProofRecord:
     """Seal a record: copy caller data, hash the diff, then the payload."""
     payload: dict[str, Any] = {
@@ -123,6 +125,7 @@ def build_record(
         "gate_outputs": [output.model_dump() for output in gate_outputs],
         "requirement_ids": list(requirement_ids),
         "thinking": scrub_thinking(thinking),
+        "attempts": attempts,
     }
     return ProofRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
 
@@ -259,7 +262,7 @@ def _load_journal(
         except ValueError as exc:
             issues.append(JournalIssue(code="invalid-record", line=number, message=str(exc)))
             continue
-        payload = entry.model_dump(exclude={"record_hash"})
+        payload = entry.model_dump(exclude={"record_hash"}, exclude_unset=True)
         if _canonical_hash(payload) != entry.record_hash:
             issues.append(
                 JournalIssue(
@@ -380,6 +383,7 @@ def build_from_gate(
     evidence_id: str,
     *,
     thinking: str,
+    attempts: int = 1,
 ) -> ProofRecord:
     """Seal a Tier-1 verdict as the node's proof record."""
     return build_record(
@@ -393,4 +397,5 @@ def build_from_gate(
         ],
         requirement_ids=list(node.requirement_ids),
         thinking=thinking,
+        attempts=attempts,
     )

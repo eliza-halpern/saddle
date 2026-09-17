@@ -23,7 +23,7 @@ from saddle.chat import ChatOptions, run_chat
 from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
 from saddle.journal import read_entries, read_records, read_spans, verify_journal
-from saddle.slice import run_slice
+from saddle.slice import ReplanFailedError, run_slice
 from saddle.transcript import is_run_end, render_event, render_journal_transcript
 from saddle.ux import ask_confirm
 from saddle.vllm import (
@@ -42,7 +42,9 @@ RUN_ALLOWLIST: Final[tuple[str, ...]] = ("read_file", "write_file", "run_tests",
 CONTEXT_CEILING: Final = 30000
 EMIT_ROUNDS: Final = 3
 MAX_FILES_IN_PROMPT: Final = 100
-MAX_CONTEXT_CHARS: Final = 8000
+NODE_CONTEXT_TOKENS: Final = 30000
+CHARS_PER_TOKEN: Final = 4
+MAX_CONTEXT_CHARS: Final = NODE_CONTEXT_TOKENS * CHARS_PER_TOKEN
 BUDGET_TO_EFFORT: Final[dict[str, str]] = {
     "zero": "none",
     "low": "low",
@@ -65,6 +67,7 @@ class RunOptions:
     max_tokens: int = 8192
     temperature: float = 0.0
     reasoning_effort: str = "medium"
+    worker_effort: str | None = None
     yes: bool = False
 
 
@@ -141,6 +144,58 @@ Rules:
 
 Output ONLY the diff, no commentary.
 """
+
+
+def build_replan_task(*, task: str, node: Node, history: str) -> str:
+    """Recovery scope for re-emission: the failed node plus its failure history."""
+    reqs = ", ".join(node.requirement_ids)
+    return (
+        f"Original task: {task}\n\n"
+        f"Node {node.id} failed and must be re-planned: {node.task_prompt}\n"
+        f"Requirements to cover: {reqs}\n"
+        f"Gate command the new nodes must satisfy: {node.deterministic_gate.test_command}\n\n"
+        f"Failure history (do not repeat it):\n{history}"
+    )
+
+
+def build_recovery_plan_prompt(
+    *,
+    task: str,
+    node: Node,
+    files: Sequence[str],
+    contents: Mapping[str, str],
+    failure: str,
+) -> str:
+    """Diagnosis prompt: root-cause the failure and outline the minimal fix."""
+    base = build_worker_prompt(task=task, node=node, files=files, contents=contents)
+    return (
+        base + "\nThe previous attempt failed as described below. Diagnose the "
+        "root cause against the CURRENT tree state above, then outline the "
+        "minimal fix steps. Write a short numbered plan, no diff, no commentary "
+        "outside the plan.\n\n" + failure
+    )
+
+
+def build_repair_prompt(
+    *,
+    task: str,
+    node: Node,
+    files: Sequence[str],
+    contents: Mapping[str, str],
+    failure: str,
+    plan: str,
+) -> str:
+    """Repair prompt: the worker brief plus evidence and the recovery plan.
+
+    The tree already holds the failed attempt, so the worker fixes
+    forward against the current contents instead of restating the change.
+    """
+    base = build_worker_prompt(task=task, node=node, files=files, contents=contents)
+    return (
+        base + "\nThe previous attempt failed. Fix forward: propose a diff against "
+        "the CURRENT tree state above that repairs the failure below. "
+        "Do not restate the whole change.\n\nRecovery plan:\n" + plan + "\n\n" + failure
+    )
 
 
 def _git_ok(argv: Sequence[str], repo: Path, message: str) -> None:
@@ -275,17 +330,56 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         stdout.write("aborted.\n")
         return 1
 
-    def propose(node: Node) -> DiffProposal:
+    def propose(node: Node, failure: str | None) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
+        effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
         files = git_ls_files(options.repo)
         contents = {
             name: (options.repo / name).read_text() for name in files if name.endswith(".py")
         }
+        if failure is None:
+            prompt = build_worker_prompt(
+                task=options.task, node=node, files=files, contents=contents
+            )
+        else:
+            plan = client.complete(
+                build_recovery_plan_prompt(
+                    task=options.task,
+                    node=node,
+                    files=files,
+                    contents=contents,
+                    failure=failure,
+                ),
+                max_tokens=options.max_tokens,
+                temperature=options.temperature,
+                reasoning_effort="xhigh",
+            )
+            prompt = build_repair_prompt(
+                task=options.task,
+                node=node,
+                files=files,
+                contents=contents,
+                failure=failure,
+                plan=plan,
+            )
         return client.propose_diff(
-            build_worker_prompt(task=options.task, node=node, files=files, contents=contents),
+            prompt,
+            max_tokens=options.max_tokens,
             temperature=options.temperature,
-            reasoning_effort=BUDGET_TO_EFFORT[budget],
+            reasoning_effort=effort,
         )
+
+    def replan(node: Node, history: str) -> Dag:
+        try:
+            return _emit_valid_dag(
+                client,
+                build_replan_task(task=options.task, node=node, history=history),
+                max_tokens=options.max_tokens,
+                temperature=options.temperature,
+                reasoning_effort=options.reasoning_effort,
+            )
+        except RunError as exc:
+            raise ReplanFailedError(str(exc)) from exc
 
     try:
         result = run_slice(
@@ -294,6 +388,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             workdir=options.repo,
             journal_path=options.journal,
             propose=propose,
+            replan=replan,
         )
     except (ValueError, RuntimeError) as exc:
         stdout.write(f"error: {exc}\n")
@@ -458,6 +553,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="medium",
         help="Emission reasoning effort.",
     )
+    run.add_argument(
+        "--worker-effort",
+        choices=list(REASONING_EFFORTS),
+        default=None,
+        help="Worker effort override (default: per-node budget).",
+    )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
@@ -544,6 +645,7 @@ def main(
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         reasoning_effort=args.reasoning_effort,
+        worker_effort=args.worker_effort,
         yes=args.yes,
     )
     with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:

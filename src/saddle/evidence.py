@@ -10,9 +10,11 @@ from __future__ import annotations
 import ast
 import re
 import shlex
+import shutil
 import subprocess
 import tarfile
 from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
@@ -64,6 +66,51 @@ def run_stdin(
 def run_shell(command: str, cwd: Path, *, recorder: SpanRecorder | None = None) -> int:
     """Run a `test_command` string via shlex splitting (never a shell)."""
     return run_argv(shlex.split(command), cwd, recorder=recorder)
+
+
+@dataclass(frozen=True)
+class CapturedRun:
+    """One completed invocation with its output, for recovery prompts."""
+
+    argv: tuple[str, ...]
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+def run_capture(
+    argv: Sequence[str], cwd: Path, *, recorder: SpanRecorder | None = None
+) -> CapturedRun:
+    """Run `argv` in `cwd`; journal its span and return exit plus output."""
+    start = perf_counter()
+    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+    _record(recorder, argv, start, proc)
+    return CapturedRun(
+        argv=tuple(argv), exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
+    )
+
+
+def run_shell_capture(
+    command: str, cwd: Path, *, recorder: SpanRecorder | None = None
+) -> CapturedRun:
+    """Run a `test_command` string via shlex splitting, capturing output."""
+    return run_capture(shlex.split(command), cwd, recorder=recorder)
+
+
+def drop_test_caches(root: Path) -> None:
+    """Remove Python and pytest caches so gates evaluate current sources.
+
+    Fix-forward retries rewrite test files seconds apart; an unchanged
+    size within the same mtime second would otherwise validate a stale
+    .pyc and run yesterday's tests. Targets materialize before removal
+    so the tree never mutates mid-walk.
+    """
+    for cache in list(root.rglob("__pycache__")):
+        shutil.rmtree(cache, ignore_errors=True)
+    for cache in list(root.rglob(".pytest_cache")):
+        shutil.rmtree(cache, ignore_errors=True)
+    for stale in list(root.rglob("*.pyc")):
+        stale.unlink(missing_ok=True)
 
 
 def changed_lines(diff: str) -> set[tuple[str, int]]:

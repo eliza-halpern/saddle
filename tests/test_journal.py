@@ -57,6 +57,7 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok"}],
         "requirement_ids": ["REQ-001"],
         "thinking": "",
+        "attempts": 1,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
@@ -104,6 +105,7 @@ def test_build_record_seals_thinking_into_hash() -> None:
         "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok"}],
         "requirement_ids": ["REQ-001"],
         "thinking": "extract the helper",
+        "attempts": 1,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
@@ -153,6 +155,18 @@ def test_verify_clean_chain_by_recomputation(tmp_path: Path) -> None:
     append_record(path, parent)
     append_record(path, _record("n2", [parent.record_hash]))
     assert verify_journal(path) == []
+
+
+def test_verify_pre_attempts_record_still_verifies(tmp_path: Path) -> None:
+    path = tmp_path / "proofs.jsonl"
+    record = _record("n1")
+    legacy = record.model_dump(exclude={"record_hash", "attempts"})
+    legacy_hash = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    path.write_text(json.dumps({**legacy, "record_hash": legacy_hash}, sort_keys=True) + "\n")
+    assert verify_journal(path) == []
+    assert read_records(path)[0].attempts == 1
 
 
 def test_verify_tampered_record_fails(tmp_path: Path) -> None:
