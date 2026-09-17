@@ -25,13 +25,15 @@ human-readable transcript plus a verifying journal.
 
 ## Gate criteria
 
-Each task runs on both the current pipeline and the Saddle slice:
+Each task runs on all three arms — untouched pi, pi-revision, and the
+Saddle slice (see M3-1 for arm harnesses and parity controls):
 
-1. **Wall-clock ≤ current** per task, measured from prompt to verified
-   journal (or to the current pipeline's equivalent done signal).
-2. **Correctness ≥ current**: Saddle output must pass its own Tier-1 gates
+1. **Wall-clock ≤ both pi arms** per task, measured from prompt to verified
+   journal (saddle) or to each pi arm's equivalent done signal.
+2. **Correctness ≥ both pi arms**: Saddle output must pass its own Tier-1 gates
    and journal verification; a human judge then confirms the change does
    what the task asked. A gate-passing wrong answer fails this criterion.
+   Wherever a pi arm passes, saddle must pass.
 3. **Zero malformed-packet retries**: guided emission (DAG plans and worker
    diffs) must parse first try — no tolerant re-parsing, no blind retries
    at the same temperature.
@@ -39,9 +41,32 @@ Each task runs on both the current pipeline and the Saddle slice:
    a human can read end to end. A run without either fails regardless of
    speed or correctness.
 
+5. **No-progress termination**: a run fails on (A) the same tool +
+   normalized args 3x in a row with no working-tree diff change and no
+   test-outcome transition between first and third, (B) 10 continuous
+   minutes with no progress event (progress = diff change or test
+   transition), or (C) 30 min absolute wall-clock, whichever trips first.
+
+## Parity freeze (M3-1)
+
+All arms run local vLLM qwen3.8-27b at thinking level xhigh with a
+completion budget of 81920 tokens: saddle passes
+`--reasoning-effort xhigh --max-tokens 81920`; untouched pi passes
+`--thinking xhigh` (models.json maxTokens 81920); revision roles pin
+`thinking: xhigh` with the same budget. A run ending in
+finish_reason=length is infra-invalid, not a scored failure: re-run
+with a higher budget (operator ceiling ~90k for extreme xhigh
+sessions) and discard the truncated attempt.
+
 ## Decision rule
 
 Proceed to phased migration (§6 step 3a) only on a decisive win across all
-three tasks on criteria 1–4. Otherwise stop at step 2 and harvest (§6
+three tasks on criteria 1–5. Otherwise stop at step 2 and harvest (§6
 step 3b): guided decoding, tool masking, and reasoning budgets port over
 regardless.
+
+*Amendment record (M3-1, before any scored run): arms fixed at three with
+parity controls; criterion 5 added (no-progress termination); decision
+rule widened 1–4 → 1–5; parity frozen at xhigh thinking with an 81920
+completion-token budget per arm plus a truncation-rerun rule. No scored
+runs preceded this change.*
