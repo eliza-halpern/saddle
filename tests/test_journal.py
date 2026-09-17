@@ -319,12 +319,15 @@ def test_kill_minus_9_mid_run_rebuilds_state(tmp_path: Path) -> None:
         " i += 1"
     )
     env = {**os.environ, "PYTHONPATH": src}
+    # Pin the driver's cwd to the project tree: under mutmut it imports
+    # trampolined code whose config lookup searches upward from cwd.
     proc = subprocess.Popen(
         [sys.executable, "-c", driver, str(path)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         text=True,
         env=env,
+        cwd=Path(__file__).parent.parent,
     )
     try:
         time.sleep(0.5)
