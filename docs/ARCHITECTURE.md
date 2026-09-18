@@ -125,12 +125,16 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 ```json
 {
   "id": "write_wave_shaders",
+  "kind": "impl",
   "dependencies": ["init_graphics_engine"],
   "task_prompt": "Implement Gerstner wave mathematics in a Three.js ShaderMaterial.",
-  "requirement_ids": ["REQ-014", "REQ-015"],
+  "requirements": [
+    {"id": "REQ-014", "statement": "Wave displacement follows the Gerstner model."},
+    {"id": "REQ-015", "statement": "The shader compiles under the project's Three.js version."}
+  ],
   "execution_constraints": {
     "reasoning_budget": "xhigh",
-    "allowed_tools": ["read_file", "write_file", "glsl_compiler_check"],
+    "allowed_tools": ["read_file", "write_file", "run_tests", "lint"],
     "max_context_tokens": 30000
   },
   "deterministic_gate": {
