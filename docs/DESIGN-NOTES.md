@@ -332,7 +332,7 @@ Meanwhile [MAKER][maker] reaches zero errors across a million steps with
 (qwen-3: 15; gpt-oss-20B: 6; llama-3.2-3B unusable), scaling as Θ(ln s)
 with p>0.5 exact-match agreement required plus a red-flag parser that
 discards over-long or misformatted responses, and [Snell et al.][testtime]
-find sequential revision wins on easy problems, (not re-verified)
+find sequential revision wins on easy problems (not re-verified),
 parallel resampling on hard ones, with the compute-optimal split near √N
 each — and compute-optimal scaling beating best-of-N at **4× less compute**.
 
@@ -741,7 +741,7 @@ artifact across T1–T7.
 - [InspectCoder][inspectcoder] / [TraceCoder][tracecoder] — runtime state as repair feedback
 - [SEDCoT][sedcot] — minimal counterexamples improve repair at no extra cost
 - [ELFuzz][elfuzz] — coverage-guided input generation
-- [HarnessFix][harnessfix] — ETCLOVG taxonomy; +11.1% from harness repair alone
+- [HarnessFix][harnessfix] — ETCLOVG taxonomy; 6.3–18.4 pp absolute from harness repair alone (v2)
 - [ReasoningBank][reasoningbank] / [Memory retrieval][memretrieval] — journal as experience corpus
 - [Self-preference bias][selfpref] — measured with authorship unlabeled
 - [Invariant filtering][invfilter] / [Symbolic execution + LLM][symbex] — inferred oracles
