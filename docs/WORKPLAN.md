@@ -585,8 +585,11 @@ Done when: both mutants red; `./check.sh` green.
 Stop if: `grep -c 'distinct} distinct of' src/saddle/slice.py` is not 1.
 
 ### T2-2a — Fixtures stop modelling the #65 exploit as the happy path
-Files: `tests/test_slice.py:48-58` (`_git_repo`), `:61-64` (`_node_dict`,
-`"kind": "refactor"`), `:99-116` (`GOOD_DIFF`, the `test_n.py` new-file hunk);
+Files: `tests/test_slice.py:86-96` (`_slice_repo` — NOT `_git_repo` at :48,
+which serves the low-level `_apply_diff` tests and stays untouched), `:61-64`
+(`_node_dict`, `"kind": "refactor"`), `:99-116` (`GOOD_DIFF`, the `test_n.py`
+new-file hunk), `:119` (`BAD_DIFF`), `:121-129` (`FIX_DIFF`), and the T2-1b
+test near `:412` whose proposer yields diff variants;
 `tests/test_cli.py:60-78` (`DIFF`), `:81-91` (`_git_repo`), `:94-99`
 (`_node_dict`), `:283` (`"new file mode 100644" in prompt`), `:2081`
 (`'"refactor"' in prompt`); `tests/test_runner.py:18-25` (`_node`,
@@ -609,14 +612,22 @@ so an `impl` node with a pre-seeded failing test takes the real
 differential and passes red-phase without shipping tests.
 Issue: #65 (fixture half)
 Steps:
-1. `tests/test_slice.py`: in `_git_repo`, write `test_n.py` with the exact
-   body the `GOOD_DIFF` hunk adds (`from n import f`, blank, blank,
+1. `tests/test_slice.py`: in `_slice_repo` (the helper every `run_slice`
+   test pairs with `_node_dict` and `GOOD_DIFF`), write `test_n.py` with the
+   exact body the `GOOD_DIFF` hunk adds (`from n import f`, blank, blank,
    `def test_f():  # REQ-001`, `    assert f() == 2`) and `git add` + commit
    it with `n.py`; delete the `test_n.py` hunk from `GOOD_DIFF` (keep the
-   `n.py` hunk); set `_node_dict`'s kind to `"impl"`. Do the same for any
-   other diff constant in the file that carries a `test_n.py` new-file hunk
-   (`:122-133` area): the test file exists at baseline now, so a hunk that
-   *modifies* it stays, a hunk that *creates* it goes.
+   `n.py` hunk); set `_node_dict`'s kind to `"impl"`.
+   The recovery fixtures currently model the retry by rewriting the *test*
+   (`BAD_DIFF` asserts 3, `FIX_DIFF` edits `test_n.py` back to 2). An `impl`
+   node may not touch tests, so move the fault into the source:
+   `BAD_DIFF = GOOD_DIFF.replace("+    return 2\n", "+    return 3\n")` and
+   `FIX_DIFF` becomes an `n.py` hunk `-    return 3` / `+    return 2` with
+   the same header shape as `GOOD_DIFF`'s first hunk. The seeded test still
+   fails at baseline (f returns 1), still fails after `BAD_DIFF` (returns 3),
+   and passes after `FIX_DIFF`, so every retry/replan test keeps its shape.
+   The T2-1b test's three "distinct" proposals must likewise differ in the
+   `n.py` hunk, not in `test_n.py`.
 2. `tests/test_cli.py`: same three moves on `DIFF`, `_git_repo` (which also
    commits `README.md`; keep that) and `_node_dict`. `:283` asserted the
    worker prompt echoes `"new file mode 100644"` from the diff; the diff no
