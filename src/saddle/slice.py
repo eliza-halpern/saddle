@@ -10,6 +10,8 @@ the same path.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -19,7 +21,7 @@ from time import perf_counter
 from typing import Final
 
 from saddle.dag import Dag, ExecutionConstraints, Node
-from saddle.evidence import CapturedRun, run_stdin
+from saddle.evidence import CapturedRun, run_argv, run_stdin
 from saddle.gates import GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
@@ -74,6 +76,15 @@ Replanner = Callable[[Node, str], Dag]
 """Re-emit a failed node's scope; history carries the failure evidence."""
 
 MAX_RECOVERY_RETRIES: Final = 2
+# Independent proposals drawn for the first attempt. Sequential retry
+# conditions each sample on the last rejection, which optimises against
+# whichever gate pushes back hardest: on T7 recovery drove the node from
+# four failing gates to one and then spent its budget on ruff while an
+# infinite loop sat untouched (F13). SpecBench measures the same effect
+# -- "longer search increases the severity of reward hacking". Drawing
+# unconditioned samples and keeping the best is the parallel half of the
+# compute-optimal split; sequential recovery still follows.
+PROPOSAL_SAMPLES: Final = 3
 RECOVERY_OUTPUT_CHARS: Final = 4000
 
 
@@ -201,6 +212,75 @@ def _seal_attempt(
     )
 
 
+def _evaluate_candidate(
+    node: Node, workdir: Path, diff: str
+) -> tuple[Tier1Result | None, str | None]:
+    """Gate `diff` on a throwaway copy of `workdir`; never touches it.
+
+    Returns the gate result, or an error string when the diff does not
+    apply. The copy carries `.git`, so the baseline ref the gate diffs
+    against resolves exactly as it would in place.
+
+    Nothing here reaches the journal. These are gate runs against trees
+    that are discarded, and the chain records what was proven about the
+    tree that was *sealed* -- a tool span with no sealed attempt to
+    parent it would be unlinkable by construction. The sampling is still
+    auditable: the attempt seal carries how many distinct candidates were
+    drawn.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        candidate = Path(tmp) / "tree"
+        shutil.copytree(workdir, candidate, symlinks=True)
+        # copytree rewrites mtimes, so git reads every file as modified and
+        # `git apply --index` refuses the patch. Refreshing the index
+        # restores the stat cache; the same trap cost a benchmark arm a
+        # run when `cp -r` produced "uncommitted changes" worktrees.
+        run_argv(["git", "update-index", "--refresh"], candidate)
+        try:
+            _apply_diff(candidate, diff)
+        except RuntimeError as exc:
+            return None, str(exc)
+        return run_node_gate(node, candidate), None
+
+
+def _best_of_samples(
+    node: Node, workdir: Path, propose: Proposer
+) -> tuple[DiffProposal | None, int]:
+    """Draw PROPOSAL_SAMPLES unconditioned proposals; keep the best.
+
+    Returns the winning diff and how many distinct diffs were drawn --
+    agreement is the correlation signal. LLM samples "often fail on the
+    same inputs", so k buys little when they agree, and recording it
+    means rho is measured rather than assumed.
+    """
+    scored: list[tuple[int, int, DiffProposal]] = []
+    drawn: list[str] = []
+    last: DiffProposal | None = None
+    for index in range(PROPOSAL_SAMPLES):
+        proposal = propose(node, None)
+        last = proposal
+        drawn.append(proposal.diff)
+        if any(proposal.diff == earlier for earlier in drawn[:-1]):
+            continue
+        result, unappliable = _evaluate_candidate(node, workdir, proposal.diff)
+        if unappliable is not None:
+            continue
+        failures = sum(1 for check in result.checks if not check.passed)
+        # `index` breaks ties toward the earliest sample, so selection is
+        # deterministic rather than dependent on sort stability.
+        scored.append((failures, index, proposal))
+        if failures == 0:
+            break
+    if not scored:
+        # Nothing gated cleanly and nothing applied. Hand back the last
+        # sample rather than paying for another call: the attempt still
+        # needs a diff to seal a failure against, and a fourth draw buys
+        # no information the three already spent did not.
+        return last, len(set(drawn))
+    scored.sort(key=lambda entry: entry[:2])
+    return scored[0][2], len(set(drawn))
+
+
 async def _run_node(
     node: Node,
     workdir: Path,
@@ -219,6 +299,7 @@ async def _run_node(
     """
     max_attempts = 1 + MAX_RECOVERY_RETRIES
     failure: str | None = None
+    sampling = ""
     seen: list[str] = []
     applied: list[str] = []
     last_result: Tier1Result | None = None
@@ -229,7 +310,16 @@ async def _run_node(
         worker_id = uuid.uuid4().hex
         recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
         try:
-            proposal = propose(node, failure)
+            if attempt == 1:
+                best, distinct = _best_of_samples(node, workdir, propose)
+                proposal = best if best is not None else propose(node, failure)
+                # Agreement across independent samples is the correlation
+                # signal: LLM samples "often fail on the same inputs", so
+                # k buys least exactly when they agree. Sealed so rho is
+                # measured across runs rather than assumed.
+                sampling = f"{distinct} distinct of {PROPOSAL_SAMPLES} sample(s)"
+            else:
+                proposal = propose(node, failure)
             if proposal.diff in seen:
                 detail = (
                     f"attempt {attempt}/{max_attempts}: "
@@ -261,7 +351,7 @@ async def _run_node(
                 )
                 append_record(journal_path, record)
                 proofs[node.id] = record.record_hash
-                detail = "" if attempt == 1 else f"recovered after {attempt} attempts"
+                detail = sampling if attempt == 1 else f"recovered after {attempt} attempts"
                 _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 0, detail)
                 return Proof(node_id=node.id)
             last_result = result

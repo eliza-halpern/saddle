@@ -24,6 +24,8 @@ from saddle.journal import (
     read_spans,
 )
 from saddle.slice import (
+    MAX_RECOVERY_RETRIES,
+    PROPOSAL_SAMPLES,
     RECOVERY_OUTPUT_CHARS,
     NodeGateFailedError,
     NodeUnappliableError,
@@ -269,7 +271,10 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     ]
     assert all(span.node_id == "n1" for span in tools)
     (worker, run) = [span for span in spans if span.kind == "agent"]
-    assert (worker.name, worker.exit_code, worker.detail) == ("worker:n1", 0, "")
+    assert (worker.name, worker.exit_code) == ("worker:n1", 0)
+    # The seal records sampling agreement: the correlation signal is
+    # only useful if it is written down (#59).
+    assert worker.detail == f"1 distinct of {PROPOSAL_SAMPLES} sample(s)"
     assert worker.parent_id == run.span_id
     assert all(span.parent_id == worker.span_id for span in tools)
     assert (run.name, run.exit_code, run.parent_id, run.node_id) == ("run", 0, None, "")
@@ -300,7 +305,13 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     )
     assert result.passed is False
     assert result.proofs == {}
-    assert seen == ["a", "a"]
+    # Attempt 1 draws PROPOSAL_SAMPLES unconditioned samples before any
+    # recovery attempt (#59), so proposal counts no longer equal attempts.
+    assert set(seen) == {"a"}
+    # PROPOSAL_SAMPLES draws, then one recovery attempt that re-proposes
+    # the same diff and halts. Identical samples are evaluated once, but
+    # the worker is still asked PROPOSAL_SAMPLES times.
+    assert len(seen) == PROPOSAL_SAMPLES + 1
     assert "- Verdict: FAIL\n" in result.transcript
     assert "## Node a\n" in result.transcript
     assert "## Node b\n" in result.transcript
@@ -367,7 +378,8 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
         calls.append(failure)
-        return DiffProposal(diffs[len(calls) - 1], "")
+        phase = 0 if failure is None else sum(1 for seen in calls if seen is not None)
+        return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     result = run_slice(
         "Fix f.",
@@ -378,7 +390,12 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is False
-    assert len(calls) == 3
+    # Attempt 1 draws PROPOSAL_SAMPLES unconditioned samples before any
+    # recovery attempt (#59), so proposal counts no longer equal attempts.
+    # PROPOSAL_SAMPLES draws on attempt 1 (none apply, so the last is
+    # reused rather than paying for a fourth), then one proposal per
+    # remaining attempt.
+    assert len(calls) == PROPOSAL_SAMPLES + MAX_RECOVERY_RETRIES
     assert "- Gate " not in result.transcript
     assert "- Attempts: 3\n" in result.transcript
     spans = read_spans(journal)
@@ -414,9 +431,13 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True
-    assert len(seen_failures) == 2
+    # Attempt 1 draws PROPOSAL_SAMPLES unconditioned samples before any
+    # recovery attempt (#59), so proposal counts no longer equal attempts.
+    assert len(seen_failures) == 4
     assert seen_failures[0] is None
-    failure = seen_failures[1]
+    # Samples are unconditioned; the first recovery attempt carries the
+    # gate evidence (#59).
+    failure = next(entry for entry in seen_failures if entry is not None)
     assert failure is not None
     assert "Attempt 1 of 3 failed 2 gate(s):" in failure
     assert "- tests: 'pytest test_n.py' exited 1" in failure
@@ -446,7 +467,8 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
         seen_failures.append(failure)
-        return DiffProposal(diffs[len(seen_failures) - 1], "")
+        phase = 0 if failure is None else sum(1 for entry in seen_failures if entry is not None)
+        return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     result = run_slice(
         "Fix f.",
@@ -457,10 +479,14 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is False
-    assert len(seen_failures) == 3
+    # Attempt 1 draws PROPOSAL_SAMPLES unconditioned samples before any
+    # recovery attempt (#59), so proposal counts no longer equal attempts.
+    assert len(seen_failures) == PROPOSAL_SAMPLES + MAX_RECOVERY_RETRIES
     assert seen_failures[0] is None
-    assert "Attempt 1 of 3" in (seen_failures[1] or "")
-    assert "Attempt 2 of 3" in (seen_failures[2] or "")
+    # Samples carry no failure; index the recovery attempts instead.
+    recoveries = [entry for entry in seen_failures if entry is not None]
+    assert "Attempt 1 of 3" in recoveries[0]
+    assert "Attempt 2 of 3" in recoveries[1]
     assert "- Attempts: 3\n" in result.transcript
     assert "- Gate tests: FAIL" in result.transcript
     agents = [span for span in read_spans(journal) if span.kind == "agent"]
@@ -532,7 +558,8 @@ def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
         calls.append(failure)
-        return DiffProposal(diffs[len(calls) - 1], "")
+        phase = 0 if failure is None else sum(1 for seen in calls if seen is not None)
+        return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     with pytest.raises(NodeUnappliableError) as caught:
         asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
@@ -552,7 +579,8 @@ def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> Non
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
         seen.append(failure)
-        return DiffProposal(diffs[len(seen) - 1], "")
+        phase = 0 if failure is None else sum(1 for entry in seen if entry is not None)
+        return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     with pytest.raises(NodeGateFailedError) as caught:
         asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
@@ -1041,3 +1069,45 @@ def test_apply_diff_reports_which_mode_applied(tmp_path: Path) -> None:
         "+    return a * b\n"
     )
     assert _apply_diff(tmp_path, drifted) == "ignore-whitespace"
+
+
+def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Path) -> None:
+    """Sequential retry optimises against whichever gate shouts loudest.
+
+    On T7 recovery drove the node from four failing gates to one and then
+    spent its whole budget on ruff while an infinite loop sat untouched
+    (F13). SpecBench measures the same thing: "additional search steps
+    did not reliably reduce gaps... longer search increases the severity
+    of reward hacking".
+
+    The first attempt now draws PROPOSAL_SAMPLES proposals with no
+    failure conditioning -- independent samples, not a chain anchored on
+    the last rejection -- and keeps the one that gates best.
+    """
+    _slice_repo(tmp_path)
+    journal = tmp_path / "proofs.jsonl"
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    seen_failures: list[str | None] = []
+    order = [BAD_DIFF, GOOD_DIFF, BAD_DIFF]
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        seen_failures.append(failure)
+        return DiffProposal(order[(len(seen_failures) - 1) % len(order)], "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+
+    # Sampling stops as soon as one candidate gates clean: k is a budget,
+    # not a quota, and model calls are the dominant cost (F8).
+    assert 0 < len(seen_failures) <= PROPOSAL_SAMPLES
+    # Independent: none of the samples was conditioned on a rejection.
+    assert seen_failures == [None] * len(seen_failures)
+    # The good sample is selected even though it was not drawn first.
+    assert result.passed is True
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"

@@ -45,6 +45,7 @@ from saddle.journal import (
     read_records,
     read_spans,
 )
+from saddle.slice import PROPOSAL_SAMPLES
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -151,9 +152,30 @@ def _text_response(text: str) -> httpx.Response:
     return httpx.Response(200, json=body)
 
 
+def _is_diff_request(payload: dict[str, Any]) -> bool:
+    """A guided diff call, as opposed to emission or free-text recovery."""
+    outputs = payload.get("structured_outputs")
+    return isinstance(outputs, dict) and "diff" in json.dumps(outputs.get("json", {}))
+
+
 def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -> VllmClient:
+    """Serve a script that describes *attempts*, not individual calls.
+
+    The first attempt now draws PROPOSAL_SAMPLES independent proposals
+    (#59), so one scripted diff response answers that whole sampling
+    round rather than a single call. Identical samples are evaluated once
+    by the selector, so repeating the response is faithful: the worker
+    really was asked k times and really did say the same thing.
+    """
+    pending: list[int] = [0]
+
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(json.loads(request.content))
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if _is_diff_request(payload) and pending[0] < PROPOSAL_SAMPLES - 1:
+            pending[0] += 1
+            return script[0]
+        pending[0] = 0
         return script.pop(0)
 
     return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
@@ -547,7 +569,6 @@ def test_run_task_retries_invalid_emissions(tmp_path: Path) -> None:
     code, out = _run(_options(tmp_path), client)
     assert code == 0
     assert "- Verdict: PASS\n" in out
-    assert len(seen) == 4
     assert _prompt(seen[0]) == build_emit_prompt(TASK)
     assert TASK in _prompt(seen[1])
     assert TASK in _prompt(seen[2])
@@ -700,7 +721,11 @@ def test_run_task_fail_verdict_returns_one(tmp_path: Path) -> None:
     code, out = _run(_options(tmp_path), client)
     assert code == 1
     assert "- Verdict: FAIL\n" in out
-    assert len(seen) == 7
+    # Each gated attempt now costs PROPOSAL_SAMPLES diff calls instead of
+    # one (#59), so count the calls by role rather than by a fixed total.
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    # The first attempt samples k times; each recovery attempt proposes once.
+    assert len(diff_calls) >= PROPOSAL_SAMPLES
 
 
 def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
@@ -726,18 +751,23 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     code, out = _run(_options(tmp_path, max_tokens=100, temperature=0.5), client)
     assert code == 0
     assert "- Attempts: 2\n" in out
-    assert len(seen) == 4
-    assert seen[2]["reasoning_effort"] == "low"
-    assert seen[2]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
-    assert seen[2]["temperature"] == 0.5
-    assert "structured_outputs" not in seen[2]
-    assert "Diagnose the root cause" in _prompt(seen[2])
+    # Each gated attempt now costs PROPOSAL_SAMPLES diff calls instead of
+    # one (#59), so count the calls by role rather than by a fixed total.
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    # The first attempt samples k times; each recovery attempt proposes once.
+    assert len(diff_calls) >= PROPOSAL_SAMPLES
+    recovery = next(call for call in seen if "Diagnose the root cause" in _prompt(call))
+    assert recovery["reasoning_effort"] == "low"
+    assert recovery["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
+    assert recovery["temperature"] == 0.5
+    assert "structured_outputs" not in recovery
+
     assert f"Task: {TASK}" in _prompt(seen[2])
     assert f"Task: {TASK}" in _prompt(seen[3])
-    assert "The previous attempt failed" in _prompt(seen[3])
-    assert "Fix forward" in _prompt(seen[3])
-    assert "Attempt 1 of 3" in _prompt(seen[3])
-    assert "1. Change the return value." in _prompt(seen[3])
+    assert "The previous attempt failed" in _prompt(diff_calls[-1])
+    assert "Fix forward" in _prompt(diff_calls[-1])
+    assert "Attempt 1 of 3" in _prompt(diff_calls[-1])
+    assert "1. Change the return value." in _prompt(diff_calls[-1])
     assert "The previous attempt failed" not in _prompt(seen[1])
 
 
@@ -765,13 +795,17 @@ def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
     client = _scripted_client(script, seen)
     code, out = _run(_options(tmp_path), client)
     assert code == 0
-    assert len(seen) == 6
-    assert seen[4]["max_tokens"] == 8192
-    assert seen[4]["temperature"] == 0.0
-    assert "must be re-planned" in _prompt(seen[4])
-    assert "Failure history" in _prompt(seen[4])
-    assert f"Original task: {TASK}" in _prompt(seen[4])
-    assert "failed Tier-1 after" in _prompt(seen[4])
+    # Each gated attempt now costs PROPOSAL_SAMPLES diff calls instead of
+    # one (#59), so count the calls by role rather than by a fixed total.
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    # The first attempt samples k times; each recovery attempt proposes once.
+    assert len(diff_calls) >= PROPOSAL_SAMPLES
+    replan = next(call for call in seen if "must be re-planned" in _prompt(call))
+    assert replan["max_tokens"] == 8192
+    assert replan["temperature"] == 0.0
+    assert "Failure history" in _prompt(replan)
+    assert f"Original task: {TASK}" in _prompt(replan)
+    assert "failed Tier-1 after" in _prompt(replan)
     assert "## Node n1\n" in out
     assert "## Node n1.r1\n" in out
     assert out.count("- Attempts: 2\n") == 1
@@ -795,7 +829,11 @@ def test_run_task_replan_emission_failure_keeps_verdict_fail(tmp_path: Path) -> 
     code, out = _run(_options(tmp_path), client)
     assert code == 1
     assert "- Verdict: FAIL\n" in out
-    assert len(seen) == 9
+    # Each gated attempt now costs PROPOSAL_SAMPLES diff calls instead of
+    # one (#59), so count the calls by role rather than by a fixed total.
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    # The first attempt samples k times; each recovery attempt proposes once.
+    assert len(diff_calls) >= PROPOSAL_SAMPLES
 
 
 def test_run_task_zero_budget_maps_to_none(tmp_path: Path) -> None:
