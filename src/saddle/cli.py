@@ -189,6 +189,11 @@ Rules:
 - Start each file section with a "diff --git a/<file> b/<file>" header line.
 - Mark new files with "new file mode 100644".
 - Mention each requirement ID in the new or changed test source.
+- A "test" node must include at least one hypothesis property, not only
+  examples: `@given(...)` over generated inputs. Examples probe the cases
+  you already thought of; a property probes the ones you did not. For a
+  requirement about a text format, `hypothesis.strategies.from_regex`
+  generates witnesses directly.
 - Make sure the gate command above passes after the diff applies.
 - Keep new code ruff-clean: double quotes, 4-space indent,
   two blank lines between top-level definitions, final newline, no unused imports,

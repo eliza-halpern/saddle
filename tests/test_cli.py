@@ -1987,3 +1987,14 @@ def test_emit_prompt_asks_for_the_test_impl_split() -> None:
     assert "may not" in prompt
     # The impl node has to depend on the tests it must turn green.
     assert "depends on" in prompt.lower()
+
+
+def test_worker_prompt_asks_test_nodes_for_a_property() -> None:
+    """The property gate otherwise just rejects what the worker keeps
+    writing: examples probe the cases already in mind (#58)."""
+    node = Node.model_validate(_node_dict("n1", "low"))
+    prompt = build_worker_prompt(
+        task="Do the thing.", node=node, files=["n.py"], contents={"n.py": "x = 1\n"}
+    )
+    assert "@given" in prompt
+    assert "from_regex" in prompt

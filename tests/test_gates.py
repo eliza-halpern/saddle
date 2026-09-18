@@ -17,6 +17,7 @@ from saddle.gates import (
     check_changed_line_coverage,
     check_mutation,
     check_node_scope,
+    check_property_coverage,
     check_red_phase,
     check_requirement_binding,
     check_ruff,
@@ -306,6 +307,7 @@ def test_run_tier1_all_green_passes() -> None:
         "coverage",
         "red-phase",
         "node-scope",
+        "property-coverage",
         "requirement-binding",
         "mutation",
     ]
@@ -319,7 +321,7 @@ def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 8  # node-scope joined the tier (#57)
+    assert len(result.checks) == 9  # node-scope (#57) and property-coverage (#58)
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
 
@@ -622,3 +624,83 @@ def test_refactor_node_still_takes_the_behaviour_preserving_branch() -> None:
         mutation=MutationOutcome(generated=10, total=10, killed=10, survivors=()),
     )
     assert "behaviour preserved" in check.detail
+
+
+def test_test_node_must_contribute_a_property() -> None:
+    """Two happy-path examples over an unbounded domain is the predicted
+    output, not an anomaly (F1). T1 shipped a regex accepting
+    `.u@example.com` and `user@example..com` with 7/7 gates green,
+    because its two tests probed neither.
+    """
+    examples_only = {
+        "tests/test_v.py": (
+            "def test_valid():  # REQ-001\n    assert valid('a@b.co')\n\n"
+            "def test_invalid():  # REQ-001\n    assert not valid('nope')\n"
+        )
+    }
+    check = check_property_coverage("test", examples_only)
+    assert check.passed is False
+    assert "property" in check.detail.lower()
+
+
+def test_hypothesis_given_counts_as_a_property() -> None:
+    sources = {
+        "tests/test_v.py": (
+            "from hypothesis import given\n"
+            "from hypothesis import strategies as st\n\n\n"
+            "@given(st.from_regex(r'^[a-z]+@[a-z]+\\.[a-z]{2,}$'))\n"
+            "def test_round_trip(address):  # REQ-001\n"
+            "    assert valid(address)\n"
+        )
+    }
+    assert check_property_coverage("test", sources).passed is True
+
+
+def test_property_coverage_does_not_bind_impl_or_refactor_nodes() -> None:
+    """An impl node writes no tests at all, and a refactor preserves the
+    ones it moves; requiring a new property of either is unsatisfiable."""
+    assert check_property_coverage("impl", {}).passed is True
+    assert (
+        check_property_coverage("refactor", {"tests/test_v.py": "def test_a():\n    pass\n"}).passed
+        is True
+    )
+
+
+def test_property_detection_handles_unparseable_and_bare_decorators() -> None:
+    """The syntax gate runs first, but check order is not a guarantee the
+    property check may lean on; and a non-`given` decorator must not be
+    mistaken for a property."""
+    assert check_property_coverage("test", {"t.py": "def broken( :\n"}).passed is False
+
+    bare = {
+        "t.py": (
+            "import pytest\n"
+            "from hypothesis import given\n\n\n"
+            "@pytest.mark.parametrize('x', [1])\n"
+            "def test_example(x):  # REQ-001\n"
+            "    assert x\n\n\n"
+            "@given\n"
+            "def test_property(value):  # REQ-001\n"
+            "    assert value is not None\n"
+        )
+    }
+    assert check_property_coverage("test", bare).passed is True
+
+
+def test_parametrize_is_examples_not_a_property() -> None:
+    """`@pytest.mark.parametrize` is a table of cases the author chose.
+
+    That is precisely what F1 shows is insufficient -- the cases probed
+    are the cases already in mind. Only generated inputs count.
+    """
+    table_only = {
+        "t.py": (
+            "import pytest\n\n\n"
+            "@pytest.mark.parametrize('address', ['a@b.co', 'c@d.co'])\n"
+            "def test_valid(address):  # REQ-001\n"
+            "    assert valid(address)\n"
+        )
+    }
+    check = check_property_coverage("test", table_only)
+    assert check.passed is False
+    assert "examples only" in check.detail

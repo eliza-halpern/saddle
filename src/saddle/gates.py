@@ -286,6 +286,54 @@ def check_red_phase(
     return GateCheck(name="red-phase", passed=True, detail="fail pre-change, pass post-change")
 
 
+def _has_property(source: str) -> bool:
+    """True when a test module drives at least one hypothesis property."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            call = decorator.func if isinstance(decorator, ast.Call) else decorator
+            name = call.attr if isinstance(call, ast.Attribute) else getattr(call, "id", "")
+            if name == "given":
+                return True
+    return False
+
+
+def check_property_coverage(kind: str, test_sources: Mapping[str, str]) -> GateCheck:
+    """A test node must state at least one property, not only examples.
+
+    LLMs "generate ordinary programs following similar patterns seen in
+    their massive training corpora, while fuzzing favors unusual inputs
+    that cover edge cases". Two happy-path examples over an unbounded
+    domain is the predicted output, and it is what T1 produced: a regex
+    accepting `.u@example.com` and `user@example..com` behind 7/7 green
+    gates (F1).
+
+    Properties are invariants over generated inputs rather than pairs the
+    author chose, so the cases they probe are not the cases the author
+    already had in mind. Only `test` nodes are bound: an impl node writes
+    no tests, and a refactor preserves the ones it moves.
+    """
+    if kind != "test":
+        return GateCheck(name="property-coverage", passed=True, detail=f"{kind} node: not required")
+    with_property = sorted(path for path, src in test_sources.items() if _has_property(src))
+    if not with_property:
+        return GateCheck(
+            name="property-coverage",
+            passed=False,
+            detail="no hypothesis property in the node's tests: examples only",
+        )
+    return GateCheck(
+        name="property-coverage",
+        passed=True,
+        detail=f"{len(with_property)} module(s) drive a property",
+    )
+
+
 def check_node_scope(kind: str, changed_files: Collection[str]) -> GateCheck:
     """A node stays on its own side of the test/implementation split.
 
@@ -455,6 +503,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             mutation=inputs.mutation,
         ),
         check_node_scope(node.kind, sorted({path for path, _ in inputs.changed})),
+        check_property_coverage(node.kind, inputs.flipped_tests),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
         check_mutation(inputs.mutation, sample.kill_threshold),
     )
