@@ -8,6 +8,7 @@ from dataclasses import replace
 from saddle.dag import DeterministicGate, Node
 from saddle.evidence import MutationOutcome
 from saddle.gates import (
+    SHELL_TIMEOUT,
     GateCheck,
     Tier1Inputs,
     check_changed_line_coverage,
@@ -382,3 +383,39 @@ def test_red_phase_behaviour_preserving_uses_fixed_floor_not_node_threshold() ->
     check = _red(0, 0, tests_changed=False, mutation=weak)
     assert check.passed is False
     assert check.detail == "tests unchanged and mutation 10.0% < 85.0%; nothing proves the change"
+
+
+def test_tests_hanging_command_reports_hang_not_exit_code() -> None:
+    """A hang is a distinct defect class, not an ordinary nonzero exit.
+
+    Operationally a hang is worse than a failure: harnesses that parse
+    pytest counts get partial or zero output from a suite that never
+    terminates. The transcript must say so rather than burying it as
+    'exited 124'.
+    """
+    check = check_test_command("pytest tests/test_x.py", lambda _cmd: SHELL_TIMEOUT)
+    assert check.passed is False
+    assert check.name == "tests"
+    assert "hang" in check.detail.lower()
+    assert "exited" not in check.detail
+
+
+def test_red_phase_hanging_baseline_names_the_hang() -> None:
+    """A baseline that never terminates is not 'tests never ran'.
+
+    It fails the gate either way, but the transcript has to say which:
+    exit 124 read as a generic nonzero exit sends recovery looking for a
+    missing file instead of a loop.
+    """
+    check = check_red_phase(
+        lambda: SHELL_TIMEOUT,
+        lambda: 0,
+        baseline_output="",
+        changed_files=["orderedlist.py"],
+        tests_changed=True,
+        coverage=GateCheck(name="coverage", passed=True),
+        mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
+    )
+    assert check.passed is False
+    assert "hang" in check.detail.lower()
+    assert "never ran" not in check.detail

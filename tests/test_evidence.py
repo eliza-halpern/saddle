@@ -15,6 +15,7 @@ import pytest
 import saddle.evidence as evidence_module
 from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
+    SHELL_TIMEOUT,
     CapturedRun,
     MutationOutcome,
     _mutmut_scratch_config,
@@ -627,3 +628,37 @@ def test_statement_lines_exempts_docstrings_but_keeps_stray_strings() -> None:
 
 def test_statement_lines_empty_source_yields_none() -> None:
     assert statement_lines("") == set()
+
+
+def test_run_capture_hanging_command_times_out(tmp_path: Path) -> None:
+    """A command that never returns must not hang the gate runner.
+
+    T7's `test_op_add` did not fail, it looped forever: `x += x` called
+    `extend(self)`, which iterated the backing list while inserting into
+    it. Six of seven gates passed on that code because nothing in the
+    stack could observe a test that simply never came back.
+    """
+    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
+    run = run_capture(argv, tmp_path, timeout=1.0)
+    assert run.exit_code == SHELL_TIMEOUT
+    assert run.timed_out is True
+
+
+def test_run_argv_timeout_journals_the_killed_span(tmp_path: Path) -> None:
+    """A killed run must leave a span; a hang that vanishes is worse than one
+    that is recorded, because the transcript then shows no reason at all."""
+    journal = tmp_path / "spans.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    argv = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('partial'); sys.stderr.flush()\nimport time; time.sleep(30)",
+    ]
+
+    assert run_argv(argv, tmp_path, recorder=recorder, timeout=1.0) == SHELL_TIMEOUT
+
+    spans = read_spans(journal)
+    assert len(spans) == 1
+    assert spans[0].exit_code == SHELL_TIMEOUT
+    assert "timed out after 1.0s" in spans[0].detail
+    assert "partial" in spans[0].detail

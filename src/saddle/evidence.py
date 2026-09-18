@@ -21,14 +21,21 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
+from typing import Final
 
 import coverage
 
+from saddle.gates import SHELL_TIMEOUT
 from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _MUTANT_VERDICT = re.compile(r"^\s*(\S+): (killed|survived|timeout|not checked)\s*$")
 _MUTATION_TIMEOUT_S = 600
+
+DEFAULT_TEST_TIMEOUT_S: Final = 300.0
+"""Wall-clock ceiling for a declared test command. Suites in scope run
+in seconds; this bounds non-termination without failing slow-but-sound
+runs."""
 
 
 def _record(
@@ -50,10 +57,48 @@ def _record(
     )
 
 
-def run_argv(argv: Sequence[str], cwd: Path, *, recorder: SpanRecorder | None = None) -> int:
-    """Run `argv` in `cwd`; return its exit code, capturing output."""
+def _partial(stream: str | bytes | None) -> str:
+    """Decode whatever a killed process managed to emit before dying."""
+    if stream is None:
+        return ""
+    return stream.decode(errors="replace") if isinstance(stream, bytes) else stream
+
+
+def _record_timeout(
+    recorder: SpanRecorder | None,
+    argv: Sequence[str],
+    start: float,
+    expired: subprocess.TimeoutExpired,
+) -> None:
+    """Journal a killed invocation; the span must not silently vanish."""
+    if recorder is None:
+        return
+    recorder.record(
+        argv=list(argv),
+        duration_ms=int((perf_counter() - start) * 1000),
+        exit_code=SHELL_TIMEOUT,
+        detail=f"timed out after {expired.timeout}s: {_partial(expired.stderr)}",
+    )
+
+
+def run_argv(
+    argv: Sequence[str],
+    cwd: Path,
+    *,
+    recorder: SpanRecorder | None = None,
+    timeout: float | None = None,
+) -> int:
+    """Run `argv` in `cwd`; return its exit code, capturing output.
+
+    A `timeout` bounds the run: exceeding it yields `SHELL_TIMEOUT`
+    rather than blocking the gate runner forever.
+    """
     start = perf_counter()
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True)
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as expired:
+        _record_timeout(recorder, argv, start, expired)
+        return SHELL_TIMEOUT
     _record(recorder, argv, start, proc)
     return proc.returncode
 
@@ -68,9 +113,15 @@ def run_stdin(
     return proc.returncode
 
 
-def run_shell(command: str, cwd: Path, *, recorder: SpanRecorder | None = None) -> int:
+def run_shell(
+    command: str,
+    cwd: Path,
+    *,
+    recorder: SpanRecorder | None = None,
+    timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
+) -> int:
     """Run a `test_command` string via shlex splitting (never a shell)."""
-    return run_argv(shlex.split(command), cwd, recorder=recorder)
+    return run_argv(shlex.split(command), cwd, recorder=recorder, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -81,14 +132,33 @@ class CapturedRun:
     exit_code: int
     stdout: str
     stderr: str
+    timed_out: bool = False
 
 
 def run_capture(
-    argv: Sequence[str], cwd: Path, *, recorder: SpanRecorder | None = None
+    argv: Sequence[str],
+    cwd: Path,
+    *,
+    recorder: SpanRecorder | None = None,
+    timeout: float | None = None,
 ) -> CapturedRun:
-    """Run `argv` in `cwd`; journal its span and return exit plus output."""
+    """Run `argv` in `cwd`; journal its span and return exit plus output.
+
+    On timeout the partial output is preserved and `timed_out` is set, so
+    recovery prompts still see how far the run got before it stalled.
+    """
     start = perf_counter()
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as expired:
+        _record_timeout(recorder, argv, start, expired)
+        return CapturedRun(
+            argv=tuple(argv),
+            exit_code=SHELL_TIMEOUT,
+            stdout=_partial(expired.stdout),
+            stderr=_partial(expired.stderr),
+            timed_out=True,
+        )
     _record(recorder, argv, start, proc)
     return CapturedRun(
         argv=tuple(argv), exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
@@ -96,10 +166,14 @@ def run_capture(
 
 
 def run_shell_capture(
-    command: str, cwd: Path, *, recorder: SpanRecorder | None = None
+    command: str,
+    cwd: Path,
+    *,
+    recorder: SpanRecorder | None = None,
+    timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
 ) -> CapturedRun:
     """Run a `test_command` string via shlex splitting, capturing output."""
-    return run_capture(shlex.split(command), cwd, recorder=recorder)
+    return run_capture(shlex.split(command), cwd, recorder=recorder, timeout=timeout)
 
 
 def drop_test_caches(root: Path) -> None:

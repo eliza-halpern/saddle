@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 # pytest exit codes that carry red-phase evidence (see `check_red_phase`).
 PYTEST_TESTS_FAILED: Final = 1
 PYTEST_COLLECTION_ERROR: Final = 2
+# Exit code for a command killed on timeout, following GNU `timeout(1)`.
+# Pytest reserves 0-5, so this cannot collide with a real suite verdict.
+SHELL_TIMEOUT: Final = 124
 # Fixed floor for behaviour-preserving nodes; ARCHITECTURE.md's own gate
 # example uses 85.0. Deliberately not the node's own kill_threshold.
 REFACTOR_KILL_FLOOR: Final = 85.0
@@ -76,8 +79,21 @@ def check_ruff(files: Collection[str], run: Callable[[list[str]], int]) -> GateC
 
 
 def check_test_command(test_command: str, run: Callable[[str], int]) -> GateCheck:
-    """Run the node's declared pytest scope; nonzero exit fails the gate."""
+    """Run the node's declared pytest scope; nonzero exit fails the gate.
+
+    A timeout is reported as a hang rather than as an exit code. The two
+    are different defects: a failing assertion names the behaviour it
+    disagrees with, while a suite that never terminates yields no verdict
+    at all -- downstream harnesses that parse pytest counts read partial
+    or zero results, so a hang scores worse than the failure it hides.
+    """
     exit_code = run(test_command)
+    if exit_code == SHELL_TIMEOUT:
+        return GateCheck(
+            name="tests",
+            passed=False,
+            detail=f"{test_command!r} hangs: no verdict within the time limit",
+        )
     if exit_code != 0:
         return GateCheck(
             name="tests",
@@ -164,7 +180,10 @@ def check_red_phase(
     (exit 2) counts only when it names a source file the node changed --
     the greenfield case, where the module under test does not exist yet.
     Any other nonzero exit (missing files, usage errors, no tests
-    collected) says nothing about the new tests and fails the gate.
+    collected) says nothing about the new tests and fails the gate. A
+    baseline that hangs is called out separately: it fails like the rest,
+    but "tests never ran" would send recovery hunting a missing file
+    instead of a loop.
 
     The planner cannot waive this: whether it binds is read off the diff.
     A node that leaves every test AST untouched preserved behaviour by
@@ -178,6 +197,12 @@ def check_red_phase(
     if baseline_exit == 0:
         return GateCheck(
             name="red-phase", passed=False, detail="tests pass pre-change; prove nothing"
+        )
+    if baseline_exit == SHELL_TIMEOUT:
+        return GateCheck(
+            name="red-phase",
+            passed=False,
+            detail="baseline hangs: no pre-change verdict; prove nothing",
         )
     if baseline_exit == PYTEST_COLLECTION_ERROR:
         if not _names_changed_source(baseline_output, changed_files):
