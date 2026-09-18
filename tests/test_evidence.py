@@ -662,3 +662,15 @@ def test_run_argv_timeout_journals_the_killed_span(tmp_path: Path) -> None:
     assert spans[0].exit_code == SHELL_TIMEOUT
     assert "timed out after 1.0s" in spans[0].detail
     assert "partial" in spans[0].detail
+
+
+def test_run_shell_paths_bound_the_command(tmp_path: Path) -> None:
+    """The shell wrappers are what the runner actually calls for test
+    commands; a timeout that stops at `run_capture` protects nothing."""
+    hang = f"{sys.executable} -c 'import time; time.sleep(30)'"
+
+    captured = run_shell_capture(hang, tmp_path, timeout=1.0)
+    assert captured.exit_code == SHELL_TIMEOUT
+    assert captured.timed_out is True
+
+    assert run_shell(hang, tmp_path, timeout=1.0) == SHELL_TIMEOUT
