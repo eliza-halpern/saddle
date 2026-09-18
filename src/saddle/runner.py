@@ -27,7 +27,7 @@ from saddle.evidence import (
     statement_lines,
     under_coverage,
 )
-from saddle.gates import Tier1Inputs, Tier1Result, run_tier1
+from saddle.gates import RED_PHASE_SAMPLES, Tier1Inputs, Tier1Result, run_tier1
 from saddle.journal import SpanRecorder
 
 
@@ -110,14 +110,26 @@ def run_node_gate(
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(source)
-        drop_test_caches(dest)
-        baseline_run = run_shell_capture(
-            under_coverage(gate.test_command, str(dest / ".coverage.red")),
-            dest,
-            recorder=recorder,
-        )
-        baseline_exit = baseline_run.exit_code
-        baseline_output = baseline_run.stdout + baseline_run.stderr
+        # Sampled, not observed once: red-phase is the only gate that
+        # reasons over two runs, so a flaky pre-change leg yields "fail
+        # before, pass after" with no causal relation to the diff. Caches
+        # are dropped between samples so each run stands alone. Skipped
+        # entirely when no test changed -- that path never reads the
+        # exits, and three extra suite runs per refactor node is real
+        # wall-clock for evidence nothing consumes.
+        samples = RED_PHASE_SAMPLES if tests_changed else 1
+        baseline_exits: list[int] = []
+        baseline_output = ""
+        for sample_index in range(samples):
+            drop_test_caches(dest)
+            baseline_run = run_shell_capture(
+                under_coverage(gate.test_command, str(dest / ".coverage.red")),
+                dest,
+                recorder=recorder,
+            )
+            baseline_exits.append(baseline_run.exit_code)
+            if sample_index == 0:
+                baseline_output = baseline_run.stdout + baseline_run.stderr
 
     def ruff_runner(argv: list[str]) -> int:
         run = run_capture(argv, workdir, recorder=recorder)
@@ -140,7 +152,7 @@ def run_node_gate(
         test_runner=lambda _command: current_exit,
         changed=changed,
         covered=covered,
-        baseline_runner=lambda: baseline_exit,
+        baseline_exits=tuple(baseline_exits),
         baseline_output=baseline_output,
         tests_changed=tests_changed,
         current_runner=lambda: current_exit,

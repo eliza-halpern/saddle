@@ -14,7 +14,7 @@ import pytest
 import saddle.slice as slice_module
 from saddle.dag import Dag, Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import GateCheck, Tier1Result
+from saddle.gates import RED_PHASE_SAMPLES, GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
     SpanRecord,
@@ -252,7 +252,8 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "git",
         "coverage",
         "git",
-        "coverage",
+        # One per red-phase baseline sample (#54).
+        *["coverage"] * RED_PHASE_SAMPLES,
         "timeout",
         "mutmut",
         "mutmut",

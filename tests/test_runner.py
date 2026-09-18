@@ -10,6 +10,7 @@ import pytest
 
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
+from saddle.gates import RED_PHASE_SAMPLES
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import read_sources, run_node_gate
 
@@ -143,7 +144,10 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "git",
         "coverage",
         "git",
-        "coverage",
+        # One coverage span per red-phase baseline sample: the pre-change
+        # leg is observed RED_PHASE_SAMPLES times so a flaky failure
+        # cannot pass as a genuine red.
+        *["coverage"] * RED_PHASE_SAMPLES,
         "timeout",
         "mutmut",
         "mutmut",
@@ -151,11 +155,13 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "ruff",
     ]
     assert all(span.node_id == "n1" for span in spans)
-    # The 4th span is the red-phase baseline leg: same coverage-wrapped
+    # Spans 4..6 are the red-phase baseline samples: same coverage-wrapped
     # command as the current leg, exiting 1 because the node's own test
     # genuinely fails against pre-change code. It used to be a raw pytest
     # exiting 4 -- file not found, because the new test was never copied in.
-    assert [span.exit_code for span in spans] == [0, 0, 0, 1, 0, 0, 0, 0, 0]
+    # The baseline samples all exit 1: unanimous, which is what a stable
+    # pre-change leg looks like. Disagreement here is what fails the gate.
+    assert [span.exit_code for span in spans] == [0, 0, 0, *[1] * RED_PHASE_SAMPLES, 0, 0, 0, 0, 0]
 
 
 def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> None:
@@ -318,3 +324,27 @@ def test_run_node_gate_changed_assertion_takes_the_red_phase_path(tmp_path: Path
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is True
     assert red.detail == "fail pre-change, pass post-change"
+
+
+def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> None:
+    """A genuinely nondeterministic pre-change leg must fail the gate.
+
+    Pins the *behaviour*, not the constant: a single observation cannot
+    distinguish a flake from a genuine red, so RED_PHASE_SAMPLES must be
+    greater than one for this to be detectable at all. The counter file
+    survives drop_test_caches, so the test alternates across samples.
+    """
+    flaky = (
+        "import pathlib\n\n"
+        "_COUNTER = pathlib.Path(__file__).parent / '.flake_count'\n\n\n"
+        "def test_f_flaky():  # REQ-001\n"
+        "    n = int(_COUNTER.read_text()) if _COUNTER.exists() else 0\n"
+        "    _COUNTER.write_text(str(n + 1))\n"
+        "    assert n % 2 == 0\n"
+    )
+    _worktree(tmp_path, flaky)
+    result = run_node_gate(_node(), tmp_path)
+
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.passed is False
+    assert "nondeterministic" in red.detail

@@ -9,7 +9,7 @@ runners are injected at the boundary, never embedded in the predicates.
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Final
@@ -25,6 +25,11 @@ PYTEST_COLLECTION_ERROR: Final = 2
 # Exit code for a command killed on timeout, following GNU `timeout(1)`.
 # Pytest reserves 0-5, so this cannot collide with a real suite verdict.
 SHELL_TIMEOUT: Final = 124
+# Baseline runs sampled per red-phase check. Red-phase is the only gate
+# that reasons over two runs, so its evidence is worth exactly what the
+# stability of the pre-change leg is worth; one observation cannot tell a
+# genuine failure from a flake.
+RED_PHASE_SAMPLES: Final = 3
 # Fixed floor for behaviour-preserving nodes; ARCHITECTURE.md's own gate
 # example uses 85.0. Deliberately not the node's own kill_threshold.
 REFACTOR_KILL_FLOOR: Final = 85.0
@@ -164,7 +169,7 @@ def _check_behaviour_preserved(coverage: GateCheck, mutation: MutationOutcome) -
 
 
 def check_red_phase(
-    run_baseline: Callable[[], int],
+    baseline_exits: Sequence[int],
     run_current: Callable[[], int],
     *,
     baseline_output: str,
@@ -185,6 +190,12 @@ def check_red_phase(
     but "tests never ran" would send recovery hunting a missing file
     instead of a loop.
 
+    `baseline_exits` carries RED_PHASE_SAMPLES observations rather than
+    one. They must agree: a test that fails on one pre-change run and
+    passes on the next yields "fail pre-change, pass post-change" with no
+    causal relation to the diff, which is a vacuous red that looks exactly
+    like a genuine one.
+
     The planner cannot waive this: whether it binds is read off the diff.
     A node that leaves every test AST untouched preserved behaviour by
     construction, so no test can fail pre-change; there the proof falls to
@@ -193,7 +204,15 @@ def check_red_phase(
     """
     if not tests_changed:
         return _check_behaviour_preserved(coverage, mutation)
-    baseline_exit = run_baseline()
+    if len(set(baseline_exits)) > 1:
+        seen = ", ".join(str(code) for code in baseline_exits)
+        return GateCheck(
+            name="red-phase",
+            passed=False,
+            detail=f"baseline nondeterministic across {len(baseline_exits)} runs "
+            f"(exits {seen}); prove nothing",
+        )
+    baseline_exit = baseline_exits[0]
     if baseline_exit == 0:
         return GateCheck(
             name="red-phase", passed=False, detail="tests pass pre-change; prove nothing"
@@ -254,7 +273,7 @@ class Tier1Inputs:
     test_runner: Callable[[str], int]
     changed: set[tuple[str, int]]
     covered: set[tuple[str, int]]
-    baseline_runner: Callable[[], int]
+    baseline_exits: tuple[int, ...]
     baseline_output: str
     tests_changed: bool
     current_runner: Callable[[], int]
@@ -304,7 +323,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         check_test_command(gate.test_command, inputs.test_runner),
         coverage,
         check_red_phase(
-            inputs.baseline_runner,
+            inputs.baseline_exits,
             inputs.current_runner,
             baseline_output=inputs.baseline_output,
             changed_files=sorted({path for path, _ in inputs.changed}),

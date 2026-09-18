@@ -8,6 +8,8 @@ from dataclasses import replace
 from saddle.dag import DeterministicGate, Node
 from saddle.evidence import MutationOutcome
 from saddle.gates import (
+    PYTEST_TESTS_FAILED,
+    RED_PHASE_SAMPLES,
     SHELL_TIMEOUT,
     GateCheck,
     Tier1Inputs,
@@ -56,7 +58,7 @@ def _passing_inputs() -> Tier1Inputs:
         test_runner=lambda _cmd: 0,
         changed={("n1.py", 1)},
         covered={("n1.py", 1)},
-        baseline_runner=lambda: 1,
+        baseline_exits=(1,) * RED_PHASE_SAMPLES,
         baseline_output="",
         tests_changed=True,
         current_runner=lambda: 0,
@@ -187,7 +189,7 @@ def _red(
     mutation: MutationOutcome = _STRONG,
 ) -> GateCheck:
     return check_red_phase(
-        lambda: baseline,
+        (baseline,) * RED_PHASE_SAMPLES,
         lambda: current,
         baseline_output=output,
         changed_files=changed,
@@ -408,7 +410,7 @@ def test_red_phase_hanging_baseline_names_the_hang() -> None:
     missing file instead of a loop.
     """
     check = check_red_phase(
-        lambda: SHELL_TIMEOUT,
+        (SHELL_TIMEOUT,) * RED_PHASE_SAMPLES,
         lambda: 0,
         baseline_output="",
         changed_files=["orderedlist.py"],
@@ -419,3 +421,41 @@ def test_red_phase_hanging_baseline_names_the_hang() -> None:
     assert check.passed is False
     assert "hang" in check.detail.lower()
     assert "never ran" not in check.detail
+
+
+def test_red_phase_nondeterministic_baseline_proves_nothing() -> None:
+    """A flaky baseline makes the differential meaningless.
+
+    Red-phase is the only gate that reasons over *two* runs, so its
+    evidence is exactly as good as the stability of the pre-change leg.
+    A test that fails on one baseline run and passes on the next gives
+    'fail pre-change, pass post-change' with no causal relation to the
+    diff at all -- a vacuous red indistinguishable from a genuine one.
+    2-16% of failures in large suites are flaky, and nothing in the
+    harness would have noticed.
+    """
+    check = check_red_phase(
+        (PYTEST_TESTS_FAILED, 0, PYTEST_TESTS_FAILED),
+        lambda: 0,
+        baseline_output="",
+        changed_files=["n.py"],
+        tests_changed=True,
+        coverage=GateCheck(name="coverage", passed=True),
+        mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
+    )
+    assert check.passed is False
+    assert "nondeterministic" in check.detail.lower()
+
+
+def test_red_phase_unanimous_baseline_still_passes() -> None:
+    """Sampling must not change the verdict on a stable baseline."""
+    check = check_red_phase(
+        (PYTEST_TESTS_FAILED,) * RED_PHASE_SAMPLES,
+        lambda: 0,
+        baseline_output="",
+        changed_files=["n.py"],
+        tests_changed=True,
+        coverage=GateCheck(name="coverage", passed=True),
+        mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
+    )
+    assert check.passed is True
