@@ -2,7 +2,7 @@
 
 Status: **draft, pre-registered before the v3 re-run.** Written 2026-09-18
 against harness `fix/gate-integrity @ d7c3a4a`, after the v2 benchmark sweep
-(`saddle-bench/runs/FINDINGS.md`, F1–F14).
+(`../saddle-bench/runs/FINDINGS.md`, F1–F14).
 
 This document exists because the v2 sweep produced a clear diagnosis and no
 plan. It takes each recorded failure mode, finds what the literature says
@@ -628,8 +628,9 @@ already made:
 
 - **Guided decoding after freeform reasoning** (D14) — specified, applied to
   the DAG, absent on diffs.
-- **Heterogeneous test-time compute per node** (D19) — specified, one global
-  effort level in practice.
+- **Heterogeneous test-time compute per node** (D19) — wired per node via
+  `reasoning_budget` → `BUDGET_TO_EFFORT` (`cli.py:402-404`); benefit
+  unmeasured (T4-3).
 - **Tiered gates with expensive checks at merge time** — specified; the merge
   tier is where D13's composition gate belongs.
 - **Requirement-bound acceptance with per-ID test evidence** — specified as

@@ -76,7 +76,8 @@ root_prop_0 ::= (("\"" "d" "i" "f" "f" " " "-" "-" "g" "i" "t" " " "\""))
 ```
 
 — a grammar for exactly one 11-character string. Every v3 T1 attempt
-died on `git apply: No valid patches in input`, identically at
+died on `git apply` exit 128 (`error: corrupt patch at line 12`, every
+attempt; ../saddle-bench/runs/PROGRESS.log:35), identically at
 temperature 0.0 and 0.8, because nothing else was legal to emit.
 
 So, for every constraint (schema, pattern, grammar, threshold, enum):
@@ -162,6 +163,6 @@ as `DEFAULT_TEST_TIMEOUT_S` lives in `evidence.py`.
 - `docs/ARCHITECTURE.md` — the spec.
 - `docs/DESIGN-NOTES.md` — the hardening plan (D1–D25), priority-ordered
   with citations. Read §0 before proposing gate changes.
-- `saddle-bench/runs/FINDINGS.md` — F1–F14, what the benchmark actually
-  showed. Claims about saddle's behaviour should cite an F-number or a
-  run log, not intuition.
+- `../saddle-bench/runs/FINDINGS.md` (sibling checkout, not in this repo) —
+  F1–F14, what the benchmark actually showed. Claims about saddle's
+  behaviour should cite an F-number or a run log, not intuition.

@@ -58,7 +58,7 @@ Two further items from that round, recorded rather than buried:
 
 Re-run from T1 under the fixed harness (`fix/gate-integrity`), five arms
 per task. Results live in `saddle-bench/runs/`, findings in
-`saddle-bench/runs/FINDINGS.md`.
+`../saddle-bench/runs/FINDINGS.md`.
 
 ## Harness defects found and fixed
 
@@ -86,7 +86,7 @@ worktree untouched.
 
 ## Open structural gaps
 
-Measured, not speculative — see FINDINGS.md for evidence.
+Measured, not speculative — see ../saddle-bench/runs/FINDINGS.md for evidence.
 
 - **Gates verify the test run, not the requirement.** T1 round 2: saddle
   passed all seven gates and shipped a validator failing 6 of 18
