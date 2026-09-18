@@ -84,6 +84,8 @@ T0-1 ──► T1-4 (check.sh green needs the staged file gone)
 T1-1, T1-2, T1-3 ──► T1-4
 T0-11 ──► T1-4 (check.sh runs `ruff format --check .`, which covers Markdown)
 T0-3 (gate names test) ──► T2-2 (extends the same test module)
+T2-2a (honest impl fixtures) ──► T2-2 (the tightened check rejects the old fixtures)
+T2-1 ──► T2-1b (the seal-count test T2-1 left behind)
 T2-1 ──► T4-1 (a benchmark rerun with vacuous k is not worth the GPU time)
 T4-4 ──► any future D14 work (deferred)
 T4-1 ──► #61 decision
@@ -555,12 +557,106 @@ Stop if: `grep -n "temperature=options.temperature," src/saddle/cli.py` returns 
 Note for T4-1: rerun the benchmark only after this lands; a k=3 arm at
 temperature 0.0 measures nothing about k.
 
+### T2-1b — The seal's sample count can vary (T2-1 step 5, split out)
+Files: `tests/test_slice.py:372` (the `"1 distinct of ..."` pin) and the
+test around it.
+Contract: `_best_of_samples` reports how many distinct proposals it saw;
+with three different appliable diffs the seal detail is
+`"3 distinct of 3 sample(s)"`, with a constant proposer it is `"1 distinct of 3 sample(s)"`.
+Direction: **tightened** (the pin at :372 asserted the count is always 1,
+which is the vacuity CLAUDE.md "A mechanism must be able to do what it
+reports" forbids; T2-1 landed the temperature routing but its session
+treated `Files:` as authoritative and left this test alone).
+Evidence: VERIFIED — `slice.py:376` builds the string from `distinct`;
+`PROPOSAL_SAMPLES = 3` at `slice.py:87`.
+Issue: #59
+Steps:
+1. Replace the test containing :372 with two tests. Known-good: a proposer
+   that returns three distinct appliable diffs (vary a comment or the
+   return value across calls) → the worker span detail is
+   `f"3 distinct of {PROPOSAL_SAMPLES} sample(s)"`. Known-bad-for-diversity:
+   a constant proposer → `f"1 distinct of {PROPOSAL_SAMPLES} sample(s)"`
+   (dedup still works). Model both on the existing test; keep its fixtures.
+2. `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest tests/test_slice.py -q --no-cov -k distinct`.
+Contract mutants (`pytest tests/test_slice.py -q --no-cov -k distinct`):
+1. `sed -i 's/sampling = f"{distinct} distinct of/sampling = f"1 distinct of/' src/saddle/slice.py` → known-good red.
+2. `sed -i 's/for index in range(PROPOSAL_SAMPLES):/for index in range(1):/' src/saddle/slice.py` → known-good red (only one sample drawn).
+Done when: both mutants red; `./check.sh` green.
+Stop if: `grep -c 'distinct} distinct of' src/saddle/slice.py` is not 1.
+
+### T2-2a — Fixtures stop modelling the #65 exploit as the happy path
+Files: `tests/test_slice.py:48-58` (`_git_repo`), `:61-64` (`_node_dict`,
+`"kind": "refactor"`), `:99-116` (`GOOD_DIFF`, the `test_n.py` new-file hunk);
+`tests/test_cli.py:60-78` (`DIFF`), `:81-91` (`_git_repo`), `:94-99`
+(`_node_dict`), `:283` (`"new file mode 100644" in prompt`), `:2081`
+(`'"refactor"' in prompt`); `tests/test_runner.py:18-25` (`_node`,
+`"kind": "refactor"`), every `_worktree(` call without `baseline_test=`
+(12 of 15).
+Contract: the end-to-end fixtures describe an honest `impl` node: the
+baseline commit already holds `test_n.py` (written by a test node earlier),
+and the worker diff edits `n.py` only. No production code changes.
+Direction: test-only, no contract change. (Today every fixture is a
+`refactor` node whose one diff edits `n.py` **and creates** `test_n.py` —
+the exact shape #65 describes, and the reason T2-2 broke 31 tests when it
+was first attempted: the tightened node-scope check rejects the fixtures
+because they are the exploit.)
+Evidence: VERIFIED — first T2-2 session, 2026-09-18: 31 failures across
+`test_cli.py` (14), `test_runner.py` (5), `test_slice.py` (12), all
+`node-scope: refactor node added file(s): test_n.py`. `gates.py`
+`check_red_phase` already documents that an `impl` node's tests "were
+written by the test node it depends on and already fail at its baseline",
+so an `impl` node with a pre-seeded failing test takes the real
+differential and passes red-phase without shipping tests.
+Issue: #65 (fixture half)
+Steps:
+1. `tests/test_slice.py`: in `_git_repo`, write `test_n.py` with the exact
+   body the `GOOD_DIFF` hunk adds (`from n import f`, blank, blank,
+   `def test_f():  # REQ-001`, `    assert f() == 2`) and `git add` + commit
+   it with `n.py`; delete the `test_n.py` hunk from `GOOD_DIFF` (keep the
+   `n.py` hunk); set `_node_dict`'s kind to `"impl"`. Do the same for any
+   other diff constant in the file that carries a `test_n.py` new-file hunk
+   (`:122-133` area): the test file exists at baseline now, so a hunk that
+   *modifies* it stays, a hunk that *creates* it goes.
+2. `tests/test_cli.py`: same three moves on `DIFF`, `_git_repo` (which also
+   commits `README.md`; keep that) and `_node_dict`. `:283` asserted the
+   worker prompt echoes `"new file mode 100644"` from the diff; the diff no
+   longer has one, so assert `"+++ b/n.py"` is in the prompt instead. `:2081`
+   asserted `'"refactor"'` is in the planner prompt; check what that test is
+   pinning (the kind enum listing, or the node's own kind?) and keep the
+   assertion true for what the prompt actually renders — if it lists all
+   kinds, it still holds; if it echoes the node's kind, it becomes `'"impl"'`.
+3. `tests/test_runner.py`: `_node` kind → `"impl"`; every `_worktree(` call
+   that omits `baseline_test=` gets `baseline_test=<the same test body it
+   passes as test_body>` so the test exists at baseline. Tests that
+   deliberately exercise "new test file appears in the diff" (look for
+   `baseline_test=None` semantics or a test name mentioning new tests) keep
+   a `refactor` or `test` node explicitly and a comment saying why.
+4. Full suite: `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q`.
+   Expect the red-phase baseline leg to now exit 1 (assertion) for every
+   fixture, not 2 (collection) — if a test pinned "exit 2 / greenfield",
+   that is a deliberate greenfield case: give it `kind="test"` or leave the
+   file uncreated at baseline with a comment, do not delete the assertion.
+Known-good: full suite green at HEAD (before T2-2). Known-bad: temporarily
+setting `_node_dict`'s kind back to `"impl"` while the diff still creates
+`test_n.py` must fail node-scope with `impl node changed test file(s)` —
+run this once in `test_slice.py` to prove the fixture is now load-bearing,
+then restore.
+Contract mutants: none (test-only; the known-bad run above is the check).
+Done when: `./check.sh` green; `grep -c '"kind": "refactor"' tests/test_slice.py tests/test_cli.py tests/test_runner.py` prints 0 for the default fixtures (explicit per-test overrides may remain, each with a comment); no file under `src/` in `git show --stat`.
+Stop if: making the fixtures honest requires changing anything under `src/`
+— report which gate rejects an honest `impl` node and why.
+
 ### T2-2 — A `refactor` node cannot create files (closes the cheapest half of #65)
 Files: `src/saddle/evidence.py:244-254` (add `git_added_files` beside
 `git_changed_files`); `src/saddle/gates.py:396-426` (`check_node_scope`),
 `:470-485` (`Tier1Inputs`), `:565` (the `check_node_scope(...)` call in
 `run_tier1`); `src/saddle/runner.py:191-205` (`Tier1Inputs(...)`);
 `tests/test_gates.py:586-600` area; `tests/test_evidence.py`.
+Requires: T2-2a landed first (the fixtures in `test_slice.py`, `test_cli.py`,
+`test_runner.py` must already be honest `impl` nodes, or this check rejects
+them — 31 failures on the first attempt). A reference implementation of
+this item, unfinished only because of those fixtures, is saved outside the
+repo; re-derive from the steps below rather than hunting for it.
 Contract: `check_node_scope(kind, changed_files, added_files)` fails a
 `refactor` node that adds any file; a behaviour-preserving move may edit
 existing sources and tests but the file set it creates is empty.
@@ -624,11 +720,9 @@ Contract mutants (`pytest tests/test_gates.py -q --no-cov -k scope`):
 1. `sed -i 's/        if added_files:/        if False:/' src/saddle/gates.py` → red.
 2. `sed -i 's/--diff-filter=A/--diff-filter=M/' src/saddle/evidence.py` → the test_evidence known-good red.
 3. `sed -i 's/if kind == "refactor":/if kind == "test":/' src/saddle/gates.py` → red (refactor falls to the impl/test branch and the known-good fails).
-Done when: mutants red; `./check.sh` green; `tests/test_slice.py` still green
-with `_node_dict`'s default `"kind": "refactor"` (`tests/test_slice.py:61-64`) —
-the slice fixtures edit existing files only; if one adds a file, that fixture
-was relying on the exemption and must be given `kind="impl"` with an honest
-note in the commit.
+Done when: mutants red; `./check.sh` green with the T2-2a fixtures
+unchanged (if a fixture still fails node-scope here, T2-2a was incomplete:
+stop and report which one).
 Stop if: `grep -c 'if kind == "refactor":' src/saddle/gates.py` is not 1 (it is at ~L411; T0-3 shifted it by one).
 
 ### T2-3 — Merge-time full-suite gate (the missing Tier 2, minimal form)
