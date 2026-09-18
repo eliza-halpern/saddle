@@ -781,7 +781,7 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert "The previous attempt failed" not in _prompt(seen[1])
 
 
-def test_run_task_first_attempt_and_recovery_use_distinct_temperatures(
+def test_run_task_sample_temperature_routes_first_attempt_vs_recovery(
     tmp_path: Path,
 ) -> None:
     _git_repo(tmp_path)
