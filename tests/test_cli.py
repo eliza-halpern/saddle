@@ -95,6 +95,7 @@ def _node_dict(
 ) -> dict[str, Any]:
     return {
         "id": node_id,
+        "kind": "refactor",
         "dependencies": [],
         "task_prompt": "Fix f and test it.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
@@ -1974,3 +1975,15 @@ def test_worker_prompt_restates_the_node_task_at_the_tail() -> None:
     assert node.task_prompt in head
     assert node.task_prompt in tail
     assert tail.index(node.task_prompt) > tail.index("x = 1")
+
+
+def test_emit_prompt_asks_for_the_test_impl_split() -> None:
+    """The scope gate rejects plans the planner would otherwise keep
+    making, so the prompt has to describe the split it enforces (#57)."""
+    prompt = build_emit_prompt("Do the thing.")
+    assert '"test"' in prompt
+    assert '"impl"' in prompt
+    assert '"refactor"' in prompt
+    assert "may not" in prompt
+    # The impl node has to depend on the tests it must turn green.
+    assert "depends on" in prompt.lower()

@@ -277,6 +277,7 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
     node = Node.model_validate(
         {
             "id": "n1",
+            "kind": "refactor",
             "dependencies": [],
             "task_prompt": "Do n1.",
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],

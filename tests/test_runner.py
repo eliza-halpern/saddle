@@ -22,6 +22,7 @@ def _node(
     return Node.model_validate(
         {
             "id": "n1",
+            "kind": "refactor",
             "dependencies": [],
             "task_prompt": "Fix f.",
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],

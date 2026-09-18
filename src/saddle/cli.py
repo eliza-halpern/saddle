@@ -100,6 +100,14 @@ def build_emit_prompt(task: str) -> str:
 Task: {task}
 
 Rules:
+- Each node has a kind: "test", "impl" or "refactor".
+- Split behaviour changes into a "test" node and an "impl" node that
+  depends on it. A "test" node writes the failing tests and may not
+  change source files; an "impl" node makes them pass and may not change
+  test files. One worker writing both sides encodes a misreading of the
+  requirement twice, and grades itself on the suite it just rewrote.
+- Use "refactor" only when behaviour is preserved: the code and its tests
+  move together and no test can fail beforehand.
 - The first node has no dependencies; every other node depends on at least one earlier node.
 - Each node carries at least one requirement: {{"id": "REQ-001", "statement": ...}}.
 - The statement is one testable sentence saying what must hold, in the

@@ -22,6 +22,7 @@ def _node(
 ) -> dict[str, Any]:
     return {
         "id": node_id,
+        "kind": "refactor",
         "dependencies": deps if deps is not None else [],
         "task_prompt": f"Do {node_id}.",
         "requirements": [
@@ -293,6 +294,7 @@ def test_derived_schema_has_arch_node_shape() -> None:
     node = schema["properties"]["nodes"]["items"]
     assert node["required"] == [
         "id",
+        "kind",
         "dependencies",
         "task_prompt",
         "requirements",
@@ -434,3 +436,20 @@ def test_requirement_id_shape_is_grammar_constrained() -> None:
 
     schema = json.dumps(dag_json_schema())
     assert "REQ-" in schema
+
+
+def test_node_kind_is_constrained_to_the_three_kinds() -> None:
+    """An unconstrained kind silently falls through the scope gate.
+
+    `check_node_scope` exempts "refactor" and otherwise treats the node
+    as a test node, so an invented kind would be graded under rules it
+    never declared. An enum is grammar-expressible, so the invalid value
+    is unrepresentable rather than mis-handled.
+    """
+    node = _node("n1")
+    node["kind"] = "implementation"
+    with pytest.raises(ValidationError):
+        Dag.model_validate({"nodes": [node]})
+
+    schema = json.dumps(dag_json_schema())
+    assert '"refactor"' in schema

@@ -20,6 +20,7 @@ def _node(
 ) -> dict[str, Any]:
     return {
         "id": node_id,
+        "kind": "refactor",
         "dependencies": deps if deps is not None else [],
         "task_prompt": f"Do {node_id}.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],

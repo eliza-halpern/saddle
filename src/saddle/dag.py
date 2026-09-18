@@ -22,6 +22,7 @@ Statement = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
 NodeId = Annotated[str, Field(min_length=1, max_length=64)]
 ReasoningBudget = Literal["zero", "low", "medium", "xhigh"]
 KillThreshold = Literal[85.0, 90.0, 95.0, 100.0]
+NodeKind = Literal["test", "impl", "refactor"]
 # A regex `pattern` compiles into the decoding grammar -- verified for
 # DIFF_HEADER_PATTERN, where xgrammar emits
 # `Regex("^diff --git ", json_string=true)` -- so a malformed ID is
@@ -95,6 +96,12 @@ class Node(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: NodeId
+    # The test/implementation split: an `impl` node may not edit tests and
+    # a `test` node may not ship the implementation, so a misreading of
+    # the contract cannot be encoded twice by the same worker (F5, #44).
+    # `refactor` is the behaviour-preserving case, which has to move code
+    # and its tests together.
+    kind: NodeKind
     dependencies: list[NonEmptyStr]
     task_prompt: NonEmptyStr
     requirements: list[Requirement] = Field(min_length=1)

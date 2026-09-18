@@ -16,6 +16,7 @@ from saddle.gates import (
     Tier1Inputs,
     check_changed_line_coverage,
     check_mutation,
+    check_node_scope,
     check_red_phase,
     check_requirement_binding,
     check_ruff,
@@ -29,6 +30,7 @@ def _node() -> Node:
     return Node.model_validate(
         {
             "id": "n1",
+            "kind": "refactor",
             "dependencies": [],
             "task_prompt": "Do n1.",
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
@@ -186,15 +188,20 @@ def _red(
     output: str = "",
     changed: tuple[str, ...] = (),
     tests_changed: bool = True,
+    kind: str = "",
     coverage: GateCheck = _PASSING_COVERAGE,
     mutation: MutationOutcome = _STRONG,
 ) -> GateCheck:
+    # Callers that predate the kind split describe themselves by whether
+    # the node touched tests; a refactor is the no-test-change case.
+    kind = kind or ("test" if tests_changed else "refactor")
     return check_red_phase(
         (baseline,) * RED_PHASE_SAMPLES,
         lambda: current,
         baseline_output=output,
         changed_files=changed,
         tests_changed=tests_changed,
+        kind=kind,
         coverage=coverage,
         mutation=mutation,
     )
@@ -298,6 +305,7 @@ def test_run_tier1_all_green_passes() -> None:
         "tests",
         "coverage",
         "red-phase",
+        "node-scope",
         "requirement-binding",
         "mutation",
     ]
@@ -311,7 +319,7 @@ def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 7
+    assert len(result.checks) == 8  # node-scope joined the tier (#57)
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
 
@@ -420,6 +428,7 @@ def test_red_phase_hanging_baseline_names_the_hang() -> None:
         baseline_output="",
         changed_files=["orderedlist.py"],
         tests_changed=True,
+        kind="test",
         coverage=GateCheck(name="coverage", passed=True),
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
@@ -445,6 +454,7 @@ def test_red_phase_nondeterministic_baseline_proves_nothing() -> None:
         baseline_output="",
         changed_files=["n.py"],
         tests_changed=True,
+        kind="test",
         coverage=GateCheck(name="coverage", passed=True),
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
@@ -460,6 +470,7 @@ def test_red_phase_unanimous_baseline_still_passes() -> None:
         baseline_output="",
         changed_files=["n.py"],
         tests_changed=True,
+        kind="test",
         coverage=GateCheck(name="coverage", passed=True),
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
@@ -543,3 +554,71 @@ def test_mutation_detail_always_reports_the_sample_size() -> None:
     """Weak evidence has to be visible in the transcript, not inferred."""
     outcome = MutationOutcome(generated=20, total=20, killed=20, survivors=())
     assert "20 mutant" in check_mutation(outcome, 85.0).detail
+
+
+def test_impl_node_may_not_touch_test_files() -> None:
+    """The circularity is one worker authoring both sides (F5, #44).
+
+    Zylos: when one model writes the implementation and the tests, "a
+    misreading of the contract doesn't get an independent second look; it
+    gets encoded twice". T4's worker fixed the wrong module and rewrote
+    the behaviour-pinning test to match; all seven gates passed. An impl
+    node that cannot edit tests cannot do that.
+    """
+    check = check_node_scope("impl", ["orders.py", "tests/test_orders.py"])
+    assert check.passed is False
+    assert "tests/test_orders.py" in check.detail
+
+
+def test_test_node_may_not_touch_source_files() -> None:
+    """The other direction matters too: a test node that ships the
+    implementation alongside its tests has authored both again."""
+    check = check_node_scope("test", ["tests/test_orders.py", "orders.py"])
+    assert check.passed is False
+    assert "orders.py" in check.detail
+
+
+def test_node_scope_accepts_a_node_that_stays_on_its_side() -> None:
+    assert check_node_scope("impl", ["orders.py", "discounts.py"]).passed is True
+    assert check_node_scope("test", ["tests/test_orders.py", "test_x.py"]).passed is True
+
+
+def test_refactor_node_may_touch_both() -> None:
+    """A behaviour-preserving refactor moves code and its tests together;
+    splitting it across two nodes would leave the first one red."""
+    assert check_node_scope("refactor", ["orders.py", "tests/test_orders.py"]).passed is True
+
+
+def test_impl_node_takes_the_real_differential_not_the_refactor_branch() -> None:
+    """An impl node changes no tests, but it is not behaviour-preserving.
+
+    Its tests were written by the test node it depends on and already
+    fail at its baseline. Routing it to _check_behaviour_preserved would
+    grade a behaviour change on a refactor's evidence.
+    """
+    check = check_red_phase(
+        (PYTEST_TESTS_FAILED,) * RED_PHASE_SAMPLES,
+        lambda: 0,
+        baseline_output="",
+        changed_files=["orders.py"],
+        tests_changed=False,
+        kind="impl",
+        coverage=GateCheck(name="coverage", passed=True),
+        mutation=MutationOutcome(generated=10, total=10, killed=10, survivors=()),
+    )
+    assert check.passed is True
+    assert "behaviour preserved" not in check.detail
+
+
+def test_refactor_node_still_takes_the_behaviour_preserving_branch() -> None:
+    check = check_red_phase(
+        (0,) * RED_PHASE_SAMPLES,
+        lambda: 0,
+        baseline_output="",
+        changed_files=["orders.py"],
+        tests_changed=False,
+        kind="refactor",
+        coverage=GateCheck(name="coverage", passed=True),
+        mutation=MutationOutcome(generated=10, total=10, killed=10, survivors=()),
+    )
+    assert "behaviour preserved" in check.detail

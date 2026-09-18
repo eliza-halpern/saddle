@@ -12,6 +12,7 @@ import ast
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Final
 
@@ -45,6 +46,17 @@ REQUIREMENT_CITATION: Final = re.compile(r"REQ-\d{3}")
 # mutants the only rates available are 0, 50 and 100. Demand all of them
 # instead, so a thin sample is a stricter bar rather than a cheaper one.
 MIN_SIGNIFICANT_MUTANTS: Final = 5
+# pytest's own discovery rules, so "is this a test file" means the same
+# thing to the gate as it does to the runner that will execute it.
+TEST_FILE_PATTERNS: Final = ("test_*.py", "*_test.py")
+
+
+def _is_test_file(path: str) -> bool:
+    """True when pytest would collect `path` as a test module."""
+    name = PurePath(path).name
+    return any(fnmatch(name, pattern) for pattern in TEST_FILE_PATTERNS)
+
+
 # Fixed floor for behaviour-preserving nodes; ARCHITECTURE.md's own gate
 # example uses 85.0. Deliberately not the node's own kill_threshold.
 REFACTOR_KILL_FLOOR: Final = 85.0
@@ -202,6 +214,7 @@ def check_red_phase(
     baseline_output: str,
     changed_files: Collection[str],
     tests_changed: bool,
+    kind: str,
     coverage: GateCheck,
     mutation: MutationOutcome,
 ) -> GateCheck:
@@ -229,7 +242,12 @@ def check_red_phase(
     changed-line coverage plus a hard mutation floor, which a tautological
     refactor cannot clear either.
     """
-    if not tests_changed:
+    # Only a refactor is behaviour-preserving by construction. An impl
+    # node also changes no tests, but its tests were written by the test
+    # node it depends on and already fail at its baseline, so it takes the
+    # real differential -- grading a behaviour change on a refactor's
+    # evidence is how T4 passed while fixing the wrong module.
+    if not tests_changed and kind == "refactor":
         return _check_behaviour_preserved(coverage, mutation)
     if len(set(baseline_exits)) > 1:
         seen = ", ".join(str(code) for code in baseline_exits)
@@ -266,6 +284,38 @@ def check_red_phase(
     if run_current() != 0:
         return GateCheck(name="red-phase", passed=False, detail="tests fail post-change")
     return GateCheck(name="red-phase", passed=True, detail="fail pre-change, pass post-change")
+
+
+def check_node_scope(kind: str, changed_files: Collection[str]) -> GateCheck:
+    """A node stays on its own side of the test/implementation split.
+
+    F5 and #44 are one defect: the worker authors the implementation and
+    the tests, so a misreading of the contract is encoded twice and the
+    suite it is graded by is the suite it just rewrote. T4's worker fixed
+    the wrong module, rewrote the behaviour-pinning test to match, and
+    passed all seven gates.
+
+    An `impl` node may not edit tests; a `test` node may not ship the
+    implementation. `refactor` is exempt: a behaviour-preserving move
+    carries code and its tests together, and splitting it would leave the
+    first node red with nothing able to fix it.
+    """
+    if kind == "refactor":
+        return GateCheck(name="node-scope", passed=True, detail="refactor: both sides allowed")
+    tests = sorted(path for path in changed_files if _is_test_file(path))
+    sources = sorted(path for path in changed_files if not _is_test_file(path))
+    stray = tests if kind == "impl" else sources
+    if stray:
+        other = "test" if kind == "impl" else "source"
+        return GateCheck(
+            name="node-scope",
+            passed=False,
+            detail=f"{kind} node changed {other} file(s): {', '.join(stray)}",
+        )
+    kept = sources if kind == "impl" else tests
+    return GateCheck(
+        name="node-scope", passed=True, detail=f"{kind} node changed {len(kept)} file(s) in scope"
+    )
 
 
 def check_requirement_binding(
@@ -400,9 +450,11 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             baseline_output=inputs.baseline_output,
             changed_files=sorted({path for path, _ in inputs.changed}),
             tests_changed=inputs.tests_changed,
+            kind=node.kind,
             coverage=coverage,
             mutation=inputs.mutation,
         ),
+        check_node_scope(node.kind, sorted({path for path, _ in inputs.changed})),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
         check_mutation(inputs.mutation, sample.kill_threshold),
     )

@@ -57,6 +57,7 @@ def _git_repo(root: Path) -> None:
 def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
     return {
         "id": node_id,
+        "kind": "refactor",
         "dependencies": deps,
         "task_prompt": f"Do {node_id}.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
