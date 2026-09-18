@@ -354,6 +354,14 @@ def test_gate_thresholds_below_the_spec_floor_are_unrepresentable() -> None:
             Dag.model_validate({"nodes": [node]})
 
 
+@pytest.mark.parametrize("value", [85.0, 90.0, 95.0, 100.0])
+def test_gate_thresholds_at_the_floor_and_above_are_representable(value: float) -> None:
+    """Every legal `KillThreshold` member is accepted, not just the floor."""
+    node = _node("n1")
+    node["deterministic_gate"]["mutation_sample"]["kill_threshold"] = value
+    Dag.model_validate({"nodes": [node]})
+
+
 def test_gate_thresholds_constrain_the_token_mask_not_just_validation() -> None:
     """Floors must be enums, not numeric bounds.
 
