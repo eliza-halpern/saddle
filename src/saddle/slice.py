@@ -3,8 +3,8 @@
 Runs one validated DAG through scheduler, Tier-1 gates, and journal, then
 renders the transcript from the sealed records. Emission and validation
 stay caller-side: this module is the deterministic schedule→gate→seal→
-transcribe path. One node completes fully in the slice; wider graphs ride
-the same path.
+transcribe path. Nodes run one at a time, not concurrently (see F7); wider
+graphs ride the same path.
 """
 
 from __future__ import annotations

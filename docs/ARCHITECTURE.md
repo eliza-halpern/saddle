@@ -150,6 +150,8 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 > * **Scheduler:** A custom Python asyncio.Queue tracking in-degrees of all DAG nodes.
 > * **Proof-Gated Dispatch:** A node becomes dispatchable only at in-degree 0 **and** with every parent's proof block present in the journal. Downstream work can never run on unverified upstream work — the framework makes building on a broken foundation unrepresentable, which is what eliminates pointless retry cascades (see §5).
 > * **Dispatch:** As nodes become dispatchable, workers are dispatched to vLLM's continuous batching queue.
+
+> *Status: the scheduler is asyncio but the worker is synchronous; no run has overlapped two nodes (F7). Measured by WORKPLAN T4-2.*
 > * **Dynamic Scoping:**
 >   * *Reasoning Budget:* Mechanical nodes (linting, search) run at Low/Zero reasoning; complex algorithmic nodes run at xhigh.
 >   * *Tool Masking:* Only the schemas listed in allowed_tools are injected into the worker's prompt, preventing context pollution and unauthorized system commands.
@@ -193,9 +195,11 @@ Two structural properties, not model quality, carry the speedup — and both sur
 
 **1. Concurrency replaces the linear sum.** Sequential agent loops pay the *sum* of all step latencies. The DAG pays the *critical path*: independent nodes overlap in vLLM's continuous batching queue. Worked example — nodes A(3 min) → {B, C, D}(4 min each) → E(3 min), plus ~1 min Tier-1 gate per node: sequential ≈ 23 min; DAG ≈ 3 + 4 + 3 + overlapped gates ≈ 12 min, a ~45% cut before counting anything else. Wider graphs win more.
 
+> *Status: the scheduler is asyncio but the worker is synchronous; no run has overlapped two nodes (F7). Measured by WORKPLAN T4-2.*
+
 **2. Proof-gated dispatch eliminates rework cascades.** In sequential ReAct systems, a late failure rooted in an early step (E fails because A was wrong) costs a full re-run — another ~23 min in the example above, and the loop is unbounded: nothing stops the agent from rebuilding the same broken foundation repeatedly. Here a node cannot dispatch until every parent's proof block exists in the journal. Building on unverified work is unrepresentable, so the entire class of "retry the chain because step 1 was silently wrong" disappears. Bounded retries (≤2) plus escalation to re-planning (not re-queueing) cap the residual waste per node at a known constant.
 
-**On agent counts:** this design is not "fewer agents" — router + PM + orchestrator + N workers + recovery workers is still a committee. The metric that matters is *bounded, parallel, non-repeating* work: five concurrent workers with ~30K-token contexts each, none of which can re-run another's failures, versus sequential full-context agents re-deriving the same state on every retry. Total tokens per task drop because no token is ever spent twice on the same failure.
+**On agent counts:** this design is not "fewer agents" — router + PM + orchestrator + N workers + recovery workers is still a committee. The metric that matters is *bounded, parallel, non-repeating* work: up to five workers (concurrency unmeasured, T4-2) with ~30K-token contexts each, none of which can re-run another's failures, versus sequential full-context agents re-deriving the same state on every retry. Total tokens per task drop because no token is ever spent twice on the same failure.
 
 ## 5. Tooling Ecosystem & Reference Implementations
 
