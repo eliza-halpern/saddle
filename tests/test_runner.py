@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import stat
 from pathlib import Path
@@ -12,7 +13,7 @@ from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES
 from saddle.journal import SpanRecorder, read_spans
-from saddle.runner import read_sources, run_node_gate
+from saddle.runner import _stub_module, read_sources, run_node_gate
 
 
 def _node(
@@ -389,3 +390,76 @@ def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> No
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False
     assert "nondeterministic" in red.detail
+
+
+def test_stub_module_keeps_the_api_and_empties_the_bodies() -> None:
+    """Greenfield red-phase needs a baseline the tests can actually run.
+
+    F2: a new module cannot be imported at baseline, so red-phase accepts
+    a collection error naming a changed source. That is reachable on
+    demand -- any new code in a new module with a new test clears it
+    regardless of what the test asserts. Stubbing the module instead
+    turns the import error into a real assertion failure, so a test that
+    exercises the new code fails pre-change and a tautological one
+    passes and is rejected.
+    """
+    source = (
+        "import re\n\n"
+        "_RE = re.compile(r'x')\n\n\n"
+        "class Holder:\n"
+        "    def take(self, value: int) -> int:\n"
+        "        return value * 2\n\n\n"
+        "def top(a: int) -> int:\n"
+        "    return a + 1\n"
+    )
+    stub = _stub_module(source)
+    tree = ast.parse(stub)
+
+    names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    assert names == {"take", "top"}
+    assert "class Holder" in stub
+    assert "NotImplementedError" in stub
+    assert "return value * 2" not in stub
+    assert "return a + 1" not in stub
+
+
+def test_stub_module_empties_async_bodies_too() -> None:
+    stub = _stub_module("async def fetch(url: str) -> bytes:\n    return b'real'\n")
+    assert "NotImplementedError" in stub
+    assert b"real".decode() not in stub
+
+
+def test_run_node_gate_greenfield_tautology_no_longer_clears_red_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The greenfield path was clearable by any new module (F2, #53).
+
+    The node creates `helper.py` and a test that never calls it. Before
+    stubbing, the baseline run failed to *import* the module, red-phase
+    read that collection error as a genuine red, and the node passed
+    while its test asserted nothing about the new code. With a stub in
+    the baseline the test imports fine, passes pre-change, and the gate
+    rejects it.
+    """
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, tmp_path) == 0
+    (tmp_path / "keep.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "keep.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], tmp_path) == 0
+
+    (tmp_path / "helper.py").write_text(
+        "def normalize(value: str) -> str:\n    return value.strip()\n"
+    )
+    (tmp_path / "test_n.py").write_text(
+        "import helper\n\n\ndef test_helper_exists():  # REQ-001\n    assert helper is not None\n"
+    )
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+
+    result = run_node_gate(_node(), tmp_path)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.passed is False
+    assert "pass pre-change" in red.detail

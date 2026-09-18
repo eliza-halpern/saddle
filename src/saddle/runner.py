@@ -40,6 +40,40 @@ def read_sources(root: Path, pattern: str) -> dict[str, str]:
     }
 
 
+class _Stubber(ast.NodeTransformer):
+    """Replace every function body with `raise NotImplementedError`."""
+
+    def _empty(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+        self.generic_visit(node)
+        node.body = [ast.Raise(exc=ast.Name(id="NotImplementedError", ctx=ast.Load()), cause=None)]
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        return self._empty(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+        return self._empty(node)
+
+
+def _stub_module(source: str) -> str:
+    """A signature-preserving stub of `source`: same API, no behaviour.
+
+    Red-phase's greenfield branch accepts a baseline collection error,
+    because a module the node creates cannot be imported before it
+    exists. That is clearable on demand: any new code in a new module
+    with a new test produces an import error naming a changed source, so
+    the gate passes whatever the test asserts (F2).
+
+    Materializing a stub instead gives the pre-change run something to
+    import. A test that exercises the new code then fails for a real
+    reason, and a tautological one passes pre-change and is rejected --
+    which is what the gate is for.
+    """
+    tree = _Stubber().visit(ast.parse(source))
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
 def _test_signatures(sources: dict[str, str]) -> dict[str, str]:
     """Map each test module to a comment- and layout-insensitive signature.
 
@@ -106,6 +140,19 @@ def run_node_gate(
         # Red-phase means the node's own tests against pre-change sources.
         # Without this copy the probe runs a suite that never contained the
         # new tests, so "file not found" scored as red for every new file.
+        # Modules the node creates do not exist at baseline, so the
+        # pre-change run cannot import them and red-phase falls back to
+        # accepting a collection error -- clearable on demand, whatever
+        # the test asserts (F2, #53). A signature-preserving stub gives
+        # the run something to import, so a test that exercises the new
+        # code fails for a real reason and a tautological one passes
+        # pre-change and is rejected.
+        for rel, source in sources.items():
+            if rel in test_sources or (dest / rel).exists():
+                continue
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(_stub_module(source))
         for rel, source in test_sources.items():
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
