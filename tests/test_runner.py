@@ -10,7 +10,7 @@ import pytest
 
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import RED_PHASE_SAMPLES
+from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import read_sources, run_node_gate
 
@@ -128,7 +128,9 @@ def test_run_node_gate_full_sample_catches_what_a_small_cap_hid(
     result = run_node_gate(_node(kill_threshold=85.0), tmp_path)
     assert result.passed is False
     by_name = {check.name: check for check in result.checks}
-    assert by_name["mutation"].detail == "50.0% < 85.0%: survived m2"
+    assert by_name["mutation"].detail == (
+        "50.0% < 100.0% (small sample: 2 mutant(s), all must die): survived m2"
+    )
 
 
 def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
@@ -149,8 +151,9 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         # cannot pass as a genuine red.
         *["coverage"] * RED_PHASE_SAMPLES,
         "timeout",
+        # `results`, then one `show` per mutant in the sample.
         "mutmut",
-        "mutmut",
+        *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
         "ruff",
         "ruff",
     ]
@@ -161,7 +164,13 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     # exiting 4 -- file not found, because the new test was never copied in.
     # The baseline samples all exit 1: unanimous, which is what a stable
     # pre-change leg looks like. Disagreement here is what fails the gate.
-    assert [span.exit_code for span in spans] == [0, 0, 0, *[1] * RED_PHASE_SAMPLES, 0, 0, 0, 0, 0]
+    assert [span.exit_code for span in spans] == [
+        0,
+        0,
+        0,
+        *[1] * RED_PHASE_SAMPLES,
+        *[0] * (2 + MIN_SIGNIFICANT_MUTANTS + 2),
+    ]
 
 
 def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> None:
@@ -220,9 +229,20 @@ def test_run_node_gate_uncovered_line_fails(tmp_path: Path) -> None:
     assert "n.py:6" in coverage.detail
 
 
-def test_run_node_gate_pass_pre_change_fails(tmp_path: Path) -> None:
+def test_run_node_gate_pass_pre_change_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`assert f() in (1, 2)` passes before and after, so it proves nothing.
+
+    The node leaves every test untouched, which routes red-phase to the
+    behaviour-preserving branch and leans the proof on mutation. The
+    shared stub reports a healthy kill for every node; this test needs a
+    survivor, because a test that accepts both the old and new return
+    value is exactly what fails to kill one.
+    """
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n"
     _worktree(tmp_path, test_body, baseline_test=test_body)
+    _surviving_mutmut(tmp_path / "stub", monkeypatch)
     result = run_node_gate(_node(), tmp_path)
     assert result.passed is False
     red = next(check for check in result.checks if check.name == "red-phase")
@@ -258,6 +278,27 @@ def test_run_node_gate_new_test_passing_pre_change_is_not_red(tmp_path: Path) ->
     result = run_node_gate(_node(), tmp_path)
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False, f"vacuous red: {red.detail}"
+
+
+def _surviving_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutmut stub whose changed-line mutant survives the node's tests."""
+    stub_dir.mkdir(exist_ok=True)
+    (stub_dir / "results.txt").write_text("  m1: survived\n")
+    (stub_dir / "show_m1.txt").write_text(
+        "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
+    )
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'STUB_DIR="{stub_dir}"\n'
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        '  results) cat "$STUB_DIR/results.txt";;\n'
+        '  show) cat "$STUB_DIR/show_$2.txt";;\n'
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 def _locatable_mutmut(

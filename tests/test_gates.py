@@ -304,7 +304,7 @@ def test_run_tier1_all_green_passes() -> None:
     by_name = {check.name: check for check in result.checks}
     assert by_name["coverage"].detail == "100.0% >= 100.0%"
     assert by_name["red-phase"].detail == "fail pre-change, pass post-change"
-    assert by_name["mutation"].detail == "90.0% >= 85.0%"
+    assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
 
 
 def test_run_tier1_one_red_check_fails_but_all_run() -> None:
@@ -331,14 +331,18 @@ def test_mutation_boundary_threshold_passes() -> None:
     check = check_mutation(outcome, 85.0)
     assert check.name == "mutation"
     assert check.passed is True
-    assert check.detail == "85.0% >= 85.0%"
+    assert check.detail == "85.0% >= 85.0% over 20 mutant(s)"
 
 
-def test_mutation_vacuous_passes_without_mutants() -> None:
+def test_mutation_no_longer_passes_without_mutants() -> None:
+    """Was `test_mutation_vacuous_passes_without_mutants`, asserting
+    `passed is True` on an empty sample. The name said vacuous and the
+    assertion pinned it; T7 shipped an infinite loop through this branch
+    (F12). Inverted rather than deleted so the history stays legible."""
     check = check_mutation(MutationOutcome(killed=0, total=0, generated=0, survivors=()), 85.0)
     assert check.name == "mutation"
-    assert check.passed is True
-    assert check.detail == "no mutants on changed lines"
+    assert check.passed is False
+    assert check.detail == "no mutants on changed lines: mutation provided no evidence"
 
 
 def test_mutation_undecided_fails_with_cause() -> None:
@@ -499,3 +503,43 @@ def test_requirement_binding_passes_when_every_cited_id_is_declared() -> None:
         {"tests/test_n.py": "# REQ-001\n# REQ-002\n"},
     )
     assert check.passed is True
+
+
+def test_mutation_zero_mutants_no_longer_passes() -> None:
+    """Zero mutants is zero evidence, not a clean bill of health.
+
+    F12: T7's node added a 218-line module, produced no changed-line
+    mutants, and the gate reported `PASS (no mutants on changed lines)`
+    having tested nothing. An infinite loop shipped past it. The
+    fail-open was deliberate -- a change with no mutable surface cannot
+    be under-tested -- but the premise is false: mutmut only mutates
+    function bodies, so a module-scope `_RE = re.compile(...)` yields 0
+    mutants where the same expression inline yields 7.
+    """
+    outcome = MutationOutcome(generated=0, total=0, killed=0, survivors=())
+    check = check_mutation(outcome, 85.0)
+    assert check.passed is False
+    assert "no mutants" in check.detail.lower()
+
+
+def test_mutation_small_sample_demands_every_mutant() -> None:
+    """A percentage over a tiny sample is noise, so take no partial credit.
+
+    F1: T1's four-line regex admitted 2 mutants, two shallow tests killed
+    both, and the gate read 100%. The validator still accepted
+    `.u@example.com` and `user@example..com`. The threshold cannot fix
+    that, but it can refuse to call 3-of-4 adequate.
+    """
+    small = MutationOutcome(generated=4, total=4, killed=3, survivors=("m4",))
+    check = check_mutation(small, 85.0)
+    assert check.passed is False
+    assert "small sample" in check.detail.lower()
+
+    large = MutationOutcome(generated=20, total=20, killed=18, survivors=("m1", "m2"))
+    assert check_mutation(large, 85.0).passed is True
+
+
+def test_mutation_detail_always_reports_the_sample_size() -> None:
+    """Weak evidence has to be visible in the transcript, not inferred."""
+    outcome = MutationOutcome(generated=20, total=20, killed=20, survivors=())
+    assert "20 mutant" in check_mutation(outcome, 85.0).detail

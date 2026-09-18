@@ -14,7 +14,7 @@ import pytest
 import saddle.slice as slice_module
 from saddle.dag import Dag, Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import RED_PHASE_SAMPLES, GateCheck, Tier1Result
+from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES, GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
     SpanRecord,
@@ -233,7 +233,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
     assert "- Gate red-phase: PASS (fail pre-change, pass post-change)\n" in result.transcript
     assert "- Gate requirement-binding: PASS (1 requirement(s) bound)\n" in result.transcript
-    assert "- Gate mutation: PASS (no mutants on changed lines)\n" in result.transcript
+    assert "- Gate mutation: PASS (100.0% >= 85.0% over 5 mutant(s))\n" in result.transcript
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
@@ -260,8 +260,9 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         # One per red-phase baseline sample (#54).
         *["coverage"] * RED_PHASE_SAMPLES,
         "timeout",
+        # `results`, then one `show` per mutant in the sample (#49).
         "mutmut",
-        "mutmut",
+        *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
         "ruff",
         "ruff",
     ]

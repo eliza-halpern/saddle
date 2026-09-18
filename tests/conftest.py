@@ -26,14 +26,28 @@ def _empty_cwd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mon
 def _stub_mutmut(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Hermetic mutmut: e2e tests exercise the collector without real runs.
 
-    The stub reports one killed mutant with unlocatable output, so the
-    verdict is vacuous-pass; tests needing real verdicts override PATH.
+    Reports MIN_SIGNIFICANT_MUTANTS killed mutants that locate to the
+    line every worktree fixture changes (n.py:2), so a node with healthy
+    tests passes the mutation gate for the stated reason.
+
+    This stub used to emit one mutant with unparseable `show` output, so
+    nothing was decided and the gate returned its fail-open "no mutants
+    on changed lines" PASS -- the fixture's own docstring called the
+    verdict vacuous. Roughly thirty tests across the suite depended on
+    that path, which is how load-bearing the fail-open had become (#49).
+    Tests needing other verdicts still override PATH.
     """
     stub_dir = tmp_path_factory.mktemp("mutmut-stub")
     script = stub_dir / "mutmut"
+    results = "\n".join(f"  m{index}: killed" for index in range(1, 6))
+    show = "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
     script.write_text(
-        '#!/bin/sh\ncase "$1" in\n  run) exit 0;;\n  results) echo "  m1: killed";;\n'
-        '  show) echo "unparseable";;\nesac\n'
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        f"  results) printf '%s\\n' '{results}';;\n"
+        f"  show) printf '%s' '{show}';;\n"
+        "esac\n"
     )
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")

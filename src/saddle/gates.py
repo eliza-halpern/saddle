@@ -41,6 +41,10 @@ RED_PHASE_SAMPLES: Final = 3
 # schema (dag.RequirementId), so anything matching here and absent from
 # the node's declared set was invented by the worker.
 REQUIREMENT_CITATION: Final = re.compile(r"REQ-\d{3}")
+# Below this many decided mutants a kill percentage is noise: with 2
+# mutants the only rates available are 0, 50 and 100. Demand all of them
+# instead, so a thin sample is a stricter bar rather than a cheaper one.
+MIN_SIGNIFICANT_MUTANTS: Final = 5
 # Fixed floor for behaviour-preserving nodes; ARCHITECTURE.md's own gate
 # example uses 85.0. Deliberately not the node's own kill_threshold.
 REFACTOR_KILL_FLOOR: Final = 85.0
@@ -333,23 +337,49 @@ class Tier1Result:
 
 
 def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
-    """Sampled changed-line kill-rate must clear `threshold`; never waived."""
+    """Changed-line kill-rate must clear `threshold`; small samples take no
+    partial credit, and an empty sample is no evidence rather than a pass.
+
+    The old fail-open returned PASS when nothing was generated, reasoning
+    that a change with no mutable surface cannot be under-tested. The
+    premise is false: mutmut only mutates function bodies, so a
+    module-scope `_RE = re.compile(...)` yields 0 mutants where the same
+    expression inline yields 7. T7 added a 218-line module, generated
+    nothing, and the gate passed an infinite loop (F12).
+
+    The threshold cannot rescue a thin sample either. T1's four-line
+    regex admitted 2 mutants, two shallow tests killed both, and the gate
+    read 100% over a validator that accepts `user@example..com` (F1).
+    Below MIN_SIGNIFICANT_MUTANTS a percentage is noise, so every mutant
+    must die -- fewer mutants means a stricter bar, not a cheaper one.
+    """
     if outcome.total == 0:
         if outcome.survivors:
             cause = ", ".join(sorted(outcome.survivors)[:5])
             return GateCheck(name="mutation", passed=False, detail=f"no mutants decided: {cause}")
         if outcome.generated == 0:
-            return GateCheck(name="mutation", passed=True, detail="no mutants on changed lines")
+            return GateCheck(
+                name="mutation",
+                passed=False,
+                detail="no mutants on changed lines: mutation provided no evidence",
+            )
         return GateCheck(name="mutation", passed=False, detail="no mutants decided")
     percent = 100.0 * outcome.killed / outcome.total
-    if percent < threshold:
+    small = outcome.total < MIN_SIGNIFICANT_MUTANTS
+    required = 100.0 if small else threshold
+    if percent < required:
         shown = ", ".join(sorted(outcome.survivors)[:5])
+        note = f" (small sample: {outcome.total} mutant(s), all must die)" if small else ""
         return GateCheck(
             name="mutation",
             passed=False,
-            detail=f"{percent:.1f}% < {threshold:.1f}%: survived {shown}",
+            detail=f"{percent:.1f}% < {required:.1f}%{note}: survived {shown}",
         )
-    return GateCheck(name="mutation", passed=True, detail=f"{percent:.1f}% >= {threshold:.1f}%")
+    return GateCheck(
+        name="mutation",
+        passed=True,
+        detail=f"{percent:.1f}% >= {required:.1f}% over {outcome.total} mutant(s)",
+    )
 
 
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
