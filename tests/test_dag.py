@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -35,7 +36,7 @@ def _node(
             "red_phase_required": True,
             "mutation_sample": {
                 "scope": "changed-lines",
-                "max_mutants": 10,
+                "max_mutants": 100,
                 "kill_threshold": 85.0,
             },
         },
@@ -325,3 +326,69 @@ def test_derived_schema_matches_model_both_directions() -> None:
     with pytest.raises(ValidationError):
         Dag.model_validate(bad)
     assert len(list(validator.iter_errors(bad))) > 0
+
+
+def test_gate_thresholds_below_the_spec_floor_are_unrepresentable() -> None:
+    """The planner cannot set its own bar below ARCHITECTURE.md's.
+
+    F6/F12: the planner set T3's kill threshold to 50.0 and T7's coverage
+    bar to 0.0, and T7's node then reported `PASS (98.8% >= 0.0%)` while
+    an infinite loop shipped. A gate whose strictness the graded party
+    chooses is not a gate.
+    """
+    for value in (0.0, 50.0, 80.0):
+        node = _node("n1")
+        node["deterministic_gate"]["mutation_sample"]["kill_threshold"] = value
+        with pytest.raises(ValidationError):
+            Dag.model_validate({"nodes": [node]})
+
+    for value in (0.0, 80.0, 99.9):
+        node = _node("n1")
+        node["deterministic_gate"]["changed_line_coverage_min"] = value
+        with pytest.raises(ValidationError):
+            Dag.model_validate({"nodes": [node]})
+
+
+def test_gate_thresholds_constrain_the_token_mask_not_just_validation() -> None:
+    """Floors must be enums, not numeric bounds.
+
+    A `minimum` in JSON Schema is not expressible in a decoding grammar,
+    so it is checked *after* the packet is produced -- the class of
+    constraint the v2 sweep showed leaks every time. `const`/`enum` is
+    what `red_phase_required` uses, and that one has never leaked.
+    """
+    # dag_json_schema() is what reaches XGrammar -- inlined, no $defs.
+    # Asserting on Dag.model_json_schema() would check a schema the
+    # decoder never sees.
+    schema = json.dumps(dag_json_schema())
+    for probe in ("changed_line_coverage_min", "kill_threshold"):
+        field = json.loads("{" + schema.split(f'"{probe}": {{', 1)[1].split("}", 1)[0] + "}")
+        assert "minimum" not in field
+        assert "const" in field or "enum" in field
+
+
+def test_shrinking_the_mutant_cap_is_unrepresentable() -> None:
+    """max_mutants is the third lever on the same gate, and the cheapest.
+
+    With coverage pinned at 100.0 and kill_threshold floored at 85.0, a
+    planner minimising gate strength has one move left: sample one
+    mutant. Kill it and the node reports 100% >= 85% having tested
+    almost nothing -- F1's T1 result (2 mutants, 100% kill, a validator
+    that accepts `user@example..com`) made worse by design.
+
+    The cap is a ceiling, not a target: lowering it only discards mutants
+    the changed lines already admit. ARCHITECTURE.md's own example pins
+    100, and the wall-clock bound is enforced separately by
+    _MUTATION_TIMEOUT_S, matching its "<=100 mutants or <=10 minutes,
+    whichever binds first".
+    """
+    for value in (1, 5, 10, 99):
+        node = _node("n1")
+        node["deterministic_gate"]["mutation_sample"]["max_mutants"] = value
+        with pytest.raises(ValidationError):
+            Dag.model_validate({"nodes": [node]})
+
+    schema = json.dumps(dag_json_schema())
+    field = json.loads("{" + schema.split('"max_mutants": {', 1)[1].split("}", 1)[0] + "}")
+    assert "minimum" not in field
+    assert "const" in field or "enum" in field

@@ -291,7 +291,7 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
                 "red_phase_required": True,
                 "mutation_sample": {
                     "scope": "changed-lines",
-                    "max_mutants": 10,
+                    "max_mutants": 100,
                     "kill_threshold": 85.0,
                 },
             },

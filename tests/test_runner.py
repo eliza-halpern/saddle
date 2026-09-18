@@ -15,7 +15,7 @@ from saddle.runner import read_sources, run_node_gate
 
 
 def _node(
-    test_command: str = "pytest test_n.py", kill_threshold: float = 85.0, max_mutants: int = 10
+    test_command: str = "pytest test_n.py", kill_threshold: float = 85.0, max_mutants: int = 100
 ) -> Node:
     return Node.model_validate(
         {
@@ -90,7 +90,7 @@ def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:
     assert (tmp_path / ".coverage.tier1").is_file()
 
 
-def test_run_node_gate_mutation_check_runs_when_required(
+def test_run_node_gate_full_sample_catches_what_a_small_cap_hid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     test_body = (
@@ -118,10 +118,16 @@ def test_run_node_gate_mutation_check_runs_when_required(
     )
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
-    result = run_node_gate(_node(kill_threshold=85.0, max_mutants=1), tmp_path)
-    assert result.passed is True
+    # This test used to pass `max_mutants=1` and assert `100.0% >= 85.0%`
+    # -- a clean PASS drawn from a one-mutant sample while `m2` survived
+    # unexamined. That was the exploit the schema floor now closes, and
+    # the suite had it recorded as expected behaviour. With the cap pinned
+    # at ARCHITECTURE.md's 100, both mutants are sampled and the survivor
+    # fails the node.
+    result = run_node_gate(_node(kill_threshold=85.0), tmp_path)
+    assert result.passed is False
     by_name = {check.name: check for check in result.checks}
-    assert by_name["mutation"].detail == "100.0% >= 85.0%"
+    assert by_name["mutation"].detail == "50.0% < 85.0%: survived m2"
 
 
 def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
@@ -297,7 +303,7 @@ def test_run_node_gate_comment_only_test_edit_stays_behaviour_preserving(
         baseline_test=baseline_test,
     )
     _locatable_mutmut(tmp_path / "stub", monkeypatch, removed="    value = 1", line=2)
-    result = run_node_gate(_node(max_mutants=1), tmp_path)
+    result = run_node_gate(_node(max_mutants=100), tmp_path)
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is True
     assert red.detail.startswith("tests unchanged (behaviour preserved)")

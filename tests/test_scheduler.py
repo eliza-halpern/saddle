@@ -34,7 +34,7 @@ def _node(
             "red_phase_required": True,
             "mutation_sample": {
                 "scope": "changed-lines",
-                "max_mutants": 10,
+                "max_mutants": 100,
                 "kill_threshold": 85.0,
             },
         },

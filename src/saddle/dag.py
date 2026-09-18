@@ -17,21 +17,38 @@ from pydantic import BaseModel, ConfigDict, Field
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 NodeId = Annotated[str, Field(min_length=1, max_length=64)]
 ReasoningBudget = Literal["zero", "low", "medium", "xhigh"]
+KillThreshold = Literal[85.0, 90.0, 95.0, 100.0]
 
 
 class MutationSample(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scope: Literal["changed-lines"]
-    max_mutants: int = Field(ge=1, le=1000)
-    kill_threshold: float = Field(ge=0, le=100)
+    # A ceiling, not a target: lowering it only discards mutants the
+    # changed lines already admit, and with the two thresholds below now
+    # floored it is the last lever a planner has on this gate. Pinned to
+    # ARCHITECTURE.md's example; the wall-clock half of its "<=100
+    # mutants or <=10 minutes, whichever binds first" is enforced
+    # separately by evidence._MUTATION_TIMEOUT_S.
+    max_mutants: Literal[100] = 100
+    # ARCHITECTURE.md's worked example is 85.0 and its prose allows "lower
+    # or waived for mechanical glue" -- which is the waiver the planner
+    # actually took (T3: 50.0). An enum floors it at the spec's own bar
+    # while still permitting a stricter node. Deliberately not `ge=85`: a
+    # JSON Schema `minimum` cannot be expressed in a decoding grammar, so
+    # it would be checked after the packet is produced rather than making
+    # the weak value unrepresentable.
+    kill_threshold: KillThreshold = 85.0
 
 
 class DeterministicGate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     test_command: NonEmptyStr
-    changed_line_coverage_min: float = Field(ge=0, le=100)
+    # "Every changed line must be executed" is the gate's own contract and
+    # ARCHITECTURE.md's example; the planner emitted 0.0 for T7 and the
+    # gate reported `PASS (98.8% >= 0.0%)`. Const, for the reason above.
+    changed_line_coverage_min: Literal[100.0] = 100.0
     # ARCHITECTURE.md gate 4 is the tautology killer, so the waiver is not
     # representable: guided decoding can only emit `true` for this field.
     red_phase_required: Literal[True] = True

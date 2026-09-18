@@ -109,7 +109,7 @@ def _node_dict(
             "red_phase_required": True,
             "mutation_sample": {
                 "scope": "changed-lines",
-                "max_mutants": 10,
+                "max_mutants": 100,
                 "kill_threshold": kill_threshold,
             },
         },
@@ -872,8 +872,6 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
     second["execution_constraints"]["allowed_tools"] = ["read_file", "write_file"]
     second["execution_constraints"]["max_context_tokens"] = 8000
     second["deterministic_gate"]["test_command"] = "pytest test_w.py"
-    second["deterministic_gate"]["changed_line_coverage_min"] = 80.0
-    second["deterministic_gate"]["mutation_sample"]["max_mutants"] = 5
     second["deterministic_gate"]["mutation_sample"]["kill_threshold"] = 90.0
     third = _node_dict("n3", "xhigh")
     third["dependencies"] = ["n1", "n2"]
@@ -881,8 +879,6 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
     third["execution_constraints"]["allowed_tools"] = ["lint"]
     third["execution_constraints"]["max_context_tokens"] = 12000
     third["deterministic_gate"]["test_command"] = "pytest test_p.py"
-    third["deterministic_gate"]["changed_line_coverage_min"] = 90.0
-    third["deterministic_gate"]["mutation_sample"]["max_mutants"] = 3
     third["deterministic_gate"]["mutation_sample"]["kill_threshold"] = 95.0
     dag = Dag.model_validate({"nodes": [first, second, third]})
     assert render_dag_plan("Do the thing.", dag) == (
@@ -894,21 +890,21 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "│   depends on: (none)\n"
         "│   tools: read_file\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
-        "mutation 10 @ 85.0% changed-lines)\n"
+        "mutation 100 @ 85.0% changed-lines)\n"
         "├── n2 [budget: medium, context: 8000 tokens]\n"
         "│   task: Wire it up.\n"
         "│   requirements: REQ-001, REQ-002\n"
         "│   depends on: n1\n"
         "│   tools: read_file, write_file\n"
-        "│   gate: pytest test_w.py (coverage >= 80.0%, red-phase required, "
-        "mutation 5 @ 90.0% changed-lines)\n"
+        "│   gate: pytest test_w.py (coverage >= 100.0%, red-phase required, "
+        "mutation 100 @ 90.0% changed-lines)\n"
         "└── n3 [budget: xhigh, context: 12000 tokens]\n"
         "    task: Polish.\n"
         "    requirements: REQ-001\n"
         "    depends on: n1, n2\n"
         "    tools: lint\n"
-        "    gate: pytest test_p.py (coverage >= 90.0%, red-phase required, "
-        "mutation 3 @ 95.0% changed-lines)\n"
+        "    gate: pytest test_p.py (coverage >= 100.0%, red-phase required, "
+        "mutation 100 @ 95.0% changed-lines)\n"
     )
 
 
@@ -923,7 +919,7 @@ def test_render_dag_plan_single_node() -> None:
         "    depends on: (none)\n"
         "    tools: read_file\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
-        "mutation 10 @ 85.0% changed-lines)\n"
+        "mutation 100 @ 85.0% changed-lines)\n"
     )
 
 
@@ -954,14 +950,14 @@ def test_run_dag_prints_plan() -> None:
         "│   depends on: (none)\n"
         "│   tools: read_file\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
-        "mutation 10 @ 85.0% changed-lines)\n"
+        "mutation 100 @ 85.0% changed-lines)\n"
         "└── n2 [budget: low, context: 8000 tokens]\n"
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: n1\n"
         "    tools: read_file\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
-        "mutation 10 @ 85.0% changed-lines)\n"
+        "mutation 100 @ 85.0% changed-lines)\n"
     )
 
 
@@ -1360,7 +1356,7 @@ def test_main_dag_passes_flags_through(
         "    depends on: (none)\n"
         "    tools: read_file\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
-        "mutation 10 @ 85.0% changed-lines)\n"
+        "mutation 100 @ 85.0% changed-lines)\n"
     )
 
 

@@ -72,7 +72,7 @@ def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
             "red_phase_required": True,
             "mutation_sample": {
                 "scope": "changed-lines",
-                "max_mutants": 10,
+                "max_mutants": 100,
                 "kill_threshold": 85.0,
             },
         },

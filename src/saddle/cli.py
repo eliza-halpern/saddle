@@ -113,7 +113,10 @@ Rules:
 - red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
-- changed_line_coverage_min and kill_threshold are 0-100 numbers.
+- changed_line_coverage_min is always 100.0: every line you change must
+  be executed by a test.
+- kill_threshold is one of 85.0, 90.0, 95.0, 100.0. There is no lower
+  setting; a node you consider mechanical still clears 85.
 - mutation_sample.scope is always "changed-lines"; max_mutants is 1-1000.
 - Prefer the fewest nodes that cover the task; a trivial task needs one node.
 - Think through the decomposition first; then emit the plan.
