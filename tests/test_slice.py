@@ -18,6 +18,7 @@ from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES, GateCheck, 
 from saddle.journal import (
     ProofRecord,
     SpanRecord,
+    SpanRecorder,
     append_record,
     append_span,
     read_records,
@@ -35,6 +36,7 @@ from saddle.slice import (
     _run_node,
     _schedulable_nodes,
     _utcnow,
+    autofix,
     format_attempt_failure,
     format_replan_history,
     run_slice,
@@ -137,6 +139,8 @@ JUNK1_DIFF = (
 
 JUNK2_DIFF = JUNK1_DIFF.replace("junk1.py", "junk2.py")
 
+TRUNCATED = "completion truncated (finish_reason=length)"
+
 
 def test_utcnow_returns_timezone_aware_iso() -> None:
     stamp = _utcnow()
@@ -222,6 +226,75 @@ def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
         _apply_diff(tmp_path, "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n")
 
 
+def test_autofix_fixes_what_ruff_can_fix(tmp_path: Path) -> None:
+    """Formatting never reaches the worker: ruff solves it exactly.
+
+    A repair attempt spent on `ruff format --check` is one not spent on
+    the correctness defect, which is how T7 finished with an infinite
+    loop untouched (F13).
+    """
+    _git_repo(tmp_path)
+    (tmp_path / "n.py").write_text("import os\nx     =    1\n")
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    autofix(tmp_path)
+    fixed = (tmp_path / "n.py").read_text()
+    assert "x = 1\n" in fixed  # ruff format normalised the spacing
+    assert "x     =    1" not in fixed
+    assert "import os" not in fixed  # ruff check --fix removed the unused import
+    # Both legs of check_ruff are now satisfied without spending an attempt.
+    assert run_argv(["ruff", "format", "--check", "n.py"], tmp_path) == 0
+    assert run_argv(["ruff", "check", "n.py"], tmp_path) == 0
+
+
+def test_autofix_leaves_files_the_node_did_not_change(tmp_path: Path) -> None:
+    """Scoped to changed files, or coverage would be owed on untouched lines.
+
+    `changed_line_coverage_min` is 100.0 against `git diff <baseline>`.
+    Formatting the whole tree would mark every pre-existing unformatted
+    file changed and demand the node cover lines it never wrote.
+    """
+    _git_repo(tmp_path)
+    (tmp_path / "untouched.py").write_text("import os\ny     =    2\n")
+    assert run_argv(["git", "add", "untouched.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "pre-existing mess"], tmp_path) == 0
+    (tmp_path / "n.py").write_text("z     =    3\n")
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    autofix(tmp_path)
+    assert (tmp_path / "n.py").read_text() == "z = 3\n"
+    assert (tmp_path / "untouched.py").read_text() == "import os\ny     =    2\n"
+
+
+def test_autofix_no_python_changes_runs_no_tools(tmp_path: Path) -> None:
+    """Nothing changed means no subprocess and no spans to explain."""
+    _git_repo(tmp_path)
+    journal = tmp_path / "spans.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1", parent_id="p1")
+    autofix(tmp_path, recorder=recorder)
+    names = [span.name for span in read_spans(journal)] if journal.exists() else []
+    assert names == ["git"]  # the scope query only; no ruff, no re-stage
+
+
+def test_autofix_ignores_changed_non_python_files(tmp_path: Path) -> None:
+    """Only Python files reach ruff, even when the node changed others.
+
+    Found by a surviving contract mutant: dropping the `.py` filter broke
+    no test, because the pre-existing-file case uses a *committed* file,
+    which `git diff` never reports whatever the filter does. A changed
+    non-Python file is the case that discriminates.
+    """
+    _git_repo(tmp_path)
+    (tmp_path / "notes.txt").write_text("not python  at  all\n")
+    (tmp_path / "data.json").write_text('{"a":   1}\n')
+    assert run_argv(["git", "add", "notes.txt", "data.json"], tmp_path) == 0
+    journal = tmp_path / "spans.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1", parent_id="p1")
+    autofix(tmp_path, recorder=recorder)
+    names = [span.name for span in read_spans(journal)] if journal.exists() else []
+    assert names == ["git"]  # scope query only: ruff was never invoked
+    assert (tmp_path / "notes.txt").read_text() == "not python  at  all\n"
+    assert (tmp_path / "data.json").read_text() == '{"a":   1}\n'
+
+
 def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
@@ -270,6 +343,14 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     spans = read_spans(journal)
     tools = [span for span in spans if span.kind == "tool"]
     assert [span.name for span in tools] == [
+        "git",
+        # autofix (#66): scope to the node's changed files, apply ruff's
+        # mechanical fixes, re-stage -- all before anything measures the
+        # tree, and all journaled, because the sealed artifact now differs
+        # from the diff the worker proposed.
+        "git",
+        "ruff",
+        "ruff",
         "git",
         "git",
         "coverage",
@@ -600,7 +681,7 @@ def test_run_node_truncated_worker_call_retries_instead_of_dying(tmp_path: Path)
     def propose(node: Node, failure: str | None) -> DiffProposal:
         calls.append(failure)
         if len(calls) <= PROPOSAL_SAMPLES + 1:
-            raise VllmResponseError("completion truncated (finish_reason=length)")
+            raise VllmResponseError(TRUNCATED)
         return DiffProposal(GOOD_DIFF, "")
 
     asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
@@ -616,7 +697,7 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
     node = Node.model_validate(_node_dict("n1", []))
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
-        raise VllmResponseError("completion truncated (finish_reason=length)")
+        raise VllmResponseError(TRUNCATED)
 
     with pytest.raises(NodeUnappliableError) as caught:
         asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))

@@ -241,6 +241,18 @@ def git_ls_files(cwd: Path) -> list[str]:
     return proc.stdout.splitlines()
 
 
+def git_changed_files(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> list[str]:
+    """Worktree-relative paths differing from `ref`, for scoping autofixes."""
+    argv = ["git", "-C", str(cwd), "diff", "--name-only", ref, "--", "."]
+    start = perf_counter()
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    _record(recorder, argv, start, proc)
+    if proc.returncode != 0:
+        msg = f"git diff --name-only against {ref!r} failed: {proc.stderr.strip()}"
+        raise RuntimeError(msg)
+    return proc.stdout.splitlines()
+
+
 def git_diff(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> str:
     """Zero-context diff of the worktree at `cwd` against git `ref`."""
     argv = ["git", "-C", str(cwd), "diff", "-U0", ref, "--", "."]

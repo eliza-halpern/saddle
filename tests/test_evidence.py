@@ -23,6 +23,7 @@ from saddle.evidence import (
     changed_lines,
     covered_lines,
     drop_test_caches,
+    git_changed_files,
     git_diff,
     git_ls_files,
     materialize_baseline,
@@ -231,6 +232,23 @@ def test_git_diff_unknown_ref_raises(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     with pytest.raises(RuntimeError, match="no-such-ref"):
         git_diff(tmp_path, "no-such-ref")
+
+
+def test_git_changed_files_lists_modified_paths(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    (tmp_path / "n.py").write_text("x = 1\n")
+    (tmp_path / "notes.txt").write_text("hello\n")
+    assert run_argv(["git", "add", "n.py", "notes.txt"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add files"], tmp_path) == 0
+    (tmp_path / "n.py").write_text("x = 2\n")
+    assert git_changed_files(tmp_path, "HEAD") == ["n.py"]
+
+
+def test_git_changed_files_unknown_ref_raises(tmp_path: Path) -> None:
+    """Fails loudly: a silent empty list would skip the autofix entirely."""
+    _git_repo(tmp_path)
+    with pytest.raises(RuntimeError, match="git diff --name-only against 'no-such-ref' failed"):
+        git_changed_files(tmp_path, "no-such-ref")
 
 
 def test_git_collectors_record_spans_including_failures(tmp_path: Path) -> None:

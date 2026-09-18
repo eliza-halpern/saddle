@@ -21,7 +21,7 @@ from time import perf_counter
 from typing import Final
 
 from saddle.dag import Dag, ExecutionConstraints, Node
-from saddle.evidence import CapturedRun, run_argv, run_stdin
+from saddle.evidence import CapturedRun, git_changed_files, run_argv, run_stdin
 from saddle.gates import GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
@@ -171,6 +171,41 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
             return mode
     msg = f"worker diff did not apply cleanly in {str(workdir)!r}"
     raise RuntimeError(msg)
+
+
+def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | None = None) -> None:
+    """Apply ruff's mechanical fixes before any gate measures the tree.
+
+    Repair attempts are scarce (MAX_RECOVERY_RETRIES) and iterative
+    refinement follows the cheapest feedback signal, not the most
+    important defect: lint emits precise localised errors while a failing
+    property emits a counterexample that needs diagnosis. T7 spent its
+    budget on ruff with an infinite loop untouched (F13), and the v3 T1
+    re-run reproduced it -- 4 gates failing, then 2, with ruff red
+    throughout. Formatting is entirely machine-solvable and most lint
+    findings carry safe fixes, so spending a stochastic worker call on
+    them buys nothing and displaces the correctness work.
+
+    Scoped to the node's own changed files: formatting the whole tree
+    would mark every pre-existing unformatted file changed, and
+    `changed_line_coverage_min` would then demand coverage of lines the
+    node never touched. Unsafe fixes stay off, and `check_ruff` still
+    fails closed on whatever is left, so this narrows what the worker is
+    asked to repair rather than lowering the bar.
+    """
+    changed = git_changed_files(workdir, baseline, recorder=recorder)
+    targets = sorted(path for path in changed if path.endswith(".py"))
+    if not targets:
+        return
+    # Order matters, and the test for this caught it: `--fix` rewrites
+    # code (removing an unused import leaves a stray blank line), so
+    # formatting has to be the last word or `ruff format --check` fails
+    # on the mess the fixer just made. Exit codes are deliberately
+    # ignored -- `ruff check --fix` reports what it could not fix, and
+    # judging that is check_ruff's job.
+    run_argv(["ruff", "check", "--fix", *targets], workdir, recorder=recorder)
+    run_argv(["ruff", "format", *targets], workdir, recorder=recorder)
+    run_argv(["git", "add", "--", *targets], workdir, recorder=recorder)
 
 
 def format_attempt_failure(
@@ -361,6 +396,7 @@ async def _run_node(
                 _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, failure)
                 continue
             applied.append(proposal.diff)
+            autofix(workdir, recorder=recorder)
             captured: list[CapturedRun] = []
             result = run_node_gate(node, workdir, recorder=recorder, capture=captured)
             if result.passed:
