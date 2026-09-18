@@ -11,6 +11,7 @@ from saddle.gates import (
     PYTEST_TESTS_FAILED,
     RED_PHASE_SAMPLES,
     SHELL_TIMEOUT,
+    TOOL_UNAVAILABLE,
     GateCheck,
     Tier1Inputs,
     check_changed_line_coverage,
@@ -459,3 +460,17 @@ def test_red_phase_unanimous_baseline_still_passes() -> None:
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
     assert check.passed is True
+
+
+def test_tests_missing_tool_names_the_tool_not_an_exit_code() -> None:
+    """`exited 127` sends recovery rewriting code over a broken venv."""
+    check = check_test_command("pytest tests/test_x.py", lambda _cmd: TOOL_UNAVAILABLE)
+    assert check.passed is False
+    assert "unavailable" in check.detail.lower()
+    assert "exited" not in check.detail
+
+
+def test_ruff_missing_tool_names_the_tool() -> None:
+    check = check_ruff(["n.py"], lambda _argv: TOOL_UNAVAILABLE)
+    assert check.passed is False
+    assert "unavailable" in check.detail.lower()

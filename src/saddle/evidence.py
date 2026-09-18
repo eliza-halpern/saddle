@@ -25,7 +25,7 @@ from typing import Final
 
 import coverage
 
-from saddle.gates import SHELL_TIMEOUT
+from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
 from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -81,6 +81,20 @@ def _record_timeout(
     )
 
 
+def _record_unavailable(
+    recorder: SpanRecorder | None, argv: Sequence[str], start: float, exc: OSError
+) -> None:
+    """Journal a tool that never launched; the reason must reach the run."""
+    if recorder is None:
+        return
+    recorder.record(
+        argv=list(argv),
+        duration_ms=int((perf_counter() - start) * 1000),
+        exit_code=TOOL_UNAVAILABLE,
+        detail=str(exc),
+    )
+
+
 def run_argv(
     argv: Sequence[str],
     cwd: Path,
@@ -99,6 +113,9 @@ def run_argv(
     except subprocess.TimeoutExpired as expired:
         _record_timeout(recorder, argv, start, expired)
         return SHELL_TIMEOUT
+    except OSError as exc:
+        _record_unavailable(recorder, argv, start, exc)
+        return TOOL_UNAVAILABLE
     _record(recorder, argv, start, proc)
     return proc.returncode
 
@@ -159,6 +176,9 @@ def run_capture(
             stderr=_partial(expired.stderr),
             timed_out=True,
         )
+    except OSError as exc:
+        _record_unavailable(recorder, argv, start, exc)
+        return CapturedRun(argv=tuple(argv), exit_code=TOOL_UNAVAILABLE, stdout="", stderr=str(exc))
     _record(recorder, argv, start, proc)
     return CapturedRun(
         argv=tuple(argv), exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr

@@ -35,6 +35,19 @@ git checkout -- src/saddle/
 
 Record the mutants and their verdicts in the commit message.
 
+**Two ways this harness lies, both observed:**
+
+1. **Commit first.** `git checkout -- src/` reverts to HEAD. Mutating
+   uncommitted work deletes it, and every later mutant then "dies" on an
+   ImportError against code that no longer has the feature.
+2. **Verify the mutation applied.** A replacement whose target string is
+   absent is a silent no-op and reports SURVIVED. `ruff format` collapsing
+   a multi-line call is enough to break an exact match. Abort the run if
+   the target is not found rather than printing a verdict.
+
+A SURVIVED that you cannot explain is more likely a broken harness than a
+missing test. Check the file actually changed before believing it.
+
 ## Defect claims require discrimination evidence
 
 Do not assert a gate is hollow, a bug exists, or a fix works. Show a test

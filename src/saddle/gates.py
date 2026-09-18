@@ -25,6 +25,12 @@ PYTEST_COLLECTION_ERROR: Final = 2
 # Exit code for a command killed on timeout, following GNU `timeout(1)`.
 # Pytest reserves 0-5, so this cannot collide with a real suite verdict.
 SHELL_TIMEOUT: Final = 124
+# Exit code for a gate tool that could not be launched at all, following
+# the shell convention for "command not found". A tool that raises rather
+# than returning bypasses recovery and leaves the run with no stated
+# reason: T1 v2 failed with no gate lines in the transcript, the only
+# evidence being a journal span reading "[Errno 2] ... 'coverage'".
+TOOL_UNAVAILABLE: Final = 127
 # Baseline runs sampled per red-phase check. Red-phase is the only gate
 # that reasons over two runs, so its evidence is worth exactly what the
 # stability of the pre-change leg is worth; one observation cannot tell a
@@ -74,6 +80,12 @@ def check_ruff(files: Collection[str], run: Callable[[list[str]], int]) -> GateC
         return GateCheck(name="ruff", passed=True, detail="no files to lint")
     lint_code = run(["ruff", "check", *ordered])
     format_code = run(["ruff", "format", "--check", *ordered])
+    if TOOL_UNAVAILABLE in (lint_code, format_code):
+        return GateCheck(
+            name="ruff",
+            passed=False,
+            detail="ruff unavailable: the gate tool could not be launched",
+        )
     if lint_code != 0 or format_code != 0:
         return GateCheck(
             name="ruff",
@@ -93,6 +105,12 @@ def check_test_command(test_command: str, run: Callable[[str], int]) -> GateChec
     or zero results, so a hang scores worse than the failure it hides.
     """
     exit_code = run(test_command)
+    if exit_code == TOOL_UNAVAILABLE:
+        return GateCheck(
+            name="tests",
+            passed=False,
+            detail=f"{test_command!r} unavailable: the gate tool could not be launched",
+        )
     if exit_code == SHELL_TIMEOUT:
         return GateCheck(
             name="tests",

@@ -16,6 +16,7 @@ import saddle.evidence as evidence_module
 from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
     SHELL_TIMEOUT,
+    TOOL_UNAVAILABLE,
     CapturedRun,
     MutationOutcome,
     _mutmut_scratch_config,
@@ -674,3 +675,36 @@ def test_run_shell_paths_bound_the_command(tmp_path: Path) -> None:
     assert captured.timed_out is True
 
     assert run_shell(hang, tmp_path, timeout=1.0) == SHELL_TIMEOUT
+
+
+def test_run_capture_missing_tool_does_not_raise(tmp_path: Path) -> None:
+    """A missing gate binary must be a verdict, not an exception.
+
+    T1 v2 failed with `Verdict: FAIL` and NO gate lines in the transcript;
+    the only evidence anywhere was a journal span reading
+    `[Errno 2] No such file or directory: 'coverage'`. A gate tool that
+    raises instead of returning bypasses recovery and leaves the run with
+    no stated reason (#34).
+    """
+    run = run_capture(["definitely-not-a-real-binary-xyz"], tmp_path)
+    assert run.exit_code == TOOL_UNAVAILABLE
+    assert "definitely-not-a-real-binary-xyz" in run.stderr
+    assert run.timed_out is False
+
+
+def test_run_argv_missing_tool_journals_the_reason(tmp_path: Path) -> None:
+    """The reason a tool never launched has to reach the journal.
+
+    #34's complaint was that the only trace of a missing `coverage` was a
+    span detail; the fix is not to drop the span, it is to make the gate
+    report it too. The span still has to carry the OS error.
+    """
+    journal = tmp_path / "spans.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+
+    assert run_argv(["no-such-binary-abc"], tmp_path, recorder=recorder) == TOOL_UNAVAILABLE
+
+    spans = read_spans(journal)
+    assert len(spans) == 1
+    assert spans[0].exit_code == TOOL_UNAVAILABLE
+    assert "no-such-binary-abc" in spans[0].detail
