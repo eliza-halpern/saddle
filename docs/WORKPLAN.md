@@ -395,12 +395,12 @@ Steps (do not type the old name; build it from the grep pattern):
    `Reads <name> session JSONL` → `Reads baseline-arm session JSONL`; :8
    `so B is <name>-only` → `so B is baseline-only`.
 2. `tests/test_stall_check.py`: rename `_pi_session` (:14, called at :51,
-   :70, :86, :99) to `_baseline_session`; every `"--pi-session"` literal
+   :70, :86, :99) to `_baseline_session`; every old-flag string literal (the one the grep finds)
    (:56, :82, :94, :104, :109) → `"--baseline-session"`; docstrings :15 and
    :115 `<name> session` → `baseline-arm session`.
 3. Run `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest tests/test_stall_check.py -q --no-cov`.
 Known-good: the suite above is green after the rename. Known-bad: the old
-flag is rejected — `.venv/bin/python benchmark/stall_check.py --pi-session x`
+flag is rejected — `.venv/bin/python benchmark/stall_check.py <old flag> x`
 exits 2 with `unrecognized arguments` (type the flag from the grep pattern).
 Contract mutants (`pytest tests/test_stall_check.py -q --no-cov`):
 1. `sed -i 's/"--baseline-session", action="append"/"--baseline-sessions", action="append"/' benchmark/stall_check.py` → red (argparse rejects every test's flag).
