@@ -372,6 +372,45 @@ Done when: `uv run ruff format --check .` exits 0.
 
 ---
 
+### T0-12 — Clean-room identifiers in the stall checker
+Files: `benchmark/stall_check.py:3`, `:8`, `:51`, `:125`, `:135-136`;
+`tests/test_stall_check.py:14-15`, `:51`, `:56`, `:70`, `:82`, `:86`, `:94`,
+`:99`, `:104`, `:109`, `:115`.
+Contract: the product name of the comparison system appears nowhere in the
+repo, including code identifiers, flags, docstrings and help text; the stall
+checker's behaviour is unchanged.
+Direction: renamed, no behaviour change (a CLI flag changes name; nothing
+else in this repo passes that flag — `grep -rn "p[i]-session" --exclude-dir=.venv .`
+lists only these two files).
+Evidence: project handoff rule (clean room); T0-10 stopped on these hits
+because its stop-if line reserves code identifiers for a separate item.
+Issue: none
+Steps (do not type the old name; build it from the grep pattern):
+1. `benchmark/stall_check.py`: rename the function at :51 to
+   `baseline_tool_calls` (and its call at :136); the flag at :125 to
+   `--baseline-session` with help `"Baseline-arm session JSONL (repeatable)."`;
+   `args.pi_session` at :135 becomes `args.baseline_session`; docstring :3
+   `Reads <name> session JSONL` → `Reads baseline-arm session JSONL`; :8
+   `so B is <name>-only` → `so B is baseline-only`.
+2. `tests/test_stall_check.py`: rename `_pi_session` (:14, called at :51,
+   :70, :86, :99) to `_baseline_session`; every `"--pi-session"` literal
+   (:56, :82, :94, :104, :109) → `"--baseline-session"`; docstrings :15 and
+   :115 `<name> session` → `baseline-arm session`.
+3. Run `PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest tests/test_stall_check.py -q --no-cov`.
+Known-good: the suite above is green after the rename. Known-bad: the old
+flag is rejected — `.venv/bin/python benchmark/stall_check.py --pi-session x`
+exits 2 with `unrecognized arguments` (type the flag from the grep pattern).
+Contract mutants (`pytest tests/test_stall_check.py -q --no-cov`):
+1. `sed -i 's/"--baseline-session", action="append"/"--baseline-sessions", action="append"/' benchmark/stall_check.py` → red (argparse rejects every test's flag).
+Done when: `grep -rniwE 'p[i]|p[i]-task' --exclude-dir=.venv --exclude-dir=.git .`
+prints nothing; the stall-check tests are green; mutant red; `./check.sh` green.
+Stop if: any file outside the two named above matches the grep — report it.
+Noticed, not touched (pre-declared): scripts in the sibling `../saddle-bench`
+checkout may still pass the old flag; that checkout is outside this repo and
+outside this item.
+
+---
+
 ## 4. Tier 1 — `./check.sh` back to green
 
 ### T1-1 — `Literal[float]` thresholds satisfy mypy without loosening the grammar
