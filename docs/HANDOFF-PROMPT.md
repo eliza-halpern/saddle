@@ -89,7 +89,10 @@ wrong. Write those down under "Noticed, not touched" in the report.
 
 GIT. You may commit on branch fix/gate-integrity, one commit per item,
 with the mutant verdicts in the message and the trailer
-"Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>". You may not push,
+"Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>". Write the
+commit message AFTER every mutant has run, copying each verdict from the
+output you actually saw. Never draft the mutant table first and run
+afterwards; two earlier sessions did that and one recorded the wrong verdict. You may not push,
 amend, rebase, create branches or tags, close issues, or touch main. Never
 commit .venv/, mutants/, coverage files, or anything under .proofs/.
 

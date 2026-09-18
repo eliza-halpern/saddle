@@ -262,14 +262,17 @@ Steps:
 - CLAUDE.md:78 `died on `git apply: No valid patches in input`` → `died on
   `git apply` exit 128 (`error: corrupt patch at line 12`, every attempt;
   ../saddle-bench/runs/PROGRESS.log:35)`.
-- CLAUDE.md:164, DESIGN-NOTES:5, BENCHMARK-RECORD:61/:89:
+- CLAUDE.md:164, DESIGN-NOTES:5, BENCHMARK-RECORD:61:
   `saddle-bench/runs/FINDINGS.md` → `../saddle-bench/runs/FINDINGS.md` and add
   once, at CLAUDE.md:164, "(sibling checkout, not in this repo)".
+- BENCHMARK-RECORD:89 reads `see FINDINGS.md for evidence` (bare name, no
+  directory): `see FINDINGS.md` → `see ../saddle-bench/runs/FINDINGS.md`.
 - DESIGN-NOTES:605 D19 "specified, one global" → "wired per node via
   `reasoning_budget` → `BUDGET_TO_EFFORT` (`cli.py:402-404`); benefit unmeasured
   (T4-3)".
 Done when: `grep -rn "No valid patches" CLAUDE.md` prints nothing;
-`grep -rn "[^.]saddle-bench/runs/FINDINGS" CLAUDE.md docs/` prints nothing.
+`grep -rn "[^.]saddle-bench/runs/FINDINGS" CLAUDE.md docs/` prints nothing;
+`grep -n "see FINDINGS.md" docs/BENCHMARK-RECORD.md` prints nothing.
 
 ### T0-9 — Citation corrections (exact replacement text)
 Files: `CLAUDE.md:21-22`; `docs/DESIGN-NOTES.md` lines listed below.
@@ -332,11 +335,13 @@ depend on — report, do not edit.
 
 ### T0-11 — Formatter debt
 Files: `CLAUDE.md:65` area, `docs/benchmark-archive.md:~1033-1075`,
-`docs/WORKPLAN.md:164-169` (the code block in T0-3). ruff formats fenced Python
-blocks in Markdown here, so this file counts.
+`docs/WORKPLAN.md:164-169` (the code block in T0-3), and
+`tests/test_gates.py:295-298` (the run-order assertion T0-3 added in 71e21c1,
+which ruff wants one-name-per-line). ruff formats fenced Python blocks in
+Markdown here, so the Markdown files count.
 Contract: `uv run ruff format --check .` exits 0.
 Direction: docs-only
-Steps: `uv run ruff format CLAUDE.md docs/benchmark-archive.md docs/WORKPLAN.md`;
+Steps: `uv run ruff format CLAUDE.md docs/benchmark-archive.md docs/WORKPLAN.md tests/test_gates.py`;
 inspect the diff is whitespace/fence-only; commit.
 Done when: `uv run ruff format --check .` exits 0.
 
