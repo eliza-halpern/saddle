@@ -105,11 +105,12 @@ Rules:
 - reasoning_budget is one of: zero, low, medium, xhigh.
 - Size reasoning_budget to the node: mechanical nodes (implement, wire, test)
   take low or zero; reserve medium/xhigh for complex algorithmic nodes.
-- max_context_tokens is the node's READ budget: it must cover every file the
-  node has to read, so use the full 30000 unless the node touches one small
-  file. It does not cap the answer and costs nothing when unused.
+- max_context_tokens is the node's READ budget (8000-30000). Pick the
+  smallest figure that covers the files this node actually has to read.
+  Context is a cost, not an allowance: a model attends worst to the middle
+  of a long prompt, so padding the budget buries the file the node has to
+  change underneath ones it does not.
 - allowed_tools uses only: read_file, write_file, run_tests, lint.
-- max_context_tokens is between 8000 and 30000.
 - red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
@@ -117,7 +118,7 @@ Rules:
   be executed by a test.
 - kill_threshold is one of 85.0, 90.0, 95.0, 100.0. There is no lower
   setting; a node you consider mechanical still clears 85.
-- mutation_sample.scope is always "changed-lines"; max_mutants is 1-1000.
+- mutation_sample.scope is always "changed-lines"; max_mutants is always 100.
 - Prefer the fewest nodes that cover the task; a trivial task needs one node.
 - Think through the decomposition first; then emit the plan.
 """
@@ -130,6 +131,14 @@ def build_worker_prompt(
 
     File context is truncated to the node's own `max_context_tokens`, which
     is what that field means; the global constant is only the hard ceiling.
+
+    The node's task, requirements and gate command appear twice, bracketing
+    the file contents. Attention follows a U-shaped curve -- strong at the
+    start and end of a prompt, weakest in the middle -- and the file
+    contents are both the longest section and the one that has to sit in
+    the middle. An instruction stated only ahead of them is stated in the
+    position the model reads best and then buried under everything it
+    reads worst.
     """
     listed = list(files)
     if not listed:
@@ -155,7 +164,11 @@ Repo files:
 File contents:
 {context}
 
-Produce a unified diff (git apply compatible) implementing this node's task.
+Node {node.id}, restated now that you have the files: {node.task_prompt}
+Requirements: {reqs}
+Gate command: {node.deterministic_gate.test_command}
+
+Produce a unified diff (git apply compatible) implementing exactly that.
 Rules:
 - Start each file section with a "diff --git a/<file> b/<file>" header line.
 - Mark new files with "new file mode 100644".

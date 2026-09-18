@@ -226,7 +226,11 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "Do the thing." in prompt
     assert "reasoning_budget is one of: zero, low, medium, xhigh." in prompt
     assert "take low or zero; reserve medium/xhigh" in prompt
-    assert "use the full 30000 unless the node touches one small" in prompt
+    # Was: `assert "use the full 30000 unless the node touches one small"`.
+    # The suite pinned the guidance #56 removes -- context is a cost, not
+    # an allowance -- so the assertion is inverted rather than deleted.
+    assert "use the full 30000" not in prompt
+    assert "smallest figure that covers the files" in prompt
     assert "red_phase_required is always true." in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
     assert "over test files only" in prompt
@@ -289,7 +293,9 @@ def test_build_worker_prompt_truncates_large_context() -> None:
     prompt = build_worker_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": big})
     assert "[file context truncated]" in prompt
     assert "x" * (MAX_CONTEXT_CHARS + 1000) not in prompt
-    context = prompt.split("File contents:\n")[1].split("\n\nProduce a unified diff")[0]
+    # The node task is restated after the contents (#56), so the context
+    # section now ends at that restatement rather than at the diff rules.
+    context = prompt.split("File contents:\n")[1].split("\n\nNode ")[0]
     assert context.endswith("[file context truncated]")
 
 
@@ -1921,3 +1927,40 @@ def test_main_up_uses_default_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     assert main(["up"]) == 0
     assert seen[0]["stdin"] is sys.stdin
     assert seen[0]["console"].file is sys.stdout
+
+
+def test_emit_prompt_does_not_push_the_planner_toward_maximum_context() -> None:
+    """Context is a cost, not a budget to spend.
+
+    The prompt used to say "use the full 30000 unless the node touches one
+    small file". Attention follows a U-shaped curve: accuracy drops >30%
+    when the relevant content sits mid-context rather than at an edge,
+    and coding agents maximise the effect (accumulative context, high
+    distractor density, long horizons). Padding a node's read budget
+    buries the file it actually has to change.
+    """
+    prompt = build_emit_prompt("Do the thing.")
+    assert "use the full 30000" not in prompt
+    assert "smallest" in prompt
+    # #50 pinned max_mutants; the prompt must not still offer a range.
+    assert "max_mutants is 1-1000" not in prompt
+
+
+def test_worker_prompt_restates_the_node_task_at_the_tail() -> None:
+    """The node's task must appear at both high-attention positions.
+
+    File contents sit in the middle of the prompt, which is exactly the
+    region the U-shaped curve says is attended to worst. The instruction
+    that matters has to bracket it, not sit only in front of it.
+    """
+    node = Node.model_validate(_node_dict("n1", "low"))
+    prompt = build_worker_prompt(
+        task="Do the thing.",
+        node=node,
+        files=["n.py"],
+        contents={"n.py": "x = 1\n" * 500},
+    )
+    head, _, tail = prompt.partition("File contents:")
+    assert node.task_prompt in head
+    assert node.task_prompt in tail
+    assert tail.index(node.task_prompt) > tail.index("x = 1")
