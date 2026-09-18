@@ -63,7 +63,7 @@ def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
         "execution_constraints": {
             "reasoning_budget": "low",
             "allowed_tools": ["read_file"],
-            "max_context_tokens": 5000,
+            "max_context_tokens": 8000,
         },
         "deterministic_gate": {
             "test_command": "pytest test_n.py",
@@ -236,8 +236,11 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         r"  - tool git: exit 0 in \d+ms: git apply --index --recount -\n",
         result.transcript,
     )
+    # Red-phase baseline leg: coverage-wrapped like the current leg, failing
+    # because the node's own test runs against pre-change code.
     assert re.search(
-        r"  - tool pytest: exit [1-9]\d* in \d+ms: pytest test_n.py\n", result.transcript
+        r"  - tool coverage: exit [1-9]\d* in \d+ms: coverage run [^\n]*-m pytest test_n.py\n",
+        result.transcript,
     )
     assert "worker:n1" not in result.transcript
     assert result.transcript.index("  - thought:") < result.transcript.index("  - tool ")
@@ -248,7 +251,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "git",
         "coverage",
         "git",
-        "pytest",
+        "coverage",
         "timeout",
         "mutmut",
         "mutmut",

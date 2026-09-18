@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
 
-from saddle.dag import Node
+from saddle.dag import DeterministicGate, Node
 from saddle.evidence import MutationOutcome
 from saddle.gates import (
+    GateCheck,
     Tier1Inputs,
     check_changed_line_coverage,
     check_mutation,
@@ -29,7 +31,7 @@ def _node() -> Node:
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],
-                "max_context_tokens": 5000,
+                "max_context_tokens": 8000,
             },
             "deterministic_gate": {
                 "test_command": "pytest tests/test_n1.py",
@@ -54,6 +56,8 @@ def _passing_inputs() -> Tier1Inputs:
         changed={("n1.py", 1)},
         covered={("n1.py", 1)},
         baseline_runner=lambda: 1,
+        baseline_output="",
+        tests_changed=True,
         current_runner=lambda: 0,
         flipped_tests={"test_a": "def test_a():  # REQ-001\n    assert True\n"},
         mutation=MutationOutcome(killed=9, total=10, generated=10, survivors=("m1",)),
@@ -167,29 +171,93 @@ def test_coverage_partial_percent_compared_to_minimum() -> None:
     assert check.detail.startswith("66.7% < 67.0%")
 
 
+_STRONG = MutationOutcome(killed=10, total=10, generated=10, survivors=())
+_PASSING_COVERAGE = GateCheck(name="coverage", passed=True, detail="100.0% >= 100.0%")
+
+
+def _red(
+    baseline: int,
+    current: int,
+    *,
+    output: str = "",
+    changed: tuple[str, ...] = (),
+    tests_changed: bool = True,
+    coverage: GateCheck = _PASSING_COVERAGE,
+    mutation: MutationOutcome = _STRONG,
+) -> GateCheck:
+    return check_red_phase(
+        lambda: baseline,
+        lambda: current,
+        baseline_output=output,
+        changed_files=changed,
+        tests_changed=tests_changed,
+        coverage=coverage,
+        mutation=mutation,
+    )
+
+
 def test_red_phase_killer_fixture_pass_pre_change_fails() -> None:
-    check = check_red_phase(lambda: 0, lambda: 0, required=True)
+    check = _red(0, 0)
     assert check.passed is False
     assert check.name == "red-phase"
     assert check.detail == "tests pass pre-change; prove nothing"
 
 
 def test_red_phase_fail_post_change_fails() -> None:
-    check = check_red_phase(lambda: 1, lambda: 1, required=True)
+    check = _red(1, 1)
     assert check.passed is False
     assert check.name == "red-phase"
     assert check.detail == "tests fail post-change"
 
 
-def test_red_phase_flip_and_opt_out_pass() -> None:
-    flip = check_red_phase(lambda: 1, lambda: 0, required=True)
+def test_red_phase_flip_passes() -> None:
+    flip = _red(1, 0)
     assert flip.passed is True
     assert flip.name == "red-phase"
     assert flip.detail == "fail pre-change, pass post-change"
-    skipped = check_red_phase(lambda: 0, lambda: 0, required=False)
-    assert skipped.passed is True
-    assert skipped.name == "red-phase"
-    assert skipped.detail == "not required"
+
+
+def test_red_phase_cannot_be_waived() -> None:
+    """The waiver is gone from the signature and unrepresentable on the wire.
+
+    `const: true` is what makes guided decoding unable to emit a waiver,
+    so the planner cannot opt a node out of the tautology killer.
+    """
+    assert "required" not in inspect.signature(check_red_phase).parameters
+    schema = DeterministicGate.model_json_schema()
+    assert schema["properties"]["red_phase_required"]["const"] is True
+
+
+def test_red_phase_unrelated_baseline_error_fails() -> None:
+    """Exit 2 blaming something the node never touched proves nothing."""
+    check = _red(2, 0, output="ImportError: No module named 'yaml'", changed=("/w/n.py",))
+    assert check.passed is False
+    assert check.detail == "baseline collection error names no changed source; prove nothing"
+
+
+def test_red_phase_greenfield_import_error_is_red() -> None:
+    """Exit 2 naming a changed module is the greenfield red case."""
+    check = _red(2, 0, output="ModuleNotFoundError: No module named 'n'", changed=("/w/n.py",))
+    assert check.passed is True
+    assert check.detail == "fail pre-change, pass post-change"
+
+
+def test_red_phase_collection_header_names_changed_file() -> None:
+    check = _red(2, 0, output="ERROR collecting n.py", changed=("/w/n.py",))
+    assert check.passed is True
+
+
+def test_red_phase_missing_file_exit_proves_nothing() -> None:
+    """Exit 4 (file not found) was the old vacuous-red path."""
+    check = _red(4, 0, output="file or directory not found", changed=("/w/n.py",))
+    assert check.passed is False
+    assert check.detail == "baseline exit 4: tests never ran; prove nothing"
+
+
+def test_red_phase_no_tests_collected_proves_nothing() -> None:
+    check = _red(5, 0, changed=("/w/n.py",))
+    assert check.passed is False
+    assert check.detail == "baseline exit 5: tests never ran; prove nothing"
 
 
 def test_binding_killer_fixture_unbound_requirement_fails() -> None:
@@ -283,3 +351,34 @@ def test_mutation_undecided_fails_with_cause() -> None:
     assert caused.name == "mutation"
     assert caused.passed is False
     assert caused.detail == "no mutants decided: c1, c2, c3, c4, c5"
+
+
+def test_red_phase_behaviour_preserving_node_leans_on_coverage_and_mutation() -> None:
+    """A node whose diff changes no test cannot have a pre-change failure."""
+    check = _red(0, 0, tests_changed=False)
+    assert check.passed is True
+    assert check.detail == (
+        "tests unchanged (behaviour preserved); coverage and mutation 100.0% carry the proof"
+    )
+
+
+def test_red_phase_behaviour_preserving_needs_coverage() -> None:
+    failed = GateCheck(name="coverage", passed=False, detail="50.0% < 100.0%")
+    check = _red(0, 0, tests_changed=False, coverage=failed)
+    assert check.passed is False
+    assert check.detail == "tests unchanged and coverage failed; nothing proves the change"
+
+
+def test_red_phase_behaviour_preserving_needs_decided_mutants() -> None:
+    none_decided = MutationOutcome(killed=0, total=0, generated=0, survivors=())
+    check = _red(0, 0, tests_changed=False, mutation=none_decided)
+    assert check.passed is False
+    assert check.detail == "tests unchanged and no mutants decided; nothing proves the change"
+
+
+def test_red_phase_behaviour_preserving_uses_fixed_floor_not_node_threshold() -> None:
+    """The floor is fixed so a planner-chosen kill_threshold cannot waive it."""
+    weak = MutationOutcome(killed=1, total=10, generated=10, survivors=("m1",))
+    check = _red(0, 0, tests_changed=False, mutation=weak)
+    assert check.passed is False
+    assert check.detail == "tests unchanged and mutation 10.0% < 85.0%; nothing proves the change"

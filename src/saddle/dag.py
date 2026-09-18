@@ -32,7 +32,9 @@ class DeterministicGate(BaseModel):
 
     test_command: NonEmptyStr
     changed_line_coverage_min: float = Field(ge=0, le=100)
-    red_phase_required: bool
+    # ARCHITECTURE.md gate 4 is the tautology killer, so the waiver is not
+    # representable: guided decoding can only emit `true` for this field.
+    red_phase_required: Literal[True] = True
     mutation_sample: MutationSample
 
 
@@ -41,7 +43,9 @@ class ExecutionConstraints(BaseModel):
 
     reasoning_budget: ReasoningBudget
     allowed_tools: list[NonEmptyStr] = Field(min_length=1)
-    max_context_tokens: int = Field(ge=1000, le=30000)
+    # Floor is a read budget, not a style knob: below ~8K a worker cannot
+    # hold the files it must change (ARCHITECTURE.md §2 sizes it at ~30K).
+    max_context_tokens: int = Field(ge=8000, le=30000)
 
 
 class Node(BaseModel):

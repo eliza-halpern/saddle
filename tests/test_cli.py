@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from saddle.cli import (
+    WORKER_OUTPUT_TOKENS,
     DagOptions,
     RunError,
     RunOptions,
@@ -100,7 +101,7 @@ def _node_dict(
         "execution_constraints": {
             "reasoning_budget": budget,
             "allowed_tools": ["read_file"],
-            "max_context_tokens": 5000,
+            "max_context_tokens": 8000,
         },
         "deterministic_gate": {
             "test_command": "pytest test_n.py",
@@ -225,7 +226,8 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "Do the thing." in prompt
     assert "reasoning_budget is one of: zero, low, medium, xhigh." in prompt
     assert "take low or zero; reserve medium/xhigh" in prompt
-    assert "large contexts only for complex algorithmic nodes" in prompt
+    assert "use the full 30000 unless the node touches one small" in prompt
+    assert "red_phase_required is always true." in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
     assert "over test files only" in prompt
     assert "fewest nodes" in prompt
@@ -300,12 +302,27 @@ def test_context_budget_is_thirty_k_tokens_at_four_chars_each() -> None:
 
 
 def test_build_worker_prompt_keeps_exactly_max_context() -> None:
-    from saddle.cli import MAX_CONTEXT_CHARS
+    from saddle.cli import CHARS_PER_TOKEN
 
     node = Node.model_validate(_node_dict())
-    body = "y" * (MAX_CONTEXT_CHARS - len("--- n.py ---\n"))
+    budget = node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN
+    body = "y" * (budget - len("--- n.py ---\n"))
     prompt = build_worker_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": body})
     assert "[file context truncated]" not in prompt
+
+
+def test_build_worker_prompt_truncates_at_node_ceiling_not_global() -> None:
+    """`max_context_tokens` bounds the node's reading, per ARCHITECTURE.md §2."""
+    from saddle.cli import CHARS_PER_TOKEN, MAX_CONTEXT_CHARS
+
+    node_dict = _node_dict()
+    node_dict["execution_constraints"]["max_context_tokens"] = 8000
+    node = Node.model_validate(node_dict)
+    budget = 8000 * CHARS_PER_TOKEN
+    assert budget < MAX_CONTEXT_CHARS
+    body = "y" * (budget + 1000)
+    prompt = build_worker_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": body})
+    assert "[file context truncated]" in prompt
 
 
 def test_build_repair_prompt_adds_failure_evidence() -> None:
@@ -412,11 +429,18 @@ def test_run_task_honors_sampling_options(tmp_path: Path) -> None:
     assert seen[0]["max_tokens"] == 100
     assert seen[0]["temperature"] == 0.5
     assert seen[0]["reasoning_effort"] == "low"
-    assert seen[1]["max_tokens"] == 5000
+    assert seen[1]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
     assert seen[1]["temperature"] == 0.5
 
 
-def test_run_task_worker_uses_node_context_ceiling(tmp_path: Path) -> None:
+def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path) -> None:
+    """Regression: spending the read ceiling as the output cap truncated work.
+
+    `max_context_tokens` bounds what the worker reads; generation gets its
+    own budget keyed to reasoning effort.
+    """
+    from saddle.cli import WORKER_OUTPUT_TOKENS
+
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     node = _node_dict()
@@ -427,7 +451,8 @@ def test_run_task_worker_uses_node_context_ceiling(tmp_path: Path) -> None:
     code, _ = _run(options, client)
     assert code == 0
     assert seen[0]["max_tokens"] == 100
-    assert seen[1]["max_tokens"] == 8000
+    assert seen[1]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
+    assert seen[1]["max_tokens"] != 8000
     assert seen[1]["reasoning_effort"] == "low"
 
 
@@ -689,7 +714,7 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert "- Attempts: 2\n" in out
     assert len(seen) == 4
     assert seen[2]["reasoning_effort"] == "low"
-    assert seen[2]["max_tokens"] == 5000
+    assert seen[2]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
     assert seen[2]["temperature"] == 0.5
     assert "structured_outputs" not in seen[2]
     assert "Diagnose the root cause" in _prompt(seen[2])
@@ -848,7 +873,6 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
     second["execution_constraints"]["max_context_tokens"] = 8000
     second["deterministic_gate"]["test_command"] = "pytest test_w.py"
     second["deterministic_gate"]["changed_line_coverage_min"] = 80.0
-    second["deterministic_gate"]["red_phase_required"] = False
     second["deterministic_gate"]["mutation_sample"]["max_mutants"] = 5
     second["deterministic_gate"]["mutation_sample"]["kill_threshold"] = 90.0
     third = _node_dict("n3", "xhigh")
@@ -864,7 +888,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
     assert render_dag_plan("Do the thing.", dag) == (
         "Task: Do the thing.\n"
         "Plan: 3 node(s): n1, n2, n3\n"
-        "├── n1 [budget: low, context: 5000 tokens]\n"
+        "├── n1 [budget: low, context: 8000 tokens]\n"
         "│   task: Fix f and test it.\n"
         "│   requirements: REQ-001\n"
         "│   depends on: (none)\n"
@@ -876,7 +900,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "│   requirements: REQ-001, REQ-002\n"
         "│   depends on: n1\n"
         "│   tools: read_file, write_file\n"
-        "│   gate: pytest test_w.py (coverage >= 80.0%, red-phase optional, "
+        "│   gate: pytest test_w.py (coverage >= 80.0%, red-phase required, "
         "mutation 5 @ 90.0% changed-lines)\n"
         "└── n3 [budget: xhigh, context: 12000 tokens]\n"
         "    task: Polish.\n"
@@ -893,7 +917,7 @@ def test_render_dag_plan_single_node() -> None:
     assert render_dag_plan("Do it.", dag) == (
         "Task: Do it.\n"
         "Plan: 1 node(s): n1\n"
-        "└── n1 [budget: low, context: 5000 tokens]\n"
+        "└── n1 [budget: low, context: 8000 tokens]\n"
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: (none)\n"
@@ -924,14 +948,14 @@ def test_run_dag_prints_plan() -> None:
     assert out.getvalue() == (
         f"Task: {TASK}\n"
         "Plan: 2 node(s): n1, n2\n"
-        "├── n1 [budget: low, context: 5000 tokens]\n"
+        "├── n1 [budget: low, context: 8000 tokens]\n"
         "│   task: Fix f and test it.\n"
         "│   requirements: REQ-001\n"
         "│   depends on: (none)\n"
         "│   tools: read_file\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 10 @ 85.0% changed-lines)\n"
-        "└── n2 [budget: low, context: 5000 tokens]\n"
+        "└── n2 [budget: low, context: 8000 tokens]\n"
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: n1\n"
@@ -1330,7 +1354,7 @@ def test_main_dag_passes_flags_through(
     assert capsys.readouterr().out == (
         "Task: Do it.\n"
         "Plan: 1 node(s): n1\n"
-        "└── n1 [budget: low, context: 5000 tokens]\n"
+        "└── n1 [budget: low, context: 8000 tokens]\n"
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: (none)\n"

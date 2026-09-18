@@ -15,7 +15,7 @@ def _node(
     *,
     deps: list[str] | None = None,
     tools: list[str] | None = None,
-    tokens: int = 5000,
+    tokens: int = 8000,
     reqs: list[str] | None = None,
     budget: str = "low",
 ) -> dict[str, Any]:
@@ -67,7 +67,7 @@ def test_valid_dag_passes() -> None:
 
 
 def test_ceiling_boundary_is_inclusive() -> None:
-    assert _check(_valid_dag(), ceiling=5000) == []
+    assert _check(_valid_dag(), ceiling=8000) == []
 
 
 def test_duplicate_ids_rejected() -> None:

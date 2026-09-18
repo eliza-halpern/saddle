@@ -24,7 +24,10 @@ from saddle.dag import dag_json_schema
 
 DEFAULT_BASE_URL: Final = "http://127.0.0.1:18020/v1"
 DEFAULT_MODEL: Final = "qwen3.8-27b"
-DEFAULT_TIMEOUT: Final = 300.0
+# Non-streaming, so this is the whole-generation deadline. At 300s a 27B
+# server silently capped completions around 6-12K tokens regardless of
+# max_tokens, which read as a hang; it must exceed the slowest budget.
+DEFAULT_TIMEOUT: Final = 1800.0
 PREFLIGHT_TIMEOUT: Final = 10.0
 DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0

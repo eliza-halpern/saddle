@@ -26,7 +26,7 @@ def _node(
         "execution_constraints": {
             "reasoning_budget": budget,
             "allowed_tools": ["read_file"],
-            "max_context_tokens": 5000,
+            "max_context_tokens": 8000,
         },
         "deterministic_gate": {
             "test_command": "pytest tests/test_x.py",

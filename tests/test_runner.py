@@ -26,7 +26,7 @@ def _node(
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],
-                "max_context_tokens": 5000,
+                "max_context_tokens": 8000,
             },
             "deterministic_gate": {
                 "test_command": test_command,
@@ -137,7 +137,7 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "git",
         "coverage",
         "git",
-        "pytest",
+        "coverage",
         "timeout",
         "mutmut",
         "mutmut",
@@ -145,7 +145,11 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "ruff",
     ]
     assert all(span.node_id == "n1" for span in spans)
-    assert [span.exit_code for span in spans] == [0, 0, 0, 4, 0, 0, 0, 0, 0]
+    # The 4th span is the red-phase baseline leg: same coverage-wrapped
+    # command as the current leg, exiting 1 because the node's own test
+    # genuinely fails against pre-change code. It used to be a raw pytest
+    # exiting 4 -- file not found, because the new test was never copied in.
+    assert [span.exit_code for span in spans] == [0, 0, 0, 1, 0, 0, 0, 0, 0]
 
 
 def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> None:
@@ -228,3 +232,83 @@ def test_run_node_gate_suffix_style_test_binds(tmp_path: Path) -> None:
     _worktree(tmp_path, test_body, test_name="n_test.py")
     result = run_node_gate(_node("pytest n_test.py"), tmp_path)
     assert result.passed is True
+
+
+def test_run_node_gate_new_test_passing_pre_change_is_not_red(tmp_path: Path) -> None:
+    """A brand-new test that also passes against baseline code is not red.
+
+    Regression: the baseline leg ran the gate command against a tree that
+    never contained the new test file, so "file not found" counted as red
+    and every greenfield node cleared red-phase vacuously.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n"
+    _worktree(tmp_path, test_body)
+    result = run_node_gate(_node(), tmp_path)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.passed is False, f"vacuous red: {red.detail}"
+
+
+def _locatable_mutmut(
+    stub_dir: Path, monkeypatch: pytest.MonkeyPatch, *, removed: str, line: int
+) -> None:
+    """Install a mutmut stub whose one mutant locates to a changed line.
+
+    The autouse stub in conftest reports unparseable output on purpose, so
+    every mutant is undecided; the behaviour-preserving red-phase branch
+    needs a real kill to lean on.
+    """
+    stub_dir.mkdir(exist_ok=True)
+    (stub_dir / "results.txt").write_text("  m1: killed\n")
+    (stub_dir / "show_m1.txt").write_text(
+        f"--- n.py\n+++ n.py\n@@ -{line} +{line} @@\n-{removed}\n+    pass\n"
+    )
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'STUB_DIR="{stub_dir}"\n'
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        '  results) cat "$STUB_DIR/results.txt";;\n'
+        '  show) cat "$STUB_DIR/show_$2.txt";;\n'
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_run_node_gate_comment_only_test_edit_stays_behaviour_preserving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tagging a test with a REQ id must not fake a red-phase flip.
+
+    Requirement-binding forces the worker to name REQ ids in test source,
+    so a comment-only edit would otherwise let a behaviour-preserving node
+    claim its tests changed and take the red-phase path.
+    """
+    baseline_test = "from n import f\n\n\ndef test_f():\n    assert f() == 1\n"
+    tagged = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
+    _worktree(
+        tmp_path,
+        tagged,
+        baseline_code="def f():\n    return 1\n",
+        # Behaviour-preserving rewrite: changed lines exist to mutate, but
+        # no test can fail pre-change because the result is identical.
+        fixed_code="def f():\n    value = 1\n    return value\n",
+        baseline_test=baseline_test,
+    )
+    _locatable_mutmut(tmp_path / "stub", monkeypatch, removed="    value = 1", line=2)
+    result = run_node_gate(_node(max_mutants=1), tmp_path)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.passed is True
+    assert red.detail.startswith("tests unchanged (behaviour preserved)")
+
+
+def test_run_node_gate_changed_assertion_takes_the_red_phase_path(tmp_path: Path) -> None:
+    """Changing what a test asserts binds the gate to a real pre-change run."""
+    baseline_test = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
+    changed = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(tmp_path, changed, baseline_test=baseline_test)
+    result = run_node_gate(_node(), tmp_path)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.passed is True
+    assert red.detail == "fail pre-change, pass post-change"

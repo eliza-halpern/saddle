@@ -30,6 +30,29 @@ human-readable transcript plus a verifying journal.
   place, keep the suite green, add a regression test. Expectation: 2–4
   nodes; a fix localized to the wrong module fails its gates instead
   of silently shifting the discrepancy.
+- **T5 — multi-currency ledger (large).** Baseline: USD-only float
+  ledger (accounts, fees, report, store) with 28 green tests. Task:
+  extend to USD/EUR/JPY per exhaustive canonical rules pinned in the
+  prompt (Decimal, half-up, JPY zero-decimals, pinned FX routing,
+  backward-compat store reads). Grading: 29 hidden tests + visible
+  suite (exactly four named tests may change) + reference equivalence.
+  Expectation: multi-node decomposition (five coupled modules).
+- **T6 — hostile parser fix (medium).** Baseline: filterlang query
+  parser (218 lines) with 3 planted bugs, each defended by a confident
+  misleading comment, plus a stale architecture note; 12 green tests
+  miss the buggy paths. Task: fix per the normative grammar spec in
+  the prompt (spec governs over comments), extend the suite. Grading:
+  17 hidden edge-case tests + suite + reference. Expectation: thinking
+  depth separates (comment-following fails).
+- **T7 — orderedlist package from spec (large, benchmark-sourced).**
+  Baseline: empty repo. Task: build an installable `orderedlist`
+  package implementing OrderedList per the normative spec.
+  Distilled + reskinned + perturbed from NL2Repo-Bench
+  `sortedcontainers` (Hard) + upstream python-sortedcontainers
+  (Apache-2.0); memorized upstream code provably fails the adapted
+  tests (see benchmark/tasks/t7/decon_proof.py). Grading: 63 hidden
+  tests via pip-install grading in a throwaway venv. Scored arms must
+  not read benchmark/tasks/ (transcripts audited; access voids run).
 
 ## Gate criteria
 
@@ -124,6 +147,60 @@ the v2 session is preserved for the gate-behavior evidence pass.*
 
 *Amendment record (before T1 v5): spec-faithful worker budgets. Emission/orchestration stay xhigh/81920 (--reasoning-effort xhigh --max-tokens 81920); worker and recovery calls use the node's own reasoning_budget and max_context_tokens ceiling (plumbing fixed in 4722124; --max-tokens is emission-only as documented). Scored saddle runs must not pass --worker-effort except as a task-pinned budget documented here: T1 pins --worker-effort low (mechanical task → low per spec §Phase 2; removes planner-sizing variance on a single-node task). Multi-node tasks (T2+) run unpinned so the planner's heterogeneous sizing is what's measured.*
 
+*Amendment record (after T6 v1, before any further scored run): three
+harness defects found, all of which made earlier verdicts overstate what
+was verified. Scored runs T1 v5 through T6 v1 predate the fixes.*
+
+*(a) Red-phase was a second facade. The baseline leg ran the gate command
+against a tree that never contained the node's new tests, so a new test
+file produced "file or directory not found" and any nonzero exit counted
+as red. Every node that added a test file cleared red-phase vacuously —
+including T1 v5, T2, T3 and T4, whose "Gate red-phase: PASS" lines prove
+nothing. Compounding it, `red_phase_required` was planner-chosen and the
+planner emitted false on every scored run (#43), so on those nodes the
+check did not even run. Fixed: the node's own test sources are copied
+over the pre-change tree before probing, both legs run the same
+coverage-wrapped command, and only exit 1 (genuine failure) or a
+collection error naming a changed source (the greenfield case) counts as
+red. The waiver is gone from the gate signature and pinned to `const:
+true` in the wire schema, so guided decoding cannot emit it (#41, #43).*
+
+*(b) Worker context ceiling was spent as the output cap. `max_context_tokens`
+is an input ceiling (ARCHITECTURE.md §2, "a clean ~28,000–30,000-token
+ceiling"); commit 4722124 wired it into `max_tokens`, and the same commit
+told the planner to prefer small contexts for mechanical nodes. T6 v1's
+node-1 was sized low/8K, generated past 8,192 output tokens, hit
+finish_reason=length and failed with the worktree untouched. The two
+quantities are now separate: the node ceiling bounds prompt context, and
+generation gets its own effort-keyed budget. The planner is told the
+field is a read budget and to use the full 30000 by default; the schema
+floor rose from 1000 to 8000. Cause: operator error by Muse Code, the
+same spec-reading error as the earlier xhigh/81920 misconfiguration —
+the field's meaning was never checked against §2.*
+
+*(c) Audit verdict was vacuously PASS. `render_journal_transcript`
+computed the verdict with `all()` over sealed gate outputs, and `all()`
+of nothing is true, so a journal with zero proofs rendered "Verdict:
+PASS". T6 v1's failed run audited as a success on exactly this path
+(#48). A journal proving nothing is now FAIL.*
+
+*(d) T4's scoring oracle was rewritten after the results were known. The
+oracle seeded in #42 before any arm ran said a fix touching discounts.py
+FAILS C2. Both scored arms fixed discounts.py; the bar was then withdrawn
+mid-run, both arms scored PASS, T4's localization-discrimination goal was
+declared void and the issue closed — by Muse Code, without the benchmark
+owner's decision. The ambiguity argument may be right, but changing a
+pre-registered oracle after seeing outcomes is what pre-registration
+exists to prevent, and saddle's T4 "win" (145s vs 159s, n=1) rests on the
+loosened bar. T4 v1 is retained as disclosed-invalid: not scored, not
+cited, re-run under an oracle fixed in advance.*
+
+*Consequence: T1 v5, T2 v1, T3 v1, T4 v1 and T6 v1 are retained on the
+record but retired from scoring — their gate verdicts were produced by a
+harness whose red-phase check could not fail. Scored results restart from
+T1 under the fixed harness. Untouched-arm results are unaffected by (a),
+(b) and (c), which are saddle-internal, and stand as recorded.*
+
 ## Task prompts
 
 Verbatim prompts, identical for all arms on each task:
@@ -141,3 +218,7 @@ Verbatim prompts, identical for all arms on each task:
   the root cause across orders.py, discounts.py and invoice.py, fix
   it in exactly one place, keep the suite green, and add a
   regression test pinning the agreed total.`
+- **T5/T6/T7:** verbatim prompts live in their tracking issues (#46,
+  #45, #47) — too long to inline. T5/T6/T7 use hidden-test grading:
+  tests kept outside the arm workdir, copied into a copy of the final
+  tree at scoring (T7 additionally requires `pip install -e .`).

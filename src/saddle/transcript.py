@@ -143,6 +143,11 @@ def render_journal_transcript(
     Run metadata the journal never stores (task, timestamps) renders as
     "(unknown)"; the verdict is PASS only when every sealed gate output
     passed, so an auditor recomputes it instead of trusting it.
+
+    A journal with no sealed proofs is FAIL, never PASS: `all()` over an
+    empty sequence is vacuously true, which reported runs that proved
+    nothing -- a truncated worker, a crash before the first node -- as
+    successes.
     """
     tools = tool_spans_by_node(spans)
     nodes = tuple(
@@ -160,7 +165,12 @@ def render_journal_transcript(
         )
         for record in records
     )
-    verdict = "PASS" if all(check.passed for node in nodes for check in node.checks) else "FAIL"
+    proven = any(node.checks for node in nodes)
+    verdict = (
+        "PASS"
+        if proven and all(check.passed for node in nodes for check in node.checks)
+        else "FAIL"
+    )
     return render_transcript(
         RunTranscript(
             task="(unknown)",

@@ -347,3 +347,28 @@ def test_render_event_agent_spans() -> None:
     ]
     run = _agent_span("run", node_id="", detail="1 proven, 0 failed, 0 undispatched")
     assert render_event(run) == ["run: exit 0 in 30ms: 1 proven, 0 failed, 0 undispatched"]
+
+
+def test_render_journal_transcript_empty_journal_is_fail() -> None:
+    """A journal that proved nothing is FAIL, never a vacuous PASS.
+
+    Regression: `all()` over no checks is true, so a run whose first worker
+    call died before sealing any proof audited as a success.
+    """
+    text = render_journal_transcript([], [], "/tmp/proofs.jsonl")
+    assert "- Verdict: FAIL\n" in text
+    assert "- Proven nodes: 0\n" in text
+
+
+def test_render_journal_transcript_node_without_gate_outputs_is_fail() -> None:
+    """A sealed record carrying no gate outputs proves nothing either."""
+    record = build_record(
+        evidence_id="e1",
+        node_id="n1",
+        diff="diff\n",
+        parent_proofs=[],
+        gate_outputs=[],
+        requirement_ids=["REQ-001"],
+        thinking="",
+    )
+    assert "- Verdict: FAIL\n" in render_journal_transcript([record], [], "/tmp/proofs.jsonl")

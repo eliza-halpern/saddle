@@ -36,7 +36,10 @@ packages = ["src/saddle"]
 target-version = "py312"
 line-length = 100
 # mutmut's work copies are generated artifacts, never lint targets.
-exclude = ["mutants"]
+# benchmark/tasks holds task fixtures: planted bugs, misleading comments
+# and adapted third-party reference code. Linting them would defeat
+# their purpose, and they are never imported by saddle.
+exclude = ["mutants", "benchmark/tasks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "EM", "PT", "RUF"]
@@ -47,6 +50,10 @@ warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Extends (not replaces) the defaults: task fixtures are graded against
+# arm workdirs, never collected here.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist",
+                 "node_modules", "venv", "{arch}", "benchmark/tasks", "mutants"]
 addopts = "--cov=saddle --cov-report=term-missing --cov-fail-under=100"
 
 [tool.coverage.run]
@@ -60,4 +67,15 @@ branch = true
 source_paths = ["src/saddle/"]
 # Copied into mutants/ unmutated: test_stall_check imports the harness.
 also_copy = ["benchmark/"]
-pytest_add_cli_args = ["-p", "no:cov", "-o", "addopts=", "-q", "-x"]
+# `--ignore` is required, not cosmetic: pyproject is not copied into
+# mutants/, so `norecursedirs` does not apply there and pytest would
+# collect benchmark/tasks' hidden grading tests for every mutant.
+pytest_add_cli_args = [
+    "-p",
+    "no:cov",
+    "-o",
+    "addopts=",
+    "-q",
+    "-x",
+    "--ignore=benchmark/tasks",
+]

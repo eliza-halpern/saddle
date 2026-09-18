@@ -26,7 +26,15 @@ def test_mutant_layout_collects(tmp_path: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(root / rel, dest, ignore=shutil.ignore_patterns("__pycache__"))
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-p",
+            "no:cacheprovider",
+            *mutmut_cfg.get("pytest_add_cli_args", []),
+        ],
         cwd=layout,
         capture_output=True,
         text=True,

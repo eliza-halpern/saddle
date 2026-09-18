@@ -283,7 +283,7 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],
-                "max_context_tokens": 5000,
+                "max_context_tokens": 8000,
             },
             "deterministic_gate": {
                 "test_command": "pytest tests/test_n1.py",

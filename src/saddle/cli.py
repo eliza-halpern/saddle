@@ -51,6 +51,16 @@ BUDGET_TO_EFFORT: Final[dict[str, str]] = {
     "medium": "medium",
     "xhigh": "xhigh",
 }
+# `max_context_tokens` is the worker's INPUT ceiling (ARCHITECTURE.md §2:
+# "each subagent receives a clean ~28,000-30,000-token ceiling"). Generation
+# is a separate budget: spending it as an output cap truncated real work
+# mid-diff. Thinking dominates output, so the budget tracks reasoning effort.
+WORKER_OUTPUT_TOKENS: Final[dict[str, int]] = {
+    "none": 8192,
+    "low": 16384,
+    "medium": 32768,
+    "xhigh": 65536,
+}
 
 
 class RunError(Exception):
@@ -95,10 +105,12 @@ Rules:
 - reasoning_budget is one of: zero, low, medium, xhigh.
 - Size reasoning_budget to the node: mechanical nodes (implement, wire, test)
   take low or zero; reserve medium/xhigh for complex algorithmic nodes.
-- Size max_context_tokens to the node: small contexts for mechanical nodes,
-  large contexts only for complex algorithmic nodes.
+- max_context_tokens is the node's READ budget: it must cover every file the
+  node has to read, so use the full 30000 unless the node touches one small
+  file. It does not cap the answer and costs nothing when unused.
 - allowed_tools uses only: read_file, write_file, run_tests, lint.
-- max_context_tokens is between 1000 and 30000.
+- max_context_tokens is between 8000 and 30000.
+- red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
 - changed_line_coverage_min and kill_threshold are 0-100 numbers.
@@ -111,7 +123,11 @@ Rules:
 def build_worker_prompt(
     *, task: str, node: Node, files: Sequence[str], contents: Mapping[str, str]
 ) -> str:
-    """Node work prompt: task, requirements, repo files, diff format rules."""
+    """Node work prompt: task, requirements, repo files, diff format rules.
+
+    File context is truncated to the node's own `max_context_tokens`, which
+    is what that field means; the global constant is only the hard ceiling.
+    """
     listed = list(files)
     if not listed:
         shown = "(no tracked files)"
@@ -120,8 +136,9 @@ def build_worker_prompt(
         if len(listed) > MAX_FILES_IN_PROMPT:
             shown += f"\n... and {len(listed) - MAX_FILES_IN_PROMPT} more"
     context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
-    if len(context) > MAX_CONTEXT_CHARS:
-        context = context[:MAX_CONTEXT_CHARS] + "\n[file context truncated]"
+    budget = min(node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS)
+    if len(context) > budget:
+        context = context[:budget] + "\n[file context truncated]"
     reqs = ", ".join(node.requirement_ids)
     return f"""Task: {task}
 
@@ -337,7 +354,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
     def propose(node: Node, failure: str | None) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
-        ceiling = node.execution_constraints.max_context_tokens
+        output_tokens = WORKER_OUTPUT_TOKENS[effort]
         files = git_ls_files(options.repo)
         contents = {
             name: (options.repo / name).read_text() for name in files if name.endswith(".py")
@@ -355,7 +372,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                     contents=contents,
                     failure=failure,
                 ),
-                max_tokens=ceiling,
+                max_tokens=output_tokens,
                 temperature=options.temperature,
                 reasoning_effort=effort,
             )
@@ -369,7 +386,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             )
         return client.propose_diff(
             prompt,
-            max_tokens=ceiling,
+            max_tokens=output_tokens,
             temperature=options.temperature,
             reasoning_effort=effort,
         )
@@ -426,7 +443,6 @@ def render_dag_plan(task: str, dag: Dag) -> str:
         gate = node.deterministic_gate
         sample = gate.mutation_sample
         depends = ", ".join(node.dependencies) if node.dependencies else "(none)"
-        red = "required" if gate.red_phase_required else "optional"
         lines.append(
             f"{branch} {node.id} [budget: {constraints.reasoning_budget}, "
             f"context: {constraints.max_context_tokens} tokens]"
@@ -437,7 +453,7 @@ def render_dag_plan(task: str, dag: Dag) -> str:
         lines.append(f"{pad}tools: {', '.join(constraints.allowed_tools)}")
         lines.append(
             f"{pad}gate: {gate.test_command} (coverage >= {gate.changed_line_coverage_min}%, "
-            f"red-phase {red}, mutation {sample.max_mutants} @ "
+            f"red-phase required, mutation {sample.max_mutants} @ "
             f"{sample.kill_threshold}% {sample.scope})"
         )
     return "\n".join(lines) + "\n"

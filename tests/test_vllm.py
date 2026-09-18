@@ -11,6 +11,7 @@ import pytest
 from saddle.dag import dag_json_schema
 from saddle.vllm import (
     DEFAULT_MODEL,
+    DEFAULT_TIMEOUT,
     DIFF_SCHEMA,
     DiffProposal,
     StreamToken,
@@ -95,8 +96,11 @@ def test_emit_honors_sampling_overrides() -> None:
 
 def test_client_uses_configured_timeout() -> None:
     client, _ = _json_client(_ok_body(content=json.dumps({"nodes": []})))
-    assert client._client.timeout.read == 300.0
-    assert client._client.timeout.connect == 300.0
+    assert client._client.timeout.read == DEFAULT_TIMEOUT
+    assert client._client.timeout.connect == DEFAULT_TIMEOUT
+    # Must outlast the largest worker output budget; 300s silently capped
+    # every long generation regardless of max_tokens.
+    assert DEFAULT_TIMEOUT >= 1800.0
 
 
 def test_base_url_trailing_slash_normalized() -> None:
