@@ -21,7 +21,10 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 Statement = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 NodeId = Annotated[str, Field(min_length=1, max_length=64)]
 ReasoningBudget = Literal["zero", "low", "medium", "xhigh"]
-KillThreshold = Literal[85.0, 90.0, 95.0, 100.0]
+# PEP 586 forbids float Literals for the type checker; pydantic
+# compiles them to a JSON-schema enum, which is what the decoder needs (see
+# test_gate_thresholds_constrain_the_token_mask_not_just_validation).
+KillThreshold = Literal[85.0, 90.0, 95.0, 100.0]  # type: ignore[valid-type]
 NodeKind = Literal["test", "impl", "refactor"]
 # A regex `pattern` compiles into the decoding grammar -- verified for
 # DIFF_HEADER_PATTERN, where xgrammar emits
@@ -75,7 +78,10 @@ class DeterministicGate(BaseModel):
     # "Every changed line must be executed" is the gate's own contract and
     # ARCHITECTURE.md's example; the planner emitted 0.0 for T7 and the
     # gate reported `PASS (98.8% >= 0.0%)`. Const, for the reason above.
-    changed_line_coverage_min: Literal[100.0] = 100.0
+    # PEP 586 forbids float Literals for the type checker; pydantic
+    # compiles them to a JSON-schema enum, which is what the decoder needs (see
+    # test_gate_thresholds_constrain_the_token_mask_not_just_validation).
+    changed_line_coverage_min: Literal[100.0] = 100.0  # type: ignore[valid-type]
     # ARCHITECTURE.md gate 4 is the tautology killer, so the waiver is not
     # representable: guided decoding can only emit `true` for this field.
     red_phase_required: Literal[True] = True
