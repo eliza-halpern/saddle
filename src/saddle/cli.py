@@ -101,7 +101,13 @@ Task: {task}
 
 Rules:
 - The first node has no dependencies; every other node depends on at least one earlier node.
-- requirement_ids look like REQ-001, REQ-002, ... (at least one per node).
+- Each node carries at least one requirement: {{"id": "REQ-001", "statement": ...}}.
+- The statement is one testable sentence saying what must hold, in the
+  shape "<when/where>, the system shall <observable behaviour>". Write it
+  so a test can fail when it is violated: "Rejects a local part ending in
+  a dot", not "Validates email correctly". A statement no test can
+  contradict states nothing.
+- Requirement IDs are REQ- followed by exactly three digits.
 - reasoning_budget is one of: zero, low, medium, xhigh.
 - Size reasoning_budget to the node: mechanical nodes (implement, wire, test)
   take low or zero; reserve medium/xhigh for complex algorithmic nodes.
@@ -151,11 +157,12 @@ def build_worker_prompt(
     budget = min(node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS)
     if len(context) > budget:
         context = context[:budget] + "\n[file context truncated]"
-    reqs = ", ".join(node.requirement_ids)
+    reqs = "\n".join(f"  {req.id}: {req.statement}" for req in node.requirements)
     return f"""Task: {task}
 
 Node {node.id}: {node.task_prompt}
-Requirements: {reqs}
+Requirements (each test must fail if its statement is violated):
+{reqs}
 Gate command: {node.deterministic_gate.test_command}
 
 Repo files:
@@ -165,7 +172,8 @@ File contents:
 {context}
 
 Node {node.id}, restated now that you have the files: {node.task_prompt}
-Requirements: {reqs}
+Requirements (each test must fail if its statement is violated):
+{reqs}
 Gate command: {node.deterministic_gate.test_command}
 
 Produce a unified diff (git apply compatible) implementing exactly that.

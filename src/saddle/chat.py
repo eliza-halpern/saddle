@@ -76,7 +76,7 @@ def _seal_turn(
         diff=diff,
         parent_proofs=[parent] if parent is not None else [],
         gate_outputs=[],
-        requirement_ids=[],
+        requirement_ids=[],  # chat-driven edits declare no requirements
         thinking=reasoning,
     )
     append_record(journal, record)

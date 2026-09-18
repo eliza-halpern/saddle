@@ -97,7 +97,7 @@ def _node_dict(
         "id": node_id,
         "dependencies": [],
         "task_prompt": "Fix f and test it.",
-        "requirement_ids": ["REQ-001"],
+        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
         "execution_constraints": {
             "reasoning_budget": budget,
             "allowed_tools": ["read_file"],
@@ -273,7 +273,10 @@ def test_build_worker_prompt_caps_long_file_lists() -> None:
 
 def test_build_worker_prompt_joins_requirements_and_context() -> None:
     node_dict = _node_dict()
-    node_dict["requirement_ids"] = ["REQ-001", "REQ-002"]
+    node_dict["requirements"] = [
+        {"id": "REQ-001", "statement": "REQ-001 holds."},
+        {"id": "REQ-002", "statement": "REQ-002 holds."},
+    ]
     node = Node.model_validate(node_dict)
     prompt = build_worker_prompt(
         task=TASK,
@@ -281,7 +284,8 @@ def test_build_worker_prompt_joins_requirements_and_context() -> None:
         files=["a.py", "b.py"],
         contents={"a.py": "1\n", "b.py": "2\n"},
     )
-    assert "Requirements: REQ-001, REQ-002\n" in prompt
+    assert "  REQ-001: REQ-001 holds.\n" in prompt
+    assert "  REQ-002: REQ-002 holds.\n" in prompt
     assert "--- a.py ---\n1\n\n\n--- b.py ---\n2\n" in prompt
 
 
@@ -364,7 +368,10 @@ def test_build_replan_task_names_scope_and_history() -> None:
 
 def test_build_replan_task_joins_multiple_requirements() -> None:
     data = _node_dict()
-    data["requirement_ids"] = ["REQ-001", "REQ-002"]
+    data["requirements"] = [
+        {"id": "REQ-001", "statement": "REQ-001 holds."},
+        {"id": "REQ-002", "statement": "REQ-002 holds."},
+    ]
     node = Node.model_validate(data)
     text = build_replan_task(task=TASK, node=node, history="x\n")
     assert "Requirements to cover: REQ-001, REQ-002" in text
@@ -874,7 +881,10 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
     second = _node_dict("n2", "medium")
     second["dependencies"] = ["n1"]
     second["task_prompt"] = "Wire it up."
-    second["requirement_ids"] = ["REQ-001", "REQ-002"]
+    second["requirements"] = [
+        {"id": "REQ-001", "statement": "REQ-001 holds."},
+        {"id": "REQ-002", "statement": "REQ-002 holds."},
+    ]
     second["execution_constraints"]["allowed_tools"] = ["read_file", "write_file"]
     second["execution_constraints"]["max_context_tokens"] = 8000
     second["deterministic_gate"]["test_command"] = "pytest test_w.py"

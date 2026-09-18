@@ -22,7 +22,7 @@ def _node(
         "id": node_id,
         "dependencies": deps if deps is not None else [],
         "task_prompt": f"Do {node_id}.",
-        "requirement_ids": ["REQ-001"],
+        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
         "execution_constraints": {
             "reasoning_budget": budget,
             "allowed_tools": ["read_file"],

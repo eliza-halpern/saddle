@@ -31,7 +31,7 @@ def _node() -> Node:
             "id": "n1",
             "dependencies": [],
             "task_prompt": "Do n1.",
-            "requirement_ids": ["REQ-001"],
+            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],
@@ -474,3 +474,28 @@ def test_ruff_missing_tool_names_the_tool() -> None:
     check = check_ruff(["n.py"], lambda _argv: TOOL_UNAVAILABLE)
     assert check.passed is False
     assert "unavailable" in check.detail.lower()
+
+
+def test_requirement_binding_rejects_ids_the_node_never_declared() -> None:
+    """A REQ ID in a test that no node declares is a hallucinated one.
+
+    traceSDD's orphan rule: every ID cited in code is a verifiable claim,
+    and one absent from the spec is automatically detectable. Without it
+    the binding gate is satisfiable in both directions -- the worker can
+    tag whatever it likes, and F5's circularity survives the statements.
+    """
+    check = check_requirement_binding(
+        ["REQ-001"],
+        {"tests/test_n.py": "def test_a():  # REQ-001\n    pass\n\n# REQ-742: invented\n"},
+    )
+    assert check.passed is False
+    assert "REQ-742" in check.detail
+    assert "undeclared" in check.detail.lower()
+
+
+def test_requirement_binding_passes_when_every_cited_id_is_declared() -> None:
+    check = check_requirement_binding(
+        ["REQ-001", "REQ-002"],
+        {"tests/test_n.py": "# REQ-001\n# REQ-002\n"},
+    )
+    assert check.passed is True

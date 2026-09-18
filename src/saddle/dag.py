@@ -12,12 +12,38 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
+# min_length=1 admits "   ", which states nothing. Requirement statements
+# are the one field whose whole purpose is to be readable by a test
+# author, so blankness has to be rejected rather than counted.
+Statement = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 NodeId = Annotated[str, Field(min_length=1, max_length=64)]
 ReasoningBudget = Literal["zero", "low", "medium", "xhigh"]
 KillThreshold = Literal[85.0, 90.0, 95.0, 100.0]
+# A regex `pattern` compiles into the decoding grammar -- verified for
+# DIFF_HEADER_PATTERN, where xgrammar emits
+# `Regex("^diff --git ", json_string=true)` -- so a malformed ID is
+# unrepresentable rather than rejected after the packet exists.
+RequirementId = Annotated[str, Field(pattern=r"^REQ-\d{3}$")]
+
+
+class Requirement(BaseModel):
+    """One acceptance criterion: an ID plus what it actually requires.
+
+    A bare ID states nothing, so no gate can check whether a test tests
+    it (F5). The worker received `Requirements: REQ-001, REQ-002`, invented
+    what they meant, asserted its own invention and the gate greped for the
+    substring -- 7/7 gates and 12/18 on hidden behaviour for T1. The
+    statement is what makes the binding checkable by anything other than
+    the party being graded.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: RequirementId
+    statement: Statement
 
 
 class MutationSample(BaseModel):
@@ -71,9 +97,14 @@ class Node(BaseModel):
     id: NodeId
     dependencies: list[NonEmptyStr]
     task_prompt: NonEmptyStr
-    requirement_ids: list[NonEmptyStr] = Field(min_length=1)
+    requirements: list[Requirement] = Field(min_length=1)
     execution_constraints: ExecutionConstraints
     deterministic_gate: DeterministicGate
+
+    @property
+    def requirement_ids(self) -> list[str]:
+        """Declared IDs, for the journal, transcript and binding gate."""
+        return [requirement.id for requirement in self.requirements]
 
 
 class Dag(BaseModel):

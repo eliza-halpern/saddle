@@ -24,7 +24,10 @@ def _node(
         "id": node_id,
         "dependencies": deps if deps is not None else [],
         "task_prompt": f"Do {node_id}.",
-        "requirement_ids": reqs if reqs is not None else ["REQ-001"],
+        "requirements": [
+            {"id": r, "statement": f"{r} holds."}
+            for r in (reqs if reqs is not None else ["REQ-001"])
+        ],
         "execution_constraints": {
             "reasoning_budget": budget,
             "allowed_tools": tools if tools is not None else ["read_file"],
@@ -215,11 +218,11 @@ def test_missing_gate_rejected_with_location() -> None:
 
 def test_missing_requirement_ids_rejected_with_location() -> None:
     node = _node("a")
-    del node["requirement_ids"]
+    del node["requirements"]
     with pytest.raises(ValidationError) as exc_info:
         Dag.model_validate({"nodes": [node]})
     locs = [error["loc"] for error in exc_info.value.errors()]
-    assert ("nodes", 0, "requirement_ids") in locs
+    assert ("nodes", 0, "requirements") in locs
 
 
 def test_bad_budget_rejected_as_literal_error() -> None:
@@ -292,7 +295,7 @@ def test_derived_schema_has_arch_node_shape() -> None:
         "id",
         "dependencies",
         "task_prompt",
-        "requirement_ids",
+        "requirements",
         "execution_constraints",
         "deterministic_gate",
     ]
@@ -392,3 +395,42 @@ def test_shrinking_the_mutant_cap_is_unrepresentable() -> None:
     field = json.loads("{" + schema.split('"max_mutants": {', 1)[1].split("}", 1)[0] + "}")
     assert "minimum" not in field
     assert "const" in field or "enum" in field
+
+
+def test_requirements_carry_testable_statements() -> None:
+    """A bare ID states nothing, so no gate can check it.
+
+    F5: the worker receives `Requirements: REQ-001, REQ-002` -- two
+    opaque strings -- invents what they mean, writes a test asserting its
+    own invention, and the gate greps for the substring. On T1 that gave
+    7/7 gates and 12/18 on hidden behaviour.
+    """
+    node = _node("n1")
+    node["requirements"] = [{"id": "REQ-001", "statement": "Rejects a local part ending in a dot."}]
+    dag = Dag.model_validate({"nodes": [node]})
+    assert dag.nodes[0].requirements[0].statement.startswith("Rejects")
+    # Downstream consumers (journal, transcript, gates) keep reading IDs.
+    assert dag.nodes[0].requirement_ids == ["REQ-001"]
+
+
+def test_requirement_without_a_statement_is_unrepresentable() -> None:
+    node = _node("n1")
+    node["requirements"] = [{"id": "REQ-001"}]
+    with pytest.raises(ValidationError):
+        Dag.model_validate({"nodes": [node]})
+    node["requirements"] = [{"id": "REQ-001", "statement": "   "}]
+    with pytest.raises(ValidationError):
+        Dag.model_validate({"nodes": [node]})
+
+
+def test_requirement_id_shape_is_grammar_constrained() -> None:
+    """A regex `pattern` compiles into the decoding grammar (verified for
+    DIFF_HEADER_PATTERN via xgrammar), so a malformed ID is unrepresentable
+    rather than rejected after the packet exists."""
+    node = _node("n1")
+    node["requirements"] = [{"id": "REQUIREMENT ONE", "statement": "Does a thing."}]
+    with pytest.raises(ValidationError):
+        Dag.model_validate({"nodes": [node]})
+
+    schema = json.dumps(dag_json_schema())
+    assert "REQ-" in schema

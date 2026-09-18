@@ -9,6 +9,7 @@ runners are injected at the boundary, never embedded in the predicates.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePath
@@ -36,6 +37,10 @@ TOOL_UNAVAILABLE: Final = 127
 # stability of the pre-change leg is worth; one observation cannot tell a
 # genuine failure from a flake.
 RED_PHASE_SAMPLES: Final = 3
+# Requirement IDs as they appear in test sources. Shape is pinned in the
+# schema (dag.RequirementId), so anything matching here and absent from
+# the node's declared set was invented by the worker.
+REQUIREMENT_CITATION: Final = re.compile(r"REQ-\d{3}")
 # Fixed floor for behaviour-preserving nodes; ARCHITECTURE.md's own gate
 # example uses 85.0. Deliberately not the node's own kill_threshold.
 REFACTOR_KILL_FLOOR: Final = 85.0
@@ -262,7 +267,15 @@ def check_red_phase(
 def check_requirement_binding(
     requirement_ids: Collection[str], flipped_tests: Mapping[str, str]
 ) -> GateCheck:
-    """Each claimed requirement must name-check in ≥1 flipped test's source."""
+    """Every declared requirement is cited, and every citation is declared.
+
+    The second half is traceSDD's orphan rule: an ID cited in code that
+    the node never declared is a hallucinated requirement, and detecting
+    it is what stops the binding being satisfiable in both directions. A
+    worker free to invent IDs can tag whatever it likes and the gate
+    still reads green -- F5's circularity, which survives adding
+    statements unless citations are constrained to the declared set.
+    """
     unbound = sorted(
         req
         for req in requirement_ids
@@ -273,6 +286,17 @@ def check_requirement_binding(
             name="requirement-binding",
             passed=False,
             detail=f"unbound requirements: {', '.join(unbound)}",
+        )
+    declared = set(requirement_ids)
+    cited = {
+        found for source in flipped_tests.values() for found in REQUIREMENT_CITATION.findall(source)
+    }
+    orphans = sorted(cited - declared)
+    if orphans:
+        return GateCheck(
+            name="requirement-binding",
+            passed=False,
+            detail=f"undeclared requirements cited: {', '.join(orphans)}",
         )
     return GateCheck(
         name="requirement-binding",

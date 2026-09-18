@@ -279,7 +279,7 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
             "id": "n1",
             "dependencies": [],
             "task_prompt": "Do n1.",
-            "requirement_ids": ["REQ-001"],
+            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],

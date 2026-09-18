@@ -23,7 +23,7 @@ def _node(
             "id": "n1",
             "dependencies": [],
             "task_prompt": "Fix f.",
-            "requirement_ids": ["REQ-001"],
+            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],

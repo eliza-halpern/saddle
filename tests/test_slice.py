@@ -59,7 +59,7 @@ def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
         "id": node_id,
         "dependencies": deps,
         "task_prompt": f"Do {node_id}.",
-        "requirement_ids": ["REQ-001"],
+        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
         "execution_constraints": {
             "reasoning_budget": "low",
             "allowed_tools": ["read_file"],
