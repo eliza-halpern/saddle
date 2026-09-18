@@ -287,30 +287,46 @@ Replace, verbatim:
 
 | Where | Now | Replace with | Source |
 |---|---|---|---|
-| CLAUDE.md:21-22 | `**49%** of its accepted tests added no line coverage at all` | `**49%** of its 571 mutant-killing tests (277) added no line coverage; engineer acceptance (73%) was measured on a separate 191-test sample` | arXiv 2501.12862 |
+| CLAUDE.md:21-22 | `of its accepted tests added no line coverage at all` | `of its 571 mutant-killing tests (277) added no line coverage; engineer acceptance (73%) was measured on a separate 191-test sample` | arXiv 2501.12862 |
 | DESIGN-NOTES:25-27 | `true-negative rate falling from **0.68 on weak-generator output to 0.17 on strong-generator output**` | `true-negative rate falling from **0.68 to 0.17** in one cell of its heatmap (Qwen2.5-72B verifying Mathematics answers from Llama-3.1-8B vs Qwen3-32B); the effect is directional across cells, the size is not` | arXiv 2509.17995 |
 | DESIGN-NOTES:29-31 | `Pairing a weak generator with an independent verifier closed **75.7%** of the gap to a model three times its size.` | `A fixed GPT-4o verifier filtering K=64 samples closed **75.7%** of the gap in one 181-problem Mathematics difficulty bin ([0.7,0.8): 10.3% → 2.5% error); whole-domain gap closure is 30–50%.` | arXiv 2509.17995 v2 |
-| DESIGN-NOTES:139/:712 | `**>30% accuracy drop**` | `wrong or degraded answers **2× to 30× more often** as the context fills (arXiv 2605.12366, Martin & Roger); the Chroma report is cited for the direction only` | audit §5 L139 row; arXiv 2605.12366. The >30% figure was not found in the Chroma report |
-| DESIGN-NOTES:182-187 | `[Zylos][zylos] calls it … Their study across **22,374 program variants** found **>99% of failing agent-written tests passed on the original program while executing the changed region**` | `[Zylos][zylos] names it; the measurement is arXiv 2603.23443: across **22,374 mutated CodeNet variants** and 8 models, **>99%** of failing single-shot LLM tests passed on the original program while executing the changed region. Per-model pass rates on the same benchmark run 40.7% (Nemotron-3-Nano 30B) to 82.9%, so a ~27B model sits near **41%**. This measures single-shot test generation, not agent loops.` | arXiv 2603.23443; corroborated by 2605.06125 (TEBench, F1 45.7–49.4%) |
-| DESIGN-NOTES:265-266/:695 | `**~83% accurate at generating properties** versus **62% at directly solving**` | `**82.4% vs 62.4%** on the Easy split (Medium 62.8/17.5, Hard 48.9/1.1; v1 Table IV); v2 (May 2026, retitled "Effective LLM Code Refinement via Property-Oriented and Structurally Minimal Feedback") reports 87.0 vs 63.0 overall with DeepSeek-R1-32B on 100 LiveCodeBench problems` | arXiv 2506.18315 v1/v2 |
-| DESIGN-NOTES:281-282 | `**+23.1–37.3%** pass@1 … and **+4.2–17.4%** on LiveCodeBench` | `**+23.1–37.3% relative** pass@1 (v1); v2 reports "up to 13.4%". The LiveCodeBench range in v1 could not be located; drop it.` | arXiv 2506.18315 |
+| DESIGN-NOTES:139 | `**>30% accuracy drop**` | `wrong or degraded answers **2× to 30× more often** as the context fills (arXiv 2605.12366, Martin & Roger); the Chroma report is cited for the direction only` | audit §5 L139 row; arXiv 2605.12366. The >30% figure was not found in the Chroma report |
+| DESIGN-NOTES:182 | `[Zylos][zylos] calls it *correlated error*:` | `[Zylos][zylos] names it *correlated error*:` | — |
+| DESIGN-NOTES:185-187 | `Their study across **22,374 program variants** found **>99% of failing agent-written tests passed on the original program while executing the changed region**` | `The measurement is arXiv 2603.23443: across **22,374 mutated CodeNet variants** and 8 models, **>99%** of failing single-shot LLM tests passed on the original program while executing the changed region (per-model pass rates 40.7%–82.9%, so a ~27B model sits near **41%**; this measures single-shot test generation, not agent loops)` | arXiv 2603.23443; corroborated by 2605.06125 (TEBench, F1 45.7–49.4%) |
+| DESIGN-NOTES:265-266 | `**~83% accurate at generating properties** versus **62% at directly solving**` | `**82.4% vs 62.4%** on the Easy split (Medium 62.8/17.5, Hard 48.9/1.1; v1 Table IV); v2 (May 2026, retitled "Effective LLM Code Refinement via Property-Oriented and Structurally Minimal Feedback") reports 87.0 vs 63.0 overall with DeepSeek-R1-32B on 100 LiveCodeBench problems` | arXiv 2506.18315 v1/v2 |
+| DESIGN-NOTES:281-282 | `Report gains of **+23.1–37.3%** pass@1 over TDD baselines on HumanEval and **+4.2–17.4%** on LiveCodeBench.` | `Report gains of **+23.1–37.3% relative** pass@1 over TDD baselines on HumanEval (v1; v2 headlines "up to 13.4%"). The LiveCodeBench range could not be located in the paper.` | arXiv 2506.18315 |
 | DESIGN-NOTES:296 | `filtering removes **>99%** of the candidate pool` | `filtering removes **the large majority** of the candidate pool (the >99% figure was not verified against the paper)` | AlphaCode (unverified) |
-| DESIGN-NOTES:318/:697 | `**k=2–3 votes** per step` | `**k=3 votes** per step for gpt-4.1-mini; k_min ranges 3–29 across models (qwen-3: 15; gpt-oss-20B: 6; llama-3.2-3B unusable), scaling as Θ(ln s) with p>0.5 exact-match agreement required` | arXiv 2511.09030 |
+| DESIGN-NOTES:318 | `**k=2–3 votes** per step` | `**k=3 votes** per step for gpt-4.1-mini; k_min ranges 3–29 across models (qwen-3: 15; gpt-oss-20B: 6; llama-3.2-3B unusable), scaling as Θ(ln s) with p>0.5 exact-match agreement required` | arXiv 2511.09030 |
 | DESIGN-NOTES:319 | `[Snell et al.][testtime] find sequential revision wins on easy problems,` | keep, append ` (not re-verified)` | — |
 | DESIGN-NOTES:344-348 | (VP-Control paragraph) | keep the numbers (verbatim, verified: 62.9%, 22.9%, 40.9, 11.3); append: `Scope: a non-code data-operations benchmark (n=849) with Qwen3-4B / Phi-4-mini Q4_K_M verifiers; the authors disclaim cross-domain transfer and report a reversal on FinQA (17% vs 20%). Directional support only for code.` | arXiv 2609.10969 |
 | DESIGN-NOTES:401-403 | `measures up to **10pp** loss on GSM-Symbolic; EMNLP 2024 found up to **27pp** on math` | `measures up to **8pp** loss from strict constrained decoding (DeepSeek-R1-Distill-Llama-8B; QwQ-32B 5pp) on GSM-Symbolic, which CRANE recovers; the TC⁰ result (Prop. 3.1) is for finite-output grammars — a diff grammar is infinite and falls under Prop. 3.3. The 27pp figure was not verified.` | arXiv 2502.09061 |
-| DESIGN-NOTES:417-420 | `**100–500 tokens** is the cited range … ~35% slower … cut cost **62%**` | `No source for these three figures was found; treat granularity bounds as a design heuristic until T4 measures them.` | UNSUPPORTED |
-| DESIGN-NOTES:549-551 | `**+11.1% average** … beating human-designed harnesses by 6.3%` | `**6.3–18.4 pp absolute** gains from repairing the harness alone (v2); 11.1 is the v2 Table III all-model average. The "beating human harnesses by 6.3%" reading is not in the paper.` | arXiv 2606.06324 v2 |
+| DESIGN-NOTES:418 | `**100–500 tokens** is the cited range;` | `**100–500 tokens** is a working estimate (no source found; T4 measures it);` | UNSUPPORTED |
+| DESIGN-NOTES:419-420 | `Decomposed workflows run ~35% slower on average but cut cost **62%** when paired with smaller models.` | `Claims that decomposed workflows run slower but cheaper with smaller models are unsourced; T4 measures this.` | UNSUPPORTED |
+| DESIGN-NOTES:549-551 | `reports **+11.1% average** across GAIA, SWE-Bench Verified, AppWorld and Terminal-Bench from repairing the *harness alone* — beating human-designed harnesses by 6.3%.` | `reports **6.3–18.4 pp absolute** gains across GAIA, SWE-Bench Verified, AppWorld and Terminal-Bench from repairing the *harness alone* (v2; 11.1 is the v2 Table III all-model average). The paper does not compare against human-designed harnesses.` | arXiv 2606.06324 v2 |
 
-Also apply the remaining rows the audit §5 table marks for action (L121/L711,
-L142-143/L695, L218/L620, L296, L319, L382-383, L403 SpecBench 28pp → "~27pp at
-the P90 upper bound (R²=0.21)", L576) using the replacement text given there.
+| DESIGN-NOTES:119 | `**2% and 16%** of test failures in large projects are flaky` | `**2% and 16%** of test failures in large projects are flaky (range not re-verified: the ACM page returns 403 and the abstract does not carry it)` | ChaosAPI (unverifiable) |
+| DESIGN-NOTES:142-143 | `prepending benign tokens ([Chroma, Context Rot][contextrot]).` | `prepending 800k benign tokens (arXiv 2605.12366, Martin & Roger; the Chroma report does not carry this figure).` | arXiv 2605.12366 |
+| DESIGN-NOTES:218 | `"specification hacking" — models exploiting weak formal specs` | `"cheating" (the paper's term) — models exploiting weak formal specs` | Vericoding |
+| DESIGN-NOTES:318 | `plus schema validation` | `plus a red-flag parser that discards over-long or misformatted responses` | arXiv 2511.09030 |
+| DESIGN-NOTES:382-383 | `same conclusion from practice: parallelise reads, keep writes single-threaded.` | `same conclusion from practice: its subtask agents only answer questions and never write code in parallel.` | Cognition post (the reads/writes wording is not in it) |
+| DESIGN-NOTES:576-577 | `**persists even when authorship is hidden**` | `**is measured with authorship unlabeled** (randomized unlabeled pairs; equal-quality pairs cut the bias by 31.5%)` | arXiv 2604.22891 |
+| DESIGN-NOTES:620 | `specification hacking shows weak specs get exploited even when formal.` | `"cheating" (their term) shows weak specs get exploited even when formal.` | Vericoding |
+| DESIGN-NOTES:695 | `83% property accuracy vs 62% solving` | `82.4% vs 62.4% property accuracy vs solving (Easy split)` | arXiv 2506.18315 |
+| DESIGN-NOTES:697 | `k=2–3 voting` | `k=3 voting (k_min 3–29 across models)` | arXiv 2511.09030 |
+| DESIGN-NOTES:702 | `82/44/27% Dafny/Verus/Lean; specification hacking` | `82/44/27% Dafny/Verus/Lean; "cheating" of weak specs` | Vericoding |
+| DESIGN-NOTES:712 | `U-shaped position curve, >30% mid-context drop` | `U-shaped position curve; magnitude per arXiv 2605.12366, not the Chroma post` | arXiv 2605.12366 |
+| DESIGN-NOTES:720 | `— persists even when authorship is hidden` | `— measured with authorship unlabeled` | arXiv 2604.22891 |
+
+Apply :218 before :620 and :702, or use `sed` with a line address, so each
+"Replace with" lands once. Every "Now" string above occurs exactly once in its
+file after whitespace joining (checked 2026-09-18). The table above is the complete list; nothing else is in scope.
 Matching note: the "Now" strings are quoted with the source's line wrapping
-removed. Four of them span a line break in the file (CLAUDE.md:21-22,
-DESIGN-NOTES:29-31, :265-266, :401-403), so grep for the first 25 characters
-of the string with `grep -n -F`, or join lines first:
-`tr '\n' ' ' < docs/DESIGN-NOTES.md | grep -o -F '<Now string>'`.
-Done when: each "Now" string returns 0 hits after `tr '\n' ' '` joining, and
+removed. Several span a line break in the file (DESIGN-NOTES:29-31, :142-143,
+:185-187, :265-266, :281-282, :401-403, :419-420, :549-551, :576-577), so grep
+for the first 25 characters of the string with `grep -n -F`, or join lines
+first, squeezing runs of whitespace to one space:
+`tr -s '[:space:]' ' ' < docs/DESIGN-NOTES.md | grep -o -F '<Now string>'`.
+Done when: each "Now" string returns 0 hits after `tr -s '[:space:]' ' '` joining, and
 each "Replace with" string returns 1 hit.
 Stop if: any "Now" string is not found after joining (line drift) — report it.
 
