@@ -187,6 +187,11 @@ Gate command: {node.deterministic_gate.test_command}
 Produce a unified diff (git apply compatible) implementing exactly that.
 Rules:
 - Start each file section with a "diff --git a/<file> b/<file>" header line.
+- Every file section needs at least one "@@ ... @@" hunk with the actual
+  change; a header with no hunk applies nothing.
+- The apply step passes --recount, so hunk header line numbers/counts
+  (the "-a,b +c,d" part) do not need to be exact -- do not spend effort
+  computing them.
 - Mark new files with "new file mode 100644".
 - Mention each requirement ID in the new or changed test source.
 - A "test" node must include at least one hypothesis property, not only

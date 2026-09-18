@@ -208,6 +208,20 @@ def test_apply_diff_garbage_raises(tmp_path: Path) -> None:
         _apply_diff(tmp_path, "not a diff\n")
 
 
+def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
+    """A header with no '@@' hunk is schema-valid but applies nothing.
+
+    DIFF_HEADER_PATTERN only anchors "diff --git "; a degenerate
+    completion that stops right after the header satisfies the grammar
+    and would otherwise cost all four _APPLY_MODES a git-apply exit 128
+    ("No valid patches in input") before failing with no useful detail.
+    """
+    _git_repo(tmp_path)
+    expected = f"worker diff has a header but no hunk ('@@ ' marker) in {str(tmp_path)!r}"
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _apply_diff(tmp_path, "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n")
+
+
 def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})

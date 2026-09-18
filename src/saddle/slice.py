@@ -151,6 +151,14 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     if not diff.lstrip().startswith("diff --git "):
         msg = f"worker content is not a unified diff (no 'diff --git' header) in {str(workdir)!r}"
         raise RuntimeError(msg)
+    # A header with no hunk is schema-valid (DIFF_HEADER_PATTERN only anchors
+    # "diff --git ") and git reports it as "No valid patches in input" --
+    # four times, once per _APPLY_MODES entry, none of them informative.
+    # Catching it here costs no subprocess and gives the retry loop a
+    # message that actually names the defect.
+    if "@@ " not in diff:
+        msg = f"worker diff has a header but no hunk ('@@ ' marker) in {str(workdir)!r}"
+        raise RuntimeError(msg)
     for mode, flags in _APPLY_MODES:
         exit_code = run_stdin(
             ["git", "apply", "--index", "--recount", *flags, "-"],
