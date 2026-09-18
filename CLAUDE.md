@@ -63,7 +63,7 @@ Asserting that a constraint is *present* proves nothing about what it
 *accepts*. The shipped test for the worker diff schema was:
 
 ```python
-assert field["pattern"].startswith("^diff --git ")   # BANNED SHAPE
+assert field["pattern"].startswith("^diff --git ")  # BANNED SHAPE
 ```
 
 That passed for weeks while the constraint it pinned made a working diff

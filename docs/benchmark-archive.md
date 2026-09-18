@@ -1033,17 +1033,22 @@ test_hidden_precedence.py:
 ```python
 from filterlang import evaluate
 
+
 def test_or_and_mix_true_lhs():
     assert evaluate("a = 1 OR b = 2 AND c = 3", {"a": 1, "b": 0, "c": 0}) is True
+
 
 def test_or_and_mix_true_lhs_both():
     assert evaluate("a = 1 OR b = 2 AND c = 3", {"a": 1, "b": 2, "c": 0}) is True
 
+
 def test_and_or_mix_true_rhs():
     assert evaluate("a = 1 AND b = 2 OR c = 3", {"a": 0, "b": 0, "c": 3}) is True
 
+
 def test_and_or_mix_true_rhs_mid():
     assert evaluate("a = 1 AND b = 2 OR c = 3", {"a": 0, "b": 2, "c": 3}) is True
+
 
 def test_two_ands_around_or():
     q = "a = 1 AND b = 2 OR c = 3 AND d = 4"
@@ -1054,17 +1059,22 @@ test_hidden_escapes.py:
 ```python
 from filterlang import evaluate
 
+
 def test_escaped_quote():
     assert evaluate("name = 'o\\'brien'", {"name": "o'brien"}) is True
+
 
 def test_escaped_backslash():
     assert evaluate("path = 'a\\\\b'", {"path": "a\\b"}) is True
 
+
 def test_lone_escaped_quote_value():
     assert evaluate("q = '\\''", {"q": "'"}) is True
 
+
 def test_trailing_escaped_backslash():
     assert evaluate("w = 'a\\\\'", {"w": "a\\"}) is True
+
 
 def test_mixed_escapes():
     assert evaluate("s = 'it\\'s \\\\ ok'", {"s": "it's \\ ok"}) is True
@@ -1074,25 +1084,31 @@ test_hidden_not_combined.py:
 ```python
 from filterlang import evaluate
 
+
 def test_not_gt():
     assert evaluate("NOT age > 30", {"age": 25}) is True
+
 
 def test_not_eq_string():
     assert evaluate("NOT name = 'amy'", {"name": "bob"}) is True
 
+
 def test_not_lt():
     assert evaluate("NOT age < 18", {"age": 40}) is True
+
 
 def test_not_eq_number():
     assert evaluate("NOT age = 7", {"age": 8}) is True
 
+
 def test_not_with_and():
-    assert evaluate("NOT age > 30 AND name = 'amy'",
-                    {"age": 25, "name": "amy"}) is True
+    assert evaluate("NOT age > 30 AND name = 'amy'", {"age": 25, "name": "amy"}) is True
+
 
 def test_escape_with_precedence():
     q = "name = 'o\\'brien' OR age > 30 AND retired = 1"
     assert evaluate(q, {"name": "o'brien", "age": 20, "retired": 0}) is True
+
 
 def test_not_or_and_combined():
     q = "NOT city = 'x' OR age > 30 AND tag = 't'"
@@ -1373,9 +1389,7 @@ from report import monthly_summary
 
 
 def test_eur_converts_to_usd():
-    txns = [
-        {"date": "2025-01-05", "amount": "100", "kind": "credit", "currency": "EUR"}
-    ]
+    txns = [{"date": "2025-01-05", "amount": "100", "kind": "credit", "currency": "EUR"}]
     summary = monthly_summary(txns, "2025-01", target="USD")
     assert summary["credits"] == Decimal("108.00")
     assert summary["net"] == Decimal("108.00")
@@ -1424,9 +1438,7 @@ def test_unsupported_target_names_supported():
 
 
 def test_unsupported_line_currency_names_supported():
-    txns = [
-        {"date": "2025-01-05", "amount": "1", "kind": "credit", "currency": "GBP"}
-    ]
+    txns = [{"date": "2025-01-05", "amount": "1", "kind": "credit", "currency": "GBP"}]
     with pytest.raises(ValueError) as err:
         monthly_summary(txns, "2025-01")
     for code in ("USD", "EUR", "JPY"):
@@ -1443,9 +1455,7 @@ from report import monthly_summary
 
 
 def test_eur_converts_to_jpy_via_usd():
-    txns = [
-        {"date": "2025-02-05", "amount": "100", "kind": "credit", "currency": "EUR"}
-    ]
+    txns = [{"date": "2025-02-05", "amount": "100", "kind": "credit", "currency": "EUR"}]
     summary = monthly_summary(txns, "2025-02", target="JPY")
     # 100 EUR * 1.08 = 108 USD; 108 * 155 = 16740 JPY.
     assert summary["credits"] == Decimal("16740")
@@ -1453,9 +1463,7 @@ def test_eur_converts_to_jpy_via_usd():
 
 
 def test_jpy_converts_to_eur_via_usd():
-    txns = [
-        {"date": "2025-02-05", "amount": "15500", "kind": "credit", "currency": "JPY"}
-    ]
+    txns = [{"date": "2025-02-05", "amount": "15500", "kind": "credit", "currency": "JPY"}]
     summary = monthly_summary(txns, "2025-02", target="EUR")
     # 15500 JPY / 155 = 100 USD; 100 / 1.08 = 92.5925... -> 92.59 EUR.
     assert summary["credits"] == Decimal("92.59")

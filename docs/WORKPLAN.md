@@ -164,9 +164,18 @@ Steps:
    ```python
    def test_run_tier1_runs_exactly_the_ten_documented_checks_in_order() -> None:
        names = [check.name for check in run_tier1(_node(), _passing_inputs()).checks]
-       assert names == ["syntax", "ruff", "tests", "coverage", "red-phase",
-                        "node-scope", "property-coverage", "assertion-preservation",
-                        "requirement-binding", "mutation"]
+       assert names == [
+           "syntax",
+           "ruff",
+           "tests",
+           "coverage",
+           "red-phase",
+           "node-scope",
+           "property-coverage",
+           "assertion-preservation",
+           "requirement-binding",
+           "mutation",
+       ]
    ```
 Known-good: the list above. Known-bad: the same list with `"mutation"` removed
 must make the test fail (that is mutant 1).
@@ -548,9 +557,14 @@ Steps:
    ```python
    if kind == "refactor":
        if added_files:
-           return GateCheck(name="node-scope", passed=False,
-                            detail=f"refactor node added file(s): {', '.join(sorted(added_files))}")
-       return GateCheck(name="node-scope", passed=True, detail="refactor: edits both sides, adds nothing")
+           return GateCheck(
+               name="node-scope",
+               passed=False,
+               detail=f"refactor node added file(s): {', '.join(sorted(added_files))}",
+           )
+       return GateCheck(
+           name="node-scope", passed=True, detail="refactor: edits both sides, adds nothing"
+       )
    ```
 4. `run_tier1` L565: pass `inputs.added_files`.
 5. `runner.py`: `added = git_added_files(workdir, baseline, recorder=recorder)`
@@ -604,11 +618,19 @@ Steps:
    if merge_command is not None and proofs:
        merge_start = perf_counter()
        merge_exit = run_shell(merge_command, workdir)
-       append_span(journal_path, build_span(
-           node_id="", argv=shlex.split(merge_command),
-           duration_ms=_elapsed_ms(merge_start), exit_code=merge_exit,
-           detail="merge-time full suite", kind="gate", name="merge-suite",
-           span_id=uuid.uuid4().hex))
+       append_span(
+           journal_path,
+           build_span(
+               node_id="",
+               argv=shlex.split(merge_command),
+               duration_ms=_elapsed_ms(merge_start),
+               exit_code=merge_exit,
+               detail="merge-time full suite",
+               kind="gate",
+               name="merge-suite",
+               span_id=uuid.uuid4().hex,
+           ),
+       )
    ```
    and change L642 to `passed = not failed_unexcused and not undispatched and merge_exit == 0`.
    Extend the run span detail (L649-652) with `f", merge exit {merge_exit}"`.

@@ -293,9 +293,18 @@ def test_binding_all_bound_passes() -> None:
 
 def test_run_tier1_runs_exactly_the_ten_documented_checks_in_order() -> None:
     names = [check.name for check in run_tier1(_node(), _passing_inputs()).checks]
-    assert names == ["syntax", "ruff", "tests", "coverage", "red-phase",
-                     "node-scope", "property-coverage", "assertion-preservation",
-                     "requirement-binding", "mutation"]
+    assert names == [
+        "syntax",
+        "ruff",
+        "tests",
+        "coverage",
+        "red-phase",
+        "node-scope",
+        "property-coverage",
+        "assertion-preservation",
+        "requirement-binding",
+        "mutation",
+    ]
 
 
 def test_run_tier1_all_green_passes() -> None:
