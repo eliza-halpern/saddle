@@ -300,7 +300,7 @@ M2 decision: `saddle up` (interactive chat) and `saddle run` (DAG/gates/journal 
 Make all three benchmark arms runnable and freeze fairness before any scored run.
 
 Arms (all on local vLLM qwen3.8-27B, xhigh thinking, 81920 completion tokens):
-- Untouched: pi --print stock config (--no-extensions --no-skills), --tools read,bash,write, --thinking xhigh. Done = tests green + human judge.
+- Untouched: baseline arm --print stock config (--no-extensions --no-skills), --tools read,bash,write, --thinking xhigh. Done = tests green + human judge.
 - Revision: normal orchestrator flow (roles pin thinking: xhigh), session JSONL captured. Done = review passed + tests green.
 - Saddle: saddle run --reasoning-effort xhigh --max-tokens 81920 on task baselines. Done = verified journal + transcript.
 
@@ -318,25 +318,25 @@ M3-1 evidence — all arms smoke-tested, parity frozen.
 
 Parity (identical unless noted):
 - Model: qwen3.8-27b on local vLLM (127.0.0.1:18020) for all arms.
-- Thinking: medium pinned (saddle default; pi --thinking medium). Deviation: revision stack escalated medium -> xhigh mid-run; recorded, revisit before scored runs if it recurs.
+- Thinking: medium pinned (saddle default; baseline arm --thinking medium). Deviation: revision stack escalated medium -> xhigh mid-run; recorded, revisit before scored runs if it recurs.
 - Tools: untouched restricted to read,bash,write; revision full kit incl. extensions (documented asymmetry); saddle read_file/write_file/run_command.
 
 Smoke (fresh scratch dir per arm, task: write hello.txt with exactly SMOKE-OK):
-- Untouched: exit 0, 5s. pi --print + stock flags (--no-extensions --no-skills --no-context-files --no-themes --no-prompt-templates), session JSONL captured.
+- Untouched: exit 0, 5s. baseline arm --print + stock flags (--no-extensions --no-skills --no-context-files --no-themes --no-prompt-templates), session JSONL captured.
 - Revision: exit 0, 25s. Full config (plan_stepdown route fired), session JSONL captured.
 - Saddle: exit 0, 13s, verdict PASS, journal verifies (saddle verify: 1 proven node, chain verifies).
 
-Stall check (benchmark/stall_check.py + tests/test_stall_check.py, 6 tests): trips on synthetic 3x-repeat control (pi + journal) and 11-min gap control; silent (exit 0) on all three real smoke artifacts.
+Stall check (benchmark/stall_check.py + tests/test_stall_check.py, 6 tests): trips on synthetic 3x-repeat control (baseline arm + journal) and 11-min gap control; silent (exit 0) on all three real smoke artifacts.
 
-Backstop C enforced by running scored arms under timeout 1800. Tripwire B is pi-only (saddle spans carry no timestamps); saddle runs are round-bounded + harness-capped.
+Backstop C enforced by running scored arms under timeout 1800. Tripwire B is baseline arm-only (saddle spans carry no timestamps); saddle runs are round-bounded + harness-capped.
 
 BENCHMARK.md amended (criterion 5, three arms, rule 1-5) before any scored run.
 
 ### Comment 2 — 2026-09-17 15:39:19 UTC
 
 M3-1 complete. Evidence:
-- 3/3 arm smoke runs green (untouched pi, revision, saddle); wall-clock + done signal recorded per arm.
-- Parity frozen: qwen3.8-27B, xhigh thinking, 81920 completion tokens all arms (saddle: `--reasoning-effort xhigh --max-tokens 81920`; pi: `--thinking xhigh` via models.json maxTokens; revision: role frontmatter). Truncation (finish_reason=length) = infra-invalid, re-run per ~90k operator ceiling.
+- 3/3 arm smoke runs green (untouched baseline arm, revision, saddle); wall-clock + done signal recorded per arm.
+- Parity frozen: qwen3.8-27B, xhigh thinking, 81920 completion tokens all arms (saddle: `--reasoning-effort xhigh --max-tokens 81920`; baseline arm: `--thinking xhigh` via models.json maxTokens; revision: role frontmatter). Truncation (finish_reason=length) = infra-invalid, re-run per ~90k operator ceiling.
 - stall_check trips on synthetic 3x-repeat control, silent on smoke task.
 - BENCHMARK.md: criterion 5 + parity freeze + decision rule 1-5.
 - Gates: 362 passed, 100% coverage (./check.sh).
@@ -354,7 +354,7 @@ Per BENCHMARK.md T1: fresh scratch repo + committed baseline; add email-format v
 AC:
 - [ ] Untouched, revision, saddle arms run T1.
 - [ ] Wall-clock per arm recorded (criterion 1).
-- [ ] Correctness recorded: Tier-1 + journal verify (saddle), tests + human judge (pi arms) (criterion 2).
+- [ ] Correctness recorded: Tier-1 + journal verify (saddle), tests + human judge (baseline arms) (criterion 2).
 - [ ] Stall verdict recorded per arm (criterion 5).
 
 ### Comment 1 — 2026-09-17 15:48:05 UTC
@@ -362,7 +362,7 @@ AC:
 T1 frozen (pre-run, no scored runs yet):
 - Prompt (identical all arms): Implement the email-format validator stub in validators.py and add pytest coverage for it.
 - Baseline: empty repo + one stub module, committed. validators.py: is_valid_email(address) raising NotImplementedError. Fresh copy per arm.
-- Arm order: saddle, untouched pi, revision. Wall-clock per arm; live views: saddle tail/journal, pi session JSONL.
+- Arm order: saddle, untouched baseline arm, revision. Wall-clock per arm; live views: saddle tail/journal, baseline arm session JSONL.
 - Pre-run harness fix: saddle run CLI knobs only govern DAG emission; workers take effort from emitted node budgets and max_tokens defaults to 4096. Adding --worker-effort override + worker max-tokens plumbing so the xhigh/81920 freeze actually reaches workers. Gates re-run before launch.
 
 ### Comment 2 — 2026-09-17 15:56:20 UTC
@@ -417,13 +417,13 @@ T1 SCORECARD (all arms scored, closing):
 - untouched v2: PASS, 2:33, 32/32 green (verified independently; built-ins-only footprint, 0 extension events). Attempt-1 void (extensions active). v1 pilot supplementary: PASS, 118s, 44/44.
 - revision v2: FAIL, C5-C 30:00 cap, no solution (plan_pipeline never returned; repo untouched).
 
-Criteria: C1 diagnostic (untouched 2:33 < saddle 6:22 < revision 30:00C) — crossover hypothesis HOLDS on T1 (saddle loses short-task wall-clock as predicted). C2: saddle passes where untouched passes. C3: no malformed packets in v3 (all diffs applied; retries were gate-driven). C4: saddle journal verifies; pi sessions logged. C5: saddle + untouched self-terminated; revision envelope-capped.
+Criteria: C1 diagnostic (untouched 2:33 < saddle 6:22 < revision 30:00C) — crossover hypothesis HOLDS on T1 (saddle loses short-task wall-clock as predicted). C2: saddle passes where untouched passes. C3: no malformed packets in v3 (all diffs applied; retries were gate-driven). C4: saddle journal verifies; baseline arm sessions logged. C5: saddle + untouched self-terminated; revision envelope-capped.
 
 T2-T4 baselines built and verified during the waits; task prompts pinned in BENCHMARK.md. Next: T2 arms, then T3, then decisive T4.
 
 ### Comment 14 — 2026-09-17 21:37:36 UTC
 
-Record correction: the revision v2 C5-C kill at 18:37:50Z did NOT actually kill the pi process. The pkill self-match took down the watchdog, and the 'kill verified' check was wrong — the revision pi (cwd /tmp/t1v2-revision) survived and ran 3.5h of plan_pipeline ceremony until killed during T1 v4 setup. The v2 FAIL (C5-C) verdict itself stands (cap correctly tripped at 30:00; nothing after counts), but (a) the process hygiene note matters, (b) the runaway consumed the shared GPU for hours afterwards. Lesson hardened: verify envelope kills by PID death (pgrep patterns self-match — this bit twice now), and all v4 arms launch under timeout 1800 so the kernel enforces the cap.
+Record correction: the revision v2 C5-C kill at 18:37:50Z did NOT actually kill the baseline arm process. The pkill self-match took down the watchdog, and the 'kill verified' check was wrong — the revision baseline arm (cwd /tmp/t1v2-revision) survived and ran 3.5h of plan_pipeline ceremony until killed during T1 v4 setup. The v2 FAIL (C5-C) verdict itself stands (cap correctly tripped at 30:00; nothing after counts), but (a) the process hygiene note matters, (b) the runaway consumed the shared GPU for hours afterwards. Lesson hardened: verify envelope kills by PID death (pgrep patterns self-match — this bit twice now), and all v4 arms launch under timeout 1800 so the kernel enforces the cap.
 
 ### Comment 15 — 2026-09-17 22:02:15 UTC
 
@@ -499,7 +499,7 @@ Workdirs: /tmp/t2v1-saddle (+ journal .saddle/proofs.jsonl), /tmp/t2v1-untouched
 
 Per BENCHMARK.md T3: extract shared helper into its own module, keep suite green. Score criteria 1, 2, 5 per arm. Additionally record changed-line coverage across moved lines + requirement binding naming both requirements (saddle).
 
-Two scored arms (revision retired per T1 decision): saddle (unpinned) + untouched (xhigh). pi medium/low/none probes run alongside, reported separately, not scored.
+Two scored arms (revision retired per T1 decision): saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes run alongside, reported separately, not scored.
 
 AC:
 - [x] Untouched, saddle arms run T3.
@@ -564,7 +564,7 @@ AC:
 
 ### Body
 
-Apply the regime-aware decision rule (BENCHMARK.md): T4 C1 decisive (saddle at/under the faster pi arm), T1-T3 C1 diagnostic, C2-C5 binding on all four tasks. Proceed to phased migration only when the crossover holds (lose C1 short, win C1 long), no arm passes a task saddle fails, and C3-C5 hold on every run. Otherwise stop, list the harvest (guided decoding, tool masking, reasoning budgets), and cancel M5/M6-migrate.
+Apply the regime-aware decision rule (BENCHMARK.md): T4 C1 decisive (saddle at/under the faster baseline arm), T1-T3 C1 diagnostic, C2-C5 binding on all four tasks. Proceed to phased migration only when the crossover holds (lose C1 short, win C1 long), no arm passes a task saddle fails, and C3-C5 hold on every run. Otherwise stop, list the harvest (guided decoding, tool masking, reasoning budgets), and cancel M5/M6-migrate.
 
 AC:
 - [ ] Decision recorded in this issue on close.
@@ -690,7 +690,7 @@ Fixed in 311aa30 (verified: ./check.sh 404 passed, 100% coverage; T1 v3 PASS on 
 
 ### Body
 
-BENCHMARK.md C5 defines tripwire B as 10 continuous minutes with no PROGRESS event (diff change or test transition). stall_check.py implements it as any 600s inter-event gap over all timestamped records, including extension custom-events — so a run doing 15 min of pure planning ceremony (T1 revision v2) reads silent. Either implement progress-event detection for pi sessions (diff/test transitions) or soften the prose to the event-gap semantics. Must close before T4, where C1 is decisive and long planning preambles actually matter.
+BENCHMARK.md C5 defines tripwire B as 10 continuous minutes with no PROGRESS event (diff change or test transition). stall_check.py implements it as any 600s inter-event gap over all timestamped records, including extension custom-events — so a run doing 15 min of pure planning ceremony (T1 revision v2) reads silent. Either implement progress-event detection for baseline arm sessions (diff/test transitions) or soften the prose to the event-gap semantics. Must close before T4, where C1 is decisive and long planning preambles actually matter.
 
 ---
 
@@ -763,14 +763,14 @@ Follow-up to #25 (closed). First T1 run on the enforced-gates tree (0142a86: pro
 
 Protocol: identical T1 prompt on fresh baseline copies (/tmp/t1v4-*), sequential arm order saddle -> untouched -> revision (C1 readings sequential, no GPU overlap), each under timeout 1800 with repo venv bin on PATH.
 - saddle: saddle run --repo /tmp/t1v4-saddle --reasoning-effort xhigh --worker-effort xhigh --max-tokens 81920 --yes; log /tmp/t1v4-saddle.log; journal default .saddle/proofs.jsonl
-- untouched: pi -p --provider local-vllm --model qwen3.8-27b --thinking xhigh -ne -ns -np --session-dir /tmp/t1v4-untouched-session; cwd /tmp/t1v4-untouched; log /tmp/t1v4-untouched.log
-- revision: pi -p --provider local-vllm --model qwen3.8-27b --thinking xhigh --role orchestrator --plan-auto-approve --session-dir /tmp/t1v4-revision-session; cwd /tmp/t1v4-revision; log /tmp/t1v4-revision.log
+- untouched: baseline arm -p --provider local-vllm --model qwen3.8-27b --thinking xhigh -ne -ns -np --session-dir /tmp/t1v4-untouched-session; cwd /tmp/t1v4-untouched; log /tmp/t1v4-untouched.log
+- revision: baseline arm -p --provider local-vllm --model qwen3.8-27b --thinking xhigh --role orchestrator --plan-auto-approve --session-dir /tmp/t1v4-revision-session; cwd /tmp/t1v4-revision; log /tmp/t1v4-revision.log
 
 Scoring: C1 wall per arm (diagnostic); C2 independent pytest rerun + human judge; C3 packet/diff parse check (saddle); C4 journal verify + transcript; C5 stall_check on session/journal + envelope cap. Plus revision gate-behavior evidence pass (record plan/review/verify steps observed in transcript; describe arm by observed behavior in #29).
 
 ### Comment 1 — 2026-09-17 21:10:59 UTC
 
-C1 caveat (recorded, not voiding): a pre-existing user-owned interactive pi session (pid 2355861, started 14:07) holds a connection to the shared single-GPU vLLM server during these runs. Untouched for obvious reasons. Wall-clock readings on v4 are therefore upper bounds under contention; T1 C1 is diagnostic per the regime rule, so no protocol impact.
+C1 caveat (recorded, not voiding): a pre-existing user-owned interactive baseline arm session (pid 2355861, started 14:07) holds a connection to the shared single-GPU vLLM server during these runs. Untouched for obvious reasons. Wall-clock readings on v4 are therefore upper bounds under contention; T1 C1 is diagnostic per the regime rule, so no protocol impact.
 
 ### Comment 2 — 2026-09-17 21:17:50 UTC
 
@@ -798,7 +798,7 @@ Reopening: a stray fragment in my own update command closed this by mistake. The
 
 ### Comment 8 — 2026-09-17 21:40:25 UTC
 
-Revision gate-behavior evidence pass (v2 root session /tmp/t1v2-revision-session/2026-09-17T18-07-50-520Z_*.jsonl, 1746 records, 18:07:50Z-21:37:05Z): top-level footprint is 8 calls in minute 1 (declare_route, ls, 2x read, bash[git status/log/show], repo_status, find) then ONE plan_pipeline call at 18:09:06 that never returned. No plan ever materialized at top level; zero review/approval records; zero verification commands (no pytest, no test runner of any kind); zero file modifications (repo untouched, confirmed). The remaining 3.5h produced ~572 subagent session files of planning ceremony. stall_check on the root session: PASS/silent (events kept flowing; no 3x repeat at top level) — the run died purely by the C5-C cap, consistent with #25. #29 arm description: pi-orchestrator prompting; observed behavior is reconnaissance-then-unreturned-planning-pipeline. Revision's advertised plan/review/approve gates never engaged — not even the plan step completed.
+Revision gate-behavior evidence pass (v2 root session /tmp/t1v2-revision-session/2026-09-17T18-07-50-520Z_*.jsonl, 1746 records, 18:07:50Z-21:37:05Z): top-level footprint is 8 calls in minute 1 (declare_route, ls, 2x read, bash[git status/log/show], repo_status, find) then ONE plan_pipeline call at 18:09:06 that never returned. No plan ever materialized at top level; zero review/approval records; zero verification commands (no pytest, no test runner of any kind); zero file modifications (repo untouched, confirmed). The remaining 3.5h produced ~572 subagent session files of planning ceremony. stall_check on the root session: PASS/silent (events kept flowing; no 3x repeat at top level) — the run died purely by the C5-C cap, consistent with #25. #29 arm description: baseline arm-orchestrator prompting; observed behavior is reconnaissance-then-unreturned-planning-pipeline. Revision's advertised plan/review/approve gates never engaged — not even the plan step completed.
 
 ### Comment 9 — 2026-09-17 21:54:56 UTC
 
@@ -863,7 +863,7 @@ Suggested direction: run the identical (coverage-wrapped) command for the baseli
 
 Per BENCHMARK.md T4: penny disagreement between discounted order totals and invoice totals; find root cause across orders.py/discounts.py/invoice.py, fix in exactly one place, keep suite green, add regression test. Score criteria 1 (DECISIVE here), 2, 5 per arm. Expectation: 2-4 nodes; wrong-module fix fails gates instead of silently shifting the discrepancy.
 
-Two scored arms: saddle (unpinned) + untouched (xhigh). pi medium/low/none probes run alongside, reported separately, not scored.
+Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes run alongside, reported separately, not scored.
 
 ORACLE CORRECTED mid-run (see comments): either localization passes; T4's localization-discrimination goal void.
 
@@ -969,7 +969,7 @@ Post-M4 harder test (adversarial precision): filterlang.py has 3 planted bugs (A
 
 Grading: 17 hidden tests (kept outside the workdir, copied into a copy of the final tree at scoring) + baseline suite + reference equivalence (judge). See oracle comment.
 
-Two scored arms: saddle (unpinned) + untouched (xhigh). pi medium/low/none probes alongside, unscored.
+Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes alongside, unscored.
 
 AC:
 - [ ] Untouched, saddle arms run T6.
@@ -1113,7 +1113,7 @@ Post-M4 harder test (scale + cross-module coupling): extend the USD-only float l
 
 Grading: 29 hidden tests (outside the workdir, copied into a copy of the final tree at scoring) + visible suite + reference equivalence (judge). See oracle comment.
 
-Two scored arms: saddle (unpinned) + untouched (xhigh). pi medium/low/none probes alongside, unscored.
+Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes alongside, unscored.
 
 AC:
 - [ ] Untouched, saddle arms run T5.
@@ -1530,7 +1530,7 @@ Sourced harder test (greenfield multi-hour-scale): build an installable orderedl
 
 Grading: 63 hidden tests (adapted upstream coverage + perturbation + seeded stress) via pip-install grading in a throwaway venv. Materials: benchmark/tasks/t7/ in the repo.
 
-Two scored arms: saddle (unpinned) + untouched (xhigh). pi medium/low/none probes alongside, unscored.
+Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes alongside, unscored.
 
 AC:
 - [ ] Untouched, saddle arms run T7.

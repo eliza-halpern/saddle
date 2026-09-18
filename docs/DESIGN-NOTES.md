@@ -504,8 +504,8 @@ and tool access per task node." Today saddle sets one effort level per run.
 
 Planning explores ambiguity, execution is largely mechanical, verification is
 precise comparison — uniform maximum compute on execution wastes budget where
-it buys least. Worth noting the probe arms give evidence here: on T6 every pi
-arm scored **17/17 including `--thinking none`**, and on T5 `none` matched
+it buys least. Worth noting the baseline arm's probe runs give evidence here: on T6 every baseline arm
+scored **17/17 including `--thinking none`**, and on T5 `none` matched
 `xhigh` at 25/29. Reasoning level is not the lever it was assumed to be, at
 least at this task scale.
 

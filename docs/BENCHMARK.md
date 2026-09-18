@@ -56,15 +56,15 @@ human-readable transcript plus a verifying journal.
 
 ## Gate criteria
 
-Each task runs on all three arms — untouched pi, pi-revision, and the
+Each task runs on all three arms — untouched baseline arm, baseline arm-revision, and the
 Saddle slice (see M3-1 for arm harnesses and parity controls):
 
-1. **Wall-clock ≤ both pi arms** per task, measured from prompt to verified
-   journal (saddle) or to each pi arm's equivalent done signal.
-2. **Correctness ≥ both pi arms**: Saddle output must pass its own Tier-1 gates
+1. **Wall-clock ≤ both baseline arms** per task, measured from prompt to verified
+   journal (saddle) or to each baseline arm's equivalent done signal.
+2. **Correctness ≥ both baseline arms**: Saddle output must pass its own Tier-1 gates
    and journal verification; a human judge then confirms the change does
    what the task asked. A gate-passing wrong answer fails this criterion.
-   Wherever a pi arm passes, saddle must pass.
+   Wherever a baseline arm passes, saddle must pass.
 3. **Zero malformed-packet retries**: guided emission (DAG plans and worker
    diffs) must parse first try — no tolerant re-parsing, no blind retries
    at the same temperature.
@@ -85,9 +85,9 @@ thinking level xhigh with a completion budget of 81920 tokens: saddle passes
 `--reasoning-effort xhigh --max-tokens 81920` (its former
 `--worker-effort xhigh` worker flags are superseded — see amendment
 record);
-untouched pi passes `--thinking xhigh` (models.json maxTokens 81920).
+untouched baseline arm passes `--thinking xhigh` (models.json maxTokens 81920).
 Exact
-arm conditions: untouched runs stock pi with `-ne -ns -np`
+arm conditions: untouched runs stock baseline arm with `-ne -ns -np`
 (no extensions, skills, or prompt templates — built-in tools only).
 The revision arm (`--role orchestrator --plan-auto-approve`, full
 extension environment) is retired — see amendment record. A run ending in
@@ -102,7 +102,7 @@ re-run correctly; the voided attempt stays on the record.
 Criterion 1 (wall-clock) is regime-dependent: on the short tasks (T1–T3)
 it is diagnostic — recorded per arm but not decisive, since per-call
 overhead dominates at that scale. On the long task (T4) it is decisive:
-saddle must clock at or under the faster pi arm. Criteria 2–5 bind on
+saddle must clock at or under the faster baseline arm. Criteria 2–5 bind on
 all four tasks.
 
 Pre-registered crossover hypothesis: saddle loses C1 on T1 and wins C1
@@ -132,18 +132,18 @@ attempts (prior FAILs stand). Exact arm invocations pinned in the
 parity freeze above. Task prompts pinned in §Task prompts below.*
 
 *Amendment record (before any scored v4 run): revision arm retired.
-Rationale: pi-revision's only scored run (T1 v2) produced no solution
+Rationale: baseline arm-revision's only scored run (T1 v2) produced no solution
 in 30:00 (C5-C; repo untouched; planning ceremony never returned),
 and its process survived the documented kill (see #25) — total
 non-performance on the trivial task at full cost. Arms are now two
-(untouched pi, saddle) for T1 v4 onward; revision v2 stands on the
-record. Criteria restated: "both pi arms" reads "the pi arm
+(untouched baseline arm, saddle) for T1 v4 onward; revision v2 stands on the
+record. Criteria restated: "both baseline arms" reads "the baseline arm
 (untouched)" wherever it binds (C1 faster-arm comparison, C2
 no-arm-passes-where-saddle-fails). Safeguard: revision may return by
 later amendment if evidence suggests regime-dependent performance;
 the v2 session is preserved for the gate-behavior evidence pass.*
 
-*Amendment record (after T1 v4 scoring): saddle worker-budget misconfiguration. All saddle T1 runs to date (v2, v3, v4) ran workers at xhigh reasoning with 81920 max tokens via --worker-effort/--max-tokens flags. This violates the spec (ARCHITECTURE.md §1 Heterogeneous Test-Time Compute, §2 5×30K worker pool, §Phase 2 mechanical→Low/Zero; corroborated by pi-revision's worker-fixed-low design): T1's mechanical workers should have run low reasoning within the 30,000-token node ceiling, with large budgets reserved for orchestration/emission. Cause: operator error by Muse Code (the coding agent running the benchmark) — the flags were chosen from a parity-freeze reading that treated equal budgets as fair, without checking the spec's explicit heterogeneous design. Impact by run: v2 FAIL stands on its own cause (harness bug #35, budget-independent); v3 PASS is off-spec configuration (passed over-budget; does not validate spec-faithful operation); v4 FAIL is plausibly budget-contributed (xhigh recovery ramble met the fixed 300s timeout). Untouched runs are unaffected (single-agent xhigh is that arm's design). These runs stay on record annotated off-spec; no further saddle runs score until worker budgets are spec-faithful.*
+*Amendment record (after T1 v4 scoring): saddle worker-budget misconfiguration. All saddle T1 runs to date (v2, v3, v4) ran workers at xhigh reasoning with 81920 max tokens via --worker-effort/--max-tokens flags. This violates the spec (ARCHITECTURE.md §1 Heterogeneous Test-Time Compute, §2 5×30K worker pool, §Phase 2 mechanical→Low/Zero; corroborated by baseline arm-revision's worker-fixed-low design): T1's mechanical workers should have run low reasoning within the 30,000-token node ceiling, with large budgets reserved for orchestration/emission. Cause: operator error by Muse Code (the coding agent running the benchmark) — the flags were chosen from a parity-freeze reading that treated equal budgets as fair, without checking the spec's explicit heterogeneous design. Impact by run: v2 FAIL stands on its own cause (harness bug #35, budget-independent); v3 PASS is off-spec configuration (passed over-budget; does not validate spec-faithful operation); v4 FAIL is plausibly budget-contributed (xhigh recovery ramble met the fixed 300s timeout). Untouched runs are unaffected (single-agent xhigh is that arm's design). These runs stay on record annotated off-spec; no further saddle runs score until worker budgets are spec-faithful.*
 
 *Amendment record (before T1 v5): spec-faithful worker budgets. Emission/orchestration stay xhigh/81920 (--reasoning-effort xhigh --max-tokens 81920); worker and recovery calls use the node's own reasoning_budget and max_context_tokens ceiling (plumbing fixed in 4722124; --max-tokens is emission-only as documented). Scored saddle runs must not pass --worker-effort except as a task-pinned budget documented here: T1 pins --worker-effort low (mechanical task → low per spec §Phase 2; removes planner-sizing variance on a single-node task). Multi-node tasks (T2+) run unpinned so the planner's heterogeneous sizing is what's measured.*
 

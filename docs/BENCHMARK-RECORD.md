@@ -11,11 +11,11 @@ Tier-1-gated nodes → hash-chained proof journal) produce better outcomes
 than a single agent on the same local model (Qwen3.8-27B via vLLM)?
 
 **Arms.** `saddle` (planner at xhigh, workers sized by the planner) and
-`untouched` (stock pi, `-ne -ns -np`, thinking xhigh). A third arm,
-`revision` (pi with the orchestrator role and full extensions), was
+`untouched` (stock baseline arm, `-ne -ns -np`, thinking xhigh). A third arm,
+`revision` (baseline arm with the orchestrator role and full extensions), was
 retired after its only scored run produced no solution in 30 minutes;
 an evidence pass on its session showed its advertised gates never
-engaged. Unscored pi probes at medium/low/none run alongside.
+engaged. Unscored baseline arm probes at medium/low/none run alongside.
 
 **Criteria.** C1 wall-clock, C2 correctness against a pre-registered
 oracle, C3 zero malformed-packet retries, C4 verifying journal plus
