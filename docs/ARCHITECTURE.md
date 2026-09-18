@@ -98,6 +98,8 @@ graph TD
 
 ### Phase -1: The Triage Router
 
+> *Status (2026-09-18): specified, not built — deferred, WORKPLAN §7.*
+
 A low-latency, zero-reasoning classification pass using guided decoding to return an enum: [CREATIVE | MECHANICAL] — **plus a machine-checked intent record** (guided fields, not freeform):
 
 > * **CREATIVE:** Open-ended requests, greenfield feature builds, or tasks requiring UX design.
@@ -143,6 +145,8 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 > * **Static DAG Validation (new — contains the single-shot risk):** Before anything executes, dependency-free Python checks run with zero LLM involvement: schema conformance, acyclicity, every dependency resolves, `allowed_tools` ⊆ global allowlist, `reasoning_budget` ∈ {zero, low, medium, xhigh} (node vocabulary; low/medium/xhigh pass to the wire, zero maps to wire none), `max_context_tokens` ≤ per-worker ceiling, every node declares `deterministic_gate` + `requirement_ids`, every `test_command` is runnable, and every intent-record criterion maps to ≥1 node gate.
 > * **Bounded Recompile:** Validation errors return to the Orchestrator as a machine-generated error list (max 3 rounds); exhaustion routes to the human gate. One call drafts, but nothing executes until the draft passes machine checks.
 > * **Rolling Wave (large/uncertain work):** The Orchestrator MAY emit a partial DAG plus a plan-ahead horizon instead of the whole graph; the scheduler requests extension waves as proof blocks land. One-shot compilation is the fast path, not a straitjacket.
+>
+> *Status (2026-09-18): specified, not built — deferred, WORKPLAN §7.*
 > * **Escalation Ladder:** node recovery (bounded, Phase 3) → subgraph re-compilation here → human gate. Repeated node failure re-plans the *structure*, never just re-queues the *work* — workers are never burned against a bad decomposition.
 
 ### Phase 2: Topological Execution (Kahn's Algorithm)
@@ -155,6 +159,8 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 > * **Dynamic Scoping:**
 >   * *Reasoning Budget:* Mechanical nodes (linting, search) run at Low/Zero reasoning; complex algorithmic nodes run at xhigh.
 >   * *Tool Masking:* Only the schemas listed in allowed_tools are injected into the worker's prompt, preventing context pollution and unauthorized system commands.
+>
+> *Status (2026-09-18): specified, not built — `RUN_ALLOWLIST` (`cli.py:41`) is consumed by nothing; see WORKPLAN T3-4.*
 
 ### Phase 3: Tiered Deterministic Environment Gates
 
@@ -174,6 +180,8 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 
 **Tier 2 — merge-time (budgeted; once per DAG):**
 
+> *Status (2026-09-18): specified, not built — see #60, WORKPLAN T2-3.*
+
 > 1. **Scoped, Sampled Mutation Testing:** mutmut/Stryker/PIT restricted to changed lines, capped (e.g., ≤100 mutants or ≤10 minutes, whichever binds first), with a kill-rate threshold from the node's gate spec, floored at 85% and selectable only upward. The earlier allowance for "lower or waived for mechanical glue" is withdrawn: it is the waiver the planner actually took (T3 set 50%, T7 set a 0.0% coverage bar), and a gate whose strictness the graded party chooses is not a gate. Full unscoped mutation is explicitly NOT a per-node gate — it would dominate wall-clock by 10–100×.
 > 2. **Full Suite + Integration:** The complete pytest suite and any integration checks run once against the merged tree.
 > 3. **On Failure:** A targeted recovery subgraph (fresh worker context with the surviving-mutant diffs / tracebacks) repairs the specific nodes; the DAG is never re-run wholesale.
@@ -186,6 +194,8 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 **Hash-Chained Proof Journal (replaces the vague "signed block"):** append-only JSONL, fsync per record. Each record contains `evidence_id`, `node_id`, `diff_hash` (sha256 of the canonical diff), `parent_proofs` (hashes of parent records), `gate_outputs` (commands, exit codes, coverage %, red-phase result, Tier-2 sample result), and `requirement_ids`; `record_hash = sha256(canonical JSON)`. Verification is recomputation plus parent-linkage checks — no PKI theater. Scheduler state is fully rebuildable from the journal, so a crash loses at most the in-flight node.
 
 ### Phase 4: Synthesis & Commit
+
+> *Status (2026-09-18): specified, not built — deferred, WORKPLAN §7.*
 
 Once all nodes reach verified completion, the Orchestrator's context is restored to GPU VRAM. It receives the collected proof records, **re-verifies the hash chain by recomputation (never by trust)**, confirms that global integration requirements are met, and prepares the final atomic Git commit.
 
@@ -208,6 +218,8 @@ Two structural properties, not model quality, carry the speedup — and both sur
 > * **pytest + coverage.py:** Tier-1 functional and changed-line-coverage gates.
 > * **mutmut / Stryker / PIT:** Mutation testing frameworks enforcing the Tier-2 sampled gate against tautological tests — scoped to changed lines, capped by mutant count and wall-clock, never per-node unscoped.
 > * **Operational Patterns (design constraints):** Token-degeneration stall detection with bounded retries instead of open-ended loops; throwaway subprocess contexts for noisy context gathering; and crash-safe file state — graph state persisted as human-readable Markdown/JSON so an operator can intervene and resume without session loss.
+>
+> *Status (2026-09-18): specified, not built — stall detection deferred, WORKPLAN §7; resume specified, not built — `slice.py:584-587` raises on a non-fresh journal, see WORKPLAN T3-1.*
 
 ## 6. Implementation Plan
 
