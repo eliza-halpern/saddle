@@ -82,6 +82,7 @@ Stop if: <premise check that, if false, ends the item>
 ```
 T0-1 ──► T1-4 (check.sh green needs the staged file gone)
 T1-1, T1-2, T1-3 ──► T1-4
+T0-11 ──► T1-4 (check.sh runs `ruff format --check .`, which covers Markdown)
 T0-3 (gate names test) ──► T2-2 (extends the same test module)
 T2-1 ──► T4-1 (a benchmark rerun with vacuous k is not worth the GPU time)
 T4-4 ──► any future D14 work (deferred)
@@ -330,11 +331,13 @@ Stop if: the grep matches inside a URL or a code identifier that the runs
 depend on — report, do not edit.
 
 ### T0-11 — Formatter debt
-Files: `CLAUDE.md:65` area, `docs/benchmark-archive.md:~1033-1075`.
+Files: `CLAUDE.md:65` area, `docs/benchmark-archive.md:~1033-1075`,
+`docs/WORKPLAN.md:164-169` (the code block in T0-3). ruff formats fenced Python
+blocks in Markdown here, so this file counts.
 Contract: `uv run ruff format --check .` exits 0.
 Direction: docs-only
-Steps: `uv run ruff format CLAUDE.md docs/benchmark-archive.md`; inspect the
-diff is whitespace/fence-only; commit.
+Steps: `uv run ruff format CLAUDE.md docs/benchmark-archive.md docs/WORKPLAN.md`;
+inspect the diff is whitespace/fence-only; commit.
 Done when: `uv run ruff format --check .` exits 0.
 
 ---
@@ -393,13 +396,30 @@ Steps: move the two names out of the `from saddle.evidence import (…)` block
 into `from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE`; run
 `uv run ruff check tests/test_evidence.py` (import order) and fix with
 `uv run ruff check --fix tests/test_evidence.py`.
-Done when: `uv run mypy tests` reports no test_evidence errors.
+Done when: `uv run mypy src tests` (the check.sh invocation) exits 0. `mypy tests`
+alone reports ~53 pre-existing `[import-untyped]` errors and is not the gate.
 Stop if: `grep -n "^SHELL_TIMEOUT\|^TOOL_UNAVAILABLE" src/saddle/gates.py` prints nothing.
+
+### T1-5 — Every legal threshold value is representable (known-good half of T1-1)
+Files: `tests/test_dag.py` (next to `test_gate_thresholds_below_the_spec_floor_are_unrepresentable`, ~L347).
+Contract: `Node` accepts every `KillThreshold` member (85.0, 90.0, 95.0, 100.0)
+and `changed_line_coverage_min=100.0`; only 85.0 is exercised today (L44).
+Direction: none (test only)
+Evidence: CLAUDE.md "A constraint is verified by a known-good instance"; T1-1's
+executor flagged the gap and did not add the test.
+Steps: add `test_gate_thresholds_at_the_floor_and_above_are_representable`,
+parametrised over the four values, building a node via the L44 fixture pattern
+and asserting no `ValidationError`.
+Known-good: the four values. Known-bad: 80.0 (already covered at ~L347).
+Mutant: `sed -i 's/Literal\[85.0, 90.0, 95.0, 100.0\]/Literal[85.0, 100.0]/' src/saddle/dag.py`
+→ the new test must fail for 90.0 and 95.0. Revert with `git checkout -- src/`.
+Done when: `pytest tests/test_dag.py -q --no-cov` green at HEAD and red under the mutant.
 
 ### T1-4 — `./check.sh` exits 0
 Files: none new.
 Contract: ruff check, ruff format --check, mypy (strict) and the suite all pass at HEAD.
-Steps: after T0-1, T0-11, T1-1..T1-3: `./check.sh`; paste the tail of its
+Steps: after T0-1, T0-11 (which must run first; it is not optional for this item),
+T1-1..T1-3: `./check.sh`; paste the tail of its
 output in the commit message of whichever item lands last.
 Done when: `./check.sh; echo exit=$?` prints `exit=0`.
 
