@@ -19,7 +19,8 @@ Coverage is not the bar and neither is a kill percentage:
 - Meta's ACH generates "relatively few, highly specific mutants, by
   design," stopping at the first buildable mutant per class, and kills
   **15%** of mutants against a coverage-driven tool's **2.4%**. **49%**
-  of its accepted tests added no line coverage at all
+  of its 571 mutant-killing tests (277) added no line coverage; engineer
+  acceptance (73%) was measured on a separate 191-test sample
   ([arXiv:2501.12862](https://arxiv.org/html/2501.12862v1)).
 
 So: state the contract in a sentence, mutate *that*, show the test dies.
