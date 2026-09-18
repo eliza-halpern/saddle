@@ -17,7 +17,9 @@ def _first_json_fence() -> dict[str, object]:
     text = ARCHITECTURE_MD.read_text()
     start = text.index("```json\n") + len("```json\n")
     end = text.index("```", start)
-    return json.loads(text[start:end])
+    obj = json.loads(text[start:end])
+    assert isinstance(obj, dict)
+    return obj
 
 
 def test_example_node_validates() -> None:
