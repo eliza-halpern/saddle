@@ -136,7 +136,8 @@ def _emit_response(payload: dict[str, Any]) -> httpx.Response:
 
 
 def _diff_response(diff: str = DIFF) -> httpx.Response:
-    return _emit_response({"diff": diff})
+    """The diff is raw grammar-constrained text, not a JSON-wrapped string."""
+    return _text_response(diff)
 
 
 def _text_response(text: str) -> httpx.Response:
@@ -155,7 +156,7 @@ def _text_response(text: str) -> httpx.Response:
 def _is_diff_request(payload: dict[str, Any]) -> bool:
     """A guided diff call, as opposed to emission or free-text recovery."""
     outputs = payload.get("structured_outputs")
-    return isinstance(outputs, dict) and "diff" in json.dumps(outputs.get("json", {}))
+    return isinstance(outputs, dict) and "grammar" in outputs
 
 
 def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -> VllmClient:

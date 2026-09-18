@@ -13,7 +13,7 @@ from saddle.dag import dag_json_schema
 from saddle.vllm import (
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
-    DIFF_SCHEMA,
+    DIFF_GRAMMAR,
     DiffProposal,
     StreamToken,
     ToolCall,
@@ -256,10 +256,11 @@ def test_client_context_manager() -> None:
 
 
 def test_diff_posts_guided_payload() -> None:
+    """The diff is raw grammar-constrained text, not a JSON-wrapped string."""
     prompt = "Add a pure add() function with a test."
-    client, seen = _json_client(_ok_body(content=json.dumps({"diff": "diff --git x"})))
+    client, seen = _json_client(_ok_body(content=REAL_DIFF))
     assert client.propose_diff(prompt) == DiffProposal(
-        diff="diff --git x", reasoning="decomposing the task..."
+        diff=REAL_DIFF, reasoning="decomposing the task..."
     )
     assert json.loads(seen[0].content) == {
         "model": DEFAULT_MODEL,
@@ -268,7 +269,7 @@ def test_diff_posts_guided_payload() -> None:
         "max_tokens": 4096,
         "reasoning_effort": "medium",
         "include_reasoning": True,
-        "structured_outputs": {"json": DIFF_SCHEMA},
+        "structured_outputs": {"grammar": DIFF_GRAMMAR},
     }
 
 
@@ -285,11 +286,12 @@ def test_diff_rejects_bad_input() -> None:
 
 
 def test_diff_missing_or_blank_content_fails() -> None:
-    for content in ('{"other": 1}', '{"diff": "  "}', '{"diff": 5}'):
+    """Blank content is refused upstream; the diff parser adds no second check."""
+    for content in ("", "   ", "\n"):
         client, _ = _json_client(_ok_body(content=content))
-        with pytest.raises(VllmResponseError, match="no diff string") as exc_info:
+        with pytest.raises(VllmResponseError, match="no text content") as exc_info:
             client.propose_diff("Do x.")
-        assert str(exc_info.value) == "content has no diff string"
+        assert str(exc_info.value) == "message has no text content"
 
 
 def test_complete_posts_unguided_payload_and_returns_prose() -> None:
@@ -666,8 +668,13 @@ def test_diff_schema_admits_a_real_diff() -> None:
     class leak-free (F9). Existence was never the question: a constraint
     is only verified once a known-good instance is shown to satisfy it.
     """
-    assert _decoder_admits(DIFF_SCHEMA, REAL_DIFF)
-    assert DIFF_SCHEMA["required"] == ["diff"]
+    assert _decoder_admits({"properties": {"diff": {"type": "string"}}}, REAL_DIFF)
+    # The diff no longer travels inside a JSON string at all: DIFF_GRAMMAR
+    # constrains the output language itself, so a hunk is mandatory and
+    # prose is unrepresentable. tools/diff_grammar_check.py is the proof,
+    # run against the serving container's xgrammar.
+    assert DIFF_GRAMMAR.startswith("root ::= section+")
+    assert '"@@ "' in DIFF_GRAMMAR
 
 
 def test_decoder_semantics_reject_a_prefix_only_pattern() -> None:
@@ -690,5 +697,5 @@ def test_parse_diff_response_passes_prose_through_to_the_apply_backstop() -> Non
     the defect #52 is about. The parser only rejects a missing or blank
     field.
     """
-    client, _ = _json_client(_ok_body(content='{"diff": "Sure! I will fix that."}'))
+    client, _ = _json_client(_ok_body(content="Sure! I will fix that."))
     assert client.propose_diff("Do x.").diff == "Sure! I will fix that."

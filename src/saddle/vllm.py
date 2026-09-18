@@ -33,32 +33,39 @@ DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
 REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
-# No `pattern` here, deliberately. It carried `^diff --git ` until the v3
-# T1 arm failed every attempt with `git apply: No valid patches in input`.
-# JSON Schema defines `pattern` as an UNANCHORED partial match, but the
-# decoding backend compiles it as a FULL match, so xgrammar reduced it to
-# a closed literal -- verified against the serving container:
+# Constrain the output *language*, not a JSON-escaped copy of it. A regex
+# over a diff inside a JSON string cannot work here in either direction:
+# every pattern correct under the decoder's full-match semantics let the
+# model emit a raw `"` and break its own packet, and every pattern that
+# kept the packet intact excluded code containing a quote. A unified diff
+# has a real grammar, so state that instead -- which is also what
+# Agentless does by emitting plain fenced edits rather than JSON
+# (arXiv:2407.01489), and what grammar-constrained decoding means
+# (arXiv:2305.13971).
 #
-#   root_prop_0 ::= (("\"" "d" "i" "f" "f" " " "-" "-" "g" "i" "t" " " "\""))
+# Validated against the serving container's xgrammar before shipping, and
+# `tools/diff_grammar_check.py` re-runs it: 44/44 real diffs from this
+# repo's own history admitted, including rename, mode-change, delete and
+# `\ No newline at end of file`; prose, markdown fences, a JSON wrapper
+# and a `diff -u` header all rejected at the first offending byte. Both
+# halves are required -- the pattern this replaces was only ever checked
+# for existence, and it admitted exactly one 11-character string.
 #
-# a grammar for exactly one 11-character string. The token mask then forced
-# the string closed after the header, so a working diff was not merely
-# unlikely, it was unrepresentable. Every downstream symptom followed:
-# identical retries and replans (nothing else was legal, at temperature 0.0
-# or 0.8 alike) and four dead apply modes per attempt.
-#
-# The prior note claimed this class "has not leaked (F9)". The check behind
-# that claim confirmed a grammar compiled; it never confirmed the grammar
-# admitted a valid diff. A constraint verified only for existence is not
-# verified. Diff structure is checked in `slice._apply_diff`, where a
-# violation is deterministic, inspectable and retryable, rather than in a
-# grammar that silently deletes the correct answer from the output space.
-DIFF_SCHEMA: Final[dict[str, Any]] = {
-    "type": "object",
-    "properties": {"diff": {"type": "string"}},
-    "required": ["diff"],
-    "additionalProperties": False,
-}
+# ANY EDIT HERE MUST RE-RUN THAT CHECK. A construct left out of this
+# grammar is a diff the worker cannot express, which is precisely the
+# failure it exists to prevent.
+DIFF_GRAMMAR: Final = r"""root ::= section+
+section    ::= header meta* hunk+
+header     ::= "diff --git " line "\n"
+meta       ::= meta_pfx line "\n"
+meta_pfx   ::= "index " | "new file mode " | "deleted file mode "
+             | "old mode " | "new mode " | "similarity index "
+             | "dissimilarity index " | "rename from " | "rename to "
+             | "copy from " | "copy to " | "--- " | "+++ " | "Binary files "
+hunk       ::= "@@ " line "\n" hline+
+hline      ::= (" " | "+" | "-" | "\\") line "\n"
+line       ::= [^\n]*
+"""
 
 
 class VllmError(Exception):
@@ -196,7 +203,7 @@ def _build_diff_payload(
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
         "include_reasoning": True,
-        "structured_outputs": {"json": DIFF_SCHEMA},
+        "structured_outputs": {"grammar": DIFF_GRAMMAR},
     }
 
 
@@ -329,12 +336,14 @@ def _parse_text_response(data: object) -> str:
 
 
 def _parse_diff_response(data: object) -> DiffProposal:
-    emission = _parse_response(data)
-    diff = emission.dag.get("diff")
-    if not isinstance(diff, str) or not diff.strip():
-        msg = "content has no diff string"
-        raise VllmResponseError(msg)
-    return DiffProposal(diff=diff, reasoning=emission.reasoning)
+    """The content IS the diff: DIFF_GRAMMAR constrains raw text, not JSON.
+
+    Structural rejection stays in `slice._apply_diff` rather than here, so
+    a bad packet remains a retryable attempt rather than throwing the run
+    away. Blank content is already refused by `_parse_message`.
+    """
+    content, reasoning = _parse_message(data)
+    return DiffProposal(diff=content, reasoning=reasoning)
 
 
 def _model_ids(data: object) -> list[str]:

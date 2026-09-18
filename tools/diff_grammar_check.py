@@ -1,0 +1,162 @@
+"""Validate DIFF_GRAMMAR against real diffs. Run this after ANY edit to it.
+
+The grammar is enforced by the serving container's xgrammar, not by this
+repo's venv, so this check runs there:
+
+    python tools/diff_grammar_check.py --emit > /tmp/cases.json
+    docker cp /tmp/cases.json <container>:/tmp/cases.json
+    docker cp tools/diff_grammar_check.py <container>:/tmp/check.py
+    docker exec <container> /app/venv/bin/python /tmp/check.py --run
+
+Why it exists: `DIFF_SCHEMA` once carried `pattern = "^diff --git "`. JSON
+Schema calls that an unanchored partial match; the decoder compiles it as
+a full match, so xgrammar reduced it to a closed literal admitting exactly
+one 11-character string, and no working diff was representable. The test
+guarding it asserted the pattern *existed*. Existence was never the
+question -- so this checks both halves, on real inputs:
+
+- every diff in this repo's own history must be ADMITTED, plus rename,
+  mode-change, delete and "\\ No newline at end of file";
+- prose, markdown fences, a JSON wrapper and a `diff -u` header must be
+  REJECTED;
+- and the model must be FORBIDDEN FROM STOPPING on a header with no hunk.
+  That third check is the token-mask guarantee itself, and it needs a stop
+  token: a header-without-hunk is a valid *prefix*, so byte-acceptance
+  alone cannot see it. A contract mutant (`hunk+` -> `hunk*`) survived the
+  first two checks and is killed only by this one.
+
+A construct missing from the grammar is a diff the worker cannot express,
+which is the exact failure the grammar exists to prevent.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+CASES_PATH = "/tmp/cases.json"
+
+MUST_REJECT = {
+    "prose": "Sure! I will fix that.\n",
+    "markdown fence": "```diff\ndiff --git a/n.py b/n.py\n",
+    "json wrapper": '{"diff": "diff --git a/n.py b/n.py\\n"}',
+    "wrong header": "diff -u a/n.py b/n.py\n@@ -1 +1 @@\n-x\n+y\n",
+    "hunk before header": "@@ -1 +1 @@\n-x = 1\n+x = 2\n",
+}
+
+# Valid prefixes the grammar must refuse to END on.
+MUST_NOT_STOP = {
+    "header only": "diff --git a/n.py b/n.py\n",
+    "header no hunk": "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n",
+}
+
+MUST_STOP = {
+    "complete diff": (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    ),
+}
+
+SYNTHETIC = {
+    "_rename": (
+        "diff --git a/old.py b/new.py\nsimilarity index 95%\nrename from old.py\n"
+        "rename to new.py\n--- a/old.py\n+++ b/new.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    ),
+    "_mode": (
+        "diff --git a/s.sh b/s.sh\nold mode 100644\nnew mode 100755\n"
+        "--- a/s.sh\n+++ b/s.sh\n@@ -1 +1 @@\n-echo a\n+echo b\n"
+    ),
+    "_nonewline": (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n"
+        "-x = 1\n\\ No newline at end of file\n+x = 2\n"
+    ),
+    "_delete": (
+        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n"
+        "--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x = 1\n-y = 2\n"
+    ),
+}
+
+
+def emit(commits: int = 40) -> None:
+    """Write the corpus: this repo's own diffs plus the awkward constructs."""
+    shas = subprocess.run(
+        ["git", "log", "--format=%H", f"-{commits}"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    cases = dict(SYNTHETIC)
+    for sha in shas:
+        diff = subprocess.run(
+            ["git", "show", sha, "--format=", "--no-color"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        if diff.strip():
+            cases[sha[:8]] = diff
+    print(
+        json.dumps(
+            {
+                "admit": cases,
+                "reject": MUST_REJECT,
+                "not_stop": MUST_NOT_STOP,
+                "stop": MUST_STOP,
+            }
+        )
+    )
+
+
+def run() -> int:
+    """Compile DIFF_GRAMMAR with the real xgrammar and check both halves."""
+    import xgrammar as xgr  # only present in the serving container
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from saddle.vllm import DIFF_GRAMMAR
+
+    cases = json.loads(Path(CASES_PATH).read_text())
+    # A byte vocab plus an explicit stop token is what lets the third check
+    # ask "may the model stop here?" rather than only "is this byte legal?".
+    vocab = [bytes([i]).decode("latin-1") for i in range(256)] + ["<eos>"]
+    stop_id = 256
+    info = xgr.TokenizerInfo(vocab, vocab_type=xgr.VocabType.RAW, stop_token_ids=[stop_id])
+    compiled = xgr.GrammarCompiler(info).compile_grammar(xgr.Grammar.from_ebnf(DIFF_GRAMMAR))
+
+    def first_reject(text: str) -> int | None:
+        matcher = xgr.GrammarMatcher(compiled)
+        for index, byte in enumerate(text.encode()):
+            if not matcher.accept_string(bytes([byte])):
+                return index
+        return None
+
+    def may_stop(text: str) -> bool:
+        matcher = xgr.GrammarMatcher(compiled)
+        for byte in text.encode():
+            if not matcher.accept_string(bytes([byte])):
+                return False
+        return bool(matcher.accept_token(stop_id))
+
+    bad = []
+    for name, text in sorted(cases["not_stop"].items()):
+        if may_stop(text):
+            bad.append(f"MUST NOT STOP but grammar allows ending: {name}")
+    for name, text in sorted(cases["stop"].items()):
+        if not may_stop(text):
+            bad.append(f"MUST STOP but grammar forbids ending: {name}")
+    for name, diff in sorted(cases["admit"].items()):
+        at = first_reject(diff)
+        if at is not None:
+            bad.append(f"MUST ADMIT but rejected at byte {at}: {name}")
+    for name, text in sorted(cases["reject"].items()):
+        if first_reject(text) is None:
+            bad.append(f"MUST REJECT but admitted: {name}")
+    total = sum(len(cases[k]) for k in ("admit", "reject", "not_stop", "stop"))
+    print(f"{total - len(bad)}/{total} cases correct")
+    for line in bad:
+        print(f"  {line}")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    if "--emit" in sys.argv:
+        emit()
+        sys.exit(0)
+    sys.exit(run())
