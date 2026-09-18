@@ -40,7 +40,7 @@ from saddle.slice import (
     run_slice,
     splice_replan,
 )
-from saddle.vllm import DiffProposal
+from saddle.vllm import DiffProposal, VllmResponseError
 
 
 def _git_repo(root: Path) -> None:
@@ -583,6 +583,47 @@ def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None
     assert error.failure is not None
     assert error.failure.startswith("Attempt 3 of 3: diff did not apply: ")
     assert str(error) == "node 'n1': no proposed diff applied in 3 attempts"
+
+
+def test_run_node_truncated_worker_call_retries_instead_of_dying(tmp_path: Path) -> None:
+    """A truncated completion spends an attempt; it does not kill the node.
+
+    T5's worker hit `finish_reason=length` and the node failed with the
+    worktree untouched, because the worker path let VllmResponseError
+    escape while `_emit_valid_dag` retried the identical condition for
+    the planner (#51).
+    """
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        if len(calls) <= PROPOSAL_SAMPLES + 1:
+            raise VllmResponseError("completion truncated (finish_reason=length)")
+        return DiffProposal(GOOD_DIFF, "")
+
+    asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
+    # The first attempt's samples and its fallback draw all raised, so the
+    # node recovered on a later attempt rather than raising.
+    assert len(calls) > PROPOSAL_SAMPLES
+
+
+def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> None:
+    """Retrying is not waiving: exhausting attempts still fails the node."""
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        raise VllmResponseError("completion truncated (finish_reason=length)")
+
+    with pytest.raises(NodeUnappliableError) as caught:
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+    error = caught.value
+    assert error.attempts == 3
+    assert error.failure is not None
+    assert error.failure.startswith("Attempt 3 of 3: worker call failed: ")
 
 
 def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> None:

@@ -257,7 +257,14 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "red_phase_required is always true." in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
     assert "over test files only" in prompt
-    assert "fewest nodes" in prompt
+    # Was: `assert "fewest nodes" in prompt`. The suite pinned the
+    # guidance #51 removes: "prefer the fewest nodes" is right for T1 and
+    # actively wrong for T5, whose 443 lines across four modules went to
+    # one worker as a single diff and died on finish_reason=length.
+    # Inverted rather than deleted, as with the #56 context guidance.
+    assert "fewest nodes" not in prompt
+    assert "Size the plan to the work" in prompt
+    assert "one worker's single" in prompt
 
 
 def test_build_worker_prompt_covers_format_rules_and_files() -> None:

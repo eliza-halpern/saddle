@@ -133,7 +133,12 @@ Rules:
 - kill_threshold is one of 85.0, 90.0, 95.0, 100.0. There is no lower
   setting; a node you consider mechanical still clears 85.
 - mutation_sample.scope is always "changed-lines"; max_mutants is always 100.
-- Prefer the fewest nodes that cover the task; a trivial task needs one node.
+- Size the plan to the work, and size each node to one worker's single
+  diff. A node that must rewrite several modules, or more code than fits
+  comfortably in one response, is too big: split it by module or by
+  behaviour until each node is one coherent, separately gateable change.
+  A trivial task still needs only one node -- fewness is the result of a
+  small task, never a target of its own.
 - Think through the decomposition first; then emit the plan.
 """
 

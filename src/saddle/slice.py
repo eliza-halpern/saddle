@@ -40,7 +40,7 @@ from saddle.journal import (
 from saddle.runner import run_node_gate
 from saddle.scheduler import Proof, schedule
 from saddle.transcript import NodeTranscript, RunTranscript, render_transcript
-from saddle.vllm import DiffProposal
+from saddle.vllm import DiffProposal, VllmResponseError
 
 
 class NodeGateFailedError(Exception):
@@ -266,7 +266,13 @@ def _best_of_samples(
     drawn: list[str] = []
     last: DiffProposal | None = None
     for index in range(PROPOSAL_SAMPLES):
-        proposal = propose(node, None)
+        # A truncated or malformed completion loses this draw, not the
+        # other two: the samples are independent, so one bad packet is
+        # not evidence about the rest.
+        try:
+            proposal = propose(node, None)
+        except VllmResponseError:
+            continue
         last = proposal
         drawn.append(proposal.diff)
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
@@ -319,16 +325,26 @@ async def _run_node(
         worker_id = uuid.uuid4().hex
         recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
         try:
-            if attempt == 1:
-                best, distinct = _best_of_samples(node, workdir, propose)
-                proposal = best if best is not None else propose(node, failure)
-                # Agreement across independent samples is the correlation
-                # signal: LLM samples "often fail on the same inputs", so
-                # k buys least exactly when they agree. Sealed so rho is
-                # measured across runs rather than assumed.
-                sampling = f"{distinct} distinct of {PROPOSAL_SAMPLES} sample(s)"
-            else:
-                proposal = propose(node, failure)
+            # A worker call that comes back truncated or malformed is a
+            # spent attempt, not a dead node. The planner already retries
+            # this exact condition (`_emit_valid_dag`); the worker path
+            # raised instead, so T5's `finish_reason=length` failed the
+            # node with the worktree untouched and nothing retried.
+            try:
+                if attempt == 1:
+                    best, distinct = _best_of_samples(node, workdir, propose)
+                    proposal = best if best is not None else propose(node, failure)
+                    # Agreement across independent samples is the correlation
+                    # signal: LLM samples "often fail on the same inputs", so
+                    # k buys least exactly when they agree. Sealed so rho is
+                    # measured across runs rather than assumed.
+                    sampling = f"{distinct} distinct of {PROPOSAL_SAMPLES} sample(s)"
+                else:
+                    proposal = propose(node, failure)
+            except VllmResponseError as exc:
+                failure = f"Attempt {attempt} of {max_attempts}: worker call failed: {exc}"
+                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, failure)
+                continue
             if proposal.diff in seen:
                 detail = (
                     f"attempt {attempt}/{max_attempts}: "
