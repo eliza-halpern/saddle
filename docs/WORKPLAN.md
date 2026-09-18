@@ -257,8 +257,10 @@ rolling wave, stall, Phase 4 → "deferred, WORKPLAN §7".
 Done when: `grep -c "specified, not built" docs/ARCHITECTURE.md` prints 7.
 
 ### T0-8 — Path and wording errors
-Files: `CLAUDE.md:78`, `:164`; `docs/DESIGN-NOTES.md:5`, `:605`;
+Files: `CLAUDE.md:79`, `:165`; `docs/DESIGN-NOTES.md:5`, `:631`;
 `docs/BENCHMARK-RECORD.md:61`, `:89`.
+Anchors re-checked 2026-09-18 after T0-6/T0-9 landed; the quoted strings are
+unique in each file, so match on the string, not the number.
 Contract: every path in these files resolves from the repo root; every
 statement about a run matches the run record.
 Direction: docs-only
@@ -268,15 +270,15 @@ sealed attempt in `../saddle-bench/runs/t1-saddle/.saddle/proofs.jsonl` carries
 `error: corrupt patch at line 12`; "No valid patches in input" appears in no run
 file.
 Steps:
-- CLAUDE.md:78 `died on `git apply: No valid patches in input`` → `died on
+- CLAUDE.md:79 `died on `git apply: No valid patches in input`` → `died on
   `git apply` exit 128 (`error: corrupt patch at line 12`, every attempt;
   ../saddle-bench/runs/PROGRESS.log:35)`.
-- CLAUDE.md:164, DESIGN-NOTES:5, BENCHMARK-RECORD:61:
+- CLAUDE.md:165, DESIGN-NOTES:5, BENCHMARK-RECORD:61:
   `saddle-bench/runs/FINDINGS.md` → `../saddle-bench/runs/FINDINGS.md` and add
-  once, at CLAUDE.md:164, "(sibling checkout, not in this repo)".
+  once, at CLAUDE.md:165, "(sibling checkout, not in this repo)".
 - BENCHMARK-RECORD:89 reads `see FINDINGS.md for evidence` (bare name, no
   directory): `see FINDINGS.md` → `see ../saddle-bench/runs/FINDINGS.md`.
-- DESIGN-NOTES:605 D19 "specified, one global" → "wired per node via
+- DESIGN-NOTES:631 D19 "specified, one global" → "wired per node via
   `reasoning_budget` → `BUDGET_TO_EFFORT` (`cli.py:402-404`); benefit unmeasured
   (T4-3)".
 Done when: `grep -rn "No valid patches" CLAUDE.md` prints nothing;
@@ -549,7 +551,7 @@ Contract mutants (`pytest tests/test_cli.py -q --no-cov -k sample_temperature`):
 3. `sed -i 's/sample_temperature: float = 0.7/sample_temperature: float = 0.0/' src/saddle/cli.py` → red only if the test relies on the default; the test must construct `RunOptions` explicitly *and* have one assertion on the parser default (`build_parser().parse_args(["run","x"]).sample_temperature == 0.7`) so this mutant dies.
 Done when: all three mutants red; `./check.sh` green; `saddle run --help`
 shows `--sample-temperature`; commit body records the direction and mutants.
-Stop if: `grep -n "temperature=options.temperature," src/saddle/cli.py` returns anything other than two hits (L423 recovery `complete` and L437).
+Stop if: `grep -n "temperature=options.temperature," src/saddle/cli.py` returns anything other than five hits (run_task emit ~L387, recovery `complete` ~L423, `propose` return ~L437, `replan` ~L447, run_dag ~L517). Only the `propose` one, the argument of `client.propose_diff(`, changes; the other four stay.
 Note for T4-1: rerun the benchmark only after this lands; a k=3 arm at
 temperature 0.0 measures nothing about k.
 
@@ -563,7 +565,7 @@ Contract: `check_node_scope(kind, changed_files, added_files)` fails a
 `refactor` node that adds any file; a behaviour-preserving move may edit
 existing sources and tests but the file set it creates is empty.
 Direction: **tightened** (`refactor` currently returns pass unconditionally,
-gates.py:410, and `kind` is chosen by the emitting model — #65: a node can
+gates.py:411, and `kind` is chosen by the emitting model — #65: a node can
 select three exemptions, gates.py:250/:321/:376/:410, by naming itself
 `refactor`).
 Evidence: VERIFIED — #65 (measured exploit, T4 record); this item removes one
@@ -592,7 +594,7 @@ Steps:
 2. `Tier1Inputs`: add `added_files: Collection[str] = ()` as the **last**
    field (frozen dataclass; a default keeps the 13 existing constructors in
    `tests/test_gates.py:59` etc. valid).
-3. `check_node_scope(kind, changed_files, added_files=())`: replace L410-411 with
+3. `check_node_scope(kind, changed_files, added_files=())`: replace the two lines starting at `if kind == "refactor":` (~L411) with
    ```python
    if kind == "refactor":
        if added_files:
@@ -627,7 +629,7 @@ with `_node_dict`'s default `"kind": "refactor"` (`tests/test_slice.py:61-64`) �
 the slice fixtures edit existing files only; if one adds a file, that fixture
 was relying on the exemption and must be given `kind="impl"` with an honest
 note in the commit.
-Stop if: gates.py:410 no longer reads `if kind == "refactor":`.
+Stop if: `grep -c 'if kind == "refactor":' src/saddle/gates.py` is not 1 (it is at ~L411; T0-3 shifted it by one).
 
 ### T2-3 — Merge-time full-suite gate (the missing Tier 2, minimal form)
 Files: `src/saddle/slice.py:636-656` (run-end block); `src/saddle/evidence.py`

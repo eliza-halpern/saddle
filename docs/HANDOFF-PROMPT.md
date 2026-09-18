@@ -107,8 +107,9 @@ Before believing any mutant SURVIVED, show `git diff --stat` proving the
 mutation applied; a no-op sed is a broken harness, not a passing test.
 
 STOP CONDITIONS. Stop and report, without improvising, if: any "Stop if" line
-in the item fires; a "Now:" string or line anchor is not found where the item
-says; a test outside the item's scope starts failing; you would need to
+in the item fires; a "Now:" string is absent from its file or occurs more than
+once (line numbers are hints, drift is expected; locate the quoted string
+with grep -n -F and edit where it is); a test outside the item's scope starts failing; you would need to
 loosen a threshold, exemption, assertion, or schema; or you want to change the
 item's approach. Ending early with a clear report is a success. Finishing
 by widening scope is a failure.
