@@ -313,7 +313,7 @@ def _best_of_samples(
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
             continue
         result, unappliable = _evaluate_candidate(node, workdir, proposal.diff)
-        if unappliable is not None:
+        if unappliable is not None or result is None:
             continue
         failures = sum(1 for check in result.checks if not check.passed)
         # `index` breaks ties toward the earliest sample, so selection is
