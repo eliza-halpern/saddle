@@ -368,13 +368,49 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     (worker, run) = [span for span in spans if span.kind == "agent"]
     assert (worker.name, worker.exit_code) == ("worker:n1", 0)
     # The seal records sampling agreement: the correlation signal is
-    # only useful if it is written down (#59).
+    # only useful if it is written down (#59). Known-bad-for-diversity: a
+    # constant proposer still dedups to one distinct sample.
     assert worker.detail == f"1 distinct of {PROPOSAL_SAMPLES} sample(s)"
     assert worker.parent_id == run.span_id
     assert all(span.parent_id == worker.span_id for span in tools)
     assert (run.name, run.exit_code, run.parent_id, run.node_id) == ("run", 0, None, "")
     assert run.detail == "1 proven, 0 failed, 0 undispatched"
     assert (worker.duration_ms, run.duration_ms) == (1000, 3000)
+
+
+def test_run_slice_pass_end_to_end_records_distinct_sample_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Known-good half of #59: three distinct, individually appliable
+    # proposals are all drawn (the first two gate-fail, the third wins),
+    # so the seal reports "3 distinct" rather than short-circuiting.
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    ticks = iter([0.0, 1.0, 2.0, 3.0])
+    monkeypatch.setattr(slice_module, "perf_counter", lambda: next(ticks))
+    bad2 = BAD_DIFF.replace("assert f() == 3", "assert f() == 4")
+    proposals = iter(
+        [
+            DiffProposal(BAD_DIFF, "first guess"),
+            DiffProposal(bad2, "second guess"),
+            DiffProposal(GOOD_DIFF, "return two instead"),
+        ]
+    )
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure: next(proposals),
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True
+    spans = read_spans(journal)
+    (worker, run) = [span for span in spans if span.kind == "agent"]
+    assert (worker.name, worker.exit_code) == ("worker:n1", 0)
+    assert worker.detail == f"3 distinct of {PROPOSAL_SAMPLES} sample(s)"
+    assert run.detail == "1 proven, 0 failed, 0 undispatched"
 
 
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:
