@@ -11,8 +11,8 @@ import pytest
 from benchmark import stall_check
 
 
-def _pi_session(path: Path, calls: list[tuple[str, dict[str, Any], str]]) -> Path:
-    """Write a pi session whose tool calls are (name, args, timestamp)."""
+def _baseline_session(path: Path, calls: list[tuple[str, dict[str, Any], str]]) -> Path:
+    """Write a baseline-arm session whose tool calls are (name, args, timestamp)."""
     lines = ['{"type": "session", "timestamp": "2026-01-01T00:00:00Z"}']
     for index, (name, args, stamp) in enumerate(calls):
         lines.append(
@@ -48,12 +48,12 @@ def _journal(path: Path, spans: list[list[str]]) -> Path:
 def test_tripwire_a_fires_on_three_identical_pi_calls(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    session = _pi_session(
+    session = _baseline_session(
         tmp_path / "loop.jsonl",
         [("bash", {"command": "ls"}, f"2026-01-01T00:00:0{second}Z") for second in range(3)],
     )
 
-    assert stall_check.main(["--pi-session", str(session)]) == 1
+    assert stall_check.main(["--baseline-session", str(session)]) == 1
     assert "tripwire A" in capsys.readouterr().out
 
 
@@ -67,7 +67,7 @@ def test_tripwire_a_fires_on_three_identical_spans(
 
 
 def test_varied_calls_stay_silent(tmp_path: Path) -> None:
-    session = _pi_session(
+    session = _baseline_session(
         tmp_path / "ok.jsonl",
         [
             ("write", {"path": "a"}, "2026-01-01T00:00:00Z"),
@@ -79,11 +79,12 @@ def test_varied_calls_stay_silent(tmp_path: Path) -> None:
         tmp_path / "ok-journal.jsonl", [["git", "diff"], ["pytest"], ["git", "diff"]]
     )
 
-    assert stall_check.main(["--pi-session", str(session), "--saddle-journal", str(journal)]) == 0
+    args = ["--baseline-session", str(session), "--saddle-journal", str(journal)]
+    assert stall_check.main(args) == 0
 
 
 def test_tripwire_b_fires_on_long_gap(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    session = _pi_session(
+    session = _baseline_session(
         tmp_path / "gap.jsonl",
         [
             ("bash", {"command": "ls"}, "2026-01-01T00:00:00Z"),
@@ -91,28 +92,28 @@ def test_tripwire_b_fires_on_long_gap(tmp_path: Path, capsys: pytest.CaptureFixt
         ],
     )
 
-    assert stall_check.main(["--pi-session", str(session)]) == 1
+    assert stall_check.main(["--baseline-session", str(session)]) == 1
     assert "tripwire B" in capsys.readouterr().out
 
 
 def test_two_repeats_do_not_trip(tmp_path: Path) -> None:
-    session = _pi_session(
+    session = _baseline_session(
         tmp_path / "twice.jsonl",
         [("bash", {"command": "ls"}, f"2026-01-01T00:00:0{second}Z") for second in range(2)],
     )
 
-    assert stall_check.main(["--pi-session", str(session)]) == 0
+    assert stall_check.main(["--baseline-session", str(session)]) == 0
 
 
 def test_missing_file_exits_usage_error(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        stall_check.main(["--pi-session", str(tmp_path / "absent.jsonl")])
+        stall_check.main(["--baseline-session", str(tmp_path / "absent.jsonl")])
 
     assert exc_info.value.code == 2
 
 
 def _event(moment: str, *, tool: str | None = None, command: str = "") -> str:
-    """One pi session line: a timestamped event, optionally a tool call."""
+    """One baseline-arm session line: a timestamped event, optionally a tool call."""
     content: list[dict[str, object]] = []
     if tool is not None:
         args: dict[str, object] = {"command": command} if tool == "bash" else {"path": "n.py"}
@@ -142,7 +143,7 @@ def test_tripwire_b_counts_progress_not_any_event(tmp_path: Path) -> None:
         )
         + "\n"
     )
-    _calls, times = stall_check.pi_tool_calls(session)
+    _calls, times = stall_check.baseline_tool_calls(session)
     assert stall_check.check_silence(times, 600.0) is not None
 
 
@@ -159,5 +160,5 @@ def test_tripwire_b_accepts_a_test_run_as_progress(tmp_path: Path) -> None:
         )
         + "\n"
     )
-    _calls, times = stall_check.pi_tool_calls(session)
+    _calls, times = stall_check.baseline_tool_calls(session)
     assert stall_check.check_silence(times, 600.0) is None

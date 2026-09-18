@@ -1,11 +1,11 @@
 """M3 stall check: tripwires A (repeat loop) and B (silence gap).
 
-Reads pi session JSONL and/or saddle journals. Exits 0 when silent,
+Reads baseline-arm session JSONL and/or saddle journals. Exits 0 when silent,
 1 with a printed reason when a tripwire fires. Backstop C (absolute
 30 min cap) is enforced by running each arm under `timeout 1800`.
 
 Tripwire B needs event timestamps, which saddle journal spans do not
-carry, so B is pi-only; saddle runs are round-bounded by construction
+carry, so B is baseline-only; saddle runs are round-bounded by construction
 and harness-capped by `timeout`.
 """
 
@@ -48,7 +48,7 @@ def _is_progress(name: str, arguments: object) -> bool:
     return isinstance(command, str) and TEST_RUNNER_MARKER in command
 
 
-def pi_tool_calls(path: Path) -> tuple[list[tuple[str, str]], list[float]]:
+def baseline_tool_calls(path: Path) -> tuple[list[tuple[str, str]], list[float]]:
     """Tool-call sequence plus PROGRESS checkpoints bounded by the session.
 
     The returned times are the moments work actually moved, with the
@@ -122,7 +122,10 @@ def main(argv: list[str]) -> int:
     """Check the given artifacts; 0 silent, 1 tripped, 2 usage error."""
     parser = argparse.ArgumentParser(description="M3 no-progress stall check.")
     parser.add_argument(
-        "--pi-session", action="append", default=[], help="Pi session JSONL (repeatable)."
+        "--baseline-session",
+        action="append",
+        default=[],
+        help="Baseline-arm session JSONL (repeatable).",
     )
     parser.add_argument(
         "--saddle-journal", action="append", default=[], help="Saddle journal (repeatable)."
@@ -132,8 +135,8 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     try:
         verdicts: list[tuple[str, str | None]] = []
-        for raw in args.pi_session:
-            calls, times = pi_tool_calls(Path(raw))
+        for raw in args.baseline_session:
+            calls, times = baseline_tool_calls(Path(raw))
             hit = check_repeats(calls, args.repeat) or check_silence(times, args.max_silence)
             verdicts.append((raw, hit))
         for raw in args.saddle_journal:
