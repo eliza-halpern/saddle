@@ -334,6 +334,65 @@ def check_property_coverage(kind: str, test_sources: Mapping[str, str]) -> GateC
     )
 
 
+def _assertions_by_test(sources: Mapping[str, str]) -> dict[str, set[str]]:
+    """Assertion ASTs per test function, keyed by function name.
+
+    Keyed by name rather than by file so relocating a test during a
+    refactor is not mistaken for rewriting it.
+    """
+    found: dict[str, set[str]] = {}
+    for source in sources.values():
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if not node.name.startswith("test"):
+                continue
+            asserts = {ast.dump(stmt) for stmt in ast.walk(node) if isinstance(stmt, ast.Assert)}
+            found.setdefault(node.name, set()).update(asserts)
+    return found
+
+
+def check_assertion_preservation(
+    kind: str, baseline_tests: Mapping[str, str], current_tests: Mapping[str, str]
+) -> GateCheck:
+    """Assertions in pre-existing tests are append-only, except for test nodes.
+
+    T4's worker fixed the wrong module and rewrote the behaviour-pinning
+    test to match -- `3.03` became `3.02` -- and all seven gates passed
+    (#44). #57 stops an impl node touching tests at all, but a refactor
+    may carry code and tests together, and behaviour-preserving means the
+    assertions survive the move.
+
+    A `test` node is exempt because repairing stale assertions is its job
+    (T2's task was exactly that), and #57 already stops it shipping the
+    implementation alongside. That is the whole reason this needs no
+    planner-set waiver: the exemption is structural, not chosen by the
+    party being graded.
+    """
+    if kind == "test":
+        return GateCheck(
+            name="assertion-preservation", passed=True, detail="test node: may restate assertions"
+        )
+    before = _assertions_by_test(baseline_tests)
+    after = _assertions_by_test(current_tests)
+    dropped = sorted(name for name, asserts in before.items() if asserts - after.get(name, set()))
+    if dropped:
+        return GateCheck(
+            name="assertion-preservation",
+            passed=False,
+            detail=f"{kind} node rewrote assertions in: {', '.join(dropped)}",
+        )
+    return GateCheck(
+        name="assertion-preservation",
+        passed=True,
+        detail=f"{len(before)} pre-existing test(s) keep their assertions",
+    )
+
+
 def check_node_scope(kind: str, changed_files: Collection[str]) -> GateCheck:
     """A node stays on its own side of the test/implementation split.
 
@@ -419,6 +478,7 @@ class Tier1Inputs:
     covered: set[tuple[str, int]]
     baseline_exits: tuple[int, ...]
     baseline_output: str
+    baseline_tests: Mapping[str, str]
     tests_changed: bool
     current_runner: Callable[[], int]
     flipped_tests: Mapping[str, str]
@@ -504,6 +564,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         ),
         check_node_scope(node.kind, sorted({path for path, _ in inputs.changed})),
         check_property_coverage(node.kind, inputs.flipped_tests),
+        check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
         check_mutation(inputs.mutation, sample.kill_threshold),
     )

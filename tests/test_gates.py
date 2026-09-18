@@ -14,6 +14,7 @@ from saddle.gates import (
     TOOL_UNAVAILABLE,
     GateCheck,
     Tier1Inputs,
+    check_assertion_preservation,
     check_changed_line_coverage,
     check_mutation,
     check_node_scope,
@@ -64,6 +65,7 @@ def _passing_inputs() -> Tier1Inputs:
         covered={("n1.py", 1)},
         baseline_exits=(1,) * RED_PHASE_SAMPLES,
         baseline_output="",
+        baseline_tests={},
         tests_changed=True,
         current_runner=lambda: 0,
         flipped_tests={"test_a": "def test_a():  # REQ-001\n    assert True\n"},
@@ -308,6 +310,7 @@ def test_run_tier1_all_green_passes() -> None:
         "red-phase",
         "node-scope",
         "property-coverage",
+        "assertion-preservation",
         "requirement-binding",
         "mutation",
     ]
@@ -321,7 +324,7 @@ def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 9  # node-scope (#57) and property-coverage (#58)
+    assert len(result.checks) == 10  # +assertion-preservation (#44)
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
 
@@ -704,3 +707,79 @@ def test_parametrize_is_examples_not_a_property() -> None:
     check = check_property_coverage("test", table_only)
     assert check.passed is False
     assert "examples only" in check.detail
+
+
+def test_refactor_may_not_rewrite_an_existing_assertion() -> None:
+    """T4: the worker fixed the wrong module and rewrote the
+    behaviour-pinning test to match -- 3.03 became 3.02 -- and all seven
+    gates passed. #57 stops an impl node touching tests at all, but a
+    refactor may move code and tests together, and "behaviour-preserving"
+    means the assertions survive the move.
+    """
+    baseline = {"tests/t.py": "def test_total():  # REQ-001\n    assert total() == 3.03\n"}
+    current = {"tests/t.py": "def test_total():  # REQ-001\n    assert total() == 3.02\n"}
+    check = check_assertion_preservation("refactor", baseline, current)
+    assert check.passed is False
+    assert "test_total" in check.detail
+
+
+def test_adding_assertions_to_an_existing_test_is_allowed() -> None:
+    """Append-only: strengthening a test is the desired direction."""
+    baseline = {"tests/t.py": "def test_total():  # REQ-001\n    assert total() == 3.03\n"}
+    current = {
+        "tests/t.py": (
+            "def test_total():  # REQ-001\n    assert total() == 3.03\n    assert total() > 0\n"
+        )
+    }
+    assert check_assertion_preservation("refactor", baseline, current).passed is True
+
+
+def test_test_nodes_may_rewrite_assertions() -> None:
+    """Repairing stale assertions is a test node's job (T2), and #57
+    stops it shipping the implementation alongside."""
+    baseline = {"tests/t.py": "def test_total():  # REQ-001\n    assert total() == 3.03\n"}
+    current = {"tests/t.py": "def test_total():  # REQ-001\n    assert total() == 3.02\n"}
+    assert check_assertion_preservation("test", baseline, current).passed is True
+
+
+def test_moving_a_test_to_another_module_preserves_its_assertions() -> None:
+    """A refactor relocating tests is fine while the asserts travel."""
+    baseline = {"tests/old.py": "def test_total():  # REQ-001\n    assert total() == 3.03\n"}
+    current = {"tests/new.py": "def test_total():  # REQ-001\n    assert total() == 3.03\n"}
+    assert check_assertion_preservation("refactor", baseline, current).passed is True
+
+
+def test_assertion_preservation_ignores_helpers_and_unparseable_sources() -> None:
+    """Only `test*` functions carry the behaviour contract, and a source
+    the syntax gate will reject must not crash this one."""
+    baseline = {
+        "tests/t.py": (
+            "def _helper():\n    assert 1 == 1\n\n\n"
+            "def test_real():  # REQ-001\n    assert total() == 3.03\n"
+        ),
+        "tests/broken.py": "def test_x( :\n",
+    }
+    # The helper's assertion vanishes; only the test function is contracted.
+    current = {"tests/t.py": "def test_real():  # REQ-001\n    assert total() == 3.03\n"}
+    assert check_assertion_preservation("refactor", baseline, current).passed is True
+
+
+def test_same_test_name_in_two_modules_keeps_both_contracts() -> None:
+    """Keying by name merges rather than overwrites.
+
+    Two modules can each define `test_total` over different subjects. If
+    the later one replaced the earlier, dropping the first module's
+    assertion would go unnoticed -- the looser reading of a name
+    collision, in a gate whose whole job is to be the stricter one.
+    """
+    baseline = {
+        "tests/orders.py": "def test_total():  # REQ-001\n    assert order_total() == 3.03\n",
+        "tests/invoices.py": "def test_total():  # REQ-002\n    assert invoice_total() == 3.03\n",
+    }
+    current = {
+        "tests/orders.py": "def test_total():  # REQ-001\n    assert order_total() == 3.02\n",
+        "tests/invoices.py": "def test_total():  # REQ-002\n    assert invoice_total() == 3.03\n",
+    }
+    check = check_assertion_preservation("refactor", baseline, current)
+    assert check.passed is False
+    assert "test_total" in check.detail

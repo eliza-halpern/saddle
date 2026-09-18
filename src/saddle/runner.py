@@ -201,6 +201,7 @@ def run_node_gate(
         covered=covered,
         baseline_exits=tuple(baseline_exits),
         baseline_output=baseline_output,
+        baseline_tests=baseline_tests,
         tests_changed=tests_changed,
         current_runner=lambda: current_exit,
         flipped_tests=test_sources,
