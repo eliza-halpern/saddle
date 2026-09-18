@@ -455,7 +455,7 @@ def test_run_task_end_to_end_pass(tmp_path: Path) -> None:
     assert [call["reasoning_effort"] for call in seen] == ["medium", "low"]
     assert seen[0]["max_tokens"] == 8192
     assert seen[0]["temperature"] == 0.0
-    assert seen[1]["temperature"] == 0.0
+    assert seen[1]["temperature"] == 0.7
     assert f"- Task: {TASK}\n" in out
     assert TASK in _prompt(seen[1])
     assert "--- n.py ---\ndef f():\n    return 1\n" in _prompt(seen[1])
@@ -467,14 +467,16 @@ def test_run_task_honors_sampling_options(tmp_path: Path) -> None:
     seen: list[dict[str, Any]] = []
     script = [_emit_response({"nodes": [_node_dict()]}), _diff_response()]
     client = _scripted_client(script, seen)
-    options = _options(tmp_path, max_tokens=100, temperature=0.5, reasoning_effort="low")
+    options = _options(
+        tmp_path, max_tokens=100, temperature=0.5, sample_temperature=0.9, reasoning_effort="low"
+    )
     code, _ = _run(options, client)
     assert code == 0
     assert seen[0]["max_tokens"] == 100
     assert seen[0]["temperature"] == 0.5
     assert seen[0]["reasoning_effort"] == "low"
     assert seen[1]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
-    assert seen[1]["temperature"] == 0.5
+    assert seen[1]["temperature"] == 0.9
 
 
 def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path) -> None:
@@ -777,6 +779,40 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert "Attempt 1 of 3" in _prompt(diff_calls[-1])
     assert "1. Change the return value." in _prompt(diff_calls[-1])
     assert "The previous attempt failed" not in _prompt(seen[1])
+
+
+def test_run_task_first_attempt_and_recovery_use_distinct_temperatures(
+    tmp_path: Path,
+) -> None:
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    bad = DIFF.replace("+    return 2\n", "+    return 3\n")
+    fix = (
+        "diff --git a/n.py b/n.py\n"
+        "--- a/n.py\n"
+        "+++ b/n.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        "-    return 3\n"
+        "+    return 2\n"
+    )
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(bad),
+        _text_response("1. Change the return value.\n"),
+        _diff_response(fix),
+    ]
+    client = _scripted_client(script, seen)
+    options = _options(tmp_path, temperature=0.3, sample_temperature=0.9)
+    code, _out = _run(options, client)
+    assert code == 0
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    first_attempt = [c for c in diff_calls if "The previous attempt failed" not in _prompt(c)]
+    recovery = [c for c in diff_calls if "The previous attempt failed" in _prompt(c)]
+    assert first_attempt
+    assert recovery
+    assert all(c["temperature"] == 0.9 for c in first_attempt)
+    assert all(c["temperature"] == 0.3 for c in recovery)
 
 
 def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
@@ -1239,6 +1275,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "model": "qwen3.8-27b",
         "max_tokens": 8192,
         "temperature": 0.0,
+        "sample_temperature": 0.7,
         "reasoning_effort": "medium",
         "worker_effort": None,
         "yes": False,
@@ -1258,6 +1295,8 @@ def test_run_parser_defaults_and_overrides() -> None:
             "100",
             "--temperature",
             "0.5",
+            "--sample-temperature",
+            "0.9",
             "--reasoning-effort",
             "low",
             "--worker-effort",
@@ -1275,10 +1314,16 @@ def test_run_parser_defaults_and_overrides() -> None:
         "model": "m",
         "max_tokens": 100,
         "temperature": 0.5,
+        "sample_temperature": 0.9,
         "reasoning_effort": "low",
         "worker_effort": "xhigh",
         "yes": True,
     }
+
+
+def test_run_options_sample_temperature_default() -> None:
+    options = RunOptions(task=TASK, repo=Path("."), journal=Path("j.jsonl"))
+    assert options.sample_temperature == 0.7
 
 
 def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1288,6 +1333,7 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "usage: saddle run [-h] [--repo REPO] [--journal JOURNAL] [--base-url BASE_URL]\n"
         "                  [--model MODEL] [--max-tokens MAX_TOKENS]\n"
         "                  [--temperature TEMPERATURE]\n"
+        "                  [--sample-temperature SAMPLE_TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  [--worker-effort {none,low,medium,xhigh}] [--yes]\n"
         "                  task\n"
@@ -1305,6 +1351,9 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                        Emission max tokens.\n"
         "  --temperature TEMPERATURE\n"
         "                        Sampling temperature.\n"
+        "  --sample-temperature SAMPLE_TEMPERATURE\n"
+        "                        Temperature for first-attempt worker samples (recovery\n"
+        "                        uses --temperature).\n"
         "  --reasoning-effort {none,low,medium,xhigh}\n"
         "                        Emission reasoning effort.\n"
         "  --worker-effort {none,low,medium,xhigh}\n"

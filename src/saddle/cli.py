@@ -76,6 +76,7 @@ class RunOptions:
     journal: Path
     max_tokens: int = 8192
     temperature: float = 0.0
+    sample_temperature: float = 0.7
     reasoning_effort: str = "medium"
     worker_effort: str | None = None
     yes: bool = False
@@ -434,7 +435,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         return client.propose_diff(
             prompt,
             max_tokens=output_tokens,
-            temperature=options.temperature,
+            temperature=options.sample_temperature if failure is None else options.temperature,
             reasoning_effort=effort,
         )
 
@@ -617,6 +618,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
     run.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     run.add_argument(
+        "--sample-temperature",
+        type=float,
+        default=0.7,
+        help="Temperature for first-attempt worker samples (recovery uses --temperature).",
+    )
+    run.add_argument(
         "--reasoning-effort",
         choices=list(REASONING_EFFORTS),
         default="medium",
@@ -712,6 +719,7 @@ def main(
         journal=journal,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
+        sample_temperature=args.sample_temperature,
         reasoning_effort=args.reasoning_effort,
         worker_effort=args.worker_effort,
         yes=args.yes,
