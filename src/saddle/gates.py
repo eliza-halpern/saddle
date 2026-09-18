@@ -1,9 +1,10 @@
 """Tier-1 per-node gates (ARCHITECTURE.md §3 Phase 3 Tier 1).
 
-Checks run in gate order: lint/syntax, tests, changed-line coverage,
-red-phase, requirement binding, sampled mutation. Each check is a small
-pure function so killer fixtures stay fast and deterministic; subprocess
-runners are injected at the boundary, never embedded in the predicates.
+Checks run in gate order: syntax, ruff, tests, coverage, red-phase,
+node-scope, property-coverage, assertion-preservation, requirement-binding,
+mutation. Each check is a small pure function so killer fixtures stay fast
+and deterministic; subprocess runners are injected at the boundary, never
+embedded in the predicates.
 """
 
 from __future__ import annotations
@@ -362,8 +363,8 @@ def check_assertion_preservation(
     """Assertions in pre-existing tests are append-only, except for test nodes.
 
     T4's worker fixed the wrong module and rewrote the behaviour-pinning
-    test to match -- `3.03` became `3.02` -- and all seven gates passed
-    (#44). #57 stops an impl node touching tests at all, but a refactor
+    test to match -- `3.03` became `3.02` -- and every Tier-1 gate then in
+    force passed (#44). #57 stops an impl node touching tests at all, but a refactor
     may carry code and tests together, and behaviour-preserving means the
     assertions survive the move.
 
@@ -400,7 +401,7 @@ def check_node_scope(kind: str, changed_files: Collection[str]) -> GateCheck:
     the tests, so a misreading of the contract is encoded twice and the
     suite it is graded by is the suite it just rewrote. T4's worker fixed
     the wrong module, rewrote the behaviour-pinning test to match, and
-    passed all seven gates.
+    passed every Tier-1 gate then in force.
 
     An `impl` node may not edit tests; a `test` node may not ship the
     implementation. `refactor` is exempt: a behaviour-preserving move
@@ -541,7 +542,7 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
 
 
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
-    """Run all seven Tier-1 checks against `node`'s gate spec and aggregate."""
+    """Run all ten Tier-1 checks against `node`'s gate spec and aggregate."""
     gate = node.deterministic_gate
     sample = gate.mutation_sample
     coverage = check_changed_line_coverage(
