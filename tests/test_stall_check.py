@@ -109,3 +109,55 @@ def test_missing_file_exits_usage_error(tmp_path: Path) -> None:
         stall_check.main(["--pi-session", str(tmp_path / "absent.jsonl")])
 
     assert exc_info.value.code == 2
+
+
+def _event(moment: str, *, tool: str | None = None, command: str = "") -> str:
+    """One pi session line: a timestamped event, optionally a tool call."""
+    content: list[dict[str, object]] = []
+    if tool is not None:
+        args: dict[str, object] = {"command": command} if tool == "bash" else {"path": "n.py"}
+        content.append({"type": "toolCall", "name": tool, "arguments": args})
+    return json.dumps({"timestamp": moment, "message": {"content": content}})
+
+
+def test_tripwire_b_counts_progress_not_any_event(tmp_path: Path) -> None:
+    """BENCHMARK.md C5 says PROGRESS event: a diff change or a test
+    transition. The checker measured any timestamped record, so a run
+    doing nothing but reading files and thinking kept the clock alive
+    forever while making no progress at all.
+    """
+    session = tmp_path / "s.jsonl"
+    session.write_text(
+        "\n".join(
+            [
+                _event("2026-09-18T00:00:00+00:00", tool="write"),
+                # 15 minutes of reading and shell ceremony: timestamped,
+                # frequent, and not progress by the stated definition.
+                *[
+                    _event(f"2026-09-18T00:{minute:02d}:00+00:00", tool="read")
+                    for minute in range(1, 16)
+                ],
+                _event("2026-09-18T00:16:00+00:00", tool="write"),
+            ]
+        )
+        + "\n"
+    )
+    _calls, times = stall_check.pi_tool_calls(session)
+    assert stall_check.check_silence(times, 600.0) is not None
+
+
+def test_tripwire_b_accepts_a_test_run_as_progress(tmp_path: Path) -> None:
+    """A pytest invocation is the "test transition" half of the rule."""
+    session = tmp_path / "s.jsonl"
+    session.write_text(
+        "\n".join(
+            [
+                _event("2026-09-18T00:00:00+00:00", tool="write"),
+                _event("2026-09-18T00:08:00+00:00", tool="bash", command="python -m pytest -q"),
+                _event("2026-09-18T00:16:00+00:00", tool="edit"),
+            ]
+        )
+        + "\n"
+    )
+    _calls, times = stall_check.pi_tool_calls(session)
+    assert stall_check.check_silence(times, 600.0) is None
