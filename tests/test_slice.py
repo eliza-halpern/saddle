@@ -211,7 +211,7 @@ def test_apply_diff_garbage_raises(tmp_path: Path) -> None:
 def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
     """A header with no '@@' hunk is schema-valid but applies nothing.
 
-    DIFF_HEADER_PATTERN only anchors "diff --git "; a degenerate
+    The decoding grammar cannot be relied on to force a hunk; a degenerate
     completion that stops right after the header satisfies the grammar
     and would otherwise cost all four _APPLY_MODES a git-apply exit 128
     ("No valid patches in input") before failing with no useful detail.

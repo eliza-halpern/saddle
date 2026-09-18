@@ -33,16 +33,29 @@ DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
 REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
-# `{"type": "string"}` admits "" and admits prose, so requiring the field
-# bought nothing: T7's replan ended `content has no diff string` after
-# three diff-apply failures (F11). The pattern anchors the git header,
-# which is expressible as a grammar -- the constraint class that has not
-# leaked (F9). A `minLength` would not be: length bounds are checked
-# after the packet exists, which is the class that leaks every time.
-DIFF_HEADER_PATTERN: Final = "^diff --git "
+# No `pattern` here, deliberately. It carried `^diff --git ` until the v3
+# T1 arm failed every attempt with `git apply: No valid patches in input`.
+# JSON Schema defines `pattern` as an UNANCHORED partial match, but the
+# decoding backend compiles it as a FULL match, so xgrammar reduced it to
+# a closed literal -- verified against the serving container:
+#
+#   root_prop_0 ::= (("\"" "d" "i" "f" "f" " " "-" "-" "g" "i" "t" " " "\""))
+#
+# a grammar for exactly one 11-character string. The token mask then forced
+# the string closed after the header, so a working diff was not merely
+# unlikely, it was unrepresentable. Every downstream symptom followed:
+# identical retries and replans (nothing else was legal, at temperature 0.0
+# or 0.8 alike) and four dead apply modes per attempt.
+#
+# The prior note claimed this class "has not leaked (F9)". The check behind
+# that claim confirmed a grammar compiled; it never confirmed the grammar
+# admitted a valid diff. A constraint verified only for existence is not
+# verified. Diff structure is checked in `slice._apply_diff`, where a
+# violation is deterministic, inspectable and retryable, rather than in a
+# grammar that silently deletes the correct answer from the output space.
 DIFF_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
-    "properties": {"diff": {"type": "string", "pattern": DIFF_HEADER_PATTERN}},
+    "properties": {"diff": {"type": "string"}},
     "required": ["diff"],
     "additionalProperties": False,
 }

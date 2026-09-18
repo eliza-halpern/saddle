@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -622,19 +623,63 @@ def test_stream_chat_unusable_error_objects_fall_through() -> None:
         assert str(exc_info.value) == "stream chunk has no choices"
 
 
-def test_diff_schema_constrains_the_header_not_just_the_type() -> None:
-    """`{"type": "string"}` admits "" and admits prose.
+REAL_DIFF = (
+    "diff --git a/validators.py b/validators.py\n"
+    "--- a/validators.py\n"
+    "+++ b/validators.py\n"
+    "@@ -1,2 +1,3 @@\n"
+    "-def is_valid_email(addr):\n"
+    "-    raise NotImplementedError\n"
+    '+SEP = "@"\n'
+    "+def is_valid_email(addr):\n"
+    "+    return isinstance(addr, str) and addr.count(SEP) == 1\n"
+)
 
-    T7's replan ended `content has no diff string` after three
-    diff-apply failures (F11). The field was already schema-required, so
-    the guarantee bought nothing: an empty string satisfies it. A pattern
-    anchoring the git header is expressible as a grammar, which is the
-    constraint class that has not leaked (F9) -- unlike a `minLength`,
-    which would be checked after the packet exists.
+
+def _decoder_admits(schema: dict[str, Any], instance: str) -> bool:
+    """Validate the way the decoding backend does: `pattern` is a FULL match.
+
+    JSON Schema defines `pattern` as an unanchored partial match, but
+    xgrammar compiles it into a grammar that must match the whole string.
+    `re.fullmatch` is that semantics, so this is the check that matters
+    for anything saddle sends as `structured_outputs`.
     """
-    field = DIFF_SCHEMA["properties"]["diff"]
-    assert field["pattern"].startswith("^diff --git ")
+    pattern = schema["properties"]["diff"].get("pattern")
+    return pattern is None or re.fullmatch(pattern, instance) is not None
+
+
+def test_diff_schema_admits_a_real_diff() -> None:
+    """Whatever constrains the diff field must still admit a working diff.
+
+    The v3 T1 arm failed every attempt with `git apply: No valid patches
+    in input`. The cause was `pattern = "^diff --git "`, which xgrammar
+    compiled to a closed literal:
+
+        root_prop_0 ::= (("\\"" "d" "i" "f" "f" " " ... "t" " " "\\""))
+
+    a grammar for exactly one 11-character string. The token mask forced
+    the string closed after the header, so no diff was representable --
+    identical output at temperature 0.0 and 0.8, hence identical retries
+    and replans.
+
+    The previous test here asserted the pattern *existed* and called the
+    class leak-free (F9). Existence was never the question: a constraint
+    is only verified once a known-good instance is shown to satisfy it.
+    """
+    assert _decoder_admits(DIFF_SCHEMA, REAL_DIFF)
     assert DIFF_SCHEMA["required"] == ["diff"]
+
+
+def test_decoder_semantics_reject_a_prefix_only_pattern() -> None:
+    """The guard above discriminates: it fails on the exact shipped bug.
+
+    A whole-value pattern (`^REQ-\\d{3}$`) survives full-match compilation;
+    a prefix pattern does not. That is the rule any future `pattern` on a
+    free-form field has to clear before it can be shipped.
+    """
+    legacy = {"properties": {"diff": {"type": "string", "pattern": "^diff --git "}}}
+    assert not _decoder_admits(legacy, REAL_DIFF)
+    assert re.fullmatch(r"^REQ-\d{3}$", "REQ-001") is not None
 
 
 def test_parse_diff_response_passes_prose_through_to_the_apply_backstop() -> None:

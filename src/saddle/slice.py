@@ -140,22 +140,23 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     a diff that needed loosening says so in the record rather than passing
     as though it had matched exactly.
     """
-    # Backstop for a server that does not enforce DIFF_HEADER_PATTERN. The
-    # token mask is the primary defence -- xgrammar compiles the pattern to
-    # `Regex("^diff --git ", json_string=true)`, so a non-diff is
-    # unrepresentable -- but saddle must not depend on the server honouring
-    # it. Raised here rather than in the response parser so it stays a
-    # retryable attempt failure: prose is exactly the case a fresh attempt
-    # can fix, and a fatal parse error would throw the run away, which is
-    # the defect this issue is about.
+    # Primary defence, not a backstop. DIFF_SCHEMA carried a
+    # `^diff --git ` pattern until the v3 T1 arm proved the token mask
+    # cannot be trusted with this constraint: the decoder compiles
+    # `pattern` as a full match, so it admitted the header and nothing
+    # else. Every regex that is correct under those semantics let the
+    # model emit a raw quote and break its own JSON packet; every regex
+    # that kept the packet intact excluded code containing a quote. So
+    # structure is checked here, where a violation is deterministic,
+    # inspectable and retryable -- prose is exactly the case a fresh
+    # attempt can fix, and a fatal parse error would throw the run away.
     if not diff.lstrip().startswith("diff --git "):
         msg = f"worker content is not a unified diff (no 'diff --git' header) in {str(workdir)!r}"
         raise RuntimeError(msg)
-    # A header with no hunk is schema-valid (DIFF_HEADER_PATTERN only anchors
-    # "diff --git ") and git reports it as "No valid patches in input" --
-    # four times, once per _APPLY_MODES entry, none of them informative.
-    # Catching it here costs no subprocess and gives the retry loop a
-    # message that actually names the defect.
+    # A header with no hunk applies nothing, and git reports it as "No
+    # valid patches in input" -- four times, once per _APPLY_MODES entry,
+    # none of them informative. Catching it here costs no subprocess and
+    # gives the retry loop a message that actually names the defect.
     if "@@ " not in diff:
         msg = f"worker diff has a header but no hunk ('@@ ' marker) in {str(workdir)!r}"
         raise RuntimeError(msg)
