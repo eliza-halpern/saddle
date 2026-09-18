@@ -447,7 +447,7 @@ class VllmClient:
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> DiffProposal:
-        """Propose a unified diff for *prompt*, guided to one JSON string field."""
+        """Propose a unified diff for *prompt*, guided by the EBNF diff grammar (DIFF_GRAMMAR)."""
         if not prompt.strip():
             msg = "prompt must not be empty"
             raise ValueError(msg)
