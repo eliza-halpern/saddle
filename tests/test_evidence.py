@@ -15,8 +15,6 @@ import pytest
 import saddle.evidence as evidence_module
 from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
-    SHELL_TIMEOUT,
-    TOOL_UNAVAILABLE,
     CapturedRun,
     MutationOutcome,
     _mutmut_scratch_config,
@@ -36,6 +34,7 @@ from saddle.evidence import (
     statement_lines,
     under_coverage,
 )
+from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
 from saddle.journal import SpanRecorder, read_spans
 
 
