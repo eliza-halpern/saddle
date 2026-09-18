@@ -107,14 +107,39 @@ def _elapsed_ms(start: float) -> int:
     return int((perf_counter() - start) * 1000)
 
 
-def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> None:
-    """Apply a proposed diff from stdin and stage it; gates diff tracked content."""
-    exit_code = run_stdin(
-        ["git", "apply", "--index", "--recount", "-"], workdir, diff, recorder=recorder
-    )
-    if exit_code != 0:
-        msg = f"worker diff did not apply cleanly in {str(workdir)!r}"
-        raise RuntimeError(msg)
+# Progressively tolerant `git apply` modes, strictest first. Each is
+# deterministic and costs no model call, which is the point: T1 spent two
+# of three worker calls on diffs that would not apply and T7 lost a whole
+# run to three consecutive failures one lint fix from passing (F4, F11,
+# F13). The dominant cause is context reproduced from memory with drifted
+# whitespace, not a wrong edit. Order matters -- a strict apply is tried
+# first so a fuzzy mode never pre-empts an exact match.
+_APPLY_MODES: Final = (
+    ("strict", ()),
+    ("ignore-whitespace", ("--ignore-whitespace",)),
+    ("reduced-context", ("--ignore-whitespace", "-C1")),
+    ("three-way", ("--3way",)),
+)
+
+
+def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> str:
+    """Apply a proposed diff from stdin and stage it; gates diff tracked content.
+
+    Returns the mode that applied. Every attempt journals its own span, so
+    a diff that needed loosening says so in the record rather than passing
+    as though it had matched exactly.
+    """
+    for mode, flags in _APPLY_MODES:
+        exit_code = run_stdin(
+            ["git", "apply", "--index", "--recount", *flags, "-"],
+            workdir,
+            diff,
+            recorder=recorder,
+        )
+        if exit_code == 0:
+            return mode
+    msg = f"worker diff did not apply cleanly in {str(workdir)!r}"
+    raise RuntimeError(msg)
 
 
 def format_attempt_failure(

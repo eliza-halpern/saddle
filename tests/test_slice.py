@@ -24,6 +24,7 @@ from saddle.journal import (
     read_spans,
 )
 from saddle.slice import (
+    _APPLY_MODES,
     RECOVERY_OUTPUT_CHARS,
     NodeGateFailedError,
     NodeUnappliableError,
@@ -341,7 +342,9 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
         result.transcript,
     )
     spans = read_spans(tmp_path / "proofs.jsonl")
-    assert len([span for span in spans if span.name == "git"]) == 1
+    # One span per apply mode tried: the ladder journals every attempt, so
+    # a diff that needed loosening -- or exhausted the ladder -- is visible.
+    assert len([span for span in spans if span.name == "git"]) == len(_APPLY_MODES)
     assert len([span for span in spans if span.kind == "agent"]) == 3
     assert "- Attempts: 2\n" in result.transcript
 
@@ -370,7 +373,7 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     assert "- Gate " not in result.transcript
     assert "- Attempts: 3\n" in result.transcript
     spans = read_spans(journal)
-    assert len([span for span in spans if span.name == "git"]) == 3
+    assert len([span for span in spans if span.name == "git"]) == 3 * len(_APPLY_MODES)
     workers = [span for span in spans if span.name == "worker:n1"]
     assert len(workers) == 3
     assert all("diff did not apply" in span.detail for span in workers)
@@ -378,7 +381,10 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     run = next(span for span in spans if span.name == "run")
     assert [span.exit_code for span in workers] == [1, 1, 1]
     assert [span.parent_id for span in workers] == [run.span_id] * 3
-    assert [tool.parent_id for tool in git_runs] == [span.span_id for span in workers]
+    # Each worker attempt now parents one git span per apply mode tried,
+    # in order, so the ladder stays attributable to the diff that needed it.
+    expected_parents = [worker.span_id for worker in workers for _ in range(len(_APPLY_MODES))]
+    assert [tool.parent_id for tool in git_runs] == expected_parents
 
 
 def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
@@ -953,3 +959,77 @@ def test_run_slice_mid_run_corruption_raises(
             propose=lambda node, failure: DiffProposal(GOOD_DIFF, ""),
             now=lambda: "2026-09-16T00:00:00+00:00",
         )
+
+
+def _git_repo_multiline(root: Path) -> None:
+    """A file with enough lines that a hunk carries real context."""
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, root) == 0
+    (root / "m.py").write_text("def f():\n    a = 1\n    b = 2\n    return a + b\n")
+    assert run_argv(["git", "add", "m.py"], root) == 0
+    assert run_argv(["git", "commit", "-m", "base"], root) == 0
+
+
+def test_apply_diff_tolerates_whitespace_drift_in_context(tmp_path: Path) -> None:
+    """Context reproduced with drifted indentation must still apply.
+
+    T1 spent two of three worker calls on diffs that would not apply and
+    T7 lost an entire run to three consecutive failures, one lint fix
+    from passing (F4, F11, F13). The dominant cause is not a wrong edit:
+    it is context the model reproduced from memory with whitespace that
+    does not match byte-for-byte. The edit itself is unambiguous.
+    """
+    _git_repo_multiline(tmp_path)
+    diff = (
+        "diff --git a/m.py b/m.py\n"
+        "--- a/m.py\n"
+        "+++ b/m.py\n"
+        "@@ -1,4 +1,4 @@\n"
+        " def f():\n"
+        "   a = 1\n"  # drifted: real file has four spaces
+        "     b = 2\n"  # drifted: real file has four spaces
+        "-    return a + b\n"
+        "+    return a * b\n"
+    )
+    _apply_diff(tmp_path, diff)
+    assert (tmp_path / "m.py").read_text() == "def f():\n    a = 1\n    b = 2\n    return a * b\n"
+
+
+def test_apply_diff_reports_which_mode_applied(tmp_path: Path) -> None:
+    """A diff that needed loosening must not read as an exact match.
+
+    The ladder exists to stop unappliable diffs destroying runs, not to
+    make sloppy ones invisible. An exact diff reports `strict`; a drifted
+    one names the tolerance it required, so the journal distinguishes
+    them.
+    """
+    _git_repo_multiline(tmp_path)
+    exact = (
+        "diff --git a/m.py b/m.py\n"
+        "--- a/m.py\n"
+        "+++ b/m.py\n"
+        "@@ -1,4 +1,4 @@\n"
+        " def f():\n"
+        "     a = 1\n"
+        "     b = 2\n"
+        "-    return a + b\n"
+        "+    return a - b\n"
+    )
+    assert _apply_diff(tmp_path, exact) == "strict"
+
+    drifted = (
+        "diff --git a/m.py b/m.py\n"
+        "--- a/m.py\n"
+        "+++ b/m.py\n"
+        "@@ -1,4 +1,4 @@\n"
+        " def f():\n"
+        "   a = 1\n"
+        "     b = 2\n"
+        "-    return a - b\n"
+        "+    return a * b\n"
+    )
+    assert _apply_diff(tmp_path, drifted) == "ignore-whitespace"
