@@ -620,3 +620,30 @@ def test_stream_chat_unusable_error_objects_fall_through() -> None:
         with pytest.raises(VllmResponseError) as exc_info:
             list(client.stream_chat([{"role": "user", "content": "hi"}]))
         assert str(exc_info.value) == "stream chunk has no choices"
+
+
+def test_diff_schema_constrains_the_header_not_just_the_type() -> None:
+    """`{"type": "string"}` admits "" and admits prose.
+
+    T7's replan ended `content has no diff string` after three
+    diff-apply failures (F11). The field was already schema-required, so
+    the guarantee bought nothing: an empty string satisfies it. A pattern
+    anchoring the git header is expressible as a grammar, which is the
+    constraint class that has not leaked (F9) -- unlike a `minLength`,
+    which would be checked after the packet exists.
+    """
+    field = DIFF_SCHEMA["properties"]["diff"]
+    assert field["pattern"].startswith("^diff --git ")
+    assert DIFF_SCHEMA["required"] == ["diff"]
+
+
+def test_parse_diff_response_passes_prose_through_to_the_apply_backstop() -> None:
+    """Prose must stay retryable, not abort the run.
+
+    The header backstop lives in _apply_diff, not here: a fatal parse
+    error would throw away a run that a fresh attempt could fix, which is
+    the defect #52 is about. The parser only rejects a missing or blank
+    field.
+    """
+    client, _ = _json_client(_ok_body(content='{"diff": "Sure! I will fix that."}'))
+    assert client.propose_diff("Do x.").diff == "Sure! I will fix that."

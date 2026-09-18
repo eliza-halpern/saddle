@@ -129,6 +129,17 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     a diff that needed loosening says so in the record rather than passing
     as though it had matched exactly.
     """
+    # Backstop for a server that does not enforce DIFF_HEADER_PATTERN. The
+    # token mask is the primary defence -- xgrammar compiles the pattern to
+    # `Regex("^diff --git ", json_string=true)`, so a non-diff is
+    # unrepresentable -- but saddle must not depend on the server honouring
+    # it. Raised here rather than in the response parser so it stays a
+    # retryable attempt failure: prose is exactly the case a fresh attempt
+    # can fix, and a fatal parse error would throw the run away, which is
+    # the defect this issue is about.
+    if not diff.lstrip().startswith("diff --git "):
+        msg = f"worker content is not a unified diff (no 'diff --git' header) in {str(workdir)!r}"
+        raise RuntimeError(msg)
     for mode, flags in _APPLY_MODES:
         exit_code = run_stdin(
             ["git", "apply", "--index", "--recount", *flags, "-"],

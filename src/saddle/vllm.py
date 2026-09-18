@@ -33,9 +33,16 @@ DEFAULT_MAX_TOKENS: Final = 4096
 DEFAULT_TEMPERATURE: Final = 0.0
 DEFAULT_REASONING_EFFORT: Final = "medium"
 REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
+# `{"type": "string"}` admits "" and admits prose, so requiring the field
+# bought nothing: T7's replan ended `content has no diff string` after
+# three diff-apply failures (F11). The pattern anchors the git header,
+# which is expressible as a grammar -- the constraint class that has not
+# leaked (F9). A `minLength` would not be: length bounds are checked
+# after the packet exists, which is the class that leaks every time.
+DIFF_HEADER_PATTERN: Final = "^diff --git "
 DIFF_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
-    "properties": {"diff": {"type": "string"}},
+    "properties": {"diff": {"type": "string", "pattern": DIFF_HEADER_PATTERN}},
     "required": ["diff"],
     "additionalProperties": False,
 }

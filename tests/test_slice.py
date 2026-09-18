@@ -24,7 +24,6 @@ from saddle.journal import (
     read_spans,
 )
 from saddle.slice import (
-    _APPLY_MODES,
     RECOVERY_OUTPUT_CHARS,
     NodeGateFailedError,
     NodeUnappliableError,
@@ -194,8 +193,14 @@ def test_apply_diff_recounts_wrong_hunk_headers(tmp_path: Path) -> None:
 
 
 def test_apply_diff_garbage_raises(tmp_path: Path) -> None:
+    """Content without a git header is named as such, not as a failed apply.
+
+    It also short-circuits: running the whole tolerance ladder over prose
+    costs four `git apply` invocations to learn something the first
+    character already said.
+    """
     _git_repo(tmp_path)
-    expected = f"worker diff did not apply cleanly in {str(tmp_path)!r}"
+    expected = f"worker content is not a unified diff (no 'diff --git' header) in {str(tmp_path)!r}"
     with pytest.raises(RuntimeError, match=re.escape(expected)):
         _apply_diff(tmp_path, "not a diff\n")
 
@@ -338,14 +343,15 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
     assert result.passed is False
     assert "- Gate " not in result.transcript
     assert "- Proof: none\n" in result.transcript
-    assert re.search(
-        r"  - tool git: exit [1-9]\d* in \d+ms: git apply --index --recount -\n",
-        result.transcript,
-    )
+    # No `git apply` line: prose is rejected on its missing header before
+    # the tolerance ladder runs (#52).
+    assert "git apply" not in result.transcript
     spans = read_spans(tmp_path / "proofs.jsonl")
     # One span per apply mode tried: the ladder journals every attempt, so
     # a diff that needed loosening -- or exhausted the ladder -- is visible.
-    assert len([span for span in spans if span.name == "git"]) == len(_APPLY_MODES)
+    # Prose never reaches the ladder (#52): the header check rejects it
+    # before the first `git apply`, so no git span is recorded at all.
+    assert [span for span in spans if span.name == "git"] == []
     assert len([span for span in spans if span.kind == "agent"]) == 3
     assert "- Attempts: 2\n" in result.transcript
 
@@ -374,7 +380,7 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     assert "- Gate " not in result.transcript
     assert "- Attempts: 3\n" in result.transcript
     spans = read_spans(journal)
-    assert len([span for span in spans if span.name == "git"]) == 3 * len(_APPLY_MODES)
+    assert [span for span in spans if span.name == "git"] == []
     workers = [span for span in spans if span.name == "worker:n1"]
     assert len(workers) == 3
     assert all("diff did not apply" in span.detail for span in workers)
@@ -382,10 +388,9 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     run = next(span for span in spans if span.name == "run")
     assert [span.exit_code for span in workers] == [1, 1, 1]
     assert [span.parent_id for span in workers] == [run.span_id] * 3
-    # Each worker attempt now parents one git span per apply mode tried,
-    # in order, so the ladder stays attributable to the diff that needed it.
-    expected_parents = [worker.span_id for worker in workers for _ in range(len(_APPLY_MODES))]
-    assert [tool.parent_id for tool in git_runs] == expected_parents
+    # Prose short-circuits before the ladder, so no git span is parented
+    # to any worker attempt.
+    assert git_runs == []
 
 
 def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
