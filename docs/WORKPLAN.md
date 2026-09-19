@@ -117,6 +117,8 @@ T3-8, T3-9, T3-10 ──► T3-6 (decompose `run_slice` after the resume seed se
 T3-7a ──► T3-3 (the oracle runs on the impl node a red specification feeds)
 T3-7a ──► T3-12 (the planner prompt must also say a test node's tests are expected to fail)
 T3-4 ──► T3-7a's test-node fixtures (a test node that creates its test file needs `write_file`)
+T3-8 ──► any two-node fixture or run (until it lands, the second node is gated against `HEAD` and fails `node-scope` on the first node's staged files)
+T3-7a, T3-8 ──► T3-7b (the smoke run, session 20a) ──► T3-3, T3-9, T3-10, T3-11 (write them after watching the path execute)
 ```
 Everything in Tier 0 is independent of everything else and can go in any order.
 
@@ -1116,6 +1118,36 @@ Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` mutat
 Dry run: not run.
 
 ### T3-4 — Bind `allowed_tools` to harness behaviour (RUN_ALLOWLIST stops being decorative)
+Status 2026-09-18: DONE — a700aa7 (executor, session 19) plus the reviewer's
+follow-up commit below. Landed as specified, with these differences from the
+text that follows: `build_worker_prompt` replaces the context block with
+`CONTENTS_WITHHELD` rather than emptying `contents` (`run_task` still reads
+the files; only the prompt withholds them); the captured-run filter is
+`_run_is_allowed` over a `CAPTURED_RUN_TOOL` map in `slice.py`, and a run
+that resolves to no binding (git, mutmut) is kept; `check_node_scope`'s
+`may_create` is required keyword-only while `added_files` keeps its `()`
+default. Reviewer re-ran the committed table's three mutants and two more
+(`"ruff": "lint"` → `"run_tests"`; `run_tier1`'s `may_create=` → `True`):
+all five KILLED, tree hash identical after each revert, caches dropped;
+`./check.sh` green at a700aa7 (558 passed, 100%). Process defect, reported
+by the executor itself: the commit message's mutant table was written
+before the mutants ran (HANDOFF-PROMPT forbids this); every recorded
+verdict was then reproduced, first by the executor and then here.
+Follow-up (reviewer, **tightened**): `_run_is_allowed` matched `argv[0]`
+literally and `test_command` is an unconstrained string, so
+`python3 -m pytest` or `.venv/bin/pytest` reached the repair prompt
+without `run_tests` — the same class as T3-13's unmatched spellings.
+`_captured_run_tool` now matches the executable's basename and, for
+`python -m X`, the module X.
+`test_repair_prompt_binding_matches_how_a_plan_spells_the_command`
+parametrizes twelve spellings: known-good and known-bad for each binding,
+and no-binding runs kept. Mutants (pre-commit, inverse replacement, tree
+hash identical after each): basename → `argv[0]` KILLED (3 cases), python
+branch → `if False` KILLED (3), `-m` module → `"python"` KILLED (1).
+Noticed, not touched: `tests/test_vllm_live.py`'s `LIVE_PROMPT` is a
+hand-written copy of the emit prompt's rules and now lacks the bindings
+paragraph; it is skipped without a key, so switching it to
+`build_emit_prompt` is left for T4-4's live session.
 Decision 2026-09-18: neither keep-as-documentation nor delete. Each tool
 name becomes a capability the harness actually honours, so the planner's
 choice changes what a node gets and may do, and a name without a binding
@@ -1359,6 +1391,54 @@ Done when: mutants red; `./check.sh` green; `grep -rn 'kind="test"' tests/test_r
 Stop if: `check_tests`'s signature at HEAD is not `(test_command, exit_code)` (~:120), or pytest's summary line is not parseable for the collected count with `--no-cov -q` (then count collected tests from `-rA` output instead and say so here).
 Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` path this must leave untouched); NONE for the `test` path, by T3-7.
 Dry run: not run.
+
+### T3-7b — Smoke run: one task through the harness on the container (session 20a)
+Files: none in this repo change. Outputs go to `../saddle-bench/runs/smoke-<date>/`
+(the planner's DAG, the journal, the transcript, `saddle doctor` output, the
+exit code); the reviewer adds the outcome to this item's Status line.
+Contract: none — this is a measurement of whether the path every later item
+is built on executes at all: planner emission → worker diff under the EBNF
+grammar → Tier-1 gates → merge-suite. It exists because no run has happened
+since `3669f9a`, the audit (§8) says the corrupt-patch class is still
+representable under the grammar, and T3-7 was found by an executor building
+a fixture, not by anyone running the harness. The next premise error of that
+kind is cheapest to find here, before T3-3 and T3-9..T3-11 are written
+against a path nobody has watched execute.
+Preconditions: T3-7a landed (a `test` node can pass) and T3-8 landed
+(until it does, every node after the first is gated against `HEAD`, so any
+plan with two or more nodes fails `node-scope` on its second node — a
+one-node task is the only smoke possible before T3-8, and it does not
+exercise the test/impl split). Container healthy (`saddle doctor` green),
+key in `SADDLE_VLLM_API_KEY`, user present; no source edits during the run.
+Direction: none (no code change).
+Evidence: VERIFIED — the T3-8 probe (its Evidence paragraph) shows the
+second node's gates reading the first node's staged diff; T3-7 shows the
+test path unexecutable at `a700aa7`.
+Issue: none.
+Steps:
+1. A scratch repo in the `_slice_repo` shape (`n.py` with `f()` returning
+   1, no test file), task "make f return 2 and reject negative input with
+   ValueError". `saddle dag` to plan; save the DAG. Then one `saddle run`
+   (the slice CLI) with the default merge command; save the journal, the
+   transcript and the exit code.
+2. Record, per node: kind; whether a `test` node passed as a red
+   specification (`tests` and `red-phase` details); whether the worker's
+   diff applied (`git apply` exit); every failed gate's verbatim detail;
+   wall-clock; and the merge exit.
+3. Fix nothing during the session. Each failure becomes a finding line
+   under this item; a failure that falsifies the premise of a later item
+   becomes a note on that item, written by the reviewer.
+Known-good: a run that ends `N proven, 0 failed, 0 undispatched, merge exit 0`.
+Known-bad: any gate failure or `git apply` failure — recorded, not fixed.
+Contract mutants: none (no code).
+Done when: the run record exists under `../saddle-bench/runs/`; this item's
+Status lists the outcome of steps 1–2 and the first failure's verbatim
+detail, if any.
+Stop if: `saddle doctor` is red (report; never restart the container); the
+key is absent; T3-7a or T3-8 has not landed (then run the one-node variant
+only, and say so in the record).
+Passing instance at HEAD: none — that is the point of the run.
+Dry run: not applicable.
 
 **Audit 2026-09-18 (post T3-2), items T3-8 – T3-16.** An audit of the T2-2,
 T3-1 (`295fbd0`) and T3-2 (`a6c1a68`) changes found nine things no later
