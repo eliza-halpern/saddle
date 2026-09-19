@@ -726,6 +726,25 @@ def test_diff_grammar_requires_the_file_lines_before_a_hunk() -> None:
     assert REJECT_AT[named[0]] == headerless.index("@@")
 
 
+def test_grammar_check_corpus_carries_the_grammar_it_checks() -> None:
+    """`--emit` writes the grammar into the cases file; `--run` reads it there.
+
+    The container has xgrammar and nothing else: `/tmp/check.py` has no
+    `src/` beside it, so importing `saddle.vllm` there raised
+    `ModuleNotFoundError` the first time the tool's own docstring lines
+    were actually run (T3-18, 2026-09-19). The corpus is the only thing
+    that crosses into the container, so the grammar travels inside it,
+    byte-identical to this checkout's.
+    """
+    from tools.diff_grammar_check import build_cases
+
+    cases = build_cases(commits=1)
+    assert cases["grammar"] == DIFF_GRAMMAR
+    # Every half the container checks travels too.
+    assert {"admit", "reject", "reject_at", "not_stop", "stop"} <= cases.keys()
+    assert "hunk without file lines" in cases["reject"]
+
+
 def test_decoder_semantics_reject_a_prefix_only_pattern() -> None:
     """The guard above discriminates: it fails on the exact shipped bug.
 

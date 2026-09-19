@@ -8,6 +8,11 @@ repo's venv, so this check runs there:
     docker cp tools/diff_grammar_check.py <container>:/tmp/check.py
     docker exec <container> /app/venv/bin/python /tmp/check.py --run
 
+The cases file carries the grammar text itself, so the container needs
+nothing from this repo: `--run` reads the grammar from the file, never
+from `src/` (there is no `src/` beside `/tmp/check.py`; importing it
+there was the first thing the lines above did when actually run).
+
 Why it exists: `DIFF_SCHEMA` once carried `pattern = "^diff --git "`. JSON
 Schema calls that an unanchored partial match; the decoder compiles it as
 a full match, so xgrammar reduced it to a closed literal admitting exactly
@@ -37,8 +42,10 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 CASES_PATH = "/tmp/cases.json"
+REPO = Path(__file__).resolve().parent.parent  # git runs here, whatever the cwd
 
 MUST_REJECT = {
     "prose": "Sure! I will fix that.\n",
@@ -88,50 +95,71 @@ SYNTHETIC = {
 }
 
 
-def emit(commits: int = 40) -> None:
-    """Write the corpus: this repo's own diffs plus the awkward constructs."""
+def _repo_grammar() -> str:
+    """The grammar as this checkout defines it (emit runs in the repo)."""
+    sys.path.insert(0, str(REPO / "src"))
+    from saddle.vllm import DIFF_GRAMMAR
+
+    return str(DIFF_GRAMMAR)
+
+
+def build_cases(commits: int = 40) -> dict[str, Any]:
+    """The corpus plus the grammar it is checked against.
+
+    The grammar travels inside the cases file so that `--run` compiles
+    exactly the text this checkout has, with no import of `saddle` in the
+    container.
+    """
     shas = subprocess.run(
-        ["git", "log", "--format=%H", f"-{commits}"], capture_output=True, text=True, check=True
+        ["git", "log", "--format=%H", f"-{commits}"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split()
     cases = dict(SYNTHETIC)
     for sha in shas:
         diff = subprocess.run(
             ["git", "show", sha, "--format=", "--no-color"],
+            cwd=REPO,
             capture_output=True,
             text=True,
             check=True,
         ).stdout
         if diff.strip():
             cases[sha[:8]] = diff
-    print(
-        json.dumps(
-            {
-                "admit": cases,
-                "reject": MUST_REJECT,
-                "reject_at": REJECT_AT,
-                "not_stop": MUST_NOT_STOP,
-                "stop": MUST_STOP,
-            }
-        )
-    )
+    return {
+        "grammar": _repo_grammar(),
+        "admit": cases,
+        "reject": MUST_REJECT,
+        "reject_at": REJECT_AT,
+        "not_stop": MUST_NOT_STOP,
+        "stop": MUST_STOP,
+    }
+
+
+def emit(commits: int = 40) -> None:
+    """Write the corpus: this repo's own diffs plus the awkward constructs."""
+    print(json.dumps(build_cases(commits)))
 
 
 def run() -> int:
-    """Compile DIFF_GRAMMAR with the real xgrammar and check both halves."""
+    """Compile the emitted grammar with the real xgrammar and check both halves."""
     # Only present in the serving container; mypy follows this file now that
     # tests/test_vllm.py imports the reject list from it.
     import xgrammar as xgr  # type: ignore[import-not-found]
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-    from saddle.vllm import DIFF_GRAMMAR
-
     cases = json.loads(Path(CASES_PATH).read_text())
+    grammar = cases.get("grammar")
+    if not grammar:
+        print("cases file carries no grammar: re-run --emit from the repo checkout")
+        return 2
     # A byte vocab plus an explicit stop token is what lets the third check
     # ask "may the model stop here?" rather than only "is this byte legal?".
     vocab = [bytes([i]).decode("latin-1") for i in range(256)] + ["<eos>"]
     stop_id = 256
     info = xgr.TokenizerInfo(vocab, vocab_type=xgr.VocabType.RAW, stop_token_ids=[stop_id])
-    compiled = xgr.GrammarCompiler(info).compile_grammar(xgr.Grammar.from_ebnf(DIFF_GRAMMAR))
+    compiled = xgr.GrammarCompiler(info).compile_grammar(xgr.Grammar.from_ebnf(grammar))
 
     def first_reject(text: str) -> int | None:
         matcher = xgr.GrammarMatcher(compiled)
