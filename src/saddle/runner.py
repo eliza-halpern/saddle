@@ -132,8 +132,9 @@ def run_node_gate(
     changed_files = sorted({path for path, _ in changed})
     added = git_added_files(workdir, baseline, recorder=recorder)
     # Every file the diff names (git decides, so deletions and non-Python
-    # files count), for the opt-in target-scope check (T3-2).
-    touched = sorted(set(git_changed_files(workdir, baseline, recorder=recorder)) | set(added))
+    # files count, and a staged new file is already among them -- tracked-
+    # ness comes from the index), for the opt-in target-scope check (T3-2).
+    touched = sorted(git_changed_files(workdir, baseline, recorder=recorder))
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
     suite = run_shell_capture(

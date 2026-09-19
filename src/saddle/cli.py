@@ -660,7 +660,7 @@ def run_tail(
                 for line in render_event(entry):
                     stdout.write(f"{line}\n")
                 stdout.flush()
-                if is_run_end(entry):
+                if is_run_end(entry) and entry is entries[-1]:
                     return 0
             shown = len(entries)
             sleep(poll_interval)

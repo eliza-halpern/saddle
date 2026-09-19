@@ -275,6 +275,20 @@ def test_run_node_gate_target_files_binds_end_to_end(tmp_path: Path) -> None:
     assert failed.detail == "touched file(s) outside target_files: n.py"
 
 
+def test_run_node_gate_target_files_names_a_staged_new_file(tmp_path: Path) -> None:
+    """T3-16(a): `git diff --name-only <ref>` already lists a staged new
+    file (tracked-ness comes from the index), so target-scope must name a
+    stray file added outside target_files with no separate union needed."""
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    (tmp_path / "extra.py").write_text("")
+    assert run_argv(["git", "add", "extra.py"], tmp_path) == 0
+    result = run_node_gate(_node(target_files=["n.py"]), tmp_path)
+    assert result.passed is False
+    failed = {check.name: check for check in result.checks}["target-scope"]
+    assert failed.detail == "touched file(s) outside target_files: extra.py"
+
+
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
     test_body = "from n import f\n\n\ndef test_f_returns_fixed_value():\n    assert f() == 2\n"
     _worktree(tmp_path, test_body, baseline_test=test_body)

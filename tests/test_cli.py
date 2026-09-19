@@ -1704,6 +1704,63 @@ def test_run_tail_streams_cold_journal_without_sleeping(tmp_path: Path) -> None:
     assert out.flushes == 4
 
 
+def test_run_tail_reads_a_cold_journal_with_two_complete_runs(tmp_path: Path) -> None:
+    """T3-16(b): a run-end span ends the tail only when it is the last
+    entry read, not the first one seen -- a cold journal already holding
+    two finished runs must render and exit past both, not stop at the
+    first run's end span while the second run's lines sit unread below."""
+    journal = tmp_path / "proofs.jsonl"
+    first = _tail_journal(journal)
+    second = _tail_journal(journal)
+    out = io.StringIO()
+    sleeps: list[float] = []
+    assert run_tail(journal, stdout=out, sleep=sleeps.append) == 0
+    assert out.getvalue() == _tail_expected(first) + _tail_expected(second)
+    assert sleeps == []
+
+
+def test_run_tail_keeps_following_past_a_finished_run(tmp_path: Path) -> None:
+    """T3-16(b), known-bad: with the old first-is_run_end-wins condition,
+    a finished run followed by a second run already in progress would stop
+    at the first run's end span and never render the second run's lines."""
+    journal = tmp_path / "proofs.jsonl"
+    finished_run = build_span(
+        node_id="",
+        argv=[],
+        duration_ms=1000,
+        exit_code=0,
+        detail="1 proven, 0 failed, 0 undispatched",
+        kind="agent",
+        name="run",
+    )
+    append_span(journal, finished_run)
+    second_tool = build_span(node_id="n2", argv=["pytest"], duration_ms=5, exit_code=0, detail="")
+    append_span(journal, second_tool)
+    second_run_end = build_span(
+        node_id="",
+        argv=[],
+        duration_ms=500,
+        exit_code=0,
+        detail="1 proven, 0 failed, 0 undispatched",
+        kind="agent",
+        name="run",
+    )
+
+    def sleep(secs: float) -> None:
+        sleeps.append(secs)
+        append_span(journal, second_run_end)
+
+    sleeps: list[float] = []
+    out = io.StringIO()
+    assert run_tail(journal, stdout=out, sleep=sleep) == 0
+    assert out.getvalue() == (
+        "run: exit 0 in 1000ms: 1 proven, 0 failed, 0 undispatched\n"
+        "[n2] tool pytest: exit 0 in 5ms: pytest\n"
+        "run: exit 0 in 500ms: 1 proven, 0 failed, 0 undispatched\n"
+    )
+    assert sleeps == [0.2]
+
+
 def test_run_tail_follows_growing_journal(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     append_span(
