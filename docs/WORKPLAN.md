@@ -910,29 +910,60 @@ design decision.
 ## 6. Tier 3 — architecture (one item each; no benchmark needed)
 
 ### T3-1 — Resume a journal instead of refusing it
-Files: `src/saddle/slice.py:584-587`; `src/saddle/journal.py:336-342`
-(`rebuild_proven`, currently test-only); `tests/test_slice.py:1062`
-(`test_run_slice_refuses_stale_journal`).
+Files: `src/saddle/slice.py` (`run_slice`: the fresh-journal refusal ~:595,
+the schedule loop ~:610, the `worker` closure ~:606); `src/saddle/journal.py`
+(no change; `rebuild_proven` ~:336 is the mechanism, `_verified_contents`
+~:318-331 the refusal); `tests/test_slice.py` (`test_run_slice_refuses_stale_journal`
+replaced by three tests).
+Status 2026-09-18: done by the reviewer directly. The text below is the
+shape that landed.
 Contract: `run_slice` on a journal that verifies seeds `proofs` from
-`rebuild_proven(journal_path)` and schedules only unproven nodes; a journal
-that does not verify still raises.
-Direction: **loosened**, with proof: the refusal rejects a legitimate input
+`rebuild_proven(journal_path)`, schedules only unproven nodes, and a node
+scheduled after its parents were proven (this run or an earlier one) still
+cites every parent's proof hash in its record; a journal that does not
+verify raises `ValueError` before any node runs; a resume with nothing
+left to run seals a run span and passes without calling the proposer.
+Direction: **loosened**, with proof: the refusal rejected a legitimate input
 (a verified journal from a crashed run; ARCHITECTURE.md promises resume and
 `rebuild_proven`'s own docstring says "a crash therefore loses at most the
 in-flight node").
 Evidence: VERIFIED — `rebuild_proven` exists and is tested in
-`tests/test_journal.py`; the refusal is `slice.py:584-587`.
-Steps: replace the refusal with `proofs = rebuild_proven(journal_path)` (let
-its corruption error propagate); the `remaining` DAG is filtered by
-`_schedulable_nodes` already. Rewrite `:1062` into two tests: a corrupt
-journal still raises; a valid journal with n1 proven runs only n2 and the
-final span says "2 proven".
-Known-bad: a journal with a broken hash chain raises. Known-good: n1's proof
-is reused, n1's `propose` is never called (assert via a proposer that fails
-on n1).
-Contract mutants: 1. `proofs = {}` instead of `rebuild_proven(...)` → n1
-re-proposed, test red. 2. swallow the corruption error → corrupt-journal test red.
-Done when: mutants red; `./check.sh` green.
+`tests/test_journal.py`; the refusal was `slice.py:594-596`. Two things the
+first draft did not know, found by running it: (1) the loop built
+`Dag(nodes=_schedulable_nodes(...))` unguarded and `Dag` requires one node,
+so an all-proven resume raised a `ValidationError`; (2) `_schedulable_nodes`
+hands the scheduler a copy with proven dependencies stripped, and the
+worker sealed *that* copy, so a node whose parent was proven before it was
+scheduled recorded `parent_proofs=[]`. That second one already affected the
+replan path (a replacement node scheduled after its parent's proof) and is
+fixed for both.
+Issue: none
+Steps (as landed):
+1. Replace the refusal with `proofs: dict[str, str] = rebuild_proven(journal_path)`
+   (import it; `read_records` stays, the transcript uses it) and let its
+   `ValueError` propagate.
+2. Loop: `ready = _schedulable_nodes(...)`; `if not ready: break`; then
+   `Dag(nodes=ready)`.
+3. `worker`: look the original node up in `remaining.nodes` by id and run
+   that, so `_run_node` computes `parents` from the full dependency list.
+4. Tests: `test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs`
+   (first run proves n1; second run's DAG adds a `refactor` n2 depending on
+   n1 whose diff appends a comment to `n.py` — `TIDY_DIFF`; the proposer
+   asserts it never sees n1; n1's hash is reused; n2's record cites it; the
+   run detail is `2 proven, 0 failed, 0 undispatched, merge exit 0`),
+   `test_run_slice_resume_with_nothing_left_runs_no_worker`, and
+   `test_run_slice_refuses_a_journal_that_does_not_verify` (one byte of the
+   sealed thinking changed → `failed verification: bad-hash@line N`).
+Known-good: n1's proof is reused, n1's `propose` is never called, n2 cites
+n1. Known-bad: a journal with a broken hash raises before any node runs.
+Contract mutants (`pytest tests/test_slice.py -k "resume or refuses" -q --no-cov`):
+1. `sed -i 's/    proofs: dict\[str, str\] = rebuild_proven(journal_path)/    proofs: dict[str, str] = {}/' src/saddle/slice.py` → n1 re-proposed, resume test red.
+2. `sed -i 's/    if hard:/    if False:/' src/saddle/journal.py` → corrupt-journal test red.
+3. `sed -i 's/        if not ready:/        if False:/' src/saddle/slice.py` → nothing-left test red (`Dag` of zero nodes).
+4. `sed -i 's/return await _run_node(original,/return await _run_node(node,/' src/saddle/slice.py` → n2's `parent_proofs` assertion red.
+Each target occurs once in its file. Drop `__pycache__` after each revert.
+Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert): 1 KILLED (both resume tests), 2 KILLED (corrupt journal accepted), 3 KILLED (Dag of zero nodes), 4 KILLED (n2 loses its parent).
+Done when: mutants red; `./check.sh` green — 532 passed at commit time.
 
 ### T3-2 — `target_files` on `Node` (issue #64, supersedes #51)
 Files: `src/saddle/dag.py` (`Node`), `src/saddle/gates.py` (`check_node_scope`
