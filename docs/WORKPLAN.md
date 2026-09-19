@@ -966,39 +966,88 @@ Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert
 Done when: mutants red; `./check.sh` green — 532 passed at commit time.
 
 ### T3-2 — `target_files` on `Node` (issue #64, supersedes #51)
-Files: `src/saddle/dag.py` (`Node`), `src/saddle/gates.py` (`check_node_scope`
-or a new `check_target_files`), `runner.py`, `tests/test_dag.py`, `tests/test_gates.py`.
-Contract: a node may declare `target_files: list[str]` (schema-constrained
-to repo-relative paths, no `..`); if declared and non-empty, a diff that
-touches any path outside the list fails a `target-scope` check.
-Direction: **tightened**; opt-in.
+Files: `src/saddle/dag.py` (`Node`: new field + validator, imports);
+`src/saddle/gates.py` (`check_target_files`, `Tier1Inputs.touched_files`,
+the call in `run_tier1` after `check_node_scope`); `src/saddle/runner.py`
+(`touched` from `git_changed_files` ∪ `added`, threaded into `Tier1Inputs`);
+`src/saddle/cli.py` (planner rule in `build_emit_prompt`; `targets:` line in
+`render_dag_plan` when declared); `docs/ARCHITECTURE.md` (Tier-1 list: item 7,
+later items renumbered); `tests/test_dag.py`, `tests/test_gates.py` (three
+unit tests, the two gate-order pins, the `len(...) == 11` pin),
+`tests/test_runner.py` (`_node(target_files=...)`, one end-to-end test, the
+tool-span pin), `tests/test_slice.py` (tool-span pin), `tests/test_cli.py`
+(prompt rule, render).
+Status 2026-09-18: done by the reviewer directly. The text below is the
+shape that landed.
+Contract: a node may declare `target_files: list[str]` (default empty). Each
+entry is a repo-relative POSIX path: no leading `/`, no backslash, no `..`
+segment, no surrounding whitespace, non-empty — rejected at validation.
+If the list is non-empty, a Tier-1 check named `target-scope` (after
+`node-scope`) fails when any file the diff changed or added — as `git`
+lists them, so deletions and non-Python files count — is outside the list,
+naming the strays. An empty list is unrestricted.
+Direction: **tightened**, opt-in; the planner can only narrow a node's
+scope with this field, never widen it (empty is the status quo).
 Evidence: PUBLISHED-WITH-MEASUREMENT — Agentless (arXiv 2407.01489)
-localisation-then-repair; #64 records T4's wrong-module edit.
-Steps: follow the T2-2 shape (new field with default `[]`, new check, thread
-through `Tier1Inputs`, known-good/known-bad, three mutants: empty list is
-unrestricted; `..` rejected by schema; out-of-list path fails). Keep the
-schema enum/const style so the constraint reaches the decoder
-(`tests/test_dag.py:357` pattern). Do this after T2-2 so `added_files` is
-already threaded.
+localisation-then-repair; #64 records T4's wrong-module edit. Design
+choices made by running it: (1) the paths are validated by a pydantic
+`field_validator`, not a JSON-schema `pattern` — the decoder compiles a
+pattern as a full match (CLAUDE.md), and a wrong one would make every path
+unrepresentable, silently; the emitted schema therefore carries an
+unconstrained optional array and pydantic rejects bad entries post-hoc,
+which the existing invalid-emission retry already handles; (2) `touched`
+comes from `git_changed_files` (one more `git` tool span per node, so the
+two tool-span pins moved again) rather than from `changed_lines`, which
+only sees Python statement lines.
+Issue: #64
+Steps: as the Files line; the gate is `check_target_files(target_files,
+touched_files)`; `Tier1Inputs.touched_files` defaults to `()`; the runner
+computes `sorted(set(git_changed_files(workdir, baseline)) | set(added))`.
+Known-good: `Node` with `["n.py", "src/app/login.py"]` validates; default is
+`[]`; `check_target_files(["n.py", "tests/test_n.py"], ["n.py"])` passes; the
+runner end-to-end with `target_files=["n.py"]` passes and reports
+`1 touched file(s) within 1 target(s)`. Known-bad: each of `/etc/passwd`,
+`../n.py`, `src/../n.py`, `src\\n.py`, `" n.py"`, `""` raises
+`ValidationError`; `check_target_files(["orders.py"], ["orders.py",
+"discounts.py", "new_module.py"])` fails naming both strays; the runner
+end-to-end with `target_files=["other.py"]` fails only `target-scope`,
+naming `n.py`.
+Contract mutants (each target occurs once in its file; drop `__pycache__` after each revert):
+1. `sed -i 's/    if not target_files:/    if False:/' src/saddle/gates.py` → `pytest tests/test_gates.py -k target_files -q --no-cov` red (empty list no longer unrestricted).
+2. `sed -i 's/or ".." in PurePosixPath(path).parts/or False/' src/saddle/dag.py` → `pytest tests/test_dag.py -k target_files -q --no-cov` red (`../n.py` accepted).
+3. `sed -i 's/        touched_files=touched,/        touched_files=(),/' src/saddle/runner.py` → `pytest tests/test_runner.py -k target_files -q --no-cov` red (the wrong-file node passes).
+Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert, caches dropped): 1 KILLED, 2 KILLED (`../n.py` and `src/../n.py` accepted), 3 KILLED.
+Done when: mutants red; `./check.sh` green — 544 passed at commit time.
 
 ### T3-3 — Property-coverage soundness (issue #62)
-Not scheduled. `check_property_coverage` (gates.py:306; the `kind != "test"`
-exemption at :321) verifies a property
+Files: none to edit (decision item). Read only `src/saddle/gates.py`
+`check_property_coverage` (~:353-380 after T3-2; the `kind != "test"`
+exemption at ~:368 is its first branch).
+Not scheduled. `check_property_coverage` verifies a property
 test *exists* for a `test` node, which CLAUDE.md classifies as a presence
 check. Making it sound needs an oracle (run the property test against a
 mutant and require a kill), which is T2-4's data plus a design decision.
 Record the decision in #62 before writing code.
 
 ### T3-4 — `RUN_ALLOWLIST` / `allowed_tools` is decorative
-Files: `src/saddle/cli.py:41`, `:127`, `:352`, `:500`; `docs/ARCHITECTURE.md:153`.
+Files: `src/saddle/cli.py:41` (`RUN_ALLOWLIST`), `:128` (the planner rule
+naming the four tools), `:356` (its only use: `validate_dag(..., allowed_tools=RUN_ALLOWLIST)`
+at emission), `:504` (`tools:` line in `render_dag_plan`); `src/saddle/dag.py:96`
+(`ExecutionConstraints.allowed_tools`); `docs/ARCHITECTURE.md:137` (the
+example node's `allowed_tools`), `:149` (static-validation bullet), `:165`
+(tool-masking bullet, already marked "specified, not built" by T0-7).
 `RUN_ALLOWLIST` constrains what the DAG may *name* in `allowed_tools`; nothing
 consumes the list at execution (the worker emits a diff; it has no tools).
 Two honest options, user's choice: (a) keep it as documentation of intent
-and say so at ARCHITECTURE.md:153 (T0-7 covers the callout); (b) remove the
-field from `Node` and the schema. Do not build tool masking to make the field
+and say so at ARCHITECTURE.md:165 (T0-7's callout already does most of
+this); (b) remove the field from `Node` and the schema. Do not build tool masking to make the field
 true; that is Phase 2 machinery that no measurement asks for.
 
 ### T3-5 — Issue hygiene (comments only; the user closes)
+Files: none in the repo. Write the drafts to `../saddle-notes/issue-comments.md`
+(outside the repo; the human posts them). Read only the commits named below
+via `git show --stat <sha>` and `src/saddle/slice.py` `_apply_diff` (~:136,
+for the `--recount` claim).
 - #66: fixed by `21c179e` ("Fix mechanically what ruff can fix, before the
   worker is asked to") — propose closing with that SHA.
 - #51: superseded by #64 — propose closing #51 with a pointer.
@@ -1007,13 +1056,16 @@ true; that is Phase 2 machinery that no measurement asks for.
   construction (a CFG cannot enforce hunk-header line counts, audit §9), so
   #61 stays open pending T4-1's measurement and a decision between (i)
   accept-and-retry on `git apply` exit 128 (already the ladder's behaviour)
-  and (ii) post-hoc `--recount`-style repair (already on every rung,
-  `slice.py:165`). Comment with this framing.
+  and (ii) post-hoc `--recount`-style repair (already on every rung: see
+  `git apply --index --recount` in `_apply_diff`). Comment with this framing.
 - #23, #17: unchanged; both are future-facing.
 
 ### T3-6 — `slice.py` decomposition (optional, no contract change)
-`run_slice` is ~90 lines with the replan loop, sealing and verdict inline.
-Split into `_schedule_until_done`, `_merge_gate` (after T2-3), `_seal_run`.
+Files: `src/saddle/slice.py` (`run_slice`, ~:580-720); `tests/test_slice.py`
+(read as the oracle; do not edit).
+`run_slice` is now ~130 lines with the resume seed (T3-1), the replan loop,
+the merge gate (T2-3), sealing and the verdict inline. Split into
+`_schedule_until_done`, `_merge_gate`, `_seal_run`.
 Pure refactor: the existing `tests/test_slice.py` is the oracle; no new
 tests; no mutants; commit labelled "refactor, no contract change".
 
@@ -1027,7 +1079,13 @@ under `../saddle-bench/runs/<id>/` with the pre-registered prediction copied
 in before the run starts.
 
 ### T4-1 — Rerun the v3 T1 arm against the HEAD grammar (F15)
-Pre-registered prediction (DESIGN-NOTES §D2, L629): the grammar removes the
+Files: `tools/diff_grammar_check.py` (`--emit` here; `--run` inside the
+container, per its docstring); `src/saddle/cli.py` (`--sample-temperature`,
+~:626; landed in T2-1); `docs/DESIGN-NOTES.md` (§"Pre-registered prediction",
+~:656-670, and the D2 status line); `docs/BENCHMARK-RECORD.md` (append);
+`../saddle-bench/runs/FINDINGS.md` and `../saddle-bench/runs/PROGRESS.log`
+(sibling checkout — named here so reading and appending to them is in scope).
+Pre-registered prediction (DESIGN-NOTES §"Pre-registered prediction", ~L656): the grammar removes the
 "no valid patches"/markdown-wrapper failure class; it does **not** remove
 exit-128 `corrupt patch at line N` because hunk line counts are not
 context-free. Expected: the failure mix shifts, not vanishes.
@@ -1035,7 +1093,8 @@ Steps:
 1. `python tools/diff_grammar_check.py --emit > $SCRATCH/cases.json`, copy into
    the container as its docstring says, run `--run`; record `N/N cases correct`.
    Stop if any case fails: the grammar is wrong before the model is.
-2. After T2-1: run T1 with `--sample-temperature 0.7`, three seeds.
+2. Run T1 with `--sample-temperature 0.7` (T2-1 landed it; 0.7 is the
+   default, so the flag is documentation), three seeds.
 3. Record per-attempt `git apply` exit codes and the first stderr line; count
    `corrupt patch` vs `does not apply` vs success.
 4. Write F15 into `../saddle-bench/runs/FINDINGS.md`; update DESIGN-NOTES D2
@@ -1043,19 +1102,33 @@ Steps:
 Decision this unblocks: #61.
 
 ### T4-2 — Does anything overlap? (F7 follow-up)
+Files: `src/saddle/scheduler.py:75` (`schedule(dag, worker, *, max_workers=5)`);
+`src/saddle/slice.py` (the `schedule(schedulable, worker)` call in the loop,
+~:619 — no `max_workers` is passed, so 5 applies); the run's journal spans;
+`docs/ARCHITECTURE.md:162` and `:213` (the two "scheduler is asyncio but the
+worker is synchronous; no run has overlapped" status lines T0-6 added).
 A three-node DAG with no edges, each node a trivial independent edit, with
 per-node worker spans timestamped. If `max_workers=5` yields serial spans
-(end_i ≤ start_{i+1}), the scheduler's asyncio is decorative and
-ARCHITECTURE.md:150/188/192 get a "measured serial" note; the fix (a
+(end_i ≤ start_{i+1}), the scheduler's asyncio is decorative and the two
+ARCHITECTURE status lines get a "measured serial" note; the fix (a
 threadpool around `_run_node`, or an async client) is a Tier 3 item to be
 written after this number exists.
 
 ### T4-3 — D19 effort sweep
+Files: `src/saddle/cli.py:48` (`BUDGET_TO_EFFORT`), `:407` (its use in
+`propose`), `:638` (`--worker-effort`); `docs/DESIGN-NOTES.md` (D19 status
+line, ~:631); `docs/BENCHMARK-RECORD.md` (append); `../saddle-bench/runs/`
+(sibling checkout, results).
 `--worker-effort` low/medium/high/xhigh on the T1 task, same seeds as T4-1.
 Report pass rate and median worker tokens. This decides whether
-`BUDGET_TO_EFFORT` (cli.py:402-404) earns its complexity.
+`BUDGET_TO_EFFORT` earns its complexity.
 
 ### T4-4 — `structural_tag` / `enable_in_reasoning` against vLLM 0.28 (precedes D14)
+Files: `src/saddle/vllm.py:57` (`DIFF_GRAMMAR`), `:206` (the request that
+sends `structured_outputs={"grammar": DIFF_GRAMMAR}`); a new probe script
+`tools/structured_output_probe.py` (the only file to create); `docs/DESIGN-NOTES.md`
+D14 (~:415) status line. Needs `SADDLE_VLLM_API_KEY` in the environment and
+`saddle doctor` green; never print the key.
 The workflow could not confirm (0-3) that vLLM 0.28's structured outputs
 honour an `enable_in_reasoning`-style flag or that `structural_tag`
 alternation gives "free text then constrained" semantics. Write a 20-line
