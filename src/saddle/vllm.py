@@ -60,9 +60,9 @@ REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
 # one of the smoke run's 16 `patch fragment without header at line 3`
 # apply failures (WORKPLAN T3-18, smoke record S2). Hunk line counts stay
 # unenforceable -- a CFG cannot count -- so this closes the header half of
-# that class, not the count half. The 44/44 figure above was measured
-# before this tightening and the container check has NOT been re-run for
-# it: no container access in the session that made the edit.
+# that class, not the count half. Re-run in the container for this
+# tightening on 2026-09-19: 53/53 (44 admit, 6 reject with the headerless
+# section refused at its `@@`, 2 must-not-stop, 1 must-stop).
 DIFF_GRAMMAR: Final = r"""root ::= section+
 section    ::= header meta* from to hunk+
 header     ::= "diff --git " line "\n"

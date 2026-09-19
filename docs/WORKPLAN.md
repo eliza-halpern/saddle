@@ -121,6 +121,7 @@ T3-8 ──► any two-node fixture or run (until it lands, the second node is g
 T3-7a, T3-8 ──► T3-7b (the smoke run, session 20a) ──► T3-3, T3-9, T3-10, T3-11 (write them after watching the path execute)
 T3-7b ──► T3-17, T3-18, T3-19, T3-20, T3-21 (each is a smoke-run finding; T3-17 needs the user's word, T3-18 needs the container)
 T3-17, T3-18, T3-19 ──► T4-1 (a benchmark against a merge gate that cannot import, a grammar that admits headerless hunks, or a planner that cannot see the repo measures those defects, not the harness)
+T3-22 ──► nothing (saddle's own self-mutation score; not a 20b or T4 prerequisite)
 T3-9 ──► T3-21's task line (the verdict half stands alone)
 ```
 Everything in Tier 0 is independent of everything else and can go in any order.
@@ -2152,6 +2153,26 @@ Passing instance at HEAD: `test_run_slice_merge_suite_gate_runs_once_and_is_jour
 Dry run: not run.
 
 ### T3-18 — The diff grammar requires the `---`/`+++` lines before a hunk (Major; container)
+Status 2026-09-19: DONE. Grammar edit, structural test and the tool's
+reject entry landed by the executor (bf7c645, session 36); the reviewer
+re-ran four mutants, all KILLED (`from to` dropped from `section`;
+`"--- " | "+++ "` back in `meta_pfx`; the reject entry deleted from the
+tool; `REJECT_AT` off by one). Container half run by the user against the
+serving container's xgrammar: `53/53 cases correct`, exit 0 — 44 admit
+(40 real diffs + rename, mode, delete, no-newline), 6 reject with the
+headerless section refused at byte 19 (its `@@`), 2 must-not-stop, 1
+must-stop. The tool's output is the record: the first attempt died with
+`ModuleNotFoundError: No module named 'saddle'` because `--run` imported
+the grammar from a `src/` that does not exist beside `/tmp/check.py` in
+the container — the docstring's own three lines had never worked. Fixed
+by the reviewer (tightened): `build_cases()` puts the checkout's grammar
+into the cases file, `run()` compiles that and refuses a file without it,
+git is pinned to the repo root so `--emit` works from any cwd; a test
+pins the emitted grammar byte-identical to `DIFF_GRAMMAR`. Mutants:
+grammar key dropped KILLED; grammar altered in transit KILLED; git not
+pinned to the repo KILLED. Issue not opened (the user's, §0.10). Finding
+carried out: the mutmut work copy fails tests that read `docs/` or
+`tools/` whatever the mutation → T3-22.
 Files: `src/saddle/vllm.py` (`DIFF_GRAMMAR` ~:57-68); `tools/diff_grammar_check.py`
 (run inside the serving container — the only xgrammar); `tests/test_vllm.py:676`
 (`assert DIFF_GRAMMAR.startswith("root ::= section+")` — the banned
@@ -2302,6 +2323,48 @@ Contract mutants: 1. the run-span clause removed → known-bad red. 2. `N
 failed` parse → `0` → known-bad red.
 Done when: mutants red; `./check.sh` green.
 Passing instance at HEAD: the existing verify happy-path test.
+Dry run: not run.
+
+### T3-22 — saddle's own mutmut work copy kills every mutant by accident (Minor)
+Files: `pyproject.toml` (`[tool.mutmut]`, `also_copy` ~:69);
+`tests/test_mutmut_layout.py` (`--collect-only`); `tests/test_docs.py`
+(reads `docs/ARCHITECTURE.md`); `tests/test_vllm.py`
+(`test_diff_grammar_requires_the_file_lines_before_a_hunk` imports
+`tools.diff_grammar_check` inside the test body).
+Contract: every test that passes in the repo also passes, unmutated, in the
+`mutants/` work copy mutmut builds from `source_paths` + `also_copy` +
+`tests`. A test that fails there whatever the mutation kills every mutant,
+so the Tier-2 self-mutation score (ARCHITECTURE §3, time-boxed in CI)
+reads 100% while measuring nothing — the vacuity class of CLAUDE.md's "a
+mechanism must be able to do what it reports".
+Direction: **tightened** (self-check; no gate change).
+Evidence: MEASURED 2026-09-19 — the layout rebuilt from pyproject
+(`src/saddle`, `benchmark`, `tests`) in a scratch directory: both
+`tests/test_docs.py` tests `FileNotFoundError: .../mutants/docs/ARCHITECTURE.md`;
+the T3-18 grammar test `ModuleNotFoundError: No module named 'tools'`.
+`test_mutmut_layout` is collect-only and cannot see either: collection
+succeeds, the failures are at run time. Found by the T3-18 executor
+(`test_docs`), confirmed by the reviewer (plus the T3-18 test itself).
+Issue: none.
+Steps: 1. `also_copy = ["benchmark/", "docs/", "tools/"]`. 2.
+`test_mutmut_layout` runs, in the rebuilt layout, the modules that read
+outside `src`/`tests` — `tests/test_docs.py` and `tests/test_vllm.py -k
+file_lines` — and requires them green; collect-only stays for the rest (a
+full-suite run in the layout is minutes and belongs in CI, not `check.sh`).
+3. If a later test reads outside the copy, it fails this test, not mutmut.
+Known-good: the rebuilt layout runs both modules green.
+Known-bad: `also_copy` without `docs/` → the layout test red on
+`FileNotFoundError`.
+Contract mutants: 1. `docs/` dropped from `also_copy` → layout test red.
+2. `tools/` dropped → layout test red. 3. Harness check, not a test
+mutant: with the layout test's run step reverted to `--collect-only`,
+mutants 1 and 2 must SURVIVE — proof that the run step carries the
+contract.
+Done when: mutants 1 and 2 red, 3 survives as stated; `./check.sh` green.
+Stop if: mutmut's `also_copy` cannot carry a directory outside
+`source_paths` — then move the reads (a `docs`-relative fixture, a
+`tools` package under `src`) instead of the copy.
+Passing instance at HEAD: none — the layout test collects, it does not run.
 Dry run: not run.
 
 ## 7. Tier 4 — measurement (needs the container; each run is a record, not a code change)
