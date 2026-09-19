@@ -177,7 +177,7 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 > 3. **Changed-Line Coverage:** Every added/changed line must be executed by the node's tests (coverage.py over the diff). Untested code fails here, cheaply. Not required for a `test` node (no source changed; recorded with basis `test node`).
 > 4. **Red-Phase Check (the cheap tautology killer):** The node's new tests must FAIL against the pre-change code (worktree baseline) and PASS post-change. A test that passes both ways proves nothing and fails the gate. This runs the test scope twice — not once per mutant — and catches the most common weak-test failure mode at a fraction of mutation cost. A `test` node has no baseline leg: red-phase mirrors its tests verdict (red by construction), and the differential runs on the `impl` node that depends on it.
 > 5. **Requirement Binding:** Each `requirement_id` the node claims must have ≥1 failing-pre/passing-post test. Unbound claims fail the gate.
-> 6. **Node-Scope:** The files the node touched must stay within the kind's allowed scope (an `impl` node may not edit tests; a `test` node may not ship the implementation; `refactor` is exempt).
+> 6. **Node-Scope:** The files the node touched must stay within the kind's allowed scope (an `impl` node may not edit tests; a `test` node may not ship the implementation; a `refactor` node may edit both but may not add files, and no kind adds files without `write_file`).
 > 7. **Target Scope** (opt-in, #64): a node that declares `target_files` may not change or add any file outside that list; an empty list is unrestricted, so the planner can only narrow a node's scope, never widen it.
 > 8. **Property Coverage:** The node's tests must exercise the property the requirement claims, not merely import the changed module.
 > 9. **Assertion Preservation:** Assertions in pre-existing tests are append-only, except for test nodes; a refactor may carry code and tests together but must not weaken an existing assertion.
@@ -224,7 +224,7 @@ Two structural properties, not model quality, carry the speedup — and both sur
 > * **mutmut / Stryker / PIT:** Mutation testing frameworks enforcing the Tier-2 sampled gate against tautological tests — scoped to changed lines, capped by mutant count and wall-clock, never per-node unscoped.
 > * **Operational Patterns (design constraints):** Token-degeneration stall detection with bounded retries instead of open-ended loops; throwaway subprocess contexts for noisy context gathering; and crash-safe file state — graph state persisted as human-readable Markdown/JSON so an operator can intervene and resume without session loss.
 >
-> *Status (2026-09-18): specified, not built — stall detection deferred, WORKPLAN §7; resume specified, not built — `slice.py:584-587` raises on a non-fresh journal, see WORKPLAN T3-1.*
+> *Status (2026-09-18): resume built (T3-1): a verified journal seeds the proven set and only unproven nodes run; stall detection deferred, WORKPLAN §7.*
 
 ## 6. Implementation Plan
 

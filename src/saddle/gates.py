@@ -1,10 +1,10 @@
 """Tier-1 per-node gates (ARCHITECTURE.md §3 Phase 3 Tier 1).
 
 Checks run in gate order: syntax, ruff, tests, coverage, red-phase,
-node-scope, property-coverage, assertion-preservation, requirement-binding,
-mutation. Each check is a small pure function so killer fixtures stay fast
-and deterministic; subprocess runners are injected at the boundary, never
-embedded in the predicates.
+node-scope, target-scope, property-coverage, assertion-preservation,
+requirement-binding, mutation. Each check is a small pure function so
+killer fixtures stay fast and deterministic; subprocess runners are
+injected at the boundary, never embedded in the predicates.
 """
 
 from __future__ import annotations
