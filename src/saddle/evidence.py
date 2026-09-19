@@ -253,6 +253,36 @@ def git_changed_files(cwd: Path, ref: str, *, recorder: SpanRecorder | None = No
     return proc.stdout.splitlines()
 
 
+def git_added_files(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> list[str]:
+    """Worktree-relative paths that do not exist at `ref` (renames count as added).
+
+    Only staged adds count. A worker introduces files through its diff
+    alone, and `_apply_diff` applies with `--index`, so every file a node
+    creates is staged. Untracked files in the worktree are the harness's
+    own artefacts -- `.saddle/proofs.jsonl`, `.coverage.tier1`, bytecode --
+    and listing them would fail every `refactor` node on its first retry.
+    """
+    argv = [
+        "git",
+        "-C",
+        str(cwd),
+        "diff",
+        "--no-renames",
+        "--diff-filter=A",
+        "--name-only",
+        ref,
+        "--",
+        ".",
+    ]
+    start = perf_counter()
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    _record(recorder, argv, start, proc)
+    if proc.returncode != 0:
+        msg = f"git diff --diff-filter=A against {ref!r} failed: {proc.stderr.strip()}"
+        raise RuntimeError(msg)
+    return proc.stdout.splitlines()
+
+
 def git_diff(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> str:
     """Zero-context diff of the worktree at `cwd` against git `ref`."""
     argv = ["git", "-C", str(cwd), "diff", "-U0", ref, "--", "."]

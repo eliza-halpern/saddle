@@ -19,6 +19,7 @@ from saddle.evidence import (
     changed_lines,
     covered_lines,
     drop_test_caches,
+    git_added_files,
     git_diff,
     materialize_baseline,
     mutation_sample,
@@ -122,6 +123,7 @@ def run_node_gate(
         for path, line in changed_lines(git_diff(workdir, baseline, recorder=recorder))
     } & statements
     changed_files = sorted({path for path, _ in changed})
+    added = git_added_files(workdir, baseline, recorder=recorder)
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
     suite = run_shell_capture(
@@ -206,5 +208,6 @@ def run_node_gate(
         current_runner=lambda: current_exit,
         flipped_tests=test_sources,
         mutation=mutation,
+        added_files=[str(workdir / p) for p in added],
     )
     return run_tier1(node, inputs)

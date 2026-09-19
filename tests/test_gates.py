@@ -607,7 +607,21 @@ def test_node_scope_accepts_a_node_that_stays_on_its_side() -> None:
 def test_refactor_node_may_touch_both() -> None:
     """A behaviour-preserving refactor moves code and its tests together;
     splitting it across two nodes would leave the first one red."""
-    assert check_node_scope("refactor", ["orders.py", "tests/test_orders.py"]).passed is True
+    check = check_node_scope("refactor", ["orders.py", "tests/test_orders.py"], added_files=[])
+    assert check.passed is True
+
+
+def test_refactor_node_may_not_create_a_file() -> None:
+    """#65: a node picks `refactor` to dodge the impl/test split entirely.
+
+    Editing both sides is the exemption's whole point, but creating a file
+    is not editing -- it is the split done under the exempt name.
+    """
+    check = check_node_scope(
+        "refactor", ["orders.py", "new_module.py"], added_files=["new_module.py"]
+    )
+    assert check.passed is False
+    assert "new_module.py" in check.detail
 
 
 def test_impl_node_takes_the_real_differential_not_the_refactor_branch() -> None:

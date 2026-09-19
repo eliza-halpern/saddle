@@ -142,12 +142,17 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
-    # test_n.py is new-at-baseline on purpose: this pins the RED_PHASE_SAMPLES
-    # multi-sampling span shape (T2-2a), which only fires when the node's
-    # test signature differs from baseline (tests_changed) -- an honest
-    # `impl` node's test is unchanged from its own baseline, so this stays a
-    # `refactor` node (both source and test may change together).
-    _worktree(tmp_path, test_body)
+    # This pins the RED_PHASE_SAMPLES multi-sampling span shape, which only
+    # fires when the node's test signature differs from baseline. An `impl`
+    # node's test is unchanged at its own baseline, so this is a `refactor`
+    # node that edits both sides: the test exists at baseline with a weaker
+    # assertion and the node appends the binding one (append-only, so
+    # assertion-preservation holds; no file is created, so node-scope holds).
+    baseline_test = test_body.replace("    assert f() == 2\n", "    assert f() is not None\n")
+    test_body = test_body.replace(
+        "    assert f() == 2\n", "    assert f() is not None\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body, baseline_test=baseline_test)
     journal = tmp_path / "proofs.jsonl"
     result = run_node_gate(
         _node(kind="refactor"), tmp_path, recorder=SpanRecorder(path=journal, node_id="n1")
@@ -155,6 +160,8 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     assert result.passed is True
     spans = read_spans(journal)
     assert [span.name for span in spans] == [
+        "git",
+        # T2-2: the staged-adds probe behind node-scope's file-creation rule.
         "git",
         "coverage",
         "git",
@@ -177,6 +184,7 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     # The baseline samples all exit 1: unanimous, which is what a stable
     # pre-change leg looks like. Disagreement here is what fails the gate.
     assert [span.exit_code for span in spans] == [
+        0,
         0,
         0,
         0,
@@ -203,11 +211,12 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
     # collision, which an honest `impl` node's own diff never does (it may
     # not touch tests at all); kept a `refactor` node so that deliberate
     # test edit does not trip node-scope on top of what this test means to
-    # exercise.
+    # exercise. The test exists at baseline: a refactor may edit it but
+    # (T2-2) may not create it.
     passing = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
-    _worktree(tmp_path, passing)
+    _worktree(tmp_path, passing, baseline_test=passing)
     assert run_node_gate(_node(kind="refactor"), tmp_path).passed is True
     assert list(tmp_path.rglob("__pycache__")), "expected pytest to mint bytecode caches"
     failing = passing.replace("assert f() == 2", "assert f() == 3")
@@ -216,12 +225,19 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
     mtime = target.stat().st_mtime
     target.write_text(failing)
     os.utime(target, (mtime, mtime))
-    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    # Stage the edited test only: `git add -A` would also stage the first
+    # run's .coverage.tier1 and bytecode as new files, which node-scope
+    # now rightly rejects for a refactor node (T2-2) but is not the point.
+    assert run_argv(["git", "add", "test_n.py"], tmp_path) == 0
     result = run_node_gate(_node(kind="refactor"), tmp_path)
     assert result.passed is False
+    # assertion-preservation joins the list because the test now exists at
+    # baseline and the rewrite drops its assertion; stale bytecode would
+    # have hidden the tests/red-phase failures, and does not.
     assert [check.name for check in result.checks if not check.passed] == [
         "tests",
         "red-phase",
+        "assertion-preservation",
     ]
 
 

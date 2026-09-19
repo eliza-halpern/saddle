@@ -21,6 +21,7 @@ from saddle.evidence import (
     changed_lines,
     covered_lines,
     drop_test_caches,
+    git_added_files,
     git_changed_files,
     git_diff,
     git_ls_files,
@@ -248,6 +249,25 @@ def test_git_changed_files_unknown_ref_raises(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     with pytest.raises(RuntimeError, match="git diff --name-only against 'no-such-ref' failed"):
         git_changed_files(tmp_path, "no-such-ref")
+
+
+def test_git_added_files_lists_staged_adds_and_ignores_untracked(tmp_path: Path) -> None:
+    """A staged new file is the node's; an untracked one is the harness's
+    (journal, coverage data, bytecode) and must not fail node-scope (#65, T2-2)."""
+    _git_repo(tmp_path)
+    (tmp_path / "b.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "b.py"], tmp_path) == 0
+    assert git_added_files(tmp_path, "HEAD") == ["b.py"]
+    assert git_changed_files(tmp_path, "HEAD") == ["b.py"]
+    (tmp_path / ".coverage.tier1").write_text("")
+    (tmp_path / "c.py").write_text("y = 2\n")
+    assert git_added_files(tmp_path, "HEAD") == ["b.py"]
+
+
+def test_git_added_files_unknown_ref_raises(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    with pytest.raises(RuntimeError, match="git diff --diff-filter=A against 'no-such-ref'"):
+        git_added_files(tmp_path, "no-such-ref")
 
 
 def test_git_collectors_record_spans_including_failures(tmp_path: Path) -> None:

@@ -394,7 +394,9 @@ def check_assertion_preservation(
     )
 
 
-def check_node_scope(kind: str, changed_files: Collection[str]) -> GateCheck:
+def check_node_scope(
+    kind: str, changed_files: Collection[str], added_files: Collection[str] = ()
+) -> GateCheck:
     """A node stays on its own side of the test/implementation split.
 
     F5 and #44 are one defect: the worker authors the implementation and
@@ -404,12 +406,21 @@ def check_node_scope(kind: str, changed_files: Collection[str]) -> GateCheck:
     passed every Tier-1 gate then in force.
 
     An `impl` node may not edit tests; a `test` node may not ship the
-    implementation. `refactor` is exempt: a behaviour-preserving move
-    carries code and its tests together, and splitting it would leave the
-    first node red with nothing able to fix it.
+    implementation. `refactor` may edit both sides -- a behaviour-preserving
+    move carries code and its tests together, and splitting it would leave
+    the first node red with nothing able to fix it -- but it may not create
+    a file: that is the `impl`/`test` split done under the exempt name (#65).
     """
     if kind == "refactor":
-        return GateCheck(name="node-scope", passed=True, detail="refactor: both sides allowed")
+        if added_files:
+            return GateCheck(
+                name="node-scope",
+                passed=False,
+                detail=f"refactor node added file(s): {', '.join(sorted(added_files))}",
+            )
+        return GateCheck(
+            name="node-scope", passed=True, detail="refactor: edits both sides, adds nothing"
+        )
     tests = sorted(path for path in changed_files if _is_test_file(path))
     sources = sorted(path for path in changed_files if not _is_test_file(path))
     stray = tests if kind == "impl" else sources
@@ -484,6 +495,7 @@ class Tier1Inputs:
     current_runner: Callable[[], int]
     flipped_tests: Mapping[str, str]
     mutation: MutationOutcome
+    added_files: Collection[str] = ()
 
 
 @dataclass(frozen=True)
@@ -563,7 +575,9 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             coverage=coverage,
             mutation=inputs.mutation,
         ),
-        check_node_scope(node.kind, sorted({path for path, _ in inputs.changed})),
+        check_node_scope(
+            node.kind, sorted({path for path, _ in inputs.changed}), inputs.added_files
+        ),
         check_property_coverage(node.kind, inputs.flipped_tests),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
