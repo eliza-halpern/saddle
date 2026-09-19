@@ -1019,29 +1019,160 @@ Contract mutants (each target occurs once in its file; drop `__pycache__` after 
 Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert, caches dropped): 1 KILLED, 2 KILLED (`../n.py` and `src/../n.py` accepted), 3 KILLED.
 Done when: mutants red; `./check.sh` green — 544 passed at commit time.
 
-### T3-3 — Property-coverage soundness (issue #62)
-Files: none to edit (decision item). Read only `src/saddle/gates.py`
-`check_property_coverage` (~:353-380 after T3-2; the `kind != "test"`
-exemption at ~:368 is its first branch).
-Not scheduled. `check_property_coverage` verifies a property
-test *exists* for a `test` node, which CLAUDE.md classifies as a presence
-check. Making it sound needs an oracle (run the property test against a
-mutant and require a kill), which is T2-4's data plus a design decision.
-Record the decision in #62 before writing code.
+### T3-3 — Property coverage becomes an oracle (issue #62)
+Decision 2026-09-18: build the oracle (option b). A presence check that a
+`@given` exists pins nothing; a gate this project keeps must be able to
+fail for the reason it reports.
+Files: `src/saddle/gates.py` (`check_property_coverage` ~:353-380 gains an
+`oracle: MutationOutcome | None` parameter; `_has_property` ~:306 stays as
+the first half); `src/saddle/evidence.py` (new `property_targets`; `mutation_sample`
+~:385 is reused unchanged; `statement_lines` ~:501); `src/saddle/runner.py`
+(runs the oracle for `test` nodes; `Tier1Inputs.property_oracle`);
+`src/saddle/gates.py` `Tier1Inputs` (~:528, new field, default `None`) and the
+`check_property_coverage(...)` call in `run_tier1`; `docs/ARCHITECTURE.md:182`
+(Tier-1 item 8); `tests/test_gates.py`, `tests/test_evidence.py`,
+`tests/test_runner.py`.
+Contract: for a `test` node, `property-coverage` passes only if (1) at least
+one of the node's test modules drives a hypothesis property (today's
+check) **and** (2) the property-bearing test modules, run alone as the test
+set, kill at least one mutant sampled from the modules those tests import
+from the workdir. Any other kind is not required, as today. The check's
+`basis` records `oracle: killed k of n mutant(s) in <module>`; a `test`
+node whose oracle did not run fails ("property oracle did not run").
+Direction: **tightened** (a `@given` over a function that asserts nothing
+discriminating no longer passes; F1's `.u@example.com` regex would have
+been caught by a property that mutation could not fool).
+Evidence: VERIFIED — F1 (7/7 green gates over a regex accepting
+`user@example..com`); CLAUDE.md "contract mutants, not kill percentage" —
+a property is adequate when it kills, which is the same standard the
+mutation gate applies to example tests. PUBLISHED — ACH (arXiv
+2501.12862) uses mutant kills as the acceptance test for generated tests.
+Issue: #62 (closes it if the oracle lands; comment the decision first).
+Steps:
+1. `evidence.py`: `property_targets(workdir: Path, test_sources: Mapping[str, str]) -> set[tuple[str, int]]`:
+   for each test module where `_has_property` is true (move `_has_property`
+   to `evidence.py` or import it under `TYPE_CHECKING`-safe layering —
+   `gates` must not import `evidence` at runtime; put the AST walk in
+   `evidence.py` and have `gates.py` keep a thin `_has_property` that calls
+   nothing from evidence), parse `import x` / `from x import ...`, keep
+   names that resolve to `<workdir>/<x>.py` or `<workdir>/<x>/__init__.py`
+   (stdlib and hypothesis fall out because they do not exist there), and
+   return `{(str(workdir / rel), line) for line in statement_lines(source)}`
+   for each — the same shape `mutation_sample` takes as `changed`.
+2. `runner.py`: for `node.kind == "test"`, `oracle = mutation_sample(workdir,
+   property_targets(workdir, test_sources), sample.max_mutants,
+   test_files={paths of the property-bearing modules only}, recorder=recorder)`;
+   otherwise `None`. This is a second mutmut run per `test` node, capped by
+   the node's `max_mutants` and the existing timeout; example tests are
+   excluded from the oracle's test set on purpose — the property must kill
+   alone.
+3. `gates.py`: `check_property_coverage(kind, test_sources, oracle)`: the
+   presence branch as today; then `oracle is None` → fail "property oracle
+   did not run"; `oracle.total == 0` → fail "no mutants generated in the
+   property's target module(s)"; `oracle.killed == 0` → fail
+   "property killed 0 of n mutant(s): no discriminating power"; else pass
+   with `basis=f"oracle: killed {k} of {n} mutant(s)"`.
+4. ARCHITECTURE item 8: "The node's property tests must kill at least one
+   sampled mutant of the module they import; a property that exists but
+   discriminates nothing fails."
+Known-good: unit — `check_property_coverage("test", {"tests/test_p.py": <@given source>}, MutationOutcome(killed=3, total=5, generated=5, survivors=("m4","m5")))` passes with the basis; evidence — `property_targets` on a module with `from n import f` and `import os` returns exactly `n.py`'s statement lines; runner end-to-end — a `test` node whose new test file carries `@given(st.integers())` over `f`, with the conftest stub (5 killed at n.py:2), passes and its record's `property-coverage` basis reads `oracle: killed 5 of 5 mutant(s)`.
+Known-bad: unit — `killed=0, total=5` fails naming 0 of 5; `total=0` fails; `None` fails; `impl`/`refactor` still "not required"; runner end-to-end — same node with a `PATH` stub built by `tests/test_evidence.py::_stub_mutmut` (~:392) reporting `m1..m5: survived` fails `property-coverage` and no other gate (model on `test_mutation_sample_timeout_yields_undecided` ~:551 for the PATH override).
+Contract mutants (`pytest tests/test_gates.py tests/test_runner.py -k property -q --no-cov`):
+1. `if oracle.killed == 0:` → `if False:` in `gates.py` → unit known-bad red.
+2. runner passes `property_oracle=None` for `test` nodes → end-to-end known-good red ("did not run").
+3. `property_targets` returns `set()` → end-to-end known-good red ("no mutants generated").
+Write the exact `sed` lines when the code exists; each target must occur once (`grep -c`) or be range-scoped; drop `__pycache__` after each revert.
+Done when: mutants red; `./check.sh` green; a `test`-node fixture exists in `tests/test_runner.py` (today every fixture there is `impl` or `refactor`).
+Stop if: `mutation_sample`'s signature is not `(workdir, changed, max_mutants, *, test_files, timeout_s, recorder)`, or `gates.py` would need a runtime import from `evidence.py`.
 
-### T3-4 — `RUN_ALLOWLIST` / `allowed_tools` is decorative
-Files: `src/saddle/cli.py:41` (`RUN_ALLOWLIST`), `:128` (the planner rule
-naming the four tools), `:356` (its only use: `validate_dag(..., allowed_tools=RUN_ALLOWLIST)`
-at emission), `:504` (`tools:` line in `render_dag_plan`); `src/saddle/dag.py:96`
-(`ExecutionConstraints.allowed_tools`); `docs/ARCHITECTURE.md:137` (the
-example node's `allowed_tools`), `:149` (static-validation bullet), `:165`
-(tool-masking bullet, already marked "specified, not built" by T0-7).
-`RUN_ALLOWLIST` constrains what the DAG may *name* in `allowed_tools`; nothing
-consumes the list at execution (the worker emits a diff; it has no tools).
-Two honest options, user's choice: (a) keep it as documentation of intent
-and say so at ARCHITECTURE.md:165 (T0-7's callout already does most of
-this); (b) remove the field from `Node` and the schema. Do not build tool masking to make the field
-true; that is Phase 2 machinery that no measurement asks for.
+### T3-4 — Bind `allowed_tools` to harness behaviour (RUN_ALLOWLIST stops being decorative)
+Decision 2026-09-18: neither keep-as-documentation nor delete. Each tool
+name becomes a capability the harness actually honours, so the planner's
+choice changes what a node gets and may do, and a name without a binding
+fails a test.
+Files: `src/saddle/cli.py:41` (`RUN_ALLOWLIST` → derived from a
+`TOOL_BINDINGS` registry), `:128` (planner rule: state each tool's effect),
+`~:150-215` (`build_worker_prompt`: file contents gated by `read_file`),
+`~:409-412` (`run_task` builds `files`/`contents` from `git_ls_files`);
+`src/saddle/slice.py` (`format_attempt_failure` ~:213: captured output
+filtered by the node's tools; its call in `_run_node` ~:421 passes the node);
+`src/saddle/gates.py` (`check_node_scope` ~:443: `write_file` governs file
+creation for every kind; `run_tier1` passes `node.execution_constraints.allowed_tools`);
+`docs/ARCHITECTURE.md:149` (static-validation bullet), `:165` (tool-masking
+bullet, rewritten to what the bindings are); `tests/test_cli.py`,
+`tests/test_slice.py`, `tests/test_gates.py`, `tests/test_runner.py`
+(fixtures that create files must list `write_file`: `_node()` there declares
+`["read_file"]` only — `test_run_node_gate_new_test_passing_pre_change_is_not_red`,
+`test_run_node_gate_flaky_baseline_is_caught_end_to_end`,
+`test_run_node_gate_greenfield_tautology_no_longer_clears_red_phase` create
+a test file and would gain a second failing check; they assert only
+red-phase, so give them `write_file` for honesty rather than leaving the
+extra failure silent).
+Contract — one binding per name, nothing else in the list:
+- `read_file`: the worker prompt carries the repo files' contents (as today,
+  truncated to `max_context_tokens`). Without it the prompt lists file names
+  only. This is the context-cost lever DESIGN-NOTES D15/D16 argue for and
+  nothing measures yet.
+- `write_file`: the node may create files, subject to its kind's scope rule.
+  Without it, `added_files` must be empty whatever the kind (`node-scope`
+  fails: "node may not create files: write_file not in allowed_tools"). Uses
+  T2-2's staged-adds probe; no new subprocess.
+- `run_tests`: after a failed attempt the recovery prompt includes the
+  captured test-command output (as today). Without it, the prompt carries
+  the gate verdict lines only.
+- `lint`: same as `run_tests` for ruff's captured output. `autofix` (#66)
+  stays unconditional — it is harness hygiene that prevented F13, not a
+  tool the node chooses.
+- `RUN_ALLOWLIST = tuple(TOOL_BINDINGS)`; a test asserts every name in the
+  registry is exercised by at least one of the tests below, so adding a
+  name without a behaviour fails the suite.
+Direction: **tightened** for `write_file` (a node that did not declare it
+can no longer create files); **scope narrowed** for `read_file`, `run_tests`,
+`lint` (omitting them removes prompt content the node used to get for free;
+the default planner output today lists all four, so nothing changes until a
+plan chooses otherwise). Journal format unchanged.
+Evidence: VERIFIED — `RUN_ALLOWLIST` has one use (`cli.py:356`, emission
+validation); `build_worker_prompt` always inlines contents; `format_attempt_failure`
+always inlines every non-zero captured run; F13 for keeping autofix
+unconditional. SPECULATIVE — whether omitting `read_file`/`run_tests` saves
+tokens without costing pass rate; that is a T4 question (see T4-3's sweep,
+which gains a tools axis).
+Issue: none (ARCHITECTURE §Tool Masking).
+Steps:
+1. `cli.py`: `TOOL_BINDINGS: Final[dict[str, str]] = {"read_file": "...", "write_file": "...", "run_tests": "...", "lint": "..."}`
+   with one-line effects; `RUN_ALLOWLIST = tuple(TOOL_BINDINGS)`; the planner
+   rule renders the four effects so the choice is deliberate.
+2. `build_worker_prompt`: if `"read_file"` not in `node.execution_constraints.allowed_tools`,
+   `contents = {}` and the prompt says "(file contents withheld: read_file
+   not in allowed_tools)"; file names still listed.
+3. `format_attempt_failure(result, captured, *, attempt, max_attempts, tools)`:
+   keep a captured run only if its tool is allowed — `argv[0]` in
+   `("pytest", "coverage", "python")` → `run_tests`; `"ruff"` → `lint`.
+4. `check_node_scope(kind, changed_files, added_files, *, may_create)`:
+   before the kind branches, `if added_files and not may_create: fail`.
+   `run_tier1` passes `may_create="write_file" in node.execution_constraints.allowed_tools`.
+5. ARCHITECTURE :165: replace the schema-injection sentence with the four
+   bindings; :149 unchanged except "⊆ global allowlist (each name bound to a
+   harness behaviour, item 6 and the recovery prompt)".
+Known-good: a node listing all four behaves exactly as today (prompt with
+contents, recovery with pytest and ruff output, files may be created);
+`check_node_scope("impl", ["n.py"], [], may_create=False)` passes.
+Known-bad: `read_file` omitted → the worker prompt contains no file body and
+carries the withheld notice; `run_tests` omitted → the recovery prompt has
+no `--- \`pytest ...\`` block while a `lint`-only node still gets ruff's;
+`write_file` omitted → `check_node_scope("refactor", ["n.py"], ["new.py"], may_create=False)`
+fails naming `write_file`; a registry name with no test coverage fails the
+registry test.
+Contract mutants (`-k "tool or allowed or may_create"`):
+1. `if added_files and not may_create:` → `if False:` → known-bad red.
+2. `if "read_file" in tools:` (prompt) → `if True:` → withheld-notice test red.
+3. captured-run filter → keep all → the `run_tests`-omitted recovery test red.
+Write the exact `sed` lines when the code exists; unique targets or range-scoped; drop `__pycache__` after each revert.
+Done when: mutants red; `./check.sh` green; `saddle dag` on a plan that
+omits `read_file` still renders `tools:` correctly (no render change).
+Measurement follow-up: T4-3's sweep gains an axis — the T1 task with
+`read_file` omitted, and with `run_tests` omitted — reporting pass rate
+and median worker tokens beside the effort axis.
 
 ### T3-5 — Issue hygiene (comments only; the user closes)
 Files: none in the repo. Write the drafts to `../saddle-notes/issue-comments.md`
@@ -1121,7 +1252,10 @@ line, ~:631); `docs/BENCHMARK-RECORD.md` (append); `../saddle-bench/runs/`
 (sibling checkout, results).
 `--worker-effort` low/medium/high/xhigh on the T1 task, same seeds as T4-1.
 Report pass rate and median worker tokens. This decides whether
-`BUDGET_TO_EFFORT` earns its complexity.
+`BUDGET_TO_EFFORT` earns its complexity. After T3-4, add a tools axis at the
+best effort: the same task with `read_file` omitted from every node, then
+with `run_tests` omitted — the two bindings that remove prompt content —
+so D15/D16's context-cost argument gets its first number.
 
 ### T4-4 — `structural_tag` / `enable_in_reasoning` against vLLM 0.28 (precedes D14)
 Files: `src/saddle/vllm.py:57` (`DIFF_GRAMMAR`), `:206` (the request that
