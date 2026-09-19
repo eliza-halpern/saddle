@@ -119,6 +119,9 @@ T3-7a ──► T3-12 (the planner prompt must also say a test node's tests are 
 T3-4 ──► T3-7a's test-node fixtures (a test node that creates its test file needs `write_file`)
 T3-8 ──► any two-node fixture or run (until it lands, the second node is gated against `HEAD` and fails `node-scope` on the first node's staged files)
 T3-7a, T3-8 ──► T3-7b (the smoke run, session 20a) ──► T3-3, T3-9, T3-10, T3-11 (write them after watching the path execute)
+T3-7b ──► T3-17, T3-18, T3-19, T3-20, T3-21 (each is a smoke-run finding; T3-17 needs the user's word, T3-18 needs the container)
+T3-17, T3-18, T3-19 ──► T4-1 (a benchmark against a merge gate that cannot import, a grammar that admits headerless hunks, or a planner that cannot see the repo measures those defects, not the harness)
+T3-9 ──► T3-21's task line (the verdict half stands alone)
 ```
 Everything in Tier 0 is independent of everything else and can go in any order.
 
@@ -1437,6 +1440,34 @@ Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` path 
 Dry run: not run.
 
 ### T3-7b — Smoke run: one task through the harness on the container (session 20a)
+Status 2026-09-19: DONE (session 20a; record `../saddle-bench/runs/smoke-2026-09-19/`,
+untracked there). Outcome: known-bad — `1 proven, 1 failed, 0 undispatched,
+merge exit 2`, run exit 1, 454 s wall. The planner split the task into
+`node-1` (test) → `node-2` (impl). `node-1` proved on the live path: all
+eleven gates, `tests: PASS (red specification: module 'src' does not exist
+yet)`, `3 distinct of 3 sample(s)`. `node-2` applied its first sample and
+failed two gates — `target-scope: FAIL (touched file(s) outside target_files:
+src/__init__.py)` and `mutation: FAIL (no mutants decided)` — then every
+recovery diff (16 of 16 `git apply` attempts, both nodes, all four
+fallbacks) died with `patch fragment without header at line 3`. The merge
+suite failed with `ModuleNotFoundError: No module named 'src'` although
+the same tree passes `python -m pytest -q` (6 passed). Confirmed working:
+T3-7a on the live path, T3-8 (every span names `refs/saddle/baseline/<node>`,
+none `HEAD`), non-vacuous sampling, journal chain integrity.
+Findings, each now an item (reviewer-verified against the code, 2026-09-19):
+S1 merge suite and node gates disagree on `sys.path` → T3-17; S2 the
+grammar lets a hunk follow `diff --git` with no `---`/`+++` lines → T3-18;
+S3 `target_files` omitted the `__init__.py` the implementation needed →
+T3-12; S4 `mutmut run` exited 1 in 658 ms and the gate said "no mutants
+decided" — reproduced: mutmut 3.8.0 asserts `Module name starts with
+"src.", which is invalid` for a package literally named `src`, and
+`mutation_sample` discards the run's exit code → T3-20 and T3-12; S5
+`saddle verify` prints `Verdict: PASS` for this failed run because the
+verdict is recomputed from proof records alone, and `Task: (unknown)` → T3-21
+and T3-9; S6 the planner never sees the repository listing
+(`build_emit_prompt(task)` takes only the task) and built a parallel
+`src/f.py` beside the existing `n.py` → T3-19; S7 step 1 said `saddle
+verify --journal`, the CLI takes a positional → fixed below.
 Files: none in this repo change. Outputs go to `../saddle-bench/runs/smoke-<date>/`
 (the planner's DAG, the journal, the transcript, `saddle doctor` output, the
 exit code); the reviewer adds the outcome to this item's Status line.
@@ -1467,7 +1498,7 @@ Steps:
    `dag.txt`), then one `saddle run "<task>" --repo /tmp/saddle-smoke --yes`
    with the default merge command (save stdout+stderr as `run.log` and the
    exit code; copy `/tmp/saddle-smoke/.saddle/proofs.jsonl`), then
-   `saddle verify --journal <that copy>` (save the transcript).
+   `saddle verify <that copy>` (positional; save the transcript).
 2. Record, per node: kind; whether a `test` node passed as a red
    specification (`tests` and `red-phase` details); whether the worker's
    diff applied (`git apply` exit); every failed gate's verbatim detail;
@@ -1901,6 +1932,14 @@ Stop if: T3-4 has rewritten these lines into a per-tool list — then put the
 two sentences where T3-4 put the kind and `target_files` rules.
 Passing instance at HEAD: `test_build_emit_prompt_names_task_and_rules`.
 Dry run: not run.
+Added 2026-09-19 (smoke run S3, S4): two more rules the prompt must state.
+(1) `target_files` lists every file the node will create as well as edit,
+including a new package's `__init__.py` — `node-2` declared `src/f.py`,
+needed `src/__init__.py`, and `target-scope` correctly failed it. (2) Never
+name a package `src`: mutmut 3.8 refuses to instrument it (`Module name
+starts with "src.", which is invalid`) and the mutation gate then fails
+with no mutants decided (T3-20 makes that failure name itself). Known-bad
+for both: the smoke record's `dag.txt`.
 
 ### T3-13 — `target_files` spellings the gate can never match (Medium)
 Files: `src/saddle/dag.py` (`_repo_relative_posix` ~:126-138);
@@ -2059,6 +2098,177 @@ Passing instance at HEAD: `test_run_tail_streams_cold_journal_without_sleeping`
 Dry run: not run.
 
 ---
+
+### T3-17 — The merge suite runs the way the node gates run tests (Major; decision needed)
+Files: `src/saddle/slice.py` (`run_slice(..., merge_command: str | None = "pytest -q", ...)`
+~:648 and the merge block after the loop); `tests/test_slice.py` (the three
+merge-suite tests; one new known-good); `docs/ARCHITECTURE.md` (Tier 2 item 2).
+Contract: the merge-time full suite runs under the same interpreter form
+as every node's `tests` gate — `python -m pytest -q` — so it measures the
+union of the node diffs and not a different import environment. The node
+gate runs `coverage run -m pytest …` (module form: cwd on `sys.path`); bare
+`pytest` does not insert cwd, so a repo whose tests import a top-level
+package without packaging passes every gate and fails the merge for a
+reason no gate can observe.
+Direction: **loosened** for the merge gate, with proof — the smoke run's
+final tree: `pytest -q` → exit 2 `ModuleNotFoundError: No module named
+'src'`; `python -m pytest -q` → 6 passed; `coverage run … -m pytest` → 6
+passed (record S1). The merge gate rejected a tree every node gate had
+accepted under the harness's own runner. The alternative (bare `pytest`
+for the node gates too) would reject any unpackaged `src`-layout repo at
+the impl node instead, which is the same input rejected one gate earlier.
+Evidence: VERIFIED — `under_coverage` (`evidence.py`) rewrites `pytest` to
+`coverage run … -m pytest`; `run_slice`'s default is bare `pytest -q`.
+Issue: none — open one quoting the three probe lines.
+Steps: 1. default `merge_command="python -m pytest -q"`; `_run_is_allowed`
+already maps `python -m pytest` to `run_tests` (T3-4 follow-up). 2. A
+known-good: `_slice_repo` variant with `pkg/__init__.py`, `pkg/m.py` and
+`tests/test_m.py` importing `pkg.m`, no conftest — the merge suite passes
+under the new default and fails under `merge_command="pytest -q"` (the
+known-bad, kept as a test that pins why). 3. ARCHITECTURE Tier 2 item 2
+names the form. 4. T3-4's binding text unchanged.
+Known-good: the packaged fixture proves and merges; every existing
+merge-suite test passes with the default swapped.
+Known-bad: the same fixture with `merge_command="pytest -q"` reads
+`merge exit 2`.
+Contract mutants: 1. default → `"pytest -q"` → known-good red. 2. merge
+block skips `shlex.split` form → the existing three merge-suite tests red.
+Done when: mutants red; `./check.sh` green.
+Stop if: the user has not confirmed the loosening (this item is a
+decision; do not start it from a handoff without the word).
+Passing instance at HEAD: `test_run_slice_merge_suite_gate_runs_once_and_is_journaled`.
+Dry run: not run.
+
+### T3-18 — The diff grammar requires the `---`/`+++` lines before a hunk (Major; container)
+Files: `src/saddle/vllm.py` (`DIFF_GRAMMAR` ~:57-68); `tools/diff_grammar_check.py`
+(run inside the serving container — the only xgrammar); `tests/test_vllm.py:676`
+(`assert DIFF_GRAMMAR.startswith("root ::= section+")` — the banned
+constraint-text shape; replace it with the known-good/known-bad pair below).
+Contract: a section is `header meta* from to hunk+` with `from ::= "--- "
+line "\n"` and `to ::= "+++ " line "\n"`; `"--- "` and `"+++ "` leave
+`meta_pfx`. A hunk can no longer follow `diff --git` (or `index`, or `new
+file mode`) directly, which is the shape behind every one of the smoke
+run's 16 `patch fragment without header at line 3` failures. Hunk line
+counts stay unenforceable (a CFG cannot count); this closes the header
+half of the class, not the count half.
+Direction: **tightened**.
+Evidence: MEASURED — smoke record S2: 16/16 recovery applies, both nodes,
+all four fallbacks. VERIFIED — the grammar lists `"--- "` and `"+++ "` as
+optional `meta`. `tests/test_vllm.py:676` pins the grammar's first line,
+which is the shape CLAUDE.md bans.
+Issue: none — open one quoting the four distinct apply errors.
+Steps: 1. the grammar edit. 2. `tools/diff_grammar_check.py` in the container
+(user present): the 40 real diffs still accept; add the known-bad
+`diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n` to its reject list and assert
+it rejects at the `@@`. 3. Replace the `startswith` test with a local
+structural check that does not pretend to be xgrammar: parse
+`DIFF_GRAMMAR` for the `section` rule and assert it names `from` and `to`
+between `meta*` and `hunk+`; and pin the check tool's reject list contains
+the known-bad. 4. Record the tool's output in the item.
+Known-good: all 40 real diffs accept in xgrammar.
+Known-bad: the headerless section rejects in xgrammar.
+Contract mutants (grammar text): 1. `from to` removed from `section` →
+the structural test red and the tool's reject list red in the container.
+Done when: the tool passes both halves in the container; `./check.sh` green.
+Stop if: `tools/diff_grammar_check.py` cannot run (no container access) —
+then land the grammar edit and the local test only, and mark the
+container half not run here.
+Passing instance at HEAD: the 40-diff accept set in the tool.
+Dry run: not run.
+
+### T3-19 — The planner is shown the repository it is planning for (Major)
+Files: `src/saddle/cli.py` (`build_emit_prompt(task)` ~:116 → `build_emit_prompt(task, files)`;
+`run_task` ~:423 and `run_dag` ~:557 call `git_ls_files` before emitting —
+`run_task` already does at ~:451, after the plan); `tests/test_cli.py`.
+Contract: the decomposition prompt carries the repository's tracked file
+list (first `MAX_FILES_IN_PROMPT`, then "… and N more"), and a rule: a task
+about an existing module changes that module; a new module is created only
+when no listed file owns the behaviour. The planner today sees the task
+sentence only — the smoke run's plan built `src/f.py` beside the `n.py`
+that already defined `f`, so the subject function ended up twice with
+different behaviour (S6).
+Direction: **tightened** (planner input; no gate changes).
+Evidence: VERIFIED — `build_emit_prompt(task: str)`; `prompt =
+build_emit_prompt(task)` at ~:372 with no file argument; smoke `dag.txt`.
+Issue: none.
+Steps: 1. the signature and the listing block (same shape as
+`build_worker_prompt`'s file list). 2. the rule sentence. 3. `run_dag`
+lists files from `--repo`'s worktree (add `--repo` to `dag`, default `.`).
+4. Tests: the prompt for `["n.py"]` names `n.py` and the rule; with 150
+files it names 100 and "… and 50 more"; `saddle dag` in a scratch repo
+passes its files (mocked client records the prompt).
+Known-good: prompt lists the files and the rule. Known-bad: an empty
+listing prints "(no tracked files)" and the rule still.
+Contract mutants: 1. listing block dropped → prompt test red. 2. `run_dag`
+passes `[]` → the CLI test red.
+Done when: mutants red; `./check.sh` green.
+Passing instance at HEAD: `test_emit_prompt_asks_for_the_test_impl_split`.
+Dry run: not run.
+
+### T3-20 — A failed `mutmut run` names itself (Medium)
+Files: `src/saddle/evidence.py` (`mutation_sample` ~:449-500: the
+`run_capture(["timeout", …, "mutmut", "run"], …)` result is discarded);
+`src/saddle/gates.py` (`check_mutation` detail for the tool-failure case);
+`tests/test_evidence.py`, `tests/test_gates.py`, `tests/test_runner.py`
+(the `_surviving_mutmut`-style stub with `run` exiting 1).
+Contract: when `mutmut run` exits non-zero, the outcome is
+`MutationOutcome(0, 0, 0, survivors=("mutmut run exited N: <last stderr
+line>",))` and the mutation check fails with that text — never "no
+mutants decided", which describes a run that happened. The smoke run's
+mutmut exited 1 in 658 ms because mutmut 3.8 refuses a package named
+`src` (`Failed trampoline hit. Module name starts with "src.", which is
+invalid`); the gate reported the absence of a verdict, not the tool.
+Direction: **tightened** (same fail-closed verdict; the reason is now
+true). Already-failed-closed: yes.
+Evidence: MEASURED — reproduced 2026-09-19 on a copy of the smoke
+worktree with the harness's own scratch config: exit 1, the assertion
+above. VERIFIED — the `run_capture` result at ~:487 is unbound.
+Issue: none.
+Steps: 1. bind the run; on non-zero exit (and not `SHELL_TIMEOUT`, which
+is the budget binding and keeps today's path) return the outcome above
+before `results`. 2. `check_mutation`: a survivor string starting with
+`mutmut run exited` renders as `mutation tool failed: …`. 3. A stub whose
+`run` exits 1 printing one stderr line; runner end-to-end asserts the
+detail.
+Known-good: the conftest stub (exit 0) unchanged. Known-bad: the exit-1
+stub → `mutation: FAIL (mutation tool failed: mutmut run exited 1: …)`.
+Contract mutants: 1. the exit check → `if False` → known-bad reads "no
+mutants decided" → red. 2. `SHELL_TIMEOUT` carve-out removed → the
+existing timeout test red.
+Done when: mutants red; `./check.sh` green.
+Passing instance at HEAD: `test_run_node_gate_full_sample_catches_what_a_small_cap_hid`.
+Dry run: not run.
+
+### T3-21 — `saddle verify` cannot call a failed run PASS (Medium)
+Files: `src/saddle/transcript.py` (`render_journal_transcript` ~:138-185);
+`src/saddle/cli.py` (`run_verify` ~:575); `tests/test_transcript.py` or
+`tests/test_cli.py` (verify tests); the smoke journal shape as the fixture
+(`_first_run` plus one failed node).
+Contract: the audit verdict is FAIL when the journal's last `run` span
+exited non-zero or its detail counts any failed or undispatched node,
+whatever the sealed proofs say; PASS requires both that and every sealed
+gate output passed. Today the verdict is recomputed from proof records
+alone, and only proven nodes have records, so a run with one proven and
+one failed node re-renders as PASS (S5: the smoke journal, `1 proven, 1
+failed`, verifies as `Verdict: PASS`). Task, started and finished stay
+"(unknown)" until T3-9 puts the task in the record.
+Direction: **tightened**.
+Evidence: MEASURED — `verify.txt` in the smoke record. VERIFIED —
+`render_journal_transcript` reads `records` for the verdict and `spans`
+only for tool lists.
+Issue: none — mention in T3-9's issue.
+Steps: 1. find the last span with `name == "run"`; if none, FAIL
+("no run span"); parse `N failed` and `M undispatched` from its detail. 2.
+verdict as above. 3. Tests: a journal with one proof and a run span `1
+proven, 1 failed` → FAIL; the proof-only happy journal → PASS unchanged; a
+journal with no run span → FAIL naming it.
+Known-good: `test_run_verify_*` happy path unchanged.
+Known-bad: the smoke shape → `- Verdict: FAIL`.
+Contract mutants: 1. the run-span clause removed → known-bad red. 2. `N
+failed` parse → `0` → known-bad red.
+Done when: mutants red; `./check.sh` green.
+Passing instance at HEAD: the existing verify happy-path test.
+Dry run: not run.
 
 ## 7. Tier 4 — measurement (needs the container; each run is a record, not a code change)
 
