@@ -1941,6 +1941,16 @@ through `splice_replan` and back into the loop).
 Dry run: not run.
 
 ### T3-12 — The planner prompt says what the gates enforce (Medium)
+Status 2026-09-19: PARTIAL — 0bd08ad (executor, session 27) landed steps
+1–3 exactly as written: both sentences present, `never use "/"` absent,
+mutants 1–2 red (reviewer re-ran both at HEAD: 1 failed each), check.sh
+632/100%. NOT landed: the four "Added 2026-09-19" rules below (S3/S4:
+`target_files` lists created files incl. `__init__.py`; never name a package
+`src`; R2/R3: a test node's spec cites the ids of every node it specifies;
+a test node's `target_files` names every test file it writes). The executor
+declined them for lacking pinned sentences and a named mutant. They are the
+open 20b blockers, so they land in the main session before the 20c rerun,
+with the mutant shape "delete each sentence → red".
 Files: `src/saddle/cli.py` (`build_emit_prompt`: the refactor rule
 ~:110-111; the `target_files` rule ~:129-131 — after T3-4's edit at ~:128);
 `tests/test_cli.py` (`test_build_emit_prompt_names_task_and_rules` ~:241,
@@ -2071,6 +2081,16 @@ Passing instance at HEAD: `test_git_added_files_lists_staged_adds_and_ignores_un
 Dry run: not run.
 
 ### T3-15 — Docs and docstrings say what landed (Minor, docs-only)
+Status 2026-09-19: DONE — aff70c3 (executor, session 27). The four edits
+as specified; gate 6 also carries the "no kind adds files without
+`write_file`" clause since T3-4 (a700aa7) had landed. `run_tier1`'s
+docstring already said eleven at HEAD. The item's grep still matches
+`gates.py:510` ("is exempt" in assertion-preservation's note), which is not
+one of the three targets. Open: the T3-8 addendum below, whose wording is
+now stale — since T3-24 (879a837) the orphan half excludes every id the
+plan declares, so ARCHITECTURE's Requirement Binding item (:179, which
+also still says "failing-pre/passing-post test" rather than "cited in a
+test source") is rewritten in the main session with T3-12's addenda.
 Files: `docs/ARCHITECTURE.md:180` (gate 6: "`refactor` is exempt"), `:227`
 (status line: "resume specified, not built — `slice.py:584-587` raises");
 `src/saddle/gates.py:3-5` (module docstring's gate order omits
@@ -2105,6 +2125,11 @@ Dry run: n/a (docs-only).
 Added 2026-09-19 (T3-8 finding): ARCHITECTURE's Requirement Binding item should say the check is suite-granular — citations are read from every discovered test source, not from the node's scoped command, so a plan with two test modules must declare every `REQ-` id either module cites on every node whose gate can see it (see `_declares_both_requirements` in `tests/test_slice.py`).
 
 ### T3-16 — Three consistency fixes (Minor)
+Status 2026-09-19: DONE — aaca5a0 (executor, session 27). (a) union
+removed after the staged-new-file test passed both with and without it;
+(b) `entry is entries[-1]`, two tail tests; (c) already correct at HEAD
+(7035a29 had reworded the T3-2 paragraph), no edit. Reviewer re-ran both
+mutants at HEAD (2 failed each) and check.sh: 632 passed, 100%.
 Files: `src/saddle/runner.py:128-130` (`touched` and its comment);
 `src/saddle/cli.py` (`run_tail` loop ~:561-577); `src/saddle/transcript.py`
 (`is_run_end` ~:70, read only); `tests/test_runner.py` (beside
