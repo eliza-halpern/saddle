@@ -31,6 +31,7 @@ from saddle.slice import (
     NodeGateFailedError,
     NodeUnappliableError,
     ReplanFailedError,
+    SliceResult,
     _apply_diff,
     _HaltRecoveryError,
     _run_node,
@@ -1193,7 +1194,18 @@ def test_run_slice_pass_with_replan_callback_unused(tmp_path: Path) -> None:
     assert calls == []
 
 
-def test_run_slice_refuses_stale_journal(tmp_path: Path) -> None:
+TIDY_DIFF = (
+    "diff --git a/n.py b/n.py\n"
+    "--- a/n.py\n"
+    "+++ b/n.py\n"
+    "@@ -1,2 +1,3 @@\n"
+    " def f():\n"
+    "     return 2\n"
+    "+# tidy\n"
+)
+
+
+def _first_run(tmp_path: Path) -> tuple[Path, SliceResult]:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
@@ -1202,18 +1214,91 @@ def test_run_slice_refuses_stale_journal(tmp_path: Path) -> None:
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, ""),
+        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert first.passed is True
-    expected = f"journal {str(journal)!r} is not fresh; resume is not supported"
-    with pytest.raises(ValueError, match=re.escape(expected)):
+    return journal, first
+
+
+def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(tmp_path: Path) -> None:
+    """Known-good (T3-1): a verified journal seeds the proofs. The proven
+    node is never re-proposed, its sealed hash is reused as the parent of
+    the new node, and the run counts both as proven."""
+    journal, first = _first_run(tmp_path)
+    tidy = _node_dict("n2", ["n1"])
+    tidy["kind"] = "refactor"  # comment-only edit on both-sides-allowed terms
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", []), tidy]})
+    proposed: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        proposed.append(node.id)
+        assert node.id != "n1", "a proven node must not be re-proposed"
+        return DiffProposal(TIDY_DIFF, "tidy")
+
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is True
+    assert set(proposed) == {"n2"}
+    assert second.proofs["n1"] == first.proofs["n1"]
+    assert list(second.proofs) == ["n1", "n2"]
+    records = read_records(journal)
+    assert [record.node_id for record in records] == ["n1", "n2"]
+    assert records[1].parent_proofs == [first.proofs["n1"]]
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
+    assert "## Node n1\n" in second.transcript
+    assert f"- Proof: {first.proofs['n1']}\n" in second.transcript
+
+
+def test_run_slice_resume_with_nothing_left_runs_no_worker(tmp_path: Path) -> None:
+    journal, first = _first_run(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is True
+    assert second.proofs == first.proofs
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
+
+
+def test_run_slice_refuses_a_journal_that_does_not_verify(tmp_path: Path) -> None:
+    """Known-bad (T3-1): a tampered record breaks its hash, and resuming
+    onto it raises before any node runs."""
+    journal, _first = _first_run(tmp_path)
+    text = journal.read_text()
+    assert text.count("return two instead") == 1
+    journal.write_text(text.replace("return two instead", "return three instead"))
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    with pytest.raises(ValueError, match=r"failed verification: bad-hash@line \d+"):
         run_slice(
             "Fix f.",
             dag,
             workdir=tmp_path,
             journal_path=journal,
-            propose=lambda node, failure: DiffProposal(GOOD_DIFF, ""),
+            propose=propose,
         )
 
 

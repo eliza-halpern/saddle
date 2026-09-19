@@ -34,6 +34,7 @@ from saddle.journal import (
     build_span,
     read_records,
     read_spans,
+    rebuild_proven,
     tool_spans_by_node,
     tool_spans_for_node,
     verify_journal,
@@ -579,10 +580,12 @@ def run_slice(
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
-    The journal must be fresh: resuming onto existing proofs would append
-    duplicate records, so that waits for the resume design. When `replan`
-    is given, each exhausted node recompiles once into a replacement
-    subgraph; replanned nodes that fail again stay failed.
+    A journal that verifies is resumed, not refused (T3-1): its proven
+    nodes seed `proofs`, so only unproven nodes are scheduled and a crash
+    loses at most the in-flight node, as `rebuild_proven` promises. A
+    journal that does not verify raises before anything runs. When
+    `replan` is given, each exhausted node recompiles once into a
+    replacement subgraph; replanned nodes that fail again stay failed.
 
     Every node is gated by its own scoped `test_command`; nothing checks
     the union of their diffs until `merge_command` runs, once, unscoped,
@@ -591,23 +594,28 @@ def run_slice(
     `merge-suite` under the run span, and a non-zero exit fails the run
     without revisiting any per-node verdict. `None` disables it.
     """
-    if read_records(journal_path):
-        msg = f"journal {str(journal_path)!r} is not fresh; resume is not supported"
-        raise ValueError(msg)
+    proofs: dict[str, str] = rebuild_proven(journal_path)
     started = now()
     run_start = perf_counter()
     run_span_id = uuid.uuid4().hex
-    proofs: dict[str, str] = {}
     remaining = dag
     replanned_from: set[str] = set()
     generated: set[str] = set()
     ever_failed: dict[str, BaseException] = {}
 
     async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
-        return await _run_node(node, workdir, journal_path, propose, proofs, run_span_id)
+        # The scheduler sees a copy with proven dependencies stripped; the
+        # proof record must cite every parent, so run the original node.
+        original = next(candidate for candidate in remaining.nodes if candidate.id == node.id)
+        return await _run_node(original, workdir, journal_path, propose, proofs, run_span_id)
 
     while True:
-        schedulable = Dag(nodes=_schedulable_nodes(remaining, proofs, ever_failed))
+        ready = _schedulable_nodes(remaining, proofs, ever_failed)
+        if not ready:
+            # Only reachable on resume: every node already proven (or
+            # blocked). A fresh DAG always has at least one root to run.
+            break
+        schedulable = Dag(nodes=ready)
         outcome = asyncio.run(schedule(schedulable, worker))
         ever_failed.update(outcome.failures)
         if replan is None:
