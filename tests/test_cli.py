@@ -264,6 +264,9 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "red_phase_required is always true." in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
     assert "target_files (optional) lists the repo-relative files" in prompt
+    assert "may not create or rename files" in prompt
+    assert 'never start one with "/"' in prompt
+    assert 'never use "/"' not in prompt
     assert "over test files only" in prompt
     # Was: `assert "fewest nodes" in prompt`. The suite pinned the
     # guidance #51 removes: "prefer the fewest nodes" is right for T1 and

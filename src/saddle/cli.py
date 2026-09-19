@@ -165,6 +165,7 @@ Rules:
   "impl" node will create) and fails if they already pass.
 - Use "refactor" only when behaviour is preserved: the code and its tests
   move together and no test can fail beforehand.
+  A refactor node may not create or rename files; it edits existing code and tests in place.
 - The first node has no dependencies; every other node depends on at least one earlier node.
 - Each node carries at least one requirement: {{"id": "REQ-001", "statement": ...}}.
 - The statement is one testable sentence saying what must hold, in the
@@ -186,8 +187,9 @@ Rules:
   else:
 {bindings}
 - target_files (optional) lists the repo-relative files the node may touch,
-  e.g. ["src/app/login.py"]. Leave it empty when unsure; never use "/" or
-  ".." in an entry. A node that touches a file outside its list fails.
+  e.g. ["src/app/login.py"].
+  Entries look like the example: never start one with "/" and never use "..".
+  A node that touches a file outside its list fails.
 - red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
