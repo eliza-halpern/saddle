@@ -671,10 +671,59 @@ def test_diff_schema_admits_a_real_diff() -> None:
     assert _decoder_admits({"properties": {"diff": {"type": "string"}}}, REAL_DIFF)
     # The diff no longer travels inside a JSON string at all: DIFF_GRAMMAR
     # constrains the output language itself, so a hunk is mandatory and
-    # prose is unrepresentable. tools/diff_grammar_check.py is the proof,
-    # run against the serving container's xgrammar.
-    assert DIFF_GRAMMAR.startswith("root ::= section+")
-    assert '"@@ "' in DIFF_GRAMMAR
+    # prose is unrepresentable. What that grammar admits and rejects is
+    # decided by xgrammar, not here: tools/diff_grammar_check.py runs the
+    # known-good/known-bad corpus against the serving container's copy.
+    # The structural pin below says only which shape was sent there.
+
+
+def _grammar_rules(grammar: str) -> dict[str, str]:
+    """Split an EBNF text into {rule name: body}, joining continuation lines."""
+    rules: dict[str, str] = {}
+    name = ""
+    for raw in grammar.splitlines():
+        if "::=" in raw:
+            head, _, body = raw.partition("::=")
+            name = head.strip()
+            rules[name] = body.strip()
+        elif raw.strip() and name:
+            rules[name] += " " + raw.strip()
+    return rules
+
+
+def test_diff_grammar_requires_the_file_lines_before_a_hunk() -> None:
+    """A hunk may not follow `diff --git` (or `index`, or a mode line) directly.
+
+    That shape is what `git apply` refuses with `patch fragment without
+    header at line 3`, and it was legal here: `"--- "` and `"+++ "` sat in
+    `meta_pfx`, which `section` takes zero or more of. `section` now
+    requires `from to` between the metadata and the hunks.
+
+    This is a structural pin, not an acceptance test, and it is deliberately
+    the weaker half: xgrammar is the engine that enforces the grammar and it
+    is not installed in this venv (it lives in the serving container), so
+    nothing here can show a diff being admitted or refused. The corpus that
+    can is tools/diff_grammar_check.py; the last assertion keeps the
+    known-bad instance in its reject list, and pins where it has to die --
+    at the `@@` itself, since a later rejection would mean a different rule
+    had swallowed the header.
+    """
+    rules = _grammar_rules(DIFF_GRAMMAR)
+    assert rules["section"].split() == ["header", "meta*", "from", "to", "hunk+"]
+    assert rules["from"] == r'"--- " line "\n"'
+    assert rules["to"] == r'"+++ " line "\n"'
+    # ... and they are no longer reachable as optional metadata instead.
+    assert '"--- "' not in rules["meta_pfx"]
+    assert '"+++ "' not in rules["meta_pfx"]
+
+    # Imported in-function: tools/ is outside the mutmut work copy, so a
+    # module-level import would break collection there (test_mutmut_layout).
+    from tools.diff_grammar_check import MUST_REJECT, REJECT_AT
+
+    headerless = "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"
+    named = [name for name, case in MUST_REJECT.items() if case == headerless]
+    assert named, "the check tool no longer carries the headerless diff"
+    assert REJECT_AT[named[0]] == headerless.index("@@")
 
 
 def test_decoder_semantics_reject_a_prefix_only_pattern() -> None:

@@ -17,8 +17,10 @@ question -- so this checks both halves, on real inputs:
 
 - every diff in this repo's own history must be ADMITTED, plus rename,
   mode-change, delete and "\\ No newline at end of file";
-- prose, markdown fences, a JSON wrapper and a `diff -u` header must be
-  REJECTED;
+- prose, markdown fences, a JSON wrapper, a `diff -u` header and a hunk
+  that follows `diff --git` with no `--- `/`+++ ` lines must be REJECTED,
+  the last one at the `@@` itself (`reject_at`) -- rejecting it later
+  would mean some other rule had swallowed the header;
 - and the model must be FORBIDDEN FROM STOPPING on a header with no hunk.
   That third check is the token-mask guarantee itself, and it needs a stop
   token: a header-without-hunk is a valid *prefix*, so byte-acceptance
@@ -44,6 +46,14 @@ MUST_REJECT = {
     "json wrapper": '{"diff": "diff --git a/n.py b/n.py\\n"}',
     "wrong header": "diff -u a/n.py b/n.py\n@@ -1 +1 @@\n-x\n+y\n",
     "hunk before header": "@@ -1 +1 @@\n-x = 1\n+x = 2\n",
+    "hunk without file lines": "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n",
+}
+
+# Byte offset at which a MUST_REJECT case has to die. Absence of a working
+# diff is not the only way to fail: a case rejected at the wrong byte is
+# being refused by the wrong rule.
+REJECT_AT = {
+    "hunk without file lines": len("diff --git a/x b/x\n"),
 }
 
 # Valid prefixes the grammar must refuse to END on.
@@ -98,6 +108,7 @@ def emit(commits: int = 40) -> None:
             {
                 "admit": cases,
                 "reject": MUST_REJECT,
+                "reject_at": REJECT_AT,
                 "not_stop": MUST_NOT_STOP,
                 "stop": MUST_STOP,
             }
@@ -107,7 +118,9 @@ def emit(commits: int = 40) -> None:
 
 def run() -> int:
     """Compile DIFF_GRAMMAR with the real xgrammar and check both halves."""
-    import xgrammar as xgr  # only present in the serving container
+    # Only present in the serving container; mypy follows this file now that
+    # tests/test_vllm.py imports the reject list from it.
+    import xgrammar as xgr  # type: ignore[import-not-found]
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     from saddle.vllm import DIFF_GRAMMAR
@@ -145,9 +158,13 @@ def run() -> int:
         at = first_reject(diff)
         if at is not None:
             bad.append(f"MUST ADMIT but rejected at byte {at}: {name}")
+    reject_at = cases.get("reject_at", {})
     for name, text in sorted(cases["reject"].items()):
-        if first_reject(text) is None:
+        at = first_reject(text)
+        if at is None:
             bad.append(f"MUST REJECT but admitted: {name}")
+        elif name in reject_at and at != reject_at[name]:
+            bad.append(f"MUST REJECT at byte {reject_at[name]} but rejected at {at}: {name}")
     total = sum(len(cases[k]) for k in ("admit", "reject", "not_stop", "stop"))
     print(f"{total - len(bad)}/{total} cases correct")
     for line in bad:

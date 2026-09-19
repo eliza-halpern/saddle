@@ -54,14 +54,25 @@ REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
 # ANY EDIT HERE MUST RE-RUN THAT CHECK. A construct left out of this
 # grammar is a diff the worker cannot express, which is precisely the
 # failure it exists to prevent.
+#
+# `--- ` and `+++ ` are required (`from to`), not optional `meta`: a hunk
+# that follows the `diff --git` line directly is the shape behind every
+# one of the smoke run's 16 `patch fragment without header at line 3`
+# apply failures (WORKPLAN T3-18, smoke record S2). Hunk line counts stay
+# unenforceable -- a CFG cannot count -- so this closes the header half of
+# that class, not the count half. The 44/44 figure above was measured
+# before this tightening and the container check has NOT been re-run for
+# it: no container access in the session that made the edit.
 DIFF_GRAMMAR: Final = r"""root ::= section+
-section    ::= header meta* hunk+
+section    ::= header meta* from to hunk+
 header     ::= "diff --git " line "\n"
 meta       ::= meta_pfx line "\n"
 meta_pfx   ::= "index " | "new file mode " | "deleted file mode "
              | "old mode " | "new mode " | "similarity index "
              | "dissimilarity index " | "rename from " | "rename to "
-             | "copy from " | "copy to " | "--- " | "+++ " | "Binary files "
+             | "copy from " | "copy to " | "Binary files "
+from       ::= "--- " line "\n"
+to         ::= "+++ " line "\n"
 hunk       ::= "@@ " line "\n" hline+
 hline      ::= (" " | "+" | "-" | "\\") line "\n"
 line       ::= [^\n]*
