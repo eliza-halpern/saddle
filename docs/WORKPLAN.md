@@ -1460,11 +1460,14 @@ second node's gates reading the first node's staged diff; T3-7 shows the
 test path unexecutable at `a700aa7`.
 Issue: none.
 Steps:
-1. A scratch repo in the `_slice_repo` shape (`n.py` with `f()` returning
-   1, no test file), task "make f return 2 and reject negative input with
-   ValueError". `saddle dag` to plan; save the DAG. Then one `saddle run`
-   (the slice CLI) with the default merge command; save the journal, the
-   transcript and the exit code.
+1. A scratch repo outside this checkout (`/tmp/saddle-smoke`): `git init`,
+   one committed file `n.py` reading `def f(x):\n    return x\n`, no test
+   file. Task: "Make f(x) return twice x and raise ValueError when x is
+   negative." `saddle doctor`, then `saddle dag "<task>"` (save stdout as
+   `dag.txt`), then one `saddle run "<task>" --repo /tmp/saddle-smoke --yes`
+   with the default merge command (save stdout+stderr as `run.log` and the
+   exit code; copy `/tmp/saddle-smoke/.saddle/proofs.jsonl`), then
+   `saddle verify --journal <that copy>` (save the transcript).
 2. Record, per node: kind; whether a `test` node passed as a red
    specification (`tests` and `red-phase` details); whether the worker's
    diff applied (`git apply` exit); every failed gate's verbatim detail;
