@@ -407,6 +407,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # The seal records sampling agreement: the correlation signal is
     # only useful if it is written down (#59). Known-bad-for-diversity: a
     # constant proposer still dedups to one distinct sample.
+    # A passing seal carries the sampling count and nothing after it (T3-25).
     assert worker.detail == f"1 distinct of {PROPOSAL_SAMPLES} sample(s)"
     assert worker.parent_id == run.span_id
     assert all(span.parent_id == worker.span_id for span in tools)
@@ -584,7 +585,7 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     agents = [span for span in spans if span.kind == "agent"]
     assert [span.name for span in agents] == ["worker:a", "worker:a", "run"]
     (first, second, run) = agents
-    assert (first.exit_code, first.detail) == (1, "attempt 1/3: 1 gate(s) failed")
+    assert (first.exit_code, first.detail) == (1, "attempt 1/3: 1 gate(s) failed: coverage")
     assert (second.exit_code, second.detail) == (
         1,
         "attempt 2/3: worker re-proposed an identical diff; stopping recovery",
@@ -729,7 +730,7 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
         ("worker:n1", 0),
         ("run", 0),
     ]
-    assert agents[0].detail == "attempt 1/3: 3 gate(s) failed"
+    assert agents[0].detail == "attempt 1/3: 3 gate(s) failed: tests, red-phase, mutation"
     assert agents[1].detail == "recovered after 2 attempts"
 
 
@@ -807,11 +808,14 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
     # BAD_DIFF's fault now lives in n.py (T2-2a), which also breaks the
     # conftest mutmut stub's location match (see the retry test above), and
     # JUNK1_DIFF/JUNK2_DIFF's new files stay permanently uncovered on top of
-    # that -- one more failing gate at every attempt than before.
+    # that -- one more failing gate at every attempt than before. Each seal
+    # names its failed gates in check order (T3-25): the node has no proof
+    # record and the transcript renders the last attempt only, so this is
+    # the one place attempt 1's verdict survives.
     assert [span.detail for span in agents] == [
-        "attempt 1/3: 3 gate(s) failed",
-        "attempt 2/3: 4 gate(s) failed",
-        "attempt 3/3: 4 gate(s) failed",
+        "attempt 1/3: 3 gate(s) failed: tests, red-phase, mutation",
+        "attempt 2/3: 4 gate(s) failed: tests, coverage, red-phase, mutation",
+        "attempt 3/3: 4 gate(s) failed: tests, coverage, red-phase, mutation",
         "0 proven, 1 failed, 0 undispatched",
     ]
 

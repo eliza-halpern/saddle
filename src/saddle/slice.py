@@ -516,7 +516,11 @@ async def _run_node(
                 max_attempts=max_attempts,
                 tools=node.execution_constraints.allowed_tools,
             )
-            failed_count = sum(1 for check in result.checks if not check.passed)
+            # The seal names the failed gates in check order (T3-25): a
+            # failed node has no proof record and the transcript renders
+            # its last attempt only, so the journal is the one place an
+            # earlier attempt's verdict can be read back from.
+            failed_names = [check.name for check in result.checks if not check.passed]
             _seal_attempt(
                 journal_path,
                 node.id,
@@ -524,7 +528,8 @@ async def _run_node(
                 worker_id,
                 start,
                 1,
-                f"attempt {attempt}/{max_attempts}: {failed_count} gate(s) failed",
+                f"attempt {attempt}/{max_attempts}: {len(failed_names)} gate(s) failed"
+                f": {', '.join(failed_names)}",
             )
         except _HaltRecoveryError as exc:
             _abandon(workdir, baseline, applied, recorder)

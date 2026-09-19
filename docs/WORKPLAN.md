@@ -2600,6 +2600,14 @@ in `tests/test_gates.py` (single-node, own ids only) — untouched by A.
 Dry run: not run.
 
 ### T3-25 — A failed attempt's seal names the gates that failed (Minor)
+Status 2026-09-19: DONE by the reviewer. The seal reads `attempt i/N: k
+gate(s) failed: <name>, <name>` in check order; the exhausted-retries
+fixture now pins `tests, red-phase, mutation` on attempt 1 and `tests,
+coverage, red-phase, mutation` on attempts 2–3, the dependent-undispatched
+fixture pins `coverage`, and the passing seal is still exactly `1 distinct
+of 3 sample(s)`. Mutants: 1 `if not check.passed` → `if check.passed`
+KILLED (seal named the eight passing gates); 2 names append deleted
+KILLED (two tests).
 Files: `src/saddle/slice.py` (`_run_node` ~:502: the `failed_count` seal
 detail `f"attempt {attempt}/{max_attempts}: {failed_count} gate(s)
 failed"`); `tests/test_slice.py` (beside
