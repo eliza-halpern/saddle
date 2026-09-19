@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from saddle.dag import Node
 from saddle.gates import GateCheck, Tier1Result
@@ -54,7 +55,8 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         "node_id": "n1",
         "diff_hash": hashlib.sha256(b"diff --git a/n.py b/n.py\n").hexdigest(),
         "parent_proofs": [],
-        "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok"}],
+        # T2-4: a new record dumps `basis` even when None; the hash covers it.
+        "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok", "basis": None}],
         "requirement_ids": ["REQ-001"],
         "thinking": "",
         "attempts": 1,
@@ -102,7 +104,8 @@ def test_build_record_seals_thinking_into_hash() -> None:
         "node_id": "n1",
         "diff_hash": hashlib.sha256(b"diff\n").hexdigest(),
         "parent_proofs": [],
-        "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok"}],
+        # T2-4: a new record dumps `basis` even when None; the hash covers it.
+        "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok", "basis": None}],
         "requirement_ids": ["REQ-001"],
         "thinking": "extract the helper",
         "attempts": 1,
@@ -136,6 +139,58 @@ def _record(
         requirement_ids=["REQ-001"],
         thinking=thinking,
     )
+
+
+PRE_BASIS_JOURNAL = Path(__file__).parent / "fixtures" / "pre-basis-proofs.jsonl"
+
+
+def test_pre_basis_journal_still_verifies(tmp_path: Path) -> None:
+    """A journal sealed before GateOutput.basis existed keeps its hash.
+
+    The fixture was generated at d944b08 by the slice fixture and must not
+    be regenerated: its records carry no `basis` key, so the field parses
+    unset and the verification payload (exclude_unset=True) omits it,
+    reproducing the hash that was sealed at the time (T2-4, known-good for
+    the compatibility half of the contract).
+    """
+    raw = PRE_BASIS_JOURNAL.read_text().splitlines()
+    proofs = [json.loads(line) for line in raw if json.loads(line)["record_type"] == "proof"]
+    assert proofs, "fixture holds no proof record"
+    assert all("basis" not in output for record in proofs for output in record["gate_outputs"])
+    assert verify_journal(PRE_BASIS_JOURNAL) == []
+    (record,) = read_records(PRE_BASIS_JOURNAL)
+    assert record.node_id == "n1"
+    assert all(output.basis is None for output in record.gate_outputs)
+    assert rebuild_proven(PRE_BASIS_JOURNAL) == {"n1": record.record_hash}
+
+
+def test_basis_round_trips_and_reverifies(tmp_path: Path) -> None:
+    """Known-good: a record sealed with a basis reads back with it and
+    still verifies; a record with an unknown extra key is still refused."""
+    path = tmp_path / "proofs.jsonl"
+    record = build_record(
+        evidence_id="e-n1",
+        node_id="n1",
+        diff="diff n1\n",
+        parent_proofs=[],
+        gate_outputs=[
+            GateOutput(name="tests", passed=True, detail="ok"),
+            GateOutput(name="mutation", passed=True, detail="100.0% over 5", basis="sampled n=5"),
+        ],
+        requirement_ids=["REQ-001"],
+        thinking="",
+    )
+    append_record(path, record)
+    (back,) = read_records(path)
+    assert [output.basis for output in back.gate_outputs] == [None, "sampled n=5"]
+    assert back == record
+    assert verify_journal(path) == []
+    # New records dump the key even when None, so build and verify agree.
+    assert '"basis": null' in path.read_text().splitlines()[0]
+    with pytest.raises(ValidationError):
+        GateOutput.model_validate(
+            {"name": "mutation", "passed": True, "detail": "x", "evidence": "sampled n=5"}
+        )
 
 
 def test_append_record_creates_dirs_and_round_trips(tmp_path: Path) -> None:

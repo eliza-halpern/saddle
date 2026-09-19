@@ -443,6 +443,12 @@ def test_run_slice_merge_suite_gate_runs_once_and_is_journaled(tmp_path: Path) -
     assert merge.parent_id == run.span_id
     assert run.exit_code == 0
     assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
+    # T2-4: the sealed record says what each verdict rested on.
+    (record,) = read_records(journal)
+    basis = {output.name: output.basis for output in record.gate_outputs}
+    assert basis["mutation"] == "sampled n=5"
+    assert basis["coverage"] == "changed-lines=1"
+    assert basis["tests"] is None
 
 
 def test_run_slice_merge_suite_failure_fails_the_run_not_the_node(tmp_path: Path) -> None:

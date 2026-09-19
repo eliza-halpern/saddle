@@ -78,11 +78,19 @@ def _names_changed_source(baseline_output: str, changed_files: Collection[str]) 
 
 @dataclass(frozen=True)
 class GateCheck:
-    """Outcome of one Tier-1 check: `passed` plus human-readable `detail`."""
+    """Outcome of one Tier-1 check: `passed` plus human-readable `detail`.
+
+    `basis` names the evidence the verdict rests on where a bare verdict
+    would hide its weight: a mutation verdict over 0 mutants and one over
+    5 both read "passed" (T7's 218-line module, CLAUDE.md), so the
+    mutation check records how many mutants were sampled. Checks whose
+    detail already carries the count leave it None.
+    """
 
     name: str
     passed: bool
     detail: str = ""
+    basis: str | None = None
 
 
 def check_syntax(sources: Mapping[str, str]) -> GateCheck:
@@ -155,7 +163,9 @@ def check_changed_line_coverage(
 ) -> GateCheck:
     """Every changed line must be executed; `minimum` is the node threshold."""
     if not changed:
-        return GateCheck(name="coverage", passed=True, detail="no changed lines")
+        return GateCheck(
+            name="coverage", passed=True, detail="no changed lines", basis="changed-lines=0"
+        )
     missing = sorted(changed - covered)
     percent = (len(changed) - len(missing)) / len(changed) * 100.0
     if percent < minimum:
@@ -164,8 +174,14 @@ def check_changed_line_coverage(
             name="coverage",
             passed=False,
             detail=f"{percent:.1f}% < {minimum:.1f}%: uncovered {gaps}",
+            basis=f"changed-lines={len(changed)}",
         )
-    return GateCheck(name="coverage", passed=True, detail=f"{percent:.1f}% >= {minimum:.1f}%")
+    return GateCheck(
+        name="coverage",
+        passed=True,
+        detail=f"{percent:.1f}% >= {minimum:.1f}%",
+        basis=f"changed-lines={len(changed)}",
+    )
 
 
 def _check_behaviour_preserved(coverage: GateCheck, mutation: MutationOutcome) -> GateCheck:
@@ -527,14 +543,22 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     if outcome.total == 0:
         if outcome.survivors:
             cause = ", ".join(sorted(outcome.survivors)[:5])
-            return GateCheck(name="mutation", passed=False, detail=f"no mutants decided: {cause}")
+            return GateCheck(
+                name="mutation",
+                passed=False,
+                detail=f"no mutants decided: {cause}",
+                basis="sampled n=0",
+            )
         if outcome.generated == 0:
             return GateCheck(
                 name="mutation",
                 passed=False,
                 detail="no mutants on changed lines: mutation provided no evidence",
+                basis="sampled n=0",
             )
-        return GateCheck(name="mutation", passed=False, detail="no mutants decided")
+        return GateCheck(
+            name="mutation", passed=False, detail="no mutants decided", basis="sampled n=0"
+        )
     percent = 100.0 * outcome.killed / outcome.total
     small = outcome.total < MIN_SIGNIFICANT_MUTANTS
     required = 100.0 if small else threshold
@@ -545,11 +569,13 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
             name="mutation",
             passed=False,
             detail=f"{percent:.1f}% < {required:.1f}%{note}: survived {shown}",
+            basis=f"sampled n={outcome.total}",
         )
     return GateCheck(
         name="mutation",
         passed=True,
         detail=f"{percent:.1f}% >= {required:.1f}% over {outcome.total} mutant(s)",
+        basis=f"sampled n={outcome.total}",
     )
 
 

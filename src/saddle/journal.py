@@ -31,6 +31,11 @@ class GateOutput(BaseModel):
     name: str
     passed: bool
     detail: str
+    # Evidence basis (T2-4): "sampled n=<mutants>" for the mutation check,
+    # None elsewhere. Optional so a journal written before this field
+    # parses unchanged; verification hashes with exclude_unset=True, so a
+    # record that never carried the key still matches its sealed hash.
+    basis: str | None = None
 
 
 class ProofRecord(BaseModel):
@@ -392,7 +397,7 @@ def build_from_gate(
         diff=diff,
         parent_proofs=parent_proofs,
         gate_outputs=[
-            GateOutput(name=check.name, passed=check.passed, detail=check.detail)
+            GateOutput(name=check.name, passed=check.passed, detail=check.detail, basis=check.basis)
             for check in result.checks
         ],
         requirement_ids=list(node.requirement_ids),

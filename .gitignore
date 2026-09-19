@@ -20,3 +20,4 @@ dist/
 # Harness runtime (proof journals stay local unless curated into docs/)
 .proofs/
 *.jsonl
+!tests/fixtures/*.jsonl

@@ -160,6 +160,7 @@ def test_coverage_killer_fixture_uncovered_line_fails() -> None:
     assert check.passed is False
     assert check.name == "coverage"
     assert check.detail == "0.0% < 100.0%: uncovered node.py:3, node.py:4"
+    assert check.basis == "changed-lines=2"
 
 
 def test_coverage_full_cover_and_empty_diff_pass() -> None:
@@ -167,10 +168,14 @@ def test_coverage_full_cover_and_empty_diff_pass() -> None:
     assert full.passed is True
     assert full.name == "coverage"
     assert full.detail == "100.0% >= 100.0%"
+    assert full.basis == "changed-lines=1"
     empty = check_changed_line_coverage(set(), set(), 100.0)
     assert empty.passed is True
     assert empty.name == "coverage"
     assert empty.detail == "no changed lines"
+    assert empty.basis == "changed-lines=0"
+    # Checks whose detail already says everything carry no basis.
+    assert check_syntax({"n.py": "x = 1\n"}).basis is None
 
 
 def test_coverage_partial_percent_compared_to_minimum() -> None:
@@ -353,6 +358,7 @@ def test_mutation_below_threshold_fails_with_survivors() -> None:
     assert check.name == "mutation"
     assert check.passed is False
     assert check.detail == "14.3% < 85.0%: survived s1, s2, s3, s4, s5"
+    assert check.basis == "sampled n=7"
 
 
 def test_mutation_boundary_threshold_passes() -> None:
@@ -361,6 +367,9 @@ def test_mutation_boundary_threshold_passes() -> None:
     assert check.name == "mutation"
     assert check.passed is True
     assert check.detail == "85.0% >= 85.0% over 20 mutant(s)"
+    # T2-4: the verdict carries its evidence basis, so a reader can tell a
+    # pass over 20 mutants from a pass over 0 without parsing the detail.
+    assert check.basis == "sampled n=20"
 
 
 def test_mutation_no_longer_passes_without_mutants() -> None:
@@ -372,6 +381,7 @@ def test_mutation_no_longer_passes_without_mutants() -> None:
     assert check.name == "mutation"
     assert check.passed is False
     assert check.detail == "no mutants on changed lines: mutation provided no evidence"
+    assert check.basis == "sampled n=0"
 
 
 def test_mutation_undecided_fails_with_cause() -> None:
@@ -379,6 +389,7 @@ def test_mutation_undecided_fails_with_cause() -> None:
     assert bare.name == "mutation"
     assert bare.passed is False
     assert bare.detail == "no mutants decided"
+    assert bare.basis == "sampled n=0"
     caused = check_mutation(
         MutationOutcome(
             killed=0, total=0, generated=0, survivors=("c6", "c5", "c4", "c3", "c2", "c1")
