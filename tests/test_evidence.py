@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import stat
@@ -32,6 +33,7 @@ from saddle.evidence import (
     run_shell,
     run_shell_capture,
     run_stdin,
+    snapshot_baseline,
     statement_lines,
     under_coverage,
 )
@@ -268,6 +270,97 @@ def test_git_added_files_unknown_ref_raises(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     with pytest.raises(RuntimeError, match="git diff --diff-filter=A against 'no-such-ref'"):
         git_added_files(tmp_path, "no-such-ref")
+
+
+def test_snapshot_baseline_freezes_the_worktree_without_moving_head(tmp_path: Path) -> None:
+    """Known-good (T3-8): the ref carries the worktree as the node found it --
+    a staged add and an unstaged edit alike -- so nothing the earlier nodes
+    left behind is a change against it, and `HEAD` and the branches stand."""
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add a"], tmp_path) == 0
+    head = run_capture(["git", "rev-parse", "HEAD"], tmp_path).stdout
+    branches = run_capture(["git", "branch", "-a"], tmp_path).stdout
+    (tmp_path / "a.py").write_text("x = 2\n")
+    (tmp_path / "b.py").write_text("y = 1\n")
+    assert run_argv(["git", "add", "b.py"], tmp_path) == 0
+    ref = snapshot_baseline(tmp_path, "n2")
+    assert ref == "refs/saddle/baseline/n2"
+    assert git_changed_files(tmp_path, ref) == []
+    assert git_added_files(tmp_path, ref) == []
+    dest = tmp_path / "tree"
+    materialize_baseline(tmp_path, ref, dest)
+    assert (dest / "a.py").read_text() == "x = 2\n"
+    assert (dest / "b.py").read_text() == "y = 1\n"
+    assert run_capture(["git", "rev-parse", "HEAD"], tmp_path).stdout == head
+    assert run_capture(["git", "branch", "-a"], tmp_path).stdout == branches
+
+
+def test_snapshot_baseline_excludes_untracked_harness_artefacts(tmp_path: Path) -> None:
+    """Known-bad (T3-8): `.coverage.tier1` and stray bytecode are the
+    harness's, not the node's baseline. `add -u` stages tracked files only,
+    so an untracked file cannot enter the tree -- and a node that creates
+    that same path later is still charged with creating it."""
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add a"], tmp_path) == 0
+    (tmp_path / ".coverage.tier1").write_text("")
+    (tmp_path / "junk.py").write_text("z = 1\n")
+    ref = snapshot_baseline(tmp_path, "n1")
+    dest = tmp_path / "tree"
+    materialize_baseline(tmp_path, ref, dest)
+    assert sorted(entry.name for entry in dest.iterdir()) == ["a.py"]
+
+
+def test_snapshot_baseline_lists_a_later_staged_add_against_its_ref(tmp_path: Path) -> None:
+    """Tracked-ness comes from the index, not from the ref: a file the node
+    stages after its snapshot is still an add against it, so node-scope and
+    target-scope still see the node's own file creation (T2-2, T3-2)."""
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add a"], tmp_path) == 0
+    ref = snapshot_baseline(tmp_path, "n1")
+    (tmp_path / "new.py").write_text("y = 1\n")
+    assert run_argv(["git", "add", "new.py"], tmp_path) == 0
+    assert git_added_files(tmp_path, ref) == ["new.py"]
+    assert git_changed_files(tmp_path, ref) == ["new.py"]
+
+
+def test_snapshot_baseline_names_an_illegal_node_id_by_digest(tmp_path: Path) -> None:
+    """Known-good (T3-8): an id git's ref parser rejects still gets a
+    resolvable ref. Nothing in the DAG schema makes a node id ref-safe, and
+    a naming failure must not be how a node dies."""
+    _git_repo(tmp_path)
+    ref = snapshot_baseline(tmp_path, "a b")
+    assert ref == f"refs/saddle/baseline/{hashlib.sha256(b'a b').hexdigest()[:16]}"
+    assert run_argv(["git", "rev-parse", "--verify", ref], tmp_path) == 0
+    assert git_changed_files(tmp_path, ref) == []
+
+
+def test_snapshot_baseline_outside_a_repo_raises(tmp_path: Path) -> None:
+    """Known-bad (T3-8): no silent ref. A caller handed `HEAD` back for a
+    failed snapshot would gate the node against the wrong tree and say
+    nothing; the argv that failed is named so the transcript can explain it."""
+    with pytest.raises(RuntimeError, match=r"git -C .* add -u -- \. failed: fatal: not a git"):
+        snapshot_baseline(tmp_path, "n1")
+
+
+def test_snapshot_baseline_records_one_span_per_git_run(tmp_path: Path) -> None:
+    """Four subprocess runs, four spans: an unjournaled git run writes the
+    ref the whole node is gated against and leaves the chain unable to say
+    where it came from."""
+    _git_repo(tmp_path)
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    snapshot_baseline(tmp_path, "n1", recorder=recorder)
+    spans = read_spans(journal)
+    assert [span.name for span in spans] == ["git"] * 4
+    assert [span.exit_code for span in spans] == [0, 0, 0, 0]
+    assert all(span.node_id == "n1" for span in spans)
+    assert [span.argv[3] for span in spans] == ["add", "write-tree", "commit-tree", "update-ref"]
 
 
 def test_git_collectors_record_spans_including_failures(tmp_path: Path) -> None:

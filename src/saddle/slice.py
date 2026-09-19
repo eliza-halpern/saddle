@@ -22,7 +22,14 @@ from time import perf_counter
 from typing import Final
 
 from saddle.dag import Dag, ExecutionConstraints, Node
-from saddle.evidence import CapturedRun, git_changed_files, run_argv, run_shell, run_stdin
+from saddle.evidence import (
+    CapturedRun,
+    git_changed_files,
+    run_argv,
+    run_shell,
+    run_stdin,
+    snapshot_baseline,
+)
 from saddle.gates import SHELL_TIMEOUT, GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
@@ -305,7 +312,7 @@ def _seal_attempt(
 
 
 def _evaluate_candidate(
-    node: Node, workdir: Path, diff: str
+    node: Node, workdir: Path, diff: str, baseline: str
 ) -> tuple[Tier1Result | None, str | None]:
     """Gate `diff` on a throwaway copy of `workdir`; never touches it.
 
@@ -332,11 +339,11 @@ def _evaluate_candidate(
             _apply_diff(candidate, diff)
         except RuntimeError as exc:
             return None, str(exc)
-        return run_node_gate(node, candidate), None
+        return run_node_gate(node, candidate, baseline=baseline), None
 
 
 def _best_of_samples(
-    node: Node, workdir: Path, propose: Proposer
+    node: Node, workdir: Path, propose: Proposer, baseline: str
 ) -> tuple[DiffProposal | None, int]:
     """Draw PROPOSAL_SAMPLES unconditioned proposals; keep the best.
 
@@ -360,7 +367,7 @@ def _best_of_samples(
         drawn.append(proposal.diff)
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
             continue
-        result, unappliable = _evaluate_candidate(node, workdir, proposal.diff)
+        result, unappliable = _evaluate_candidate(node, workdir, proposal.diff, baseline)
         if unappliable is not None or result is None:
             continue
         failures = sum(1 for check in result.checks if not check.passed)
@@ -396,6 +403,7 @@ async def _run_node(
     yields mid-node and the proof map stays consistent without locks.
     """
     max_attempts = 1 + MAX_RECOVERY_RETRIES
+    baseline: str | None = None
     failure: str | None = None
     sampling = ""
     seen: list[str] = []
@@ -408,6 +416,16 @@ async def _run_node(
         worker_id = uuid.uuid4().hex
         recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
         try:
+            if baseline is None:
+                # This node's own baseline, taken before any proposal is
+                # drawn, so every gate below diffs this node's work and not
+                # the staged edits of the nodes that ran before it (T3-8).
+                # Under this attempt's recorder: the four `git` spans must
+                # hang off a sealed attempt, as `_evaluate_candidate`
+                # explains. Attempts 2..N keep the ref: a recovery diff
+                # lands on the previous attempt's tree, and the proof is
+                # the accumulated diff.
+                baseline = snapshot_baseline(workdir, node.id, recorder=recorder)
             # A worker call that comes back truncated or malformed is a
             # spent attempt, not a dead node. The planner already retries
             # this exact condition (`_emit_valid_dag`); the worker path
@@ -415,7 +433,7 @@ async def _run_node(
             # node with the worktree untouched and nothing retried.
             try:
                 if attempt == 1:
-                    best, distinct = _best_of_samples(node, workdir, propose)
+                    best, distinct = _best_of_samples(node, workdir, propose, baseline)
                     proposal = best if best is not None else propose(node, failure)
                     # Agreement across independent samples is the correlation
                     # signal: LLM samples "often fail on the same inputs", so
@@ -444,9 +462,11 @@ async def _run_node(
                 _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, failure)
                 continue
             applied.append(proposal.diff)
-            autofix(workdir, recorder=recorder)
+            autofix(workdir, baseline=baseline, recorder=recorder)
             captured: list[CapturedRun] = []
-            result = run_node_gate(node, workdir, recorder=recorder, capture=captured)
+            result = run_node_gate(
+                node, workdir, baseline=baseline, recorder=recorder, capture=captured
+            )
             if result.passed:
                 parents = [proofs[dep] for dep in node.dependencies]
                 record = build_from_gate(

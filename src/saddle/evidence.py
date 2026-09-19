@@ -8,6 +8,7 @@ possible so fixtures stay fast and branch coverage stays cheap.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -281,6 +282,69 @@ def git_added_files(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None
         msg = f"git diff --diff-filter=A against {ref!r} failed: {proc.stderr.strip()}"
         raise RuntimeError(msg)
     return proc.stdout.splitlines()
+
+
+BASELINE_REF_PREFIX: Final = "refs/saddle/baseline/"
+"""Namespace for per-node baseline commits. Outside `refs/heads` and
+`refs/tags`, so writing one moves no branch, no tag and not `HEAD`."""
+
+
+def _ref_slug(node_id: str) -> str:
+    """`node_id` as a git-legal ref component, else its sha256 prefix.
+
+    Node ids come from the planner and nothing in the DAG schema makes
+    them ref-safe: a space, a `..`, a trailing `.lock` would fail
+    `update-ref` and take the node down for a naming reason. git's own
+    parser decides -- `check-ref-format` is the one `update-ref` uses --
+    and the digest fallback is a pure function of the id, so attempts
+    2..N of the same node resolve the same ref.
+    """
+    proc = subprocess.run(
+        ["git", "check-ref-format", f"{BASELINE_REF_PREFIX}{node_id}"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        return node_id
+    return hashlib.sha256(node_id.encode()).hexdigest()[:16]
+
+
+def snapshot_baseline(cwd: Path, node_id: str, *, recorder: SpanRecorder | None = None) -> str:
+    """Freeze the worktree at `cwd` as a commit; return the ref naming it.
+
+    A node's gates must diff the node's own work, and `HEAD` is not that
+    ref once a slice has more than one node: `_run_node` applies,
+    autofixes, gates and seals but never commits, so every earlier node's
+    proven edit is still staged when the next node runs. Against `HEAD`
+    the second node's `target-scope` names the first node's files, its
+    `coverage` demands lines it never wrote, and `red-phase` compares
+    against a tree two nodes old.
+
+    `git add -u -- .` stages tracked files only, so `.coverage.tier1`,
+    `.saddle/` and bytecode stay out of the tree; `write-tree` and
+    `commit-tree -p HEAD` name it; `update-ref` publishes it under
+    `BASELINE_REF_PREFIX`. `HEAD`, every branch and the set of paths the
+    index tracks are unchanged, so the worker's worktree is the worktree
+    it had. `git diff`, `git diff --diff-filter=A` and `git archive` take
+    the result exactly as they take `HEAD`.
+    """
+    ref = f"{BASELINE_REF_PREFIX}{_ref_slug(node_id)}"
+
+    def git(*args: str) -> str:
+        argv = ["git", "-C", str(cwd), *args]
+        start = perf_counter()
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        _record(recorder, argv, start, proc)
+        if proc.returncode != 0:
+            msg = f"{' '.join(argv)} failed: {proc.stderr.strip()}"
+            raise RuntimeError(msg)
+        return proc.stdout.strip()
+
+    git("add", "-u", "--", ".")
+    tree = git("write-tree")
+    commit = git("commit-tree", tree, "-p", "HEAD", "-m", f"saddle baseline {node_id}")
+    git("update-ref", ref, commit)
+    return ref
 
 
 def git_diff(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> str:

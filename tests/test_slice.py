@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
+import stat
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +16,7 @@ import pytest
 
 import saddle.slice as slice_module
 from saddle.dag import Dag, Node
-from saddle.evidence import CapturedRun, run_argv
+from saddle.evidence import CapturedRun, run_argv, run_capture
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
@@ -355,6 +357,10 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     spans = read_spans(journal)
     tools = [span for span in spans if span.kind == "tool"]
     assert [span.name for span in tools] == [
+        # T3-8: the node's own baseline -- `add -u`, `write-tree`,
+        # `commit-tree`, `update-ref` -- taken before any proposal is drawn,
+        # so every ref below is this node's snapshot and not `HEAD`.
+        *["git"] * 4,
         "git",
         # autofix (#66): scope to the node's changed files, apply ruff's
         # mechanical fixes, re-stage -- all before anything measures the
@@ -600,8 +606,13 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
     # One span per apply mode tried: the ladder journals every attempt, so
     # a diff that needed loosening -- or exhausted the ladder -- is visible.
     # Prose never reaches the ladder (#52): the header check rejects it
-    # before the first `git apply`, so no git span is recorded at all.
-    assert [span for span in spans if span.name == "git"] == []
+    # before the first `git apply`, so no apply span is recorded at all.
+    assert [span for span in spans if "apply" in span.argv] == []
+    # The node's baseline snapshot is the only `git` that runs, once, before
+    # the first proposal is drawn (T3-8): four runs, named rather than
+    # counted, so a fifth git run could not hide behind the total.
+    git_runs = [span for span in spans if span.name == "git"]
+    assert [span.argv[3] for span in git_runs] == ["add", "write-tree", "commit-tree", "update-ref"]
     assert len([span for span in spans if span.kind == "agent"]) == 3
     assert "- Attempts: 2\n" in result.transcript
 
@@ -636,7 +647,7 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     assert "- Gate " not in result.transcript
     assert "- Attempts: 3\n" in result.transcript
     spans = read_spans(journal)
-    assert [span for span in spans if span.name == "git"] == []
+    assert [span for span in spans if "apply" in span.argv] == []
     workers = [span for span in spans if span.name == "worker:n1"]
     assert len(workers) == 3
     assert all("diff did not apply" in span.detail for span in workers)
@@ -644,9 +655,11 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     run = next(span for span in spans if span.name == "run")
     assert [span.exit_code for span in workers] == [1, 1, 1]
     assert [span.parent_id for span in workers] == [run.span_id] * 3
-    # Prose short-circuits before the ladder, so no git span is parented
-    # to any worker attempt.
-    assert git_runs == []
+    # Prose short-circuits before the ladder, so the only git spans parented
+    # to a worker attempt are the baseline snapshot's, taken once on attempt
+    # 1 and reused by attempts 2..N (T3-8).
+    assert [span.argv[3] for span in git_runs] == ["add", "write-tree", "commit-tree", "update-ref"]
+    assert {span.parent_id for span in git_runs} == {workers[0].span_id}
 
 
 def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
@@ -1386,6 +1399,19 @@ TIDY_DIFF = (
     "+# tidy\n"
 )
 
+# A refactor with a statement to its name: the value `n1` proved, spelled as
+# a sum. Behaviour preserved, the same test still pins it, and the changed
+# line is one coverage can cover and mutation can mutate.
+REFACTOR_DIFF = (
+    "diff --git a/n.py b/n.py\n"
+    "--- a/n.py\n"
+    "+++ b/n.py\n"
+    "@@ -1,2 +1,2 @@\n"
+    " def f():\n"
+    "-    return 2\n"
+    "+    return 1 + 1\n"
+)
+
 
 def _first_run(tmp_path: Path) -> tuple[Path, SliceResult]:
     _slice_repo(tmp_path)
@@ -1403,20 +1429,31 @@ def _first_run(tmp_path: Path) -> tuple[Path, SliceResult]:
     return journal, first
 
 
-def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(tmp_path: Path) -> None:
+def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Known-good (T3-1): a verified journal seeds the proofs. The proven
     node is never re-proposed, its sealed hash is reused as the parent of
-    the new node, and the run counts both as proven."""
+    the new node, and the run counts both as proven.
+
+    `n2` is a refactor that rewrites the statement `n1` proved, so it
+    carries its own evidence: coverage of its changed line and killed
+    mutants on it. It used to be a comment-only edit, which passed only
+    while `n2` was gated against `HEAD` and credited with `n1`'s work
+    (T3-8); against its own baseline that diff has no statement line and
+    proves nothing (the known-bad below).
+    """
     journal, first = _first_run(tmp_path)
+    _refactor_mutmut(tmp_path / "stub", monkeypatch)
     tidy = _node_dict("n2", ["n1"])
-    tidy["kind"] = "refactor"  # comment-only edit on both-sides-allowed terms
+    tidy["kind"] = "refactor"
     dag = Dag.model_validate({"nodes": [_node_dict("n1", []), tidy]})
     proposed: list[str] = []
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
         proposed.append(node.id)
         assert node.id != "n1", "a proven node must not be re-proposed"
-        return DiffProposal(TIDY_DIFF, "tidy")
+        return DiffProposal(REFACTOR_DIFF, "same value, spelled as a sum")
 
     second = run_slice(
         "Fix f.",
@@ -1426,7 +1463,7 @@ def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(tmp_path: Pa
         propose=propose,
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
-    assert second.passed is True
+    assert second.passed is True, second.transcript
     assert set(proposed) == {"n2"}
     assert second.proofs["n1"] == first.proofs["n1"]
     assert list(second.proofs) == ["n1", "n2"]
@@ -1437,6 +1474,45 @@ def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(tmp_path: Pa
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
     assert "## Node n1\n" in second.transcript
     assert f"- Proof: {first.proofs['n1']}\n" in second.transcript
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 1 + 1\n"
+    assert (
+        "- Gate red-phase: PASS (tests unchanged (behaviour preserved); coverage and "
+        "mutation 100.0% carry the proof)\n"
+    ) in second.transcript
+
+
+def test_run_slice_resumed_comment_only_refactor_proves_nothing(tmp_path: Path) -> None:
+    """Known-bad (T3-8): the fixture the resume test used to run.
+
+    A refactor whose diff is a comment has no changed statement line, so
+    coverage has nothing to cover and mutation nothing to mutate; gated
+    against its own baseline it fails red-phase for exactly that reason.
+    Against `HEAD` it passed, credited with `n1`'s `return 2` -- which is
+    how this fixture stayed green from T3-1 until T3-8 measured it.
+    """
+    journal, first = _first_run(tmp_path)
+    tidy = _node_dict("n2", ["n1"])
+    tidy["kind"] = "refactor"
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", []), tidy]})
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure: DiffProposal(TIDY_DIFF, "tidy"),
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is False
+    assert list(second.proofs) == ["n1"]
+    assert second.proofs["n1"] == first.proofs["n1"]
+    assert (
+        "- Gate red-phase: FAIL (tests unchanged and no mutants decided; "
+        "nothing proves the change)\n"
+    ) in second.transcript
+    assert (
+        "- Gate mutation: FAIL (no mutants on changed lines: mutation provided no evidence)\n"
+        in second.transcript
+    )
 
 
 def test_run_slice_resume_with_nothing_left_runs_no_worker(tmp_path: Path) -> None:
@@ -1648,3 +1724,296 @@ def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Pa
     # The good sample is selected even though it was not drawn first.
     assert result.passed is True
     assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
+
+
+# --- T3-8: a node is gated against its own baseline, so slices can be wide ---
+
+M_DIFF = (
+    "diff --git a/m.py b/m.py\n"
+    "--- a/m.py\n"
+    "+++ b/m.py\n"
+    "@@ -1,2 +1,2 @@\n"
+    " def g():\n"
+    "-    return 1\n"
+    "+    return 2\n"
+)
+
+# The `test` node's whole diff: one new file holding a failing specification
+# with a hypothesis property, which is what a `test` node must ship (T3-7a).
+SPEC_DIFF = (
+    "diff --git a/test_n.py b/test_n.py\n"
+    "new file mode 100644\n"
+    "--- /dev/null\n"
+    "+++ b/test_n.py\n"
+    "@@ -0,0 +1,12 @@\n"
+    "+from hypothesis import given\n"
+    "+from hypothesis import strategies as st\n"
+    "+\n"
+    "+from n import f\n"
+    "+\n"
+    "+\n"
+    "+def test_f_returns_two():  # REQ-001\n"
+    "+    assert f() == 2\n"
+    "+\n"
+    "+\n"
+    "+@given(st.integers())\n"
+    "+def test_f_is_an_int(_value):  # REQ-001\n"
+    "+    assert isinstance(f(), int)\n"
+)
+
+
+def _two_module_repo(root: Path) -> None:
+    """`_slice_repo` plus a second module and its failing test, committed.
+
+    `n2`'s work is `m.py` alone, so its gates have to read `n1`'s proven
+    edit to `n.py` as history rather than as a file `n2` strayed into.
+    """
+    _slice_repo(root)
+    (root / "m.py").write_text("def g():\n    return 1\n")
+    (root / "test_m.py").write_text(
+        "from m import g\n\n\ndef test_g():  # REQ-002\n    assert g() == 2\n"
+    )
+    assert run_argv(["git", "add", "m.py", "test_m.py"], root) == 0
+    assert run_argv(["git", "commit", "-m", "second module"], root) == 0
+
+
+def _spec_slice_repo(root: Path) -> None:
+    """`_slice_repo` without `test_n.py`: the `test` node creates it."""
+    setup = (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    )
+    for argv in setup:
+        assert run_argv(argv, root) == 0
+    (root / "n.py").write_text("def f():\n    return 1\n")
+    assert run_argv(["git", "add", "n.py"], root) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
+
+
+def _declares_both_requirements(node: dict[str, object]) -> dict[str, object]:
+    """Both REQ ids on both nodes, because binding is suite-granular.
+
+    `run_node_gate` reads citations from every discovered test source, not
+    from the ones the node's scoped command runs, so `test_m.py`'s
+    `REQ-002` tag counts as cited for `n1` too. A fixture that declared it
+    on `n2` alone would fail `n1` with "undeclared requirements cited:
+    REQ-002" -- the orphan rule doing its job, not a T3-8 defect.
+    """
+    node["requirements"] = [
+        {"id": "REQ-001", "statement": "REQ-001 holds."},
+        {"id": "REQ-002", "statement": "REQ-002 holds."},
+    ]
+    return node
+
+
+def _mutmut_stub(
+    stub_dir: Path, monkeypatch: pytest.MonkeyPatch, mutants: dict[str, tuple[str, str]]
+) -> None:
+    """A mutmut stub reporting every mutant in `mutants` killed.
+
+    Each entry is `name: (file, removed line)`; the collector locates a
+    mutant by matching the removed line's text against the file, so the
+    text must be exactly the source line the fixture's diff leaves there.
+    """
+    stub_dir.mkdir(exist_ok=True)
+    (stub_dir / "results.txt").write_text("".join(f"  {name}: killed\n" for name in mutants))
+    for name, (rel, removed) in mutants.items():
+        (stub_dir / f"show_{name}.txt").write_text(
+            f"--- {rel}\n+++ {rel}\n@@ -2 +2 @@\n-{removed}\n+    return 3  # {name}\n"
+        )
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'STUB_DIR="{stub_dir}"\n'
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        '  results) cat "$STUB_DIR/results.txt";;\n'
+        '  show) cat "$STUB_DIR/show_$2.txt";;\n'
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def _two_module_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Killed mutants on *both* modules' changed lines.
+
+    conftest's autouse stub locates every mutant at `n.py:2`, so the node
+    whose changed line lives in `m.py` would find no mutants in scope and
+    fail the mutation gate for a fixture reason rather than a T3-8 one.
+    Each node still only counts the mutants that land on its own changed
+    lines: the other module's are skipped before the file is read.
+    """
+    mutants = {
+        f"n{index}": ("n.py", "    return 2") for index in range(1, 1 + MIN_SIGNIFICANT_MUTANTS)
+    }
+    mutants |= {
+        f"g{index}": ("m.py", "    return 2") for index in range(1, 1 + MIN_SIGNIFICANT_MUTANTS)
+    }
+    _mutmut_stub(stub_dir, monkeypatch, mutants)
+
+
+def _refactor_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Killed mutants on the line `REFACTOR_DIFF` leaves behind.
+
+    conftest's stub locates its mutants at `    return 2`; the resumed
+    refactor rewrote that line, so its mutants have to sit on the new text.
+    """
+    _mutmut_stub(
+        stub_dir,
+        monkeypatch,
+        {
+            f"r{index}": ("n.py", "    return 1 + 1")
+            for index in range(1, 1 + MIN_SIGNIFICANT_MUTANTS)
+        },
+    )
+
+
+def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (T3-8): the second node's gates see the second node's diff.
+
+    `_run_node` applies, autofixes, gates and seals but never commits, so
+    when `n2` runs, `n1`'s proven edit to `n.py` is still staged. Gated
+    against `HEAD` -- the default every caller took before this -- `n2`
+    failed `target-scope` ("touched file(s) outside target_files: n.py"),
+    `coverage` (0.0%, uncovered `n.py:2`) and `red-phase` on work that was
+    already proven. Gated against a snapshot of the tree `n2` started
+    from, its diff is `m.py` and nothing else.
+    """
+    _two_module_repo(tmp_path)
+    _two_module_mutmut(tmp_path / "stub", monkeypatch)
+    second = _declares_both_requirements(_node_dict("n2", ["n1"]))
+    second["target_files"] = ["m.py"]
+    gate = second["deterministic_gate"]
+    assert isinstance(gate, dict)
+    gate["test_command"] = "pytest test_m.py"
+    first = _declares_both_requirements(_node_dict("n1", []))
+    dag = Dag.model_validate({"nodes": [first, second]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(node.id)
+        return DiffProposal(GOOD_DIFF if node.id == "n1" else M_DIFF, "")
+
+    result = run_slice(
+        "Fix f and g.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["n1", "n2"]
+    # One call per node: the first sample gated clean, so `_best_of_samples`
+    # took its `failures == 0` exit instead of drawing all three. Against
+    # `HEAD` the first sample scores `target-scope` red and `n2` costs three.
+    assert calls == ["n1", "n2"]
+    assert "- Gate target-scope: PASS (1 touched file(s) within 1 target(s))\n" in result.transcript
+    assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
+    spans = read_spans(journal)
+    run = [span for span in spans if span.name == "run"][-1]
+    assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
+    # Every ref the harness diffs `n2` against -- autofix's scope and the
+    # runner's changed-file lists alike -- is `n2`'s own snapshot, never
+    # `HEAD`. Autofix against `HEAD` is idempotent on an earlier node's
+    # ruff-clean files, so this is the only place the threading shows.
+    name_only = [
+        span
+        for span in spans
+        if span.node_id == "n2" and span.name == "git" and "--name-only" in span.argv
+    ]
+    assert name_only, "no `git diff --name-only` span for n2"
+    assert all("refs/saddle/baseline/n2" in span.argv for span in name_only)
+    assert not any("HEAD" in span.argv for span in name_only)
+    refs = run_capture(["git", "for-each-ref", "--format=%(refname)", "refs/saddle/"], tmp_path)
+    assert refs.stdout.split() == ["refs/saddle/baseline/n1", "refs/saddle/baseline/n2"]
+
+
+# `n2`'s own stray: the same `m.py` edit plus a comment on `n1`'s file.
+STRAY_DIFF = M_DIFF + (
+    "diff --git a/n.py b/n.py\n"
+    "--- a/n.py\n"
+    "+++ b/n.py\n"
+    "@@ -1,2 +1,3 @@\n"
+    " def f():\n"
+    "     return 2\n"
+    "+# stray\n"
+)
+
+
+def test_run_slice_second_node_own_stray_still_fails_target_scope(tmp_path: Path) -> None:
+    """Known-bad (T3-8): narrowing the ref does not narrow the check.
+
+    `n2` declares `target_files=["m.py"]` and edits `m.py` *and* `n.py`.
+    `n1`'s proven edit to `n.py` is no longer charged to `n2`, but `n2`'s own
+    line on that file still is: `target-scope` names `n.py` and the node
+    fails. The pass in the test above is not "target-scope stopped looking".
+    """
+    _two_module_repo(tmp_path)
+    second = _declares_both_requirements(_node_dict("n2", ["n1"]))
+    second["target_files"] = ["m.py"]
+    gate = second["deterministic_gate"]
+    assert isinstance(gate, dict)
+    gate["test_command"] = "pytest test_m.py"
+    first = _declares_both_requirements(_node_dict("n1", []))
+    dag = Dag.model_validate({"nodes": [first, second]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(GOOD_DIFF if node.id == "n1" else STRAY_DIFF, "")
+
+    result = run_slice(
+        "Fix f and g.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False
+    assert list(result.proofs) == ["n1"]
+    assert (
+        "- Gate target-scope: FAIL (touched file(s) outside target_files: n.py)\n"
+        in result.transcript
+    )
+
+
+def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
+    """Deferred from T3-7a, unblocked by T3-8: a `test` node writes the
+    specification, the `impl` node that depends on it makes it pass, and both
+    prove. Against `HEAD` the impl node failed `node-scope` with "impl node
+    changed test file(s): test_n.py", because the spec the test node had just
+    created was staged and counted as the impl node's own edit.
+    """
+    _spec_slice_repo(tmp_path)
+    spec = _node_dict("t1", [])
+    spec["kind"] = "test"
+    dag = Dag.model_validate({"nodes": [spec, _node_dict("n1", ["t1"])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(node.id)
+        return DiffProposal(SPEC_DIFF if node.id == "t1" else GOOD_DIFF, "")
+
+    result = run_slice(
+        "Specify f, then fix it.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["t1", "n1"]
+    assert calls == ["t1", "n1"]
+    assert "- Gate node-scope: PASS (test node changed 1 file(s) in scope)\n" in result.transcript
+    assert "- Gate node-scope: PASS (impl node changed 1 file(s) in scope)\n" in result.transcript
+    assert "- Gate tests: PASS (red specification: 1 failing test(s))\n" in result.transcript
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
