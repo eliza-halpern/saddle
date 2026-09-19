@@ -121,6 +121,8 @@ T3-8 ──► any two-node fixture or run (until it lands, the second node is g
 T3-7a, T3-8 ──► T3-7b (the smoke run, session 20a) ──► T3-3, T3-9, T3-10, T3-11 (write them after watching the path execute)
 T3-7b ──► T3-17, T3-18, T3-19, T3-20, T3-21 (each is a smoke-run finding; T3-17 needs the user's word, T3-18 needs the container)
 T3-17, T3-18, T3-19 ──► T4-1 (a benchmark against a merge gate that cannot import, a grammar that admits headerless hunks, or a planner that cannot see the repo measures those defects, not the harness)
+T3-7b (20b) ──► T3-23, T3-24, T3-25 (each is a rerun finding; T3-24 needs the user's word)
+T3-23, T3-24 ──► T4-1 (a benchmark in which no replacement node can pass `red-phase` and no impl node can pass `requirement-binding` measures those two defects, not the harness)
 T3-22 ──► nothing (saddle's own self-mutation score; not a 20b or T4 prerequisite)
 T3-9 ──► T3-21's task line (the verdict half stands alone)
 ```
@@ -1440,7 +1442,7 @@ Stop if: `check_tests`'s signature at HEAD is not `(test_command, exit_code)` (~
 Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` path this must leave untouched); NONE for the `test` path, by T3-7.
 Dry run: not run.
 
-### T3-7b — Smoke run: one task through the harness on the container (session 20a)
+### T3-7b — Smoke run: one task through the harness on the container (sessions 20a, 20b)
 Status 2026-09-19: DONE (session 20a; record `../saddle-bench/runs/smoke-2026-09-19/`,
 untracked there). Outcome: known-bad — `1 proven, 1 failed, 0 undispatched,
 merge exit 2`, run exit 1, 454 s wall. The planner split the task into
@@ -1466,7 +1468,40 @@ landed, so the planner may still name a package `src` or leave an
 `__init__.py` out of `target_files`; if it does, the mutation gate now
 reads `mutation tool failed: mutmut run exited 1: ...Module name starts
 with "src."...` (T3-20) — record that as confirming T3-20 and T3-12, not as
-a new finding. The reviewer adds the second outcome to this Status.
+a new finding.
+Second outcome (session 20b, 2026-09-19; record
+`../saddle-bench/runs/smoke-2026-09-19b/`, reviewer-verified against the
+code): known-bad — `1 proven, 1 failed, 0 undispatched, merge exit 0`, run
+exit 1, 554 s wall, 7 of 7 `git apply` spans exit 0 (20a: 16 of 16 failed).
+Same split, `node-1` (test, REQ-001) → `node-2` (impl, REQ-002). `node-1`
+proved first attempt, all eleven gates. `node-2` failed three attempts:
+`coverage: FAIL (15.8% < 100.0%: uncovered .../test_n_req002.py:3, ...)`,
+`node-scope: FAIL (impl node changed test file(s): .../test_n_req002.py)`,
+`target-scope: FAIL (touched file(s) outside target_files:
+test_n_req002.py)`, `requirement-binding: FAIL (undeclared requirements
+cited: REQ-001)`. The replan produced `node-2.r1`, which failed three
+attempts on `red-phase: FAIL (tests pass pre-change; prove nothing)` and
+the same `requirement-binding` line. Confirmed live: T3-19 (the plan
+targets the existing `n.py`; S6 gone), T3-21 (`saddle verify` prints
+`Verdict: FAIL` for this failed run; 20a printed PASS), T3-8, T3-7a,
+non-vacuous sampling, chain integrity. Not discriminated, and recorded as
+such: T3-17 (merge exit 0, but both `pytest -q` and `python -m pytest -q`
+pass on this tree, so S1's trigger never arose), T3-20 (no `mutmut run`
+failed), T3-18 (one clean run is not proof the corrupt-patch class is
+gone). Findings, each now an item: R1 a failed node's applied diffs stay
+in the worktree, so its replacement snapshots a baseline that already
+carries the work (`git show refs/saddle/baseline/node-2.r1:n.py` is the
+implemented function; the red probes split 1,1,1,1,1,1,1 on `node-2`
+against 0,0,0 on `node-2.r1`) and the merge suite ran green over unproven
+edits → T3-23; R2 `requirement-binding` rejects an impl node whose
+dependency's tests cite the dependency's requirement, so every test → impl
+split with distinct ids fails on the impl node → T3-24; R3 `target_files`
+omitted a file the model wrote (a second test file), the mirror of S3 →
+T3-12 and T3-13, second instance; R4 which gates failed on `node-2`
+attempt 1 cannot be recovered from the record (the seal keeps a count) →
+T3-25. Also seen: `.coverage.tier1` is left untracked in the repo under
+test after the run (evidence.py ~:323 keeps it out of the tree by design;
+no item).
 Findings, each now an item (reviewer-verified against the code, 2026-09-19):
 S1 merge suite and node gates disagree on `sys.path` → T3-17; S2 the
 grammar lets a hunk follow `diff --git` with no `---`/`+++` lines → T3-18;
@@ -2377,6 +2412,189 @@ Stop if: mutmut's `also_copy` cannot carry a directory outside
 `source_paths` — then move the reads (a `docs`-relative fixture, a
 `tools` package under `src`) instead of the copy.
 Passing instance at HEAD: none — the layout test collects, it does not run.
+Dry run: not run.
+
+### T3-23 — A failed node's work leaves the worktree before anything else runs on it (Major)
+Files: `src/saddle/slice.py` (`_run_node` ~:404: the two `raise
+NodeGateFailedError` sites ~:516 and ~:523 and the `NodeUnappliableError`
+site ~:521; `run_slice` ~:656: the merge-suite call ~:729);
+`src/saddle/evidence.py` (new `restore_baseline(cwd, ref, *, recorder)`
+beside `materialize_baseline` ~:366); `tests/test_slice.py` (beside
+`test_run_slice_replan_recovers_failed_node` ~:1244 and
+`test_run_slice_exhausted_retries_fail_with_attempts` ~:754);
+`tests/test_evidence.py`.
+Contract: when `_run_node` gives up on a node after at least one diff was
+applied, the worktree and index are restored to that node's own baseline
+ref (`refs/saddle/baseline/<slug>`, the T3-8 snapshot) before the
+exception leaves `_run_node`: `git diff <ref>` is empty and `git diff
+--diff-filter=A <ref>` is empty, so (1) a replacement node's
+`snapshot_baseline` freezes the tree the failed node started from, and its
+`red-phase` pre leg can be red again; (2) the merge suite runs over proven
+edits only. A node that applied nothing restores nothing (the tree is
+already its baseline). The restore is one recorded span (name
+`restore-baseline`, exit code of the git call) under the attempt that
+failed, so the journal shows it happened.
+Direction: **tightened** — nothing that proves today changes; a run that
+today gates a replacement against unproven work, and merges over it, now
+cannot.
+Evidence: session 20b, this item's finding R1 (T3-7b Status): `git show
+refs/saddle/baseline/node-2:n.py` is `def f(x): return x`,
+`refs/saddle/baseline/node-2.r1:n.py` raises `ValueError` and returns
+`2 * x`; `node-2.r1` failed `red-phase: FAIL (tests pass pre-change; prove
+nothing)` on all three attempts with red probe exits 0,0,0 against
+`node-2`'s 1,1,1,1,1,1,1. VERIFIED by reading: `_run_node` ~:466
+`_apply_diff` → `applied.append`, no revert on any exit path ~:512-523;
+`splice_replan` ~:526 keeps the failed node "so the transcript keeps its
+verdict" and the replacement's first attempt snapshots the current worktree
+~:436; the merge ~:729 runs `merge_command` in `workdir` as it stands.
+After the run, `/tmp/saddle-smoke` carried `M n.py`, `A test_n.py`,
+`A test_n_req002.py` staged and the merge suite passed over them.
+Issue: the T3-7b issue (T3-5 drafts it), R1 paragraph.
+Stop if: `git restore --source <ref> --staged --worktree -- .` does not
+delete a file that `git apply --index` added since the snapshot. Probed
+2026-09-19 (reviewer, scratch repo, git as installed): a staged edit to
+`n.py` and a staged new `test_n.py` after the snapshot → restore exit 0,
+`git status --porcelain` empty, `git diff <ref>` empty, `test_n.py` gone
+from disk. The one line suffices; no `git rm`/unlink fallback is needed.
+Steps: 1. `restore_baseline` in evidence.py: `git -C <cwd> restore
+--source <ref> --staged --worktree -- .`, then assert both diffs are
+empty and raise `RuntimeError` naming the ref if not; record the span.
+2. In `_run_node`, wrap the give-up paths: before `raise
+NodeUnappliableError` and both `raise NodeGateFailedError`, `if applied
+and baseline is not None: restore_baseline(workdir, baseline,
+recorder=recorder)`. The `_HaltRecoveryError` handler and the fall-through
+after the loop both need it; one helper `_abandon(...)` called from both
+is the shape. 3. Fixture: the T3-8 two-node `_slice_repo` shape where
+`n1` is an impl node whose proposer returns a diff that turns the suite
+green but fails another gate (`target_files=["other.py"]` so
+`target-scope` fails while `tests` passes), then a `replan` that returns
+a one-node DAG with the correct target. Known-good: `n1.r1` proves, the
+run reads `1 proven, 1 failed, 0 undispatched, merge exit 0` with `n1`
+in `replanned_from`, and `git show refs/saddle/baseline/n1.r1:n.py`
+equals `refs/saddle/baseline/n1:n.py`. Known-bad: before step 2 the same
+fixture fails `n1.r1` with `red-phase: FAIL (tests pass pre-change; prove
+nothing)` — that is the 20b run in miniature and must be shown red first.
+4. A second test: after `test_run_slice_exhausted_retries_fail_with_attempts`
+fails its node, `git diff refs/saddle/baseline/<id>` in the fixture repo is
+empty and the added file is gone. 5. `tests/test_evidence.py`:
+`restore_baseline` on a repo with a staged edit and a staged new file
+since the ref → both gone, `HEAD` unchanged; on a repo already at the ref →
+no-op, exit 0 span recorded.
+Contract mutants (write the exact seds when the code exists; each target
+occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each
+revert): 1. delete the `restore_baseline` call in `_abandon` → step 3's
+test red (the replacement's red-phase); 2. `--staged --worktree` → `--worktree`
+only → step 4's test red (the index still carries the diff);
+3. `if applied and baseline` → `if not applied and baseline` → step 3
+red (never restores after an applied diff) and the no-op case of step 5
+may go red too — record which.
+Known-good at HEAD, and a test this item MUST change:
+`test_run_slice_replan_recovers_failed_node` ~:1244 proposes `BAD_DIFF`
+(`return 3`) for `n1` and `FIX_DIFF` (`-    return 3` / `+    return 2`)
+for the replacement — the replacement's diff only applies BECAUSE the
+failed diff is still in the worktree. That test pins the defect. After
+step 2 it must propose `GOOD_DIFF` for the replacement (the replacement
+starts from `n1`'s baseline, `return 1`), and the assertion set stays.
+`test_run_slice_replanned_node_failure_stays_failed` ~:1280 is the same
+shape; check it too.
+Dry run: not run.
+
+### T3-24 — An impl node may cite the requirements its dependencies' tests specify (Major; decision needed)
+Files: `src/saddle/gates.py` (`check_requirement_binding` ~:600; the call
+in `run_tier1` ~:793); `src/saddle/runner.py` (`run_node_gate` ~:100: a
+new parameter; `Tier1Inputs`); `src/saddle/slice.py` (`_run_node` ~:404
+and `schedule`: the dag is needed to compute the upstream set);
+`tests/test_gates.py`, `tests/test_slice.py` (the T3-8 two-node fixture
+~:1244 declares both ids on both nodes to dodge exactly this — leave it,
+add the distinct-ids case).
+Contract today (gates.py ~:600): the orphan half rejects any `REQ-\d{3}`
+cited in ANY discovered test source that the node did not declare
+(`flipped_tests=test_sources`, runner.py ~:222, is every `test_*.py`,
+not the tests this node's diff touched). Under T3-7a's test → impl split
+the planner gives the test node REQ-001 and the impl node REQ-002; the
+test node's file cites REQ-001; the impl node, whose whole job is to make
+that file pass, is then rejected for "citing" REQ-001. No impl node in a
+two-node plan with distinct ids can pass this gate.
+Evidence: session 20b, T3-7b finding R2 — `node-2` and `node-2.r1`, six
+attempts, every one `requirement-binding: FAIL (undeclared requirements
+cited: REQ-001)`; `node-2` declares `REQ-002` only (dag.txt). VERIFIED by
+reading as above. The suite-granular note in T3-8 step 4 (~:1668) already
+describes the mechanism and worked around it in the fixture.
+Decision (user's word before an executor starts): (A, recommended) the
+declared set for the orphan check is the node's own ids plus the ids
+declared by its transitive dependencies — an id that appears anywhere
+upstream is a planned requirement, not a hallucinated one, and the
+"unbound" half (every id the node itself declares must be cited) stays as
+it is. (B) leave the gate; T3-12's planner prompt tells the planner that
+an impl node declares every id its dependency's tests cite. B keeps the
+gate honest but makes every plan hinge on the planner reading one
+sentence, and 20b shows what a missed sentence costs.
+Direction under A: **loosened, with proof** — 20b is the legitimate input
+the contract rejects (an impl node fulfilling the specification its
+dependency wrote). What stays tight: an id declared nowhere in the DAG is
+still an orphan; a declared id no test cites is still unbound.
+Issue: the T3-7b issue, R2 paragraph.
+Steps under A: 1. `check_requirement_binding(requirement_ids,
+flipped_tests, *, upstream_ids: Collection[str] = ())`; `orphans = sorted(
+cited - declared - set(upstream_ids))`; detail unchanged. 2. `Tier1Inputs`
+gains `upstream_requirements: tuple[str, ...] = ()`; `run_node_gate` takes
+`upstream_requirements` and passes it through; `run_tier1` ~:793 passes
+`inputs.upstream_requirements`. 3. `_run_node` receives the transitive
+union — compute it once per node in `schedule` from the DAG it was given
+(`Dag` already validates dependencies; a helper `upstream_requirement_ids(
+dag, node_id) -> tuple[str, ...]` in `dag.py` keeps the layering) and pass
+it to `run_node_gate`; `_best_of_samples`/`_evaluate_candidate` carry it
+the way they carry `baseline`. 4. Tests, gates: known-good — node declares
+`REQ-002`, upstream is `("REQ-001",)`, sources cite both → PASS `1
+requirement(s) bound`; known-bad — sources cite `REQ-003`, declared
+nowhere → `undeclared requirements cited: REQ-003`; unbound — node
+declares `REQ-002`, no source cites it → `unbound requirements: REQ-002`
+(upstream does not rescue the unbound half). 5. Test, slice: the T3-8
+two-node fixture with `n1` declaring `REQ-001` only and `n2` `REQ-002`
+only, `test_m.py` citing both → `2 proven`; before step 1 the same fixture
+fails `n2` with `undeclared requirements cited: REQ-001` (show it red
+first; that is 20b in miniature).
+Contract mutants (write the exact seds when the code exists; each target
+occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each
+revert): 1. `- set(upstream_ids)` deleted → step 5 red; 2. `cited -
+declared - set(upstream_ids)` → `cited - set(upstream_ids)` → the
+known-good in step 4 still passes but a node citing its own undeclared id
+must fail: add that case (declares `REQ-002`, cites `REQ-002` and
+`REQ-009`, upstream empty → orphan `REQ-009`) and show it red; 3. the
+transitive helper returns direct dependencies only → a three-node chain
+test (n3 cites n1's id) red.
+Passing instance at HEAD: `test_run_tier1` cases for requirement-binding
+in `tests/test_gates.py` (single-node, own ids only) — untouched by A.
+Dry run: not run.
+
+### T3-25 — A failed attempt's seal names the gates that failed (Minor)
+Files: `src/saddle/slice.py` (`_run_node` ~:502: the `failed_count` seal
+detail `f"attempt {attempt}/{max_attempts}: {failed_count} gate(s)
+failed"`); `tests/test_slice.py` (beside
+`test_run_slice_exhausted_retries_fail_with_attempts` ~:754, which reads
+attempt spans).
+Contract: the seal of a failed attempt reads `attempt i/N: k gate(s)
+failed: <name>, <name>` with the failed gate names in check order, so a
+failed node's earlier attempts can be read from the journal; a passing
+attempt's seal is unchanged; the transcript's per-node gate list (final
+attempt) is unchanged.
+Direction: **tightened** (more is recorded; nothing is accepted that was
+refused).
+Evidence: session 20b finding R4 and 20a's S5 second half — `node-2`
+attempt 1 "2 gate(s) failed", attempts 2–3 "4 gate(s) failed"; which two
+is unrecoverable from `proofs.jsonl`, `run.log` or the transcript, since a
+failed node has no proof record and the transcript renders the last
+attempt only.
+Steps: 1. `names = ", ".join(check.name for check in result.checks if not
+check.passed)`; append `f": {names}"` to the detail. 2. Test: run the
+exhausted-retries fixture, read the attempt spans for the node, assert
+each detail ends with the failed gate names in order (`tests`, then the
+others as the fixture produces them); assert a passing seal (the single-
+node proven fixture) has no colon after `sample(s)`.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1;
+drop `__pycache__` after each revert): 1. `if not check.passed` → `if
+check.passed` → the seal names the passing gates, test red; 2. delete the
+`f": {names}"` append → test red.
 Dry run: not run.
 
 ## 7. Tier 4 — measurement (needs the container; each run is a record, not a code change)
