@@ -838,46 +838,72 @@ Done when: mutants red; every pre-existing `tests/test_slice.py` test green
 Stop if: `grep -c "passed = not failed_unexcused and not undispatched" src/saddle/slice.py` is not 1.
 
 ### T2-4 — Gate outputs carry their evidence basis
-Files: `src/saddle/journal.py:28-33` (`GateOutput`), `:395` (the one place a
-`GateCheck` becomes a `GateOutput`), `:125` (proof payload), `:265`
-(verification payload); `tests/test_journal.py`.
-Contract: `GateOutput` has an optional `basis: str | None = None` field;
-`mutation` outputs record `"sampled n=<mutants tried>"`, `coverage` records
-`"changed-lines=<n>"`, all others `None`; old journals (no `basis` key) still
-parse and their `record_hash` is unchanged.
+Files: `src/saddle/gates.py` (`GateCheck` at ~:80, `check_changed_line_coverage`
+~:150-175, `check_mutation` ~:520-560); `src/saddle/journal.py` (`GateOutput`
+~:28, `build_from_gate` ~:378); `.gitignore` (one exception line);
+`tests/fixtures/pre-basis-proofs.jsonl` (new, generated at d944b08 — see
+below); `tests/test_gates.py`; `tests/test_journal.py` (two hand-built hash
+payloads plus two new tests); `tests/test_slice.py` (one assertion block in
+the merge-suite known-good test).
+Status 2026-09-18: done by the reviewer directly (agreed after the T2-2 and
+T2-3 stops). The text below is the shape that landed.
+Contract: `GateCheck` and `GateOutput` have an optional `basis: str | None =
+None`; the mutation check records `"sampled n=<mutants in the sample>"` on
+every branch (0 when none were decided), the coverage check records
+`"changed-lines=<n>"`; all other checks leave it `None`; `build_from_gate`
+copies it into the proof record. A journal written before the field parses
+unchanged and its sealed `record_hash` still verifies.
 Direction: **scope narrowed** (a reader can now tell a mutation verdict on
 0 mutants — the T7 "218 lines, 0 mutants, passed" case in CLAUDE.md — from
 one on 5). No verdict changes.
 Evidence: VERIFIED — CLAUDE.md "Kill percentage scales with line count";
 ACH (arXiv 2501.12862) reports mutant counts alongside kill rates, never a
-bare percentage.
+bare percentage. First draft said to parse the counts out of the detail
+strings; the coverage detail has no count and the failing mutation detail
+only carries one for small samples, so the count now travels on the check
+itself, set where it is known.
 Issue: none (supports #62/#63 discussions).
 Steps:
-1. `GateOutput`: add `basis: str | None = None` (keeps `extra="forbid"`).
-2. Where `GateCheck` → `GateOutput` is built, set `basis` for `mutation` and
-   `coverage` from the check's `detail` (the counts are already in the
-   detail string; parse with `re.fullmatch` on the exact format the check
-   emits, and stop if the format has no count).
-3. Hash: `build_proof` hashes `output.model_dump()` (journal.py:125) and
-   verification hashes `model_dump(exclude={"record_hash"}, exclude_unset=True)`
-   (journal.py:265). An old record's JSON has no `basis` key, so it is unset
-   on parse and excluded from the verification payload: old hashes still
-   verify. A new record dumps `basis` (even `None`) into the build payload
-   and reads it back as set, so build and verify agree. Add the test that
-   proves both: parse a HEAD-era journal line (copy one from
-   `../saddle-bench/runs/t7-saddle/.saddle/proofs.jsonl` into the test as a
-   string) and assert `_verified_records` accepts it; build a new record with
-   `basis` and assert it re-verifies after a write/read round trip.
-Known-good: a record with `basis="sampled n=5"` round-trips through
-`read_records`. Known-bad: a record with an unknown extra key still fails
-(`extra="forbid"` pin, exists already or add it).
-Contract mutants: 1. drop the `basis=` assignment for mutation → the
-known-good assertion on `basis` red. 2. make `basis: str = ""` (required,
-non-optional) → old-journal parse test red.
-Done when: `saddle verify` on `../saddle-bench/runs/t7-saddle/.saddle/proofs.jsonl`
-(a HEAD-era journal) still passes; mutants red.
-Stop if: journal.py:265 no longer uses `exclude_unset=True` — then old
-records would hash differently and this item needs a design decision.
+1. `GateCheck` (a dataclass): add `basis: str | None = None` last. Every
+   `check_mutation` return gets `basis=f"sampled n={outcome.total}"` (the
+   three `total == 0` branches say `"sampled n=0"`); every
+   `check_changed_line_coverage` return gets `basis=f"changed-lines={len(changed)}"`.
+2. `GateOutput`: add `basis: str | None = None` (keeps `extra="forbid"`).
+   `build_from_gate` passes `basis=check.basis`.
+3. Hash compatibility, how it holds: `build_record` hashes
+   `output.model_dump()`, which now includes `"basis": null` for every
+   output, so new records carry the key and re-read as set. Verification
+   hashes `model_dump(exclude={"record_hash"}, exclude_unset=True)`; an old
+   record's JSON has no `basis` key, so it parses unset, is excluded, and
+   the old hash matches. Two pre-existing tests in `test_journal.py` rebuild
+   the payload by hand and now include `"basis": None`.
+4. Fixture: `tests/fixtures/pre-basis-proofs.jsonl` is a journal produced by
+   the slice fixture at d944b08 (one proof record, no `basis` keys). It is
+   the known-good for the compatibility half and must never be regenerated.
+   `.gitignore` ignores `*.jsonl`; the exception `!tests/fixtures/*.jsonl` is
+   part of this item. (The benchmark journals in `../saddle-bench/runs/`
+   were the first draft's fixture; t7's has no proof records at all, and
+   the sibling checkout is outside an executor's read scope.)
+Known-good: `check_mutation` over 20 mutants → `basis == "sampled n=20"`;
+`check_changed_line_coverage` over one line → `"changed-lines=1"`; a record
+built with a basis round-trips through `append_record`/`read_records` and
+`verify_journal` reports nothing; the slice known-good's sealed record says
+`mutation: sampled n=5`, `coverage: changed-lines=1`, `tests: None`; the
+pre-basis fixture verifies, reads back with every basis `None`, and
+`rebuild_proven` returns its one node. Known-bad: `GateOutput` with an
+unknown extra key raises `ValidationError`.
+Contract mutants:
+1. `sed -i 's/basis=check.basis)/basis=None)/' src/saddle/journal.py` (ruff keeps the call on one line, hence no trailing comma) → slice known-good basis assertions red (`pytest tests/test_slice.py -k merge_suite_gate_runs_once -q --no-cov`).
+2. `sed -i 's/    basis: str | None = None/    basis: str = ""/' src/saddle/journal.py` (one hit in that file) → pre-basis fixture test red (`pytest tests/test_journal.py -k pre_basis -q --no-cov`: the field becomes required, the old record fails to parse).
+3. `sed -i '/^    percent = 100.0 \* outcome.killed/,/^def run_tier1/s/basis=f"sampled n={outcome.total}"/basis="sampled n=0"/' src/saddle/gates.py` (range-scoped: the two f-string sites sit below `percent = ...`; the three `total == 0` branches above it already read `"sampled n=0"` and an unscoped inverse would rewrite them) → `pytest tests/test_gates.py -k mutation -q --no-cov` red.
+Drop `__pycache__` after each revert (CLAUDE.md hazard 3).
+Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert): 1 KILLED (slice known-good), 2 KILLED (pre-basis fixture fails to parse), 3 KILLED (two mutation tests).
+Done when: `.venv/bin/saddle verify tests/fixtures/pre-basis-proofs.jsonl`
+reports no issues; mutants red; `./check.sh` green.
+Stop if: `grep -c 'model_dump(exclude={"record_hash"}, exclude_unset=True)' src/saddle/journal.py`
+is not 1 (the verification payload, ~:265; `exclude_unset` also appears once
+elsewhere) — then old records would hash differently and this item needs a
+design decision.
 
 ---
 
