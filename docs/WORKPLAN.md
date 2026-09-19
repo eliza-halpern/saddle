@@ -75,7 +75,26 @@ Known-bad: <instance the contract must reject>
 Contract mutants: <1–3 sed one-liners + expected red test>
 Done when: <observable condition>
 Stop if: <premise check that, if false, ends the item>
+Passing instance at HEAD: <one existing test that already walks the path this item extends> | NONE (then this is a finding item first)
+Dry run: <commit at which the author applied it and ran ./check.sh> | not run
 ```
+
+Two authoring rules, added 2026-09-18 after the stops on T2-2, T2-3 and T3-3
+(all correct stops on items written from reading alone):
+
+- **Passing instance.** An item that adds a fixture, a node kind, a gate
+  branch or a new path through the gates names one test that already passes
+  through that path at HEAD. If none exists, the item is not an item yet:
+  write the finding (as T3-7 was) and decide before anyone implements. This
+  check is a grep; it needs no run, and it would have caught T3-3's
+  unsatisfiable known-good.
+- **Dry run.** A contract change (anything with a `Direction:` other than
+  docs-only) is applied and run through `./check.sh` by the author before it
+  is handed off, and the item says at which commit; the blast radius of a
+  gate change across 500 tests is not visible from reading (T2-2: 31
+  failures, T2-3: a span kind that did not exist, both found only by
+  running). An item marked `not run` may still be handed off, but the
+  executor and the reviewer both know a stop is likely and cheap.
 
 ## 2. Sequencing
 
@@ -89,6 +108,15 @@ T2-1 ──► T2-1b (the seal-count test T2-1 left behind)
 T2-1 ──► T4-1 (a benchmark rerun with vacuous k is not worth the GPU time)
 T4-4 ──► any future D14 work (deferred)
 T4-1 ──► #61 decision
+T3-8 ──► T3-10 (the tree-snapshot helper is reused for the proven-tree ref)
+T3-9 ──► T3-10 (T3-10 adds a field to the record shape T3-9 defines)
+T3-9 ──► T3-11 (the `node_hash` filter is what drops a foreign `.r1` proof)
+T3-4 ──► T3-12, T3-15 (both edit lines T3-4 rewrites: `cli.py:128-131`, `ARCHITECTURE.md:180`)
+T3-4 is independent of T3-8, T3-13, T3-14, T3-16 (T3-4 owns `check_node_scope`/`run_tier1`; none of these edit them)
+T3-8, T3-9, T3-10 ──► T3-6 (decompose `run_slice` after the resume seed settles)
+T3-7a ──► T3-3 (the oracle runs on the impl node a red specification feeds)
+T3-7a ──► T3-12 (the planner prompt must also say a test node's tests are expected to fail)
+T3-4 ──► T3-7a's test-node fixtures (a test node that creates its test file needs `write_file`)
 ```
 Everything in Tier 0 is independent of everything else and can go in any order.
 
@@ -993,9 +1021,10 @@ localisation-then-repair; #64 records T4's wrong-module edit. Design
 choices made by running it: (1) the paths are validated by a pydantic
 `field_validator`, not a JSON-schema `pattern` — the decoder compiles a
 pattern as a full match (CLAUDE.md), and a wrong one would make every path
-unrepresentable, silently; the emitted schema therefore carries an
-unconstrained optional array and pydantic rejects bad entries post-hoc,
-which the existing invalid-emission retry already handles; (2) `touched`
+unrepresentable, silently; the emitted schema therefore carries an optional
+array of non-empty strings (`minLength: 1`, no shape rule) and pydantic
+rejects bad entries post-hoc, which the existing invalid-emission retry
+already handles; (2) `touched`
 comes from `git_changed_files` (one more `git` tool span per node, so the
 two tool-span pins moved again) rather than from `changed_lines`, which
 only sees Python statement lines.
@@ -1019,71 +1048,72 @@ Contract mutants (each target occurs once in its file; drop `__pycache__` after 
 Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert, caches dropped): 1 KILLED, 2 KILLED (`../n.py` and `src/../n.py` accepted), 3 KILLED.
 Done when: mutants red; `./check.sh` green — 544 passed at commit time.
 
-### T3-3 — Property coverage becomes an oracle (issue #62)
-Decision 2026-09-18: build the oracle (option b). A presence check that a
-`@given` exists pins nothing; a gate this project keeps must be able to
-fail for the reason it reports.
-Files: `src/saddle/gates.py` (`check_property_coverage` ~:353-380 gains an
-`oracle: MutationOutcome | None` parameter; `_has_property` ~:306 stays as
-the first half); `src/saddle/evidence.py` (new `property_targets`; `mutation_sample`
-~:385 is reused unchanged; `statement_lines` ~:501); `src/saddle/runner.py`
-(runs the oracle for `test` nodes; `Tier1Inputs.property_oracle`);
-`src/saddle/gates.py` `Tier1Inputs` (~:528, new field, default `None`) and the
-`check_property_coverage(...)` call in `run_tier1`; `docs/ARCHITECTURE.md:182`
-(Tier-1 item 8); `tests/test_gates.py`, `tests/test_evidence.py`,
-`tests/test_runner.py`.
-Contract: for a `test` node, `property-coverage` passes only if (1) at least
-one of the node's test modules drives a hypothesis property (today's
-check) **and** (2) the property-bearing test modules, run alone as the test
-set, kill at least one mutant sampled from the modules those tests import
-from the workdir. Any other kind is not required, as today. The check's
-`basis` records `oracle: killed k of n mutant(s) in <module>`; a `test`
-node whose oracle did not run fails ("property oracle did not run").
-Direction: **tightened** (a `@given` over a function that asserts nothing
-discriminating no longer passes; F1's `.u@example.com` regex would have
-been caught by a property that mutation could not fool).
-Evidence: VERIFIED — F1 (7/7 green gates over a regex accepting
-`user@example..com`); CLAUDE.md "contract mutants, not kill percentage" —
-a property is adequate when it kills, which is the same standard the
-mutation gate applies to example tests. PUBLISHED — ACH (arXiv
-2501.12862) uses mutant kills as the acceptance test for generated tests.
-Issue: #62 (closes it if the oracle lands; comment the decision first).
+### T3-3 — Property coverage becomes an oracle on the `impl` node (issue #62)
+Decision 2026-09-18: build the oracle (option b), placed per T3-7 option A.
+Requires T3-7a (a `test` node can pass) and T2-4 (`basis`, landed).
+Files: `src/saddle/gates.py` (`check_property_coverage` ~:353-380: keeps
+the presence half for `test` nodes, gains an `oracle: MutationOutcome | None`
+half for `impl` nodes; `_has_property` ~:306 stays; `Tier1Inputs` ~:528:
+`property_oracle: MutationOutcome | None = None`; the call in `run_tier1`);
+`src/saddle/evidence.py` (new `property_modules(test_sources, changed_files)`
+beside `mutation_sample` ~:385; `statement_lines` ~:501 unused here — the
+mutants come from the node's own `changed` set); `src/saddle/runner.py`
+(~:188-212: a second `mutation_sample` for `impl` nodes whose changed files
+are imported by a property-bearing test module, with `test_files` =
+those modules only); `docs/ARCHITECTURE.md:182` (item 8); `tests/test_gates.py`,
+`tests/test_evidence.py`, `tests/test_runner.py` (the T3-7a fixtures).
+Contract: `property-coverage` has two halves by kind. `test` node: at least
+one of its test modules drives a hypothesis property (today's check; the
+red specification must include a property). `impl` node: if any
+property-bearing test module in the workdir imports one of the node's
+changed modules, those modules alone, as the test set, must kill at least
+one mutant of the node's changed lines (the same `changed` set the
+mutation gate sampled); the check records `basis="oracle: killed k of n
+mutant(s) by <module>"`; if no property module imports the changed
+modules it passes "not required: no property targets this change" with
+`basis=None`; an oracle that did not run when it should have fails.
+`refactor`: not required, as today.
+Direction: **tightened** (a `@given` written by the test node that cannot
+discriminate on the implementation now fails the `impl` node that
+implemented it; F1's regex would have been caught here, at the node that
+shipped it).
+Evidence: VERIFIED — F1; CLAUDE.md "contract mutants"; PUBLISHED — ACH
+(arXiv 2501.12862) accepts a generated test only when it kills. Placement
+by T3-7: a property run at the `test` node fails on the unmutated
+baseline too (the implementation is not there yet), so every kill would
+be vacuous; at the `impl` node the code exists and a kill means
+discrimination.
+Issue: #62 (closes it when landed; comment first — T3-5 carries the draft).
 Steps:
-1. `evidence.py`: `property_targets(workdir: Path, test_sources: Mapping[str, str]) -> set[tuple[str, int]]`:
-   for each test module where `_has_property` is true (move `_has_property`
-   to `evidence.py` or import it under `TYPE_CHECKING`-safe layering —
-   `gates` must not import `evidence` at runtime; put the AST walk in
-   `evidence.py` and have `gates.py` keep a thin `_has_property` that calls
-   nothing from evidence), parse `import x` / `from x import ...`, keep
-   names that resolve to `<workdir>/<x>.py` or `<workdir>/<x>/__init__.py`
-   (stdlib and hypothesis fall out because they do not exist there), and
-   return `{(str(workdir / rel), line) for line in statement_lines(source)}`
-   for each — the same shape `mutation_sample` takes as `changed`.
-2. `runner.py`: for `node.kind == "test"`, `oracle = mutation_sample(workdir,
-   property_targets(workdir, test_sources), sample.max_mutants,
-   test_files={paths of the property-bearing modules only}, recorder=recorder)`;
-   otherwise `None`. This is a second mutmut run per `test` node, capped by
-   the node's `max_mutants` and the existing timeout; example tests are
-   excluded from the oracle's test set on purpose — the property must kill
-   alone.
-3. `gates.py`: `check_property_coverage(kind, test_sources, oracle)`: the
-   presence branch as today; then `oracle is None` → fail "property oracle
-   did not run"; `oracle.total == 0` → fail "no mutants generated in the
-   property's target module(s)"; `oracle.killed == 0` → fail
-   "property killed 0 of n mutant(s): no discriminating power"; else pass
-   with `basis=f"oracle: killed {k} of {n} mutant(s)"`.
-4. ARCHITECTURE item 8: "The node's property tests must kill at least one
-   sampled mutant of the module they import; a property that exists but
-   discriminates nothing fails."
-Known-good: unit — `check_property_coverage("test", {"tests/test_p.py": <@given source>}, MutationOutcome(killed=3, total=5, generated=5, survivors=("m4","m5")))` passes with the basis; evidence — `property_targets` on a module with `from n import f` and `import os` returns exactly `n.py`'s statement lines; runner end-to-end — a `test` node whose new test file carries `@given(st.integers())` over `f`, with the conftest stub (5 killed at n.py:2), passes and its record's `property-coverage` basis reads `oracle: killed 5 of 5 mutant(s)`.
-Known-bad: unit — `killed=0, total=5` fails naming 0 of 5; `total=0` fails; `None` fails; `impl`/`refactor` still "not required"; runner end-to-end — same node with a `PATH` stub built by `tests/test_evidence.py::_stub_mutmut` (~:392) reporting `m1..m5: survived` fails `property-coverage` and no other gate (model on `test_mutation_sample_timeout_yields_undecided` ~:551 for the PATH override).
-Contract mutants (`pytest tests/test_gates.py tests/test_runner.py -k property -q --no-cov`):
-1. `if oracle.killed == 0:` → `if False:` in `gates.py` → unit known-bad red.
-2. runner passes `property_oracle=None` for `test` nodes → end-to-end known-good red ("did not run").
-3. `property_targets` returns `set()` → end-to-end known-good red ("no mutants generated").
-Write the exact `sed` lines when the code exists; each target must occur once (`grep -c`) or be range-scoped; drop `__pycache__` after each revert.
-Done when: mutants red; `./check.sh` green; a `test`-node fixture exists in `tests/test_runner.py` (today every fixture there is `impl` or `refactor`).
-Stop if: `mutation_sample`'s signature is not `(workdir, changed, max_mutants, *, test_files, timeout_s, recorder)`, or `gates.py` would need a runtime import from `evidence.py`.
+1. `evidence.py`: `property_modules(test_sources, changed_files) -> dict[str, str]`:
+   the subset of `test_sources` whose AST has a `@given` decorator and
+   whose `import x` / `from x import` names resolve to a path in
+   `changed_files` (compare module name to the changed file's stem /
+   package path). Put the `@given` walk in `evidence.py`; `gates.py` keeps
+   its own `_has_property` (no runtime import from `evidence`).
+2. `runner.py`, `impl` nodes only, after the existing `mutation_sample`:
+   `targets = property_modules(test_sources, changed_files)`; if `targets`:
+   `oracle = mutation_sample(workdir, changed, sample.max_mutants, test_files=set(targets), recorder=recorder)`
+   else `None`; pass `property_oracle=oracle` and also `property_targets=tuple(targets)`
+   (so the check can tell "no targets" from "did not run").
+3. `check_property_coverage(kind, test_sources, *, oracle=None, targets=())`:
+   `test` → presence as today; `impl` → no `targets` → pass "not required";
+   `targets` and `oracle is None` → fail "property oracle did not run";
+   `oracle.total == 0` → fail "no mutants sampled for the property oracle";
+   `oracle.killed == 0` → fail "property killed 0 of n mutant(s): no
+   discriminating power"; else pass with the basis. `refactor` → not required.
+4. ARCHITECTURE item 8: "A test node must state a property; the impl node
+   that implements it must show the property alone kills a sampled mutant."
+Known-good: unit — `check_property_coverage("impl", {...}, oracle=MutationOutcome(killed=3, total=5, generated=5, survivors=("m4","m5")), targets=("test_n.py",))` passes with the basis; `("impl", {...}, targets=())` passes "not required"; evidence — `property_modules({"test_n.py": <@given, from n import f>, "test_x.py": <@given, import os>}, [".../n.py"])` returns only `test_n.py`; runner end-to-end — T3-7a's `impl` fixture with a property-bearing `test_n.py` and the conftest stub (5 killed) passes with `basis == "oracle: killed 5 of 5 mutant(s) by test_n.py"`.
+Known-bad: unit — `killed=0` fails naming 0 of n; `total=0` fails; `targets` non-empty with `oracle=None` fails "did not run"; `refactor` "not required"; runner end-to-end — the same `impl` fixture with a `PATH` stub built by `tests/test_evidence.py::_stub_mutmut` (~:392) reporting `m1..m5: survived` fails `property-coverage` and no other gate (the main mutation gate reads the conftest stub's 5 kills only if the survivor stub is scoped to the second call — simplest: make the survivor stub answer `results` with survivors on every call, and assert the failing set is exactly `{"mutation", "property-coverage"}`; state which in the test's docstring).
+Contract mutants (write the exact seds when the code exists; unique targets or range-scoped; drop `__pycache__` after each revert):
+1. `if oracle.killed == 0:` → `if False:` → unit known-bad red.
+2. runner passes `property_oracle=None` while passing `property_targets` → end-to-end known-good red ("did not run").
+3. `property_modules` returns `{}` → end-to-end known-good red ("not required" where the basis was expected).
+Done when: mutants red; `./check.sh` green; the T3-7a slice test (`t1` then `n1`) still passes with `n1`'s record carrying the oracle basis.
+Stop if: T3-7a has not landed, or `mutation_sample`'s signature is not `(workdir, changed, max_mutants, *, test_files, timeout_s, recorder)`.
+Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` mutation path the oracle re-runs with a narrower test set); the property half has NONE until T3-7a's fixture exists.
+Dry run: not run.
 
 ### T3-4 — Bind `allowed_tools` to harness behaviour (RUN_ALLOWLIST stops being decorative)
 Decision 2026-09-18: neither keep-as-documentation nor delete. Each tool
@@ -1199,6 +1229,653 @@ the merge gate (T2-3), sealing and the verdict inline. Split into
 `_schedule_until_done`, `_merge_gate`, `_seal_run`.
 Pure refactor: the existing `tests/test_slice.py` is the oracle; no new
 tests; no mutants; commit labelled "refactor, no contract change".
+
+### T3-7 — A `test`-kind node cannot pass Tier-1 (finding; decision needed)
+Files: none to edit until decided. Read `src/saddle/gates.py`
+(`check_tests` ~:120-140, `check_red_phase` ~:230-300, `check_mutation`
+~:560-600, `check_node_scope` ~:443), `src/saddle/evidence.py`
+(`mutation_sample` ~:385-450, the `test_files` exclusion ~:411),
+`docs/ARCHITECTURE.md:180` (Node-Scope) and the DAG kind docstring in
+`src/saddle/dag.py` (~:101-110).
+Finding (VERIFIED 2026-09-18 by the first T3-3 session, confirmed by the
+reviewer): the `test`/`impl` split (F5, #44) is enforced by node-scope, but
+the Tier-1 path a `test` node must walk cannot end green:
+- `check_tests` requires the node's `test_command` to exit 0 for every kind;
+  a `test` node writes tests for behaviour that does not exist yet, so its
+  tests fail — or, if they pass, they prove nothing.
+- `check_red_phase` has no branch a `test` node can satisfy: it changes no
+  source, so its tests behave identically on the baseline leg and the
+  current leg; "fail pre-change, pass post-change" is impossible, and the
+  behaviour-preserved branch is `refactor`-only (`gates.py:267`).
+- `check_mutation`: the node's changed lines are all in test files, which
+  `mutation_sample` excludes from the mutant scope by design, so
+  `total == 0` and every such branch fails.
+Consequently every end-to-end fixture in the suite is `impl` or `refactor`;
+no `test`-kind node has ever been run through the gates (`grep -rn
+'"kind": "test"' tests/` finds only unit tests of single checks), and the
+planner has never been told it may not emit one. A DAG that follows the
+split as documented cannot run.
+Options (user's choice; each is its own tightened/loosened contract with
+known-good and known-bad):
+- **(A) `test` node = red specification.** For kind `test`: `check_tests`
+  passes when the command exits `PYTEST_TESTS_FAILED` (1) with at least one
+  test collected and failing, and fails on 0 (nothing specified) or on
+  collection errors that name no source the dependent impl will create;
+  `check_red_phase` for a `test` node is satisfied by that same red run
+  (the pre-change leg *is* the current leg); `check_mutation` and coverage
+  are "not required: no source changed" with `basis="test node"`; T3-3's
+  property oracle moves to the **impl** node that depends on it — after
+  the impl's own mutation gate, run the sampled mutants again with only the
+  property-bearing test modules as the test set and require ≥1 kill, so the
+  property is shown to discriminate on the code that now exists. The
+  dependent `impl` node's tests gate already requires green, which is the
+  other half of red-then-green. Direction: loosened for `test` nodes (three
+  checks that could only fail now have a satisfiable contract), tightened
+  for `impl` nodes with properties (the oracle).
+- **(B) Drop the `test` kind.** Keep `impl` (may not touch tests) and
+  `refactor` (both sides, no new files); tests are written by... nobody in
+  the DAG, which contradicts F5/#44's whole point. Listed for completeness;
+  not recommended.
+- **(C) Merge test+impl into one node kind with a two-phase gate.** The
+  node's diff carries tests and implementation; the harness applies the
+  test files first, runs the command (must be red), then applies the rest
+  (must be green). Direction: replaces node-scope's split with an in-node
+  ordering. Bigger change; loses the independent second look that the split
+  exists to provide.
+Recommendation: (A). It is what ARCHITECTURE's Node-Scope text already
+implies, it needs no schema change, and it gives T3-3's oracle the node
+where it means something.
+**Decision 2026-09-18: (A).** Implemented by T3-7a; T3-3 is rewritten
+against it below. Still to do for this item: the comment on #62/#44.
+Done when: the comment is posted (T3-5 carries the draft).
+Stop if: n/a (decision item).
+Passing instance at HEAD: NONE for the `test`-node path — that is the finding.
+Dry run: n/a (decision item).
+
+### T3-7a — A `test` node is a red specification (implements T3-7 option A)
+Files: `src/saddle/gates.py` (`check_tests` ~:120-140: a `kind` branch;
+`check_red_phase` ~:230-300: a `test`-kind branch before the sampling
+logic; `check_changed_line_coverage` ~:150-175 and `check_mutation`
+~:560-600 are unchanged — `run_tier1` ~:615 substitutes a "not required"
+`GateCheck` for `test` nodes before calling them); `src/saddle/runner.py`
+(~:126-175: skip the coverage data file, the baseline samples and
+`mutation_sample` for `test` nodes; still run the suite once and capture
+it); `src/saddle/cli.py` (`build_emit_prompt` ~:110: one sentence: a `test`
+node's tests are expected to fail until the `impl` node that depends on it
+lands); `docs/ARCHITECTURE.md:176-183` (items 2, 3, 4, 10 gain the
+`test`-node clause); `tests/test_gates.py` (three unit tests + the order
+pins unchanged); `tests/test_runner.py` (the first end-to-end `test`-node
+fixture: `_node(kind="test")`, `_worktree(..., baseline_code=fixed_code)`
+so the source is untouched and a new failing test file is the diff — needs
+`write_file` once T3-4 lands; until then the fixture is a `test` node
+creating a test file, which node-scope allows for that kind);
+`tests/test_slice.py` (one two-node slice: `test` node `t1` then `impl`
+node `n1` depending on it; `_slice_repo` without `test_n.py` at baseline
+for this test only).
+Contract: for `kind == "test"`: (1) `tests` passes when the node's
+`test_command` exits `PYTEST_TESTS_FAILED` with at least one test
+collected ("red specification: N failing test(s)"), or exits
+`PYTEST_COLLECTION_ERROR` whose output names a module that does not exist
+in the workdir (the greenfield spec: the `impl` node will create it); it
+fails on exit 0 ("tests pass against the current code: nothing
+specified"), on 0 collected, on a timeout, and on any other exit. (2)
+`red-phase` for a `test` node is the same observation: it passes iff (1)
+passed ("red by construction: the specification fails now"), with no
+baseline leg. (3) `coverage` and `mutation` for a `test` node are "not
+required: no source changed", `basis="test node"`. Every other kind is
+unchanged: an `impl` node still needs exit 0, the differential red-phase,
+coverage and mutation. The `impl` node that depends on a `test` node is
+gated as today; its tests gate turning green is the other half of
+red-then-green.
+Direction: **loosened** for `test` nodes, with proof — T3-7 shows the
+contract rejected every legitimate `test` node, so the split ARCHITECTURE
+documents was unexecutable; **tightened** in one place — a `test` node
+whose tests already pass now fails (it specified nothing), where before it
+failed for the wrong reason (mutation) and the reason was invisible.
+Evidence: VERIFIED — T3-7 (three gates, none passable); `check_red_phase`'s
+own docstring already says an `impl` node's "tests were written by the
+test node it depends on and already fail at its baseline", i.e. the
+design assumes a red spec exists; `_names_changed_source` ~:300 is the
+existing greenfield rule to mirror for the collection-error case.
+Issue: #44 (the split), #62 (property presence stays on the `test` node).
+Steps:
+1. `check_tests(test_command, exit_code, *, kind="impl", collected: int | None = None, output: str = "", workdir_modules: Collection[str] = ())`
+   — keep the old signature working for every existing caller by
+   defaulting `kind`; the `test` branch as in the contract. The runner
+   already captures the suite (`run_shell_capture` ~:129); parse the
+   collected count from pytest's summary line, and pass the workdir's
+   module names (`sources.keys()` without `.py`) for the greenfield rule.
+2. `check_red_phase`: first lines: `if kind == "test": return <mirror of the tests verdict>` — pass iff the tests check passed; detail "red by construction".
+3. `run_tier1`: for `test` nodes replace the coverage and mutation entries with `GateCheck(name=..., passed=True, detail="not required: no source changed", basis="test node")`; the order pin stays eleven names.
+4. `runner.py`: branch on `node.kind == "test"` to skip `covered_lines`, the baseline loop and `mutation_sample`; `Tier1Inputs` gets `covered=set()`, `baseline_exits=()`, `mutation=MutationOutcome(0, 0, 0, ())` for that kind (values the substituted checks never read).
+5. Prompt sentence and ARCHITECTURE clauses.
+Known-good: unit — `check_tests("pytest test_n.py", 1, kind="test", collected=1)` passes with the red-spec detail; `check_tests("pytest test_n.py", 2, kind="test", collected=0, output="ModuleNotFoundError: No module named 'm'", workdir_modules={"n"})` passes (greenfield); runner end-to-end — a `test` node whose new `test_n.py` asserts `f() == 2` against `n.py` returning 1 passes all eleven checks, with `tests`, `red-phase` reading red-spec, `coverage`/`mutation` "not required", `property-coverage` passing because the file also carries a `@given`; slice end-to-end — `t1` (test) then `n1` (impl, `GOOD_DIFF`'s `n.py` hunk only) both prove and the run reads `2 proven, 0 failed, 0 undispatched, merge exit 0`.
+Known-bad: unit — `check_tests(..., 0, kind="test", collected=1)` fails "nothing specified"; `(..., 1, kind="test", collected=0)` fails; `(..., 2, kind="test", output="ModuleNotFoundError: No module named 'n'", workdir_modules={"n"})` fails (the module exists: a real collection error); `check_tests(..., 1)` with the default kind still fails as today; runner end-to-end — a `test` node whose test asserts `f() == 1` (already true) fails only `tests` and `red-phase`.
+Contract mutants (write the exact seds when the code exists; unique targets or range-scoped; drop `__pycache__` after each revert):
+1. the `test`-kind branch of `check_tests` accepts exit 0 → known-bad "nothing specified" red.
+2. `check_red_phase`'s `test` branch returns pass unconditionally → the runner known-bad (`f() == 1`) red on red-phase count.
+3. `run_tier1` substitutes "not required" for every kind, not only `test` → `test_run_tier1_all_green_passes`'s coverage detail pin red.
+Done when: mutants red; `./check.sh` green; `grep -rn 'kind="test"' tests/test_runner.py tests/test_slice.py` finds the two fixtures.
+Stop if: `check_tests`'s signature at HEAD is not `(test_command, exit_code)` (~:120), or pytest's summary line is not parseable for the collected count with `--no-cov -q` (then count collected tests from `-rA` output instead and say so here).
+Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` path this must leave untouched); NONE for the `test` path, by T3-7.
+Dry run: not run.
+
+**Audit 2026-09-18 (post T3-2), items T3-8 – T3-16.** An audit of the T2-2,
+T3-1 (`295fbd0`) and T3-2 (`a6c1a68`) changes found nine things no later
+item covers (T3-7 above is a separate finding from the T3-3 session).
+Ranked: **Major** — T3-8 (every node after the first is gated
+against `HEAD`, not its own baseline), T3-9 (a proof record names neither
+the task nor the node it proves), T3-10 (resume trusts the journal and never
+looks at the worktree); **Medium** — T3-11 (replacement ids across resume),
+T3-12 (the planner prompt contradicts the gates), T3-13 (`target_files`
+admits spellings the gate can never match); **Minor** — T3-14 (rename case
+untested), T3-15 (docs drift), T3-16 (three consistency fixes). Anchors are
+as of `4b25506`. T3-4 owns `check_node_scope` and `run_tier1`; nothing
+below edits them.
+
+### T3-8 — Gate every node against its own baseline, not `HEAD` (Major)
+Files: `src/saddle/evidence.py` (new `snapshot_baseline` beside
+`git_added_files` ~:256, recorded through `_record` ~:41 like its
+neighbours); `src/saddle/slice.py` (`_run_node` ~:336: the snapshot in
+attempt 1; `autofix(workdir, recorder=recorder)` ~:401 and
+`run_node_gate(node, workdir, recorder=recorder, capture=captured)` ~:403
+gain `baseline=`; `_evaluate_candidate` ~:262 and its
+`run_node_gate(node, candidate)` ~:289 gain a `baseline` parameter;
+`_best_of_samples` ~:293 threads it); `src/saddle/runner.py` (no change:
+`run_node_gate(..., baseline="HEAD")` ~:101 already takes the ref);
+`tests/test_evidence.py` (helper tests beside `_git_repo` ~:42);
+`tests/test_slice.py` (two-node test beside `_slice_repo` ~:87 /
+`GOOD_DIFF` ~:103; the span pin in
+`test_run_slice_propose_error_seals_worker_span` ~:733 moves if it counts
+`git` spans — `tests/test_runner.py::test_run_node_gate_records_tool_spans`
+~:143 does not, the runner's own span list is unchanged).
+Contract: every gate run for a node — `autofix` scoping, `run_node_gate` in
+place, `_evaluate_candidate` on a copy — diffs against a snapshot of the
+worktree taken in that node's first attempt before any proposal is drawn,
+never against `HEAD`. The snapshot is a commit object at
+`refs/saddle/baseline/<slug>` (`<slug>` is the node id when
+`git check-ref-format refs/saddle/baseline/<id>` accepts it, else the
+first 16 hex of the id's sha256), built as `git add -u -- .` (tracked
+files only, so `.coverage.tier1` and `__pycache__` stay out),
+`git write-tree`, `git commit-tree <tree> -p HEAD -m "saddle baseline <id>"`,
+`git update-ref <ref> <commit>`. `HEAD`, every branch and the index's
+tracked set are untouched. A node's coverage, red-phase, node-scope,
+target-scope and mutation sample therefore see only that node's own diff;
+a single-node slice is gated exactly as before (its snapshot tree is
+`HEAD`'s tree).
+Direction: **scope narrowed**, with proof. The probe below rejects a
+legitimate input: node `n2`, `target_files=["m.py"]`, whose diff touches
+only `m.py`, fails `target-scope: FAIL (touched file(s) outside
+target_files: n.py)`, `coverage: FAIL (0.0% < 100.0%: uncovered .../n.py:2)`
+and `red-phase: FAIL`, because `n1`'s proven edit to `n.py` is still staged
+when `n2` runs (2026-09-18, scratch run of the fixture in step 4). No gate
+accepts anything it rejected correctly before.
+Evidence: VERIFIED — `_run_node` applies, autofixes, gates and seals but
+never commits (~:395-412), so `git` sees every proven node's edit as
+staged; `run_node_gate` defaults `baseline="HEAD"` (runner.py ~:101) and
+all three callers in `slice.py` take the default (~:289, ~:401, ~:403).
+The snapshot shape was verified in a scratch repo: after `write-tree` /
+`commit-tree -p HEAD` / `update-ref`, `git diff --name-only <ref>`,
+`git diff --no-renames --diff-filter=A --name-only <ref>` and
+`git archive <ref>` all resolve, with `git rev-parse HEAD` and
+`git status --porcelain` unchanged. `_evaluate_candidate` copies `.git`
+(~:280), so the ref resolves in the candidate tree too.
+Issue: none — open one: "Every node after the first is gated against HEAD,
+not its own baseline", quoting the probe output; cross-reference #64
+(target-scope is what makes the pollution visible).
+Steps:
+1. `snapshot_baseline(cwd: Path, node_id: str, *, recorder=None) -> str`
+   in `evidence.py`: the four `git` runs above through `_record`; raise
+   `RuntimeError` naming the failing argv on a non-zero exit; the last
+   line is `    return ref` (mutant 1 targets it). `_ref_slug(node_id)`
+   beside it.
+2. `_run_node`: `baseline: str | None = None` before the loop (~:357);
+   inside the `attempt == 1` branch (~:371), before `_best_of_samples`,
+   `baseline = snapshot_baseline(workdir, node.id, recorder=recorder)` —
+   under that attempt's recorder so the spans link to a sealed attempt
+   (`_evaluate_candidate`'s docstring explains why an orphan span is
+   unacceptable). Attempts 2..N keep the same ref: a recovery diff lands on
+   the previous attempt's tree and the proof is the accumulated diff
+   (`"\n".join(applied)` ~:407).
+3. Pass `baseline=baseline` to `autofix` ~:401 and `run_node_gate` ~:403;
+   give `_best_of_samples` and `_evaluate_candidate` a `baseline: str`
+   parameter and call `run_node_gate(node, candidate, baseline=baseline)`
+   (keep that spelling, mutant 3 targets it).
+4. Fixture for the slice test: `_slice_repo` plus `m.py`
+   (`def g():\n    return 1\n`) and `test_m.py` (`from m import g\n\n\ndef
+   test_g():  # REQ-002\n    assert g() == 2\n`) committed at baseline;
+   `n1` = `_node_dict("n1", [])` with `GOOD_DIFF`; `n2` = `_node_dict("n2",
+   ["n1"])` with `test_command="pytest test_m.py"`, `target_files=["m.py"]`
+   and `GOOD_DIFF` rewritten for `m.py`/`g`. Both nodes declare `REQ-001`
+   and `REQ-002`: requirement-binding is suite-granular (runner.py
+   ~:110-112 — every discovered test source counts once the suite flips),
+   so the `REQ-002` tag in `test_m.py` is "cited" for `n1` too, and a
+   fixture that declares it on `n2` only fails `n1` with "undeclared
+   requirements cited: REQ-002" (the probe did exactly this first). The
+   proposer dispatches on `node.id` and records each call.
+Known-good: (a) the two-node slice passes with both nodes proven, the run
+span reads `2 proven, 0 failed, 0 undispatched, merge exit 0`, and the
+proposer was called once for `n2`; (b) every existing single-node
+`tests/test_slice.py` case passes unchanged; (c) `snapshot_baseline` on a
+repo with a staged new file and an unstaged edit to a tracked file:
+`git diff --name-only <ref>` is empty, `git archive <ref>` carries both
+files at worktree content, `git rev-parse HEAD` is unchanged; (d) a node
+id `git check-ref-format` rejects (`"a b"`) still gets a resolvable ref.
+Known-bad: (e) an `n2` whose diff also edits `n.py` fails `target-scope`
+naming `n.py` — the gate still sees the node's own stray, just not `n1`'s;
+(f) an untracked `.coverage.tier1` in the worktree is absent from
+`git archive <ref>`; (g) `snapshot_baseline` on a directory that is not a
+repo raises `RuntimeError` naming `git write-tree`.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/^    return ref$/    return "HEAD"/' src/saddle/evidence.py` → `pytest tests/test_slice.py -k two_nodes -q --no-cov` red (`n2` fails `target-scope` naming `n.py` again).
+2. `sed -i 's/"add", "-u", "--", "."/"add", "-A", "--", "."/' src/saddle/evidence.py` → `pytest tests/test_evidence.py -k snapshot -q --no-cov` red (the untracked file lands in the archive).
+3. `sed -i 's/run_node_gate(node, candidate, baseline=baseline)/run_node_gate(node, candidate)/' src/saddle/slice.py` → `pytest tests/test_slice.py -k two_nodes -q --no-cov` red: the first sample scores `target-scope` red against `HEAD`, so `_best_of_samples` never takes its `failures == 0` exit (~:319) and draws all three, and known-good (a)'s call count for `n2` is 3, not 1.
+Done when: mutants red; `./check.sh` green; `git for-each-ref refs/saddle/`
+after the two-node test lists two refs.
+Stop if: `_run_node` already commits between nodes on this branch (it does
+not at `4b25506`), or `git diff --name-only <ref>` fails to list a staged
+new file (it lists it: tracked-ness comes from the index, not the ref).
+Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs`
+(two nodes through `run_slice` and `_run_node` across two runs) and
+`test_run_node_gate_target_files_binds_end_to_end` (the `target-scope` path).
+Dry run: not run (the probe fixture was run in a scratch copy at `4b25506`, not the fix).
+
+### T3-9 — A proof record names the task and the node it proves (Major)
+Files: `src/saddle/journal.py` (`ProofRecord` ~:41: four new fields;
+`build_record` ~:112: parameters and payload; `build_from_gate` ~:383:
+computes and passes them; new `proven_records(path) -> dict[str,
+ProofRecord]` beside `rebuild_proven` ~:341, which keeps its contract —
+`test_rebuild_proven_maps_nodes_to_hashes` ~:299 is the pin);
+`src/saddle/slice.py` (`run_slice` ~:597: the seed; `_run_node` ~:406:
+passes `task_hash` to `build_from_gate`; `run_slice` already receives
+`task` ~:571); `src/saddle/transcript.py` (`render_journal_transcript`
+~:138: show `kind` and `target_files` when set — optional);
+`tests/test_journal.py` (beside `test_pre_basis_journal_still_verifies`
+~:147); `tests/test_slice.py` (beside the resume tests ~:1226-1284).
+Contract: every proof record carries `task_hash` (sha256 of the `task`
+string `run_slice` received), `node_hash` (sha256 of
+`node.model_dump_json()` for the node as validated — the original,
+not the dependency-stripped scheduler copy the `worker` closure ~:606
+already swaps out), and readable `kind` and `target_files`, all inside
+the hashed payload. On resume, `run_slice` reuses a journal proof for
+node id `X` only when the record's `node_hash` equals the current DAG's
+`X` and its `task_hash` equals the current task's. A candidate record
+whose non-empty `task_hash` differs from the current task's raises
+`ValueError` before any node runs, naming both hashes and pointing at
+`--journal` (cli.py ~:620) for a fresh path; a record whose node changed,
+or that predates these fields, is not reused and the node is scheduled
+again. When the journal held any proof, the seed's outcome is sealed as
+one agent span named `resume` under the run span (`detail`: `reused n1;
+dropped n2 (node changed)`) so `saddle tail` and the transcript show what
+resume did; `is_run_end` (transcript.py ~:70) matches `run` only, so tail
+keeps following.
+Direction: **tightened** (T3-1 loosened the refusal; this binds what it
+lets through to the task and node it was sealed for). Old journals still
+verify: the fields default to `""`/`[]`, verification hashes with
+`exclude_unset=True` (journal.py ~:270) and
+`test_pre_basis_journal_still_verifies` is the pin.
+Evidence: VERIFIED by reading — `ProofRecord` ~:41-53 holds `node_id`,
+`diff_hash`, `parent_proofs`, `gate_outputs`, `requirement_ids`,
+`thinking`, `attempts` and nothing that names the task or the node's
+content; `run_slice` ~:597 seeds `proofs = rebuild_proven(journal_path)`
+with no comparison, so a journal from task A run against task B's DAG
+counts every same-id node as proven and never schedules it, and the CLI
+default journal is per repo (cli.py ~:720), so that is the default flow
+for a second task. Write known-bad (a) first and watch it pass (the
+defect) before changing anything.
+Issue: none — open one: "Resume reuses proofs across tasks and node edits";
+T3-10 is its second half.
+Steps:
+1. `ProofRecord`: `task_hash: str = ""`, `node_hash: str = ""`, `kind: str =
+   ""`, `target_files: list[str] = Field(default_factory=list)`.
+2. `build_record`: keyword parameters with the same defaults, written into
+   `payload` after `"attempts"` — the hash covers them.
+3. `build_from_gate(node, ..., task_hash: str = "")`: `node_hash =
+   hashlib.sha256(node.model_dump_json().encode()).hexdigest()`,
+   `kind=node.kind`, `target_files=list(node.target_files)`.
+4. `journal.proven_records(path)`: last verified record per node id, same
+   corruption policy as `rebuild_proven` (share `_verified_records` ~:335).
+5. `run_slice`: `task_hash = hashlib.sha256(task.encode()).hexdigest()`;
+   `expected = {node.id: <node_hash> for node in dag.nodes}`; seed `proofs`
+   from `proven_records` with the two predicates spelled
+   `record.node_hash == expected.get(record.node_id)` and
+   `record.task_hash and record.task_hash != task_hash` (mutants 2 and 3
+   target these); the `resume` span via `append_span`/`build_span` with
+   `parent_id=run_span_id` like `merge-suite` ~:650.
+Known-good: `_first_run` then the T3-1 resume test unchanged (same task,
+same `n1` → reused, not re-proposed) and a `resume` span with detail
+`reused n1`; a record built by `build_from_gate` has 64-hex `task_hash`
+and `node_hash` and `kind == "impl"`; `test_pre_basis_journal_still_verifies`
+still passes; `saddle verify` on a journal written before this item still
+prints `chain verifies`.
+Known-bad: (a) `_first_run` with task `"Fix f."`, then `run_slice("Fix g.",
+...)` on the same journal → `ValueError` naming both task hashes, no
+proposer call; (b) `_first_run`, then the same task with `n1`'s
+`task_prompt` changed → `n1` is proposed again, the journal gains a second
+`n1` record with a different `node_hash`, the `resume` span reads
+`dropped n1 (node changed)`; (c) a sealed record with `task_hash` altered
+via `model_copy` fails `verify_journal` (the field is inside the hash).
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/        "task_hash": task_hash,/        "task_hash": "",/' src/saddle/journal.py` → `pytest tests/test_journal.py -k task_hash -q --no-cov` red (the record no longer carries the task; (c) stops firing).
+2. `sed -i 's/record.node_hash == expected.get(record.node_id)/True/' src/saddle/slice.py` → `pytest tests/test_slice.py -k node_changed -q --no-cov` red (the edited `n1` is reused).
+3. `sed -i 's/record.task_hash and record.task_hash != task_hash/False/' src/saddle/slice.py` → `pytest tests/test_slice.py -k different_task -q --no-cov` red (task B resumes on task A's journal).
+Done when: mutants red; `./check.sh` green.
+Stop if: `model_dump_json()` for the same node differs across the pydantic
+pinned in the lock file and its next minor (pin one hash in a test and
+check it survives `uv sync`); then hash `json.dumps(node.model_dump(mode="json"),
+sort_keys=True)` instead.
+Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs`
+(the seed path) and `test_pre_basis_journal_still_verifies` (the compat path).
+Dry run: not run.
+
+### T3-10 — Resume checks the worktree it resumes onto (Major)
+Files: `src/saddle/evidence.py` (T3-8's helper generalised to
+`snapshot_tree(cwd, ref, *, recorder)`; `snapshot_baseline` calls it);
+`src/saddle/journal.py` (`ProofRecord`/`build_record`/`build_from_gate`:
+`tree_hash: str = ""`, as T3-9's steps 1-3); `src/saddle/slice.py`
+(`_run_node` ~:404: the snapshot after `if result.passed:` and before
+`build_from_gate`; `run_slice` ~:597: the check after the seed);
+`src/saddle/cli.py` (`_ensure_clean` ~:314 docstring: the resume flow);
+`docs/ARCHITECTURE.md:227` (with T3-15); `tests/test_journal.py`;
+`tests/test_slice.py` (beside the resume tests ~:1226-1284).
+Contract: a proof record carries `tree_hash`, the `git write-tree` id of
+the worktree's tracked files (after `git add -u -- .`, as in T3-8) taken
+after the gate passed and before the record is sealed, and the same tree
+is kept at `refs/saddle/proven/<slug>`. On resume, after T3-9's seed,
+`run_slice` computes the current tree the same way (no ref) and requires
+it to equal the `tree_hash` of the last reused proof in journal order;
+otherwise it raises `ValueError` before any node runs, naming both ids
+and the restore command
+`git restore --source refs/saddle/proven/<id> --staged --worktree -- .`.
+A committed proven state matches (a commit does not change the tree id).
+The CLI flow after a crash: `_ensure_clean` (~:314) refuses the dirty
+tree, the user commits the staged proven edits (`git add -u && git commit`)
+and runs again; the check passes.
+Direction: **tightened**. Nothing that resumes correctly today stops
+resuming; a resume onto a tree that is not the proven one now fails
+instead of gating new nodes against unproven code.
+Evidence: VERIFIED by reading — `run_slice` ~:597-604 seeds from the
+journal and reads nothing from the worktree; `rebuild_proven`'s docstring
+(journal.py ~:344-345) promises "a crash therefore loses at most the
+in-flight node", which holds only while the worktree still carries the
+proven edits. Reproduce: `_first_run`, `git checkout -- n.py` (n1's edit
+gone), resume with a dependent `n2`: `n2` is gated on a tree without
+`n1`'s change and the run seals `2 proven`.
+Issue: the T3-9 issue, second half.
+Steps: 1. field, parameter and payload entry `"tree_hash": tree_hash,`
+(mutant 2 targets it). 2. `_run_node` after `if result.passed:`:
+`tree = snapshot_tree(workdir, f"refs/saddle/proven/{_ref_slug(node.id)}",
+recorder=recorder)`; pass `tree_hash=tree` to `build_from_gate`. 3.
+`run_slice`, after the seed, when at least one proof was reused:
+`expected = <last reused record>.tree_hash`; `current = <git add -u;
+git write-tree>`; `if current != expected:` (keep that spelling, mutant 1
+targets it) raise with both ids and the command. Records with an empty
+`tree_hash` are never reused (T3-9 already drops them: their `node_hash`
+is empty too).
+Known-good: `_first_run` then the T3-1 resume test on the untouched
+worktree → resumes; the same with `git add -u && git commit -m proven`
+between the runs → resumes (tree id equal); the record's `tree_hash`
+equals `git write-tree` run by the test after the first run.
+Known-bad: `_first_run`, then `git checkout -- n.py` → `ValueError` naming
+both tree ids and the restore command, no proposer call; `_first_run`,
+then an edit to an unrelated tracked file → `ValueError` (strict equality:
+the proof is about one tree; a fresh `--journal` is the escape hatch); a
+sealed record with `tree_hash` altered via `model_copy` fails
+`verify_journal`.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/    if current != expected:/    if False:/' src/saddle/slice.py` → `pytest tests/test_slice.py -k resume_tree -q --no-cov` red (the reverted worktree resumes).
+2. `sed -i 's/        "tree_hash": tree_hash,/        "tree_hash": "",/' src/saddle/journal.py` → `pytest tests/test_journal.py -k tree_hash -q --no-cov` red.
+Done when: mutants red; `./check.sh` green; `docs/ARCHITECTURE.md:227` says
+what resume checks.
+Stop if: `git restore --source <ref> --staged --worktree -- .` does not
+recreate a file the ref has and the worktree lacks (check on the installed
+git before writing it into the error message), or T3-8/T3-9 have not
+landed (this reuses their helper and field plumbing).
+Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs`
+(the seed path this extends).
+Dry run: not run.
+
+### T3-11 — Replacement ids are unique across the journal (Medium)
+Files: `src/saddle/slice.py` (`splice_replan` ~:448: `mapping` numbers
+`.r<index>` from 1 and checks collisions against the current DAG only,
+~:457-460; `run_slice` ~:602-603: `replanned_from`/`generated` start empty
+on every run; the `splice_replan` call ~:637); `tests/test_slice.py`
+(beside `test_splice_replan_rejects_collision` ~:996 and
+`test_run_slice_replan_recovers_failed_node` ~:1051; `_first_run` ~:1210).
+Contract: (1) a replacement id is unique across the journal, not just the
+run: `splice_replan` takes the ids already sealed in the journal and
+numbers past them, so a resumed run that replans `n2` after an earlier run
+sealed `n2.r1` produces `n2.r2`; (2) a journal proof whose id is not in
+the DAG being run (`n2.r1` from an earlier run's replan) is never reused —
+T3-9's `node_hash` comparison has no DAG node to compare it with — and the
+`resume` span lists it as `dropped n2.r1 (not in DAG)`.
+Direction: **tightened** for (1) (ids that could collide no longer can);
+(2) is T3-9's contract applied to replan ids and needs only its test.
+Evidence: VERIFIED by reading — `generated` and `replanned_from` are fresh
+sets at ~:602-603 and `splice_replan`'s collision check ~:457 sees only
+`dag.nodes`, so a second run restarts at `.r1`; `rebuild_proven` keeps the
+*last* record per id (~:347), so a second `n2.r1` shadows the first in
+`saddle verify` output and in the transcript's `sealed` map (~:645).
+Issue: none.
+Steps: 1. `splice_replan(dag, failed_id, new, *, taken: Collection[str] =
+())`: `existing = {node.id for node in dag.nodes} | set(taken)`; number
+each replacement with the smallest index whose id is not in `existing`
+(spell the loop `while candidate in existing:`, mutant 1 targets it).
+`run_slice` passes `taken={record.node_id for record in
+read_records(journal_path)}`. 2. Test (2): `_first_run`, append a
+`build_from_gate` record for a node `n2.r1` with T3-9's fields, resume
+with DAG `{n1, n2}` where `n2` fails once and the replanner returns one
+replacement: `n2.r2` is proposed, the `resume` span reads `dropped n2.r1
+(not in DAG)`, and the journal has exactly one record per id.
+Known-good: a replan in a fresh journal still yields `n2.r1`
+(`test_run_slice_replan_recovers_failed_node` unchanged); a resumed replan
+after a sealed `n2.r1` yields `n2.r2`.
+Known-bad: with the old numbering the journal holds two `n2.r1` records —
+the test asserts one record per id.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/while candidate in existing:/while False:/' src/saddle/slice.py` → `pytest tests/test_slice.py -k replan_across_resume -q --no-cov` red (two `n2.r1` records).
+Done when: mutant red; `./check.sh` green.
+Stop if: T3-9 has not landed (its `resume` span and `node_hash` filter are
+what (2) asserts on).
+Passing instance at HEAD: `test_run_slice_replan_recovers_failed_node` (a replan
+through `splice_replan` and back into the loop).
+Dry run: not run.
+
+### T3-12 — The planner prompt says what the gates enforce (Medium)
+Files: `src/saddle/cli.py` (`build_emit_prompt`: the refactor rule
+~:110-111; the `target_files` rule ~:129-131 — after T3-4's edit at ~:128);
+`tests/test_cli.py` (`test_build_emit_prompt_names_task_and_rules` ~:241,
+its `target_files` assertion ~:253;
+`test_emit_prompt_asks_for_the_test_impl_split` ~:2079).
+Contract: the emission prompt states (1) that a `refactor` node may not
+create or rename files — `check_node_scope` fails "refactor node added
+file(s): ..." (gates.py ~:465), and a staged `git mv` is an add to the
+gate (T3-14); and (2) that a `target_files` entry looks like the example:
+"never start an entry with "/" and never use ".."" — replacing the current
+`never use "/" or ".." in an entry`, which forbids the slash its own
+example `["src/app/login.py"]` contains.
+Direction: prompt-only, no gate contract changes. The prompt is the only
+place the planner learns a rule; a rule the gate enforces and the prompt
+withholds is a plan the planner keeps emitting and the gate keeps
+rejecting (#57 was this shape for the test/impl split).
+Evidence: VERIFIED — `cli.py:110-111` describes `refactor` as "the code and
+its tests move together" and says nothing about files; `cli.py:130` reads
+`never use "/" or ".." in an entry` one line after an example with two
+slashes. No run record shows a planner obeying the literal rule yet (T4
+predates `target_files`); T4-1's rerun will.
+Issue: none; note it on #64.
+Steps: 1. After the refactor sentence: "A refactor node may not create or
+rename files; it edits existing code and tests in place." 2. Replace the
+`target_files` rule's second sentence with: "Entries look like the example:
+never start one with "/" and never use ".."." 3. Tests: assert both new
+sentences are in `build_emit_prompt("x")` and that `never use "/"` is not.
+Known-good: the prompt contains `may not create or rename files` and
+`never start one with "/"`. Known-bad: the prompt contains `never use "/"`
+— a prompt has no input to reject, so the absence assertion is the
+discriminating half.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/A refactor node may not create or rename files; //' src/saddle/cli.py` → `pytest tests/test_cli.py -k emit_prompt -q --no-cov` red.
+2. `sed -i 's/never start one with "\/" and never use ".."\./never use "\/" or ".." in an entry./' src/saddle/cli.py` → same command red (the old wording is back; `grep -c 'never use "/"' src/saddle/cli.py` prints 1 before the run).
+Done when: mutants red; `./check.sh` green.
+Stop if: T3-4 has rewritten these lines into a per-tool list — then put the
+two sentences where T3-4 put the kind and `target_files` rules.
+Passing instance at HEAD: `test_build_emit_prompt_names_task_and_rules`.
+Dry run: not run.
+
+### T3-13 — `target_files` spellings the gate can never match (Medium)
+Files: `src/saddle/dag.py` (`_repo_relative_posix` ~:126-138);
+`src/saddle/gates.py` (`check_target_files` ~:323, read only: it compares
+strings exactly against what `git` prints); `tests/test_dag.py` (the
+known-good ~:466 and the parametrized known-bad ~:480).
+Contract: a `target_files` entry is rejected when any `/`-separated
+segment is empty, `.` or `..` — so `./n.py`, `a//b.py`, `src/./x.py`,
+`dir/` and `/etc/passwd` all fail validation — in addition to the
+existing backslash and surrounding-whitespace rules. An accepted entry is
+spelled the way `git diff --name-only` prints it, so it can match its own
+file.
+Direction: **tightened**, with proof: `./n.py` validates today
+(`PurePosixPath("./n.py").parts == ("n.py",)`, so the `..` check never
+sees the dot), the gate then compares `"./n.py" == "n.py"` and fails
+`target-scope` on the node's own file — a declared list that can only
+reject. Same for `a//b.py` (`parts == ("a", "b.py")`) and `dir/`.
+Evidence: VERIFIED — `dag.py:134` normalises through `PurePosixPath`
+before the `..` check; `gates.py:323` subtracts raw strings;
+`tests/test_dag.py:480` lists no `.`-segment or empty-segment case.
+Issue: none; note it on #64.
+Steps: replace the `startswith("/")` and `PurePosixPath` clauses with
+`any(segment in ("", ".", "..") for segment in path.split("/"))` (keep
+that spelling, the mutants target it); keep the backslash and strip
+checks; extend the message to "...without empty, '.' or '..' segments";
+drop the `PurePosixPath` import if unused.
+Known-good: `n.py`, `src/app/login.py`, `a.b/c-d_e.py`, `.github/x.yml`
+(a name starting with a dot is not a `.` segment) validate.
+Known-bad: `./n.py`, `a//b.py`, `src/./x.py`, `dir/`, plus the six existing
+cases, each raise `ValidationError` naming the entry.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/segment in ("", ".", "..")/segment in ("..",)/' src/saddle/dag.py` → `pytest tests/test_dag.py -k target_files -q --no-cov` red (`./n.py`, `a//b.py`, `dir/`, `/etc/passwd` accepted).
+2. `sed -i 's/segment in ("", ".", "..")/segment in ("", ".")/' src/saddle/dag.py` → same command red (`../n.py` accepted — the existing case must still bite).
+Done when: mutants red; `./check.sh` green; `.github/x.yml` validates (the
+known-good guards against over-tightening to "no segment starts with a
+dot").
+Stop if: `git diff --name-only` ever prints a `./` prefix (it does not from
+the repo root, and the runner's `-C workdir` is the root).
+Passing instance at HEAD: the `target_files` known-good in `tests/test_dag.py`
+~:466 (the validator path).
+Dry run: not run.
+
+### T3-14 — `git_added_files` sees a staged rename (Minor, test-only)
+Files: `tests/test_evidence.py` (beside
+`test_git_added_files_lists_staged_adds_and_ignores_untracked` ~:254);
+`src/saddle/evidence.py:270` (`"--no-renames"`, read only).
+Contract: a staged `git mv n.py m.py` reports `["m.py"]` from
+`git_added_files`, so a `refactor` node that renames a file fails
+`node-scope` as an add and a `target_files` list must name the new path.
+Direction: none (test-only). CLAUDE.md asks for the rename as a widened
+input; the flag that makes this true has no test that dies without it.
+Evidence: VERIFIED 2026-09-18 in a scratch repo on git 2.43: with
+`--no-renames` the command prints `m.py`; without it `diff.renames`
+defaults on, the change shows as `R100` and `--diff-filter=A` prints
+nothing.
+Issue: none.
+Steps: one test: `_git_repo`, `git mv n.py m.py`, assert
+`git_added_files(root, "HEAD") == ["m.py"]` and that
+`git_changed_files(root, "HEAD")` lists both paths.
+Known-good: the assertion above. Known-bad: none needed — the mutant is
+the discriminating half.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/        "--no-renames",//' src/saddle/evidence.py` → `pytest tests/test_evidence.py -k rename -q --no-cov` red (returns `[]`).
+Done when: mutant red; `./check.sh` green.
+Stop if: none.
+Passing instance at HEAD: `test_git_added_files_lists_staged_adds_and_ignores_untracked`.
+Dry run: not run.
+
+### T3-15 — Docs and docstrings say what landed (Minor, docs-only)
+Files: `docs/ARCHITECTURE.md:180` (gate 6: "`refactor` is exempt"), `:227`
+(status line: "resume specified, not built — `slice.py:584-587` raises");
+`src/saddle/gates.py:3-5` (module docstring's gate order omits
+`target-scope`), `:615` (`run_tier1`: "all ten Tier-1 checks");
+`tests/test_gates.py:300` (the eleven-name order pin, read only), `:351`
+(`len(...) == 11`, read only).
+Contract: ARCHITECTURE gate 6 reads "an `impl` node may not edit tests; a
+`test` node may not ship the implementation; a `refactor` node may edit
+both but may not add files" (T2-2; once T3-4 lands, add "and no kind adds
+files without `write_file`" there, once); `:227` reads "resume built
+(T3-1): a verified journal seeds the proven set and only unproven nodes
+run; stall detection deferred, WORKPLAN §7"; the gates docstring lists
+`target-scope` after `node-scope`; `run_tier1`'s docstring says eleven.
+The two `test_gates.py` pins already enforce the count and order in code;
+this makes the prose agree.
+Direction: docs-only.
+Evidence: VERIFIED — `ARCHITECTURE.md:180` still says "`refactor` is
+exempt" after T2-2 removed the exemption (`gates.py:465` fails a refactor
+that adds files); `:227` cites a refusal T3-1 deleted; `gates.py:4-5`
+lists ten names and `:615` says "ten" while `test_gates.py:351` pins `== 11`.
+Issue: none.
+Steps: the four edits; afterwards
+`grep -n "is exempt\|specified, not built.*resume\|all ten" docs/ARCHITECTURE.md src/saddle/gates.py`
+prints nothing.
+Known-good / Known-bad / Contract mutants: none — prose. `tests/test_docs.py`
+pins only the example node JSON, which this does not touch.
+Done when: the grep above is empty; `./check.sh` green.
+Stop if: T3-4 has already rewritten `ARCHITECTURE.md:180` — then fix only
+`:227` and the two docstrings.
+Passing instance at HEAD: n/a (prose).
+Dry run: n/a (docs-only).
+
+### T3-16 — Three consistency fixes (Minor)
+Files: `src/saddle/runner.py:128-130` (`touched` and its comment);
+`src/saddle/cli.py` (`run_tail` loop ~:561-577); `src/saddle/transcript.py`
+(`is_run_end` ~:70, read only); `tests/test_runner.py` (beside
+`test_run_node_gate_target_files_binds_end_to_end` ~:249); `tests/test_cli.py`
+(beside `test_run_tail_streams_cold_journal_without_sleeping` ~:1682); this
+file (T3-2's Evidence paragraph ~:1021, corrected in the commit that adds
+these items).
+Contract:
+(a) `touched` in `run_node_gate` is `sorted(git_changed_files(...))` alone:
+`git diff --name-only <ref>` already lists a staged new file (tracked-ness
+comes from the index), so `| set(added)` at `:130` adds nothing. Prove it
+before removing it: a runner test that stages a new file outside
+`target_files` and asserts `target-scope` names it must pass before and
+after the change. If it fails without the union, keep the union and record
+why here.
+(b) `saddle tail` exits on a run-end span only when that span is the last
+entry read: `if is_run_end(entry) and entry is entries[-1]:`. Today
+(~:574) it returns at the first run-end span, so a cold journal with two
+completed runs prints the first run and exits before the second, and a
+journal with a finished run followed by a run in flight stops at the old
+run's end.
+(c) T3-2's Evidence says the emitted schema carries "an unconstrained
+optional array"; `dag_json_schema()` emits `items: {type: string,
+minLength: 1}`. Corrected in this file; nothing else to do.
+Direction: (a) none if the proof holds (equivalent code); (b) **tightened**
+(a stricter exit; a finished journal still exits at once, since its
+run-end span is its last entry); (c) docs-only.
+Evidence: (a) VERIFIED — `git diff HEAD --name-only` lists a file added with
+`git add` (git's tracked-set semantics; the T3-2 end-to-end test exercises
+a staged new file only through `added`). (b) VERIFIED by reading —
+`cli.py:574` returns inside the `for entry in entries[shown:]` loop at the
+first `is_run_end`. (c) VERIFIED — `dag_json_schema()` run at `4b25506`
+prints `{'items': {'minLength': 1, 'type': 'string'}, ...}` for the field.
+Issue: none.
+Steps: (a) the test, then the one-line change and its comment at `:128-129`;
+(b) the condition above, plus a test with two complete runs in one journal
+(`_first_run` resumed once, or `_tail_journal` twice) asserting both run
+spans render and the exit is 0, and one with a run-end span followed by a
+new run's first span asserting tail keeps following.
+Known-good: (a) a staged new file outside `target_files` is named by
+`target-scope`; (b) a one-run journal still exits 0 without sleeping
+(`test_run_tail_streams_cold_journal_without_sleeping` unchanged).
+Known-bad: (b) with the old condition the second run's lines are absent from
+the output — the two-run test asserts they are present.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `sed -i 's/if is_run_end(entry) and entry is entries\[-1\]:/if is_run_end(entry):/' src/saddle/cli.py` → `pytest tests/test_cli.py -k tail -q --no-cov` red.
+2. `sed -i 's/    touched = sorted(git_changed_files(workdir, baseline, recorder=recorder))/    touched = []/' src/saddle/runner.py` → `pytest tests/test_runner.py -k target_files -q --no-cov` red (the wrong-file node passes) — confirms the staged-add test still discriminates once the union is gone.
+Done when: mutants red; `./check.sh` green.
+Stop if: (a)'s proof fails — then keep the union and delete (a) from this
+item.
+Passing instance at HEAD: `test_run_tail_streams_cold_journal_without_sleeping`
+((b)) and `test_run_node_gate_target_files_binds_end_to_end` ((a)).
+Dry run: not run.
 
 ---
 
