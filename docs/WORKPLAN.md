@@ -1455,6 +1455,18 @@ suite failed with `ModuleNotFoundError: No module named 'src'` although
 the same tree passes `python -m pytest -q` (6 passed). Confirmed working:
 T3-7a on the live path, T3-8 (every span names `refs/saddle/baseline/<node>`,
 none `HEAD`), non-vacuous sampling, journal chain integrity.
+Rerun (session 20b), after T3-17..T3-21 landed (5014996, bf7c645 +
+3ce1100, ee2bf84, b887d30, 221fc1b): same task, same scratch-repo shape in
+a FRESH `/tmp/saddle-smoke` (delete the old one first), same record shape,
+written to a NEW directory `../saddle-bench/runs/smoke-2026-09-19b/` —
+never overwrite the first record. Expected: `N proven, 0 failed, 0
+undispatched, merge exit 0`, and `saddle verify` on the journal agreeing
+with the run's verdict (T3-21). Known open at run time: T3-12 has not
+landed, so the planner may still name a package `src` or leave an
+`__init__.py` out of `target_files`; if it does, the mutation gate now
+reads `mutation tool failed: mutmut run exited 1: ...Module name starts
+with "src."...` (T3-20) — record that as confirming T3-20 and T3-12, not as
+a new finding. The reviewer adds the second outcome to this Status.
 Findings, each now an item (reviewer-verified against the code, 2026-09-19):
 S1 merge suite and node gates disagree on `sys.path` → T3-17; S2 the
 grammar lets a hunk follow `diff --git` with no `---`/`+++` lines → T3-18;
