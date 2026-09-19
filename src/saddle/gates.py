@@ -694,12 +694,13 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     if outcome.total == 0:
         if outcome.survivors:
             cause = ", ".join(sorted(outcome.survivors)[:5])
-            return GateCheck(
-                name="mutation",
-                passed=False,
-                detail=f"no mutants decided: {cause}",
-                basis="sampled n=0",
+            # A tool that never ran is named as such (T3-20); "no mutants
+            # decided" describes a run that happened.
+            failed_tool = any(s.startswith("mutmut run exited") for s in outcome.survivors)
+            detail = (
+                f"mutation tool failed: {cause}" if failed_tool else f"no mutants decided: {cause}"
             )
+            return GateCheck(name="mutation", passed=False, detail=detail, basis="sampled n=0")
         if outcome.generated == 0:
             return GateCheck(
                 name="mutation",

@@ -838,3 +838,33 @@ def test_run_argv_missing_tool_journals_the_reason(tmp_path: Path) -> None:
     assert len(spans) == 1
     assert spans[0].exit_code == TOOL_UNAVAILABLE
     assert "no-such-binary-abc" in spans[0].detail
+
+
+def test_mutation_sample_failed_run_names_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3-20 known-bad: `mutmut run` exiting non-zero is the tool failing.
+
+    The smoke run's mutmut 3.8 refused a package named `src` and exited 1
+    in 658 ms; the outcome read "no mutants decided" because the run's exit
+    was discarded and `results` (exit 0, empty) was trusted instead.
+    """
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(
+        stub_dir,
+        "",
+        {},
+        run_body=(
+            'echo "Running stats"; echo "AssertionError: Module name starts with src." >&2; exit 1'
+        ),
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    outcome = mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
+    assert outcome == MutationOutcome(
+        killed=0,
+        total=0,
+        generated=0,
+        survivors=("mutmut run exited 1: AssertionError: Module name starts with src.",),
+    )

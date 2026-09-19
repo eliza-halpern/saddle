@@ -605,3 +605,33 @@ def test_run_node_gate_test_node_whose_tests_pass_specifies_nothing(tmp_path: Pa
     failed = {check.name: check.detail for check in result.checks if not check.passed}
     assert list(failed) == ["tests", "red-phase"]
     assert failed["tests"] == "'pytest test_n.py' exited 0: tests already pass, nothing specified"
+
+
+def test_run_node_gate_failed_mutmut_run_is_named_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3-20: the gate detail carries the tool's last line, so recovery
+    reads a broken tool rather than a missing test."""
+    test_body = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  run) echo "Failed trampoline hit. Module name starts with src." >&2; exit 1;;\n'
+        "  results) exit 0;;\n"
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    result = run_node_gate(_node(), tmp_path)
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["mutation"].passed is False
+    assert by_name["mutation"].detail == (
+        "mutation tool failed: mutmut run exited 1: "
+        "Failed trampoline hit. Module name starts with src."
+    )

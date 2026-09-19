@@ -1104,3 +1104,17 @@ def test_run_tier1_impl_node_keeps_the_real_coverage_and_mutation_checks() -> No
     assert by_name["coverage"].passed is False
     assert by_name["coverage"].basis != "test node"
     assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
+
+
+def test_mutation_failed_tool_is_named_not_undecided() -> None:
+    """T3-20: a tool that never ran renders as a tool failure (known-bad),
+    while a run that decided nothing keeps its wording (known-good)."""
+    failed = MutationOutcome(
+        killed=0, total=0, generated=0, survivors=("mutmut run exited 1: boom",)
+    )
+    check = check_mutation(failed, 85.0)
+    assert check.passed is False
+    assert check.detail == "mutation tool failed: mutmut run exited 1: boom"
+    assert check.basis == "sampled n=0"
+    undecided = MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut not on PATH",))
+    assert check_mutation(undecided, 85.0).detail == "no mutants decided: mutmut not on PATH"

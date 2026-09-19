@@ -489,7 +489,21 @@ def mutation_sample(
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
         (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production))
-        run_capture(["timeout", str(timeout_s), "mutmut", "run"], scratch, recorder=recorder)
+        ran = run_capture(["timeout", str(timeout_s), "mutmut", "run"], scratch, recorder=recorder)
+        # `mutmut run` exits 0 even when mutants survive, so any other exit
+        # is the tool failing, not a verdict (T3-20): the smoke run's mutmut
+        # 3.8 refused a package named `src` and exited 1 in 658 ms, and the
+        # gate read "no mutants decided" -- the absence of a verdict, not
+        # the tool. SHELL_TIMEOUT is the budget binding and keeps its path.
+        if ran.exit_code not in (0, SHELL_TIMEOUT):
+            output = (ran.stderr.strip() or ran.stdout.strip()).splitlines()
+            last = output[-1].strip() if output else "no output"
+            return MutationOutcome(
+                killed=0,
+                total=0,
+                generated=0,
+                survivors=(f"mutmut run exited {ran.exit_code}: {last}",),
+            )
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)
         scoped: list[tuple[str, str]] = []
