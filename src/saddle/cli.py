@@ -103,7 +103,11 @@ class RunOptions:
 
 @dataclass(frozen=True)
 class DagOptions:
-    """Resolved `dag` inputs: task, server, and emission knobs (no repo)."""
+    """Resolved `dag` inputs: task, server, emission knobs, and the repo to list.
+
+    `repo` is only read (`git ls-files`) so the planner sees the files it
+    is planning for (T3-19); None lists nothing, for callers without one.
+    """
 
     task: str
     base_url: str
@@ -111,14 +115,31 @@ class DagOptions:
     max_tokens: int = 8192
     temperature: float = 0.0
     reasoning_effort: str = "medium"
+    repo: Path | None = None
 
 
-def build_emit_prompt(task: str) -> str:
-    """Decomposition prompt: task plus the DAG vocabulary rules.
+def _file_listing(files: Sequence[str]) -> str:
+    """The tracked files, capped like the worker prompt's list."""
+    listed = list(files)
+    if not listed:
+        return "(no tracked files)"
+    shown = "\n".join(listed[:MAX_FILES_IN_PROMPT])
+    if len(listed) > MAX_FILES_IN_PROMPT:
+        shown += f"\n... and {len(listed) - MAX_FILES_IN_PROMPT} more"
+    return shown
+
+
+def build_emit_prompt(task: str, files: Sequence[str] = ()) -> str:
+    """Decomposition prompt: task, the repository's files, and the DAG rules.
 
     The tool rules render `TOOL_BINDINGS`, so a name the harness does not
     honour cannot reach the planner and a binding cannot change without
     the prompt saying so.
+
+    `files` is the repository's tracked listing (T3-19). A planner that
+    sees only the task sentence plans blind: the smoke run of 2026-09-19
+    built a parallel `src/f.py` beside the `n.py` that already defined
+    `f`, so the task's subject ended up twice with different behaviour.
     """
     tools = ", ".join(TOOL_BINDINGS)
     bindings = "\n".join(f"  - {name}: {effect}." for name, effect in TOOL_BINDINGS.items())
@@ -126,7 +147,13 @@ def build_emit_prompt(task: str) -> str:
 
 Task: {task}
 
+Repository files (tracked):
+{_file_listing(files)}
+
 Rules:
+- A task about behaviour an existing file already owns changes that file.
+  Create a new module only when no listed file owns the behaviour; never
+  create a parallel copy of a function the repository already defines.
 - Each node has a kind: "test", "impl" or "refactor".
 - Split behaviour changes into a "test" node and an "impl" node that
   depends on it. A "test" node writes the failing tests and may not
@@ -364,12 +391,13 @@ def _emit_valid_dag(
     client: VllmClient,
     task: str,
     *,
+    files: Sequence[str],
     max_tokens: int,
     temperature: float,
     reasoning_effort: str,
 ) -> Dag:
     """Emit a DAG, feeding validation errors back (bounded recompile)."""
-    prompt = build_emit_prompt(task)
+    prompt = build_emit_prompt(task, files)
     errors: list[str] = []
     for _ in range(EMIT_ROUNDS):
         attempt = prompt
@@ -429,6 +457,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         dag = _emit_valid_dag(
             client,
             options.task,
+            files=git_ls_files(options.repo),
             max_tokens=options.max_tokens,
             temperature=options.temperature,
             reasoning_effort=options.reasoning_effort,
@@ -489,6 +518,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             return _emit_valid_dag(
                 client,
                 build_replan_task(task=options.task, node=node, history=history),
+                files=git_ls_files(options.repo),
                 max_tokens=options.max_tokens,
                 temperature=options.temperature,
                 reasoning_effort=options.reasoning_effort,
@@ -554,6 +584,20 @@ def render_dag_plan(task: str, dag: Dag) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _listable_files(repo: Path | None) -> list[str]:
+    """The repo's tracked files for `saddle dag`; none outside a repository.
+
+    `dag` is a preview and may run anywhere, so a cwd that is not a git
+    repository lists nothing rather than failing (T3-19).
+    """
+    if repo is None:
+        return []
+    try:
+        return git_ls_files(repo)
+    except RuntimeError:
+        return []
+
+
 def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
     """Emit the plan and print it; execute nothing."""
     try:
@@ -561,6 +605,7 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
         dag = _emit_valid_dag(
             client,
             options.task,
+            files=_listable_files(options.repo),
             max_tokens=options.max_tokens,
             temperature=options.temperature,
             reasoning_effort=options.reasoning_effort,
@@ -632,6 +677,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     dag = sub.add_parser("dag", help="Show the plan before it runs.")
     dag.add_argument("task", help="Task description to decompose into a plan.")
+    dag.add_argument("--repo", default=".", help="Repository whose files the planner is shown.")
     dag.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     dag.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     dag.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
@@ -731,6 +777,7 @@ def main(
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             dag_options = DagOptions(
                 task=args.task,
+                repo=Path(args.repo),
                 base_url=args.base_url,
                 model=args.model,
                 max_tokens=args.max_tokens,

@@ -15,6 +15,7 @@ import pytest
 
 from saddle.cli import (
     CONTENTS_WITHHELD,
+    MAX_FILES_IN_PROMPT,
     RUN_ALLOWLIST,
     TOOL_BINDINGS,
     WORKER_OUTPUT_TOKENS,
@@ -37,7 +38,7 @@ from saddle.cli import (
     run_verify,
 )
 from saddle.dag import Dag, Node
-from saddle.evidence import CapturedRun, run_argv
+from saddle.evidence import CapturedRun, git_ls_files, run_argv
 from saddle.gates import GateCheck, Tier1Result, check_node_scope
 from saddle.journal import (
     GateOutput,
@@ -585,7 +586,7 @@ def test_run_task_retries_invalid_emissions(tmp_path: Path) -> None:
     code, out = _run(_options(tmp_path), client)
     assert code == 0
     assert "- Verdict: PASS\n" in out
-    assert _prompt(seen[0]) == build_emit_prompt(TASK)
+    assert _prompt(seen[0]) == build_emit_prompt(TASK, git_ls_files(tmp_path))
     assert TASK in _prompt(seen[1])
     assert TASK in _prompt(seen[2])
     assert "Previous attempt failed:\ncontent is not valid JSON" in _prompt(seen[1])
@@ -1421,7 +1422,7 @@ def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match=r"^0$"):
         main(["dag", "--help"])
     assert capsys.readouterr().out == (
-        "usage: saddle dag [-h] [--base-url BASE_URL] [--model MODEL]\n"
+        "usage: saddle dag [-h] [--repo REPO] [--base-url BASE_URL] [--model MODEL]\n"
         "                  [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  task\n"
@@ -1431,6 +1432,7 @@ def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "\n"
         "options:\n"
         "  -h, --help            show this help message and exit\n"
+        "  --repo REPO           Repository whose files the planner is shown.\n"
         "  --base-url BASE_URL   vLLM base URL.\n"
         "  --model MODEL         Model id.\n"
         "  --max-tokens MAX_TOKENS\n"
@@ -2245,3 +2247,47 @@ def test_emit_prompt_says_a_test_node_is_expected_to_fail() -> None:
     prompt = build_emit_prompt("Do the thing.")
     assert "expected to fail" in prompt
     assert "fails if they already pass" in prompt
+
+
+def test_emit_prompt_lists_the_repository_and_the_existing_file_rule() -> None:
+    """T3-19 known-good: the planner sees what it is planning for."""
+    prompt = build_emit_prompt("Make f return twice x.", ["n.py", "tests/test_n.py"])
+    assert "Repository files (tracked):\nn.py\ntests/test_n.py\n" in prompt
+    assert "changes that file" in prompt
+    assert "never\n  create a parallel copy" in prompt
+
+
+def test_emit_prompt_caps_the_listing_like_the_worker_prompt() -> None:
+    files = [f"m{index}.py" for index in range(MAX_FILES_IN_PROMPT + 50)]
+    prompt = build_emit_prompt("Do the thing.", files)
+    assert f"m{MAX_FILES_IN_PROMPT - 1}.py\n... and 50 more\n" in prompt
+    assert f"m{MAX_FILES_IN_PROMPT}.py" not in prompt
+
+
+def test_emit_prompt_without_files_says_so() -> None:
+    """T3-19 known-bad: an empty listing is stated, and the rule still stands."""
+    prompt = build_emit_prompt("Do the thing.")
+    assert "Repository files (tracked):\n(no tracked files)\n" in prompt
+    assert "changes that file" in prompt
+
+
+def test_run_dag_shows_the_planner_the_repo_files(tmp_path: Path) -> None:
+    """`saddle dag --repo` lists the repo's tracked files in the emit prompt;
+    without a repo the prompt lists nothing (the options default)."""
+    _git_repo(tmp_path)
+    seen: list[httpx.Request] = []
+    client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]}, seen)
+    options = DagOptions(task=TASK, base_url="http://x/v1", model="m", repo=tmp_path)
+    assert run_dag(options, client, stdout=io.StringIO()) == 0
+    body = json.loads(seen[1].content)
+    assert body["messages"][0]["content"] == build_emit_prompt(TASK, git_ls_files(tmp_path))
+    assert (
+        "Repository files (tracked):\nREADME.md\nn.py\ntest_n.py\n"
+        in (body["messages"][0]["content"])
+    )
+    # Outside a repository the preview still runs and lists nothing.
+    empty = DagOptions(task=TASK, base_url="http://x/v1", model="m", repo=tmp_path / "nowhere")
+    seen.clear()
+    client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]}, seen)
+    assert run_dag(empty, client, stdout=io.StringIO()) == 0
+    assert "(no tracked files)" in json.loads(seen[1].content)["messages"][0]["content"]
