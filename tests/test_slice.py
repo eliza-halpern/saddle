@@ -14,7 +14,7 @@ import pytest
 import saddle.slice as slice_module
 from saddle.dag import Dag, Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES, GateCheck, Tier1Result
+from saddle.gates import MIN_SIGNIFICANT_MUTANTS, GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
     SpanRecord,
@@ -61,7 +61,7 @@ def _git_repo(root: Path) -> None:
 def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
     return {
         "id": node_id,
-        "kind": "refactor",
+        "kind": "impl",
         "dependencies": deps,
         "task_prompt": f"Do {node_id}.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
@@ -92,7 +92,10 @@ def _slice_repo(root: Path) -> None:
     for argv in setup:
         assert run_argv(argv, root) == 0
     (root / "n.py").write_text("def f():\n    return 1\n")
-    assert run_argv(["git", "add", "n.py"], root) == 0
+    (root / "test_n.py").write_text(
+        "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    )
+    assert run_argv(["git", "add", "n.py", "test_n.py"], root) == 0
     assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
 
 
@@ -104,28 +107,18 @@ GOOD_DIFF = (
     " def f():\n"
     "-    return 1\n"
     "+    return 2\n"
-    "diff --git a/test_n.py b/test_n.py\n"
-    "new file mode 100644\n"
-    "--- /dev/null\n"
-    "+++ b/test_n.py\n"
-    "@@ -0,0 +1,5 @@\n"
-    "+from n import f\n"
-    "+\n"
-    "+\n"
-    "+def test_f():  # REQ-001\n"
-    "+    assert f() == 2\n"
 )
 
-BAD_DIFF = GOOD_DIFF.replace("+    assert f() == 2\n", "+    assert f() == 3\n")
+BAD_DIFF = GOOD_DIFF.replace("+    return 2\n", "+    return 3\n")
 
 FIX_DIFF = (
-    "diff --git a/test_n.py b/test_n.py\n"
-    "--- a/test_n.py\n"
-    "+++ b/test_n.py\n"
-    "@@ -4,2 +4,2 @@\n"
-    " def test_f():  # REQ-001\n"
-    "-    assert f() == 3\n"
-    "+    assert f() == 2\n"
+    "diff --git a/n.py b/n.py\n"
+    "--- a/n.py\n"
+    "+++ b/n.py\n"
+    "@@ -1,2 +1,2 @@\n"
+    " def f():\n"
+    "-    return 3\n"
+    "+    return 2\n"
 )
 
 JUNK1_DIFF = (
@@ -318,7 +311,9 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "- Verdict: PASS\n" in result.transcript
     assert "## Node n1\n" in result.transcript
     assert "- Gate syntax: PASS (2 file(s) parsed)\n" in result.transcript
-    assert "- Gate ruff: PASS (2 file(s) clean)\n" in result.transcript
+    # Only n.py is in the diff -- test_n.py is unchanged from the impl
+    # node's own baseline (T2-2a), so it is not in ruff's changed-file scope.
+    assert "- Gate ruff: PASS (1 file(s) clean)\n" in result.transcript
     assert "- Gate tests: PASS ('pytest test_n.py' exited 0)\n" in result.transcript
     assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
     assert "- Gate red-phase: PASS (fail pre-change, pass post-change)\n" in result.transcript
@@ -355,8 +350,10 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "git",
         "coverage",
         "git",
-        # One per red-phase baseline sample (#54).
-        *["coverage"] * RED_PHASE_SAMPLES,
+        # One per red-phase baseline sample (#54): this node's test is
+        # unchanged from its own baseline (T2-2a's honest impl fixture), so
+        # `tests_changed` is False and only one sample is taken.
+        *["coverage"] * 1,
         "timeout",
         # `results`, then one `show` per mutant in the sample (#49).
         "mutmut",
@@ -389,7 +386,7 @@ def test_run_slice_pass_end_to_end_records_distinct_sample_count(
     journal = tmp_path / "proofs.jsonl"
     ticks = iter([0.0, 1.0, 2.0, 3.0])
     monkeypatch.setattr(slice_module, "perf_counter", lambda: next(ticks))
-    bad2 = BAD_DIFF.replace("assert f() == 3", "assert f() == 4")
+    bad2 = BAD_DIFF.replace("+    return 3\n", "+    return 4\n")
     proposals = iter(
         [
             DiffProposal(BAD_DIFF, "first guess"),
@@ -570,7 +567,11 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
     # gate evidence (#59).
     failure = next(entry for entry in seen_failures if entry is not None)
     assert failure is not None
-    assert "Attempt 1 of 3 failed 2 gate(s):" in failure
+    # BAD_DIFF's fault now lives in n.py (T2-2a), so the changed line no
+    # longer matches the conftest mutmut stub's fixed "n.py:2 was return 2"
+    # location; the mutation gate correctly finds no evidence there, on top
+    # of tests and red-phase failing -- three gates, not two.
+    assert "Attempt 1 of 3 failed 3 gate(s):" in failure
     assert "- tests: 'pytest test_n.py' exited 1" in failure
     assert "FAILED" in failure
     assert "- Attempts: 2\n" in result.transcript
@@ -585,7 +586,7 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
         ("worker:n1", 0),
         ("run", 0),
     ]
-    assert agents[0].detail == "attempt 1/3: 2 gate(s) failed"
+    assert agents[0].detail == "attempt 1/3: 3 gate(s) failed"
     assert agents[1].detail == "recovered after 2 attempts"
 
 
@@ -621,10 +622,14 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
     assert "- Attempts: 3\n" in result.transcript
     assert "- Gate tests: FAIL" in result.transcript
     agents = [span for span in read_spans(journal) if span.kind == "agent"]
+    # BAD_DIFF's fault now lives in n.py (T2-2a), which also breaks the
+    # conftest mutmut stub's location match (see the retry test above), and
+    # JUNK1_DIFF/JUNK2_DIFF's new files stay permanently uncovered on top of
+    # that -- one more failing gate at every attempt than before.
     assert [span.detail for span in agents] == [
-        "attempt 1/3: 2 gate(s) failed",
-        "attempt 2/3: 3 gate(s) failed",
-        "attempt 3/3: 3 gate(s) failed",
+        "attempt 1/3: 3 gate(s) failed",
+        "attempt 2/3: 4 gate(s) failed",
+        "attempt 3/3: 4 gate(s) failed",
         "0 proven, 1 failed, 0 undispatched",
     ]
 

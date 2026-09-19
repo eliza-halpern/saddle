@@ -17,12 +17,15 @@ from saddle.runner import _stub_module, read_sources, run_node_gate
 
 
 def _node(
-    test_command: str = "pytest test_n.py", kill_threshold: float = 85.0, max_mutants: int = 100
+    test_command: str = "pytest test_n.py",
+    kill_threshold: float = 85.0,
+    max_mutants: int = 100,
+    kind: str = "impl",
 ) -> Node:
     return Node.model_validate(
         {
             "id": "n1",
-            "kind": "refactor",
+            "kind": kind,
             "dependencies": [],
             "task_prompt": "Fix f.",
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
@@ -85,7 +88,7 @@ def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
-    _worktree(tmp_path, test_body)
+    _worktree(tmp_path, test_body, baseline_test=test_body)
     result = run_node_gate(_node(), tmp_path)
     assert result.node_id == "n1"
     assert result.passed is True
@@ -99,7 +102,7 @@ def test_run_node_gate_full_sample_catches_what_a_small_cap_hid(
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
-    _worktree(tmp_path, test_body)
+    _worktree(tmp_path, test_body, baseline_test=test_body)
     stub_dir = tmp_path / "stub"
     stub_dir.mkdir()
     (stub_dir / "results.txt").write_text("  m1: killed\n  m2: survived\n")
@@ -139,9 +142,16 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
+    # test_n.py is new-at-baseline on purpose: this pins the RED_PHASE_SAMPLES
+    # multi-sampling span shape (T2-2a), which only fires when the node's
+    # test signature differs from baseline (tests_changed) -- an honest
+    # `impl` node's test is unchanged from its own baseline, so this stays a
+    # `refactor` node (both source and test may change together).
     _worktree(tmp_path, test_body)
     journal = tmp_path / "proofs.jsonl"
-    result = run_node_gate(_node(), tmp_path, recorder=SpanRecorder(path=journal, node_id="n1"))
+    result = run_node_gate(
+        _node(kind="refactor"), tmp_path, recorder=SpanRecorder(path=journal, node_id="n1")
+    )
     assert result.passed is True
     spans = read_spans(journal)
     assert [span.name for span in spans] == [
@@ -179,7 +189,7 @@ def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> N
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
-    _worktree(tmp_path, test_body)
+    _worktree(tmp_path, test_body, baseline_test=test_body)
     captured: list[CapturedRun] = []
     result = run_node_gate(_node(), tmp_path, capture=captured)
     assert result.passed is True
@@ -189,11 +199,16 @@ def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> N
 
 
 def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
+    # This test edits test_n.py mid-test to force a stale-bytecode mtime
+    # collision, which an honest `impl` node's own diff never does (it may
+    # not touch tests at all); kept a `refactor` node so that deliberate
+    # test edit does not trip node-scope on top of what this test means to
+    # exercise.
     passing = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
     _worktree(tmp_path, passing)
-    assert run_node_gate(_node(), tmp_path).passed is True
+    assert run_node_gate(_node(kind="refactor"), tmp_path).passed is True
     assert list(tmp_path.rglob("__pycache__")), "expected pytest to mint bytecode caches"
     failing = passing.replace("assert f() == 2", "assert f() == 3")
     assert len(failing) == len(passing)
@@ -202,7 +217,7 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
     target.write_text(failing)
     os.utime(target, (mtime, mtime))
     assert run_argv(["git", "add", "-A"], tmp_path) == 0
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     assert result.passed is False
     assert [check.name for check in result.checks if not check.passed] == [
         "tests",
@@ -212,7 +227,7 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
 
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
     test_body = "from n import f\n\n\ndef test_f_returns_fixed_value():\n    assert f() == 2\n"
-    _worktree(tmp_path, test_body)
+    _worktree(tmp_path, test_body, baseline_test=test_body)
     result = run_node_gate(_node(), tmp_path)
     assert result.passed is False
     binding = next(check for check in result.checks if check.name == "requirement-binding")
@@ -223,7 +238,7 @@ def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
 def test_run_node_gate_uncovered_line_fails(tmp_path: Path) -> None:
     fixed = "def f():\n    return 2\n\n\ndef unused():\n    return 3\n"
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
-    _worktree(tmp_path, test_body, fixed_code=fixed)
+    _worktree(tmp_path, test_body, fixed_code=fixed, baseline_test=test_body)
     result = run_node_gate(_node(), tmp_path)
     assert result.passed is False
     coverage = next(check for check in result.checks if check.name == "coverage")
@@ -237,15 +252,15 @@ def test_run_node_gate_pass_pre_change_fails(
     """`assert f() in (1, 2)` passes before and after, so it proves nothing.
 
     The node leaves every test untouched, which routes red-phase to the
-    behaviour-preserving branch and leans the proof on mutation. The
-    shared stub reports a healthy kill for every node; this test needs a
-    survivor, because a test that accepts both the old and new return
-    value is exactly what fails to kill one.
+    behaviour-preserving branch (only reachable for a `refactor` node) and
+    leans the proof on mutation. The shared stub reports a healthy kill for
+    every node; this test needs a survivor, because a test that accepts
+    both the old and new return value is exactly what fails to kill one.
     """
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n"
     _worktree(tmp_path, test_body, baseline_test=test_body)
     _surviving_mutmut(tmp_path / "stub", monkeypatch)
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     assert result.passed is False
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False
@@ -254,7 +269,7 @@ def test_run_node_gate_pass_pre_change_fails(
 def test_run_node_gate_lint_dirty_fails(tmp_path: Path) -> None:
     fixed = "import os\n\n\ndef f():\n    return 2\n"
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
-    _worktree(tmp_path, test_body, fixed_code=fixed)
+    _worktree(tmp_path, test_body, fixed_code=fixed, baseline_test=test_body)
     result = run_node_gate(_node(), tmp_path)
     assert result.passed is False
     ruff = next(check for check in result.checks if check.name == "ruff")
@@ -263,7 +278,7 @@ def test_run_node_gate_lint_dirty_fails(tmp_path: Path) -> None:
 
 def test_run_node_gate_suffix_style_test_binds(tmp_path: Path) -> None:
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
-    _worktree(tmp_path, test_body, test_name="n_test.py")
+    _worktree(tmp_path, test_body, test_name="n_test.py", baseline_test=test_body)
     result = run_node_gate(_node("pytest n_test.py"), tmp_path)
     assert result.passed is True
 
@@ -274,10 +289,14 @@ def test_run_node_gate_new_test_passing_pre_change_is_not_red(tmp_path: Path) ->
     Regression: the baseline leg ran the gate command against a tree that
     never contained the new test file, so "file not found" counted as red
     and every greenfield node cleared red-phase vacuously.
+
+    test_n.py is new-at-baseline on purpose (that is what the regression
+    needs), so this stays a `refactor` node -- an honest `impl` node's test
+    already exists, unchanged, at its own baseline.
     """
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n"
     _worktree(tmp_path, test_body)
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False, f"vacuous red: {red.detail}"
 
@@ -338,7 +357,10 @@ def test_run_node_gate_comment_only_test_edit_stays_behaviour_preserving(
 
     Requirement-binding forces the worker to name REQ ids in test source,
     so a comment-only edit would otherwise let a behaviour-preserving node
-    claim its tests changed and take the red-phase path.
+    claim its tests changed and take the red-phase path. The shortcut this
+    pins is only reachable for a `refactor` node (an `impl` node's
+    unchanged-test case takes the real differential instead, per
+    check_red_phase), so kept explicit rather than the new impl default.
     """
     baseline_test = "from n import f\n\n\ndef test_f():\n    assert f() == 1\n"
     tagged = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
@@ -352,18 +374,22 @@ def test_run_node_gate_comment_only_test_edit_stays_behaviour_preserving(
         baseline_test=baseline_test,
     )
     _locatable_mutmut(tmp_path / "stub", monkeypatch, removed="    value = 1", line=2)
-    result = run_node_gate(_node(max_mutants=100), tmp_path)
+    result = run_node_gate(_node(max_mutants=100, kind="refactor"), tmp_path)
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is True
     assert red.detail.startswith("tests unchanged (behaviour preserved)")
 
 
 def test_run_node_gate_changed_assertion_takes_the_red_phase_path(tmp_path: Path) -> None:
-    """Changing what a test asserts binds the gate to a real pre-change run."""
+    """Changing what a test asserts binds the gate to a real pre-change run.
+
+    Both the source and the test change here, which only a `refactor` node
+    may do honestly (an `impl` node may not touch tests at all).
+    """
     baseline_test = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
     changed = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
     _worktree(tmp_path, changed, baseline_test=baseline_test)
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is True
     assert red.detail == "fail pre-change, pass post-change"
@@ -376,6 +402,9 @@ def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> No
     distinguish a flake from a genuine red, so RED_PHASE_SAMPLES must be
     greater than one for this to be detectable at all. The counter file
     survives drop_test_caches, so the test alternates across samples.
+
+    test_n.py is new-at-baseline on purpose (the node must be judged on its
+    own new test), so this stays a `refactor` node.
     """
     flaky = (
         "import pathlib\n\n"
@@ -386,7 +415,7 @@ def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> No
         "    assert n % 2 == 0\n"
     )
     _worktree(tmp_path, flaky)
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
 
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False

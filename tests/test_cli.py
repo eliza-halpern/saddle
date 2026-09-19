@@ -65,16 +65,6 @@ DIFF = (
     " def f():\n"
     "-    return 1\n"
     "+    return 2\n"
-    "diff --git a/test_n.py b/test_n.py\n"
-    "new file mode 100644\n"
-    "--- /dev/null\n"
-    "+++ b/test_n.py\n"
-    "@@ -0,0 +1,5 @@\n"
-    "+from n import f\n"
-    "+\n"
-    "+\n"
-    "+def test_f_returns_two():  # REQ-001\n"
-    "+    assert f() == 2\n"
 )
 
 
@@ -86,8 +76,11 @@ def _git_repo(root: Path) -> None:
     ):
         assert run_argv(argv, root) == 0
     (root / "n.py").write_text("def f():\n    return 1\n")
+    (root / "test_n.py").write_text(
+        "from n import f\n\n\ndef test_f_returns_two():  # REQ-001\n    assert f() == 2\n"
+    )
     (root / "README.md").write_text("demo\n")
-    assert run_argv(["git", "add", "n.py", "README.md"], root) == 0
+    assert run_argv(["git", "add", "n.py", "test_n.py", "README.md"], root) == 0
     assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
 
 
@@ -96,7 +89,7 @@ def _node_dict(
 ) -> dict[str, Any]:
     return {
         "id": node_id,
-        "kind": "refactor",
+        "kind": "impl",
         "dependencies": [],
         "task_prompt": "Fix f and test it.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
