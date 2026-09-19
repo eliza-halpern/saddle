@@ -46,8 +46,18 @@ Record the mutants and their verdicts in the commit message.
    a multi-line call is enough to break an exact match. Abort the run if
    the target is not found rather than printing a verdict.
 
+3. **Drop bytecode after the revert.** A mutant that keeps the file's byte
+   length (`--diff-filter=A` → `M`) and is reverted within the same second
+   leaves `__pycache__` pointing at the mutated code: Python validates a
+   `.pyc` by source mtime (one-second resolution) and size, and both still
+   match. The next run then fails a correct source, or passes a mutated
+   one. Observed 2026-09-18 while landing T2-2: the restored tree failed
+   its own known-good test twice, and `find src tests -name __pycache__
+   -exec rm -rf {} +` made it pass. Delete the caches after every revert.
+
 A SURVIVED that you cannot explain is more likely a broken harness than a
-missing test. Check the file actually changed before believing it.
+missing test. Check the file actually changed before believing it, and
+check the bytecode is not older than the file you are looking at.
 
 ## Defect claims require discrimination evidence
 

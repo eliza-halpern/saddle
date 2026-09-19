@@ -662,7 +662,13 @@ Files: `src/saddle/evidence.py:244-254` (add `git_added_files` beside
 `git_changed_files`); `src/saddle/gates.py:396-426` (`check_node_scope`),
 `:470-485` (`Tier1Inputs`), `:565` (the `check_node_scope(...)` call in
 `run_tier1`); `src/saddle/runner.py:191-205` (`Tier1Inputs(...)`);
-`tests/test_gates.py:586-600` area; `tests/test_evidence.py`.
+`tests/test_gates.py:586-600` area; `tests/test_evidence.py`;
+`tests/test_runner.py` (`test_run_node_gate_records_tool_spans`,
+`test_run_node_gate_ignores_stale_bytecode`: two refactor fixtures whose
+test was still new-at-baseline, plus the tool-span pin);
+`tests/test_slice.py` (`test_run_slice_pass_end_to_end` tool-span pin).
+Status 2026-09-18: finished by the reviewer after two executor stops; the
+text below is the shape that landed. Both stops were correct.
 Requires: T2-2a landed first (the fixtures in `test_slice.py`, `test_cli.py`,
 `test_runner.py` must already be honest `impl` nodes, or this check rejects
 them — 31 failures on the first attempt). A reference implementation of
@@ -693,11 +699,14 @@ Steps:
                "--name-only", ref, "--", "."]
        ...same shape as git_changed_files...
    ```
-   Untracked files: `git diff` ignores them, so also append
-   `git -C cwd ls-files --others --exclude-standard` output (the worker writes
-   files without staging; `_apply_diff` uses `--index` at `slice.py:165` so
-   applied diffs are staged, but the untracked case costs one line and closes
-   a hole).
+   Staged adds only. Do **not** append `git ls-files --others`: the
+   worker introduces files only through its diff, which `_apply_diff`
+   applies with `--index`, so every file a node creates is staged; the
+   untracked files in a worktree are the harness's own (`.saddle/proofs.jsonl`
+   is the default journal path, `.coverage.tier1`, bytecode), and listing
+   them fails every `refactor` node on its first retry. The first draft of
+   this item had that clause; the fixtures did not catch it because the
+   T2-2a fixtures are `impl` nodes, which ignore `added_files`.
 2. `Tier1Inputs`: add `added_files: Collection[str] = ()` as the **last**
    field (frozen dataclass; a default keeps the 13 existing constructors in
    `tests/test_gates.py:59` etc. valid).
@@ -726,14 +735,25 @@ added_files=["new_module.py"]).passed is False` and the detail names
 `new_module.py`. Plus in `tests/test_evidence.py`: a tmp repo with one commit,
 create `b.py`, `git add b.py`, assert `git_added_files(tmp, "HEAD") == ["b.py"]`
 and that `git_changed_files` also lists it (so the two helpers agree on
-staged adds); an untracked `c.py` is listed too.
+staged adds); an untracked `c.py` and a `.coverage.tier1` are **not** listed.
 Contract mutants (`pytest tests/test_gates.py -q --no-cov -k scope`):
-1. `sed -i 's/        if added_files:/        if False:/' src/saddle/gates.py` → red.
-2. `sed -i 's/--diff-filter=A/--diff-filter=M/' src/saddle/evidence.py` → the test_evidence known-good red.
-3. `sed -i 's/if kind == "refactor":/if kind == "test":/' src/saddle/gates.py` → red (refactor falls to the impl/test branch and the known-good fails).
-Done when: mutants red; `./check.sh` green with the T2-2a fixtures
-unchanged (if a fixture still fails node-scope here, T2-2a was incomplete:
-stop and report which one).
+1. `sed -i 's/        if added_files:/        if False:/' src/saddle/gates.py` → red (`-k "refactor_node or node_scope"`; plain `-k scope` selects one unrelated test and reports SURVIVED).
+2. `sed -i 's/"--diff-filter=A",/"--diff-filter=M",/' src/saddle/evidence.py` → the test_evidence known-good red (`-k added_files`). Quote it: the bare string also sits in the error message. Same byte length, so drop `__pycache__` after the revert (CLAUDE.md hazard 3).
+3. `sed -i '/^def check_node_scope/,/^def check_property_coverage/s/if kind == "refactor":/if kind == "test":/' src/saddle/gates.py` → red (refactor falls to the impl/test branch and the known-good fails). Range-scoped: `check_assertion_preservation` has the same line and an unscoped inverse sed corrupts it.
+Verdicts 2026-09-18 (reviewer, pre-commit, tree restored to the same hash after each): 1 KILLED, 2 KILLED, 3 KILLED.
+6. Two `test_runner.py` refactor fixtures still created their test file
+   (kept that way by T2-2a for the RED_PHASE_SAMPLES span shape and the
+   stale-bytecode edit). Seed the test at baseline for both: the span test
+   gets a weaker baseline assertion and appends the binding one (append-only,
+   so assertion-preservation holds, and the signature change still triggers
+   three samples); the bytecode test stages `test_n.py` alone instead of
+   `git add -A` (which would stage the first run's coverage file as an add)
+   and its expected failure list gains `assertion-preservation`, because the
+   rewrite now drops an assertion that exists at baseline.
+7. The two tool-span pins (`test_runner.py`, `test_slice.py`) gain one
+   `"git"` entry right after `git_diff`'s: the staged-adds probe.
+Done when: mutants red; `./check.sh` green; `git show --stat` lists exactly
+the seven files above.
 Stop if: `grep -c 'if kind == "refactor":' src/saddle/gates.py` is not 1 (it is at ~L411; T0-3 shifted it by one).
 
 ### T2-3 — Merge-time full-suite gate (the missing Tier 2, minimal form)

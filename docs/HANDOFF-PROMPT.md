@@ -104,7 +104,12 @@ MEASUREMENT. Do not edit any file while pytest, coverage, or mutmut is
 running. Run the suite as CLAUDE.md says:
   PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
 Before believing any mutant SURVIVED, show `git diff --stat` proving the
-mutation applied; a no-op sed is a broken harness, not a passing test.
+mutation applied; a no-op sed is a broken harness, not a passing test. After
+every revert run `find src tests -name __pycache__ -type d -exec rm -rf {} +`
+before the next pytest: a same-length mutant reverted within one second
+leaves stale bytecode that Python will happily import (CLAUDE.md, hazard 3).
+A sed whose target occurs more than once in the file (`grep -c` it first)
+must be scoped with a line range, or it mutates the wrong function.
 
 STOP CONDITIONS. Stop and report, without improvising, if: any "Stop if" line
 in the item fires; a "Now:" string is absent from its file or occurs more than
