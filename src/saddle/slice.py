@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from time import perf_counter
 from typing import Final
 
@@ -89,11 +89,12 @@ MAX_RECOVERY_RETRIES: Final = 2
 PROPOSAL_SAMPLES: Final = 3
 RECOVERY_OUTPUT_CHARS: Final = 4000
 # Which `allowed_tools` name governs a captured run's output in the repair
-# prompt (T3-4). The suite runs under `coverage run -m pytest`, so the
-# executable the node's `test_command` names is not always argv[0]. A run
-# whose argv[0] is in neither column is governed by no binding and is kept:
-# these are the harness's own runs, and dropping one would remove evidence
-# no plan asked to be withheld.
+# prompt (T3-4), keyed by the executable's basename or, for `python -m X`,
+# by X (`_captured_run_tool`). The suite runs under `coverage run -m
+# pytest`, so the executable the node's `test_command` names is not always
+# argv[0]. A run that resolves to no key is governed by no binding and is
+# kept: these are the harness's own runs (git, mutmut), and dropping one
+# would remove evidence no plan asked to be withheld.
 CAPTURED_RUN_TOOL: Final[dict[str, str]] = {
     "pytest": "run_tests",
     "coverage": "run_tests",
@@ -222,9 +223,26 @@ def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | N
     run_argv(["git", "add", "--", *targets], workdir, recorder=recorder)
 
 
+def _captured_run_tool(argv: Sequence[str]) -> str | None:
+    """Which binding governs a captured run's output, by what it ran.
+
+    The match is on the executable's basename and, for `python -m X`, on
+    the module X: nothing constrains how a plan spells `test_command`, so
+    `python3 -m pytest` and `.venv/bin/pytest` have to be `run_tests` as
+    surely as `pytest` is, or omitting the name withholds nothing (T3-4
+    follow-up; the same class as T3-13's unmatched spellings).
+    """
+    if not argv:
+        return None
+    name = PurePosixPath(argv[0]).name
+    if name.startswith("python"):
+        name = argv[2] if len(argv) >= 3 and argv[1] == "-m" else "python"
+    return CAPTURED_RUN_TOOL.get(name)
+
+
 def _run_is_allowed(run: CapturedRun, tools: Collection[str]) -> bool:
     """Is this captured run's output a capability the node asked for (T3-4)?"""
-    governing = CAPTURED_RUN_TOOL.get(run.argv[0]) if run.argv else None
+    governing = _captured_run_tool(run.argv)
     return governing is None or governing in tools
 
 

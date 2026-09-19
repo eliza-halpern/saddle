@@ -1078,6 +1078,48 @@ def test_repair_prompt_withholds_lint_output_without_lint() -> None:
     assert "n.py:1:1 F401" not in text
 
 
+@pytest.mark.parametrize(
+    ("argv", "governing"),
+    [
+        (("pytest", "tests"), "run_tests"),
+        (("coverage", "run", "-m", "pytest"), "run_tests"),
+        (("python3", "-m", "pytest", "tests"), "run_tests"),
+        (("/usr/bin/python3.12", "-m", "coverage", "run", "-m", "pytest"), "run_tests"),
+        ((".venv/bin/pytest", "tests"), "run_tests"),
+        (("python", "tests/run.py"), "run_tests"),
+        (("ruff", "check", "n.py"), "lint"),
+        (("python", "-m", "ruff", "check", "n.py"), "lint"),
+        ((".venv/bin/ruff", "format", "--check"), "lint"),
+        (("mutmut", "run"), None),
+        (("git", "diff", "--stat"), None),
+        ((), None),
+    ],
+)
+def test_repair_prompt_binding_matches_how_a_plan_spells_the_command(
+    argv: tuple[str, ...], governing: str | None
+) -> None:
+    """T3-4 follow-up: the binding governs what ran, not how argv[0] was spelled.
+
+    `test_command` is a free string, so a plan could write `python3 -m
+    pytest` and get the suite's output back without `run_tests`. Match on
+    the basename, and on the module for `python -m X`. A run that resolves
+    to no binding (mutmut, git) is kept whatever the node listed.
+    """
+    captured = [CapturedRun(argv=argv, exit_code=1, stdout="RUN-MARKER", stderr="")]
+
+    def prompt(tools: list[str]) -> str:
+        return format_attempt_failure(
+            _failed_result(), captured, attempt=1, max_attempts=3, tools=tools
+        )
+
+    if governing is None:
+        assert "RUN-MARKER" in prompt([])
+        return
+    other = "lint" if governing == "run_tests" else "run_tests"
+    assert "RUN-MARKER" in prompt([governing])
+    assert "RUN-MARKER" not in prompt([other])
+
+
 def test_repair_prompt_keeps_both_when_the_node_declared_both() -> None:
     """T3-4 known-good: all four names behaves exactly as it did before."""
     captured = [
