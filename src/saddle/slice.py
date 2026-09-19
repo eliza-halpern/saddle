@@ -95,6 +95,14 @@ MAX_RECOVERY_RETRIES: Final = 2
 # compute-optimal split; sequential recovery still follows.
 PROPOSAL_SAMPLES: Final = 3
 RECOVERY_OUTPUT_CHARS: Final = 4000
+# The merge-time suite runs under the same interpreter form as every
+# node's tests gate (`coverage run -m pytest ...`): the module form puts
+# the working directory on `sys.path`, bare `pytest` does not, and a repo
+# whose tests import a top-level package without packaging passes every
+# gate and fails the merge for a reason no gate can observe (T3-17; the
+# smoke run of 2026-09-19: `pytest -q` exit 2 `No module named 'src'`,
+# `python -m pytest -q` 6 passed on the same tree).
+MERGE_COMMAND: Final = "python -m pytest -q"
 # Which `allowed_tools` name governs a captured run's output in the repair
 # prompt (T3-4), keyed by the executable's basename or, for `python -m X`,
 # by X (`_captured_run_tool`). The suite runs under `coverage run -m
@@ -645,7 +653,7 @@ def run_slice(
     journal_path: Path,
     propose: Proposer,
     replan: Replanner | None = None,
-    merge_command: str | None = "pytest -q",
+    merge_command: str | None = MERGE_COMMAND,
     now: Callable[[], str] = _utcnow,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.

@@ -185,10 +185,10 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 
 **Tier 2 — merge-time (budgeted; once per DAG):**
 
-> *Status (2026-09-18): specified, not built — see #60, WORKPLAN T2-3.*
+> *Status (2026-09-19): item 2 built in its minimal form (WORKPLAN T2-3: the full suite once, after the last node, as `python -m pytest -q` — the same interpreter form as the node gates, T3-17); items 1 and 3 not built — see #60.*
 
 > 1. **Scoped, Sampled Mutation Testing:** mutmut/Stryker/PIT restricted to changed lines, capped (e.g., ≤100 mutants or ≤10 minutes, whichever binds first), with a kill-rate threshold from the node's gate spec, floored at 85% and selectable only upward. The earlier allowance for "lower or waived for mechanical glue" is withdrawn: it is the waiver the planner actually took (T3 set 50%, T7 set a 0.0% coverage bar), and a gate whose strictness the graded party chooses is not a gate. Full unscoped mutation is explicitly NOT a per-node gate — it would dominate wall-clock by 10–100×.
-> 2. **Full Suite + Integration:** The complete pytest suite and any integration checks run once against the merged tree.
+> 2. **Full Suite + Integration:** The complete pytest suite and any integration checks run once against the merged tree, under the same interpreter form as the node gates (`python -m pytest`), so the merge measures the union of the node diffs and not a different import environment.
 > 3. **On Failure:** A targeted recovery subgraph (fresh worker context with the surviving-mutant diffs / tracebacks) repairs the specific nodes; the DAG is never re-run wholesale.
 
 **Verification handling:**

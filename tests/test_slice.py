@@ -2017,3 +2017,93 @@ def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
     assert "- Gate tests: PASS (red specification: 1 failing test(s))\n" in result.transcript
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
+
+
+# --- T3-17: the merge suite runs the way the node gates run tests ---------
+
+PKG_DIFF = (
+    "diff --git a/pkg/m.py b/pkg/m.py\n"
+    "--- a/pkg/m.py\n"
+    "+++ b/pkg/m.py\n"
+    "@@ -1,2 +1,2 @@\n"
+    " def g():\n"
+    "-    return 1\n"
+    "+    return 2\n"
+)
+
+
+def _packaged_repo(root: Path) -> None:
+    """A top-level package imported by tests in `tests/`, no conftest and no
+    packaging: the layout the smoke run's planner produced. `python -m
+    pytest` puts cwd on `sys.path` and imports `pkg`; bare `pytest` does not."""
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, root) == 0
+    (root / "pkg").mkdir()
+    (root / "pkg" / "__init__.py").write_text("")
+    (root / "pkg" / "m.py").write_text("def g():\n    return 1\n")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_m.py").write_text(
+        "from pkg.m import g\n\n\ndef test_g():  # REQ-001\n    assert g() == 2\n"
+    )
+    assert run_argv(["git", "add", "-A"], root) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
+
+
+def _packaged_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **kwargs: object
+) -> SliceResult:
+    _packaged_repo(tmp_path)
+    _mutmut_stub(
+        tmp_path / "stub",
+        monkeypatch,
+        {
+            f"p{index}": ("pkg/m.py", "    return 2")
+            for index in range(1, 1 + MIN_SIGNIFICANT_MUTANTS)
+        },
+    )
+    node = _node_dict("n1", [])
+    node["target_files"] = ["pkg/m.py"]
+    gate = node["deterministic_gate"]
+    assert isinstance(gate, dict)
+    gate["test_command"] = "pytest tests/test_m.py"
+    dag = Dag.model_validate({"nodes": [node]})
+    return run_slice(
+        "Fix g.",
+        dag,
+        workdir=tmp_path,
+        journal_path=tmp_path / "proofs.jsonl",
+        propose=lambda node, failure: DiffProposal(PKG_DIFF, ""),
+        now=lambda: "2026-09-16T00:00:00+00:00",
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def test_run_slice_merge_suite_runs_as_the_node_gates_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3-17 known-good: the node proves under `coverage run -m pytest` and
+    the merge suite, under the same interpreter form, imports the same
+    package and passes."""
+    result = _packaged_slice(tmp_path, monkeypatch)
+    assert result.passed is True, result.transcript
+    run = [span for span in read_spans(tmp_path / "proofs.jsonl") if span.name == "run"][-1]
+    assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
+    merge = next(s for s in read_spans(tmp_path / "proofs.jsonl") if s.name == "merge-suite")
+    assert merge.argv == ["python", "-m", "pytest", "-q"]
+
+
+def test_run_slice_bare_pytest_merge_cannot_import_what_the_gates_could(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3-17 known-bad, kept so the reason for the default stays load-bearing:
+    the same proven tree fails a bare `pytest -q` merge with a collection
+    error (exit 2) that no node gate could observe."""
+    result = _packaged_slice(tmp_path, monkeypatch, merge_command="pytest -q")
+    assert list(result.proofs) == ["n1"]
+    assert result.passed is False
+    run = [span for span in read_spans(tmp_path / "proofs.jsonl") if span.name == "run"][-1]
+    assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 2"
