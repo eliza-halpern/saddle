@@ -10,6 +10,7 @@ graphs ride the same path.
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 import tempfile
 import uuid
@@ -21,8 +22,8 @@ from time import perf_counter
 from typing import Final
 
 from saddle.dag import Dag, ExecutionConstraints, Node
-from saddle.evidence import CapturedRun, git_changed_files, run_argv, run_stdin
-from saddle.gates import GateCheck, Tier1Result
+from saddle.evidence import CapturedRun, git_changed_files, run_argv, run_shell, run_stdin
+from saddle.gates import SHELL_TIMEOUT, GateCheck, Tier1Result
 from saddle.journal import (
     ProofRecord,
     SpanRecord,
@@ -573,6 +574,7 @@ def run_slice(
     journal_path: Path,
     propose: Proposer,
     replan: Replanner | None = None,
+    merge_command: str | None = "pytest -q",
     now: Callable[[], str] = _utcnow,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
@@ -581,6 +583,13 @@ def run_slice(
     duplicate records, so that waits for the resume design. When `replan`
     is given, each exhausted node recompiles once into a replacement
     subgraph; replanned nodes that fail again stay failed.
+
+    Every node is gated by its own scoped `test_command`; nothing checks
+    the union of their diffs until `merge_command` runs, once, unscoped,
+    in `workdir` after the schedule loop ends (ARCHITECTURE Tier 2, #60).
+    It runs only if at least one node was proven, seals a tool span named
+    `merge-suite` under the run span, and a non-zero exit fails the run
+    without revisiting any per-node verdict. `None` disables it.
     """
     if read_records(journal_path):
         msg = f"journal {str(journal_path)!r} is not fresh; resume is not supported"
@@ -627,6 +636,24 @@ def run_slice(
         if not progressed:
             break
     sealed = {record.node_id: record for record in read_records(journal_path)}
+    merge_exit = 0
+    merge_ran = merge_command is not None and bool(proofs)
+    if merge_command is not None and proofs:
+        merge_start = perf_counter()
+        merge_exit = run_shell(merge_command, workdir)
+        timed_out = " (timed out)" if merge_exit == SHELL_TIMEOUT else ""
+        append_span(
+            journal_path,
+            build_span(
+                node_id="",
+                argv=shlex.split(merge_command),
+                duration_ms=_elapsed_ms(merge_start),
+                exit_code=merge_exit,
+                detail=f"merge-time full suite: exit {merge_exit}{timed_out}",
+                name="merge-suite",
+                parent_id=run_span_id,
+            ),
+        )
     tools = tool_spans_by_node(read_spans(journal_path))
     transcripts = tuple(
         _transcribe(
@@ -639,7 +666,7 @@ def run_slice(
     )
     failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
     undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
-    passed = not failed_unexcused and not undispatched
+    passed = not failed_unexcused and not undispatched and merge_exit == 0
     append_span(
         journal_path,
         build_span(
@@ -651,6 +678,7 @@ def run_slice(
                 f"{len(proofs)} proven, "
                 f"{len(failed_unexcused)} failed, "
                 f"{len(undispatched)} undispatched"
+                + (f", merge exit {merge_exit}" if merge_ran else "")
             ),
             kind="agent",
             name="run",

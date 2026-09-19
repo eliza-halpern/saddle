@@ -300,6 +300,9 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         workdir=tmp_path,
         journal_path=journal,
         propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        # This test pins the exact tool-span sequence and mocks perf_counter
+        # with four ticks; the merge-time suite (T2-3) is exercised on its own.
+        merge_command=None,
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True
@@ -402,6 +405,7 @@ def test_run_slice_pass_end_to_end_records_distinct_sample_count(
         workdir=tmp_path,
         journal_path=journal,
         propose=lambda node, failure: next(proposals),
+        merge_command=None,  # four perf_counter ticks, as above
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True
@@ -410,6 +414,87 @@ def test_run_slice_pass_end_to_end_records_distinct_sample_count(
     assert (worker.name, worker.exit_code) == ("worker:n1", 0)
     assert worker.detail == f"3 distinct of {PROPOSAL_SAMPLES} sample(s)"
     assert run.detail == "1 proven, 0 failed, 0 undispatched"
+
+
+def test_run_slice_merge_suite_gate_runs_once_and_is_journaled(tmp_path: Path) -> None:
+    """Known-good (T2-3, #60): after every node is proven, the unscoped merge
+    command runs once in the workdir and seals a `merge-suite` tool span
+    under the run span; exit 0 keeps the run passing."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        merge_command="true",
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True
+    assert list(result.proofs) == ["n1"]
+    spans = read_spans(journal)
+    (merge,) = [span for span in spans if span.name == "merge-suite"]
+    run = next(span for span in spans if span.name == "run")
+    assert (merge.kind, merge.node_id, merge.exit_code) == ("tool", "", 0)
+    assert merge.argv == ["true"]
+    assert merge.detail == "merge-time full suite: exit 0"
+    assert merge.parent_id == run.span_id
+    assert run.exit_code == 0
+    assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
+
+
+def test_run_slice_merge_suite_failure_fails_the_run_not_the_node(tmp_path: Path) -> None:
+    """Known-bad (T2-3, #60): a node can pass its own scoped gate while the
+    union of diffs breaks the suite. The merge command's non-zero exit fails
+    the run; the node's proof record stays, because its verdict was earned."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        merge_command="false",
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False
+    assert list(result.proofs) == ["n1"]
+    (record,) = read_records(journal)
+    assert record.node_id == "n1"
+    assert "- Verdict: FAIL\n" in result.transcript
+    spans = read_spans(journal)
+    (merge,) = [span for span in spans if span.name == "merge-suite"]
+    run = next(span for span in spans if span.name == "run")
+    assert merge.exit_code == 1
+    assert merge.detail == "merge-time full suite: exit 1"
+    assert run.exit_code == 1
+    assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 1"
+
+
+def test_run_slice_merge_suite_is_skipped_when_nothing_was_proven(tmp_path: Path) -> None:
+    """No proven node means no merged tree to test: the merge command does
+    not run and the run detail carries no merge exit."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure: DiffProposal(BAD_DIFF, ""),
+        merge_command="true",
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False
+    spans = read_spans(journal)
+    assert [span for span in spans if span.name == "merge-suite"] == []
+    run = next(span for span in spans if span.name == "run")
+    assert "merge exit" not in run.detail
 
 
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:
