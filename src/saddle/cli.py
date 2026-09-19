@@ -133,6 +133,9 @@ Rules:
   change source files; an "impl" node makes them pass and may not change
   test files. One worker writing both sides encodes a misreading of the
   requirement twice, and grades itself on the suite it just rewrote.
+  A "test" node's tests are expected to fail when it runs: its tests
+  gate passes on a red run (failing tests, or an import of a module the
+  "impl" node will create) and fails if they already pass.
 - Use "refactor" only when behaviour is preserved: the code and its tests
   move together and no test can fail beforehand.
 - The first node has no dependencies; every other node depends on at least one earlier node.

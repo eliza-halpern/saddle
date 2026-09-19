@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import ast
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from saddle.dag import Node
 from saddle.evidence import (
     CapturedRun,
+    MutationOutcome,
     changed_lines,
     covered_lines,
     drop_test_caches,
@@ -170,7 +171,9 @@ def run_node_gate(
         # entirely when no test changed -- that path never reads the
         # exits, and three extra suite runs per refactor node is real
         # wall-clock for evidence nothing consumes.
-        samples = RED_PHASE_SAMPLES if tests_changed else 1
+        # A test node has no baseline leg: its red-phase mirrors the tests
+        # verdict (T3-7a), so the samples would be evidence nothing reads.
+        samples = 0 if node.kind == "test" else (RED_PHASE_SAMPLES if tests_changed else 1)
         baseline_exits: list[int] = []
         baseline_output = ""
         for sample_index in range(samples):
@@ -191,8 +194,14 @@ def run_node_gate(
         return run.exit_code
 
     sample = gate.mutation_sample
-    mutation = mutation_sample(
-        workdir, changed, sample.max_mutants, test_files=test_sources, recorder=recorder
+    # A test node changes no source, so there is nothing to mutate and the
+    # check is substituted with "not required" (T3-7a): skip the mutmut run.
+    mutation = (
+        MutationOutcome(killed=0, total=0, generated=0, survivors=())
+        if node.kind == "test"
+        else mutation_sample(
+            workdir, changed, sample.max_mutants, test_files=test_sources, recorder=recorder
+        )
     )
     inputs = Tier1Inputs(
         sources=sources,
@@ -214,5 +223,7 @@ def run_node_gate(
         mutation=mutation,
         added_files=[str(workdir / p) for p in added],
         touched_files=touched,
+        test_output=suite.stdout + suite.stderr,
+        workdir_modules=sorted({PurePath(rel).parts[0].removesuffix(".py") for rel in sources}),
     )
     return run_tier1(node, inputs)

@@ -543,3 +543,65 @@ def test_run_node_gate_greenfield_tautology_no_longer_clears_red_phase(
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False
     assert "pass pre-change" in red.detail
+
+
+# --- T3-7a: the first `test`-kind nodes that can pass Tier-1 -----------------
+
+_SPEC_CODE: Final = "def f():\n    return 1\n"
+SPEC_TEST: Final = (
+    "from hypothesis import given\n"
+    "from hypothesis import strategies as st\n\n"
+    "from n import f\n\n\n"
+    "def test_f_returns_two():  # REQ-001\n"
+    "    assert f() == 2\n\n\n"
+    "@given(st.integers())\n"
+    "def test_f_is_an_int(_value):  # REQ-001\n"
+    "    assert isinstance(f(), int)\n"
+)
+
+
+def _spec_worktree(root: Path, test_body: str) -> None:
+    """Source committed and untouched; the node's whole diff is one new test file."""
+    _worktree(root, test_body, baseline_code=_SPEC_CODE, fixed_code=_SPEC_CODE)
+
+
+def test_run_node_gate_test_node_passes_as_a_red_specification(tmp_path: Path) -> None:
+    """T3-7a known-good, end to end: before it, no test node could pass (T3-7)."""
+    _spec_worktree(tmp_path, SPEC_TEST)
+    recorder = SpanRecorder(path=tmp_path / "proofs.jsonl", node_id="n1")
+    result = run_node_gate(_node(kind="test"), tmp_path, recorder=recorder)
+    assert result.passed is True, [check for check in result.checks if not check.passed]
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["tests"].detail == "red specification: 1 failing test(s)"
+    assert by_name["red-phase"].detail == "red by construction: the specification fails now"
+    assert by_name["coverage"].basis == "test node"
+    assert by_name["mutation"].basis == "test node"
+    # No baseline samples and no mutmut: the suite ran exactly once.
+    names = [span.name for span in read_spans(tmp_path / "proofs.jsonl") if span.kind == "tool"]
+    assert names.count("coverage") == 1
+    assert "mutmut" not in names
+    assert "timeout" not in names
+
+
+def test_run_node_gate_test_node_greenfield_import_is_red(tmp_path: Path) -> None:
+    """A spec importing the module the impl node will create is red, not broken."""
+    # `m` does not exist, so isort files it as third-party: no blank line.
+    body = SPEC_TEST.replace(
+        "from hypothesis import strategies as st\n\nfrom n import f\n",
+        "from hypothesis import strategies as st\nfrom m import f\n",
+    )
+    _spec_worktree(tmp_path, body)
+    result = run_node_gate(_node(kind="test"), tmp_path)
+    assert result.passed is True, [check for check in result.checks if not check.passed]
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["tests"].detail == "red specification: module 'm' does not exist yet"
+
+
+def test_run_node_gate_test_node_whose_tests_pass_specifies_nothing(tmp_path: Path) -> None:
+    """T3-7a known-bad: the tautological spec fails tests and red-phase, nothing else."""
+    _spec_worktree(tmp_path, SPEC_TEST.replace("assert f() == 2", "assert f() == 1"))
+    result = run_node_gate(_node(kind="test"), tmp_path)
+    assert result.passed is False
+    failed = {check.name: check.detail for check in result.checks if not check.passed}
+    assert list(failed) == ["tests", "red-phase"]
+    assert failed["tests"] == "'pytest test_n.py' exited 0: tests already pass, nothing specified"

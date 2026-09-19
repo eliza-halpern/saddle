@@ -125,7 +125,79 @@ def check_ruff(files: Collection[str], run: Callable[[list[str]], int]) -> GateC
     return GateCheck(name="ruff", passed=True, detail=f"{len(ordered)} file(s) clean")
 
 
-def check_test_command(test_command: str, run: Callable[[str], int]) -> GateCheck:
+def _failing_test_count(output: str) -> int:
+    """Failing tests as pytest's summary line counts them (`3 failed, 1 passed`)."""
+    match = re.search(r"(\d+) failed", output)
+    return int(match.group(1)) if match else 0
+
+
+def _missing_module(output: str) -> str | None:
+    """Top-level name of the module an import error says is absent, if any."""
+    match = re.search(r"No module named '([\w.]+)'", output)
+    return match.group(1).split(".")[0] if match else None
+
+
+def _red_specification(
+    test_command: str, exit_code: int, output: str, workdir_modules: Collection[str]
+) -> GateCheck:
+    """The `test`-kind tests verdict: the node's tests must fail now (T3-7a).
+
+    A test node writes the specification the impl node depending on it
+    must satisfy, so a suite that passes against the current code
+    specified nothing. Exit 1 with at least one failing test is red. A
+    collection error is red only when it names a module the worktree
+    does not have -- the greenfield spec whose module the impl node will
+    create; one naming an existing module is a broken test, not a
+    specification. Any other exit never ran the tests.
+    """
+    if exit_code == 0:
+        return GateCheck(
+            name="tests",
+            passed=False,
+            detail=f"{test_command!r} exited 0: tests already pass, nothing specified",
+        )
+    if exit_code == PYTEST_TESTS_FAILED:
+        failing = _failing_test_count(output)
+        if failing:
+            return GateCheck(
+                name="tests",
+                passed=True,
+                detail=f"red specification: {failing} failing test(s)",
+            )
+        return GateCheck(
+            name="tests",
+            passed=False,
+            detail=f"{test_command!r} exited 1 but its output counts no failing test",
+        )
+    if exit_code == PYTEST_COLLECTION_ERROR:
+        missing = _missing_module(output)
+        if missing is not None and missing not in workdir_modules:
+            return GateCheck(
+                name="tests",
+                passed=True,
+                detail=f"red specification: module {missing!r} does not exist yet",
+            )
+        blamed = f"names existing module {missing!r}" if missing else "names no missing module"
+        return GateCheck(
+            name="tests",
+            passed=False,
+            detail=f"{test_command!r} collection error {blamed}: broken, not a specification",
+        )
+    return GateCheck(
+        name="tests",
+        passed=False,
+        detail=f"{test_command!r} exited {exit_code}: tests never ran",
+    )
+
+
+def check_test_command(
+    test_command: str,
+    run: Callable[[str], int],
+    *,
+    kind: str = "impl",
+    output: str = "",
+    workdir_modules: Collection[str] = (),
+) -> GateCheck:
     """Run the node's declared pytest scope; nonzero exit fails the gate.
 
     A timeout is reported as a hang rather than as an exit code. The two
@@ -133,6 +205,11 @@ def check_test_command(test_command: str, run: Callable[[str], int]) -> GateChec
     disagrees with, while a suite that never terminates yields no verdict
     at all -- downstream harnesses that parse pytest counts read partial
     or zero results, so a hang scores worse than the failure it hides.
+
+    A `test` node is graded the other way round (`_red_specification`):
+    `output` is the run's captured text and `workdir_modules` the
+    worktree's importable top-level names, both supplied by the runner so
+    the predicate stays subprocess-free.
     """
     exit_code = run(test_command)
     if exit_code == TOOL_UNAVAILABLE:
@@ -147,6 +224,8 @@ def check_test_command(test_command: str, run: Callable[[str], int]) -> GateChec
             passed=False,
             detail=f"{test_command!r} hangs: no verdict within the time limit",
         )
+    if kind == "test":
+        return _red_specification(test_command, exit_code, output, workdir_modules)
     if exit_code != 0:
         return GateCheck(
             name="tests",
@@ -234,6 +313,7 @@ def check_red_phase(
     kind: str,
     coverage: GateCheck,
     mutation: MutationOutcome,
+    red_spec: GateCheck | None = None,
 ) -> GateCheck:
     """New tests must fail pre-change for a reason the change explains.
 
@@ -259,6 +339,19 @@ def check_red_phase(
     changed-line coverage plus a hard mutation floor, which a tautological
     refactor cannot clear either.
     """
+    # A test node has no differential: its tests are the specification
+    # and they must fail now, which the tests check already observed, so
+    # red-phase mirrors that verdict (`red_spec`) and has no baseline leg
+    # (T3-7a). The impl node that depends on it takes the real differential.
+    if kind == "test":
+        if red_spec is not None and red_spec.passed:
+            return GateCheck(
+                name="red-phase",
+                passed=True,
+                detail="red by construction: the specification fails now",
+            )
+        why = red_spec.detail if red_spec is not None else "no tests verdict to mirror"
+        return GateCheck(name="red-phase", passed=False, detail=f"specification is not red: {why}")
     # Only a refactor is behaviour-preserving by construction. An impl
     # node also changes no tests, but its tests were written by the test
     # node it depends on and already fail at its baseline, so it takes the
@@ -565,6 +658,11 @@ class Tier1Inputs:
     added_files: Collection[str] = ()
     # Repo-relative paths of every file the node changed or added (T3-2).
     touched_files: Collection[str] = ()
+    # The current suite run's captured text and the worktree's importable
+    # top-level names; read only by a `test` node's red-specification
+    # verdict (T3-7a).
+    test_output: str = ""
+    workdir_modules: Collection[str] = ()
 
 
 @dataclass(frozen=True)
@@ -632,17 +730,44 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     )
 
 
+def _not_required(name: str) -> GateCheck:
+    """A `test` node changes no source, so source-only evidence is moot (T3-7a)."""
+    return GateCheck(
+        name=name, passed=True, detail="not required: no source changed", basis="test node"
+    )
+
+
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
-    """Run all ten Tier-1 checks against `node`'s gate spec and aggregate."""
+    """Run all eleven Tier-1 checks against `node`'s gate spec and aggregate.
+
+    A `test` node is a red specification (T3-7a): its tests check inverts,
+    red-phase mirrors that verdict, and the two source-only checks
+    (coverage, mutation) are substituted with "not required" so the
+    order pin and the count stay the same for every kind.
+    """
     gate = node.deterministic_gate
     sample = gate.mutation_sample
-    coverage = check_changed_line_coverage(
-        inputs.changed, inputs.covered, gate.changed_line_coverage_min
+    is_spec = node.kind == "test"
+    syntax = check_syntax(inputs.sources)
+    ruff = check_ruff(inputs.ruff_files, inputs.ruff_runner)
+    tests = check_test_command(
+        gate.test_command,
+        inputs.test_runner,
+        kind=node.kind,
+        output=inputs.test_output,
+        workdir_modules=inputs.workdir_modules,
+    )
+    coverage = (
+        _not_required("coverage")
+        if is_spec
+        else check_changed_line_coverage(
+            inputs.changed, inputs.covered, gate.changed_line_coverage_min
+        )
     )
     checks = (
-        check_syntax(inputs.sources),
-        check_ruff(inputs.ruff_files, inputs.ruff_runner),
-        check_test_command(gate.test_command, inputs.test_runner),
+        syntax,
+        ruff,
+        tests,
         coverage,
         check_red_phase(
             inputs.baseline_exits,
@@ -653,6 +778,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             kind=node.kind,
             coverage=coverage,
             mutation=inputs.mutation,
+            red_spec=tests,
         ),
         check_node_scope(
             node.kind,
@@ -664,6 +790,8 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         check_property_coverage(node.kind, inputs.flipped_tests),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
-        check_mutation(inputs.mutation, sample.kill_threshold),
+        _not_required("mutation")
+        if is_spec
+        else check_mutation(inputs.mutation, sample.kill_threshold),
     )
     return Tier1Result(node_id=node.id, passed=all(check.passed for check in checks), checks=checks)

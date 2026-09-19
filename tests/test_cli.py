@@ -2237,3 +2237,11 @@ def test_worker_prompt_asks_test_nodes_for_a_property() -> None:
     )
     assert "@given" in prompt
     assert "from_regex" in prompt
+
+
+def test_emit_prompt_says_a_test_node_is_expected_to_fail() -> None:
+    """T3-7a: the planner is told a test node's suite must be red when it runs,
+    or it keeps planning test nodes whose tests pass and specify nothing."""
+    prompt = build_emit_prompt("Do the thing.")
+    assert "expected to fail" in prompt
+    assert "fails if they already pass" in prompt

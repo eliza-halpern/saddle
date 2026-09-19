@@ -6,9 +6,12 @@ import inspect
 from dataclasses import replace
 from typing import Final
 
+import pytest
+
 from saddle.dag import DeterministicGate, Node
 from saddle.evidence import MutationOutcome
 from saddle.gates import (
+    PYTEST_COLLECTION_ERROR,
     PYTEST_TESTS_FAILED,
     RED_PHASE_SAMPLES,
     SHELL_TIMEOUT,
@@ -36,11 +39,11 @@ from saddle.gates import (
 ALL_TOOLS: Final[tuple[str, ...]] = ("read_file", "write_file", "run_tests", "lint")
 
 
-def _node(tools: list[str] | None = None) -> Node:
+def _node(tools: list[str] | None = None, kind: str = "refactor") -> Node:
     return Node.model_validate(
         {
             "id": "n1",
-            "kind": "refactor",
+            "kind": kind,
             "dependencies": [],
             "task_prompt": "Do n1.",
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
@@ -209,8 +212,12 @@ def _red(
     mutation: MutationOutcome = _STRONG,
 ) -> GateCheck:
     # Callers that predate the kind split describe themselves by whether
-    # the node touched tests; a refactor is the no-test-change case.
-    kind = kind or ("test" if tests_changed else "refactor")
+    # the node touched tests; a refactor is the no-test-change case. The
+    # differential (fail pre-change, pass post-change) is the impl node's
+    # path: a test node is a red specification with no baseline leg
+    # (T3-7a), and these fixtures used to name it "test" because nothing
+    # had yet tried to run one (T3-7).
+    kind = kind or ("impl" if tests_changed else "refactor")
     return check_red_phase(
         (baseline,) * RED_PHASE_SAMPLES,
         lambda: current,
@@ -470,7 +477,7 @@ def test_red_phase_hanging_baseline_names_the_hang() -> None:
         baseline_output="",
         changed_files=["orderedlist.py"],
         tests_changed=True,
-        kind="test",
+        kind="impl",
         coverage=GateCheck(name="coverage", passed=True),
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
@@ -496,7 +503,7 @@ def test_red_phase_nondeterministic_baseline_proves_nothing() -> None:
         baseline_output="",
         changed_files=["n.py"],
         tests_changed=True,
-        kind="test",
+        kind="impl",
         coverage=GateCheck(name="coverage", passed=True),
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
@@ -512,7 +519,7 @@ def test_red_phase_unanimous_baseline_still_passes() -> None:
         baseline_output="",
         changed_files=["n.py"],
         tests_changed=True,
-        kind="test",
+        kind="impl",
         coverage=GateCheck(name="coverage", passed=True),
         mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
     )
@@ -916,3 +923,184 @@ def test_same_test_name_in_two_modules_keeps_both_contracts() -> None:
     check = check_assertion_preservation("refactor", baseline, current)
     assert check.passed is False
     assert "test_total" in check.detail
+
+
+# --- T3-7a: a `test` node is a red specification ---------------------------
+
+SPEC_SOURCE: Final = (
+    "from hypothesis import given\n"
+    "from hypothesis import strategies as st\n\n"
+    "from n import f\n\n\n"
+    "def test_f_returns_two():  # REQ-001\n"
+    "    assert f() == 2\n\n\n"
+    "@given(st.integers())\n"
+    "def test_f_is_an_int(_value):  # REQ-001\n"
+    "    assert isinstance(f(), int)\n"
+)
+
+
+def _spec_inputs(exit_code: int, output: str) -> Tier1Inputs:
+    """Inputs the runner would build for a test node whose only diff is a test file."""
+    return replace(
+        _passing_inputs(),
+        ruff_files=["test_n.py"],
+        test_runner=lambda _cmd: exit_code,
+        changed={("test_n.py", 1)},
+        covered=set(),
+        baseline_exits=(),
+        current_runner=lambda: exit_code,
+        flipped_tests={"test_n.py": SPEC_SOURCE},
+        mutation=MutationOutcome(killed=0, total=0, generated=0, survivors=()),
+        test_output=output,
+        workdir_modules=["n", "test_n"],
+    )
+
+
+def test_tests_spec_node_passes_on_a_red_run() -> None:
+    """T3-7a known-good: a test node's suite must fail now."""
+    check = check_test_command(
+        "pytest test_n.py",
+        lambda _cmd: PYTEST_TESTS_FAILED,
+        kind="test",
+        output="1 failed, 1 passed in 0.02s",
+    )
+    assert check.passed is True
+    assert check.detail == "red specification: 1 failing test(s)"
+
+
+def test_tests_spec_node_passes_on_a_greenfield_import() -> None:
+    """The module under test does not exist yet: the impl node will create it."""
+    check = check_test_command(
+        "pytest test_m.py",
+        lambda _cmd: PYTEST_COLLECTION_ERROR,
+        kind="test",
+        output="E   ModuleNotFoundError: No module named 'm'",
+        workdir_modules={"n"},
+    )
+    assert check.passed is True
+    assert check.detail == "red specification: module 'm' does not exist yet"
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "output", "fragment"),
+    [
+        (0, "2 passed in 0.01s", "exited 0: tests already pass, nothing specified"),
+        (PYTEST_TESTS_FAILED, "", "exited 1 but its output counts no failing test"),
+        (
+            PYTEST_COLLECTION_ERROR,
+            "ModuleNotFoundError: No module named 'n'",
+            "names existing module 'n'",
+        ),
+        (PYTEST_COLLECTION_ERROR, "ERROR test_n.py - SyntaxError", "names no missing module"),
+        (5, "no tests ran in 0.01s", "exited 5: tests never ran"),
+    ],
+)
+def test_tests_spec_node_known_bad(exit_code: int, output: str, fragment: str) -> None:
+    check = check_test_command(
+        "pytest test_n.py",
+        lambda _cmd: exit_code,
+        kind="test",
+        output=output,
+        workdir_modules={"n"},
+    )
+    assert check.passed is False
+    assert fragment in check.detail
+
+
+@pytest.mark.parametrize(
+    ("code", "word"), [(SHELL_TIMEOUT, "hangs"), (TOOL_UNAVAILABLE, "unavailable")]
+)
+def test_tests_spec_node_hang_and_unavailable_still_fail(code: int, word: str) -> None:
+    check = check_test_command(
+        "pytest test_n.py", lambda _cmd: code, kind="test", output="1 failed in 0.01s"
+    )
+    assert check.passed is False
+    assert word in check.detail
+
+
+def test_tests_impl_node_still_needs_exit_zero() -> None:
+    """The default kind is unchanged: exit 1 fails an impl node whatever the output says."""
+    check = check_test_command(
+        "pytest test_n.py", lambda _cmd: PYTEST_TESTS_FAILED, output="1 failed in 0.01s"
+    )
+    assert check.passed is False
+    assert check.detail == "'pytest test_n.py' exited 1"
+
+
+def test_red_phase_spec_node_mirrors_the_tests_verdict() -> None:
+    """A test node has no baseline leg: red-phase is the tests verdict, restated."""
+
+    def red_phase(spec: GateCheck | None) -> GateCheck:
+        # `baseline_exits=()` proves the branch returns before any baseline
+        # observation is read: the runner takes none for a test node.
+        return check_red_phase(
+            (),
+            lambda: PYTEST_TESTS_FAILED,
+            baseline_output="",
+            changed_files=[],
+            tests_changed=True,
+            kind="test",
+            coverage=GateCheck(name="coverage", passed=True),
+            mutation=MutationOutcome(killed=0, total=0, generated=0, survivors=()),
+            red_spec=spec,
+        )
+
+    red = red_phase(
+        GateCheck(name="tests", passed=True, detail="red specification: 1 failing test(s)")
+    )
+    assert red.passed is True
+    assert red.detail == "red by construction: the specification fails now"
+    green = red_phase(
+        GateCheck(
+            name="tests", passed=False, detail="'pytest test_n.py' exited 0: nothing specified"
+        )
+    )
+    assert green.passed is False
+    assert (
+        green.detail == "specification is not red: 'pytest test_n.py' exited 0: nothing specified"
+    )
+    missing = red_phase(None)
+    assert missing.passed is False
+    assert missing.detail == "specification is not red: no tests verdict to mirror"
+
+
+def test_run_tier1_spec_node_keeps_eleven_checks_and_substitutes_source_only_ones() -> None:
+    """T3-7a known-good at the aggregate: every check runs, two read "not required"."""
+    result = run_tier1(_node(kind="test"), _spec_inputs(PYTEST_TESTS_FAILED, "1 failed in 0.01s"))
+    assert [check.name for check in result.checks] == [
+        "syntax",
+        "ruff",
+        "tests",
+        "coverage",
+        "red-phase",
+        "node-scope",
+        "target-scope",
+        "property-coverage",
+        "assertion-preservation",
+        "requirement-binding",
+        "mutation",
+    ]
+    assert result.passed is True, [check for check in result.checks if not check.passed]
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["tests"].detail == "red specification: 1 failing test(s)"
+    assert by_name["red-phase"].detail == "red by construction: the specification fails now"
+    for name in ("coverage", "mutation"):
+        assert by_name[name].detail == "not required: no source changed"
+        assert by_name[name].basis == "test node"
+
+
+def test_run_tier1_spec_node_whose_tests_pass_fails_tests_and_red_phase_only() -> None:
+    """T3-7a known-bad: the tautological specification fails for the right reason."""
+    result = run_tier1(_node(kind="test"), _spec_inputs(0, "2 passed in 0.01s"))
+    assert result.passed is False
+    assert [check.name for check in result.checks if not check.passed] == ["tests", "red-phase"]
+
+
+def test_run_tier1_impl_node_keeps_the_real_coverage_and_mutation_checks() -> None:
+    """The substitution is keyed on kind: an impl node's coverage is still measured."""
+    inputs = replace(_passing_inputs(), covered=set())
+    result = run_tier1(_node(kind="impl"), inputs)
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["coverage"].passed is False
+    assert by_name["coverage"].basis != "test node"
+    assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
