@@ -267,6 +267,11 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "may not create or rename files" in prompt
     assert 'never start one with "/"' in prompt
     assert 'never use "/"' not in prompt
+    # The four rules the 20a/20b smoke runs showed the planner needs (T3-12).
+    assert 'Never name a package "src"' in prompt
+    assert "cite the requirement id of every node they specify" in prompt
+    assert "every file the node will create as well as edit" in prompt
+    assert "names every test file it will write" in prompt
     assert "over test files only" in prompt
     # Was: `assert "fewest nodes" in prompt`. The suite pinned the
     # guidance #51 removes: "prefer the fewest nodes" is right for T1 and
@@ -276,6 +281,18 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "fewest nodes" not in prompt
     assert "Size the plan to the work" in prompt
     assert "one worker's single" in prompt
+
+
+def test_build_worker_prompt_tells_the_worker_its_target_files() -> None:
+    """20b's node-2 wrote a second test file no node listed (R3): the
+    gate rejected it, but the worker had never been told the list."""
+    scoped = Node.model_validate({**_node_dict(), "target_files": ["n.py", "m.py"]})
+    prompt = build_worker_prompt(task=TASK, node=scoped, files=["n.py"], contents={})
+    assert "Touch only these files: n.py, m.py." in prompt
+    assert "rejects a diff that names any other file" in prompt
+    unscoped = Node.model_validate(_node_dict())
+    prompt = build_worker_prompt(task=TASK, node=unscoped, files=["n.py"], contents={})
+    assert "Touch only these files" not in prompt
 
 
 def test_build_worker_prompt_covers_format_rules_and_files() -> None:

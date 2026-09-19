@@ -154,6 +154,8 @@ Rules:
 - A task about behaviour an existing file already owns changes that file.
   Create a new module only when no listed file owns the behaviour; never
   create a parallel copy of a function the repository already defines.
+  Never name a package "src": the mutation gate cannot instrument a
+  module whose name starts with "src.".
 - Each node has a kind: "test", "impl" or "refactor".
 - Split behaviour changes into a "test" node and an "impl" node that
   depends on it. A "test" node writes the failing tests and may not
@@ -174,6 +176,10 @@ Rules:
   a dot", not "Validates email correctly". A statement no test can
   contradict states nothing.
 - Requirement IDs are REQ- followed by exactly three digits.
+- A "test" node's tests cite the requirement id of every node they specify,
+  the "impl" node's included: the binding gate fails a node whose id no
+  test cites, and fails a node whose tests cite an id no node of the plan
+  declares.
 - reasoning_budget is one of: zero, low, medium, xhigh.
 - Size reasoning_budget to the node: mechanical nodes (implement, wire, test)
   take low or zero; reserve medium/xhigh for complex algorithmic nodes.
@@ -190,6 +196,10 @@ Rules:
   e.g. ["src/app/login.py"].
   Entries look like the example: never start one with "/" and never use "..".
   A node that touches a file outside its list fails.
+  List every file the node will create as well as edit, including a new
+  package's __init__.py: a node that adds a file its list omits fails.
+  A "test" node's target_files names every test file it will write; the
+  gate rejects any other.
 - red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
@@ -246,6 +256,14 @@ def build_worker_prompt(
     else:
         context = CONTENTS_WITHHELD
     reqs = "\n".join(f"  {req.id}: {req.statement}" for req in node.requirements)
+    scope = ""
+    if node.target_files:
+        # The planner's list reaches the gate; the worker has to hear it
+        # too, or it writes the extra test file 20b's node-2 wrote (R3).
+        scope = (
+            f"- Touch only these files: {', '.join(node.target_files)}. "
+            "The gate rejects a diff that names any other file.\n"
+        )
     return f"""Task: {task}
 
 Node {node.id}: {node.task_prompt}
@@ -274,7 +292,7 @@ Rules:
   computing them.
 - Mark new files with "new file mode 100644".
 - Mention each requirement ID in the new or changed test source.
-- A "test" node must include at least one hypothesis property, not only
+{scope}- A "test" node must include at least one hypothesis property, not only
   examples: `@given(...)` over generated inputs. Examples probe the cases
   you already thought of; a property probes the ones you did not. For a
   requirement about a text format, `hypothesis.strategies.from_regex`

@@ -1941,16 +1941,25 @@ through `splice_replan` and back into the loop).
 Dry run: not run.
 
 ### T3-12 — The planner prompt says what the gates enforce (Medium)
-Status 2026-09-19: PARTIAL — 0bd08ad (executor, session 27) landed steps
-1–3 exactly as written: both sentences present, `never use "/"` absent,
-mutants 1–2 red (reviewer re-ran both at HEAD: 1 failed each), check.sh
-632/100%. NOT landed: the four "Added 2026-09-19" rules below (S3/S4:
-`target_files` lists created files incl. `__init__.py`; never name a package
-`src`; R2/R3: a test node's spec cites the ids of every node it specifies;
-a test node's `target_files` names every test file it writes). The executor
-declined them for lacking pinned sentences and a named mutant. They are the
-open 20b blockers, so they land in the main session before the 20c rerun,
-with the mutant shape "delete each sentence → red".
+Status 2026-09-19: DONE in two commits. 0bd08ad (executor, session 27)
+landed steps 1–3 exactly as written: both sentences present, `never use
+"/"` absent, mutants 1–2 red (reviewer re-ran both at HEAD), check.sh
+632/100%. The executor declined the four "Added 2026-09-19" rules below
+for lacking pinned sentences and a named mutant; the main session landed
+them in the follow-up commit (prompt-only, tightened): the planner prompt
+gains `Never name a package "src"` (under the file-ownership rule), the
+cite-every-node rule (after the REQ- id rule), and two `target_files`
+sentences (created files incl. `__init__.py`; a test node names every test
+file it writes). The worker prompt now carries the node's `target_files`
+too — "Touch only these files: ...; the gate rejects a diff that names any
+other file" — since R3 was a worker that had never seen the list; absent
+when the list is empty (both halves tested). Five contract mutants, each
+deleting one sentence (or the worker's `{scope}` slot) by exact
+replacement with a count check, all red against
+`pytest tests/test_cli.py -k "emit_prompt or worker_prompt"`. The same
+commit rewrites ARCHITECTURE gate 5 (T3-15's T3-8 addendum, updated for
+T3-24): binding is a citation in some discovered test source, suite-
+granular, orphan = an id no node of the plan declares.
 Files: `src/saddle/cli.py` (`build_emit_prompt`: the refactor rule
 ~:110-111; the `target_files` rule ~:129-131 — after T3-4's edit at ~:128);
 `tests/test_cli.py` (`test_build_emit_prompt_names_task_and_rules` ~:241,
@@ -2088,9 +2097,9 @@ docstring already said eleven at HEAD. The item's grep still matches
 `gates.py:510` ("is exempt" in assertion-preservation's note), which is not
 one of the three targets. Open: the T3-8 addendum below, whose wording is
 now stale — since T3-24 (879a837) the orphan half excludes every id the
-plan declares, so ARCHITECTURE's Requirement Binding item (:179, which
-also still says "failing-pre/passing-post test" rather than "cited in a
-test source") is rewritten in the main session with T3-12's addenda.
+plan declares. ARCHITECTURE's Requirement Binding item (:179, which also
+said "failing-pre/passing-post test") was rewritten in the main session's
+T3-12 follow-up commit; the addendum below is closed by it.
 Files: `docs/ARCHITECTURE.md:180` (gate 6: "`refactor` is exempt"), `:227`
 (status line: "resume specified, not built — `slice.py:584-587` raises");
 `src/saddle/gates.py:3-5` (module docstring's gate order omits
