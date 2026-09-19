@@ -1325,6 +1325,50 @@ Passing instance at HEAD: NONE for the `test`-node path — that is the finding.
 Dry run: n/a (decision item).
 
 ### T3-7a — A `test` node is a red specification (implements T3-7 option A)
+Status 2026-09-19: DONE by the reviewer (commit below) after session 20
+stopped correctly on step 1's premise: there is no `check_tests(test_command,
+exit_code)`; the gate is `check_test_command(test_command, run)`, a
+runner-injected predicate that never receives an exit code. Landed within
+that shape rather than inverting it: `check_test_command(test_command, run,
+*, kind="impl", output="", workdir_modules=())` still calls `run` for the
+exit code; `output` (the suite's captured text) and `workdir_modules` (the
+worktree's importable top-level names) are two new `Tier1Inputs` fields the
+runner fills from the capture it already took, so the predicate stays
+subprocess-free. The `test` verdict is `_red_specification`: exit 1 with
+`N failed` in the output passes ("red specification: N failing test(s)");
+exit 2 whose output says `No module named 'X'` with X not in
+`workdir_modules` passes ("module 'X' does not exist yet"); exit 0, exit 1
+with no failing count, exit 2 naming an existing module or none, and every
+other exit fail; hang and unavailable fail as for every kind.
+`check_red_phase(..., red_spec: GateCheck | None = None)` returns for
+`kind == "test"` before any baseline observation is read. `run_tier1`
+substitutes `_not_required("coverage")` and `_not_required("mutation")`
+(`basis="test node"`) and evaluates syntax, ruff, tests in the same order
+as before, so the runner invocation order is unchanged. `runner.py` takes
+zero baseline samples and skips mutmut for a `test` node; the suite still
+runs once, under coverage. The planner prompt gains the sentence; ARCHITECTURE
+items 2, 3, 4, 10 gain the clause.
+Fixture corrections: `tests/test_gates.py`'s `_red` helper defaulted the
+differential path to `kind="test"` and three red-phase tests named it so;
+that is the T3-7 mismodelling in the fixtures, and they now say `impl`. The
+gate's ruff run has isort on, so the fixture test files use one import per
+line with `n` first-party (blank line before it) and a greenfield `m`
+third-party (no blank line).
+Not landed here: the two-node slice fixture (`t1` test → `n1` impl). It
+cannot pass until T3-8: `n1` is gated against `HEAD`, where `t1`'s staged
+test file reads as a test change by an `impl` node and fails `node-scope`.
+It moves to T3-8's known-good.
+Mutants (pre-commit, exact replacement, tree hash identical after each
+revert, caches dropped; `pytest tests/test_gates.py tests/test_runner.py -k
+"spec or test_node or tier1 or red_phase or tests_impl" --no-cov`):
+1. `if kind == "test":` (tests check) → `if False:` — KILLED (8 tests).
+2. greenfield rule drops `and missing not in workdir_modules` — KILLED.
+3. red-phase test branch → `if True:` — KILLED (3, incl. the end-to-end known-bad).
+4. `is_spec = node.kind == "test"` → `is_spec = True` — KILLED (all-green coverage pin, impl test).
+5. runner `samples = 0 if node.kind == "test"` → `if False` — KILLED (one `coverage` span expected).
+6. runner mutmut skip `if node.kind == "test"` → `if False` — KILLED (`mutmut` span absent).
+Noticed, not touched: ARCHITECTURE's Tier-2 status line still reads
+"specified, not built" although T2-3 landed the full-suite half — T3-15's.
 Files: `src/saddle/gates.py` (`check_tests` ~:120-140: a `kind` branch;
 `check_red_phase` ~:230-300: a `test`-kind branch before the sampling
 logic; `check_changed_line_coverage` ~:150-175 and `check_mutation`
@@ -1387,7 +1431,7 @@ Contract mutants (write the exact seds when the code exists; unique targets or r
 1. the `test`-kind branch of `check_tests` accepts exit 0 → known-bad "nothing specified" red.
 2. `check_red_phase`'s `test` branch returns pass unconditionally → the runner known-bad (`f() == 1`) red on red-phase count.
 3. `run_tier1` substitutes "not required" for every kind, not only `test` → `test_run_tier1_all_green_passes`'s coverage detail pin red.
-Done when: mutants red; `./check.sh` green; `grep -rn 'kind="test"' tests/test_runner.py tests/test_slice.py` finds the two fixtures.
+Done when: mutants red; `./check.sh` green; `grep -rn 'kind="test"' tests/test_runner.py tests/test_slice.py` finds the two fixtures. (Landed: three `kind="test"` fixtures in `tests/test_runner.py`; the slice fixture waits on T3-8.)
 Stop if: `check_tests`'s signature at HEAD is not `(test_command, exit_code)` (~:120), or pytest's summary line is not parseable for the collected count with `--no-cov -q` (then count collected tests from `-rA` output instead and say so here).
 Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` path this must leave untouched); NONE for the `test` path, by T3-7.
 Dry run: not run.
@@ -1541,6 +1585,12 @@ repo with a staged new file and an unstaged edit to a tracked file:
 `git diff --name-only <ref>` is empty, `git archive <ref>` carries both
 files at worktree content, `git rev-parse HEAD` is unchanged; (d) a node
 id `git check-ref-format` rejects (`"a b"`) still gets a resolvable ref.
+Also, deferred from T3-7a: the two-node slice `t1` (`kind="test"`, creates
+`test_n.py` with a `@given` test asserting `f() == 2`) then `n1` (`impl`,
+depends on `t1`, `GOOD_DIFF`'s `n.py` hunk) both prove and the run reads
+`2 proven, 0 failed, 0 undispatched`; `_slice_repo` without `test_n.py` at
+baseline for this test only. At HEAD it fails `node-scope` on `n1` — the
+probe this item exists for.
 Known-bad: (e) an `n2` whose diff also edits `n.py` fails `target-scope`
 naming `n.py` — the gate still sees the node's own stray, just not `n1`'s;
 (f) an untracked `.coverage.tier1` in the worktree is absent from
