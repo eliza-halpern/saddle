@@ -178,9 +178,10 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 > 4. **Red-Phase Check (the cheap tautology killer):** The node's new tests must FAIL against the pre-change code (worktree baseline) and PASS post-change. A test that passes both ways proves nothing and fails the gate. This runs the test scope twice — not once per mutant — and catches the most common weak-test failure mode at a fraction of mutation cost.
 > 5. **Requirement Binding:** Each `requirement_id` the node claims must have ≥1 failing-pre/passing-post test. Unbound claims fail the gate.
 > 6. **Node-Scope:** The files the node touched must stay within the kind's allowed scope (an `impl` node may not edit tests; a `test` node may not ship the implementation; `refactor` is exempt).
-> 7. **Property Coverage:** The node's tests must exercise the property the requirement claims, not merely import the changed module.
-> 8. **Assertion Preservation:** Assertions in pre-existing tests are append-only, except for test nodes; a refactor may carry code and tests together but must not weaken an existing assertion.
-> 9. **Sampled Mutation Testing** (moved here from Tier 2 — audit §2.3): mutmut/Stryker/PIT restricted to the node's changed lines, capped (e.g., ≤100 mutants or ≤10 minutes, whichever binds first), with a kill-rate threshold from the node's gate spec, floored at 85% and selectable only upward.
+> 7. **Target Scope** (opt-in, #64): a node that declares `target_files` may not change or add any file outside that list; an empty list is unrestricted, so the planner can only narrow a node's scope, never widen it.
+> 8. **Property Coverage:** The node's tests must exercise the property the requirement claims, not merely import the changed module.
+> 9. **Assertion Preservation:** Assertions in pre-existing tests are append-only, except for test nodes; a refactor may carry code and tests together but must not weaken an existing assertion.
+> 10. **Sampled Mutation Testing** (moved here from Tier 2 — audit §2.3): mutmut/Stryker/PIT restricted to the node's changed lines, capped (e.g., ≤100 mutants or ≤10 minutes, whichever binds first), with a kill-rate threshold from the node's gate spec, floored at 85% and selectable only upward.
 
 **Tier 2 — merge-time (budgeted; once per DAG):**
 

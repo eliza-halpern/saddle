@@ -354,6 +354,8 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "git",
         # T2-2: the staged-adds probe behind node-scope's file-creation rule.
         "git",
+        # T3-2: changed-files list for target-scope.
+        "git",
         "coverage",
         "git",
         # One per red-phase baseline sample (#54): this node's test is

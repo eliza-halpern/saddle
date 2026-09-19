@@ -250,6 +250,7 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "smallest figure that covers the files" in prompt
     assert "red_phase_required is always true." in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
+    assert "target_files (optional) lists the repo-relative files" in prompt
     assert "over test files only" in prompt
     # Was: `assert "fewest nodes" in prompt`. The suite pinned the
     # guidance #51 removes: "prefer the fewest nodes" is right for T1 and
@@ -998,6 +999,16 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "    gate: pytest test_p.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 95.0% changed-lines)\n"
     )
+
+
+def test_render_dag_plan_shows_target_files_only_when_declared() -> None:
+    node = _node_dict("n1", "low", kill_threshold=85.0)
+    node["target_files"] = ["n.py", "test_n.py"]
+    dag = Dag.model_validate({"nodes": [node]})
+    text = render_dag_plan("Do the thing.", dag)
+    assert "    tools: read_file\n    targets: n.py, test_n.py\n    gate: " in text
+    bare = Dag.model_validate({"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]})
+    assert "targets:" not in render_dag_plan("Do the thing.", bare)
 
 
 def test_render_dag_plan_single_node() -> None:

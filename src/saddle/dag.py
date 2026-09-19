@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 # min_length=1 admits "   ", which states nothing. Requirement statements
@@ -113,6 +114,28 @@ class Node(BaseModel):
     requirements: list[Requirement] = Field(min_length=1)
     execution_constraints: ExecutionConstraints
     deterministic_gate: DeterministicGate
+    # Opt-in localisation (T3-2, #64): repo-relative files this node may
+    # touch. Empty means unrestricted, so an omitted field changes nothing
+    # and a declared list can only narrow the node's own scope. Validated
+    # here rather than by a JSON-schema `pattern`: the decoder compiles a
+    # pattern as a full match (CLAUDE.md), and no lookahead-free regex
+    # says "no `..` segment" -- a wrong pattern would make every path
+    # unrepresentable, silently.
+    target_files: list[NonEmptyStr] = Field(default_factory=list)
+
+    @field_validator("target_files")
+    @classmethod
+    def _repo_relative_posix(cls, paths: list[str]) -> list[str]:
+        for path in paths:
+            if (
+                path.startswith("/")
+                or "\\" in path
+                or path != path.strip()
+                or ".." in PurePosixPath(path).parts
+            ):
+                msg = f"target_files entry {path!r} must be a repo-relative POSIX path without '..'"
+                raise ValueError(msg)
+        return paths
 
     @property
     def requirement_ids(self) -> list[str]:

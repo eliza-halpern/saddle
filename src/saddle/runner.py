@@ -20,6 +20,7 @@ from saddle.evidence import (
     covered_lines,
     drop_test_caches,
     git_added_files,
+    git_changed_files,
     git_diff,
     materialize_baseline,
     mutation_sample,
@@ -124,6 +125,9 @@ def run_node_gate(
     } & statements
     changed_files = sorted({path for path, _ in changed})
     added = git_added_files(workdir, baseline, recorder=recorder)
+    # Every file the diff names (git decides, so deletions and non-Python
+    # files count), for the opt-in target-scope check (T3-2).
+    touched = sorted(set(git_changed_files(workdir, baseline, recorder=recorder)) | set(added))
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
     suite = run_shell_capture(
@@ -209,5 +213,6 @@ def run_node_gate(
         flipped_tests=test_sources,
         mutation=mutation,
         added_files=[str(workdir / p) for p in added],
+        touched_files=touched,
     )
     return run_tier1(node, inputs)

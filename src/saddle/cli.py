@@ -126,6 +126,9 @@ Rules:
   of a long prompt, so padding the budget buries the file the node has to
   change underneath ones it does not.
 - allowed_tools uses only: read_file, write_file, run_tests, lint.
+- target_files (optional) lists the repo-relative files the node may touch,
+  e.g. ["src/app/login.py"]. Leave it empty when unsure; never use "/" or
+  ".." in an entry. A node that touches a file outside its list fails.
 - red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
@@ -499,6 +502,8 @@ def render_dag_plan(task: str, dag: Dag) -> str:
         lines.append(f"{pad}requirements: {', '.join(node.requirement_ids)}")
         lines.append(f"{pad}depends on: {depends}")
         lines.append(f"{pad}tools: {', '.join(constraints.allowed_tools)}")
+        if node.target_files:
+            lines.append(f"{pad}targets: {', '.join(node.target_files)}")
         lines.append(
             f"{pad}gate: {gate.test_command} (coverage >= {gate.changed_line_coverage_min}%, "
             f"red-phase required, mutation {sample.max_mutants} @ "

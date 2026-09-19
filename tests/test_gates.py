@@ -23,6 +23,7 @@ from saddle.gates import (
     check_requirement_binding,
     check_ruff,
     check_syntax,
+    check_target_files,
     check_test_command,
     run_tier1,
 )
@@ -296,7 +297,7 @@ def test_binding_all_bound_passes() -> None:
     assert check.detail == "1 requirement(s) bound"
 
 
-def test_run_tier1_runs_exactly_the_ten_documented_checks_in_order() -> None:
+def test_run_tier1_runs_exactly_the_eleven_documented_checks_in_order() -> None:
     names = [check.name for check in run_tier1(_node(), _passing_inputs()).checks]
     assert names == [
         "syntax",
@@ -305,6 +306,7 @@ def test_run_tier1_runs_exactly_the_ten_documented_checks_in_order() -> None:
         "coverage",
         "red-phase",
         "node-scope",
+        "target-scope",
         "property-coverage",
         "assertion-preservation",
         "requirement-binding",
@@ -330,6 +332,7 @@ def test_run_tier1_all_green_passes() -> None:
         "coverage",
         "red-phase",
         "node-scope",
+        "target-scope",
         "property-coverage",
         "assertion-preservation",
         "requirement-binding",
@@ -345,7 +348,7 @@ def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 10  # +assertion-preservation (#44)
+    assert len(result.checks) == 11  # +assertion-preservation (#44)
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
 
@@ -633,6 +636,29 @@ def test_refactor_node_may_not_create_a_file() -> None:
     )
     assert check.passed is False
     assert "new_module.py" in check.detail
+
+
+def test_target_files_empty_is_unrestricted() -> None:
+    check = check_target_files([], ["n.py", "tests/test_n.py", "README.md"])
+    assert check.passed is True
+    assert check.name == "target-scope"
+    assert check.detail == "unrestricted: no target_files declared"
+
+
+def test_target_files_within_list_passes() -> None:
+    """Known-good (T3-2): every touched file is named, so the node stays
+    inside the scope it declared."""
+    check = check_target_files(["n.py", "tests/test_n.py"], ["n.py"])
+    assert check.passed is True
+    assert check.detail == "1 touched file(s) within 2 target(s)"
+
+
+def test_target_files_outside_list_fails_and_names_the_stray() -> None:
+    """Known-bad (T3-2, #64): T4's worker fixed the wrong module; a node
+    that had named its module would have been stopped here."""
+    check = check_target_files(["orders.py"], ["orders.py", "discounts.py", "new_module.py"])
+    assert check.passed is False
+    assert check.detail == "touched file(s) outside target_files: discounts.py, new_module.py"
 
 
 def test_impl_node_takes_the_real_differential_not_the_refactor_branch() -> None:

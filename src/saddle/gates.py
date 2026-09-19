@@ -320,6 +320,36 @@ def _has_property(source: str) -> bool:
     return False
 
 
+def check_target_files(target_files: Collection[str], touched_files: Collection[str]) -> GateCheck:
+    """Opt-in localisation (#64): a node that names its files may not touch others.
+
+    Empty `target_files` is unrestricted, so an emitting model that omits
+    the field loses nothing; a declared list can only narrow the node's
+    own scope, which is the one direction a planner-supplied value may
+    move (CLAUDE.md: "A threshold the model itself supplies lets the model
+    set its own bar" -- this one cannot lower it). T4's worker fixed the
+    wrong module while passing every gate then in force; a node that had
+    said which module would have been caught here.
+    """
+    if not target_files:
+        return GateCheck(
+            name="target-scope", passed=True, detail="unrestricted: no target_files declared"
+        )
+    allowed = set(target_files)
+    stray = sorted(path for path in touched_files if path not in allowed)
+    if stray:
+        return GateCheck(
+            name="target-scope",
+            passed=False,
+            detail=f"touched file(s) outside target_files: {', '.join(stray)}",
+        )
+    return GateCheck(
+        name="target-scope",
+        passed=True,
+        detail=f"{len(touched_files)} touched file(s) within {len(target_files)} target(s)",
+    )
+
+
 def check_property_coverage(kind: str, test_sources: Mapping[str, str]) -> GateCheck:
     """A test node must state at least one property, not only examples.
 
@@ -512,6 +542,8 @@ class Tier1Inputs:
     flipped_tests: Mapping[str, str]
     mutation: MutationOutcome
     added_files: Collection[str] = ()
+    # Repo-relative paths of every file the node changed or added (T3-2).
+    touched_files: Collection[str] = ()
 
 
 @dataclass(frozen=True)
@@ -604,6 +636,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         check_node_scope(
             node.kind, sorted({path for path, _ in inputs.changed}), inputs.added_files
         ),
+        check_target_files(node.target_files, inputs.touched_files),
         check_property_coverage(node.kind, inputs.flipped_tests),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(node.requirement_ids, inputs.flipped_tests),

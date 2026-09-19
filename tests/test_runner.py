@@ -21,11 +21,13 @@ def _node(
     kill_threshold: float = 85.0,
     max_mutants: int = 100,
     kind: str = "impl",
+    target_files: list[str] | None = None,
 ) -> Node:
     return Node.model_validate(
         {
             "id": "n1",
             "kind": kind,
+            "target_files": target_files or [],
             "dependencies": [],
             "task_prompt": "Fix f.",
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
@@ -163,6 +165,8 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "git",
         # T2-2: the staged-adds probe behind node-scope's file-creation rule.
         "git",
+        # T3-2: the changed-files list behind target-scope.
+        "git",
         "coverage",
         "git",
         # One coverage span per red-phase baseline sample: the pre-change
@@ -184,6 +188,7 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     # The baseline samples all exit 1: unanimous, which is what a stable
     # pre-change leg looks like. Disagreement here is what fails the gate.
     assert [span.exit_code for span in spans] == [
+        0,
         0,
         0,
         0,
@@ -239,6 +244,23 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
         "red-phase",
         "assertion-preservation",
     ]
+
+
+def test_run_node_gate_target_files_binds_end_to_end(tmp_path: Path) -> None:
+    """T3-2, #64: the same honest impl node passes when it names the file
+    it changes and fails, naming the stray, when it names a different one.
+    Paths are repo-relative, whatever the runner's absolute convention."""
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    scoped = run_node_gate(_node(target_files=["n.py"]), tmp_path)
+    assert scoped.passed is True
+    by_name = {check.name: check for check in scoped.checks}
+    assert by_name["target-scope"].detail == "1 touched file(s) within 1 target(s)"
+    wrong = run_node_gate(_node(target_files=["other.py"]), tmp_path)
+    assert wrong.passed is False
+    assert [check.name for check in wrong.checks if not check.passed] == ["target-scope"]
+    failed = {check.name: check for check in wrong.checks}["target-scope"]
+    assert failed.detail == "touched file(s) outside target_files: n.py"
 
 
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from saddle.dag import Dag, DagIssue, dag_json_schema, validate_dag
+from saddle.dag import Dag, DagIssue, Node, dag_json_schema, validate_dag
 
 
 def _node(
@@ -461,3 +461,27 @@ def test_node_kind_is_constrained_to_the_three_kinds() -> None:
 
     schema = json.dumps(dag_json_schema())
     assert '"refactor"' in schema
+
+
+def test_target_files_default_empty_and_repo_relative_accepted() -> None:
+    """Known-good (T3-2): the field is optional and plain repo-relative POSIX
+    paths, including nested ones, are representable."""
+    plain = Node.model_validate(_node("n1"))
+    assert plain.target_files == []
+    node = _node("n1")
+    node["target_files"] = ["n.py", "src/app/login.py", "tests/test_login.py"]
+    assert Node.model_validate(node).target_files == [
+        "n.py",
+        "src/app/login.py",
+        "tests/test_login.py",
+    ]
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../n.py", "src/../n.py", "src\\n.py", " n.py", ""])
+def test_target_files_rejects_escapes_and_absolute_paths(bad: str) -> None:
+    """Known-bad (T3-2): anything that could name a file outside the repo,
+    or that is not a clean POSIX path, is refused at validation."""
+    node = _node("n1")
+    node["target_files"] = [bad]
+    with pytest.raises(ValidationError):
+        Node.model_validate(node)
