@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import replace
+from typing import Final
 
 from saddle.dag import DeterministicGate, Node
 from saddle.evidence import MutationOutcome
@@ -28,8 +29,14 @@ from saddle.gates import (
     run_tier1,
 )
 
+# Every tool name the global allowlist carries (T3-4). A node listing all
+# four behaves exactly as it did before each name was bound to a harness
+# behaviour, so this is the fixtures' known-good default; a test that pins
+# one binding passes a shorter list.
+ALL_TOOLS: Final[tuple[str, ...]] = ("read_file", "write_file", "run_tests", "lint")
 
-def _node() -> Node:
+
+def _node(tools: list[str] | None = None) -> Node:
     return Node.model_validate(
         {
             "id": "n1",
@@ -39,7 +46,7 @@ def _node() -> Node:
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
             "execution_constraints": {
                 "reasoning_budget": "low",
-                "allowed_tools": ["read_file"],
+                "allowed_tools": tools if tools is not None else list(ALL_TOOLS),
                 "max_context_tokens": 8000,
             },
             "deterministic_gate": {
@@ -600,7 +607,7 @@ def test_impl_node_may_not_touch_test_files() -> None:
     the behaviour-pinning test to match; all seven gates passed. An impl
     node that cannot edit tests cannot do that.
     """
-    check = check_node_scope("impl", ["orders.py", "tests/test_orders.py"])
+    check = check_node_scope("impl", ["orders.py", "tests/test_orders.py"], may_create=True)
     assert check.passed is False
     assert "tests/test_orders.py" in check.detail
 
@@ -608,20 +615,25 @@ def test_impl_node_may_not_touch_test_files() -> None:
 def test_test_node_may_not_touch_source_files() -> None:
     """The other direction matters too: a test node that ships the
     implementation alongside its tests has authored both again."""
-    check = check_node_scope("test", ["tests/test_orders.py", "orders.py"])
+    check = check_node_scope("test", ["tests/test_orders.py", "orders.py"], may_create=True)
     assert check.passed is False
     assert "orders.py" in check.detail
 
 
 def test_node_scope_accepts_a_node_that_stays_on_its_side() -> None:
-    assert check_node_scope("impl", ["orders.py", "discounts.py"]).passed is True
-    assert check_node_scope("test", ["tests/test_orders.py", "test_x.py"]).passed is True
+    assert check_node_scope("impl", ["orders.py", "discounts.py"], may_create=True).passed is True
+    assert (
+        check_node_scope("test", ["tests/test_orders.py", "test_x.py"], may_create=True).passed
+        is True
+    )
 
 
 def test_refactor_node_may_touch_both() -> None:
     """A behaviour-preserving refactor moves code and its tests together;
     splitting it across two nodes would leave the first one red."""
-    check = check_node_scope("refactor", ["orders.py", "tests/test_orders.py"], added_files=[])
+    check = check_node_scope(
+        "refactor", ["orders.py", "tests/test_orders.py"], added_files=[], may_create=True
+    )
     assert check.passed is True
 
 
@@ -632,10 +644,64 @@ def test_refactor_node_may_not_create_a_file() -> None:
     is not editing -- it is the split done under the exempt name.
     """
     check = check_node_scope(
-        "refactor", ["orders.py", "new_module.py"], added_files=["new_module.py"]
+        "refactor", ["orders.py", "new_module.py"], added_files=["new_module.py"], may_create=True
     )
     assert check.passed is False
     assert "new_module.py" in check.detail
+
+
+def test_a_node_without_write_file_may_not_create_a_file() -> None:
+    """T3-4 known-bad: `write_file` is the binding that governs creation.
+
+    `allowed_tools` was validated against the global allowlist and then
+    consumed by nothing, so withholding `write_file` changed nothing about
+    what the node could do. The refactor ban (#65) covered one kind; this
+    covers every kind, and it names the tool so the worker can read why.
+    """
+    check = check_node_scope("refactor", ["n.py"], ["new.py"], may_create=False)
+    assert check.passed is False
+    assert check.name == "node-scope"
+    assert "write_file not in allowed_tools" in check.detail
+    assert "new.py" in check.detail
+
+
+def test_an_impl_node_without_write_file_may_not_create_a_file() -> None:
+    """The ban is not the refactor exemption in disguise: an `impl` node
+    creating a file was in scope for its kind and is still refused."""
+    check = check_node_scope("impl", ["n.py"], ["new.py"], may_create=False)
+    assert check.passed is False
+    assert "write_file not in allowed_tools" in check.detail
+
+
+def test_a_node_without_write_file_that_creates_nothing_still_passes() -> None:
+    """T3-4 known-good: the binding governs creation, not editing. A node
+    that only changes files it already had loses nothing by omitting
+    `write_file`, which is what makes the name a choice rather than a
+    formality."""
+    check = check_node_scope("impl", ["n.py"], [], may_create=False)
+    assert check.passed is True
+    assert check.detail == "impl node changed 1 file(s) in scope"
+
+
+def test_run_tier1_reads_may_create_from_the_node_allowed_tools() -> None:
+    """The binding has to reach the gate from the plan, not from a default.
+
+    Same inputs, same added file, two nodes differing only in whether they
+    declared `write_file`: one fails node-scope naming the tool, the other
+    passes. Without this the registry entry could be true of
+    `check_node_scope` and false of every actual run.
+    """
+    inputs = replace(_passing_inputs(), added_files=["new.py"])
+    without = run_tier1(_node(tools=["read_file"]), inputs)
+    with_tool = run_tier1(_node(tools=["read_file", "write_file"]), inputs)
+    scope_without = next(c for c in without.checks if c.name == "node-scope")
+    scope_with = next(c for c in with_tool.checks if c.name == "node-scope")
+    assert scope_without.passed is False
+    assert "write_file not in allowed_tools" in scope_without.detail
+    # The `refactor` node still may not add a file (#65) -- but for the
+    # kind's reason, not the tool's, which is what pins the two apart.
+    assert scope_with.passed is False
+    assert scope_with.detail == "refactor node added file(s): new.py"
 
 
 def test_target_files_empty_is_unrestricted() -> None:

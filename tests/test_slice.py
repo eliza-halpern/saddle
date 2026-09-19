@@ -8,6 +8,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -59,7 +60,16 @@ def _git_repo(root: Path) -> None:
     assert run_argv(["git", "commit", "-m", "base"], root) == 0
 
 
-def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
+# Every tool name the global allowlist carries (T3-4). A node listing all
+# four behaves exactly as it did before each name was bound to a harness
+# behaviour, so this is the fixtures' known-good default; a test that pins
+# one binding passes a shorter list.
+ALL_TOOLS: Final[tuple[str, ...]] = ("read_file", "write_file", "run_tests", "lint")
+
+
+def _node_dict(
+    node_id: str, deps: list[str], *, tools: list[str] | None = None
+) -> dict[str, object]:
     return {
         "id": node_id,
         "kind": "impl",
@@ -67,8 +77,11 @@ def _node_dict(node_id: str, deps: list[str]) -> dict[str, object]:
         "task_prompt": f"Do {node_id}.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
         "execution_constraints": {
+            # All four by default (T3-4): these nodes create test files and
+            # read the suite output back on a failed attempt, which is what
+            # they did before each name was bound to a behaviour.
             "reasoning_budget": "low",
-            "allowed_tools": ["read_file"],
+            "allowed_tools": tools if tools is not None else list(ALL_TOOLS),
             "max_context_tokens": 8000,
         },
         "deterministic_gate": {
@@ -686,6 +699,45 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert agents[1].detail == "recovered after 2 attempts"
 
 
+def test_run_slice_withholds_suite_output_from_a_node_without_run_tests(
+    tmp_path: Path,
+) -> None:
+    """T3-4 end to end: the node's own `allowed_tools` reach the repair prompt.
+
+    Known-good is `test_run_slice_retry_repairs_failing_tests` directly
+    above, whose node lists all four and whose recovery prompt carries
+    pytest's "FAILED" lines. Same repo, same diffs, one name removed: the
+    gate verdicts survive and the captured suite output does not. A unit
+    test of `format_attempt_failure` cannot see this -- the wiring from
+    `node.execution_constraints` is the half that was decorative.
+    """
+    _slice_repo(tmp_path)
+    node = _node_dict("n1", [], tools=["read_file", "write_file", "lint"])
+    dag = Dag.model_validate({"nodes": [node]})
+    journal = tmp_path / "proofs.jsonl"
+    seen_failures: list[str | None] = []
+
+    def propose(_node: Node, failure: str | None) -> DiffProposal:
+        seen_failures.append(failure)
+        return DiffProposal(BAD_DIFF if failure is None else FIX_DIFF, "fix it")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True
+    failure = next(entry for entry in seen_failures if entry is not None)
+    assert failure is not None
+    assert "Attempt 1 of 3 failed 3 gate(s):" in failure
+    assert "- tests: 'pytest test_n.py' exited 1" in failure
+    assert "FAILED" not in failure
+    assert "coverage run" not in failure
+
+
 def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
@@ -897,7 +949,7 @@ def _failed_result() -> Tier1Result:
 
 
 def test_format_attempt_failure_lists_failed_gates_only() -> None:
-    text = format_attempt_failure(_failed_result(), [], attempt=1, max_attempts=3)
+    text = format_attempt_failure(_failed_result(), [], attempt=1, max_attempts=3, tools=ALL_TOOLS)
     assert text.startswith("Attempt 1 of 3 failed 1 gate(s):\n")
     assert "- tests: 'pytest test_n.py' exited 1\n" in text
     assert "syntax" not in text
@@ -908,7 +960,9 @@ def test_format_attempt_failure_skips_passing_runs() -> None:
     captured = [
         CapturedRun(argv=("pytest", "test_n.py"), exit_code=0, stdout="ok", stderr=""),
     ]
-    text = format_attempt_failure(_failed_result(), captured, attempt=2, max_attempts=3)
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=2, max_attempts=3, tools=ALL_TOOLS
+    )
     assert text.startswith("Attempt 2 of 3 failed 1 gate(s):\n")
     assert "---" not in text
 
@@ -922,7 +976,9 @@ def test_format_attempt_failure_includes_failing_output() -> None:
             stderr="a warning",
         ),
     ]
-    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=ALL_TOOLS
+    )
     assert "--- `pytest test_n.py` (exit 1) ---" in text
     assert "traceback here" in text
     assert "a warning" in text
@@ -932,14 +988,18 @@ def test_format_attempt_failure_truncates_long_output() -> None:
     captured = [
         CapturedRun(argv=("pytest",), exit_code=1, stdout="x" * 5000, stderr=""),
     ]
-    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=ALL_TOOLS
+    )
     assert "[earlier output truncated]\n" + "x" * 4000 in text
     assert "x" * 4001 not in text
 
 
 def test_format_attempt_failure_marks_empty_output() -> None:
     captured = [CapturedRun(argv=("pytest",), exit_code=2, stdout="", stderr="")]
-    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=ALL_TOOLS
+    )
     assert text == (
         "Attempt 1 of 3 failed 1 gate(s):\n"
         "- tests: 'pytest test_n.py' exited 1\n"
@@ -953,7 +1013,9 @@ def test_format_attempt_failure_renders_failing_run_after_passing_run() -> None:
         CapturedRun(argv=("pytest",), exit_code=0, stdout="ok", stderr=""),
         CapturedRun(argv=("pytest",), exit_code=1, stdout="traceback here", stderr=""),
     ]
-    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=ALL_TOOLS
+    )
     assert "--- `pytest` (exit 1) ---" in text
     assert "traceback here" in text
 
@@ -962,9 +1024,85 @@ def test_format_attempt_failure_keeps_exact_boundary_output() -> None:
     captured = [
         CapturedRun(argv=("pytest",), exit_code=1, stdout="y" * RECOVERY_OUTPUT_CHARS, stderr="")
     ]
-    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3)
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=ALL_TOOLS
+    )
     assert "[earlier output truncated]" not in text
     assert "y" * RECOVERY_OUTPUT_CHARS in text
+
+
+def test_repair_prompt_withholds_test_output_without_run_tests() -> None:
+    """T3-4 known-bad: `run_tests` gates the suite output in the repair prompt.
+
+    Before the binding, every non-zero captured run was inlined whatever
+    the plan said, so `run_tests` cost nothing to omit and bought nothing
+    to list. The gate verdict lines stay -- they are the node's own
+    result -- so the worker still learns which gates failed.
+    """
+    captured = [
+        CapturedRun(
+            argv=("coverage", "run", "-m", "pytest"),
+            exit_code=1,
+            stdout="E   assert 1 == 2",
+            stderr="",
+        ),
+        CapturedRun(argv=("ruff", "check", "n.py"), exit_code=1, stdout="n.py:1:1 F401", stderr=""),
+    ]
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=["lint"]
+    )
+    # Withheld: the suite's own output and its header.
+    assert "assert 1 == 2" not in text
+    assert "coverage run -m pytest" not in text
+    # Kept: the lint output this node did ask for, and the gate verdicts.
+    assert "--- `ruff check n.py` (exit 1) ---" in text
+    assert "n.py:1:1 F401" in text
+    assert "- tests: 'pytest test_n.py' exited 1" in text
+
+
+def test_repair_prompt_withholds_lint_output_without_lint() -> None:
+    """The other half: a `run_tests`-only node gets the suite and not ruff."""
+    captured = [
+        CapturedRun(
+            argv=("coverage", "run", "-m", "pytest"),
+            exit_code=1,
+            stdout="E   assert 1 == 2",
+            stderr="",
+        ),
+        CapturedRun(argv=("ruff", "check", "n.py"), exit_code=1, stdout="n.py:1:1 F401", stderr=""),
+    ]
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=["run_tests"]
+    )
+    assert "assert 1 == 2" in text
+    assert "n.py:1:1 F401" not in text
+
+
+def test_repair_prompt_keeps_both_when_the_node_declared_both() -> None:
+    """T3-4 known-good: all four names behaves exactly as it did before."""
+    captured = [
+        CapturedRun(
+            argv=("coverage", "run", "-m", "pytest"),
+            exit_code=1,
+            stdout="E   assert 1 == 2",
+            stderr="",
+        ),
+        CapturedRun(argv=("ruff", "check", "n.py"), exit_code=1, stdout="n.py:1:1 F401", stderr=""),
+    ]
+    text = format_attempt_failure(
+        _failed_result(), captured, attempt=1, max_attempts=3, tools=ALL_TOOLS
+    )
+    assert "assert 1 == 2" in text
+    assert "n.py:1:1 F401" in text
+
+
+def test_repair_prompt_keeps_a_run_no_binding_governs() -> None:
+    """A capability the node declined is withheld; harness output nobody
+    named is not. Dropping an unmapped run would remove evidence no plan
+    asked to have withheld."""
+    captured = [CapturedRun(argv=("git", "apply"), exit_code=1, stdout="corrupt patch", stderr="")]
+    text = format_attempt_failure(_failed_result(), captured, attempt=1, max_attempts=3, tools=[])
+    assert "corrupt patch" in text
 
 
 def test_splice_replan_rewires_dependents_to_new_leaves() -> None:

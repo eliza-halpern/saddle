@@ -14,7 +14,7 @@ import shlex
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -88,6 +88,18 @@ MAX_RECOVERY_RETRIES: Final = 2
 # compute-optimal split; sequential recovery still follows.
 PROPOSAL_SAMPLES: Final = 3
 RECOVERY_OUTPUT_CHARS: Final = 4000
+# Which `allowed_tools` name governs a captured run's output in the repair
+# prompt (T3-4). The suite runs under `coverage run -m pytest`, so the
+# executable the node's `test_command` names is not always argv[0]. A run
+# whose argv[0] is in neither column is governed by no binding and is kept:
+# these are the harness's own runs, and dropping one would remove evidence
+# no plan asked to be withheld.
+CAPTURED_RUN_TOOL: Final[dict[str, str]] = {
+    "pytest": "run_tests",
+    "coverage": "run_tests",
+    "python": "run_tests",
+    "ruff": "lint",
+}
 
 
 class _HaltRecoveryError(Exception):
@@ -210,19 +222,35 @@ def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | N
     run_argv(["git", "add", "--", *targets], workdir, recorder=recorder)
 
 
+def _run_is_allowed(run: CapturedRun, tools: Collection[str]) -> bool:
+    """Is this captured run's output a capability the node asked for (T3-4)?"""
+    governing = CAPTURED_RUN_TOOL.get(run.argv[0]) if run.argv else None
+    return governing is None or governing in tools
+
+
 def format_attempt_failure(
     result: Tier1Result,
     captured: Sequence[CapturedRun],
     *,
     attempt: int,
     max_attempts: int,
+    tools: Collection[str],
 ) -> str:
-    """Render one failed attempt as repair evidence: gates plus failing output."""
+    """Render one failed attempt as repair evidence: gates plus failing output.
+
+    `tools` is the node's `allowed_tools`, and it decides which captured
+    output the worker gets back: `run_tests` for the suite, `lint` for
+    ruff. The gate verdict lines are unconditional -- they are the node's
+    own result, not a tool's -- so a node that declared neither still
+    learns which gates failed, just not in what words.
+    """
     failed = [check for check in result.checks if not check.passed]
     lines = [f"Attempt {attempt} of {max_attempts} failed {len(failed)} gate(s):"]
     lines.extend(f"- {check.name}: {check.detail}" for check in failed)
     for run in captured:
         if run.exit_code == 0:
+            continue
+        if not _run_is_allowed(run, tools):
             continue
         output = (run.stdout + "\n" + run.stderr).strip()
         if len(output) > RECOVERY_OUTPUT_CHARS:
@@ -419,7 +447,11 @@ async def _run_node(
                 return Proof(node_id=node.id)
             last_result = result
             failure = format_attempt_failure(
-                result, captured, attempt=attempt, max_attempts=max_attempts
+                result,
+                captured,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                tools=node.execution_constraints.allowed_tools,
             )
             failed_count = sum(1 for check in result.checks if not check.passed)
             _seal_attempt(

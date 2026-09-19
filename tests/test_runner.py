@@ -6,6 +6,7 @@ import ast
 import os
 import stat
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -15,6 +16,12 @@ from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import _stub_module, read_sources, run_node_gate
 
+# Every tool name the global allowlist carries (T3-4). A node listing all
+# four behaves exactly as it did before each name was bound to a harness
+# behaviour, so this is the fixtures' known-good default; a test that pins
+# one binding passes a shorter list.
+ALL_TOOLS: Final[tuple[str, ...]] = ("read_file", "write_file", "run_tests", "lint")
+
 
 def _node(
     test_command: str = "pytest test_n.py",
@@ -22,6 +29,7 @@ def _node(
     max_mutants: int = 100,
     kind: str = "impl",
     target_files: list[str] | None = None,
+    tools: list[str] | None = None,
 ) -> Node:
     return Node.model_validate(
         {
@@ -33,7 +41,11 @@ def _node(
             "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
             "execution_constraints": {
                 "reasoning_budget": "low",
-                "allowed_tools": ["read_file"],
+                # All four by default (T3-4). Several tests below create a
+                # test file at baseline; without `write_file` node-scope
+                # would fail them for a reason they do not assert on, and
+                # the extra red would sit silent behind the check they do.
+                "allowed_tools": tools if tools is not None else list(ALL_TOOLS),
                 "max_context_tokens": 8000,
             },
             "deterministic_gate": {

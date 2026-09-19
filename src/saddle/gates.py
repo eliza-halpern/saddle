@@ -441,9 +441,14 @@ def check_assertion_preservation(
 
 
 def check_node_scope(
-    kind: str, changed_files: Collection[str], added_files: Collection[str] = ()
+    kind: str,
+    changed_files: Collection[str],
+    added_files: Collection[str] = (),
+    *,
+    may_create: bool,
 ) -> GateCheck:
-    """A node stays on its own side of the test/implementation split.
+    """A node stays on its own side of the test/implementation split, and
+    creates files only if it declared `write_file`.
 
     F5 and #44 are one defect: the worker authors the implementation and
     the tests, so a misreading of the contract is encoded twice and the
@@ -456,7 +461,23 @@ def check_node_scope(
     move carries code and its tests together, and splitting it would leave
     the first node red with nothing able to fix it -- but it may not create
     a file: that is the `impl`/`test` split done under the exempt name (#65).
+
+    `may_create` is the `write_file` binding (T3-4) and it binds every
+    kind, ahead of the kind branches: `allowed_tools` was validated
+    against the global allowlist and then consumed by nothing, so a plan
+    that withheld `write_file` still got a node that could add whatever it
+    liked. The probe is T2-2's staged adds, already collected; no new
+    subprocess runs for this.
     """
+    if added_files and not may_create:
+        return GateCheck(
+            name="node-scope",
+            passed=False,
+            detail=(
+                "node may not create files: write_file not in allowed_tools; "
+                f"added {', '.join(sorted(added_files))}"
+            ),
+        )
     if kind == "refactor":
         if added_files:
             return GateCheck(
@@ -634,7 +655,10 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             mutation=inputs.mutation,
         ),
         check_node_scope(
-            node.kind, sorted({path for path, _ in inputs.changed}), inputs.added_files
+            node.kind,
+            sorted({path for path, _ in inputs.changed}),
+            inputs.added_files,
+            may_create="write_file" in node.execution_constraints.allowed_tools,
         ),
         check_target_files(node.target_files, inputs.touched_files),
         check_property_coverage(node.kind, inputs.flipped_tests),

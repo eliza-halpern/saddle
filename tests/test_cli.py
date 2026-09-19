@@ -6,6 +6,7 @@ import io
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -13,6 +14,9 @@ import httpx
 import pytest
 
 from saddle.cli import (
+    CONTENTS_WITHHELD,
+    RUN_ALLOWLIST,
+    TOOL_BINDINGS,
     WORKER_OUTPUT_TOKENS,
     DagOptions,
     RunError,
@@ -33,7 +37,8 @@ from saddle.cli import (
     run_verify,
 )
 from saddle.dag import Dag, Node
-from saddle.evidence import run_argv
+from saddle.evidence import CapturedRun, run_argv
+from saddle.gates import GateCheck, Tier1Result, check_node_scope
 from saddle.journal import (
     GateOutput,
     ProofRecord,
@@ -45,7 +50,7 @@ from saddle.journal import (
     read_records,
     read_spans,
 )
-from saddle.slice import PROPOSAL_SAMPLES
+from saddle.slice import PROPOSAL_SAMPLES, format_attempt_failure
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -85,7 +90,11 @@ def _git_repo(root: Path) -> None:
 
 
 def _node_dict(
-    node_id: str = "n1", budget: str = "low", kill_threshold: float = 85.0
+    node_id: str = "n1",
+    budget: str = "low",
+    kill_threshold: float = 85.0,
+    *,
+    tools: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": node_id,
@@ -95,7 +104,10 @@ def _node_dict(
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
         "execution_constraints": {
             "reasoning_budget": budget,
-            "allowed_tools": ["read_file"],
+            # All four by default: T3-4 binds each name to a behaviour, and
+            # the default fixture is the known-good "behaves exactly as
+            # today" node. Tests that pin a binding pass a shorter list.
+            "allowed_tools": tools if tools is not None else list(RUN_ALLOWLIST),
             "max_context_tokens": 8000,
         },
         "deterministic_gate": {
@@ -981,7 +993,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "│   task: Fix f and test it.\n"
         "│   requirements: REQ-001\n"
         "│   depends on: (none)\n"
-        "│   tools: read_file\n"
+        "│   tools: read_file, write_file, run_tests, lint\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
         "├── n2 [budget: medium, context: 8000 tokens]\n"
@@ -1006,7 +1018,11 @@ def test_render_dag_plan_shows_target_files_only_when_declared() -> None:
     node["target_files"] = ["n.py", "test_n.py"]
     dag = Dag.model_validate({"nodes": [node]})
     text = render_dag_plan("Do the thing.", dag)
-    assert "    tools: read_file\n    targets: n.py, test_n.py\n    gate: " in text
+    assert (
+        "    tools: read_file, write_file, run_tests, lint\n"
+        "    targets: n.py, test_n.py\n"
+        "    gate: "
+    ) in text
     bare = Dag.model_validate({"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]})
     assert "targets:" not in render_dag_plan("Do the thing.", bare)
 
@@ -1020,7 +1036,7 @@ def test_render_dag_plan_single_node() -> None:
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: (none)\n"
-        "    tools: read_file\n"
+        "    tools: read_file, write_file, run_tests, lint\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
     )
@@ -1051,14 +1067,14 @@ def test_run_dag_prints_plan() -> None:
         "│   task: Fix f and test it.\n"
         "│   requirements: REQ-001\n"
         "│   depends on: (none)\n"
-        "│   tools: read_file\n"
+        "│   tools: read_file, write_file, run_tests, lint\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
         "└── n2 [budget: low, context: 8000 tokens]\n"
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: n1\n"
-        "    tools: read_file\n"
+        "    tools: read_file, write_file, run_tests, lint\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
     )
@@ -1470,7 +1486,7 @@ def test_main_dag_passes_flags_through(
         "    task: Fix f and test it.\n"
         "    requirements: REQ-001\n"
         "    depends on: (none)\n"
-        "    tools: read_file\n"
+        "    tools: read_file, write_file, run_tests, lint\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
     )
@@ -2074,6 +2090,130 @@ def test_worker_prompt_restates_the_node_task_at_the_tail() -> None:
     assert node.task_prompt in head
     assert node.task_prompt in tail
     assert tail.index(node.task_prompt) > tail.index("x = 1")
+
+
+def test_worker_prompt_inlines_contents_for_a_node_with_read_file() -> None:
+    """T3-4 known-good: all four names behaves exactly as it did before."""
+    node = Node.model_validate(_node_dict("n1", "low"))
+    prompt = build_worker_prompt(
+        task="Do the thing.", node=node, files=["n.py"], contents={"n.py": "MARKER = 1\n"}
+    )
+    assert "--- n.py ---" in prompt
+    assert "MARKER = 1" in prompt
+    assert CONTENTS_WITHHELD not in prompt
+
+
+def test_worker_prompt_withholds_contents_without_read_file() -> None:
+    """T3-4 known-bad: `read_file` is what buys the file bodies.
+
+    `allowed_tools` was validated against the global allowlist and then
+    consumed by nothing, so a plan that omitted `read_file` still had the
+    whole repo inlined -- the context-cost lever DESIGN-NOTES D15/D16
+    argue for did not exist. The file *names* stay: omitting the tool is
+    a budget choice, not blindness, and the node can still say which file
+    it needs.
+    """
+    node = Node.model_validate(_node_dict("n1", "low", tools=["write_file", "run_tests"]))
+    prompt = build_worker_prompt(
+        task="Do the thing.", node=node, files=["n.py"], contents={"n.py": "MARKER = 1\n"}
+    )
+    assert "MARKER = 1" not in prompt
+    assert "--- n.py ---" not in prompt
+    assert CONTENTS_WITHHELD in prompt
+    # The listing is not the contents, and it survives.
+    assert "Repo files:\nn.py" in prompt
+
+
+def test_run_allowlist_is_derived_from_the_bindings_registry() -> None:
+    """A name is admissible because the harness honours it, not because
+    someone typed it into a second list that can drift from the first."""
+    assert RUN_ALLOWLIST == tuple(TOOL_BINDINGS)
+
+
+def test_emit_prompt_states_what_each_tool_buys() -> None:
+    """The planner cannot choose deliberately against effects it is not told.
+
+    Rendered from the registry, so a binding cannot change without the
+    prompt changing with it.
+    """
+    prompt = build_emit_prompt("Do the thing.")
+    for name, effect in TOOL_BINDINGS.items():
+        assert f"- {name}: {effect}." in prompt
+
+
+def _prompt_for(tools: list[str]) -> str:
+    return build_worker_prompt(
+        task="T",
+        node=Node.model_validate(_node_dict("n1", tools=tools)),
+        files=["n.py"],
+        contents={"n.py": "MARKER = 1\n"},
+    )
+
+
+def _read_file_changes_behaviour() -> bool:
+    """With `read_file` the worker prompt carries file bodies; without it, not."""
+    return "MARKER = 1" in _prompt_for(["read_file"]) and "MARKER = 1" not in _prompt_for(["lint"])
+
+
+def _write_file_changes_behaviour() -> bool:
+    """With `write_file` an added file clears node-scope; without it, not."""
+    with_tool = check_node_scope("impl", ["n.py"], ["new.py"], may_create=True)
+    without = check_node_scope("impl", ["n.py"], ["new.py"], may_create=False)
+    return with_tool.passed is True and without.passed is False
+
+
+def _captured(argv: tuple[str, ...], marker: str) -> list[CapturedRun]:
+    return [CapturedRun(argv=argv, exit_code=1, stdout=marker, stderr="")]
+
+
+def _failed_gate() -> Tier1Result:
+    return Tier1Result(
+        node_id="n1",
+        passed=False,
+        checks=(GateCheck(name="tests", passed=False, detail="'pytest test_n.py' exited 1"),),
+    )
+
+
+def _repair_prompt(captured: list[CapturedRun], tools: list[str]) -> str:
+    return format_attempt_failure(_failed_gate(), captured, attempt=1, max_attempts=3, tools=tools)
+
+
+def _run_tests_changes_behaviour() -> bool:
+    """With `run_tests` the repair prompt carries the suite output; without it, not."""
+    captured = _captured(("coverage", "run", "-m", "pytest"), "SUITE-MARKER")
+    return "SUITE-MARKER" in _repair_prompt(captured, ["run_tests"]) and (
+        "SUITE-MARKER" not in _repair_prompt(captured, ["lint"])
+    )
+
+
+def _lint_changes_behaviour() -> bool:
+    """With `lint` the repair prompt carries ruff's output; without it, not."""
+    captured = _captured(("ruff", "check", "n.py"), "RUFF-MARKER")
+    return "RUFF-MARKER" in _repair_prompt(captured, ["lint"]) and (
+        "RUFF-MARKER" not in _repair_prompt(captured, ["run_tests"])
+    )
+
+
+_TOOL_BEHAVIOUR_PROBES: dict[str, Callable[[], bool]] = {
+    "read_file": _read_file_changes_behaviour,
+    "write_file": _write_file_changes_behaviour,
+    "run_tests": _run_tests_changes_behaviour,
+    "lint": _lint_changes_behaviour,
+}
+
+
+def test_every_registry_name_is_a_behaviour_the_harness_honours() -> None:
+    """T3-4's own guard: a name with no binding fails the suite.
+
+    `RUN_ALLOWLIST` used to be four strings validated against emissions
+    and consumed nowhere, so adding a fifth would have cost nothing and
+    bought nothing. Each probe here shows the *difference* listing a name
+    makes -- both halves, per CLAUDE.md -- and the set comparison means a
+    registry entry without a probe cannot be added quietly.
+    """
+    assert set(_TOOL_BEHAVIOUR_PROBES) == set(TOOL_BINDINGS)
+    for name, probe in _TOOL_BEHAVIOUR_PROBES.items():
+        assert probe() is True, f"{name}: listing it changed nothing the harness does"
 
 
 def test_emit_prompt_asks_for_the_test_impl_split() -> None:

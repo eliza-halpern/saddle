@@ -38,7 +38,26 @@ from saddle.vllm import (
     VllmResponseError,
 )
 
-RUN_ALLOWLIST: Final[tuple[str, ...]] = ("read_file", "write_file", "run_tests", "lint")
+# Every name a plan may list, and the harness behaviour listing it buys
+# (T3-4). The list was decorative until this registry existed: it was
+# validated against emissions and consumed nowhere, so a plan that dropped
+# `read_file` still got the whole repo inlined. A name with no binding here
+# is a name the node cannot be given, so `RUN_ALLOWLIST` is derived rather
+# than written twice.
+TOOL_BINDINGS: Final[dict[str, str]] = {
+    "read_file": ("the prompt carries the repo files' contents; without it, the file names only"),
+    "write_file": (
+        "the node may create files, subject to its kind's scope rule; "
+        "without it, creating any file fails the node-scope gate"
+    ),
+    "run_tests": (
+        "a failed attempt's repair prompt carries the test command's output; "
+        "without it, the gate verdict lines only"
+    ),
+    "lint": ("the repair prompt carries ruff's output; without it, the gate verdict lines only"),
+}
+RUN_ALLOWLIST: Final[tuple[str, ...]] = tuple(TOOL_BINDINGS)
+CONTENTS_WITHHELD: Final = "(file contents withheld: read_file not in allowed_tools)"
 CONTEXT_CEILING: Final = 30000
 EMIT_ROUNDS: Final = 3
 MAX_FILES_IN_PROMPT: Final = 100
@@ -95,7 +114,14 @@ class DagOptions:
 
 
 def build_emit_prompt(task: str) -> str:
-    """Decomposition prompt: task plus the DAG vocabulary rules."""
+    """Decomposition prompt: task plus the DAG vocabulary rules.
+
+    The tool rules render `TOOL_BINDINGS`, so a name the harness does not
+    honour cannot reach the planner and a binding cannot change without
+    the prompt saying so.
+    """
+    tools = ", ".join(TOOL_BINDINGS)
+    bindings = "\n".join(f"  - {name}: {effect}." for name, effect in TOOL_BINDINGS.items())
     return f"""Decompose the mechanical coding task below into a DAG of 1 to 4 nodes.
 
 Task: {task}
@@ -125,7 +151,10 @@ Rules:
   Context is a cost, not an allowance: a model attends worst to the middle
   of a long prompt, so padding the budget buries the file the node has to
   change underneath ones it does not.
-- allowed_tools uses only: read_file, write_file, run_tests, lint.
+- allowed_tools uses only: {tools}. Each name is a capability the node
+  gets only because it listed it, so list what the node needs and nothing
+  else:
+{bindings}
 - target_files (optional) lists the repo-relative files the node may touch,
   e.g. ["src/app/login.py"]. Leave it empty when unsure; never use "/" or
   ".." in an entry. A node that touches a file outside its list fails.
@@ -162,6 +191,10 @@ def build_worker_prompt(
     the middle. An instruction stated only ahead of them is stated in the
     position the model reads best and then buried under everything it
     reads worst.
+
+    `read_file` is the binding that decides whether the contents appear
+    at all (T3-4): without it the node still gets the file *names*, which
+    is what makes omitting it a context-cost lever rather than blindness.
     """
     listed = list(files)
     if not listed:
@@ -170,10 +203,16 @@ def build_worker_prompt(
         shown = "\n".join(listed[:MAX_FILES_IN_PROMPT])
         if len(listed) > MAX_FILES_IN_PROMPT:
             shown += f"\n... and {len(listed) - MAX_FILES_IN_PROMPT} more"
-    context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
-    budget = min(node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS)
-    if len(context) > budget:
-        context = context[:budget] + "\n[file context truncated]"
+    tools = node.execution_constraints.allowed_tools
+    if "read_file" in tools:
+        context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
+        budget = min(
+            node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS
+        )
+        if len(context) > budget:
+            context = context[:budget] + "\n[file context truncated]"
+    else:
+        context = CONTENTS_WITHHELD
     reqs = "\n".join(f"  {req.id}: {req.statement}" for req in node.requirements)
     return f"""Task: {task}
 

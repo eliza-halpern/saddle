@@ -146,7 +146,7 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 }
 ```
 
-> * **Static DAG Validation (new — contains the single-shot risk):** Before anything executes, dependency-free Python checks run with zero LLM involvement: schema conformance, acyclicity, every dependency resolves, `allowed_tools` ⊆ global allowlist, `reasoning_budget` ∈ {zero, low, medium, xhigh} (node vocabulary; low/medium/xhigh pass to the wire, zero maps to wire none), `max_context_tokens` ≤ per-worker ceiling, every node declares `deterministic_gate` + `requirement_ids`, every `test_command` is runnable, and every intent-record criterion maps to ≥1 node gate.
+> * **Static DAG Validation (new — contains the single-shot risk):** Before anything executes, dependency-free Python checks run with zero LLM involvement: schema conformance, acyclicity, every dependency resolves, `allowed_tools` ⊆ global allowlist (each name bound to a harness behaviour, item 6 and the recovery prompt), `reasoning_budget` ∈ {zero, low, medium, xhigh} (node vocabulary; low/medium/xhigh pass to the wire, zero maps to wire none), `max_context_tokens` ≤ per-worker ceiling, every node declares `deterministic_gate` + `requirement_ids`, every `test_command` is runnable, and every intent-record criterion maps to ≥1 node gate.
 > * **Bounded Recompile:** Validation errors return to the Orchestrator as a machine-generated error list (max 3 rounds); exhaustion routes to the human gate. One call drafts, but nothing executes until the draft passes machine checks.
 > * **Rolling Wave (large/uncertain work):** The Orchestrator MAY emit a partial DAG plus a plan-ahead horizon instead of the whole graph; the scheduler requests extension waves as proof blocks land. One-shot compilation is the fast path, not a straitjacket.
 >
@@ -162,9 +162,9 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 > *Status: the scheduler is asyncio but the worker is synchronous; no run has overlapped two nodes (F7). Measured by WORKPLAN T4-2.*
 > * **Dynamic Scoping:**
 >   * *Reasoning Budget:* Mechanical nodes (linting, search) run at Low/Zero reasoning; complex algorithmic nodes run at xhigh.
->   * *Tool Masking:* Only the schemas listed in allowed_tools are injected into the worker's prompt, preventing context pollution and unauthorized system commands.
+>   * *Tool Masking:* Each name in `allowed_tools` is one harness capability, and a node gets it only by listing it: `read_file` puts the repo files' contents in the worker prompt (without it the prompt lists the file names only); `write_file` lets the node create files, subject to its kind's scope rule (without it any added file fails Tier-1 item 6); `run_tests` puts the test command's captured output in the repair prompt after a failed attempt, and `lint` does the same for ruff's (without them the repair prompt carries the gate verdict lines only). Autofix is not on this list: it is harness hygiene, not a capability the plan chooses.
 >
-> *Status (2026-09-18): specified, not built — `RUN_ALLOWLIST` (`cli.py:41`) is consumed by nothing; see WORKPLAN T3-4.*
+> *Status (2026-09-18): built — `TOOL_BINDINGS` (`cli.py`) is the registry and `RUN_ALLOWLIST` is derived from it, so a name with no binding cannot be validated into a plan; WORKPLAN T3-4.*
 
 ### Phase 3: Tiered Deterministic Environment Gates
 
