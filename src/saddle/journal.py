@@ -204,8 +204,20 @@ class SpanRecorder:
     node_id: str
     parent_id: str | None = None
 
-    def record(self, *, argv: Sequence[str], duration_ms: int, exit_code: int, detail: str) -> None:
-        """Seal and append one completed tool invocation."""
+    def record(
+        self,
+        *,
+        argv: Sequence[str],
+        duration_ms: int,
+        exit_code: int,
+        detail: str,
+        name: str | None = None,
+    ) -> None:
+        """Seal and append one completed tool invocation.
+
+        `name` overrides the tool name derived from `argv`, for a git run
+        whose purpose the journal should show (`restore-baseline`, T3-23).
+        """
         append_span(
             self.path,
             build_span(
@@ -214,6 +226,7 @@ class SpanRecorder:
                 duration_ms=duration_ms,
                 exit_code=exit_code,
                 detail=detail,
+                name=name,
                 parent_id=self.parent_id,
             ),
         )

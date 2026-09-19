@@ -221,6 +221,19 @@ def test_apply_diff_garbage_raises(tmp_path: Path) -> None:
         _apply_diff(tmp_path, "not a diff\n")
 
 
+def test_apply_diff_that_does_not_match_the_tree_raises(tmp_path: Path) -> None:
+    """A well-formed diff git rejects in every tolerance mode is named as a
+    failed apply. Until T3-23 this path was covered only by accident: a
+    replacement node's diff written against the tree its failed
+    predecessor left behind, which the restore now makes apply."""
+    _git_repo(tmp_path)
+    diff = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 9\n+x = 2\n"
+    expected = f"worker diff did not apply cleanly in {str(tmp_path)!r}"
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _apply_diff(tmp_path, diff)
+    assert (tmp_path / "n.py").read_text() == "x = 1\n"
+
+
 def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
     """A header with no '@@' hunk is schema-valid but applies nothing.
 
@@ -582,7 +595,15 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert run.detail == "0 proven, 1 failed, 1 undispatched"
     tools = [span for span in spans if span.kind == "tool"]
     assert tools
-    assert {tool.parent_id for tool in tools} == {first.span_id}
+    # Every gate run hangs off the attempt that applied the diff; what hangs
+    # off the halting attempt is the restore that undoes it and the two
+    # diffs proving the tree is back at the baseline (T3-23).
+    assert {tool.parent_id for tool in tools} == {first.span_id, second.span_id}
+    assert [tool.name for tool in tools if tool.parent_id == second.span_id] == [
+        "restore-baseline",
+        "git",
+        "git",
+    ]
 
 
 def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None:
@@ -793,6 +814,103 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
         "attempt 3/3: 4 gate(s) failed",
         "0 proven, 1 failed, 0 undispatched",
     ]
+
+
+def test_run_slice_exhausted_node_leaves_its_baseline_tree_behind(tmp_path: Path) -> None:
+    """A node that gave up takes its work with it (T3-23).
+
+    The exhausted-retries fixture applies `BAD_DIFF` to `n.py` and stages
+    two new files. Before the restore, all three stayed in the worktree
+    and index after the node failed, so the next thing to run on the tree
+    -- a replacement's snapshot, the merge suite -- ran over unproven
+    edits. Worktree and index alike must read as the node's baseline ref
+    (`--staged --worktree`: an index still carrying the diff is the
+    mutant this pins), and the restore is one journaled span under the
+    attempt that failed.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    diffs = [BAD_DIFF, JUNK1_DIFF, JUNK2_DIFF]
+    seen_failures: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        seen_failures.append(failure)
+        phase = 0 if failure is None else sum(1 for entry in seen_failures if entry is not None)
+        return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False
+    ref = "refs/saddle/baseline/n1"
+    assert run_capture(["git", "diff", ref], tmp_path).stdout == ""
+    assert run_capture(["git", "diff", "--diff-filter=A", ref], tmp_path).stdout == ""
+    assert run_capture(["git", "diff", "--cached", ref], tmp_path).stdout == ""
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 1\n"
+    assert not (tmp_path / "junk1.py").exists()
+    assert not (tmp_path / "junk2.py").exists()
+    spans = read_spans(journal)
+    restores = [span for span in spans if span.name == "restore-baseline"]
+    assert len(restores) == 1
+    (restore,) = restores
+    assert (restore.node_id, restore.exit_code) == ("n1", 0)
+    assert ref in restore.argv
+    agents = [span for span in spans if span.kind == "agent" and span.node_id == "n1"]
+    assert restore.parent_id == agents[-1].span_id
+
+
+def test_run_slice_replacement_starts_from_the_failed_nodes_baseline(tmp_path: Path) -> None:
+    """Known-good (T3-23): the 20b run in miniature, with the restore in place.
+
+    `n1` proposes the right edit to the wrong file for its declared
+    scope: `GOOD_DIFF` turns the suite green but `target-scope` rejects
+    it (`target_files=["other.py"]`), and the identical re-proposal ends
+    the node after two attempts. Without the restore, `n1.r1` snapshots
+    the tree `n1` left behind -- `return 2`, staged -- as its own
+    baseline, and can neither apply the fix nor be red before it (20b:
+    `red-phase: FAIL (tests pass pre-change; prove nothing)` on every
+    attempt). With it, `n1.r1`'s baseline is `n1`'s baseline, the same
+    diff proves, and the merge suite runs over `n1.r1`'s work alone.
+    """
+    _slice_repo(tmp_path)
+    node = _node_dict("n1", [])
+    node["target_files"] = ["other.py"]
+    dag = Dag.model_validate({"nodes": [node]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(GOOD_DIFF, "")
+
+    def replan(node: Node, history: str) -> Dag:
+        assert "touched file(s) outside target_files: n.py" in history
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        replan=replan,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["n1.r1"]
+    assert "- Gate red-phase: PASS" in result.transcript
+    run = next(span for span in read_spans(journal) if span.name == "run")
+    # `n1` is excused by its replacement, so it is not counted as failed.
+    assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
+    baseline = run_capture(["git", "show", "refs/saddle/baseline/n1:n.py"], tmp_path).stdout
+    replacement = run_capture(["git", "show", "refs/saddle/baseline/n1.r1:n.py"], tmp_path).stdout
+    assert baseline == replacement == "def f():\n    return 1\n"
+    # The proven edit, and nothing of `n1`'s, is what the merge suite saw.
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
 
 
 def test_run_slice_propose_error_seals_worker_span(tmp_path: Path) -> None:
@@ -1248,7 +1366,10 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
     replans: list[tuple[str, str]] = []
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
-        return DiffProposal(BAD_DIFF if node.id == "n1" else FIX_DIFF, "")
+        # The replacement starts from `n1`'s baseline (`return 1`), not from
+        # the tree `n1`'s failed diff left behind (T3-23): it proposes the
+        # whole fix, not a repair of `return 3`.
+        return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
     def replan(node: Node, history: str) -> Dag:
         replans.append((node.id, history))
@@ -1344,7 +1465,8 @@ def test_run_slice_replan_continues_past_failed_emission(tmp_path: Path) -> None
     def propose(node: Node, failure: str | None) -> DiffProposal:
         if node.id in ("a", "b"):
             return DiffProposal(BAD_DIFF, "")
-        return DiffProposal(FIX_DIFF, "")
+        # `b.r1` starts from `b`'s baseline, not from `return 3` (T3-23).
+        return DiffProposal(GOOD_DIFF, "")
 
     def replan(node: Node, history: str) -> Dag:
         calls.append(node.id)

@@ -826,22 +826,15 @@ def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     bad = DIFF.replace("+    return 2\n", "+    return 3\n")
-    fix = (
-        "diff --git a/n.py b/n.py\n"
-        "--- a/n.py\n"
-        "+++ b/n.py\n"
-        "@@ -1,2 +1,2 @@\n"
-        " def f():\n"
-        "-    return 3\n"
-        "+    return 2\n"
-    )
+    # The replacement starts from `n1`'s baseline (`return 1`), not from the
+    # tree `n1`'s failed diff left behind (T3-23), so it proposes the whole fix.
     script = [
         _emit_response({"nodes": [_node_dict()]}),
         _diff_response(bad),
         _text_response("1. Change the return value.\n"),
         _diff_response(bad),
         _emit_response({"nodes": [_node_dict("m1")]}),
-        _diff_response(fix),
+        _diff_response(DIFF),
     ]
     client = _scripted_client(script, seen)
     code, out = _run(_options(tmp_path), client)

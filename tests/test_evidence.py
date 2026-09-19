@@ -28,6 +28,7 @@ from saddle.evidence import (
     git_ls_files,
     materialize_baseline,
     mutation_sample,
+    restore_baseline,
     run_argv,
     run_capture,
     run_shell,
@@ -361,6 +362,79 @@ def test_snapshot_baseline_records_one_span_per_git_run(tmp_path: Path) -> None:
     assert [span.exit_code for span in spans] == [0, 0, 0, 0]
     assert all(span.node_id == "n1" for span in spans)
     assert [span.argv[3] for span in spans] == ["add", "write-tree", "commit-tree", "update-ref"]
+
+
+def test_restore_baseline_drops_a_staged_edit_and_a_staged_add(tmp_path: Path) -> None:
+    """Known-good (T3-23): a staged edit and a staged new file since the
+    ref are both gone from worktree and index; `HEAD` and the branches stand."""
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add a"], tmp_path) == 0
+    head = run_capture(["git", "rev-parse", "HEAD"], tmp_path).stdout
+    branches = run_capture(["git", "branch", "-a"], tmp_path).stdout
+    ref = snapshot_baseline(tmp_path, "n1")
+    (tmp_path / "a.py").write_text("x = 2\n")
+    (tmp_path / "new.py").write_text("y = 1\n")
+    assert run_argv(["git", "add", "a.py", "new.py"], tmp_path) == 0
+    assert git_added_files(tmp_path, ref) == ["new.py"]
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    restore_baseline(tmp_path, ref, recorder=recorder)
+    assert (tmp_path / "a.py").read_text() == "x = 1\n"
+    assert not (tmp_path / "new.py").exists()
+    assert run_capture(["git", "diff", ref], tmp_path).stdout == ""
+    assert run_capture(["git", "diff", "--cached", ref], tmp_path).stdout == ""
+    assert git_changed_files(tmp_path, ref) == []
+    assert git_added_files(tmp_path, ref) == []
+    assert run_capture(["git", "rev-parse", "HEAD"], tmp_path).stdout == head
+    assert run_capture(["git", "branch", "-a"], tmp_path).stdout == branches
+    spans = read_spans(journal)
+    assert [span.name for span in spans] == ["restore-baseline", "git", "git"]
+    assert [span.exit_code for span in spans] == [0, 0, 0]
+    assert spans[0].argv[3:] == ["restore", "--source", ref, "--staged", "--worktree", "--", "."]
+
+
+def test_restore_baseline_is_a_recorded_no_op_on_a_tree_already_at_the_ref(
+    tmp_path: Path,
+) -> None:
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "add a"], tmp_path) == 0
+    ref = snapshot_baseline(tmp_path, "n1")
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    restore_baseline(tmp_path, ref, recorder=recorder)
+    assert (tmp_path / "a.py").read_text() == "x = 1\n"
+    assert run_capture(["git", "diff", ref], tmp_path).stdout == ""
+    assert run_capture(["git", "diff", "--cached", ref], tmp_path).stdout == ""
+    restore = next(span for span in read_spans(journal) if span.name == "restore-baseline")
+    assert restore.exit_code == 0
+
+
+def test_restore_baseline_unknown_ref_raises_and_records(tmp_path: Path) -> None:
+    _git_repo(tmp_path)
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    with pytest.raises(RuntimeError, match="no-such-ref"):
+        restore_baseline(tmp_path, "no-such-ref", recorder=recorder)
+    (span,) = read_spans(journal)
+    assert (span.name, span.exit_code != 0) == ("restore-baseline", True)
+
+
+def test_restore_baseline_refuses_a_tree_that_still_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The post-condition is asserted, not assumed: a restore that leaves a
+    difference behind names the ref and the paths instead of returning."""
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    ref = snapshot_baseline(tmp_path, "n1")
+    monkeypatch.setattr(evidence_module, "git_changed_files", lambda *_a, **_k: ["a.py"])
+    with pytest.raises(RuntimeError, match=f"still differs from {ref!r} after restore: a.py"):
+        restore_baseline(tmp_path, ref)
 
 
 def test_git_collectors_record_spans_including_failures(tmp_path: Path) -> None:

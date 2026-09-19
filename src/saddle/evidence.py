@@ -44,6 +44,8 @@ def _record(
     argv: Sequence[str],
     start: float,
     proc: subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes],
+    *,
+    name: str | None = None,
 ) -> None:
     """Journal one completed invocation; no recorder means no span."""
     if recorder is None:
@@ -55,6 +57,7 @@ def _record(
         duration_ms=int((perf_counter() - start) * 1000),
         exit_code=proc.returncode,
         detail=detail,
+        name=name,
     )
 
 
@@ -384,6 +387,34 @@ def materialize_baseline(
     except tarfile.ReadError:
         # `git archive` of an empty tree is not a readable tar: nothing to extract.
         return
+
+
+def restore_baseline(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> None:
+    """Put the worktree and index at `cwd` back to git `ref` (T3-23).
+
+    A node that gave up leaves its applied diffs staged; a replacement
+    node would snapshot them as its own baseline and the merge suite
+    would run over them. One `git restore --source <ref> --staged
+    --worktree -- .` drops edits and staged adds alike (probed: a file
+    `git apply --index` added since the ref is gone from disk after it).
+    The span is named `restore-baseline` so the journal shows the tree
+    was reset. Raises `RuntimeError` naming the ref if anything still
+    differs from it afterwards; `HEAD` and every branch stand.
+    """
+    argv = ["git", "-C", str(cwd), "restore", "--source", ref, "--staged", "--worktree", "--", "."]
+    start = perf_counter()
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    _record(recorder, argv, start, proc, name="restore-baseline")
+    if proc.returncode != 0:
+        msg = f"git restore to {ref!r} failed: {proc.stderr.strip()}"
+        raise RuntimeError(msg)
+    leftover = git_changed_files(cwd, ref, recorder=recorder) + git_added_files(
+        cwd, ref, recorder=recorder
+    )
+    if leftover:
+        paths = ", ".join(sorted(set(leftover)))
+        msg = f"worktree still differs from {ref!r} after restore: {paths}"
+        raise RuntimeError(msg)
 
 
 def under_coverage(test_command: str, data_file: str) -> str:

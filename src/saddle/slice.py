@@ -25,6 +25,7 @@ from saddle.dag import Dag, ExecutionConstraints, Node
 from saddle.evidence import (
     CapturedRun,
     git_changed_files,
+    restore_baseline,
     run_argv,
     run_shell,
     run_stdin,
@@ -394,6 +395,22 @@ def _best_of_samples(
     return scored[0][2], len(set(drawn))
 
 
+def _abandon(
+    workdir: Path, baseline: str | None, applied: Sequence[str], recorder: SpanRecorder
+) -> None:
+    """Undo a failed node's applied diffs before its failure leaves `_run_node` (T3-23).
+
+    Every give-up path passes here. With at least one diff applied, the
+    worktree and index go back to the node's own baseline ref, so a
+    replacement node snapshots the tree this node started from (its
+    `red-phase` pre leg can be red again) and the merge suite runs over
+    proven edits only. A node that applied nothing restores nothing: the
+    tree already is its baseline.
+    """
+    if applied and baseline is not None:
+        restore_baseline(workdir, baseline, recorder=recorder)
+
+
 async def _run_node(
     node: Node,
     workdir: Path,
@@ -510,6 +527,7 @@ async def _run_node(
                 f"attempt {attempt}/{max_attempts}: {failed_count} gate(s) failed",
             )
         except _HaltRecoveryError as exc:
+            _abandon(workdir, baseline, applied, recorder)
             if exc.result is None:
                 detail = f"identical diff re-proposed after {exc.attempts} non-applying attempt(s)"
                 raise NodeUnappliableError(node.id, detail, exc.attempts, exc.failure) from exc
@@ -517,6 +535,9 @@ async def _run_node(
         except BaseException as exc:
             _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, str(exc))
             raise
+    # `recorder` is the last attempt's: the restore span hangs off the
+    # attempt that failed, so the journal shows when the tree was reset.
+    _abandon(workdir, baseline, applied, recorder)
     if last_result is None:
         detail = f"no proposed diff applied in {max_attempts} attempts"
         raise NodeUnappliableError(node.id, detail, max_attempts, failure)

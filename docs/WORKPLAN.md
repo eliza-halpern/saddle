@@ -2415,6 +2415,38 @@ Passing instance at HEAD: none — the layout test collects, it does not run.
 Dry run: not run.
 
 ### T3-23 — A failed node's work leaves the worktree before anything else runs on it (Major)
+Status 2026-09-19: DONE by the reviewer. `restore_baseline(cwd, ref, *,
+recorder)` in evidence.py runs the one `git restore --source <ref> --staged
+--worktree -- .`, records it as a span named `restore-baseline` (the
+`SpanRecorder.record` gained a `name=` override for it), then asserts
+`git diff --name-only <ref>` and `git diff --diff-filter=A <ref>` are
+empty and raises `RuntimeError` naming the ref and the paths otherwise.
+`_abandon(workdir, baseline, applied, recorder)` in slice.py guards on
+`applied and baseline is not None` and is called from the
+`_HaltRecoveryError` handler and the loop fall-through; the span hangs off
+the attempt that ended the node (for a halt, the identical-re-proposal
+attempt; its two verification diffs hang there too). Known-bad shown red
+at HEAD before the fix, four tests: the replacement node in the step-3
+fixture fails as **unappliable** after 2 attempts (its `GOOD_DIFF` cannot
+apply to the `return 2` tree `n1` left), not as `red-phase` as predicted
+below — same defect, earlier gate, because the replacement proposes the
+whole fix; 20b's diff happened to apply to both trees. Known-good: `1
+proven, 0 failed, 0 undispatched, merge exit 0` (a replanned node is
+excused, so the tally reads 0 failed, not 1) and both baseline refs show
+`return 1`. Mutants: 1 restore call deleted KILLED (replacement test,
+replan test); 2 `--staged --worktree` → `--worktree` KILLED (the
+exhausted-node tree test's `git diff --cached <ref>` and the evidence
+staged-edit test); 3 `if applied` → `if not applied` KILLED (replacement
+and exhausted-node tests, plus both unappliable-diff slice tests, which
+the restore-on-nothing-applied now touches). Tests changed as this item
+required: `test_run_slice_replan_recovers_failed_node`,
+`test_run_slice_replan_continues_past_failed_emission` and
+`tests/test_cli.py::test_run_task_replan_recovers_exhausted_node` all
+proposed a repair of `return 3` for the replacement and pinned the
+defect; each now proposes the whole fix. `test_run_slice_replanned_node_
+failure_stays_failed` needed no change (its replacement now fails gates
+instead of not applying; still 2 attempts). That accidental coverage of
+`_apply_diff`'s "did not apply cleanly" path is replaced by a direct test.
 Files: `src/saddle/slice.py` (`_run_node` ~:404: the two `raise
 NodeGateFailedError` sites ~:516 and ~:523 and the `NodeUnappliableError`
 site ~:521; `run_slice` ~:656: the merge-suite call ~:729);
