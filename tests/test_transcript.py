@@ -372,3 +372,43 @@ def test_render_journal_transcript_node_without_gate_outputs_is_fail() -> None:
         thinking="",
     )
     assert "- Verdict: FAIL\n" in render_journal_transcript([record], [], "/tmp/proofs.jsonl")
+
+
+def _run_span(exit_code: int, detail: str) -> SpanRecord:
+    return build_span(
+        node_id="",
+        argv=[],
+        duration_ms=1,
+        exit_code=exit_code,
+        detail=detail,
+        kind="agent",
+        name="run",
+    )
+
+
+def test_render_journal_transcript_failed_run_span_is_fail() -> None:
+    """T3-21 known-bad: the smoke journal's shape -- one sealed proof, a run
+    span saying a second node failed -- re-rendered as PASS, because only
+    proven nodes have records and the run span was never read."""
+    record = _sealed("n1", True, [])
+    spans = [_run_span(1, "1 proven, 1 failed, 0 undispatched, merge exit 2")]
+    text = render_journal_transcript([record], spans, "/tmp/proofs.jsonl")
+    assert "- Verdict: FAIL\n" in text
+    assert "- Proven nodes: 1\n" in text
+
+
+def test_render_journal_transcript_passed_run_span_stays_pass() -> None:
+    """T3-21 known-good: a run span that exited 0 changes nothing."""
+    record = _sealed("n1", True, [])
+    spans = [_run_span(0, "1 proven, 0 failed, 0 undispatched, merge exit 0")]
+    assert "- Verdict: PASS\n" in render_journal_transcript([record], spans, "/tmp/proofs.jsonl")
+
+
+def test_render_journal_transcript_last_run_span_governs() -> None:
+    """A resumed journal carries one run span per run; the latest is the verdict."""
+    record = _sealed("n1", True, [])
+    spans = [
+        _run_span(1, "1 proven, 1 failed, 0 undispatched, merge exit 2"),
+        _run_span(0, "2 proven, 0 failed, 0 undispatched, merge exit 0"),
+    ]
+    assert "- Verdict: PASS\n" in render_journal_transcript([record], spans, "/tmp/proofs.jsonl")

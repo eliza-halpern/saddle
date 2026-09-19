@@ -144,6 +144,13 @@ def render_journal_transcript(
     "(unknown)"; the verdict is PASS only when every sealed gate output
     passed, so an auditor recomputes it instead of trusting it.
 
+    Only proven nodes have sealed records, so proofs alone cannot see a
+    failed node: the smoke run of 2026-09-19 (`1 proven, 1 failed, merge
+    exit 2`) re-rendered as PASS. The run's own span is the record of
+    what happened to the rest of the DAG, so when the journal has one its
+    exit governs too (T3-21); a journal with no run span (in flight, or
+    older than run spans) keeps the proof-only verdict.
+
     A journal with no sealed proofs is FAIL, never PASS: `all()` over an
     empty sequence is vacuously true, which reported runs that proved
     nothing -- a truncated worker, a crash before the first node -- as
@@ -166,9 +173,11 @@ def render_journal_transcript(
         for record in records
     )
     proven = any(node.checks for node in nodes)
+    runs = [span for span in spans if span.name == "run"]
+    run_ok = runs[-1].exit_code == 0 if runs else True
     verdict = (
         "PASS"
-        if proven and all(check.passed for node in nodes for check in node.checks)
+        if run_ok and proven and all(check.passed for node in nodes for check in node.checks)
         else "FAIL"
     )
     return render_transcript(
