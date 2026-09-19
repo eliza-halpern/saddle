@@ -598,16 +598,26 @@ def check_node_scope(
 
 
 def check_requirement_binding(
-    requirement_ids: Collection[str], flipped_tests: Mapping[str, str]
+    requirement_ids: Collection[str],
+    flipped_tests: Mapping[str, str],
+    *,
+    planned_ids: Collection[str] = (),
 ) -> GateCheck:
-    """Every declared requirement is cited, and every citation is declared.
+    """Every declared requirement is cited, and every citation is planned.
 
     The second half is traceSDD's orphan rule: an ID cited in code that
-    the node never declared is a hallucinated requirement, and detecting
-    it is what stops the binding being satisfiable in both directions. A
+    nobody declared is a hallucinated requirement, and detecting it is
+    what stops the binding being satisfiable in both directions. A
     worker free to invent IDs can tag whatever it likes and the gate
     still reads green -- F5's circularity, which survives adding
     statements unless citations are constrained to the declared set.
+
+    `planned_ids` widens that set to the ids other nodes of the same plan
+    declare (T3-24): the test sources are read suite-wide, so a plan that
+    gives its `test` node `REQ-001` and its `impl` node `REQ-002` cites
+    both ids in one file, and with the node's own ids alone no node of
+    such a plan can pass (session 20b). The first half is untouched: an
+    id the node itself declares must be cited, whatever the plan holds.
     """
     unbound = sorted(
         req
@@ -624,7 +634,7 @@ def check_requirement_binding(
     cited = {
         found for source in flipped_tests.values() for found in REQUIREMENT_CITATION.findall(source)
     }
-    orphans = sorted(cited - declared)
+    orphans = sorted(cited - declared - set(planned_ids))
     if orphans:
         return GateCheck(
             name="requirement-binding",
@@ -663,6 +673,10 @@ class Tier1Inputs:
     # verdict (T3-7a).
     test_output: str = ""
     workdir_modules: Collection[str] = ()
+    # Every id some node of the plan declares; the orphan half of
+    # requirement-binding subtracts these before rejecting a citation
+    # (T3-24). Empty means the node's own ids are the whole plan.
+    planned_requirements: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -790,7 +804,9 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         check_target_files(node.target_files, inputs.touched_files),
         check_property_coverage(node.kind, inputs.flipped_tests),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
-        check_requirement_binding(node.requirement_ids, inputs.flipped_tests),
+        check_requirement_binding(
+            node.requirement_ids, inputs.flipped_tests, planned_ids=inputs.planned_requirements
+        ),
         _not_required("mutation")
         if is_spec
         else check_mutation(inputs.mutation, sample.kill_threshold),

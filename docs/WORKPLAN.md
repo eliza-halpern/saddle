@@ -2532,6 +2532,38 @@ shape; check it too.
 Dry run: not run.
 
 ### T3-24 — An impl node may cite the requirements its dependencies' tests specify (Major; decision needed)
+Status 2026-09-19: DONE by the reviewer under the user's word for A, with
+one correction to A's declared set, **loosened, with proof**. Step 5 as
+written does not reproduce 20b: run at HEAD, the two-node fixture with
+`n1` `REQ-001` only and `n2` `REQ-002` only fails **`n1`**, not `n2`, with
+`undeclared requirements cited: REQ-002` (`Proven nodes: 0`), because
+`flipped_tests` is every discovered test source and the committed
+`test_m.py` cites `n2`'s id before `n2` exists; the 20b shape (`test` node
+`t1` declaring `REQ-001` writes a spec citing `REQ-001` and `REQ-002`,
+`impl` node `n1` declares `REQ-002`) fails `t1` the same way. An upstream-
+only set rescues neither, since the cited id is declared *downstream*:
+implemented as mutant 3 below, both slice tests stay at `Proven nodes: 0`.
+So the orphan half subtracts the ids declared by **every node of the
+plan** (`planned_requirement_ids(dag) -> tuple[str, ...]` in `dag.py`,
+sorted union; `check_requirement_binding(..., *, planned_ids=())`;
+`Tier1Inputs.planned_requirements`; `run_node_gate(...,
+planned_requirements=())`; `_run_node`/`_best_of_samples`/
+`_evaluate_candidate` carry it; run_slice's worker computes it from
+`remaining`, so a replacement node's ids count and a replaced node's do
+not). Same rationale as A — an id some node of the plan declares is
+planned, not hallucinated — and what stays tight is unchanged: an id
+declared by no node is still an orphan (known-bad `REQ-003`), and a node's
+own ids must still be cited (unbound half untouched; the plan does not
+rescue it). Tests: gates known-good/known-bad/unbound/own-orphan-with-
+no-plan, `run_tier1` passthrough, runner end to end, dag helper (union
+over a chain plus a sibling; single node), and the two slice tests above,
+both shown red at HEAD. Mutants, all KILLED: 1. `- set(planned_ids)`
+deleted (6 tests); 2. `cited - declared - set(planned_ids)` → `cited -
+set(planned_ids)` (9, including the own-orphan case); 3. helper returns
+the dependencies' ids only — option A as written (dag + both slice
+tests); 4. the worker hands the gate an empty plan (both slice tests).
+`./check.sh` green: 629 passed, 3 skipped, 100%. The T3-8 fixture
+`_declares_both_requirements` is left as it was.
 Files: `src/saddle/gates.py` (`check_requirement_binding` ~:600; the call
 in `run_tier1` ~:793); `src/saddle/runner.py` (`run_node_gate` ~:100: a
 new parameter; `Tier1Inputs`); `src/saddle/slice.py` (`_run_node` ~:404

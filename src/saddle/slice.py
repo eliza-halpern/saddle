@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 from time import perf_counter
 from typing import Final
 
-from saddle.dag import Dag, ExecutionConstraints, Node
+from saddle.dag import Dag, ExecutionConstraints, Node, planned_requirement_ids
 from saddle.evidence import (
     CapturedRun,
     git_changed_files,
@@ -321,7 +321,7 @@ def _seal_attempt(
 
 
 def _evaluate_candidate(
-    node: Node, workdir: Path, diff: str, baseline: str
+    node: Node, workdir: Path, diff: str, baseline: str, planned: tuple[str, ...]
 ) -> tuple[Tier1Result | None, str | None]:
     """Gate `diff` on a throwaway copy of `workdir`; never touches it.
 
@@ -348,11 +348,11 @@ def _evaluate_candidate(
             _apply_diff(candidate, diff)
         except RuntimeError as exc:
             return None, str(exc)
-        return run_node_gate(node, candidate, baseline=baseline), None
+        return run_node_gate(node, candidate, baseline=baseline, planned_requirements=planned), None
 
 
 def _best_of_samples(
-    node: Node, workdir: Path, propose: Proposer, baseline: str
+    node: Node, workdir: Path, propose: Proposer, baseline: str, planned: tuple[str, ...]
 ) -> tuple[DiffProposal | None, int]:
     """Draw PROPOSAL_SAMPLES unconditioned proposals; keep the best.
 
@@ -376,7 +376,7 @@ def _best_of_samples(
         drawn.append(proposal.diff)
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
             continue
-        result, unappliable = _evaluate_candidate(node, workdir, proposal.diff, baseline)
+        result, unappliable = _evaluate_candidate(node, workdir, proposal.diff, baseline, planned)
         if unappliable is not None or result is None:
             continue
         failures = sum(1 for check in result.checks if not check.passed)
@@ -418,8 +418,13 @@ async def _run_node(
     propose: Proposer,
     proofs: dict[str, str],
     run_span_id: str,
+    planned: tuple[str, ...],
 ) -> Proof:
     """Execute one node: propose, apply, gate, seal — with bounded recovery.
+
+    `planned` is every requirement id the node's plan declares, handed to
+    each gate run so a citation of another node's id is not an orphan
+    (T3-24).
 
     A failed gate (or a diff that does not apply) retries in a fresh
     worker call carrying the failure evidence, at most
@@ -458,7 +463,7 @@ async def _run_node(
             # node with the worktree untouched and nothing retried.
             try:
                 if attempt == 1:
-                    best, distinct = _best_of_samples(node, workdir, propose, baseline)
+                    best, distinct = _best_of_samples(node, workdir, propose, baseline, planned)
                     proposal = best if best is not None else propose(node, failure)
                     # Agreement across independent samples is the correlation
                     # signal: LLM samples "often fail on the same inputs", so
@@ -490,7 +495,12 @@ async def _run_node(
             autofix(workdir, baseline=baseline, recorder=recorder)
             captured: list[CapturedRun] = []
             result = run_node_gate(
-                node, workdir, baseline=baseline, recorder=recorder, capture=captured
+                node,
+                workdir,
+                baseline=baseline,
+                recorder=recorder,
+                capture=captured,
+                planned_requirements=planned,
             )
             if result.passed:
                 parents = [proofs[dep] for dep in node.dependencies]
@@ -711,7 +721,12 @@ def run_slice(
         # The scheduler sees a copy with proven dependencies stripped; the
         # proof record must cite every parent, so run the original node.
         original = next(candidate for candidate in remaining.nodes if candidate.id == node.id)
-        return await _run_node(original, workdir, journal_path, propose, proofs, run_span_id)
+        # From the plan as it stands: a replacement node's ids are planned
+        # too, and a replaced node's are not (T3-24).
+        planned = planned_requirement_ids(remaining)
+        return await _run_node(
+            original, workdir, journal_path, propose, proofs, run_span_id, planned
+        )
 
     while True:
         ready = _schedulable_nodes(remaining, proofs, ever_failed)

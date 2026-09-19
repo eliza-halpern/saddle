@@ -285,6 +285,21 @@ def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
     assert "REQ-001" in binding.detail
 
 
+def test_run_node_gate_planned_requirements_reach_the_binding_gate(tmp_path: Path) -> None:
+    """End to end (T3-24): a suite citing an id another node of the plan
+    declares fails the node gated alone and passes once the plan's ids are
+    handed in; the node's own REQ-001 is still the one counted as bound."""
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2  # REQ-002\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    alone = run_node_gate(_node(), tmp_path)
+    binding = next(check for check in alone.checks if check.name == "requirement-binding")
+    assert binding.detail == "undeclared requirements cited: REQ-002"
+    planned = run_node_gate(_node(), tmp_path, planned_requirements=("REQ-001", "REQ-002"))
+    binding = next(check for check in planned.checks if check.name == "requirement-binding")
+    assert binding.passed is True
+    assert binding.detail == "1 requirement(s) bound"
+
+
 def test_run_node_gate_uncovered_line_fails(tmp_path: Path) -> None:
     fixed = "def f():\n    return 2\n\n\ndef unused():\n    return 3\n"
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"

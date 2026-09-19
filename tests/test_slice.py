@@ -960,7 +960,7 @@ def test_run_node_identical_after_nonapply_reports_unappliable(tmp_path: Path) -
         return DiffProposal("not a diff\n", "")
 
     with pytest.raises(NodeUnappliableError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
     error = caught.value
     assert error.node_id == "n1"
     assert error.attempts == 2
@@ -981,7 +981,7 @@ def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     with pytest.raises(NodeUnappliableError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
     error = caught.value
     assert error.node_id == "n1"
     assert error.attempts == 3
@@ -1008,7 +1008,7 @@ def test_run_node_truncated_worker_call_retries_instead_of_dying(tmp_path: Path)
             raise VllmResponseError(TRUNCATED)
         return DiffProposal(GOOD_DIFF, "")
 
-    asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+    asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
     assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
     # The first attempt's samples and its fallback draw all raised, so the
     # node recovered on a later attempt rather than raising.
@@ -1024,7 +1024,7 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
         raise VllmResponseError(TRUNCATED)
 
     with pytest.raises(NodeUnappliableError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
     error = caught.value
     assert error.attempts == 3
     assert error.failure is not None
@@ -1043,7 +1043,7 @@ def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> Non
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     with pytest.raises(NodeGateFailedError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run"))
+        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
     error = caught.value
     assert error.attempts == 3
     assert error.result.passed is False
@@ -1060,7 +1060,7 @@ def test_run_node_missing_proof_seals_attempt_with_tool_linkage(tmp_path: Path) 
         return DiffProposal(GOOD_DIFF, "")
 
     with pytest.raises(KeyError):
-        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run-test"))
+        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run-test", ()))
     spans = read_spans(journal)
     tools = [span for span in spans if span.kind == "tool"]
     workers = [span for span in spans if span.name == "worker:n1"]
@@ -2233,3 +2233,95 @@ def test_run_slice_bare_pytest_merge_cannot_import_what_the_gates_could(
     assert result.passed is False
     run = [span for span in read_spans(tmp_path / "proofs.jsonl") if span.name == "run"][-1]
     assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 2"
+
+
+# --- T3-24: a citation of a requirement another node of the plan declares ---
+
+
+def test_run_slice_distinct_ids_first_node_sees_the_second_nodes_citation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (T3-24): the T3-8 two-node fixture with distinct ids.
+
+    `n1` declares `REQ-001` alone and `n2` `REQ-002` alone; the committed
+    `test_m.py` cites `REQ-002`. Binding reads every discovered test
+    source, so `n1`'s gate sees `REQ-002` and, with the orphan set drawn
+    from the node's own ids only, fails with "undeclared requirements
+    cited: REQ-002" for an id the plan itself declares one node later.
+    An id declared anywhere in the plan is planned, not hallucinated.
+    """
+    _two_module_repo(tmp_path)
+    _two_module_mutmut(tmp_path / "stub", monkeypatch)
+    second = _node_dict("n2", ["n1"])
+    second["requirements"] = [{"id": "REQ-002", "statement": "REQ-002 holds."}]
+    second["target_files"] = ["m.py"]
+    gate = second["deterministic_gate"]
+    assert isinstance(gate, dict)
+    gate["test_command"] = "pytest test_m.py"
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", []), second]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(GOOD_DIFF if node.id == "n1" else M_DIFF, "")
+
+    result = run_slice(
+        "Fix f and g.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["n1", "n2"]
+    bound = "- Gate requirement-binding: PASS (1 requirement(s) bound)\n"
+    assert result.transcript.count(bound) == 2
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
+
+
+# `SPEC_DIFF` with the property tagged for the impl node's requirement: the
+# specification a `test` node writes cites the ids of the nodes that will
+# make it pass (session 20b's plan, where the impl node declared `REQ-002`).
+SPEC_DIFF_TWO_IDS = SPEC_DIFF.replace(
+    "+def test_f_is_an_int(_value):  # REQ-001\n", "+def test_f_is_an_int(_value):  # REQ-002\n"
+)
+
+
+def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
+    tmp_path: Path,
+) -> None:
+    """Session 20b in miniature (T3-24): the `test` node `t1` declares
+    `REQ-001` and writes a specification citing `REQ-001` and `REQ-002`; the
+    `impl` node `n1` that depends on it declares `REQ-002`. With the orphan
+    set drawn from each node's own ids, `t1` fails "undeclared requirements
+    cited: REQ-002" and no test-first split with distinct ids can prove; drawn
+    from the dependencies' ids only, `t1` still fails, because the id it cites
+    is declared downstream. The unbound half is per node either way: each
+    node's own ids must be cited.
+    """
+    _spec_slice_repo(tmp_path)
+    spec = _node_dict("t1", [])
+    spec["kind"] = "test"
+    impl = _node_dict("n1", ["t1"])
+    impl["requirements"] = [{"id": "REQ-002", "statement": "REQ-002 holds."}]
+    dag = Dag.model_validate({"nodes": [spec, impl]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(SPEC_DIFF_TWO_IDS if node.id == "t1" else GOOD_DIFF, "")
+
+    result = run_slice(
+        "Specify f, then fix it.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["t1", "n1"]
+    bound = "- Gate requirement-binding: PASS (1 requirement(s) bound)\n"
+    assert result.transcript.count(bound) == 2
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"

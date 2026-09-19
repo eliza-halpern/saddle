@@ -102,8 +102,13 @@ def run_node_gate(
     baseline: str = "HEAD",
     recorder: SpanRecorder | None = None,
     capture: list[CapturedRun] | None = None,
+    planned_requirements: tuple[str, ...] = (),
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
+
+    `planned_requirements` is every id the node's plan declares, which the
+    binding gate's orphan half subtracts before rejecting a citation
+    (T3-24); a single node gated on its own leaves it empty.
 
     The current-tree suite runs once under coverage and its exit code
     serves both the tests check and the red-phase post leg; the baseline
@@ -225,5 +230,6 @@ def run_node_gate(
         touched_files=touched,
         test_output=suite.stdout + suite.stderr,
         workdir_modules=sorted({PurePath(rel).parts[0].removesuffix(".py") for rel in sources}),
+        planned_requirements=planned_requirements,
     )
     return run_tier1(node, inputs)

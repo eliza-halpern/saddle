@@ -311,6 +311,68 @@ def test_binding_all_bound_passes() -> None:
     assert check.detail == "1 requirement(s) bound"
 
 
+# --- T3-24: the orphan half subtracts the ids the rest of the plan declares --
+
+
+def test_binding_citation_of_another_planned_id_is_not_an_orphan() -> None:
+    """Known-good: the node declares REQ-002, the plan also holds REQ-001,
+    and the suite cites both -- the shape of every test-first split with
+    distinct ids (session 20b). The pass detail counts the node's own ids."""
+    check = check_requirement_binding(
+        ["REQ-002"],
+        {"test_n.py": "def test_a():  # REQ-001\n    pass\n\n\ndef test_b():  # REQ-002\n"},
+        planned_ids=("REQ-001", "REQ-002"),
+    )
+    assert check.passed is True
+    assert check.detail == "1 requirement(s) bound"
+
+
+def test_binding_citation_of_an_id_no_node_declares_is_still_an_orphan() -> None:
+    """Known-bad: REQ-003 is declared by no node of the plan."""
+    check = check_requirement_binding(
+        ["REQ-002"],
+        {"test_n.py": "# REQ-001\n# REQ-002\n# REQ-003\n"},
+        planned_ids=("REQ-001", "REQ-002"),
+    )
+    assert check.passed is False
+    assert check.detail == "undeclared requirements cited: REQ-003"
+
+
+def test_binding_planned_ids_do_not_rescue_an_unbound_own_id() -> None:
+    """The unbound half is per node: REQ-002 is planned and declared here
+    but no test cites it, and the plan citing REQ-001 changes nothing."""
+    check = check_requirement_binding(
+        ["REQ-002"], {"test_n.py": "# REQ-001\n"}, planned_ids=("REQ-001", "REQ-002")
+    )
+    assert check.passed is False
+    assert check.detail == "unbound requirements: REQ-002"
+
+
+def test_binding_own_undeclared_citation_is_an_orphan_with_no_plan() -> None:
+    """A node gated alone (empty plan) that cites an id it did not declare
+    is still caught: the node's own ids are subtracted, not replaced."""
+    check = check_requirement_binding(["REQ-002"], {"test_n.py": "# REQ-002\n# REQ-009\n"})
+    assert check.passed is False
+    assert check.detail == "undeclared requirements cited: REQ-009"
+
+
+def test_run_tier1_hands_the_plans_ids_to_the_binding_gate() -> None:
+    """`Tier1Inputs.planned_requirements` reaches the orphan half (T3-24):
+    the same suite citing REQ-001 and REQ-002 fails the node without it
+    and passes with it."""
+    inputs = _passing_inputs()
+    cited_both = {"test_a": "def test_a():  # REQ-001\n    assert True  # REQ-002\n"}
+    alone = run_tier1(_node(), replace(inputs, flipped_tests=cited_both))
+    binding = next(check for check in alone.checks if check.name == "requirement-binding")
+    assert binding.detail == "undeclared requirements cited: REQ-002"
+    planned = run_tier1(
+        _node(),
+        replace(inputs, flipped_tests=cited_both, planned_requirements=("REQ-001", "REQ-002")),
+    )
+    binding = next(check for check in planned.checks if check.name == "requirement-binding")
+    assert binding.passed is True
+
+
 def test_run_tier1_runs_exactly_the_eleven_documented_checks_in_order() -> None:
     names = [check.name for check in run_tier1(_node(), _passing_inputs()).checks]
     assert names == [

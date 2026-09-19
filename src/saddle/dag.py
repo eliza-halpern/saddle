@@ -149,6 +149,22 @@ class Dag(BaseModel):
     nodes: list[Node] = Field(min_length=1, max_length=32)
 
 
+def planned_requirement_ids(dag: Dag) -> tuple[str, ...]:
+    """Every requirement id some node of `dag` declares, sorted (T3-24).
+
+    The binding gate's orphan half reads citations from every discovered
+    test source, and a plan that splits its ids across nodes puts one
+    node's id in the tests another node gates against: the `test` node
+    that writes the specification cites the id of the `impl` node that
+    will make it pass, and an `impl` node reads the file its dependency
+    wrote. An id declared anywhere in the plan is a planned requirement,
+    not a hallucinated one, so it is what the gate subtracts before
+    calling a citation an orphan. Each node's *own* ids still have to be
+    cited: that half stays per node.
+    """
+    return tuple(sorted({rid for node in dag.nodes for rid in node.requirement_ids}))
+
+
 @dataclass(frozen=True)
 class DagIssue:
     """One machine-readable validation finding (`[]` from validate_dag is valid)."""

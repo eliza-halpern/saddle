@@ -8,7 +8,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from saddle.dag import Dag, DagIssue, Node, dag_json_schema, validate_dag
+from saddle.dag import (
+    Dag,
+    DagIssue,
+    Node,
+    dag_json_schema,
+    planned_requirement_ids,
+    validate_dag,
+)
 
 
 def _node(
@@ -485,3 +492,28 @@ def test_target_files_rejects_escapes_and_absolute_paths(bad: str) -> None:
     node["target_files"] = [bad]
     with pytest.raises(ValidationError):
         Node.model_validate(node)
+
+
+# --- T3-24: the ids a plan declares, for the binding gate's orphan half ----
+
+
+def test_planned_requirement_ids_is_the_sorted_union_over_every_node() -> None:
+    """Every node's ids, whatever its position: a `test` node cites the id
+    of the `impl` node downstream of it, and a sibling's id is planned too.
+    """
+    dag = Dag.model_validate(
+        {
+            "nodes": [
+                _node("c", deps=["b"], reqs=["REQ-003", "REQ-001"]),
+                _node("b", deps=["a"], reqs=["REQ-002"]),
+                _node("a"),
+                _node("d", reqs=["REQ-004"]),
+            ]
+        }
+    )
+    assert planned_requirement_ids(dag) == ("REQ-001", "REQ-002", "REQ-003", "REQ-004")
+
+
+def test_planned_requirement_ids_of_a_single_node_plan_is_its_own_ids() -> None:
+    dag = Dag.model_validate({"nodes": [_node("a", reqs=["REQ-002", "REQ-001"])]})
+    assert planned_requirement_ids(dag) == ("REQ-001", "REQ-002")
