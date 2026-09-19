@@ -759,11 +759,17 @@ Stop if: `grep -c 'if kind == "refactor":' src/saddle/gates.py` is not 1 (it is 
 ### T2-3 — Merge-time full-suite gate (the missing Tier 2, minimal form)
 Files: `src/saddle/slice.py:636-656` (run-end block); `src/saddle/evidence.py`
 (no change; use `run_shell`, L133); `tests/test_slice.py`.
+Status 2026-09-18: finished by the reviewer after one correct executor
+stop (the first draft said `kind="gate"`; `SpanRecord.kind` is
+`Literal["tool", "agent"]` and a suite run is a tool invocation). The text
+below is the shape that landed.
 Contract: after the schedule/replan loop exits, if at least one node was
 proven, the **unscoped** suite command `merge_command` runs once in `workdir`; a
-non-zero exit sets the run verdict to failed and seals a span
-`kind="gate", name="merge-suite"` with the exit code; a zero exit seals the
-same span with exit 0. Per-node verdicts are not revisited.
+non-zero exit sets the run verdict to failed and seals a **tool** span
+`name="merge-suite"`, `node_id=""`, parented to the run span, with the exit
+code; a zero exit seals the same span with exit 0. Per-node verdicts are
+not revisited. The run span's detail gains `, merge exit N` only when the
+gate ran (no proven node → no merge run, detail unchanged).
 Direction: **tightened** (today a run whose every node passed its *own*
 `test_command` is reported passed even if the union of diffs breaks the
 suite — ARCHITECTURE.md:167-171 promises this gate; #60 and D13 record the
@@ -778,12 +784,15 @@ Steps:
    `None` disables the gate (the tests that assert exact span sequences can
    pass `None`; do not weaken those tests).
 2. Insert **after** the `while True:` loop ends and **before**
-   `failed_unexcused = …` (L640):
+   `tools = tool_spans_by_node(read_spans(journal_path))`, so the span is
+   sealed before the run span:
    ```python
    merge_exit = 0
+   merge_ran = merge_command is not None and bool(proofs)
    if merge_command is not None and proofs:
        merge_start = perf_counter()
        merge_exit = run_shell(merge_command, workdir)
+       timed_out = " (timed out)" if merge_exit == SHELL_TIMEOUT else ""
        append_span(
            journal_path,
            build_span(
@@ -791,32 +800,42 @@ Steps:
                argv=shlex.split(merge_command),
                duration_ms=_elapsed_ms(merge_start),
                exit_code=merge_exit,
-               detail="merge-time full suite",
-               kind="gate",
+               detail=f"merge-time full suite: exit {merge_exit}{timed_out}",
                name="merge-suite",
-               span_id=uuid.uuid4().hex,
+               parent_id=run_span_id,
            ),
        )
    ```
-   and change L642 to `passed = not failed_unexcused and not undispatched and merge_exit == 0`.
-   Extend the run span detail (L649-652) with `f", merge exit {merge_exit}"`.
-   Import `run_shell` from `saddle.evidence` (L24) and `shlex`.
+   (`kind` stays the default `"tool"`.) Change the verdict line to
+   `passed = not failed_unexcused and not undispatched and merge_exit == 0`.
+   Extend the run span detail with
+   `+ (f", merge exit {merge_exit}" if merge_ran else "")` — conditional,
+   because three tests pin the exact detail of runs with nothing proven.
+   Import `run_shell` from `saddle.evidence`, `SHELL_TIMEOUT` from
+   `saddle.gates`, and `shlex`.
 3. cli.py: no change; the default `"pytest -q"` applies. Do not add a CLI
    flag in this item.
-Known-good (`tests/test_slice.py`, model on `test_run_slice_pass_end_to_end`
-L298): one node, good diff, `merge_command="true"` → `result.passed is True`
-and the journal holds a span named `merge-suite` with `exit_code == 0`.
+Known-good (`tests/test_slice.py`, model on `test_run_slice_pass_end_to_end`):
+one node, good diff, `merge_command="true"` → `result.passed is True`, the
+journal holds a tool span named `merge-suite` with `exit_code == 0` under
+the run span, and the run detail ends `, merge exit 0`.
 Known-bad: same DAG, `merge_command="false"` → `result.passed is False`, the
-node's own proof record is still present (per-node verdict untouched), and
-the `merge-suite` span has `exit_code == 1`.
+node's own proof record is still present (per-node verdict untouched), the
+`merge-suite` span has `exit_code == 1`, the transcript verdict is FAIL.
+Skip case: a node that never proves → no `merge-suite` span, no suffix.
+Only the two tests that mock `perf_counter` with four ticks
+(`test_run_slice_pass_end_to_end`, `..._records_distinct_sample_count`) take
+`merge_command=None`; every other `run_slice` call keeps the default and
+runs `pytest -q` in its fixture repo at the end.
 Contract mutants (`pytest tests/test_slice.py -q --no-cov -k merge`):
 1. `sed -i 's/and merge_exit == 0/and True/' src/saddle/slice.py` → known-bad red.
 2. `sed -i 's/if merge_command is not None and proofs:/if False:/' src/saddle/slice.py` → known-good span assertion red.
 3. `sed -i 's/exit_code=merge_exit,/exit_code=0,/' src/saddle/slice.py` → known-bad span exit assertion red.
+Verdicts 2026-09-18 (reviewer, pre-commit, `-k merge_suite`, tree hash identical after each revert, caches dropped): 1 KILLED (known-bad), 2 KILLED (known-good and known-bad), 3 KILLED (known-bad).
 Done when: mutants red; every pre-existing `tests/test_slice.py` test green
 (those that count spans get `merge_command=None` with a one-line comment);
 `./check.sh` green.
-Stop if: L642 does not read `passed = not failed_unexcused and not undispatched`.
+Stop if: `grep -c "passed = not failed_unexcused and not undispatched" src/saddle/slice.py` is not 1.
 
 ### T2-4 — Gate outputs carry their evidence basis
 Files: `src/saddle/journal.py:28-33` (`GateOutput`), `:395` (the one place a
