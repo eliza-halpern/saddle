@@ -1988,6 +1988,20 @@ name a package `src`: mutmut 3.8 refuses to instrument it (`Module name
 starts with "src.", which is invalid`) and the mutation gate then fails
 with no mutants decided (T3-20 makes that failure name itself). Known-bad
 for both: the smoke record's `dag.txt`.
+Added 2026-09-19 (smoke rerun 20b, R2 and R3; after T3-24 landed as
+879a837): two more. (3) A `test` node's specification cites, on its tests,
+the requirement ids of every node it specifies — the impl node that makes
+it pass declares its own id and the binding gate's unbound half requires
+some test to cite it; in 20b `node-1`'s `test_n.py` cited `REQ-001` only,
+so with T3-24 in place `node-2` (`REQ-002`) would now fail "unbound
+requirements: REQ-002" instead of the orphan it failed then. Citing an id
+another node of the plan declares is allowed since 879a837; citing one no
+node declares is not. (4) `target_files` of a `test` node names every
+test file it will write, and the worker is told the gate rejects any
+other — `node-2` in 20b wrote a second file `test_n_req002.py` that no
+node listed (R3, the mirror of 20a's S3). Known-bad for both: the 20b
+record's `dag.txt` and `gates-failed.txt`. Tests: the two new sentences
+present, the mutant shape as above (delete each sentence → red).
 
 ### T3-13 — `target_files` spellings the gate can never match (Medium)
 Files: `src/saddle/dag.py` (`_repo_relative_posix` ~:126-138);
