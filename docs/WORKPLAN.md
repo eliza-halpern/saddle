@@ -1501,6 +1501,53 @@ as of `4b25506`. T3-4 owns `check_node_scope` and `run_tier1`; nothing
 below edits them.
 
 ### T3-8 — Gate every node against its own baseline, not `HEAD` (Major)
+Status 2026-09-19: DONE — executor (session 22) plus the reviewer (commit
+below). The executor landed `snapshot_baseline` / `_ref_slug` /
+`BASELINE_REF_PREFIX` in `evidence.py`, the `baseline` threading through
+`_run_node`, `autofix`, `run_node_gate`, `_best_of_samples` and
+`_evaluate_candidate`, six `snapshot_baseline` tests, the two-node
+known-good and own-stray known-bad, `_two_module_repo` and a mutmut stub
+for two modules, and the `t1` test → `n1` impl slice deferred from T3-7a
+(passing). It stopped, correctly, on the T3-1 resume fixture: its `n2` was
+a comment-only refactor (`TIDY_DIFF`) that passed only while gated against
+`HEAD` and credited with `n1`'s `return 2`; against its own baseline the
+diff has no statement line, so coverage has nothing to cover and mutation
+nothing to mutate, and red-phase fails "no mutants decided". That verdict
+is right; the fixture was the same class of defect this item fixes.
+Reviewer: `n2` is now `REFACTOR_DIFF` (`return 2` → `return 1 + 1`; the
+same test pins it, mutants relocated by `_refactor_mutmut`); the
+comment-only diff stays as the known-bad
+`test_run_slice_resumed_comment_only_refactor_proves_nothing`; the stub
+helper is generalised to `_mutmut_stub(name → (file, removed line))`; and
+the two-node test pins in the journal that every `git diff --name-only`
+span for `n2` names `refs/saddle/baseline/n2` and never `HEAD`, which is
+the only observable of autofix's ref (ruff is idempotent on an earlier
+node's clean files, so no behavioural fixture separates the two).
+Deviations from the steps, both reported by the executor: the snapshot is
+guarded by `if baseline is None:` rather than inside `attempt == 1` (mypy
+cannot narrow `str | None` across that join; same condition, same
+recorder, still before `_best_of_samples`); a non-repo raises naming
+`git … add -u -- .`, the first run, not `write-tree`. Three span pins
+moved, not one: `pass_end_to_end`, `unappliable_diff_fails_without_checks`
+and `distinct_unappliable_diffs_exhaust_attempts` count git spans and now
+name the four snapshot argvs.
+Mutants (pre-commit, exact replacement, tree hash identical after each
+revert, caches dropped; `pytest tests/test_slice.py tests/test_evidence.py
+-k "two_nodes or snapshot or distinct_unappliable or resum or own_stray or
+test_node_then_impl" --no-cov`):
+1. `return ref` → `return "HEAD"` — KILLED (5 tests).
+2. `git("add", "-u", "--", ".")` → `-A` — KILLED (4; untracked artefacts enter the tree).
+3. `_evaluate_candidate` gates without `baseline=` — KILLED (2).
+4. `if baseline is None:` → `if True:` (snapshot every attempt) — KILLED (span parents).
+5. `autofix(workdir, baseline=…)` → default — SURVIVED on behaviour, KILLED once the journal pin above landed.
+6. in-place `run_node_gate` without `baseline=` — KILLED (3).
+Issue: not opened by the executor (outward-facing) — T3-5 drafts it,
+quoting the executor's two `git diff` outputs (`n2` against `HEAD`
+carrying `n1`'s `return 2`; against its own ref, the comment only) and the
+four failing-gate lines. Noticed: requirement binding is suite-granular —
+a second test module's `REQ-` tag is charged to every node in the slice
+(`_declares_both_requirements` in the fixture); T3-15 gains a line for
+ARCHITECTURE.
 Files: `src/saddle/evidence.py` (new `snapshot_baseline` beside
 `git_added_files` ~:256, recorded through `_record` ~:41 like its
 neighbours); `src/saddle/slice.py` (`_run_node` ~:336: the snapshot in
@@ -1954,6 +2001,7 @@ Stop if: T3-4 has already rewritten `ARCHITECTURE.md:180` — then fix only
 `:227` and the two docstrings.
 Passing instance at HEAD: n/a (prose).
 Dry run: n/a (docs-only).
+Added 2026-09-19 (T3-8 finding): ARCHITECTURE's Requirement Binding item should say the check is suite-granular — citations are read from every discovered test source, not from the node's scoped command, so a plan with two test modules must declare every `REQ-` id either module cites on every node whose gate can see it (see `_declares_both_requirements` in `tests/test_slice.py`).
 
 ### T3-16 — Three consistency fixes (Minor)
 Files: `src/saddle/runner.py:128-130` (`touched` and its comment);
