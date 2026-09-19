@@ -2100,6 +2100,18 @@ Dry run: not run.
 ---
 
 ### T3-17 — The merge suite runs the way the node gates run tests (Major; decision needed)
+Status 2026-09-19: DONE by the reviewer on the user's word (the loosening
+confirmed in chat). `MERGE_COMMAND = "python -m pytest -q"` is
+`run_slice`'s default; the merge span's argv records it. Known-good
+`test_run_slice_merge_suite_runs_as_the_node_gates_do` (a `pkg/` package
+imported by `tests/test_m.py`, no conftest, no packaging: the smoke run's
+layout) proves and merges; known-bad
+`test_run_slice_bare_pytest_merge_cannot_import_what_the_gates_could` keeps
+`merge_command="pytest -q"` on the same tree and reads `merge exit 2`, so
+the reason for the default stays load-bearing. ARCHITECTURE's Tier 2
+status line, stale since T2-3, now says item 2 is built and how. Mutants
+(pre-commit, exact replacement, tree hash identical): default → `"pytest
+-q"` KILLED; merge block ignores its parameter KILLED (2).
 Files: `src/saddle/slice.py` (`run_slice(..., merge_command: str | None = "pytest -q", ...)`
 ~:648 and the merge block after the loop); `tests/test_slice.py` (the three
 merge-suite tests; one new known-good); `docs/ARCHITECTURE.md` (Tier 2 item 2).
@@ -2177,6 +2189,14 @@ Passing instance at HEAD: the 40-diff accept set in the tool.
 Dry run: not run.
 
 ### T3-19 — The planner is shown the repository it is planning for (Major)
+Status 2026-09-19: DONE by the reviewer (ee2bf84). `build_emit_prompt(task,
+files=())` lists the tracked files (capped like the worker prompt) and
+states the existing-file rule; `_emit_valid_dag(..., files=)` is fed from
+`run_task`, the replan path and `run_dag`; `saddle dag --repo` (default
+`.`) lists the repo and a non-repo cwd lists nothing (`_listable_files`),
+since `dag` is a preview. The `saddle dag --help` golden gained the
+option. Mutants: listing emptied KILLED (3); cap removed KILLED; `run_dag`
+passes `()` KILLED; `run_task` passes `()` KILLED.
 Files: `src/saddle/cli.py` (`build_emit_prompt(task)` ~:116 → `build_emit_prompt(task, files)`;
 `run_task` ~:423 and `run_dag` ~:557 call `git_ls_files` before emitting —
 `run_task` already does at ~:451, after the plan); `tests/test_cli.py`.
@@ -2206,6 +2226,13 @@ Passing instance at HEAD: `test_emit_prompt_asks_for_the_test_impl_split`.
 Dry run: not run.
 
 ### T3-20 — A failed `mutmut run` names itself (Medium)
+Status 2026-09-19: DONE by the reviewer (b887d30). `mutation_sample` binds
+the `mutmut run` capture; an exit other than 0 or `SHELL_TIMEOUT` returns
+`survivors=("mutmut run exited N: <last output line>",)` before `results`
+is read (mutmut exits 0 with survivors — checked on a real run, so
+non-zero is the tool); `check_mutation` renders that as `mutation tool
+failed: …`. Mutants: exit check → `if False` KILLED (2); timeout carve-out
+removed KILLED; wording dropped KILLED (2).
 Files: `src/saddle/evidence.py` (`mutation_sample` ~:449-500: the
 `run_capture(["timeout", …, "mutmut", "run"], …)` result is discarded);
 `src/saddle/gates.py` (`check_mutation` detail for the tool-failure case);
@@ -2240,6 +2267,13 @@ Passing instance at HEAD: `test_run_node_gate_full_sample_catches_what_a_small_c
 Dry run: not run.
 
 ### T3-21 — `saddle verify` cannot call a failed run PASS (Medium)
+Status 2026-09-19: DONE by the reviewer (221fc1b). The last `run` span's
+exit governs when one exists (`run_ok`); a journal with no run span keeps
+the proof-only verdict, so the golden fixture and a live `tail` are
+unchanged — a deliberate narrowing of the item's "no run span → FAIL",
+recorded here. The `N failed` parse was not needed: the run span's exit
+is 0 iff the run passed. Mutants: run-span clause removed KILLED; first
+run governs instead of last KILLED.
 Files: `src/saddle/transcript.py` (`render_journal_transcript` ~:138-185);
 `src/saddle/cli.py` (`run_verify` ~:575); `tests/test_transcript.py` or
 `tests/test_cli.py` (verify tests); the smoke journal shape as the fixture
