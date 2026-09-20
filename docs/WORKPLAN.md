@@ -1057,8 +1057,27 @@ Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert
 Done when: mutants red; `./check.sh` green — 544 passed at commit time.
 
 ### T3-3 — Property coverage becomes an oracle on the `impl` node (issue #62)
-Status 2026-09-19: STOPPED by session 21 (no change to the tree) and
-REWRITTEN below; owner is now the main session (contract change to
+Status 2026-09-19 (later): DONE -- landed by the main session in the commit
+that carries this line, as the rewrite below specifies, with these
+differences from the original steps: `check_property_coverage` keeps its
+two positional parameters and gains keyword-only `oracle` and `targets`;
+the `impl` branch lives in `_check_property_oracle`; `property_modules`
+matches an import by dotted path against the changed file's path without
+`.py` (a package `__init__.py` is its directory), including relative
+imports; the runner computes `property_targets` for every kind and runs
+the oracle only for `impl` nodes with targets. Evidence: the real-engine
+test `test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs`
+(mutmut 3.8: example alone kills, property alone survives); end-to-end
+known-good `test_run_node_gate_impl_node_property_oracle_passes_with_basis`
+and known-bad `..._property_that_cannot_discriminate_fails` (failing set
+exactly `{property-coverage}`, via a stub whose `run` reads the scratch
+config); the t1-then-n1 slice test asserts `n1`'s record basis. Contract
+mutants, scoped run (21 tests): M0 config drops `run_tests` -> 3 red; M1
+`if oracle.killed == 0` -> `if False` -> 2 red; M2 runner passes
+`property_oracle=None` -> 3 red; M3 `property_modules` never matches -> 4
+red. `./check.sh` green at 100%. #62 stays open for T3-5's comment.
+Earlier status 2026-09-19: STOPPED by session 21 (no change to the tree) and
+REWRITTEN below; owner became the main session (contract change to
 `mutation_sample`). The premise the first text rested on is false:
 `mutation_sample`'s `test_files` is the *mutation-exclusion* set (paths
 subtracted from `source_paths` in the scratch `pyproject.toml`,

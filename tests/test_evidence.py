@@ -28,6 +28,7 @@ from saddle.evidence import (
     git_ls_files,
     materialize_baseline,
     mutation_sample,
+    property_modules,
     restore_baseline,
     run_argv,
     run_capture,
@@ -653,6 +654,87 @@ def test_mutmut_scratch_config_exact() -> None:
         'source_paths = ["a.py", "tests/x.py"]\n'
         'pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider"]\n'
     )
+
+
+def test_mutmut_scratch_config_appends_run_tests_to_pytest_args() -> None:
+    """`run_tests` are collection paths after the fixed flags, sorted (T3-3)."""
+    assert _mutmut_scratch_config(["a.py"], run_tests={"test_z.py", "test_a.py"}) == (
+        "[tool.mutmut]\n"
+        'source_paths = ["a.py"]\n'
+        'pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider", "test_a.py", "test_z.py"]\n'
+    )
+
+
+def _without_stubbed_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop the conftest `mutmut` stub from PATH so the real engine runs."""
+    kept = [p for p in os.environ["PATH"].split(os.pathsep) if "mutmut-stub" not in p]
+    monkeypatch.setenv("PATH", os.pathsep.join(kept))
+    assert shutil.which("mutmut") is not None, "the venv must be on PATH (CLAUDE.md)"
+
+
+def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real mutmut, the enforcing engine (CLAUDE.md): `test_files` does not
+    choose what runs, `run_tests` does. Session 21's probe: a property with
+    no discriminating power beside an example that has it, mutant
+    `return 2 -> return 3`. With the example alone collected the mutant is
+    killed; with the property alone it survives. Before T3-3 both calls
+    reported the kill, because pytest always collected the whole tree.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f():\n    return 2\n")
+    (workdir / "test_prop.py").write_text(
+        "from hypothesis import given, strategies as st\n"
+        "from n import f\n\n\n"
+        "@given(st.integers())\n"
+        "def test_prop(_x):\n"
+        "    assert isinstance(f(), int)\n"
+    )
+    (workdir / "test_ex.py").write_text("from n import f\n\n\ndef test_f():\n    assert f() == 2\n")
+    changed = {(str(workdir / "n.py"), 2)}
+    tests = {"test_prop.py", "test_ex.py"}
+    example = mutation_sample(workdir, changed, 5, test_files=tests, run_tests={"test_ex.py"})
+    assert example == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+    prop = mutation_sample(workdir, changed, 5, test_files=tests, run_tests={"test_prop.py"})
+    assert prop == MutationOutcome(killed=0, total=1, generated=1, survivors=("n.x_f__mutmut_1",))
+
+
+def test_property_modules_selects_property_bearing_modules_that_import_a_change() -> None:
+    """Known-good: a `@given` module importing the changed module, by stem,
+    by dotted path, or by package `__init__`. Known-bad: a property over
+    an unrelated import, examples only over the changed module, and an
+    unparseable file.
+    """
+    given = "from hypothesis import given\nfrom hypothesis import strategies as st\n"
+    sources = {
+        "test_n.py": given
+        + "from n import f\n@given(st.integers())\ndef test_p(x):\n    assert f()\n",
+        "tests/test_pkg.py": given
+        + "import pkg.m\n@given(st.integers())\ndef test_q(x):\n    assert pkg.m.g()\n",
+        "test_init.py": given
+        + "from pkg import g\n@given(st.text())\ndef test_r(x):\n    assert g()\n",
+        "test_os.py": given + "import os\n@given(st.integers())\ndef test_s(x):\n    assert os\n",
+        "test_rel.py": given
+        + "from . import n\n@given(st.integers())\ndef test_u(x):\n    assert n\n",
+        "test_examples.py": "from n import f\ndef test_t():\n    assert f() == 2\n",
+        "test_broken.py": "def broken( :\n",
+    }
+    changed = ["/w/n.py", "/w/pkg/m.py"]
+    # `test_rel.py` reaches `n` through a relative import (no module name).
+    assert list(property_modules(sources, changed)) == [
+        "test_n.py",
+        "test_rel.py",
+        "tests/test_pkg.py",
+    ]
+    assert property_modules(sources, changed)["test_n.py"] == sources["test_n.py"]
+    assert list(property_modules(sources, ["/w/pkg/__init__.py"])) == ["test_init.py"]
+    # `import os` matches only a changed `os.py`; a stem inside a longer name does not.
+    assert property_modules(sources, ["/w/os.py"]) == {"test_os.py": sources["test_os.py"]}
+    assert property_modules(sources, ["/w/xn.py", "/w/pkgm.py"]) == {}
+    assert property_modules({}, changed) == {}
 
 
 def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

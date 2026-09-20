@@ -25,6 +25,7 @@ from saddle.evidence import (
     git_diff,
     materialize_baseline,
     mutation_sample,
+    property_modules,
     run_capture,
     run_shell_capture,
     statement_lines,
@@ -209,6 +210,24 @@ def run_node_gate(
             workdir, changed, sample.max_mutants, test_files=test_sources, recorder=recorder
         )
     )
+    # The property oracle (T3-3), `impl` nodes only: the property-bearing
+    # test modules that import a changed module run alone against the same
+    # changed-line mutants, with the same exclusion set; `run_tests` narrows
+    # what pytest collects, which `test_files` never did. `None` when no
+    # module qualifies, so the check can tell "no targets" from "not run".
+    property_targets = tuple(property_modules(test_sources, changed_files))
+    property_oracle = (
+        mutation_sample(
+            workdir,
+            changed,
+            sample.max_mutants,
+            test_files=test_sources,
+            run_tests=property_targets,
+            recorder=recorder,
+        )
+        if node.kind == "impl" and property_targets
+        else None
+    )
     inputs = Tier1Inputs(
         sources=sources,
         ruff_files=[
@@ -232,5 +251,7 @@ def run_node_gate(
         test_output=suite.stdout + suite.stderr,
         workdir_modules=sorted({PurePath(rel).parts[0].removesuffix(".py") for rel in sources}),
         planned_requirements=planned_requirements,
+        property_oracle=property_oracle,
+        property_targets=property_targets,
     )
     return run_tier1(node, inputs)

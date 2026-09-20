@@ -2143,6 +2143,9 @@ def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
     assert "- Gate tests: PASS (red specification: 1 failing test(s))\n" in result.transcript
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
+    # The property `t1` specified bites on `n1` (T3-3): its record says so.
+    outputs = {o.name: o for o in read_records(journal)[1].gate_outputs}
+    assert outputs["property-coverage"].basis == "oracle: killed 5 of 5 mutant(s) by test_n.py"
 
 
 # --- T3-17: the merge suite runs the way the node gates run tests ---------

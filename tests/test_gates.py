@@ -861,10 +861,48 @@ def test_hypothesis_given_counts_as_a_property() -> None:
     assert check_property_coverage("test", sources).passed is True
 
 
+def test_property_oracle_binds_the_impl_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T3-3: the property alone must kill a sampled mutant of the impl node.
+
+    Known-good: a kill by the property modules passes with the basis. No
+    targets: not required. Known-bad: zero kills names the count and the
+    modules; no mutants sampled fails; targets without an oracle means the
+    runner skipped a run it owed, which fails rather than passes.
+    """
+    killed = MutationOutcome(killed=3, total=5, generated=5, survivors=("m4", "m5"))
+    check = check_property_coverage("impl", {}, oracle=killed, targets=("test_n.py",))
+    assert check.passed is True
+    assert check.detail == "property killed 3 of 5 mutant(s)"
+    assert check.basis == "oracle: killed 3 of 5 mutant(s) by test_n.py"
+
+    untargeted = check_property_coverage("impl", {}, targets=())
+    assert untargeted.passed is True
+    assert untargeted.detail == "not required: no property targets this change"
+    assert untargeted.basis is None
+
+    none = MutationOutcome(killed=0, total=5, generated=5, survivors=("m1", "m2", "m3", "m4", "m5"))
+    check = check_property_coverage("impl", {}, oracle=none, targets=("test_n.py", "test_m.py"))
+    assert check.passed is False
+    assert check.detail == (
+        "property killed 0 of 5 mutant(s): no discriminating power (test_n.py, test_m.py)"
+    )
+    empty = MutationOutcome(killed=0, total=0, generated=0, survivors=())
+    check = check_property_coverage("impl", {}, oracle=empty, targets=("test_n.py",))
+    assert check.passed is False
+    assert check.detail == "no mutants sampled for the property oracle (test_n.py)"
+    check = check_property_coverage("impl", {}, oracle=None, targets=("test_n.py",))
+    assert check.passed is False
+    assert check.detail == "property oracle did not run for test_n.py"
+
+
 def test_property_coverage_does_not_bind_impl_or_refactor_nodes() -> None:
-    """An impl node writes no tests at all, and a refactor preserves the
-    ones it moves; requiring a new property of either is unsatisfiable."""
-    assert check_property_coverage("impl", {}).passed is True
+    """An impl node with no property targeting its change is not required
+    (the oracle half is tested above; this is not a passing instance of
+    it), and a refactor preserves the tests it moves."""
+    assert (
+        check_property_coverage("impl", {}).detail
+        == "not required: no property targets this change"
+    )
     assert (
         check_property_coverage("refactor", {"tests/test_v.py": "def test_a():\n    pass\n"}).passed
         is True

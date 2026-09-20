@@ -443,8 +443,14 @@ def check_target_files(target_files: Collection[str], touched_files: Collection[
     )
 
 
-def check_property_coverage(kind: str, test_sources: Mapping[str, str]) -> GateCheck:
-    """A test node must state at least one property, not only examples.
+def check_property_coverage(
+    kind: str,
+    test_sources: Mapping[str, str],
+    *,
+    oracle: MutationOutcome | None = None,
+    targets: Collection[str] = (),
+) -> GateCheck:
+    """A test node must state a property; the impl node must show it bites.
 
     LLMs "generate ordinary programs following similar patterns seen in
     their massive training corpora, while fuzzing favors unusual inputs
@@ -455,9 +461,20 @@ def check_property_coverage(kind: str, test_sources: Mapping[str, str]) -> GateC
 
     Properties are invariants over generated inputs rather than pairs the
     author chose, so the cases they probe are not the cases the author
-    already had in mind. Only `test` nodes are bound: an impl node writes
-    no tests, and a refactor preserves the ones it moves.
+    already had in mind. A `test` node is bound by presence. An `impl`
+    node is bound by the oracle (T3-3): `targets` are the property-bearing
+    modules that import a changed module, and `oracle` is a mutation
+    sample run with those modules alone as the test set; the property
+    must kill at least one of the node's changed-line mutants, or it has
+    no discriminating power over the code that implements it (F1's regex
+    shipped behind a property that could not tell it from a correct one).
+    No targets means no property claims this change and the check is not
+    required; targets with no oracle means the runner did not run what it
+    should have, which fails rather than passes. A refactor preserves the
+    tests it moves and is not bound.
     """
+    if kind == "impl":
+        return _check_property_oracle(oracle, tuple(targets))
     if kind != "test":
         return GateCheck(name="property-coverage", passed=True, detail=f"{kind} node: not required")
     with_property = sorted(path for path, src in test_sources.items() if _has_property(src))
@@ -471,6 +488,33 @@ def check_property_coverage(kind: str, test_sources: Mapping[str, str]) -> GateC
         name="property-coverage",
         passed=True,
         detail=f"{len(with_property)} module(s) drive a property",
+    )
+
+
+def _check_property_oracle(oracle: MutationOutcome | None, targets: tuple[str, ...]) -> GateCheck:
+    name = "property-coverage"
+    if not targets:
+        return GateCheck(
+            name=name, passed=True, detail="not required: no property targets this change"
+        )
+    by = ", ".join(targets)
+    if oracle is None:
+        return GateCheck(name=name, passed=False, detail=f"property oracle did not run for {by}")
+    if oracle.total == 0:
+        return GateCheck(
+            name=name, passed=False, detail=f"no mutants sampled for the property oracle ({by})"
+        )
+    if oracle.killed == 0:
+        return GateCheck(
+            name=name,
+            passed=False,
+            detail=f"property killed 0 of {oracle.total} mutant(s): no discriminating power ({by})",
+        )
+    return GateCheck(
+        name=name,
+        passed=True,
+        detail=f"property killed {oracle.killed} of {oracle.total} mutant(s)",
+        basis=f"oracle: killed {oracle.killed} of {oracle.total} mutant(s) by {by}",
     )
 
 
@@ -677,6 +721,12 @@ class Tier1Inputs:
     # requirement-binding subtracts these before rejecting a citation
     # (T3-24). Empty means the node's own ids are the whole plan.
     planned_requirements: tuple[str, ...] = ()
+    # The property oracle (T3-3): `property_targets` are the property-bearing
+    # test modules that import a changed module, and `property_oracle` is the
+    # mutation sample run with those modules alone, or None when the runner
+    # did not run it. Read only for `impl` nodes.
+    property_oracle: MutationOutcome | None = None
+    property_targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -802,7 +852,12 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             may_create="write_file" in node.execution_constraints.allowed_tools,
         ),
         check_target_files(node.target_files, inputs.touched_files),
-        check_property_coverage(node.kind, inputs.flipped_tests),
+        check_property_coverage(
+            node.kind,
+            inputs.flipped_tests,
+            oracle=inputs.property_oracle,
+            targets=inputs.property_targets,
+        ),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(
             node.requirement_ids, inputs.flipped_tests, planned_ids=inputs.planned_requirements

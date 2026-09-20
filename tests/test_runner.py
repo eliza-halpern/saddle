@@ -636,6 +636,68 @@ def test_run_node_gate_test_node_whose_tests_pass_specifies_nothing(tmp_path: Pa
     assert failed["tests"] == "'pytest test_n.py' exited 0: tests already pass, nothing specified"
 
 
+def test_run_node_gate_impl_node_property_oracle_passes_with_basis(tmp_path: Path) -> None:
+    """T3-3 known-good, end to end: `n1` implements the specification `t1`
+    wrote (`SPEC_TEST`: an example and a property over `n`). The conftest
+    stub kills every mutant on every call, so the oracle -- a second
+    `mutmut run` -- passes and the record carries its basis.
+    """
+    _worktree(tmp_path, SPEC_TEST, baseline_test=SPEC_TEST)
+    recorder = SpanRecorder(path=tmp_path / "proofs.jsonl", node_id="n1")
+    result = run_node_gate(_node(), tmp_path, recorder=recorder)
+    assert result.passed is True, [check for check in result.checks if not check.passed]
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["property-coverage"].detail == "property killed 5 of 5 mutant(s)"
+    assert by_name["property-coverage"].basis == "oracle: killed 5 of 5 mutant(s) by test_n.py"
+    names = [span.name for span in read_spans(tmp_path / "proofs.jsonl") if span.kind == "tool"]
+    assert names.count("mutmut") >= 2, names
+
+
+def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutmut stub that can answer the two calls differently (T3-3).
+
+    `run` reads the scratch `pyproject.toml` it is launched beside: when a
+    test path was appended to `pytest_add_cli_args` (the oracle's narrowed
+    run) it marks the scratch and `results` reports survivors; the main
+    gate's unrestricted run reports kills. The conftest stub cannot tell
+    the calls apart, so a fixture built on it could never fail this gate.
+    """
+    stub_dir.mkdir(exist_ok=True)
+    show = "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  run) grep -q 'no:cacheprovider\", \"' pyproject.toml && touch .narrowed; exit 0;;\n"
+        "  results) if [ -f .narrowed ]; then v=survived; else v=killed; fi;"
+        ' for i in 1 2 3 4 5; do echo "  m$i: $v"; done;;\n'
+        f"  show) printf '%s' '{show}';;\n"
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_run_node_gate_impl_node_property_that_cannot_discriminate_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T3-3 known-bad, end to end: the same fixture, with a stub whose
+    narrowed run reports every mutant survived. The main mutation gate
+    still passes on the unrestricted run, so the failing set is exactly
+    the property oracle -- the verdict F1 never received.
+    """
+    _worktree(tmp_path, SPEC_TEST, baseline_test=SPEC_TEST)
+    _oracle_aware_mutmut(tmp_path / "stub", monkeypatch)
+    result = run_node_gate(_node(), tmp_path)
+    assert result.passed is False
+    failed = {check.name: check.detail for check in result.checks if not check.passed}
+    assert failed == {
+        "property-coverage": (
+            "property killed 0 of 5 mutant(s): no discriminating power (test_n.py)"
+        )
+    }
+
+
 def test_run_node_gate_failed_mutmut_run_is_named_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

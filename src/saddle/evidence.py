@@ -17,10 +17,10 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePath
 from time import perf_counter
 from typing import Final
 
@@ -432,6 +432,67 @@ class MutationOutcome:
     survivors: tuple[str, ...]
 
 
+def _is_given(decorator: ast.expr) -> bool:
+    node = decorator.func if isinstance(decorator, ast.Call) else decorator
+    name = (
+        node.id
+        if isinstance(node, ast.Name)
+        else node.attr
+        if isinstance(node, ast.Attribute)
+        else ""
+    )
+    return name == "given"
+
+
+def _imported_names(tree: ast.AST) -> set[str]:
+    """Dotted names a module imports: `a.b` and, for `from a import b`, `a` and `a.b`."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module:
+                names.add(module)
+            names.update(f"{module}.{alias.name}" if module else alias.name for alias in node.names)
+    return names
+
+
+def property_modules(
+    test_sources: Mapping[str, str], changed_files: Collection[str]
+) -> dict[str, str]:
+    """Test modules that drive a `@given` property over a changed module.
+
+    A module counts when its AST carries a `given` decorator and one of
+    its imports names a changed file: the dotted name, as a path, equals
+    the changed file's path without `.py` (a package's `__init__.py` is
+    its directory) or ends it at a `/` boundary. These are the modules
+    the property oracle runs alone against the node's mutants (T3-3).
+    """
+    targets: set[str] = set()
+    for path in changed_files:
+        posix = PurePath(path).as_posix().removesuffix(".py")
+        targets.add(posix.removesuffix("/__init__") if posix.endswith("/__init__") else posix)
+    matched: dict[str, str] = {}
+    for path in sorted(test_sources):
+        source = test_sources[path]
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        functions = (
+            n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        )
+        if not any(_is_given(d) for f in functions for d in f.decorator_list):
+            continue
+        for name in _imported_names(tree):
+            as_path = name.replace(".", "/")
+            if any(t == as_path or t.endswith("/" + as_path) for t in targets):
+                matched[path] = source
+                break
+    return matched
+
+
 def _parse_mutant_verdicts(text: str) -> dict[str, str]:
     """Mutant name to verdict from `mutmut results --all True` output."""
     verdicts = {}
@@ -467,14 +528,18 @@ def _mutant_lines(show_output: str, source: str) -> set[int]:
     return {lineno for lineno, text in numbered for snippet in removed if text == snippet}
 
 
-def _mutmut_scratch_config(sources: list[str]) -> str:
-    """Minimal mutmut config: per-file sources (a `.` root nests mutants/)."""
+def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) -> str:
+    """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
+
+    `run_tests` are collection paths appended to pytest's arguments, so
+    only those modules run against each mutant; empty means the whole
+    scratch tree, as before. A kill scored by a narrowed set belongs to
+    that set (T3-3), which the unrestricted run cannot say.
+    """
     quoted = ", ".join(json.dumps(source) for source in sources)
-    return (
-        "[tool.mutmut]\n"
-        f"source_paths = [{quoted}]\n"
-        'pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider"]\n'
-    )
+    args = ["-q", "-x", "-p", "no:cacheprovider", *sorted(run_tests)]
+    joined = ", ".join(json.dumps(arg) for arg in args)
+    return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
 
 
 def mutation_sample(
@@ -483,6 +548,7 @@ def mutation_sample(
     max_mutants: int,
     *,
     test_files: Collection[str],
+    run_tests: Collection[str] = (),
     timeout_s: int = _MUTATION_TIMEOUT_S,
     recorder: SpanRecorder | None = None,
 ) -> MutationOutcome:
@@ -490,9 +556,13 @@ def mutation_sample(
 
     Runs in a scratch copy (mutmut writes mutants/ into cwd) under a time
     budget; the verdict covers the deterministic name-sorted sample and
-    degrades to decided mutants when the budget binds first. Test files
-    are excluded from scope (mutating tests pollutes the rate), timeouts
-    count as killed (behavior changed), and missing mutmut fails closed.
+    degrades to decided mutants when the budget binds first. `test_files`
+    are excluded from mutation scope (mutating tests pollutes the rate);
+    `run_tests` restricts which tests pytest collects against each mutant
+    and leaves the scope alone -- the two are different sets (T3-3: a
+    session read the first as the second and built a vacuous oracle).
+    Timeouts count as killed (behavior changed), and missing mutmut
+    fails closed.
     """
     if not changed:
         return MutationOutcome(killed=0, total=0, generated=0, survivors=())
@@ -519,7 +589,7 @@ def mutation_sample(
         )
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
-        (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production))
+        (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production, run_tests))
         ran = run_capture(["timeout", str(timeout_s), "mutmut", "run"], scratch, recorder=recorder)
         # `mutmut run` exits 0 even when mutants survive, so any other exit
         # is the tool failing, not a verdict (T3-20): the smoke run's mutmut
