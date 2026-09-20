@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from saddle.dag import Node
 from saddle.gates import Tier1Result
@@ -50,6 +50,14 @@ class ProofRecord(BaseModel):
     requirement_ids: list[str]
     thinking: str
     attempts: int = 1
+    # What this proof is a proof *of* (T3-9). Sealed inside the hash, and
+    # defaulted so a journal written before they existed still parses and
+    # still reproduces its own hash (verification dumps with
+    # `exclude_unset=True`, as `basis` above relies on too).
+    task_hash: str = ""
+    node_hash: str = ""
+    kind: str = ""
+    target_files: list[str] = Field(default_factory=list)
     record_hash: str
 
 
@@ -109,6 +117,16 @@ def _canonical_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def hash_node(node: Node) -> str:
+    """The node's content as one hash: what a proof for it was sealed against.
+
+    One spelling, used both when a record is sealed and when a resume
+    decides whether the DAG still holds the node it proved, so the two
+    can never drift apart.
+    """
+    return hashlib.sha256(node.model_dump_json().encode()).hexdigest()
+
+
 def build_record(
     *,
     evidence_id: str,
@@ -119,6 +137,10 @@ def build_record(
     requirement_ids: list[str],
     thinking: str,
     attempts: int = 1,
+    task_hash: str = "",
+    node_hash: str = "",
+    kind: str = "",
+    target_files: Sequence[str] = (),
 ) -> ProofRecord:
     """Seal a record: copy caller data, hash the diff, then the payload."""
     payload: dict[str, Any] = {
@@ -131,6 +153,10 @@ def build_record(
         "requirement_ids": list(requirement_ids),
         "thinking": scrub_thinking(thinking),
         "attempts": attempts,
+        "task_hash": task_hash,
+        "node_hash": node_hash,
+        "kind": kind,
+        "target_files": list(target_files),
     }
     return ProofRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
 
@@ -360,6 +386,17 @@ def rebuild_proven(path: Path) -> dict[str, str]:
     return {record.node_id: record.record_hash for record in _verified_records(path)}
 
 
+def proven_records(path: Path) -> dict[str, ProofRecord]:
+    """Rebuild scheduler state with the whole record, not just its hash.
+
+    Last verified record per node id, in journal order; same corruption
+    policy as `rebuild_proven`, which keeps its narrower contract for
+    callers that only need the hashes. A resume needs the record itself
+    to see which task and which node the proof was sealed for (T3-9).
+    """
+    return {record.node_id: record for record in _verified_records(path)}
+
+
 def read_records(path: Path) -> list[ProofRecord]:
     """Verified sealed records in journal order, for transcripts and audits."""
     return _verified_records(path)
@@ -402,8 +439,15 @@ def build_from_gate(
     *,
     thinking: str,
     attempts: int = 1,
+    task_hash: str = "",
 ) -> ProofRecord:
-    """Seal a Tier-1 verdict as the node's proof record."""
+    """Seal a Tier-1 verdict as the node's proof record.
+
+    The record names what it proves, not only that something passed:
+    `task_hash` is the task the run was given, `node_hash` the node as
+    validated, and `kind`/`target_files` the same facts spelled readably
+    for an auditor (T3-9).
+    """
     return build_record(
         evidence_id=evidence_id,
         node_id=node.id,
@@ -416,4 +460,8 @@ def build_from_gate(
         requirement_ids=list(node.requirement_ids),
         thinking=thinking,
         attempts=attempts,
+        task_hash=task_hash,
+        node_hash=hash_node(node),
+        kind=node.kind,
+        target_files=list(node.target_files),
     )

@@ -19,11 +19,13 @@ from saddle.dag import Dag, Node
 from saddle.evidence import CapturedRun, run_argv, run_capture
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, GateCheck, Tier1Result
 from saddle.journal import (
+    GateOutput,
     ProofRecord,
     SpanRecord,
     SpanRecorder,
     append_record,
     append_span,
+    build_record,
     read_records,
     read_spans,
 )
@@ -46,6 +48,7 @@ from saddle.slice import (
     run_slice,
     splice_replan,
 )
+from saddle.transcript import is_run_end
 from saddle.vllm import DiffProposal, VllmResponseError
 
 
@@ -960,7 +963,11 @@ def test_run_node_identical_after_nonapply_reports_unappliable(tmp_path: Path) -
         return DiffProposal("not a diff\n", "")
 
     with pytest.raises(NodeUnappliableError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
+        asyncio.run(
+            _run_node(
+                node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", (), task_hash=""
+            )
+        )
     error = caught.value
     assert error.node_id == "n1"
     assert error.attempts == 2
@@ -981,7 +988,11 @@ def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     with pytest.raises(NodeUnappliableError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
+        asyncio.run(
+            _run_node(
+                node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", (), task_hash=""
+            )
+        )
     error = caught.value
     assert error.node_id == "n1"
     assert error.attempts == 3
@@ -1008,7 +1019,9 @@ def test_run_node_truncated_worker_call_retries_instead_of_dying(tmp_path: Path)
             raise VllmResponseError(TRUNCATED)
         return DiffProposal(GOOD_DIFF, "")
 
-    asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
+    asyncio.run(
+        _run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", (), task_hash="")
+    )
     assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
     # The first attempt's samples and its fallback draw all raised, so the
     # node recovered on a later attempt rather than raising.
@@ -1024,7 +1037,11 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
         raise VllmResponseError(TRUNCATED)
 
     with pytest.raises(NodeUnappliableError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
+        asyncio.run(
+            _run_node(
+                node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", (), task_hash=""
+            )
+        )
     error = caught.value
     assert error.attempts == 3
     assert error.failure is not None
@@ -1043,7 +1060,11 @@ def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> Non
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
 
     with pytest.raises(NodeGateFailedError) as caught:
-        asyncio.run(_run_node(node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", ()))
+        asyncio.run(
+            _run_node(
+                node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", (), task_hash=""
+            )
+        )
     error = caught.value
     assert error.attempts == 3
     assert error.result.passed is False
@@ -1060,7 +1081,7 @@ def test_run_node_missing_proof_seals_attempt_with_tool_linkage(tmp_path: Path) 
         return DiffProposal(GOOD_DIFF, "")
 
     with pytest.raises(KeyError):
-        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run-test", ()))
+        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run-test", (), task_hash=""))
     spans = read_spans(journal)
     tools = [span for span in spans if span.kind == "tool"]
     workers = [span for span in spans if span.name == "worker:n1"]
@@ -1661,6 +1682,166 @@ def test_run_slice_resume_with_nothing_left_runs_no_worker(tmp_path: Path) -> No
     assert second.proofs == first.proofs
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
+
+
+def _resume_span(journal: Path) -> SpanRecord:
+    """The last `resume` span: what the seed decided, sealed (T3-9)."""
+    return [span for span in read_spans(journal) if span.name == "resume"][-1]
+
+
+def test_run_slice_resume_span_names_the_proofs_it_reused(tmp_path: Path) -> None:
+    """Known-good (T3-9): same task, same node, so the proof is reused --
+    and the run says so in one agent span under the run span, rather than
+    a silently shorter schedule. `saddle tail` keeps following, because
+    `is_run_end` matches the run span alone."""
+    journal, first = _first_run(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.proofs == first.proofs
+    resume = _resume_span(journal)
+    assert resume.detail == "reused n1"
+    assert resume.kind == "agent"
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert resume.parent_id == run.span_id
+    assert not is_run_end(resume)
+
+
+def test_run_slice_refuses_a_journal_sealed_for_a_different_task(tmp_path: Path) -> None:
+    """Known-bad (T3-9a): the CLI's default journal is per repo, so a
+    second task run in the same checkout resumed onto the first task's
+    proofs and counted every same-id node as already proven. It now stops
+    before any node runs, naming both hashes and the way out."""
+    journal, _first = _first_run(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    sealed = hashlib.sha256(b"Fix f.").hexdigest()
+    current = hashlib.sha256(b"Fix g.").hexdigest()
+    with pytest.raises(ValueError, match=r"sealed for a different task") as caught:
+        run_slice(
+            "Fix g.",
+            dag,
+            workdir=tmp_path,
+            journal_path=journal,
+            propose=propose,
+            now=lambda: "2026-09-16T00:00:00+00:00",
+        )
+    message = str(caught.value)
+    assert sealed in message
+    assert current in message
+    assert "--journal" in message
+    # Nothing was written: the refusal precedes the resume span too.
+    assert [span.name for span in read_spans(journal) if span.name == "resume"] == []
+
+
+def test_run_slice_resume_reschedules_a_node_changed_since_its_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad (T3-9b): editing `n1`'s prompt and rerunning used to
+    reuse the proof of the node as it was written before the edit.
+
+    Both runs prove `n1` as a refactor, which is the only kind whose
+    second proposal is legal here: the first run leaves the worktree
+    green, so an `impl` node could not be red pre-change without editing
+    the tests it is forbidden to touch.
+    """
+    _slice_repo(tmp_path)
+    journal = tmp_path / "proofs.jsonl"
+    before = _node_dict("n1", [])
+    before["kind"] = "refactor"
+    first = run_slice(
+        "Fix f.",
+        Dag.model_validate({"nodes": [before]}),
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert first.passed is True, first.transcript
+
+    _refactor_mutmut(tmp_path / "stub", monkeypatch)
+    after = _node_dict("n1", [])
+    after["kind"] = "refactor"
+    after["task_prompt"] = "Do n1, and spell the value as a sum."
+    proposed: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        proposed.append(node.id)
+        return DiffProposal(REFACTOR_DIFF, "same value, spelled as a sum")
+
+    second = run_slice(
+        "Fix f.",
+        Dag.model_validate({"nodes": [after]}),
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is True, second.transcript
+    assert proposed == ["n1"]
+    assert _resume_span(journal).detail == "dropped n1 (node changed)"
+    records = read_records(journal)
+    assert [record.node_id for record in records] == ["n1", "n1"]
+    assert records[0].node_hash != records[1].node_hash
+    assert records[0].task_hash == records[1].task_hash
+    assert second.proofs["n1"] == records[1].record_hash
+    assert second.proofs["n1"] != first.proofs["n1"]
+
+
+def test_run_slice_resume_drops_a_record_that_predates_the_node_hash(tmp_path: Path) -> None:
+    """A journal sealed before T3-9 says nothing about which node it
+    proved, so it is not proof of this one: `n1` is scheduled again and
+    the empty `task_hash` is tolerated rather than fatal."""
+    _slice_repo(tmp_path)
+    journal = tmp_path / "proofs.jsonl"
+    append_record(
+        journal,
+        build_record(
+            evidence_id="n1#1",
+            node_id="n1",
+            diff="diff n1\n",
+            parent_proofs=[],
+            gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+            requirement_ids=["REQ-001"],
+            thinking="sealed before T3-9",
+        ),
+    )
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    proposed: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        proposed.append(node.id)
+        return DiffProposal(GOOD_DIFF, "return two instead")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert proposed == ["n1"]
+    assert _resume_span(journal).detail == "dropped n1 (no node hash)"
+    records = read_records(journal)
+    assert [record.node_hash == "" for record in records] == [True, False]
+    assert result.proofs["n1"] == records[1].record_hash
 
 
 def test_run_slice_refuses_a_journal_that_does_not_verify(tmp_path: Path) -> None:

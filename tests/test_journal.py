@@ -27,6 +27,8 @@ from saddle.journal import (
     build_from_gate,
     build_record,
     build_span,
+    hash_node,
+    proven_records,
     read_entries,
     read_records,
     read_spans,
@@ -60,6 +62,12 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         "requirement_ids": ["REQ-001"],
         "thinking": "",
         "attempts": 1,
+        # T3-9: a record built without them still dumps the four, so the
+        # hash a caller recomputes and the one build_record sealed agree.
+        "task_hash": "",
+        "node_hash": "",
+        "kind": "",
+        "target_files": [],
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
@@ -109,6 +117,10 @@ def test_build_record_seals_thinking_into_hash() -> None:
         "requirement_ids": ["REQ-001"],
         "thinking": "extract the helper",
         "attempts": 1,
+        "task_hash": "",
+        "node_hash": "",
+        "kind": "",
+        "target_files": [],
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
@@ -162,6 +174,122 @@ def test_pre_basis_journal_still_verifies(tmp_path: Path) -> None:
     assert record.node_id == "n1"
     assert all(output.basis is None for output in record.gate_outputs)
     assert rebuild_proven(PRE_BASIS_JOURNAL) == {"n1": record.record_hash}
+
+
+def _proof_node(**overrides: object) -> Node:
+    """A validated node: what a proof record has to name (T3-9)."""
+    spec: dict[str, object] = {
+        "id": "n1",
+        "kind": "impl",
+        "dependencies": [],
+        "task_prompt": "Do n1.",
+        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+        "execution_constraints": {
+            "reasoning_budget": "low",
+            "allowed_tools": ["read_file"],
+            "max_context_tokens": 8000,
+        },
+        "deterministic_gate": {
+            "test_command": "pytest tests/test_n1.py",
+            "changed_line_coverage_min": 100.0,
+            "red_phase_required": True,
+            "mutation_sample": {
+                "scope": "changed-lines",
+                "max_mutants": 100,
+                "kill_threshold": 85.0,
+            },
+        },
+        "target_files": ["n.py"],
+    }
+    return Node.model_validate({**spec, **overrides})
+
+
+def _passing_result() -> Tier1Result:
+    return Tier1Result(
+        node_id="n1", passed=True, checks=(GateCheck(name="tests", passed=True, detail="ok"),)
+    )
+
+
+def test_build_from_gate_seals_the_task_hash_node_hash_and_kind(tmp_path: Path) -> None:
+    """Known-good (T3-9): a sealed record names what it is a proof *of*.
+
+    Before this the record held `node_id` and nothing that said which
+    task was being worked on or what the node said, so a journal from
+    task A counted every same-id node of task B as already proven.
+    """
+    node = _proof_node()
+    record = build_from_gate(
+        node,
+        "diff n1\n",
+        _passing_result(),
+        [],
+        "e1",
+        thinking="why n1",
+        task_hash="a" * 64,
+    )
+    assert record.task_hash == "a" * 64
+    assert record.node_hash == hash_node(node)
+    assert re.fullmatch(r"[0-9a-f]{64}", record.node_hash)
+    assert record.kind == "impl"
+    assert record.target_files == ["n.py"]
+    # Known-bad for the node half: a different node hashes differently.
+    assert hash_node(_proof_node(task_prompt="Do n1, differently.")) != record.node_hash
+    path = tmp_path / "proofs.jsonl"
+    append_record(path, record)
+    assert verify_journal(path) == []
+    assert read_records(path) == [record]
+
+
+def test_altering_a_sealed_task_hash_fails_verification(tmp_path: Path) -> None:
+    """Known-bad (T3-9c): the new fields are inside the hash, so a record
+    re-pointed at another task is corruption, not a reusable proof."""
+    record = build_from_gate(
+        _proof_node(), "diff n1\n", _passing_result(), [], "e1", thinking="", task_hash="a" * 64
+    )
+    good = tmp_path / "good.jsonl"
+    append_record(good, record)
+    assert verify_journal(good) == []
+    bad = tmp_path / "bad.jsonl"
+    append_record(bad, record.model_copy(update={"task_hash": "b" * 64}))
+    (issue,) = verify_journal(bad)
+    assert issue.code == "bad-hash"
+
+
+def test_node_hash_pins_the_serialisation_a_resume_keys_on(tmp_path: Path) -> None:
+    """The node hash is the resume key, so a quiet change in how pydantic
+    spells `model_dump_json` would re-run every journalled node with no
+    other symptom. A red here is that change, not a stale constant: the
+    answer is to canonicalise (sorted `model_dump(mode="json")`), not to
+    paste the new digest in.
+    """
+    assert (
+        hash_node(_proof_node())
+        == "22ba4b044fe313cae15905871d3a7248725e15dfa6a9174cf257ca5f431f9499"
+    )
+
+
+def test_proven_records_returns_the_last_record_per_node(tmp_path: Path) -> None:
+    """`rebuild_proven` keeps its narrower contract; this one hands back
+    the whole record, which is what a resume needs to check it (T3-9)."""
+    path = tmp_path / "proofs.jsonl"
+    first = _record("n1")
+    append_record(path, first)
+    child = _record("n2", [first.record_hash])
+    append_record(path, child)
+    again = build_record(
+        evidence_id="e-n1#2",
+        node_id="n1",
+        diff="diff n1 again\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="second go",
+    )
+    append_record(path, again)
+    assert again.record_hash != first.record_hash
+    assert proven_records(path) == {"n1": again, "n2": child}
+    assert rebuild_proven(path) == {"n1": again.record_hash, "n2": child.record_hash}
+    assert proven_records(tmp_path / "missing.jsonl") == {}
 
 
 def test_basis_round_trips_and_reverifies(tmp_path: Path) -> None:

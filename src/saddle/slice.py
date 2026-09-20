@@ -10,6 +10,7 @@ graphs ride the same path.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import shlex
 import shutil
 import tempfile
@@ -40,9 +41,10 @@ from saddle.journal import (
     append_span,
     build_from_gate,
     build_span,
+    hash_node,
+    proven_records,
     read_records,
     read_spans,
-    rebuild_proven,
     tool_spans_by_node,
     tool_spans_for_node,
     verify_journal,
@@ -419,12 +421,15 @@ async def _run_node(
     proofs: dict[str, str],
     run_span_id: str,
     planned: tuple[str, ...],
+    *,
+    task_hash: str,
 ) -> Proof:
     """Execute one node: propose, apply, gate, seal — with bounded recovery.
 
     `planned` is every requirement id the node's plan declares, handed to
     each gate run so a citation of another node's id is not an orphan
-    (T3-24).
+    (T3-24). `task_hash` is the run's task, sealed into the record so a
+    later resume can tell whose proof this is (T3-9).
 
     A failed gate (or a diff that does not apply) retries in a fresh
     worker call carrying the failure evidence, at most
@@ -512,6 +517,7 @@ async def _run_node(
                     f"{node.id}#{attempt}",
                     thinking=proposal.reasoning,
                     attempts=attempt,
+                    task_hash=task_hash,
                 )
                 append_record(journal_path, record)
                 proofs[node.id] = record.record_hash
@@ -681,6 +687,47 @@ def _transcribe(
     )
 
 
+def _seed_proofs(journal_path: Path, dag: Dag, task_hash: str) -> tuple[dict[str, str], str | None]:
+    """Which journalled proofs this run may reuse, and what it decided.
+
+    A proof is reusable only for the task and the node it was sealed
+    against (T3-9): a journal from task A run against task B's DAG used to
+    count every same-id node as proven and never schedule it, and the CLI
+    default journal is per repo, so that was the default flow for a second
+    task. A record sealed for a different task is fatal -- the run stops
+    before anything executes and the user picks a fresh `--journal` path.
+    A record whose node no longer hashes the same, or that predates these
+    fields, is simply not reused: the node is scheduled again.
+
+    Returns the seed and a one-line summary, or `None` when the journal
+    held no proof and there was nothing to decide.
+    """
+    candidates = list(proven_records(journal_path).values())
+    expected = {node.id: hash_node(node) for node in dag.nodes}
+    for record in candidates:
+        if record.task_hash and record.task_hash != task_hash:
+            msg = (
+                f"journal {str(journal_path)!r} was sealed for a different task: "
+                f"node {record.node_id!r} carries task_hash {record.task_hash}, "
+                f"this run's task hashes to {task_hash}. "
+                "Pass a fresh --journal path to run a new task."
+            )
+            raise ValueError(msg)
+    proofs: dict[str, str] = {}
+    decided: list[str] = []
+    for record in candidates:
+        if record.node_hash == expected.get(record.node_id):
+            proofs[record.node_id] = record.record_hash
+            decided.append(f"reused {record.node_id}")
+        elif not record.node_hash:
+            # Sealed before the node was named in the record: nothing says
+            # it proved this DAG's node, so it does not count as proof.
+            decided.append(f"dropped {record.node_id} (no node hash)")
+        else:
+            decided.append(f"dropped {record.node_id} (node changed)")
+    return proofs, "; ".join(decided) if candidates else None
+
+
 def run_slice(
     task: str,
     dag: Dag,
@@ -696,10 +743,15 @@ def run_slice(
 
     A journal that verifies is resumed, not refused (T3-1): its proven
     nodes seed `proofs`, so only unproven nodes are scheduled and a crash
-    loses at most the in-flight node, as `rebuild_proven` promises. A
-    journal that does not verify raises before anything runs. When
-    `replan` is given, each exhausted node recompiles once into a
-    replacement subgraph; replanned nodes that fail again stay failed.
+    loses at most the in-flight node, as `proven_records` promises. What
+    a proof is a proof *of* bounds that reuse (T3-9): a record sealed for
+    another task raises before any node runs, a record whose node has
+    changed is dropped and the node scheduled again, and when the journal
+    held any proof the decision is sealed as a `resume` span under the run
+    span so the transcript and `saddle tail` show it. A journal that does
+    not verify raises before anything runs. When `replan` is given, each
+    exhausted node recompiles once into a replacement subgraph; replanned
+    nodes that fail again stay failed.
 
     Every node is gated by its own scoped `test_command`; nothing checks
     the union of their diffs until `merge_command` runs, once, unscoped,
@@ -708,10 +760,25 @@ def run_slice(
     `merge-suite` under the run span, and a non-zero exit fails the run
     without revisiting any per-node verdict. `None` disables it.
     """
-    proofs: dict[str, str] = rebuild_proven(journal_path)
+    task_hash = hashlib.sha256(task.encode()).hexdigest()
     started = now()
     run_start = perf_counter()
     run_span_id = uuid.uuid4().hex
+    proofs, resumed = _seed_proofs(journal_path, dag, task_hash)
+    if resumed is not None:
+        append_span(
+            journal_path,
+            build_span(
+                node_id="",
+                argv=[],
+                duration_ms=_elapsed_ms(run_start),
+                exit_code=0,
+                detail=resumed,
+                kind="agent",
+                name="resume",
+                parent_id=run_span_id,
+            ),
+        )
     remaining = dag
     replanned_from: set[str] = set()
     generated: set[str] = set()
@@ -725,7 +792,14 @@ def run_slice(
         # too, and a replaced node's are not (T3-24).
         planned = planned_requirement_ids(remaining)
         return await _run_node(
-            original, workdir, journal_path, propose, proofs, run_span_id, planned
+            original,
+            workdir,
+            journal_path,
+            propose,
+            proofs,
+            run_span_id,
+            planned,
+            task_hash=task_hash,
         )
 
     while True:
