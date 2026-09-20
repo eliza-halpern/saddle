@@ -65,8 +65,13 @@ branch = true
 # mutmut 3.x runs pytest in-process; coverage is disabled for mutant runs
 # (per-run coverage is pure overhead and fails the 100% gate by design).
 source_paths = ["src/saddle/"]
-# Copied into mutants/ unmutated: test_stall_check imports the harness.
-also_copy = ["benchmark/"]
+# Copied into mutants/ unmutated. benchmark/: test_stall_check imports the
+# harness. docs/: test_docs reads ARCHITECTURE.md. tools/: the T3-18 grammar
+# test imports diff_grammar_check. A test that reads outside the copy fails
+# there whatever the mutation and kills every mutant, so the Tier-2 score
+# would read 100% while measuring nothing; test_mutmut_layout runs those
+# modules in a rebuilt copy and lists them in OUTSIDE_READERS.
+also_copy = ["benchmark/", "docs/", "tools/"]
 # `--ignore` is required, not cosmetic: pyproject is not copied into
 # mutants/, so `norecursedirs` does not apply there and pytest would
 # collect benchmark/tasks' hidden grading tests for every mutant.

@@ -716,8 +716,9 @@ def test_diff_grammar_requires_the_file_lines_before_a_hunk() -> None:
     assert '"--- "' not in rules["meta_pfx"]
     assert '"+++ "' not in rules["meta_pfx"]
 
-    # Imported in-function: tools/ is outside the mutmut work copy, so a
-    # module-level import would break collection there (test_mutmut_layout).
+    # Imported in-function: tools/ reaches the mutmut work copy only through
+    # also_copy (pyproject), and test_mutmut_layout runs this test there to
+    # prove it; a module-level import would fail at collection instead.
     from tools.diff_grammar_check import MUST_REJECT, REJECT_AT
 
     headerless = "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"
