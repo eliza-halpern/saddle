@@ -4075,6 +4075,7 @@ ceiling, not what truncated T5 (an output cap), and is left alone until
 a run shows a worker starved of context.
 
 ### T6-14 — A truncated attempt is retried with more room, and the emission budget is not the reasoning effort's side effect (tightened in effect; #51 part 2 reopened)
+Superseded in part 2026-09-20 by T6-17: the per-effort allowance and the truncation ladder are gone; the baseline-tree sizing and the pre-flight stand.
 Status 2026-09-20: DONE by the main session, with T6-8, in the commit
 that carries this line. Landed: `worker_output_cap(node, effort,
 file_lines, escalations)` in cli.py -- the effort's entry in
@@ -4252,6 +4253,33 @@ twelve outputs on disk. Owner: executor.
 ---
 
 ### T6-17 — Reasoning is not budgeted: the worker's `max_tokens` is the context that is left (scope narrowed; supersedes T6-14's ladder)
+Status 2026-09-20: DONE by the main session (commit below). Landed:
+`worker_max_tokens(prompt, context_window)` = window − len(prompt)//3 −
+2048 (three chars per token over-counts code, so the request never
+exceeds the window; F21.10's prompt was 3.76); `diff_budget(node,
+window)` = window − max_context_tokens − 2048 replaces `emission_budget`
+in the T6-8 pre-flight; `server_context_window(client, override)` reads
+`VllmClient.max_model_len()` (new; `max_model_len` of the served model
+on `GET /models`), else `--context-window` (new flag on `run` and
+`dag`), else 175000. Removed: `WORKER_OUTPUT_TOKENS`,
+`WORKER_OUTPUT_STEPS`, `MAX_WORKER_OUTPUT`, `worker_output_cap`,
+`emission_budget`, the `escalations` and `baseline_lines` state in
+`propose`. Every worker call, the recovery-plan `complete` included, is
+sized from its own prompt; a longer repair brief or a bloated tree buys
+less room, never more (F21.9a's fix is now structural). Deviations from
+the item text: the prompt count uses chars//3, not the server's previous
+`prompt_tokens` (the retry prompt differs from the call it would be
+taken from); `dag.py` is unchanged (the budget was always the caller's).
+Direction, honestly: scope narrowed for the cap, and `node-too-large`'s
+threshold LOOSENED from 131072 − allowance (114688 for `low`) to window −
+read ceiling − margin (164952 for a node reading 8000), because the
+allowance it subtracted was not a cap (F21.10) -- the known-bad fixture
+grew from 8000 to 11000 lines to stay over it. Mutants: M1 `max_tokens`
+→ constant 16384 KILLED; M2 `node-too-large` → `if False` KILLED; M3
+`max_model_len` ignored → fallback KILLED. T6-14's "one step up the
+ladder after a truncation" and "reasoning allowance per effort" are
+superseded; its baseline-tree sizing (F21.9a) and T6-8's pre-flight
+stand.
 Files: `src/saddle/cli.py` (`WORKER_OUTPUT_TOKENS`, `WORKER_OUTPUT_STEPS`,
 `MAX_WORKER_OUTPUT`, `worker_output_cap`, `emission_budget`, `propose`'s
 `escalations`), `src/saddle/dag.py` (`validate_dag(..., emission_budget=)`,
