@@ -3968,6 +3968,29 @@ successor. Owner: main session. Note: this supersedes the "opt-in"
 decision in T3-2 and closes #64's remaining half; say so in the commit.
 
 ### T6-9 — A run on a clock seals what it has (deadline; no gate change)
+Status 2026-09-20: DONE by the main session (commit below). Landed:
+`run_slice(..., deadline_s=None, clock=perf_counter)`; a `_Deadline`
+(end time, clock, node walls so far) threaded into `_schedule_until_done`
+and `_run_node`. A node is not started when the time left is under the
+median node wall so far, or gone (`_DeadlineSkipError`: undispatched,
+not failed; no replan past the deadline); no attempt is started past the
+deadline (the give-up path, `_abandon`, restores the tree as on any
+exhaustion; the node counts as failed after the attempts it made); the
+attempt in flight finishes and may seal. `_seal_run` writes exit code 3
+(`DEADLINE_EXIT`) and `deadline: N proven, M failed, K undispatched` in
+the run span; `SliceResult.deadline_hit`; `saddle run --deadline
+SECONDS` exits 3. The merge suite still runs over what was proven.
+Bench: `run_arm.sh` passes `--deadline "${DEADLINE:-1700}"` and its
+`timeout` is now a backstop 600 s past it (uncommitted in saddle-bench).
+Deviations from the item text: the in-flight attempt is not interrupted
+at the deadline (the item's known-bad, asserted: a 3 s deadline inside a
+5 s call still seals); the deadline give-up reason is not sealed as its
+own span -- the run span carries `deadline:` and the node's last attempt
+span carries its gate verdict. Mutants: M1 dispatch guard → `if False`
+KILLED; M2 between-attempt guard → `if False` KILLED; M3 exit code 3 →
+never KILLED. check.sh 696 passed, 100%. Sizing note for the T5 seed:
+with T6-17 a worker call can run 15-20 min, so `DEADLINE` for that seed
+should be set from the run's own node count, not 1700 by habit.
 Files: `src/saddle/slice.py` (`run_slice(..., deadline_s: float | None =
 None)`; `_schedule_until_done` stops dispatching new nodes when
 `remaining < median node wall so far`, or at the deadline, and
