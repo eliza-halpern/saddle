@@ -1057,6 +1057,49 @@ Verdicts 2026-09-18 (reviewer, pre-commit, tree hash identical after each revert
 Done when: mutants red; `./check.sh` green — 544 passed at commit time.
 
 ### T3-3 — Property coverage becomes an oracle on the `impl` node (issue #62)
+Status 2026-09-19: STOPPED by session 21 (no change to the tree) and
+REWRITTEN below; owner is now the main session (contract change to
+`mutation_sample`). The premise the first text rested on is false:
+`mutation_sample`'s `test_files` is the *mutation-exclusion* set (paths
+subtracted from `source_paths` in the scratch `pyproject.toml`,
+`evidence.py` ~:515, and mutants locating into them dropped, ~:551); the
+tests that *run* are whatever pytest collects from the whole scratch tree
+(`_mutmut_scratch_config`, ~:470, is not parameterised). Step 2's original
+call `mutation_sample(..., test_files=set(targets))` therefore widened the
+mutation scope and left the run set untouched, and its "oracle" verdict was
+the main gate's verdict relabelled. Session 21's probe: a property with no
+discriminating power (`assert isinstance(f(), int)`) beside an example
+(`assert f() == 2`), mutant `return 2 -> return 3`: the prescribed call
+reported `killed=1` with either `test_files` value, while the property
+module alone passes the mutant under pytest. Reviewer's engine probe
+(mutmut 3.8.0, real run, 2026-09-19): with the test path appended to
+`pytest_add_cli_args`, `test_prop.py` alone -> `survived`; `test_ex.py`
+alone -> `killed`; no path -> `killed`. So mutmut honours a collection path
+there, and that is the mechanism the rewrite uses.
+Step 0 (contract change, main session): `_mutmut_scratch_config(sources,
+run_tests=())` appends `sorted(run_tests)` to `pytest_add_cli_args` when
+non-empty (the existing exact-string pin `test_mutmut_scratch_config_exact`
+stays true for the no-argument form); `mutation_sample` gains keyword-only
+`run_tests: Collection[str] = ()` and passes it through; the docstring
+says "`test_files` excludes paths from mutation; `run_tests` restricts
+which tests pytest collects". Known-good/known-bad for step 0 use the real
+engine (override the conftest `_stub_mutmut` PATH), the probe workdir
+above: `run_tests={"test_ex.py"}` -> `killed=1`; `run_tests={"test_prop.py"}`
+-> `killed=0, survivors=("n.x_f__mutmut_1",)`; the unit half pins the config
+string `pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider", "test_prop.py"]`.
+Step 2 becomes: `oracle = mutation_sample(workdir, changed, sample.max_mutants,
+test_files=test_sources, run_tests=set(targets), recorder=recorder)` --
+the exclusion set is unchanged from the main gate; only the run set narrows.
+Fixtures: the conftest stub answers every call identically, so the runner
+end-to-end known-bad needs a stub whose `run` inspects `pyproject.toml` and
+writes survivors to its results file when a test path appears in
+`pytest_add_cli_args` and kills otherwise; then the main gate passes, the
+oracle fails, and the failing set is exactly `{"property-coverage"}`.
+Contract mutant 0 (add to the table): `_mutmut_scratch_config` ignores
+`run_tests` -> the real-engine known-bad goes green (property alone reports
+a kill) -> red. Additional stop-if: a mutmut whose `pytest_add_cli_args`
+does not restrict collection (re-run the engine probe first).
+Original text follows, for the parts that still hold.
 Decision 2026-09-18: build the oracle (option b), placed per T3-7 option A.
 Requires T3-7a (a `test` node can pass) and T2-4 (`basis`, landed).
 Files: `src/saddle/gates.py` (`check_property_coverage` ~:353-380: keeps
