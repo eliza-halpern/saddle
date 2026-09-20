@@ -9,6 +9,8 @@ import os
 import re
 import stat
 import subprocess
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -338,7 +340,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, "return two instead"),
         # This test pins the exact tool-span sequence and mocks perf_counter
         # with four ticks; the merge-time suite (T2-3) is exercised on its own.
         merge_command=None,
@@ -454,7 +456,7 @@ def test_run_slice_pass_end_to_end_records_distinct_sample_count(
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: next(proposals),
+        propose=lambda node, failure, seed: next(proposals),
         merge_command=None,  # four perf_counter ticks, as above
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
@@ -478,7 +480,7 @@ def test_run_slice_merge_suite_gate_runs_once_and_is_journaled(tmp_path: Path) -
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, "return two instead"),
         merge_command="true",
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
@@ -513,7 +515,7 @@ def test_run_slice_merge_suite_failure_fails_the_run_not_the_node(tmp_path: Path
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, "return two instead"),
         merge_command="false",
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
@@ -542,7 +544,7 @@ def test_run_slice_merge_suite_is_skipped_when_nothing_was_proven(tmp_path: Path
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(BAD_DIFF, ""),
+        propose=lambda node, failure, seed: DiffProposal(BAD_DIFF, ""),
         merge_command="true",
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
@@ -562,7 +564,7 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     ).replace("@@ -1,2 +1,2 @@", "@@ -1,2 +1,6 @@")
     seen: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen.append(node.id)
         return DiffProposal(bad_diff, "")
 
@@ -629,7 +631,7 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
         dag,
         workdir=tmp_path,
         journal_path=tmp_path / "proofs.jsonl",
-        propose=lambda node, failure: DiffProposal("not a diff\n", ""),
+        propose=lambda node, failure, seed: DiffProposal("not a diff\n", ""),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is False
@@ -660,7 +662,7 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     diffs = ["garbage one\n", "garbage two\n", "garbage three\n"]
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         phase = 0 if failure is None else sum(1 for seen in calls if seen is not None)
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
@@ -704,7 +706,7 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     seen_failures: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen_failures.append(failure)
         return DiffProposal(BAD_DIFF if failure is None else FIX_DIFF, "fix it")
 
@@ -766,7 +768,7 @@ def test_run_slice_withholds_suite_output_from_a_node_without_run_tests(
     journal = tmp_path / "proofs.jsonl"
     seen_failures: list[str | None] = []
 
-    def propose(_node: Node, failure: str | None) -> DiffProposal:
+    def propose(_node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen_failures.append(failure)
         return DiffProposal(BAD_DIFF if failure is None else FIX_DIFF, "fix it")
 
@@ -794,7 +796,7 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
     diffs = [BAD_DIFF, JUNK1_DIFF, JUNK2_DIFF]
     seen_failures: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen_failures.append(failure)
         phase = 0 if failure is None else sum(1 for entry in seen_failures if entry is not None)
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
@@ -852,7 +854,7 @@ def test_run_slice_exhausted_node_leaves_its_baseline_tree_behind(tmp_path: Path
     diffs = [BAD_DIFF, JUNK1_DIFF, JUNK2_DIFF]
     seen_failures: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen_failures.append(failure)
         phase = 0 if failure is None else sum(1 for entry in seen_failures if entry is not None)
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
@@ -902,7 +904,7 @@ def test_run_slice_replacement_starts_from_the_failed_nodes_baseline(tmp_path: P
     dag = Dag.model_validate({"nodes": [node]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(GOOD_DIFF, "")
 
     def replan(node: Node, history: str) -> Dag:
@@ -936,7 +938,7 @@ def test_run_slice_propose_error_seals_worker_span(tmp_path: Path) -> None:
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "boom"
         raise RuntimeError(msg)
 
@@ -970,7 +972,7 @@ def test_run_node_identical_after_nonapply_reports_unappliable(tmp_path: Path) -
     _slice_repo(tmp_path)
     node = Node.model_validate(_node_dict("n1", []))
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal("not a diff\n", "")
 
     with pytest.raises(NodeUnappliableError) as caught:
@@ -993,7 +995,7 @@ def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None
     diffs = ["garbage one\n", "garbage two\n", "garbage three\n"]
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         phase = 0 if failure is None else sum(1 for seen in calls if seen is not None)
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
@@ -1024,7 +1026,7 @@ def test_run_node_truncated_worker_call_retries_instead_of_dying(tmp_path: Path)
     node = Node.model_validate(_node_dict("n1", []))
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         if len(calls) <= PROPOSAL_SAMPLES + 1:
             raise VllmResponseError(TRUNCATED)
@@ -1044,7 +1046,7 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
     _slice_repo(tmp_path)
     node = Node.model_validate(_node_dict("n1", []))
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         raise VllmResponseError(TRUNCATED)
 
     with pytest.raises(NodeUnappliableError) as caught:
@@ -1072,7 +1074,7 @@ def test_retry_sidecar_reports_its_own_draw_not_the_first_attempts_samples(
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF if failure is None else FIX_DIFF, "")
 
     result = run_slice(
@@ -1105,7 +1107,7 @@ def test_failed_retry_call_sidecar_carries_no_earlier_samples(tmp_path: Path) ->
     journal = tmp_path / "proofs.jsonl"
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         retries = sum(1 for f in calls if f is not None)
         if failure is None:
@@ -1130,6 +1132,71 @@ def test_failed_retry_call_sidecar_carries_no_earlier_samples(tmp_path: Path) ->
     assert len(_sidecar(journal, agents[2])["samples"]) == 1
 
 
+def test_first_attempt_draws_its_samples_concurrently(tmp_path: Path) -> None:
+    """T6-25 known-good. Every sample call waits at a barrier sized for
+    all PROPOSAL_SAMPLES draws: the node seals only if the draws were in
+    flight together. Serial sampling parks the first call alone until the
+    barrier breaks, and the node fails.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    barrier = threading.Barrier(PROPOSAL_SAMPLES, timeout=5)
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        barrier.wait()
+        return DiffProposal(GOOD_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    worker = next(s for s in read_spans(journal) if s.name == "worker:n1")
+    assert worker.detail == f"1 distinct of {PROPOSAL_SAMPLES} sample(s)"
+
+
+def test_samples_are_evaluated_in_seed_order_not_arrival_order(tmp_path: Path) -> None:
+    """T6-25 known-good. Seed 0's draw is slow and passes; the last seed's
+    draw is instant and also passes, with different bytes. The sealed
+    diff is seed 0's: evaluation order is the seed order, so the record
+    does not depend on which request the server answered first.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    seeds: list[int] = []
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        seeds.append(seed)
+        if seed == 0:
+            time.sleep(0.3)
+            return DiffProposal(GOOD_DIFF, "")
+        return DiffProposal(SLOPPY_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert sorted(seeds) == list(range(PROPOSAL_SAMPLES))
+    worker = next(s for s in read_spans(journal) if s.name == "worker:n1")
+    sealed = _sidecar(journal, worker)
+    assert sealed["diff_hash"] == hashlib.sha256(GOOD_DIFF.encode()).hexdigest()
+    assert [x["outcome"] for x in sealed["samples"]] == [
+        "0 gate(s) failed",
+        *["not evaluated: an earlier sample passed"] * (PROPOSAL_SAMPLES - 1),
+    ]
+
+
 SLOPPY_DIFF = GOOD_DIFF.replace("+    return 2\n", "+    return  2\n")
 
 
@@ -1147,7 +1214,7 @@ def test_sampler_scores_a_candidate_the_way_the_gate_will_see_it(tmp_path: Path)
     journal = tmp_path / "proofs.jsonl"
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         return DiffProposal(SLOPPY_DIFF, "")
 
@@ -1160,9 +1227,15 @@ def test_sampler_scores_a_candidate_the_way_the_gate_will_see_it(tmp_path: Path)
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True, result.transcript
-    assert calls == [None], "the first sample gates clean once autofixed; sampling stops"
+    # All k draws are paid up front (T6-25); what autofix-aware scoring
+    # buys is that the first sample is seen to pass and nothing after it
+    # is evaluated -- before, every sample scored one gate red.
+    assert calls == [None] * PROPOSAL_SAMPLES
     sealed = _sidecar(journal, next(s for s in read_spans(journal) if s.name == "worker:n1"))
-    assert [x["outcome"] for x in sealed["samples"]] == ["0 gate(s) failed"]
+    assert [x["outcome"] for x in sealed["samples"]] == [
+        "0 gate(s) failed",
+        *["not evaluated: an earlier sample passed"] * (PROPOSAL_SAMPLES - 1),
+    ]
 
 
 def test_run_node_transport_failure_restores_the_tree_and_names_itself(tmp_path: Path) -> None:
@@ -1180,7 +1253,7 @@ def test_run_node_transport_failure_restores_the_tree_and_names_itself(tmp_path:
     calls: list[str | None] = []
     timed_out = "request failed: timed out"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         if failure is None:
             return DiffProposal(BAD_DIFF, "")
@@ -1207,7 +1280,7 @@ def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> Non
     diffs = [BAD_DIFF, JUNK1_DIFF, JUNK2_DIFF]
     seen: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen.append(failure)
         phase = 0 if failure is None else sum(1 for entry in seen if entry is not None)
         return DiffProposal(diffs[min(phase, len(diffs) - 1)], "")
@@ -1230,7 +1303,7 @@ def test_run_node_missing_proof_seals_attempt_with_tool_linkage(tmp_path: Path) 
     node = Node.model_validate(_node_dict("n1", ["ghost"]))
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(GOOD_DIFF, "")
 
     with pytest.raises(KeyError):
@@ -1561,7 +1634,7 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     replans: list[tuple[str, str]] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         # The replacement starts from `n1`'s baseline (`return 1`), not from
         # the tree `n1`'s failed diff left behind (T3-23): it proposes the
         # whole fix, not a repair of `return 3`.
@@ -1621,7 +1694,7 @@ def test_run_slice_replan_across_resume_numbers_past_sealed_ids(tmp_path: Path) 
     )
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
     def replan(node: Node, history: str) -> Dag:
@@ -1650,7 +1723,7 @@ def test_run_slice_replanned_node_failure_stays_failed(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     calls: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(node.id)
         return DiffProposal(BAD_DIFF, "")
 
@@ -1680,7 +1753,7 @@ def test_run_slice_replan_failure_keeps_node_failed(tmp_path: Path) -> None:
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF, "")
 
     def replan(node: Node, history: str) -> Dag:
@@ -1708,7 +1781,7 @@ def test_run_slice_replan_continues_past_failed_emission(tmp_path: Path) -> None
     journal = tmp_path / "proofs.jsonl"
     calls: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         if node.id in ("a", "b"):
             return DiffProposal(BAD_DIFF, "")
         # `b.r1` starts from `b`'s baseline, not from `return 3` (T3-23).
@@ -1749,7 +1822,7 @@ def test_run_slice_pass_with_replan_callback_unused(tmp_path: Path) -> None:
         dag,
         workdir=tmp_path,
         journal_path=tmp_path / "proofs.jsonl",
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, ""),
+        propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, ""),
         replan=replan,
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
@@ -1790,7 +1863,7 @@ def _first_run(tmp_path: Path) -> tuple[Path, SliceResult]:
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, "return two instead"),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert first.passed is True
@@ -1818,7 +1891,7 @@ def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(
     dag = Dag.model_validate({"nodes": [_node_dict("n1", []), tidy]})
     proposed: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         proposed.append(node.id)
         assert node.id != "n1", "a proven node must not be re-proposed"
         return DiffProposal(REFACTOR_DIFF, "same value, spelled as a sum")
@@ -1881,7 +1954,7 @@ def test_run_slice_deadline_seals_what_it_has_and_resumes(
     ticks = _Ticks(step=5.0)
     proposed: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         proposed.append(node.id)
         ticks.spend()
         return DiffProposal(GOOD_DIFF if node.id == "n1" else REFACTOR_DIFF, "ok")
@@ -1899,7 +1972,7 @@ def test_run_slice_deadline_seals_what_it_has_and_resumes(
     assert result.deadline_hit is True
     assert result.passed is False
     assert list(result.proofs) == ["n1"]
-    assert proposed == ["n1"]
+    assert proposed == ["n1"] * PROPOSAL_SAMPLES
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.exit_code == 3
     assert run.detail == "deadline: 1 proven, 0 failed, 1 undispatched, merge exit 0"
@@ -1919,22 +1992,23 @@ def test_run_slice_deadline_seals_what_it_has_and_resumes(
     assert second.passed is True, second.transcript
     assert second.deadline_hit is False
     assert list(second.proofs) == ["n1", "n2"]
-    assert proposed[1:] == ["n2"]
+    assert proposed[PROPOSAL_SAMPLES:] == ["n2"] * PROPOSAL_SAMPLES
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.exit_code == 0
 
 
 def test_run_slice_deadline_lets_the_attempt_in_flight_finish_and_seal(tmp_path: Path) -> None:
     """Known-bad half (T6-9): a node running at the deadline is not killed
-    mid-gate. The deadline (3 s) passes during `n1`'s worker call (5 s);
-    the attempt finishes, its gate passes and its proof is sealed; only
-    then does the run stop, `n2` undispatched, with the deadline recorded."""
+    mid-gate. The deadline (3 s) passes during `n1`'s first attempt (k
+    concurrent draws, 5 s each on this clock, T6-25); the attempt finishes,
+    its gate passes and its proof is sealed; only then does the run stop,
+    `n2` undispatched, with the deadline recorded."""
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", []), _node_dict("n2", ["n1"])]})
     journal = tmp_path / "proofs.jsonl"
     ticks = _Ticks(step=5.0)
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         ticks.spend()
         return DiffProposal(GOOD_DIFF, "ok")
 
@@ -1948,7 +2022,7 @@ def test_run_slice_deadline_lets_the_attempt_in_flight_finish_and_seal(tmp_path:
         deadline_s=3.0,
         clock=ticks,
     )
-    assert ticks.now == 5.0
+    assert ticks.now == 5.0 * PROPOSAL_SAMPLES
     assert list(result.proofs) == ["n1"]
     assert result.deadline_hit is True
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
@@ -1968,7 +2042,7 @@ def test_run_slice_deadline_starts_no_retry_and_restores_the_tree(tmp_path: Path
     ticks = _Ticks(step=5.0)
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         ticks.spend()
         return DiffProposal(BAD_DIFF, "wrong value")
@@ -2014,7 +2088,7 @@ def test_run_slice_resumed_comment_only_refactor_proves_nothing(tmp_path: Path) 
         dag,
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(TIDY_DIFF, "tidy"),
+        propose=lambda node, failure, seed: DiffProposal(TIDY_DIFF, "tidy"),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert second.passed is False
@@ -2034,7 +2108,7 @@ def test_run_slice_resume_with_nothing_left_runs_no_worker(tmp_path: Path) -> No
     journal, first = _first_run(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2065,7 +2139,7 @@ def test_run_slice_resume_span_names_the_proofs_it_reused(tmp_path: Path) -> Non
     journal, first = _first_run(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2094,7 +2168,7 @@ def test_run_slice_refuses_a_journal_sealed_for_a_different_task(tmp_path: Path)
     journal, _first = _first_run(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2137,7 +2211,7 @@ def test_run_slice_resume_reschedules_a_node_changed_since_its_proof(
         Dag.model_validate({"nodes": [before]}),
         workdir=tmp_path,
         journal_path=journal,
-        propose=lambda node, failure: DiffProposal(GOOD_DIFF, "return two instead"),
+        propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, "return two instead"),
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert first.passed is True, first.transcript
@@ -2148,7 +2222,7 @@ def test_run_slice_resume_reschedules_a_node_changed_since_its_proof(
     after["task_prompt"] = "Do n1, and spell the value as a sum."
     proposed: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         proposed.append(node.id)
         return DiffProposal(REFACTOR_DIFF, "same value, spelled as a sum")
 
@@ -2161,7 +2235,7 @@ def test_run_slice_resume_reschedules_a_node_changed_since_its_proof(
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert second.passed is True, second.transcript
-    assert proposed == ["n1"]
+    assert proposed == ["n1"] * PROPOSAL_SAMPLES
     assert _resume_span(journal).detail == "dropped n1 (node changed)"
     records = read_records(journal)
     assert [record.node_id for record in records] == ["n1", "n1"]
@@ -2192,7 +2266,7 @@ def test_run_slice_resume_drops_a_record_that_predates_the_node_hash(tmp_path: P
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     proposed: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         proposed.append(node.id)
         return DiffProposal(GOOD_DIFF, "return two instead")
 
@@ -2205,7 +2279,7 @@ def test_run_slice_resume_drops_a_record_that_predates_the_node_hash(tmp_path: P
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True, result.transcript
-    assert proposed == ["n1"]
+    assert proposed == ["n1"] * PROPOSAL_SAMPLES
     assert _resume_span(journal).detail == "dropped n1 (no node hash)"
     records = read_records(journal)
     assert [record.node_hash == "" for record in records] == [True, False]
@@ -2235,7 +2309,7 @@ def test_run_slice_resume_tree_check_passes_on_the_proven_worktree(tmp_path: Pat
     journal, first = _first_run(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2264,7 +2338,7 @@ def test_run_slice_resume_tree_check_passes_after_the_proven_edits_are_committed
     assert run_argv(["git", "diff-index", "--quiet", "HEAD", "--"], tmp_path) == 0
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2298,7 +2372,7 @@ def test_run_slice_resume_tree_refuses_a_worktree_missing_the_proven_edit(
     assert (tmp_path / "n.py").read_text() == "def f():\n    return 1\n"
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2328,7 +2402,7 @@ def test_run_slice_resume_tree_refuses_an_edit_to_an_unrelated_file(tmp_path: Pa
     )
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2352,7 +2426,7 @@ def test_run_slice_refuses_a_journal_that_does_not_verify(tmp_path: Path) -> Non
     journal.write_text(text.replace("return two instead", "return three instead"))
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         msg = "nothing should be proposed"
         raise AssertionError(msg)
 
@@ -2387,7 +2461,7 @@ def test_run_slice_post_write_corruption_raises(
             dag,
             workdir=tmp_path,
             journal_path=journal,
-            propose=lambda node, failure: DiffProposal(GOOD_DIFF, ""),
+            propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, ""),
             now=lambda: "2026-09-16T00:00:00+00:00",
         )
 
@@ -2411,7 +2485,7 @@ def test_run_slice_mid_run_corruption_raises(
             dag,
             workdir=tmp_path,
             journal_path=journal,
-            propose=lambda node, failure: DiffProposal(GOOD_DIFF, ""),
+            propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, ""),
             now=lambda: "2026-09-16T00:00:00+00:00",
         )
 
@@ -2509,7 +2583,7 @@ def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Pa
     seen_failures: list[str | None] = []
     order = [BAD_DIFF, GOOD_DIFF, BAD_DIFF]
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         seen_failures.append(failure)
         return DiffProposal(order[(len(seen_failures) - 1) % len(order)], "")
 
@@ -2701,7 +2775,7 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     journal = tmp_path / "proofs.jsonl"
     calls: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(node.id)
         return DiffProposal(GOOD_DIFF if node.id == "n1" else M_DIFF, "")
 
@@ -2715,10 +2789,10 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     )
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["n1", "n2"]
-    # One call per node: the first sample gated clean, so `_best_of_samples`
-    # took its `failures == 0` exit instead of drawing all three. Against
-    # `HEAD` the first sample scores `target-scope` red and `n2` costs three.
-    assert calls == ["n1", "n2"]
+    # k draws per node, paid up front (T6-25); the first sample of each
+    # gated clean, so nothing after it was evaluated and no retry ran.
+    # Against `HEAD` the first sample would score `target-scope` red.
+    assert calls == ["n1"] * PROPOSAL_SAMPLES + ["n2"] * PROPOSAL_SAMPLES
     assert "- Gate target-scope: PASS (1 touched file(s) within 1 target(s))\n" in result.transcript
     assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
     spans = read_spans(journal)
@@ -2776,7 +2850,7 @@ def test_run_slice_second_node_own_stray_still_fails_target_scope(tmp_path: Path
     dag = Dag.model_validate({"nodes": [first, second]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(GOOD_DIFF if node.id == "n1" else STRAY_DIFF, "")
 
     result = run_slice(
@@ -2809,7 +2883,7 @@ def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     calls: list[str] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(node.id)
         return DiffProposal(SPEC_DIFF if node.id == "t1" else GOOD_DIFF, "")
 
@@ -2823,7 +2897,7 @@ def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
     )
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["t1", "n1"]
-    assert calls == ["t1", "n1"]
+    assert calls == ["t1"] * PROPOSAL_SAMPLES + ["n1"] * PROPOSAL_SAMPLES
     assert "- Gate node-scope: PASS (test node changed 1 file(s) in scope)\n" in result.transcript
     assert "- Gate node-scope: PASS (impl node changed 1 file(s) in scope)\n" in result.transcript
     assert "- Gate tests: PASS (red specification: 1 failing test(s))\n" in result.transcript
@@ -2891,7 +2965,7 @@ def _packaged_slice(
         dag,
         workdir=tmp_path,
         journal_path=tmp_path / "proofs.jsonl",
-        propose=lambda node, failure: DiffProposal(PKG_DIFF, ""),
+        propose=lambda node, failure, seed: DiffProposal(PKG_DIFF, ""),
         now=lambda: "2026-09-16T00:00:00+00:00",
         **kwargs,  # type: ignore[arg-type]
     )
@@ -2950,7 +3024,7 @@ def test_run_slice_distinct_ids_first_node_sees_the_second_nodes_citation(
     dag = Dag.model_validate({"nodes": [_node_dict("n1", []), second]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(GOOD_DIFF if node.id == "n1" else M_DIFF, "")
 
     result = run_slice(
@@ -2997,7 +3071,7 @@ def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     dag = Dag.model_validate({"nodes": [spec, impl]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(SPEC_DIFF_TWO_IDS if node.id == "t1" else GOOD_DIFF, "")
 
     result = run_slice(
@@ -3031,7 +3105,7 @@ def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
     def replan(node: Node, history: str) -> Dag:
@@ -3073,7 +3147,7 @@ def test_run_slice_every_attempt_leaves_a_sidecar_with_its_evidence(tmp_path: Pa
     journal = tmp_path / "proofs.jsonl"
     calls: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         calls.append(failure)
         if failure is None:
             return DiffProposal(
@@ -3128,7 +3202,7 @@ def test_run_slice_truncated_attempt_keeps_its_partial_reasoning(tmp_path: Path)
     journal = tmp_path / "proofs.jsonl"
     attempts: list[str | None] = []
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         attempts.append(failure)
         if len(attempts) <= PROPOSAL_SAMPLES + 1:
             msg = "completion truncated at 4096 output tokens (finish_reason=length)"

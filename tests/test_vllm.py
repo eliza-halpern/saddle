@@ -285,6 +285,16 @@ def test_diff_posts_guided_payload() -> None:
     }
 
 
+def test_diff_payload_carries_the_seed_when_given() -> None:
+    """T6-25: concurrent draws are told apart by seed; a call without one
+    sends no `seed` key (the server's default), as before."""
+    client, seen = _json_client(_ok_body(content=REAL_DIFF))
+    client.propose_diff("Do x.", seed=7)
+    assert json.loads(seen[0].content)["seed"] == 7
+    client.propose_diff("Do x.")
+    assert "seed" not in json.loads(seen[1].content)
+
+
 def test_diff_rejects_bad_input() -> None:
     client, _ = _json_client(_ok_body(content=json.dumps({"diff": "x"})))
     with pytest.raises(ValueError, match="must not be empty") as prompt_info:

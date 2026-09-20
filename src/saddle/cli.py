@@ -593,7 +593,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         stdout.write("aborted.\n")
         return 1
 
-    def propose(node: Node, failure: str | None) -> DiffProposal:
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
         files = git_ls_files(options.repo)
@@ -634,6 +634,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             max_tokens=worker_max_tokens(prompt, options.context_window),
             temperature=worker_temperature(options, failure),
             reasoning_effort=effort,
+            seed=seed,
         )
 
     def replan(node: Node, history: str) -> Dag:

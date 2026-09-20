@@ -16,6 +16,7 @@ import shutil
 import tempfile
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -87,7 +88,7 @@ class ReplanFailedError(Exception):
     """A replan attempt produced nothing schedulable; the node stays failed."""
 
 
-Proposer = Callable[[Node, str | None], DiffProposal]
+Proposer = Callable[[Node, str | None, int], DiffProposal]
 """Propose a diff for a node; `failure` carries prior-attempt evidence."""
 
 Replanner = Callable[[Node, str], Dag]
@@ -447,7 +448,16 @@ def _evaluate_candidate(
 def _best_of_samples(
     node: Node, workdir: Path, propose: Proposer, baseline: str, planned: tuple[str, ...]
 ) -> tuple[DiffProposal | None, int, list[dict[str, Any]]]:
-    """Draw PROPOSAL_SAMPLES unconditioned proposals; keep the best.
+    """Draw PROPOSAL_SAMPLES unconditioned proposals concurrently; keep the best.
+
+    The k worker calls go out together, each with its own seed (T6-25):
+    the model is local and the server batches, so k draws cost about one
+    draw's wall where drawing them one after another cost k -- round 3c's
+    n1 spent 1028 s on three serial samples every other node waited on.
+    The returned diffs are then evaluated one at a time in the worktree
+    in seed order, never arrival order, so the sealed record does not
+    depend on which request the server answered first; the first that
+    passes seals, and the rest are recorded as not evaluated.
 
     Returns the winning diff, how many distinct diffs were drawn --
     agreement is the correlation signal: LLM samples "often fail on the
@@ -456,23 +466,37 @@ def _best_of_samples(
     sample for the attempt's sidecar (T6-12): a sample that failed its
     gates or did not apply used to vanish with its reasoning.
     """
+
+    def draw(seed: int) -> DiffProposal | VllmResponseError:
+        # A truncated or malformed completion loses this draw, not the
+        # others: the samples are independent, so one bad packet is not
+        # evidence about the rest.
+        try:
+            return propose(node, None, seed)
+        except VllmResponseError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=PROPOSAL_SAMPLES) as pool:
+        draws = list(pool.map(draw, range(PROPOSAL_SAMPLES)))
     scored: list[tuple[int, int, DiffProposal]] = []
     drawn: list[str] = []
     last: DiffProposal | None = None
     samples: list[dict[str, Any]] = []
-    for index in range(PROPOSAL_SAMPLES):
-        # A truncated or malformed completion loses this draw, not the
-        # other two: the samples are independent, so one bad packet is
-        # not evidence about the rest.
-        try:
-            proposal = propose(node, None)
-        except VllmResponseError as exc:
-            samples.append({**_error_evidence(exc), "outcome": f"worker call failed: {exc}"})
+    passed = False
+    for index, outcome in enumerate(draws):
+        if isinstance(outcome, VllmResponseError):
+            samples.append(
+                {**_error_evidence(outcome), "outcome": f"worker call failed: {outcome}"}
+            )
             continue
+        proposal = outcome
         last = proposal
         drawn.append(proposal.diff)
         summary = _proposal_evidence(proposal)
         samples.append(summary)
+        if passed:
+            summary["outcome"] = "not evaluated: an earlier sample passed"
+            continue
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
             summary["outcome"] = "identical to an earlier sample"
             continue
@@ -482,11 +506,11 @@ def _best_of_samples(
             continue
         failures = sum(1 for check in result.checks if not check.passed)
         summary["outcome"] = f"{failures} gate(s) failed"
-        # `index` breaks ties toward the earliest sample, so selection is
+        # `index` breaks ties toward the earliest seed, so selection is
         # deterministic rather than dependent on sort stability.
         scored.append((failures, index, proposal))
         if failures == 0:
-            break
+            passed = True
     if not scored:
         # Nothing gated cleanly and nothing applied. Hand back the last
         # sample rather than paying for another call: the attempt still
@@ -582,14 +606,17 @@ async def _run_node(
                     best, distinct, samples = _best_of_samples(
                         node, workdir, propose, baseline, planned
                     )
-                    proposal = best if best is not None else propose(node, failure)
+                    proposal = (
+                        best if best is not None else propose(node, failure, PROPOSAL_SAMPLES)
+                    )
                     # Agreement across independent samples is the correlation
                     # signal: LLM samples "often fail on the same inputs", so
                     # k buys least exactly when they agree. Sealed so rho is
                     # measured across runs rather than assumed.
                     sampling = f"{distinct} distinct of {PROPOSAL_SAMPLES} sample(s)"
                 else:
-                    proposal = propose(node, failure)
+                    # A retry is one draw; its seed follows the sample seeds.
+                    proposal = propose(node, failure, PROPOSAL_SAMPLES - 1 + attempt)
                     samples = [
                         {**_proposal_evidence(proposal), "outcome": "retry draw, gated in place"}
                     ]

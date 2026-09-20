@@ -499,7 +499,8 @@ def test_run_task_end_to_end_pass(tmp_path: Path) -> None:
         "worker:n1",
         "run",
     ]
-    assert [call["reasoning_effort"] for call in seen] == ["medium", "low"]
+    # One planner call, then k concurrent worker draws (T6-25), all at the node's effort.
+    assert [call["reasoning_effort"] for call in seen] == ["medium", *["low"] * PROPOSAL_SAMPLES]
     assert seen[0]["max_tokens"] == 8192
     assert seen[0]["temperature"] == 0.0
     assert seen[1]["temperature"] == 0.7
@@ -556,7 +557,8 @@ def test_run_task_worker_effort_overrides_node_budget(tmp_path: Path) -> None:
     options = _options(tmp_path, worker_effort="xhigh")
     code, _ = _run(options, client)
     assert code == 0
-    assert [call["reasoning_effort"] for call in seen] == ["medium", "xhigh"]
+    # One planner call, then k concurrent worker draws (T6-25), all at the node's effort.
+    assert [call["reasoning_effort"] for call in seen] == ["medium", *["xhigh"] * PROPOSAL_SAMPLES]
 
 
 def test_run_task_transport_error_surfaces(tmp_path: Path) -> None:
@@ -968,7 +970,8 @@ def test_run_task_zero_budget_maps_to_none(tmp_path: Path) -> None:
     client = _scripted_client(script, seen)
     code, _ = _run(_options(tmp_path), client)
     assert code == 0
-    assert [call["reasoning_effort"] for call in seen] == ["medium", "none"]
+    # One planner call, then k concurrent worker draws (T6-25), all at the node's effort.
+    assert [call["reasoning_effort"] for call in seen] == ["medium", *["none"] * PROPOSAL_SAMPLES]
 
 
 def test_run_task_stale_journal_fails(tmp_path: Path) -> None:

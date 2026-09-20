@@ -236,9 +236,15 @@ def _build_payload(
 
 
 def _build_diff_payload(
-    *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
+    *,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    reasoning_effort: str,
+    seed: int | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
@@ -247,6 +253,11 @@ def _build_diff_payload(
         "include_reasoning": True,
         "structured_outputs": {"grammar": DIFF_GRAMMAR},
     }
+    # Concurrent draws of one prompt are told apart by seed (T6-25); a
+    # call without one leaves the key out and the server picks, as before.
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
 
 
 def _build_text_payload(
@@ -550,6 +561,7 @@ class VllmClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+        seed: int | None = None,
     ) -> DiffProposal:
         """Propose a unified diff for *prompt*, guided by the EBNF diff grammar (DIFF_GRAMMAR)."""
         if not prompt.strip():
@@ -562,6 +574,7 @@ class VllmClient:
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            seed=seed,
         )
         return _parse_diff_response(self._post(payload), max_tokens=max_tokens)
 
