@@ -60,6 +60,57 @@ Re-run from T1 under the fixed harness (`fix/gate-integrity`), five arms
 per task. Results live in `saddle-bench/runs/`, findings in
 `../saddle-bench/runs/FINDINGS.md`.
 
+### Round 3 (T4-6a viability sweep, 2026-09-20)
+
+Thirteen saddle-only runs against per-task correctness oracles frozen
+before the first run (`saddle-bench@d9bd23b`), `--sample-temperature 0.7`,
+one seed on T1-T4 and three on T5-T7. Full record in
+`../saddle-bench/runs/FINDINGS.md` F21.
+
+**5 of 13 pass their oracle. 3 of 13 on the strict reading** that also
+requires a sealed proof covering the implementation (F21.2). **Not one of
+the nine large-task runs completed**: eight hit the 1800 s wall, the ninth
+exhausted its replans.
+
+| task | seeds | oracle PASS | how the runs ended |
+|---|---|---|---|
+| T1 | 1 | 0/1 | verdict; 22 of 22 gates passed on wrong code (11/18) |
+| T2 | 1 | 1/1 | verdict after a replan; 4 attempts lost to lint |
+| T3 | 1 | 1/1 | verdict |
+| T4 | 1 | 1/1 | verdict |
+| T5 | 3 | 0/3 | timeout x3, nothing sealed, worktrees untouched |
+| T6 | 3 | 2/3 | timeout x3; the two passes are unproven residue |
+| T7 | 3 | 0/3 | timeout x2, verdict x1; no implementation produced |
+
+All four pre-registered predictions but one were falsified; they are
+recorded unedited in `runs/round3/PREDICTION.md`.
+
+**What round 3 establishes that round 2 could not.** Round 2's verdicts
+were void because red-phase could not fail. This round the gates
+demonstrably reject work -- nine node-attempt failures across T2, T6 and
+T7 -- and T2/T3/T4 correctness was measured for the first time against
+oracles nobody could tune afterwards.
+
+**The defect to fix first (F21.1).** The worker's output cap is
+`WORKER_OUTPUT_TOKENS[effort]`, and `effort` comes from the *planner's*
+`reasoning_budget`. `propose()` (`cli.py:505-542`) recomputes that same
+cap on every retry, so `vllm.py:314`'s "retry with more max_tokens" is
+advice no caller acts on -- and the retry lengthens the prompt while
+holding the budget fixed. vLLM's histogram shows 7 generations in the
+20k-50k band and none above 50k against a nominal 81920, consistent with
+`medium = 32768`. T5's three seeds fail identically to the second:
+budget-bound, not content-bound. Labelled **harness**, not model ceiling.
+
+**Reading the T6 passes correctly (F21.2).** t6-s1 and t6-s2 pass every
+oracle check on a `filterlang.py` saddle never proved: the sealed proof
+covers `tests/test_filterlang.py` alone, and the corrected source is
+residue from an impl attempt that failed its gates and was not reverted.
+F14's shape. An oracle PASS is not a saddle PASS, and the columns must
+stay separate.
+
+Eleven follow-on items, each labelled harness or model-ceiling with its
+run log as evidence, are in F21.8.
+
 ## Harness defects found and fixed
 
 Three checks reported PASS without verifying their property. All three
@@ -102,6 +153,14 @@ Measured, not speculative — see ../saddle-bench/runs/FINDINGS.md for evidence.
 
 ## Status
 
-Round 2 in progress. #38 and the follow-ups above are prerequisites for a
-meaningful saddle result, not production hardening: round 2 measures
-saddle *without* them and is the control against which they are judged.
+Round 3 complete (2026-09-20). The gate-integrity work landed: the gates
+are now demonstrably capable of failing, and correctness is measured by
+oracles frozen before the runs. On small tasks saddle is correct 3 times
+in 4 and slower than a single agent; on large tasks it produced a proven
+implementation **zero** times in nine attempts.
+
+The crossover hypothesis -- saddle loses on small tasks and wins on large
+ones -- remains untested, because the large tasks never reached a verdict.
+F21.1 is the blocker: a planner-set output ceiling the retry path never
+raises. Until that is fixed, a T4-6b comparison against the baseline arm
+would measure that ceiling rather than the architecture.
