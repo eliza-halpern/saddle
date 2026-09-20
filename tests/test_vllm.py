@@ -353,6 +353,28 @@ def test_list_models_returns_served_ids() -> None:
     assert empty.list_models() == []
 
 
+def test_max_model_len_reads_the_served_models_context_length() -> None:
+    """T6-17 known-good: vLLM's /models entry carries `max_model_len`; the
+    client returns the served model's. Known-bad: an entry without it, a
+    non-integer, or another model's value gives None, not a guess."""
+    payload = {
+        "data": [
+            {"id": "other", "max_model_len": 4096},
+            {"id": DEFAULT_MODEL, "max_model_len": 175000},
+        ],
+        "object": "list",
+    }
+    client, seen = _json_client(payload)
+    assert client.max_model_len() == 175000
+    assert seen[0].url.path == "/v1/models"
+    bare, _ = _json_client({"data": [{"id": DEFAULT_MODEL}], "object": "list"})
+    assert bare.max_model_len() is None
+    odd, _ = _json_client({"data": [{"id": DEFAULT_MODEL, "max_model_len": "175000"}]})
+    assert odd.max_model_len() is None
+    absent, _ = _json_client({"data": [{"id": "other", "max_model_len": 4096}]})
+    assert absent.max_model_len() is None
+
+
 def test_list_models_auth_and_server_errors() -> None:
     for status in (401, 403):
         client, _ = _client_for(httpx.Response(status, json={"error": "nope"}))

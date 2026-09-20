@@ -20,7 +20,7 @@ from rich.console import Console
 
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
-from saddle.dag import Dag, Node, emission_estimate, validate_dag
+from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
 from saddle.journal import read_entries, read_plans, read_records, read_spans, verify_journal
 from saddle.slice import ReplanFailedError, run_slice
@@ -72,64 +72,52 @@ BUDGET_TO_EFFORT: Final[dict[str, str]] = {
 }
 # `max_context_tokens` is the worker's INPUT ceiling (ARCHITECTURE.md §2:
 # "each subagent receives a clean ~28,000-30,000-token ceiling"). Generation
-# is a separate budget: spending it as an output cap truncated real work
-# mid-diff. Thinking counts against the same output cap on this server, so
-# this table is the *reasoning allowance* per effort: what the think block
-# may spend before the diff starts. It is also the whole cap for a node that
-# declares no `target_files` (there is nothing to size the diff from). A
-# scoped node's cap is its emission estimate (dag.py `emission_estimate`,
-# from the repo) plus this allowance, so buying room to write never buys
-# room to think (T6-14; round-3 T5 truncated three seeds at the medium
-# entry with a ~4000-token diff outstanding).
-WORKER_OUTPUT_TOKENS: Final[dict[str, int]] = {
-    "none": 8192,
-    "low": 16384,
-    "medium": 32768,
-    "xhigh": 65536,
-}
-# After a `finish_reason=length` failure the next attempt for that node runs
-# one step up this ladder (the first step strictly above its current cap);
-# the top is the most the harness ever asks for in one response. Before
-# T6-14 the retry resent the identical cap, after a longer prompt.
-WORKER_OUTPUT_STEPS: Final[tuple[int, ...]] = (8192, 16384, 32768, 65536, 131072)
-MAX_WORKER_OUTPUT: Final = WORKER_OUTPUT_STEPS[-1]
-TRUNCATED_MARK: Final = "finish_reason=length"
+# is not budgeted at all (T6-17): this model's strategy is long test-time
+# compute, vLLM enforces no split between thinking and content, and every
+# cap the harness tried was paid for by the diff, not the thinking -- F21.10
+# arm (c) reasoned 17571 tokens at effort `low` against a 16384 "allowance"
+# and truncated 3/3. So a worker call asks for everything the context has
+# left after its prompt; `finish_reason=length` is then the model's ceiling,
+# not the harness's, and stays a retryable attempt failure whose evidence
+# is in the sidecar (T6-12). The window comes from the server
+# (`max_model_len` on `GET /models`), else `--context-window`, else the
+# container's `MAX_LEN`.
+DEFAULT_CONTEXT_WINDOW: Final = 175000
+# Code tokenises denser than prose; F21.10's 24739-char worker prompt was
+# 6586 tokens (3.76 chars/token). Three over-counts the prompt, so the
+# request can never exceed the window, at the cost of room no diff needs.
+PROMPT_CHARS_PER_TOKEN: Final = 3
+# Slack under the window for the chat template and the count's error.
+OUTPUT_MARGIN: Final = 2048
 
 
-def worker_output_cap(
-    node: Node, effort: str, file_lines: Mapping[str, int], escalations: int
-) -> int:
-    """The `max_tokens` a worker call for `node` sends (T6-14).
-
-    Emission estimate plus reasoning allowance when the node declares
-    scope; the allowance alone otherwise. Each escalation (one per
-    truncation already suffered by this node) at least doubles the cap
-    and lands no lower than the next ladder rung: round 3b (F21.9b)
-    showed a cap of 32624 "escalating" to the 32768 rung, 144 tokens of
-    room, so a step is measured from the cap, not from the rung table.
-    `file_lines` must be the node's *baseline* tree: a failed attempt's
-    diff is still applied when the next attempt is proposed, and sizing
-    from it let a degenerate 699-line failure buy itself a bigger cap
-    (F21.9a).
-    """
-    estimate = emission_estimate(node, file_lines)
-    cap = WORKER_OUTPUT_TOKENS[effort] + (estimate or 0)
-    for _ in range(escalations):
-        rung = next((step for step in WORKER_OUTPUT_STEPS if step > cap), MAX_WORKER_OUTPUT)
-        cap = max(rung, 2 * cap)
-    return min(cap, MAX_WORKER_OUTPUT)
+def worker_max_tokens(prompt: str, context_window: int) -> int:
+    """The `max_tokens` a worker call sends: the window left after `prompt` (T6-17)."""
+    left = context_window - len(prompt) // PROMPT_CHARS_PER_TOKEN - OUTPUT_MARGIN
+    return max(left, OUTPUT_MARGIN)
 
 
-def emission_budget(node: Node) -> int:
+def diff_budget(node: Node, context_window: int) -> int:
     """Most a node's diff may be estimated at and still be planned (T6-8).
 
-    The top of the ladder minus the node's own reasoning allowance: a diff
-    that cannot fit beside its thinking at the largest cap the harness
-    sends is a node no retry can rescue, so it is rejected before any
-    worker call and the planner splits it.
+    The window minus the node's own read ceiling and the margin: a diff
+    that cannot fit in the room its prompt leaves is a node no retry can
+    rescue, so it is rejected before any worker call and the planner
+    splits it. Since T6-17 nothing is subtracted for reasoning, because
+    nothing caps it.
     """
-    effort = BUDGET_TO_EFFORT[node.execution_constraints.reasoning_budget]
-    return MAX_WORKER_OUTPUT - WORKER_OUTPUT_TOKENS[effort]
+    return context_window - node.execution_constraints.max_context_tokens - OUTPUT_MARGIN
+
+
+def server_context_window(client: VllmClient, override: int | None) -> int:
+    """The context window worker calls size against: flag, server, default."""
+    if override is not None:
+        return override
+    try:
+        reported = client.max_model_len()
+    except VllmError:
+        reported = None
+    return reported or DEFAULT_CONTEXT_WINDOW
 
 
 def _file_lines(repo: Path, files: Sequence[str]) -> dict[str, int]:
@@ -161,6 +149,7 @@ class RunOptions:
     reasoning_effort: str = "medium"
     worker_effort: str | None = None
     yes: bool = False
+    context_window: int = DEFAULT_CONTEXT_WINDOW
 
 
 @dataclass(frozen=True)
@@ -178,6 +167,7 @@ class DagOptions:
     temperature: float = 0.0
     reasoning_effort: str = "medium"
     repo: Path | None = None
+    context_window: int = DEFAULT_CONTEXT_WINDOW
 
 
 def _file_listing(files: Sequence[str]) -> str:
@@ -490,13 +480,14 @@ def _emit_valid_dag(
     max_tokens: int,
     temperature: float,
     reasoning_effort: str,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
 ) -> Dag:
     """Emit a DAG, feeding validation errors back (bounded recompile).
 
     `file_lines` (baseline lines per file) turns on the scope checks: an
     impl/refactor node must declare its files and its estimated diff must
-    fit its emission budget (T6-8). Both come back to the planner as
-    validation errors, like every other issue.
+    fit the room the window leaves it (T6-8, `diff_budget`). Both come
+    back to the planner as validation errors, like every other issue.
     """
     prompt = build_emit_prompt(task, files)
     errors: list[str] = []
@@ -528,7 +519,7 @@ def _emit_valid_dag(
             context_ceiling=CONTEXT_CEILING,
             required_ids=sorted(required),
             file_lines=file_lines,
-            emission_budget=emission_budget,
+            emission_budget=lambda node: diff_budget(node, context_window),
         )
         if not issues:
             return dag
@@ -566,6 +557,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             max_tokens=options.max_tokens,
             temperature=options.temperature,
             reasoning_effort=options.reasoning_effort,
+            context_window=options.context_window,
         )
     except RunError as exc:
         stdout.write(f"error: {exc}\n")
@@ -581,27 +573,13 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         stdout.write("aborted.\n")
         return 1
 
-    escalations: dict[str, int] = {}
-    baseline_lines: dict[str, dict[str, int]] = {}
-
     def propose(node: Node, failure: str | None) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
         files = git_ls_files(options.repo)
-        # The node's first proposal sees its baseline tree (nodes run
-        # synchronously and a node's earlier attempts are the only edits
-        # since); size every attempt from that snapshot, never from the
-        # tree a failed attempt left behind (F21.9a).
-        if node.id not in baseline_lines:
-            baseline_lines[node.id] = _file_lines(options.repo, files)
-        # `failure` is the immediately preceding attempt's verdict; a
-        # truncation in it is one more step up the ladder for this node,
-        # and the count persists so a later apply failure does not reset it.
-        if failure is not None and TRUNCATED_MARK in failure:
-            escalations[node.id] = escalations.get(node.id, 0) + 1
-        output_tokens = worker_output_cap(
-            node, effort, baseline_lines[node.id], escalations.get(node.id, 0)
-        )
+        # Every call gets the window left after its own prompt (T6-17):
+        # a longer prompt (a repair brief, a tree a failed attempt bloated)
+        # buys less room, never more, and nothing is held back for thinking.
         contents = {
             name: (options.repo / name).read_text() for name in files if name.endswith(".py")
         }
@@ -610,15 +588,16 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 task=options.task, node=node, files=files, contents=contents
             )
         else:
+            plan_prompt = build_recovery_plan_prompt(
+                task=options.task,
+                node=node,
+                files=files,
+                contents=contents,
+                failure=failure,
+            )
             plan = client.complete(
-                build_recovery_plan_prompt(
-                    task=options.task,
-                    node=node,
-                    files=files,
-                    contents=contents,
-                    failure=failure,
-                ),
-                max_tokens=output_tokens,
+                plan_prompt,
+                max_tokens=worker_max_tokens(plan_prompt, options.context_window),
                 temperature=options.temperature,
                 reasoning_effort=effort,
             )
@@ -632,7 +611,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             )
         return client.propose_diff(
             prompt,
-            max_tokens=output_tokens,
+            max_tokens=worker_max_tokens(prompt, options.context_window),
             temperature=options.sample_temperature if failure is None else options.temperature,
             reasoning_effort=effort,
         )
@@ -648,6 +627,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 max_tokens=options.max_tokens,
                 temperature=options.temperature,
                 reasoning_effort=options.reasoning_effort,
+                context_window=options.context_window,
             )
         except RunError as exc:
             # Message unobserved: the scheduler swallows it with a bare continue.
@@ -737,6 +717,7 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
             max_tokens=options.max_tokens,
             temperature=options.temperature,
             reasoning_effort=options.reasoning_effort,
+            context_window=options.context_window,
         )
     except RunError as exc:
         stdout.write(f"error: {exc}\n")
@@ -814,6 +795,11 @@ def build_parser() -> argparse.ArgumentParser:
     dag.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     dag.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     dag.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
+    dag.add_argument(
+        "--context-window",
+        type=int,
+        help="Model context length in tokens (default: what the server reports, else 175000).",
+    )
     dag.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     dag.add_argument(
         "--reasoning-effort",
@@ -842,6 +828,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     run.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     run.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
+    run.add_argument(
+        "--context-window",
+        type=int,
+        help="Model context length in tokens (default: what the server reports, else 175000).",
+    )
     run.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     run.add_argument(
         "--sample-temperature",
@@ -916,6 +907,7 @@ def main(
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 reasoning_effort=args.reasoning_effort,
+                context_window=server_context_window(client, args.context_window),
             )
             return run_dag(dag_options, client, stdout=stdout or sys.stdout)
     if args.command == "up":
@@ -940,23 +932,24 @@ def main(
             )
     repo = Path(args.repo).resolve()
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
-    options = RunOptions(
-        task=args.task,
-        repo=repo,
-        journal=journal,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        sample_temperature=args.sample_temperature,
-        reasoning_effort=args.reasoning_effort,
-        worker_effort=args.worker_effort,
-        yes=args.yes,
-    )
     with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
         try:
             check_server(client, base_url=args.base_url, model=args.model)
         except RunError as exc:
             print(f"error: {exc}", file=stderr or sys.stderr)
             return 1
+        options = RunOptions(
+            task=args.task,
+            repo=repo,
+            journal=journal,
+            max_tokens=args.max_tokens,
+            temperature=args.temperature,
+            sample_temperature=args.sample_temperature,
+            reasoning_effort=args.reasoning_effort,
+            worker_effort=args.worker_effort,
+            yes=args.yes,
+            context_window=server_context_window(client, args.context_window),
+        )
         return run_task(
             options,
             client,

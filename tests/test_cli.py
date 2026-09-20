@@ -8,19 +8,19 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import httpx
 import pytest
 
 from saddle.cli import (
     CONTENTS_WITHHELD,
+    DEFAULT_CONTEXT_WINDOW,
     MAX_FILES_IN_PROMPT,
-    MAX_WORKER_OUTPUT,
+    OUTPUT_MARGIN,
+    PROMPT_CHARS_PER_TOKEN,
     RUN_ALLOWLIST,
     TOOL_BINDINGS,
-    WORKER_OUTPUT_STEPS,
-    WORKER_OUTPUT_TOKENS,
     DagOptions,
     RunError,
     RunOptions,
@@ -32,7 +32,7 @@ from saddle.cli import (
     build_replan_task,
     build_worker_prompt,
     check_server,
-    emission_budget,
+    diff_budget,
     main,
     render_dag_plan,
     run_dag,
@@ -40,7 +40,8 @@ from saddle.cli import (
     run_tail,
     run_task,
     run_verify,
-    worker_output_cap,
+    server_context_window,
+    worker_max_tokens,
 )
 from saddle.dag import DIFF_OVERHEAD_TOKENS, TOKENS_PER_LINE, Dag, Node
 from saddle.evidence import CapturedRun, git_ls_files, run_argv
@@ -64,6 +65,7 @@ from saddle.vllm import (
     DiffProposal,
     VllmAuthError,
     VllmClient,
+    VllmRequestError,
 )
 
 TASK = "Fix f to return 2 and add a passing test."
@@ -132,14 +134,10 @@ def _node_dict(
     }
 
 
-def _expected_cap(repo: Path, effort: str, *, escalations: int = 0) -> int:
-    """The worker cap the fixture node earns: `n.py`'s lines sized as a diff,
-    plus the effort's reasoning allowance, climbed `escalations` steps (T6-14)."""
-    lines = (repo / "n.py").read_text().count("\n")
-    cap = WORKER_OUTPUT_TOKENS[effort] + lines * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
-    for _ in range(escalations):
-        cap = max(next(step for step in WORKER_OUTPUT_STEPS if step > cap), 2 * cap)
-    return min(cap, MAX_WORKER_OUTPUT)
+def _expected_cap(call: dict[str, Any], window: int = DEFAULT_CONTEXT_WINDOW) -> int:
+    """The `max_tokens` a worker call earns: the window left after its own
+    prompt (T6-17); nothing is held back for reasoning."""
+    return window - len(_prompt(call)) // PROMPT_CHARS_PER_TOKEN - OUTPUT_MARGIN
 
 
 def _emit_response(payload: dict[str, Any]) -> httpx.Response:
@@ -522,16 +520,15 @@ def test_run_task_honors_sampling_options(tmp_path: Path) -> None:
     assert seen[0]["max_tokens"] == 100
     assert seen[0]["temperature"] == 0.5
     assert seen[0]["reasoning_effort"] == "low"
-    assert seen[1]["max_tokens"] == _expected_cap(tmp_path, "low")
+    assert seen[1]["max_tokens"] == _expected_cap(seen[1])
     assert seen[1]["temperature"] == 0.9
 
 
 def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path) -> None:
     """Regression: spending the read ceiling as the output cap truncated work.
 
-    `max_context_tokens` bounds what the worker reads; generation gets its
-    own budget: the diff's estimated size plus the effort's reasoning
-    allowance (T6-14).
+    `max_context_tokens` bounds what the worker reads; generation gets
+    the rest of the window (T6-17).
     """
 
     _git_repo(tmp_path)
@@ -544,8 +541,8 @@ def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path
     code, _ = _run(options, client)
     assert code == 0
     assert seen[0]["max_tokens"] == 100
-    assert seen[1]["max_tokens"] == _expected_cap(tmp_path, "low")
-    assert seen[1]["max_tokens"] != 8000
+    assert seen[1]["max_tokens"] == _expected_cap(seen[1])
+    assert seen[1]["max_tokens"] > 100_000
     assert seen[1]["reasoning_effort"] == "low"
 
 
@@ -815,7 +812,7 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert len(diff_calls) >= PROPOSAL_SAMPLES
     recovery = next(call for call in seen if "Diagnose the root cause" in _prompt(call))
     assert recovery["reasoning_effort"] == "low"
-    assert recovery["max_tokens"] == _expected_cap(tmp_path, "low")
+    assert recovery["max_tokens"] == _expected_cap(recovery)
     assert recovery["temperature"] == 0.5
     assert "structured_outputs" not in recovery
 
@@ -1174,6 +1171,9 @@ class _FakeClient:
     def list_models(self) -> list[str]:
         return [self._model]
 
+    def max_model_len(self) -> int | None:
+        return None
+
 
 def _refusing_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
@@ -1336,6 +1336,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "base_url": DEFAULT_BASE_URL,
         "model": "qwen3.8-27b",
         "max_tokens": 8192,
+        "context_window": None,
         "temperature": 0.0,
         "sample_temperature": 0.7,
         "reasoning_effort": "medium",
@@ -1375,6 +1376,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "base_url": "http://x/v1/",
         "model": "m",
         "max_tokens": 100,
+        "context_window": None,
         "temperature": 0.5,
         "sample_temperature": 0.9,
         "reasoning_effort": "low",
@@ -1394,6 +1396,7 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
     assert capsys.readouterr().out == (
         "usage: saddle run [-h] [--repo REPO] [--journal JOURNAL] [--base-url BASE_URL]\n"
         "                  [--model MODEL] [--max-tokens MAX_TOKENS]\n"
+        "                  [--context-window CONTEXT_WINDOW]\n"
         "                  [--temperature TEMPERATURE]\n"
         "                  [--sample-temperature SAMPLE_TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
@@ -1411,6 +1414,9 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --model MODEL         Model id.\n"
         "  --max-tokens MAX_TOKENS\n"
         "                        Emission max tokens.\n"
+        "  --context-window CONTEXT_WINDOW\n"
+        "                        Model context length in tokens (default: what the\n"
+        "                        server reports, else 175000).\n"
         "  --temperature TEMPERATURE\n"
         "                        Sampling temperature.\n"
         "  --sample-temperature SAMPLE_TEMPERATURE\n"
@@ -1464,7 +1470,8 @@ def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         main(["dag", "--help"])
     assert capsys.readouterr().out == (
         "usage: saddle dag [-h] [--repo REPO] [--base-url BASE_URL] [--model MODEL]\n"
-        "                  [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
+        "                  [--max-tokens MAX_TOKENS] [--context-window CONTEXT_WINDOW]\n"
+        "                  [--temperature TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  task\n"
         "\n"
@@ -1478,6 +1485,9 @@ def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --model MODEL         Model id.\n"
         "  --max-tokens MAX_TOKENS\n"
         "                        Emission max tokens.\n"
+        "  --context-window CONTEXT_WINDOW\n"
+        "                        Model context length in tokens (default: what the\n"
+        "                        server reports, else 175000).\n"
         "  --temperature TEMPERATURE\n"
         "                        Sampling temperature.\n"
         "  --reasoning-effort {none,low,medium,xhigh}\n"
@@ -2434,42 +2444,97 @@ def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path)
     assert "- Attempts: 2\n" in out
     diff_calls = [call for call in seen if _is_diff_request(call)]
     assert len(diff_calls) == truncate_first + 1
-    first = _expected_cap(tmp_path, "low")
-    assert [call["max_tokens"] for call in diff_calls[:-1]] == [first] * truncate_first
-    assert diff_calls[-1]["max_tokens"] == _expected_cap(tmp_path, "low", escalations=1)
-    assert diff_calls[-1]["max_tokens"] > first
+    # T6-17: no ladder. Every call, the retry included, is given the window
+    # left after its own prompt; the repair brief is longer, so the retry
+    # has slightly less room, never a "step up" that was fiction anyway.
+    assert [call["max_tokens"] for call in diff_calls] == [_expected_cap(c) for c in diff_calls]
+    first = diff_calls[0]["max_tokens"]
+    assert first > 100_000
+    assert diff_calls[-1]["max_tokens"] < first
     recovery = next(call for call in seen if "Diagnose the root cause" in _prompt(call))
-    assert recovery["max_tokens"] == diff_calls[-1]["max_tokens"]
+    assert recovery["max_tokens"] == _expected_cap(recovery)
     assert f"completion truncated at {first} output tokens" in _prompt(recovery)
     assert "retry with more" not in _prompt(recovery)
 
 
-def test_worker_output_cap_is_sized_from_declared_files_not_effort_alone() -> None:
-    """T6-14: same effort, more declared lines, larger cap; no scope, the
-    allowance alone; escalation climbs the ladder and stops at its top."""
-    lines = {"a.py": 100, "b.py": 900}
-    small = Node.model_validate({**_node_dict(), "target_files": ["a.py"]})
-    large = Node.model_validate({**_node_dict(), "target_files": ["a.py", "b.py"]})
-    bare = Node.model_validate({**_node_dict(), "target_files": []})
-    allowance = WORKER_OUTPUT_TOKENS["low"]
-    assert worker_output_cap(bare, "low", lines, 0) == allowance
-    assert (
-        worker_output_cap(small, "low", lines, 0)
-        == allowance + 100 * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
-    )
-    assert worker_output_cap(large, "low", lines, 0) > worker_output_cap(small, "low", lines, 0)
-    assert worker_output_cap(bare, "low", lines, 1) == 32768
-    assert worker_output_cap(bare, "low", lines, 2) == 65536
-    assert worker_output_cap(bare, "xhigh", lines, 5) == MAX_WORKER_OUTPUT
-    # F21.9b: a cap just under a rung must not "escalate" onto that rung.
-    just_under = Node.model_validate({**_node_dict(), "target_files": ["u.py"]})
-    under_lines = {
-        "u.py": (32624 - WORKER_OUTPUT_TOKENS["low"] - DIFF_OVERHEAD_TOKENS) // TOKENS_PER_LINE
-    }
-    base = worker_output_cap(just_under, "low", under_lines, 0)
-    assert base == 32624
-    assert worker_output_cap(just_under, "low", under_lines, 1) >= 2 * base
-    assert emission_budget(bare) == MAX_WORKER_OUTPUT - allowance
+def test_worker_max_tokens_is_the_window_left_after_the_prompt() -> None:
+    """T6-17 known-good: F21.10's 24739-char prompt against the container's
+    175000 window gets everything but the over-counted prompt and the
+    margin; the old cap for that node (20256) is nowhere in sight. A prompt
+    that fills the window still gets the margin, never zero or less.
+    Known-bad for the pre-flight: a node's diff budget is the window minus
+    its read ceiling and the margin, with nothing subtracted for reasoning."""
+    prompt = "x" * 24739
+    assert worker_max_tokens(prompt, 175000) == 175000 - 24739 // 3 - OUTPUT_MARGIN
+    assert worker_max_tokens(prompt, 175000) == 164706
+    assert worker_max_tokens(prompt, 100000) == 89706
+    assert worker_max_tokens("x" * (3 * 175000), 175000) == OUTPUT_MARGIN
+    base = _node_dict()
+    constraints = {**base["execution_constraints"], "max_context_tokens": 30000}
+    node = Node.model_validate({**base, "execution_constraints": constraints})
+    assert diff_budget(node, 175000) == 175000 - 30000 - OUTPUT_MARGIN
+    assert diff_budget(node, 175000) == 142952
+    assert diff_budget(node, 100000) == 67952
+
+
+class _WindowClient:
+    """A client whose /models answer is scripted: a length, or an error."""
+
+    def __init__(self, reported: int | None, error: Exception | None = None) -> None:
+        self._reported = reported
+        self._error = error
+
+    def max_model_len(self) -> int | None:
+        if self._error is not None:
+            raise self._error
+        return self._reported
+
+
+def test_server_context_window_prefers_the_flag_then_the_server_then_the_default() -> None:
+    """T6-17: the server's `max_model_len` sizes worker calls unless the
+    user overrides it; a server that does not report one, or cannot be
+    asked, falls back to the container's 175000."""
+    assert server_context_window(cast("VllmClient", _WindowClient(131072)), None) == 131072
+    assert server_context_window(cast("VllmClient", _WindowClient(131072)), 4096) == 4096
+    assert server_context_window(cast("VllmClient", _WindowClient(None)), None) == 175000
+    failing = _WindowClient(None, VllmRequestError("request failed: refused"))
+    assert server_context_window(cast("VllmClient", failing), None) == DEFAULT_CONTEXT_WINDOW
+
+
+def test_run_task_sizes_worker_calls_from_the_context_window_it_is_given(tmp_path: Path) -> None:
+    """T6-17 known-good: the window `main` resolved (here 100000, as a
+    server reporting `max_model_len` would give) is what every worker call
+    is sized against; the default is not used when a window is known."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    script = [_emit_response({"nodes": [_node_dict()]}), _diff_response()]
+    code, _ = _run(_options(tmp_path, context_window=100000), _scripted_client(script, seen))
+    assert code == 0
+    assert seen[1]["max_tokens"] == _expected_cap(seen[1], 100000)
+    assert seen[1]["max_tokens"] != _expected_cap(seen[1])
+    assert 80_000 < seen[1]["max_tokens"] < 100_000
+
+
+def test_main_run_takes_the_context_window_from_the_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6-17: `GET /models` reports `max_model_len`; `run` sizes against it,
+    and `--context-window` overrides it."""
+    _FakeClient.calls.clear()
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    monkeypatch.setattr(_FakeClient, "max_model_len", lambda self: 120000)
+    captured: list[RunOptions] = []
+
+    def fake_run_task(options: RunOptions, *args: Any, **kwargs: Any) -> int:
+        captured.append(options)
+        return 0
+
+    monkeypatch.setattr("saddle.cli.run_task", fake_run_task)
+    assert main(["run", "--repo", str(tmp_path), "--yes", TASK]) == 0
+    assert captured[-1].context_window == 120000
+    assert main(["run", "--repo", str(tmp_path), "--yes", "--context-window", "65536", TASK]) == 0
+    assert captured[-1].context_window == 65536
 
 
 def test_run_task_emission_rejects_an_undeclared_scope_and_replans(tmp_path: Path) -> None:
@@ -2493,9 +2558,12 @@ def test_run_task_emission_rejects_a_node_too_large_before_any_worker_call(tmp_p
     the largest cap the harness sends is rejected at planning time with the
     estimate and budget named; no worker call happens for it. Round-3 T5's
     plan (four modules, 249 lines) is NOT this case -- its failure was the
-    cap, T6-14 -- so the fixture declares a genuinely oversized file."""
+    cap, T6-14 -- so the fixture declares a genuinely oversized file: 11000
+    lines is 178048 tokens against the 164952 the default window leaves a
+    node that reads 8000 (T6-17; the old 8000-line fixture, 130048, now
+    fits, because nothing is held back for reasoning any more)."""
     _git_repo(tmp_path)
-    (tmp_path / "big.py").write_text("x = 1\n" * 8000)
+    (tmp_path / "big.py").write_text("x = 1\n" * 11000)
     assert run_argv(["git", "add", "big.py"], tmp_path) == 0
     assert run_argv(["git", "commit", "-q", "-m", "big"], tmp_path) == 0
     seen: list[dict[str, Any]] = []
@@ -2507,10 +2575,11 @@ def test_run_task_emission_rejects_a_node_too_large_before_any_worker_call(tmp_p
     code, out = _run(_options(tmp_path), _scripted_client(script, seen))
     assert code == 0, out
     assert "node-too-large: node 'n1' declares 2 file(s)" in _prompt(seen[1])
-    assert (
-        f"over its {MAX_WORKER_OUTPUT - WORKER_OUTPUT_TOKENS['low']}-token emission budget"
-        in _prompt(seen[1])
-    )
+    budget = diff_budget(Node.model_validate(_node_dict()), DEFAULT_CONTEXT_WINDOW)
+    lines = 11000 + (tmp_path / "n.py").read_text().count("\n")
+    estimate = lines * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
+    assert f"estimated at {estimate} tokens" in _prompt(seen[1])
+    assert f"over its {budget}-token emission budget" in _prompt(seen[1])
     assert not _is_diff_request(seen[0])
     assert not _is_diff_request(seen[1])
 
@@ -2527,11 +2596,12 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     tmp_path: Path,
 ) -> None:
     """Known-bad (F21.9a, round 3b): attempt 1 applied 699 lines of
-    degenerate output and failed `syntax`; attempt 2's estimate was then
-    taken from the bloated tree and its cap rose from 21536 to 32624.
-    Here attempt 1 bloats `n.py` by 300 lines and fails syntax; attempt
-    2's cap must equal the baseline's, escalations aside (none: a syntax
-    failure is not a truncation)."""
+    degenerate output and failed `syntax`; attempt 2's cap was then sized
+    from the bloated tree and rose from 21536 to 32624. Since T6-17 a call
+    is given the window left after its own prompt, and the prompt shows the
+    live tree: a bloated tree costs the next attempt room, it never buys
+    any. Here attempt 1 bloats `n.py` by 300 lines and fails syntax;
+    attempt 2's cap must be below attempt 1's."""
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     head = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,2 +1,302 @@\n"
@@ -2556,11 +2626,8 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     diff_calls = [call for call in seen if _is_diff_request(call)]
     assert len(diff_calls) >= PROPOSAL_SAMPLES + 1, out
     assert "Gate syntax: FAIL" in out
-    baseline_cap = _expected_cap(tmp_path, "low")
-    # Every attempt, including the one proposed on top of the 300-line
-    # failure, is sized from the baseline: the mutant that sizes from the
-    # live tree reads 23264 here for attempt 2.
-    assert [call["max_tokens"] for call in diff_calls] == [baseline_cap] * len(diff_calls)
+    assert [call["max_tokens"] for call in diff_calls] == [_expected_cap(c) for c in diff_calls]
+    assert diff_calls[-1]["max_tokens"] < diff_calls[0]["max_tokens"]
 
 
 def test_run_verify_prints_the_plan_a_run_sealed(tmp_path: Path) -> None:

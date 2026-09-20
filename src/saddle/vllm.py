@@ -441,6 +441,17 @@ def _model_ids(data: object) -> list[str]:
     return ids
 
 
+def _model_context(data: object, model: str) -> int | None:
+    """`max_model_len` of the served `model` from a /models envelope; None if unreported."""
+    if model not in _model_ids(data):
+        return None
+    for item in data["data"]:  # type: ignore[index]  # _model_ids validated the shape
+        if item["id"] == model:
+            value = item.get("max_model_len")
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+    return None  # pragma: no cover -- unreachable: the id was in _model_ids
+
+
 def _checked_json(response: httpx.Response) -> Any:
     """Map error statuses to errors; parse the JSON body otherwise."""
     if response.status_code in (401, 403):
@@ -618,14 +629,21 @@ class VllmClient:
             msg = f"request failed: {exc}"
             raise VllmRequestError(msg) from exc
 
-    def list_models(self) -> list[str]:
-        """GET /models with a short timeout; return served model ids."""
+    def _models(self) -> Any:
         try:
             response = self._client.get("/models", timeout=PREFLIGHT_TIMEOUT)
         except httpx.HTTPError as exc:
             msg = f"request failed: {exc}"
             raise VllmRequestError(msg) from exc
-        return _model_ids(_checked_json(response))
+        return _checked_json(response)
+
+    def list_models(self) -> list[str]:
+        """GET /models with a short timeout; return served model ids."""
+        return _model_ids(self._models())
+
+    def max_model_len(self) -> int | None:
+        """The served model's context length as vLLM reports it, or None (T6-17)."""
+        return _model_context(self._models(), self._model)
 
     def close(self) -> None:
         self._client.close()
