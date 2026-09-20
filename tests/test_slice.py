@@ -240,9 +240,12 @@ def test_apply_diff_that_does_not_match_the_tree_raises(tmp_path: Path) -> None:
     predecessor left behind, which the restore now makes apply."""
     _git_repo(tmp_path)
     diff = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 9\n+x = 2\n"
-    expected = f"worker diff did not apply cleanly in {str(tmp_path)!r}"
-    with pytest.raises(RuntimeError, match=re.escape(expected)):
+    expected = f"worker diff did not apply cleanly in {str(tmp_path)!r} (last rung three-way: "
+    # T6-27: the failure names the last rung and git's last stderr line, so
+    # the attempt's record says which line git rejected, not only that it did.
+    with pytest.raises(RuntimeError, match=re.escape(expected) + r"error: .*") as caught:
         _apply_diff(tmp_path, diff)
+    assert "\n" not in str(caught.value)
     assert (tmp_path / "n.py").read_text() == "x = 1\n"
 
 
@@ -3236,3 +3239,135 @@ def test_run_slice_truncated_attempt_keeps_its_partial_reasoning(tmp_path: Path)
     assert truncated["max_tokens"] == 4096
     assert all(s["finish_reason"] == "length" for s in truncated["samples"])
     assert verify_journal(journal) == []
+
+
+def test_every_attempt_sidecar_carries_the_call_and_the_diff(tmp_path: Path) -> None:
+    """T6-27 known-good, end to end. Attempt 1 fails its gate, attempt 2
+    seals. Both sidecars retain the diff text, the prompt, the seed, the
+    temperature, the start time and the wall of the call that drew them,
+    beside the hashes; both worker spans carry an argv that names the
+    attempt and the prompt's hash, so their `args_hash` differ; every
+    span, tool or agent, has a `started_at`. Known-bad, the pre-T6-27
+    shape: an empty argv hashing to sha256("[]") and no absolute time.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        prompt = f"fix f ({'retry' if failure else 'first'})"
+        return DiffProposal(
+            BAD_DIFF if failure is None else FIX_DIFF,
+            "thought",
+            prompt=prompt,
+            seed=seed,
+            temperature=0.7,
+            started_at="2026-09-20T17:30:00+00:00",
+            wall_s=12.5,
+        )
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+        settings={"model": "qwen3.8-27b", "server": "0.28.0"},
+    )
+    assert result.passed is True, result.transcript
+    spans = read_spans(journal)
+    assert all(s.started_at for s in spans), [s.name for s in spans if not s.started_at]
+    workers = [s for s in spans if s.name == "worker:n1"]
+    assert [s.argv[:3] for s in workers] == [
+        ["worker", "n1", "attempt=1"],
+        ["worker", "n1", "attempt=2"],
+    ]
+    empty = hashlib.sha256(b"[]").hexdigest()
+    assert empty not in {s.args_hash for s in workers}
+    assert len({s.args_hash for s in workers}) == 2
+    first, second = (_sidecar(journal, s) for s in workers)
+    assert first["attempt"] == 1
+    assert first["diff_hash"] == hashlib.sha256(BAD_DIFF.encode()).hexdigest()
+    assert first["samples"][0]["diff"] == BAD_DIFF
+    assert first["samples"][0]["seed"] == 0
+    assert first["samples"][0]["prompt"] == "fix f (first)"
+    assert workers[0].argv[3] == "prompt_sha256=" + hashlib.sha256(b"fix f (first)").hexdigest()
+    assert second["diff"] == FIX_DIFF
+    assert (second["seed"], second["temperature"], second["wall_s"]) == (
+        PROPOSAL_SAMPLES,
+        0.7,
+        12.5,
+    )
+    assert second["started_at"] == "2026-09-20T17:30:00+00:00"
+    run = next(s for s in spans if s.name == "run")
+    assert run.argv == ["run", "model=qwen3.8-27b", "server=0.28.0"]
+    assert run.started_at == "2026-09-16T00:00:00+00:00"
+    assert verify_journal(journal) == []
+
+
+def test_a_recorded_attempt_replays_to_the_same_diff_hash(tmp_path: Path) -> None:
+    """T6-27 known-good for the contract's purpose: a fake client keyed on
+    (prompt, seed, temperature) handed the sidecar's own fields reproduces
+    the sealed diff hash. Known-bad: with the seed withheld the replay is a
+    different draw.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    by_seed = {0: GOOD_DIFF, 1: SLOPPY_DIFF, 2: GOOD_DIFF}
+
+    def model(prompt: str, seed: int, temperature: float) -> str:
+        return by_seed[seed] if prompt.startswith("fix") and temperature == 0.7 else BAD_DIFF
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(
+            model("fix f", seed, 0.7), "", prompt="fix f", seed=seed, temperature=0.7
+        )
+
+    assert run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    ).passed
+    sealed = _sidecar(journal, next(s for s in read_spans(journal) if s.name == "worker:n1"))
+    replayed = model(sealed["prompt"], sealed["seed"], sealed["temperature"])
+    assert hashlib.sha256(replayed.encode()).hexdigest() == sealed["diff_hash"]
+    other = model(sealed["prompt"], 1, sealed["temperature"])
+    assert hashlib.sha256(other.encode()).hexdigest() != sealed["diff_hash"]
+
+
+def test_failed_worker_call_sidecar_keeps_the_call_the_client_attached(tmp_path: Path) -> None:
+    """T6-27: a transport failure's sidecar carries prompt, seed, temperature
+    and start from the error's `evidence`, and the span's argv names the
+    prompt's hash, so the 2494 s timeout of round 3d would not be blank."""
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        if failure is None:
+            return DiffProposal(BAD_DIFF, "", prompt="p0", seed=seed, temperature=0.7)
+        exc = VllmRequestError("request failed: timed out")
+        exc.evidence = {
+            "prompt": "p1",
+            "seed": seed,
+            "temperature": 0.7,
+            "started_at": "t",
+            "wall_s": 1800.0,
+        }
+        raise exc
+
+    with pytest.raises(VllmRequestError):
+        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run", (), task_hash=""))
+    workers = [s for s in read_spans(journal) if s.name.startswith("worker:")]
+    sidecar = _sidecar(journal, workers[-1])
+    assert (sidecar["prompt"], sidecar["seed"], sidecar["wall_s"]) == (
+        "p1",
+        PROPOSAL_SAMPLES,
+        1800.0,
+    )
+    assert workers[-1].argv[3] == "prompt_sha256=" + hashlib.sha256(b"p1").hexdigest()

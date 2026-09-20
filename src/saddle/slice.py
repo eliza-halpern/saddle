@@ -32,7 +32,7 @@ from saddle.evidence import (
     restore_baseline,
     run_argv,
     run_shell,
-    run_stdin,
+    run_stdin_capture,
     snapshot_baseline,
     snapshot_tree,
 )
@@ -229,8 +229,9 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     if "@@ " not in diff:
         msg = f"worker diff has a header but no hunk ('@@ ' marker) in {str(workdir)!r}"
         raise RuntimeError(msg)
+    stderr = ""
     for mode, flags in _APPLY_MODES:
-        exit_code = run_stdin(
+        exit_code, stderr = run_stdin_capture(
             ["git", "apply", "--index", "--recount", *flags, "-"],
             workdir,
             diff,
@@ -238,7 +239,12 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
         )
         if exit_code == 0:
             return mode
-    msg = f"worker diff did not apply cleanly in {str(workdir)!r}"
+    # The last rung's stderr rides in the failure (T6-27): the tool spans
+    # carry each rung's, but the attempt's own record used to say only
+    # "did not apply", and a reader had to go and find which line git
+    # rejected.
+    why = stderr.strip().splitlines()[-1] if stderr.strip() else "no stderr"
+    msg = f"worker diff did not apply cleanly in {str(workdir)!r} (last rung {mode}: {why})"
     raise RuntimeError(msg)
 
 
@@ -337,10 +343,31 @@ def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
     return {
         "thinking": proposal.reasoning,
         "diff_hash": hashlib.sha256(proposal.diff.encode()).hexdigest(),
+        # The diff itself and the call that drew it (T6-27): a failed
+        # attempt's diff used to survive only as a hash, and no attempt
+        # could be replayed because its seed and temperature were not
+        # written down.
+        "diff": proposal.diff,
+        "prompt": proposal.prompt,
+        "seed": proposal.seed,
+        "temperature": proposal.temperature,
+        "started_at": proposal.started_at,
+        "wall_s": proposal.wall_s,
         "finish_reason": "stop",
         "usage": dict(proposal.usage),
         "max_tokens": proposal.max_tokens,
     }
+
+
+def _prompt_hash(prompt: str) -> str:
+    """sha256 of a worker prompt, or empty when there was none to hash."""
+    return hashlib.sha256(prompt.encode()).hexdigest() if prompt else ""
+
+
+def _call_evidence(exc: BaseException) -> dict[str, Any]:
+    """The call a failed worker request was, when the client attached it (T6-27)."""
+    evidence = getattr(exc, "evidence", None)
+    return dict(evidence) if isinstance(evidence, dict) else {}
 
 
 def _error_evidence(exc: BaseException) -> dict[str, Any]:
@@ -352,7 +379,7 @@ def _error_evidence(exc: BaseException) -> dict[str, Any]:
     sidecar names the exception type beside the detail (F21.12b): round
     3c's 1826 s timeout sealed four keys that could not say what it was.
     """
-    evidence: dict[str, Any] = {"error_type": type(exc).__name__}
+    evidence: dict[str, Any] = {"error_type": type(exc).__name__, **_call_evidence(exc)}
     if isinstance(exc, VllmResponseError):
         evidence.update(
             {
@@ -366,17 +393,31 @@ def _error_evidence(exc: BaseException) -> dict[str, Any]:
     return evidence
 
 
+@dataclass
+class _AttemptCtx:
+    """One attempt's identity for its seal (T6-27): id, clocks, number, prompt."""
+
+    worker_id: str
+    start: float
+    started_at: str
+    number: int
+    prompt_hash: str = ""
+
+
 def _seal_attempt(
     journal_path: Path,
     node_id: str,
     run_span_id: str,
-    worker_id: str,
-    start: float,
+    ctx: _AttemptCtx,
     exit_code: int,
     detail: str,
     evidence: Mapping[str, Any] | None = None,
 ) -> None:
     """Append one attempt's agent span under the run span, with its sidecar.
+
+    The span's argv names the attempt and the prompt's hash (T6-27):
+    every worker span used to be appended with an empty argv, so its
+    `args_hash` was the hash of `[]` and could not tell two calls apart.
 
     Every attempt, sealed or not, leaves `attempts/<span_id>.json` beside
     the journal (T6-12): round-3 T5 spent 160k output tokens on three
@@ -386,25 +427,27 @@ def _seal_attempt(
     """
     payload: dict[str, Any] = {
         "node_id": node_id,
-        "span_id": worker_id,
+        "span_id": ctx.worker_id,
+        "attempt": ctx.number,
         "exit_code": exit_code,
         "detail": detail,
         **(evidence or {}),
     }
-    attempt_hash = write_attempt_sidecar(journal_path, worker_id, payload)
+    attempt_hash = write_attempt_sidecar(journal_path, ctx.worker_id, payload)
     append_span(
         journal_path,
         build_span(
             node_id=node_id,
-            argv=[],
-            duration_ms=_elapsed_ms(start),
+            argv=["worker", node_id, f"attempt={ctx.number}", f"prompt_sha256={ctx.prompt_hash}"],
+            duration_ms=_elapsed_ms(ctx.start),
             exit_code=exit_code,
             detail=detail,
             kind="agent",
             name=f"worker:{node_id}",
             parent_id=run_span_id,
-            span_id=worker_id,
+            span_id=ctx.worker_id,
             attempt_hash=attempt_hash,
+            started_at=ctx.started_at,
         ),
     )
 
@@ -584,6 +627,7 @@ async def _run_node(
         attempt += 1
         start = perf_counter()
         worker_id = uuid.uuid4().hex
+        ctx = _AttemptCtx(worker_id, start, _utcnow(), attempt)
         recorder = SpanRecorder(path=journal_path, node_id=node.id, parent_id=worker_id)
         try:
             if baseline is None:
@@ -615,24 +659,26 @@ async def _run_node(
                     # measured across runs rather than assumed.
                     sampling = f"{distinct} distinct of {PROPOSAL_SAMPLES} sample(s)"
                 else:
-                    # A retry is one draw; its seed follows the sample seeds.
-                    proposal = propose(node, failure, PROPOSAL_SAMPLES - 1 + attempt)
+                    # A retry is one draw; its seed follows the sample seeds
+                    # (0..k-1 for attempt 1, then k, k+1, ...).
+                    proposal = propose(node, failure, PROPOSAL_SAMPLES - 2 + attempt)
                     samples = [
                         {**_proposal_evidence(proposal), "outcome": "retry draw, gated in place"}
                     ]
             except VllmResponseError as exc:
+                ctx.prompt_hash = _prompt_hash(str(_call_evidence(exc).get("prompt", "")))
                 failure = f"Attempt {attempt} of {max_attempts}: worker call failed: {exc}"
                 _seal_attempt(
                     journal_path,
                     node.id,
                     run_span_id,
-                    worker_id,
-                    start,
+                    ctx,
                     1,
                     failure,
                     {**_error_evidence(exc), "samples": samples},
                 )
                 continue
+            ctx.prompt_hash = _prompt_hash(proposal.prompt)
             if proposal.diff in seen:
                 detail = (
                     f"attempt {attempt}/{max_attempts}: "
@@ -643,8 +689,7 @@ async def _run_node(
                     journal_path,
                     node.id,
                     run_span_id,
-                    worker_id,
-                    start,
+                    ctx,
                     1,
                     detail,
                     _proposal_evidence(proposal),
@@ -659,8 +704,7 @@ async def _run_node(
                     journal_path,
                     node.id,
                     run_span_id,
-                    worker_id,
-                    start,
+                    ctx,
                     1,
                     failure,
                     {**_proposal_evidence(proposal), "samples": samples},
@@ -702,8 +746,7 @@ async def _run_node(
                     journal_path,
                     node.id,
                     run_span_id,
-                    worker_id,
-                    start,
+                    ctx,
                     0,
                     detail,
                     {**_proposal_evidence(proposal), "samples": samples},
@@ -726,8 +769,7 @@ async def _run_node(
                 journal_path,
                 node.id,
                 run_span_id,
-                worker_id,
-                start,
+                ctx,
                 1,
                 f"attempt {attempt}/{max_attempts}: {len(failed_names)} gate(s) failed"
                 f": {', '.join(failed_names)}",
@@ -747,6 +789,9 @@ async def _run_node(
                 raise NodeUnappliableError(node.id, detail, exc.attempts, exc.failure) from exc
             raise NodeGateFailedError(exc.result, exc.attempts, exc.failure) from exc
         except BaseException as exc:
+            ctx.prompt_hash = ctx.prompt_hash or _prompt_hash(
+                str(_call_evidence(exc).get("prompt", ""))
+            )
             # A failure the loop does not retry (a transport error, a
             # cancelled task, a bug) still fails the node, and a failed
             # node leaves the tree at its baseline: round 3c's n2.r2 timed
@@ -757,8 +802,7 @@ async def _run_node(
                 journal_path,
                 node.id,
                 run_span_id,
-                worker_id,
-                start,
+                ctx,
                 1,
                 str(exc),
                 {**_error_evidence(exc), "samples": samples},
@@ -1081,6 +1125,7 @@ def _merge_gate(
     merge_ran = merge_command is not None and bool(proofs)
     if merge_command is not None and proofs:
         merge_start = perf_counter()
+        merge_started_at = _utcnow()
         merge_exit = run_shell(merge_command, workdir)
         timed_out = " (timed out)" if merge_exit == SHELL_TIMEOUT else ""
         append_span(
@@ -1093,6 +1138,7 @@ def _merge_gate(
                 detail=f"merge-time full suite: exit {merge_exit}{timed_out}",
                 name="merge-suite",
                 parent_id=run_span_id,
+                started_at=merge_started_at,
             ),
         )
     return merge_exit, merge_ran
@@ -1113,8 +1159,13 @@ def _seal_run(
     started: str,
     now: Callable[[], str],
     deadline_hit: bool = False,
+    settings: Mapping[str, str] | None = None,
 ) -> SliceResult:
     """Write the run's terminal span and verdict, and render its transcript.
+
+    `settings` (T6-27) are the run's knobs the journal never held -- served
+    model and server version, temperatures, context window -- sealed as
+    the run span's argv so rounds can be compared on more than faith.
 
     A run the deadline stopped (T6-9) seals exit code 3 and says so in
     the span, so `verify` and the transcript distinguish "ran out of
@@ -1145,9 +1196,10 @@ def _seal_run(
         journal_path,
         build_span(
             node_id="",
-            argv=[],
+            argv=["run", *(f"{key}={value}" for key, value in sorted((settings or {}).items()))],
             duration_ms=_elapsed_ms(run_start),
             exit_code=exit_code,
+            started_at=started,
             detail=(
                 ("deadline: " if deadline_hit else "") + f"{len(proofs)} proven, "
                 f"{len(failed_unexcused)} failed, "
@@ -1188,6 +1240,7 @@ def run_slice(
     now: Callable[[], str] = _utcnow,
     deadline_s: float | None = None,
     clock: Callable[[], float] = perf_counter,
+    settings: Mapping[str, str] | None = None,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
@@ -1264,6 +1317,7 @@ def run_slice(
                 kind="agent",
                 name="resume",
                 parent_id=run_span_id,
+                started_at=started,
             ),
         )
     remaining, ever_failed, replanned_from, deadline_hit = _schedule_until_done(
@@ -1298,4 +1352,5 @@ def run_slice(
         started=started,
         now=now,
         deadline_hit=deadline_hit,
+        settings=settings,
     )

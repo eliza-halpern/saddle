@@ -128,10 +128,17 @@ def run_stdin(
     argv: Sequence[str], cwd: Path, text: str, *, recorder: SpanRecorder | None = None
 ) -> int:
     """Run `argv` with `text` on stdin; return its exit code."""
+    return run_stdin_capture(argv, cwd, text, recorder=recorder)[0]
+
+
+def run_stdin_capture(
+    argv: Sequence[str], cwd: Path, text: str, *, recorder: SpanRecorder | None = None
+) -> tuple[int, str]:
+    """Run `argv` with `text` on stdin; return its exit code and stderr (T6-27)."""
     start = perf_counter()
     proc = subprocess.run(argv, input=text, cwd=cwd, capture_output=True, text=True)
     _record(recorder, argv, start, proc)
-    return proc.returncode
+    return proc.returncode, proc.stderr
 
 
 def run_shell(

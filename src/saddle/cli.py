@@ -7,6 +7,7 @@ bounded recompile, plan confirmation, then the schedule-gate-seal path.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -22,7 +23,16 @@ from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
-from saddle.journal import read_entries, read_plans, read_records, read_spans, verify_journal
+from saddle.journal import (
+    JournalIssue,
+    SpanRecord,
+    attempt_sidecar_path,
+    read_entries,
+    read_plans,
+    read_records,
+    read_spans,
+    verify_journal,
+)
 from saddle.slice import DEADLINE_EXIT, ReplanFailedError, run_slice
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
@@ -152,6 +162,10 @@ class RunOptions:
     context_window: int = DEFAULT_CONTEXT_WINDOW
     recovery_temperature: float | None = None
     deadline_s: float | None = None
+    # Sealed on the run span (T6-27): rounds were compared on the
+    # assumption the model never moved, and nothing could have said if it had.
+    model: str = DEFAULT_MODEL
+    server_version: str = "unknown"
 
 
 def worker_temperature(options: RunOptions, failure: str | None) -> float:
@@ -548,6 +562,14 @@ def _emit_valid_dag(
     raise RunError(msg)
 
 
+def served_version(client: VllmClient) -> str:
+    """The server's version for the run span (T6-27); `unknown` when it will not say."""
+    try:
+        return client.server_version() or "unknown"
+    except VllmRequestError:
+        return "unknown"
+
+
 def check_server(client: VllmClient, *, base_url: str, model: str) -> list[str]:
     """Preflight: reachability, key, model match. Returns served ids."""
     try:
@@ -654,6 +676,16 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             # Message unobserved: the scheduler swallows it with a bare continue.
             raise ReplanFailedError(str(exc)) from exc  # pragma: no mutate
 
+    settings = {
+        "model": options.model,
+        "server": options.server_version,
+        "context_window": str(options.context_window),
+        "temperature": str(options.temperature),
+        "sample_temperature": str(options.sample_temperature),
+        "recovery_temperature": str(worker_temperature(options, "retry")),
+        "reasoning_effort": options.reasoning_effort,
+        "worker_effort": options.worker_effort or "node budget",
+    }
     try:
         result = run_slice(
             options.task,
@@ -663,6 +695,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             propose=propose,
             replan=replan,
             deadline_s=options.deadline_s,
+            settings=settings,
         )
     except (ValueError, RuntimeError) as exc:
         stdout.write(f"error: {exc}\n")
@@ -771,6 +804,88 @@ def run_verify(journal: Path, *, stdout: IO[str]) -> int:
     return 0
 
 
+EXPLAIN_REDACTED: Final = ("prompt", "diff", "thinking")
+
+
+def _explain_attempt(journal: Path, span: SpanRecord) -> list[str]:
+    """One worker span's redacted line: times, call knobs, verdict."""
+    when = span.started_at or "?"
+    knobs = " ".join(span.argv[2:])
+    line = f"  {when}  {span.duration_ms / 1000:8.1f}s  exit {span.exit_code}  {knobs}"
+    lines = [line, f"    {span.detail}"]
+    path = attempt_sidecar_path(journal, span.span_id)
+    if not span.attempt_hash or not path.exists():
+        return lines
+    evidence = json.loads(path.read_text())
+    call = {k: evidence.get(k) for k in ("seed", "temperature", "wall_s", "finish_reason")}
+    usage = evidence.get("usage") or {}
+    call["completion_tokens"] = usage.get("completion_tokens")
+    call["cached_tokens"] = usage.get("cached_tokens")
+    shown = ", ".join(f"{k}={v}" for k, v in call.items() if v is not None)
+    samples = evidence.get("samples") or []
+    outcomes = ", ".join(str(s.get("outcome", "?")) for s in samples if isinstance(s, dict))
+    lines.append(f"    sidecar {span.span_id[:12]}: {shown or 'no call details'}")
+    if outcomes:
+        lines.append(f"    samples: {outcomes}")
+    return lines
+
+
+def run_explain(journal: Path, *, attempt: str | None, stdout: IO[str]) -> int:
+    """Explain a run from its journal (T6-27): times, calls, verdicts, findings.
+
+    The default tier is redacted -- identifiers, start times, durations,
+    seeds, temperatures, token counts, gate verdicts, verify findings --
+    and never prints a prompt, a diff or the model's reasoning. `attempt`
+    names one worker span (a prefix of its id) and prints that attempt's
+    raw sidecar in full, which does contain them.
+    """
+    issues: list[JournalIssue] = verify_journal(journal)
+    try:
+        spans = read_spans(journal)
+    except ValueError as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    if attempt is not None:
+        matches = [s for s in spans if s.kind == "agent" and s.span_id.startswith(attempt)]
+        if len(matches) != 1:
+            stdout.write(f"error: {len(matches)} attempt(s) match {attempt!r}\n")
+            return 1
+        path = attempt_sidecar_path(journal, matches[0].span_id)
+        if not path.exists():
+            stdout.write(f"error: no sidecar for {matches[0].span_id}\n")
+            return 1
+        stdout.write(json.dumps(json.loads(path.read_text()), indent=2, sort_keys=True) + "\n")
+        return 0
+    stdout.write(f"journal: {journal}\n")
+    stdout.write(
+        "verify: "
+        + (", ".join(f"{i.code}@line {i.line}" for i in issues) if issues else "clean")
+        + "\n"
+    )
+    for plan in read_plans(journal):
+        stdout.write(f"plan{' replacing ' + plan.replaces if plan.replaces else ''}:\n")
+        for node in plan.nodes:
+            tools = ", ".join(node.allowed_tools) if node.allowed_tools else "not recorded"
+            stdout.write(f"  {node.id} {node.kind} budget={node.reasoning_budget} tools: {tools}\n")
+    runs = [s for s in spans if s.name == "run"]
+    for run in runs:
+        stdout.write(
+            f"run: {run.started_at or '?'} {run.duration_ms / 1000:.1f}s exit {run.exit_code}\n"
+        )
+        for part in run.argv[1:]:
+            stdout.write(f"  {part}\n")
+        stdout.write(f"  {run.detail}\n")
+    workers = [s for s in spans if s.kind == "agent" and s.name.startswith("worker:")]
+    tools_by_node: dict[str, int] = {}
+    for span in spans:
+        if span.kind == "tool":
+            tools_by_node[span.node_id] = tools_by_node.get(span.node_id, 0) + 1
+    for span in workers:
+        stdout.write(f"{span.name} ({tools_by_node.get(span.node_id, 0)} tool span(s) on node)\n")
+        stdout.write("".join(f"{line}\n" for line in _explain_attempt(journal, span)))
+    return 0
+
+
 def run_tail(
     journal: Path,
     *,
@@ -845,6 +960,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=".saddle/proofs.jsonl",
         help="Journal path (default: .saddle/proofs.jsonl).",
     )
+    explain = sub.add_parser("explain", help="Explain a run from its journal (T6-27).")
+    explain.add_argument(
+        "journal",
+        nargs="?",
+        default=".saddle/proofs.jsonl",
+        help="Journal path (default: .saddle/proofs.jsonl).",
+    )
+    explain.add_argument(
+        "--attempt",
+        help="Print one attempt's raw sidecar (prefix of its span id); includes prompt and diff.",
+    )
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
     run.add_argument("--repo", default=".", help="Directory to work in (repo created if missing).")
@@ -918,10 +1044,12 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor", "dag", "verify", "tail", "up"):
+    if args.command not in ("run", "doctor", "dag", "verify", "tail", "up", "explain"):
         return 0
     if args.command == "verify":
         return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
+    if args.command == "explain":
+        return run_explain(Path(args.journal), attempt=args.attempt, stdout=stdout or sys.stdout)
     if args.command == "tail":
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     key = _api_key()
@@ -985,6 +1113,8 @@ def main(
             context_window=server_context_window(client, args.context_window),
             recovery_temperature=args.recovery_temperature,
             deadline_s=args.deadline,
+            model=args.model,
+            server_version=served_version(client),
         )
         return run_task(
             options,

@@ -7,6 +7,7 @@ import io
 import json
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -38,9 +39,11 @@ from saddle.cli import (
     render_dag_plan,
     run_dag,
     run_doctor,
+    run_explain,
     run_tail,
     run_task,
     run_verify,
+    served_version,
     server_context_window,
     worker_max_tokens,
 )
@@ -58,6 +61,7 @@ from saddle.journal import (
     build_span,
     read_records,
     read_spans,
+    write_attempt_sidecar,
 )
 from saddle.slice import PROPOSAL_SAMPLES, format_attempt_failure
 from saddle.vllm import (
@@ -193,15 +197,19 @@ def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -
     really was asked k times and really did say the same thing.
     """
     pending: list[int] = [0]
+    # The k draws of one sampling round arrive concurrently (T6-25); the
+    # counter and the script are shared state, so the handler serialises.
+    lock = threading.Lock()
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        seen.append(payload)
-        if _is_diff_request(payload) and pending[0] < PROPOSAL_SAMPLES - 1:
-            pending[0] += 1
-            return script[0]
-        pending[0] = 0
-        return script.pop(0)
+        with lock:
+            seen.append(payload)
+            if _is_diff_request(payload) and pending[0] < PROPOSAL_SAMPLES - 1:
+                pending[0] += 1
+                return script[0]
+            pending[0] = 0
+            return script.pop(0)
 
     return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
 
@@ -1219,6 +1227,9 @@ class _FakeClient:
         return [self._model]
 
     def max_model_len(self) -> int | None:
+        return None
+
+    def server_version(self) -> str | None:
         return None
 
 
@@ -2799,3 +2810,151 @@ def test_run_task_flushes_the_plan_line_before_any_node_runs(tmp_path: Path) -> 
     )
     assert code == 0
     assert any(value.endswith("Plan: 1 node(s): n1\n") for value in flushed_at)
+
+
+def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> None:
+    """T6-27: model, server version, temperatures, window and efforts are
+    the run span's argv, so two rounds can be compared on record."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    client = _scripted_client([_emit_response({"nodes": [_node_dict()]}), _diff_response()], seen)
+    code, _ = _run(_options(tmp_path, model="m", server_version="0.28.0"), client)
+    assert code == 0
+    run = next(s for s in read_spans(tmp_path / "proofs.jsonl") if s.name == "run")
+    assert run.argv == [
+        "run",
+        f"context_window={DEFAULT_CONTEXT_WINDOW}",
+        "model=m",
+        "reasoning_effort=medium",
+        "recovery_temperature=0.7",
+        "sample_temperature=0.7",
+        "server=0.28.0",
+        "temperature=0.0",
+        "worker_effort=node budget",
+    ]
+    # The k draws arrive in any order (T6-25); each carries its own seed.
+    assert sorted(call["seed"] for call in seen[1:]) == list(range(PROPOSAL_SAMPLES))
+
+
+def test_served_version_is_unknown_when_the_server_will_not_say() -> None:
+    client, _ = _json_client_cli({"version": "0.28.0"})
+    assert served_version(client) == "0.28.0"
+    client, _ = _json_client_cli({})
+    assert served_version(client) == "unknown"
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        down_msg = "down"
+        raise httpx.ConnectError(down_msg)
+
+    down = VllmClient(api_key="k", transport=httpx.MockTransport(refuse))
+    assert served_version(down) == "unknown"
+
+
+def _json_client_cli(payload: Any) -> tuple[VllmClient, list[httpx.Request]]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=payload)
+
+    return VllmClient(api_key="k", transport=httpx.MockTransport(handler)), seen
+
+
+def test_run_explain_is_redacted_by_default_and_raw_for_one_attempt(tmp_path: Path) -> None:
+    """T6-27 known-good: the default tier names times, seeds, tokens and
+    verdicts and never a prompt, a diff or the reasoning; `--attempt`
+    prints one sidecar whole. Known-bad: an ambiguous or unknown attempt
+    prefix is refused, not guessed."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    client = _scripted_client([_emit_response({"nodes": [_node_dict()]}), _diff_response()], seen)
+    assert _run(_options(tmp_path, server_version="0.28.0"), client)[0] == 0
+    journal = tmp_path / "proofs.jsonl"
+    out = io.StringIO()
+    assert run_explain(journal, attempt=None, stdout=out) == 0
+    body = out.getvalue()
+    assert body.startswith(
+        f"journal: {journal}\nverify: clean\nplan:\n  n1 impl budget=low tools: "
+    )
+    assert "server=0.28.0" in body
+    assert "worker:n1 (" in body
+    assert "attempt=1 prompt_sha256=" in body
+    assert "seed=0" in body
+    assert "samples: 0 gate(s) failed" in body
+    assert TASK not in body
+    assert "diff --git" not in body
+    worker = next(s for s in read_spans(journal) if s.name == "worker:n1")
+    out = io.StringIO()
+    assert run_explain(journal, attempt=worker.span_id[:8], stdout=out) == 0
+    raw = json.loads(out.getvalue())
+    assert TASK in raw["prompt"]
+    assert raw["diff"].startswith("diff --git")
+    out = io.StringIO()
+    assert run_explain(journal, attempt="zzzz", stdout=out) == 1
+    assert out.getvalue() == "error: 0 attempt(s) match 'zzzz'\n"
+    out = io.StringIO()
+    assert run_explain(journal, attempt="", stdout=out) == 1
+    assert out.getvalue().startswith("error: 2 attempt(s) match ''")
+
+
+def test_explain_command_is_wired_and_needs_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    journal = tmp_path / "proofs.jsonl"
+    _sealed_journal(journal)
+    out = io.StringIO()
+    assert main(["explain", str(journal)], stdout=out) == 0
+    assert out.getvalue().startswith(f"journal: {journal}\nverify: clean\n")
+
+
+def test_run_explain_handles_spans_without_sidecars_and_bare_sidecars(tmp_path: Path) -> None:
+    """T6-27 edges: a worker span sealed before T6-12 has no sidecar and is
+    listed from its span alone; a sidecar with no samples prints no
+    samples line; `--attempt` on a span whose sidecar file is gone is an
+    error, not a crash."""
+    journal = tmp_path / "proofs.jsonl"
+    append_span(
+        journal,
+        build_span(
+            node_id="n1",
+            argv=[],
+            duration_ms=10,
+            exit_code=1,
+            detail="old shape",
+            kind="agent",
+            name="worker:n1",
+            span_id="a" * 32,
+        ),
+    )
+    attempt_hash = write_attempt_sidecar(journal, "b" * 32, {"seed": 4, "samples": []})
+    append_span(
+        journal,
+        build_span(
+            node_id="n1",
+            argv=["worker", "n1", "attempt=2", "prompt_sha256=x"],
+            duration_ms=10,
+            exit_code=0,
+            detail="sealed",
+            kind="agent",
+            name="worker:n1",
+            span_id="b" * 32,
+            attempt_hash=attempt_hash,
+            started_at="2026-09-20T18:00:00+00:00",
+        ),
+    )
+    out = io.StringIO()
+    assert run_explain(journal, attempt=None, stdout=out) == 0
+    body = out.getvalue()
+    assert f"  ?  {0.01:8.1f}s  exit 1  \n    old shape\n" in body
+    assert "sidecar bbbbbbbbbbbb: seed=4\n" in body
+    assert "samples:" not in body
+    out = io.StringIO()
+    assert run_explain(journal, attempt="aaaa", stdout=out) == 1
+    assert out.getvalue() == f"error: no sidecar for {'a' * 32}\n"
+    # A journal that fails to load is reported, not raised through.
+    attempt_sidecar_path(journal, "b" * 32).unlink()
+    out = io.StringIO()
+    assert run_explain(journal, attempt=None, stdout=out) == 1
+    assert out.getvalue().startswith("error: journal ")

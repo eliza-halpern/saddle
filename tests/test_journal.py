@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from saddle.journal import (
     read_spans,
     rebuild_proven,
     scrub_thinking,
+    started_before,
     tool_spans_by_node,
     tool_spans_for_node,
     verify_journal,
@@ -942,3 +944,110 @@ def test_verify_rejects_a_malformed_plan_line(tmp_path: Path) -> None:
         1,
         "line is not a plan record",
     )
+
+
+def test_span_started_at_is_sealed_when_given_and_absent_when_not() -> None:
+    """T6-27 known-good: a span built with `started_at` carries it under the
+    hash, so editing it fails verification; known-bad for compatibility:
+    a span built without one has no such key, which is what keeps every
+    pre-T6-27 journal (and the pre-basis fixture) verifying.
+    """
+    when = "2026-09-20T17:22:00+00:00"
+    stamped = build_span(
+        node_id="n1", argv=["git", "status"], duration_ms=5, exit_code=0, detail="", started_at=when
+    )
+    assert stamped.started_at == when
+    payload = stamped.model_dump(exclude={"record_hash"}, exclude_unset=True)
+    assert payload["started_at"] == when
+
+    def digest(p: dict[str, object]) -> str:
+        return hashlib.sha256(
+            json.dumps(p, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    assert digest(payload) == stamped.record_hash
+    assert digest({**payload, "started_at": "2026-09-20T17:23:00+00:00"}) != stamped.record_hash
+    bare = build_span(node_id="n1", argv=["git", "status"], duration_ms=5, exit_code=0, detail="")
+    assert "started_at" not in bare.model_dump(exclude_unset=True)
+
+
+def test_recorder_stamps_tool_spans_with_the_start_derived_from_its_clock(tmp_path: Path) -> None:
+    """T6-27: a tool span's start is the recorder's clock less its duration."""
+    fixed = datetime(2026, 9, 20, 17, 22, 10, tzinfo=UTC)
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(journal, "n1", None, clock=lambda: fixed)
+    recorder.record(argv=["git", "status"], duration_ms=2500, exit_code=0, detail="")
+    (span,) = read_spans(journal)
+    assert span.started_at == "2026-09-20T17:22:07.500000+00:00"
+    assert started_before(0, fixed) == fixed.isoformat()
+    assert verify_journal(journal) == []
+
+
+def test_plan_record_carries_each_nodes_allowed_tools() -> None:
+    """T6-27: F21.13d could not be settled because the plan omitted the tools."""
+    node = _plan_node()
+    plan = build_plan([node], task_hash="t")
+    assert plan.nodes[0].allowed_tools == list(node.execution_constraints.allowed_tools)
+    assert plan.nodes[0].allowed_tools
+
+
+def test_verify_flags_a_retained_diff_that_does_not_hash_to_its_diff_hash(tmp_path: Path) -> None:
+    """T6-27 known-bad: a sidecar retaining a diff whose sha256 is not the
+    sealed `diff_hash` is a sidecar telling two stories, and verify says
+    so with its own code. Known-good: a matching diff verifies clean, and a
+    sidecar with no retained diff (pre-T6-27) is not judged.
+    """
+    journal = tmp_path / "proofs.jsonl"
+    diff = "diff --git a/n.py b/n.py\n"
+    good: dict[str, object] = {"diff": diff, "diff_hash": hashlib.sha256(diff.encode()).hexdigest()}
+
+    def seal(evidence: dict[str, object], span_id: str) -> None:
+        attempt_hash = write_attempt_sidecar(journal, span_id, evidence)
+        append_span(
+            journal,
+            build_span(
+                node_id="n1",
+                argv=[],
+                duration_ms=1,
+                exit_code=1,
+                detail="x",
+                kind="agent",
+                name="worker:n1",
+                span_id=span_id,
+                attempt_hash=attempt_hash,
+            ),
+        )
+
+    seal(good, "a" * 32)
+    seal({"diff_hash": good["diff_hash"]}, "b" * 32)
+    assert verify_journal(journal) == []
+    seal({**good, "diff": diff + "+x\n"}, "c" * 32)
+    issues = verify_journal(journal)
+    assert [issue.code for issue in issues] == ["sidecar-diff-hash"]
+    assert issues[0].line == 3
+
+
+def test_sidecar_diff_check_ignores_sidecars_that_are_not_json_objects(tmp_path: Path) -> None:
+    """T6-27: the retained-diff check judges only a JSON object; a sidecar
+    that is not JSON, or is a JSON list, hashes as sealed and is left to
+    the sidecar-hash check alone."""
+    journal = tmp_path / "proofs.jsonl"
+    for span_id, raw in (("a" * 32, b"not json"), ("b" * 32, b"[1, 2]")):
+        path = attempt_sidecar_path(journal, span_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        append_span(
+            journal,
+            build_span(
+                node_id="n1",
+                argv=[],
+                duration_ms=1,
+                exit_code=1,
+                detail="x",
+                kind="agent",
+                name="worker:n1",
+                span_id=span_id,
+                attempt_hash=hashlib.sha256(raw).hexdigest(),
+            ),
+        )
+    assert verify_journal(journal) == []

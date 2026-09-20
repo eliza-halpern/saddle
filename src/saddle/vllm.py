@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
+from time import perf_counter
 from types import TracebackType
 from typing import Any, Final
 
@@ -80,7 +82,15 @@ line       ::= [^\n]*
 
 
 class VllmError(Exception):
-    """Base error for guided-emission failures."""
+    """Base error for guided-emission failures.
+
+    `evidence` (T6-27) is what the failed call was: prompt, seed,
+    temperature, start time and wall, attached by the method that made the
+    call so the attempt's sidecar can hold them whatever the failure type.
+    Round 3d's 2494 s timeout sealed nothing the client knew.
+    """
+
+    evidence: dict[str, Any]
 
 
 class VllmAuthError(VllmError):
@@ -141,6 +151,12 @@ class DiffProposal:
     reasoning: str
     usage: dict[str, int] = field(default_factory=dict, compare=False)
     max_tokens: int | None = field(default=None, compare=False)
+    # The call that produced it (T6-27): enough to replay the draw.
+    prompt: str = field(default="", compare=False)
+    seed: int | None = field(default=None, compare=False)
+    temperature: float | None = field(default=None, compare=False)
+    started_at: str = field(default="", compare=False)
+    wall_s: float | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -576,7 +592,27 @@ class VllmClient:
             reasoning_effort=reasoning_effort,
             seed=seed,
         )
-        return _parse_diff_response(self._post(payload), max_tokens=max_tokens)
+        started_at = datetime.now(UTC).isoformat()
+        start = perf_counter()
+        try:
+            proposal = _parse_diff_response(self._post(payload), max_tokens=max_tokens)
+        except VllmError as exc:
+            exc.evidence = {
+                "prompt": prompt,
+                "seed": seed,
+                "temperature": temperature,
+                "started_at": started_at,
+                "wall_s": round(perf_counter() - start, 3),
+            }
+            raise
+        return replace(
+            proposal,
+            prompt=prompt,
+            seed=seed,
+            temperature=temperature,
+            started_at=started_at,
+            wall_s=round(perf_counter() - start, 3),
+        )
 
     def complete(
         self,
@@ -669,6 +705,17 @@ class VllmClient:
     def list_models(self) -> list[str]:
         """GET /models with a short timeout; return served model ids."""
         return _model_ids(self._models())
+
+    def server_version(self) -> str | None:
+        """GET /version; the server's version string, or None when it has none (T6-27)."""
+        try:
+            response = self._client.get("/version", timeout=PREFLIGHT_TIMEOUT)
+        except httpx.HTTPError as exc:
+            msg = f"request failed: {exc}"
+            raise VllmRequestError(msg) from exc
+        data = _checked_json(response)
+        version = data.get("version") if isinstance(data, dict) else None
+        return version if isinstance(version, str) and version else None
 
     def max_model_len(self) -> int | None:
         """The served model's context length as vLLM reports it, or None (T6-17)."""

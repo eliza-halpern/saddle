@@ -888,3 +888,43 @@ def test_diff_proposal_carries_usage_and_cap_without_changing_equality() -> None
     assert proposal.usage == {"completion_tokens": 77}
     assert proposal.max_tokens == 999
     assert proposal == DiffProposal(diff=REAL_DIFF, reasoning="decomposing the task...")
+
+
+def test_diff_proposal_carries_the_call_that_produced_it() -> None:
+    """T6-27 known-good: prompt, seed, temperature, start and wall ride on
+    the proposal so the sidecar can replay the draw; equality still
+    compares the two text fields only."""
+    client, _ = _json_client(_ok_body(content=REAL_DIFF))
+    proposal = client.propose_diff("Do x.", seed=3, temperature=0.7)
+    assert (proposal.prompt, proposal.seed, proposal.temperature) == ("Do x.", 3, 0.7)
+    assert proposal.started_at.endswith("+00:00")
+    assert proposal.wall_s is not None
+    assert proposal.wall_s >= 0
+    assert proposal == DiffProposal(diff=REAL_DIFF, reasoning="decomposing the task...")
+
+
+def test_failed_diff_call_carries_its_evidence() -> None:
+    """T6-27 known-bad: a transport failure has no envelope, so what the
+    client knew (the call) is attached to the error instead of lost."""
+    client = _failing_client(httpx.ReadTimeout("timed out"))
+    with pytest.raises(VllmRequestError) as caught:
+        client.propose_diff("Do x.", seed=1, temperature=0.7)
+    evidence = caught.value.evidence
+    assert (evidence["prompt"], evidence["seed"], evidence["temperature"]) == ("Do x.", 1, 0.7)
+    assert evidence["started_at"].endswith("+00:00")
+    assert evidence["wall_s"] >= 0
+    client, _ = _json_client(_ok_body(content=None, finish_reason="length"))
+    with pytest.raises(VllmResponseError) as truncated:
+        client.propose_diff("Do y.", seed=2)
+    assert truncated.value.evidence["seed"] == 2
+
+
+def test_server_version_reads_the_version_endpoint() -> None:
+    """T6-27: the served version, or None when the endpoint has none."""
+    client, seen = _json_client({"version": "0.28.0"})
+    assert client.server_version() == "0.28.0"
+    assert seen[0].url.path.endswith("/version")
+    client, _ = _json_client({})
+    assert client.server_version() is None
+    with pytest.raises(VllmRequestError, match="request failed"):
+        _failing_client(httpx.ConnectError("down")).server_version()

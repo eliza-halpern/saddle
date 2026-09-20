@@ -14,8 +14,9 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -78,6 +79,10 @@ class PlanNode(BaseModel):
     reasoning_budget: str
     max_context_tokens: int
     node_hash: str
+    # What the node may do (T6-27): round 3d's F21.13d could not say
+    # whether the plan declared `lint`, because nothing recorded it.
+    # Unset on plans sealed before T6-27.
+    allowed_tools: list[str] = []
 
 
 class PlanRecord(BaseModel):
@@ -113,6 +118,11 @@ class SpanRecord(BaseModel):
     duration_ms: int
     exit_code: int
     detail: str
+    # UTC ISO-8601 start of the span (T6-27). Round 3d's journal held no
+    # absolute time anywhere, so nothing in it could be joined to a server
+    # log, and three concurrent draws had no recoverable order. Unset on
+    # spans sealed before T6-27.
+    started_at: str = ""
     # sha256 of the attempt sidecar `attempts/<span_id>.json` beside the
     # journal (T6-12): the attempt's reasoning, finish reason, token usage,
     # the cap it was sent, and its failure. Empty for tool spans and for
@@ -229,8 +239,9 @@ def build_span(
     parent_id: str | None = None,
     span_id: str | None = None,
     attempt_hash: str = "",
+    started_at: str = "",
 ) -> SpanRecord:
-    """Seal one span: scrubbed argv, hashed args, capped detail."""
+    """Seal one span: scrubbed argv, hashed args, capped detail, start time."""
     scrubbed = [scrub_thinking(part) for part in argv]
     encoded_args = json.dumps(scrubbed).encode()
     payload: dict[str, Any] = {
@@ -246,6 +257,8 @@ def build_span(
         "exit_code": exit_code,
         "detail": scrub_thinking(detail)[:MAX_SPAN_DETAIL_CHARS],
     }
+    if started_at:
+        payload["started_at"] = started_at
     if attempt_hash:
         payload["attempt_hash"] = attempt_hash
     return SpanRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
@@ -265,6 +278,7 @@ def build_plan(nodes: Sequence[Node], *, task_hash: str, replaces: str = "") -> 
                 "reasoning_budget": node.execution_constraints.reasoning_budget,
                 "max_context_tokens": node.execution_constraints.max_context_tokens,
                 "node_hash": hash_node(node),
+                "allowed_tools": list(node.execution_constraints.allowed_tools),
             }
             for node in nodes
         ],
@@ -327,6 +341,15 @@ def append_plan(path: Path, plan: PlanRecord) -> None:
     _append_line(path, json.dumps(plan.model_dump(exclude_unset=True), sort_keys=True))
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def started_before(duration_ms: int, now: datetime) -> str:
+    """The UTC ISO-8601 instant `duration_ms` before `now` (T6-27)."""
+    return (now - timedelta(milliseconds=duration_ms)).isoformat()
+
+
 @dataclass(frozen=True)
 class SpanRecorder:
     """Journal sink for one node's tool spans."""
@@ -334,6 +357,8 @@ class SpanRecorder:
     path: Path
     node_id: str
     parent_id: str | None = None
+    # Wall clock for `started_at` (T6-27); injectable so a test can pin it.
+    clock: Callable[[], datetime] = utc_now
 
     def record(
         self,
@@ -359,6 +384,7 @@ class SpanRecorder:
                 detail=detail,
                 name=name,
                 parent_id=self.parent_id,
+                started_at=started_before(duration_ms, self.clock()),
             ),
         )
 
@@ -457,6 +483,17 @@ def _load_journal(
                             message=f"attempt sidecar for span {entry.span_id!r} {state}",
                         )
                     )
+                elif _sidecar_diff_mismatch(sidecar):
+                    # T6-27: a retained diff that does not hash to the
+                    # sealed `diff_hash` is a sidecar telling two stories.
+                    issues.append(
+                        JournalIssue(
+                            code="sidecar-diff-hash",
+                            line=number,
+                            message=f"attempt sidecar for span {entry.span_id!r} "
+                            "retains a diff that does not hash to its diff_hash",
+                        )
+                    )
             continue
         if any(parent not in seen for parent in entry.parent_proofs):
             issues.append(
@@ -496,6 +533,20 @@ def _load_journal(
                 )
             )
     return (records, spans, issues, ordered)
+
+
+def _sidecar_diff_mismatch(sidecar: Path) -> bool:
+    """Whether a hashing sidecar retains a `diff` that is not its `diff_hash` (T6-27)."""
+    try:
+        evidence = json.loads(sidecar.read_bytes())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(evidence, dict):
+        return False
+    diff, diff_hash = evidence.get("diff"), evidence.get("diff_hash")
+    if not isinstance(diff, str) or not isinstance(diff_hash, str):
+        return False
+    return hashlib.sha256(diff.encode()).hexdigest() != diff_hash
 
 
 def verify_journal(path: Path) -> list[JournalIssue]:
