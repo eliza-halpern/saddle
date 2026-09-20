@@ -343,16 +343,26 @@ def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
 
 
 def _error_evidence(exc: BaseException) -> dict[str, Any]:
-    """What a failed worker call leaves behind: a truncation keeps its partial text."""
+    """What a failed worker call leaves behind.
+
+    A truncation keeps its partial text, the usage the server reported
+    and the cap the call sent (T6-12). Any other failure has no envelope
+    -- a transport timeout arrives with nothing but its message -- so the
+    sidecar names the exception type beside the detail (F21.12b): round
+    3c's 1826 s timeout sealed four keys that could not say what it was.
+    """
+    evidence: dict[str, Any] = {"error_type": type(exc).__name__}
     if isinstance(exc, VllmResponseError):
-        return {
-            "thinking": exc.reasoning,
-            "partial_content_chars": len(exc.content),
-            "finish_reason": exc.finish_reason,
-            "usage": dict(exc.usage),
-            "max_tokens": exc.max_tokens,
-        }
-    return {}
+        evidence.update(
+            {
+                "thinking": exc.reasoning,
+                "partial_content_chars": len(exc.content),
+                "finish_reason": exc.finish_reason,
+                "usage": dict(exc.usage),
+                "max_tokens": exc.max_tokens,
+            }
+        )
+    return evidence
 
 
 def _seal_attempt(
@@ -699,6 +709,12 @@ async def _run_node(
                 raise NodeUnappliableError(node.id, detail, exc.attempts, exc.failure) from exc
             raise NodeGateFailedError(exc.result, exc.attempts, exc.failure) from exc
         except BaseException as exc:
+            # A failure the loop does not retry (a transport error, a
+            # cancelled task, a bug) still fails the node, and a failed
+            # node leaves the tree at its baseline: round 3c's n2.r2 timed
+            # out after applying 530 lines and the oracle graded them
+            # unproven (F21.12b). Seal first so the restore span hangs off
+            # the attempt that failed, as on the other give-up paths.
             _seal_attempt(
                 journal_path,
                 node.id,
@@ -707,8 +723,9 @@ async def _run_node(
                 start,
                 1,
                 str(exc),
-                _error_evidence(exc),
+                {**_error_evidence(exc), "samples": samples},
             )
+            _abandon(workdir, baseline, applied, recorder)
             raise
     # `recorder` is the last attempt's: the restore span hangs off the
     # attempt that failed, so the journal shows when the tree was reset.

@@ -56,7 +56,7 @@ from saddle.slice import (
     splice_replan,
 )
 from saddle.transcript import is_run_end
-from saddle.vllm import DiffProposal, VllmResponseError
+from saddle.vllm import DiffProposal, VllmRequestError, VllmResponseError
 
 
 def _git_repo(root: Path) -> None:
@@ -1057,6 +1057,42 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
     assert error.attempts == 3
     assert error.failure is not None
     assert error.failure.startswith("Attempt 3 of 3: worker call failed: ")
+
+
+def test_run_node_transport_failure_restores_the_tree_and_names_itself(tmp_path: Path) -> None:
+    """F21.12b known-bad. Attempt 1 applies a diff that fails its gate;
+    attempt 2's worker call dies in transport (round 3c: `request failed:
+    timed out` after 1826 s). The error still fails the node, but the
+    applied diff must not stay in the tree -- n2.r2 left 530 lines of
+    unproven `money.py` staged and the oracle graded them -- and the
+    sealed attempt's sidecar must say what kind of failure it was, not
+    arrive as four keys with nothing the client knew.
+    """
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str | None] = []
+    timed_out = "request failed: timed out"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        if failure is None:
+            return DiffProposal(BAD_DIFF, "")
+        raise VllmRequestError(timed_out)
+
+    with pytest.raises(VllmRequestError):
+        asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run", (), task_hash=""))
+    assert calls[-1] is not None, "the transport failure was the retry, after an applied diff"
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 1\n"
+    status = run_capture(["git", "status", "--porcelain"], tmp_path).stdout.splitlines()
+    # Untracked run artefacts (journal, sidecars, coverage data) are not
+    # node work; nothing tracked may be modified or staged.
+    assert [line for line in status if not line.startswith("??")] == []
+    workers = [r for r in read_spans(journal) if r.name.startswith("worker:")]
+    sidecar = _sidecar(journal, workers[-1])
+    assert sidecar["detail"] == timed_out
+    assert sidecar["error_type"] == "VllmRequestError"
+    assert "samples" in sidecar
 
 
 def test_run_node_exhausted_gate_failures_reports_failure(tmp_path: Path) -> None:
