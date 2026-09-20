@@ -292,6 +292,12 @@ BASELINE_REF_PREFIX: Final = "refs/saddle/baseline/"
 `refs/tags`, so writing one moves no branch, no tag and not `HEAD`."""
 
 
+PROVEN_REF_PREFIX: Final = "refs/saddle/proven/"
+"""Namespace for the tree each proof was sealed against (T3-10). Same
+properties as `BASELINE_REF_PREFIX`: writing one moves no branch, no tag
+and not `HEAD`."""
+
+
 def _ref_slug(node_id: str) -> str:
     """`node_id` as a git-legal ref component, else its sha256 prefix.
 
@@ -312,26 +318,34 @@ def _ref_slug(node_id: str) -> str:
     return hashlib.sha256(node_id.encode()).hexdigest()[:16]
 
 
-def snapshot_baseline(cwd: Path, node_id: str, *, recorder: SpanRecorder | None = None) -> str:
-    """Freeze the worktree at `cwd` as a commit; return the ref naming it.
+def proven_ref(node_id: str) -> str:
+    """The ref holding the tree `node_id`'s proof was sealed against (T3-10).
 
-    A node's gates must diff the node's own work, and `HEAD` is not that
-    ref once a slice has more than one node: `_run_node` applies,
-    autofixes, gates and seals but never commits, so every earlier node's
-    proven edit is still staged when the next node runs. Against `HEAD`
-    the second node's `target-scope` names the first node's files, its
-    `coverage` demands lines it never wrote, and `red-phase` compares
-    against a tree two nodes old.
+    Same slug rule as the baseline refs: `check-ref-format` decides a ref
+    component by component, so an id git accepts under one
+    `refs/saddle/<word>/` prefix it accepts under the other.
+    """
+    return f"{PROVEN_REF_PREFIX}{_ref_slug(node_id)}"
+
+
+def snapshot_tree(cwd: Path, ref: str | None, *, recorder: SpanRecorder | None = None) -> str:
+    """Stage the tracked files at `cwd`; return their `git write-tree` id.
 
     `git add -u -- .` stages tracked files only, so `.coverage.tier1`,
-    `.saddle/` and bytecode stay out of the tree; `write-tree` and
-    `commit-tree -p HEAD` name it; `update-ref` publishes it under
-    `BASELINE_REF_PREFIX`. `HEAD`, every branch and the set of paths the
-    index tracks are unchanged, so the worker's worktree is the worktree
-    it had. `git diff`, `git diff --diff-filter=A` and `git archive` take
-    the result exactly as they take `HEAD`.
+    `.saddle/` and bytecode stay out of the tree, while a file `git apply
+    --index` added is already tracked and does go in. The id is a pure
+    function of that content and nothing else: the same tracked tree
+    hashes the same before and after it is committed, which is what lets
+    a resume compare the worktree it was handed against the tree a proof
+    was sealed on (`ref=None`: stage and hash, publish nothing).
+
+    With a `ref`, the tree is also named -- `commit-tree -p HEAD` then
+    `update-ref`, outside `refs/heads` and `refs/tags`, so `HEAD`, every
+    branch and the set of paths the index tracks are unchanged and the
+    worker's worktree is the worktree it had. `git diff`, `git diff
+    --diff-filter=A` and `git archive` take the result exactly as they
+    take `HEAD`.
     """
-    ref = f"{BASELINE_REF_PREFIX}{_ref_slug(node_id)}"
 
     def git(*args: str) -> str:
         argv = ["git", "-C", str(cwd), *args]
@@ -345,8 +359,28 @@ def snapshot_baseline(cwd: Path, node_id: str, *, recorder: SpanRecorder | None 
 
     git("add", "-u", "--", ".")
     tree = git("write-tree")
-    commit = git("commit-tree", tree, "-p", "HEAD", "-m", f"saddle baseline {node_id}")
-    git("update-ref", ref, commit)
+    if ref is not None:
+        commit = git("commit-tree", tree, "-p", "HEAD", "-m", f"saddle snapshot {ref}")
+        git("update-ref", ref, commit)
+    return tree
+
+
+def snapshot_baseline(cwd: Path, node_id: str, *, recorder: SpanRecorder | None = None) -> str:
+    """Freeze the worktree at `cwd` as a commit; return the ref naming it.
+
+    A node's gates must diff the node's own work, and `HEAD` is not that
+    ref once a slice has more than one node: `_run_node` applies,
+    autofixes, gates and seals but never commits, so every earlier node's
+    proven edit is still staged when the next node runs. Against `HEAD`
+    the second node's `target-scope` names the first node's files, its
+    `coverage` demands lines it never wrote, and `red-phase` compares
+    against a tree two nodes old.
+
+    `snapshot_tree` does the work and states what it leaves untouched;
+    this one only decides the ref.
+    """
+    ref = f"{BASELINE_REF_PREFIX}{_ref_slug(node_id)}"
+    snapshot_tree(cwd, ref, recorder=recorder)
     return ref
 
 

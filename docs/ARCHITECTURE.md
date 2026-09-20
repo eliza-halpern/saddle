@@ -224,7 +224,7 @@ Two structural properties, not model quality, carry the speedup — and both sur
 > * **mutmut / Stryker / PIT:** Mutation testing frameworks enforcing the Tier-2 sampled gate against tautological tests — scoped to changed lines, capped by mutant count and wall-clock, never per-node unscoped.
 > * **Operational Patterns (design constraints):** Token-degeneration stall detection with bounded retries instead of open-ended loops; throwaway subprocess contexts for noisy context gathering; and crash-safe file state — graph state persisted as human-readable Markdown/JSON so an operator can intervene and resume without session loss.
 >
-> *Status (2026-09-18): resume built (T3-1): a verified journal seeds the proven set and only unproven nodes run; stall detection deferred, WORKPLAN §7.*
+> *Status (2026-09-19): resume built (T3-1): a verified journal seeds the proven set and only unproven nodes run. What it resumes **onto** is checked, not assumed (T3-10): each proof seals the `git write-tree` id of the tracked worktree its gate passed on, kept at `refs/saddle/proven/<node>`, and a resume whose worktree hashes to anything else raises before any node runs, naming both ids and the `git restore --source` that puts the proven tree back (committing the proven edits keeps the same tree, so the `saddle run` clean-tree check and this one agree). Stall detection deferred, WORKPLAN §7.*
 
 ## 6. Implementation Plan
 

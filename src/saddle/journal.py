@@ -58,6 +58,11 @@ class ProofRecord(BaseModel):
     node_hash: str = ""
     kind: str = ""
     target_files: list[str] = Field(default_factory=list)
+    # The worktree the gate passed on (T3-10): the `git write-tree` id of
+    # the tracked files, kept at `refs/saddle/proven/<node>`. A resume
+    # compares the tree it was handed with this one; defaulted for the
+    # same reason as the fields above.
+    tree_hash: str = ""
     record_hash: str
 
 
@@ -141,6 +146,7 @@ def build_record(
     node_hash: str = "",
     kind: str = "",
     target_files: Sequence[str] = (),
+    tree_hash: str = "",
 ) -> ProofRecord:
     """Seal a record: copy caller data, hash the diff, then the payload."""
     payload: dict[str, Any] = {
@@ -157,6 +163,7 @@ def build_record(
         "node_hash": node_hash,
         "kind": kind,
         "target_files": list(target_files),
+        "tree_hash": tree_hash,
     }
     return ProofRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
 
@@ -440,13 +447,15 @@ def build_from_gate(
     thinking: str,
     attempts: int = 1,
     task_hash: str = "",
+    tree_hash: str = "",
 ) -> ProofRecord:
     """Seal a Tier-1 verdict as the node's proof record.
 
     The record names what it proves, not only that something passed:
     `task_hash` is the task the run was given, `node_hash` the node as
     validated, and `kind`/`target_files` the same facts spelled readably
-    for an auditor (T3-9).
+    for an auditor (T3-9). `tree_hash` is the worktree the gate passed
+    on, so a resume can check it is resuming onto that tree (T3-10).
     """
     return build_record(
         evidence_id=evidence_id,
@@ -464,4 +473,5 @@ def build_from_gate(
         node_hash=hash_node(node),
         kind=node.kind,
         target_files=list(node.target_files),
+        tree_hash=tree_hash,
     )

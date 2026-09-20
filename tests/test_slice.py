@@ -403,6 +403,10 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
         "ruff",
         "ruff",
+        # T3-10: the tree the gate passed on -- `add -u`, `write-tree`,
+        # `commit-tree`, `update-ref` again -- taken after the verdict and
+        # before the record is sealed, so the proof names its worktree.
+        *["git"] * 4,
     ]
     assert all(span.node_id == "n1" for span in tools)
     (worker, run) = [span for span in spans if span.kind == "agent"]
@@ -1844,6 +1848,137 @@ def test_run_slice_resume_drops_a_record_that_predates_the_node_hash(tmp_path: P
     assert result.proofs["n1"] == records[1].record_hash
 
 
+def _tree_now(root: Path) -> str:
+    """The tracked tree as git ids it, computed the way a resume does."""
+    assert run_argv(["git", "add", "-u", "--", "."], root) == 0
+    return run_capture(["git", "write-tree"], root).stdout.strip()
+
+
+def test_run_slice_resume_tree_hash_seals_the_worktree_it_proved(tmp_path: Path) -> None:
+    """Known-good (T3-10): the sealed `tree_hash` is the tree the gate
+    passed on, so the worktree the proof speaks for is nameable."""
+    journal, _first = _first_run(tmp_path)
+    record = read_records(journal)[-1]
+    assert re.fullmatch(r"[0-9a-f]{40}", record.tree_hash)
+    assert record.tree_hash == _tree_now(tmp_path)
+    ref = run_capture(["git", "rev-parse", "refs/saddle/proven/n1^{tree}"], tmp_path)
+    assert ref.stdout.strip() == record.tree_hash
+
+
+def test_run_slice_resume_tree_check_passes_on_the_proven_worktree(tmp_path: Path) -> None:
+    """Known-good (T3-10): an untouched worktree still hashes to the tree
+    the proof was sealed against, so the resume proceeds as before."""
+    journal, first = _first_run(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is True
+    assert second.proofs == first.proofs
+
+
+def test_run_slice_resume_tree_check_passes_after_the_proven_edits_are_committed(
+    tmp_path: Path,
+) -> None:
+    """Known-good (T3-10): the CLI flow after a crash. `_ensure_clean`
+    refuses the dirty tree, the user commits the proven edits, and the
+    resume still matches -- a commit names the tree, it does not change
+    it."""
+    journal, first = _first_run(tmp_path)
+    assert run_argv(["git", "add", "-u", "--", "."], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "proven"], tmp_path) == 0
+    assert run_argv(["git", "diff-index", "--quiet", "HEAD", "--"], tmp_path) == 0
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is True
+    assert second.proofs == first.proofs
+
+
+def test_run_slice_resume_tree_refuses_a_worktree_missing_the_proven_edit(
+    tmp_path: Path,
+) -> None:
+    """Known-bad (T3-10): `git checkout -- n.py` throws away what `n1`
+    proved. The resume used to seed `n1` as proven and gate the next node
+    against a tree without its change; it now stops before any node runs,
+    naming both trees and the way back."""
+    journal, _first = _first_run(tmp_path)
+    proven = read_records(journal)[-1].tree_hash
+    # `HEAD --`, not `--`: a proven edit is staged (`_run_node` never
+    # commits), so a bare `git checkout -- n.py` restores it from the index
+    # and loses nothing. Discarding it takes the index too, which is what
+    # `git reset --hard` and `git checkout HEAD -- .` do and what the user
+    # reaches for when `_ensure_clean` refuses a crashed run's tree.
+    assert run_argv(["git", "checkout", "HEAD", "--", "n.py"], tmp_path) == 0
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 1\n"
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    with pytest.raises(ValueError, match=r"worktree does not match") as caught:
+        run_slice(
+            "Fix f.",
+            dag,
+            workdir=tmp_path,
+            journal_path=journal,
+            propose=propose,
+            now=lambda: "2026-09-16T00:00:00+00:00",
+        )
+    message = str(caught.value)
+    assert proven in message
+    assert _tree_now(tmp_path) in message
+    assert "git restore --source refs/saddle/proven/n1 --staged --worktree -- ." in message
+    assert [span.name for span in read_spans(journal) if span.name == "resume"] == []
+
+
+def test_run_slice_resume_tree_refuses_an_edit_to_an_unrelated_file(tmp_path: Path) -> None:
+    """Known-bad (T3-10): strict equality. The proof is about one tree,
+    not about `n1`'s files alone, so an edit anywhere in the tracked tree
+    ends the resume; a fresh `--journal` is the escape hatch."""
+    journal, _first = _first_run(tmp_path)
+    (tmp_path / "test_n.py").write_text(
+        "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n\n\n# unrelated\n"
+    )
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        msg = "nothing should be proposed"
+        raise AssertionError(msg)
+
+    with pytest.raises(ValueError, match=r"worktree does not match"):
+        run_slice(
+            "Fix f.",
+            dag,
+            workdir=tmp_path,
+            journal_path=journal,
+            propose=propose,
+            now=lambda: "2026-09-16T00:00:00+00:00",
+        )
+
+
 def test_run_slice_refuses_a_journal_that_does_not_verify(tmp_path: Path) -> None:
     """Known-bad (T3-1): a tampered record breaks its hash, and resuming
     onto it raises before any node runs."""
@@ -2238,7 +2373,13 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     assert all("refs/saddle/baseline/n2" in span.argv for span in name_only)
     assert not any("HEAD" in span.argv for span in name_only)
     refs = run_capture(["git", "for-each-ref", "--format=%(refname)", "refs/saddle/"], tmp_path)
-    assert refs.stdout.split() == ["refs/saddle/baseline/n1", "refs/saddle/baseline/n2"]
+    assert refs.stdout.split() == [
+        "refs/saddle/baseline/n1",
+        "refs/saddle/baseline/n2",
+        # T3-10: one proven tree per sealed node, beside its baseline.
+        "refs/saddle/proven/n1",
+        "refs/saddle/proven/n2",
+    ]
 
 
 # `n2`'s own stray: the same `m.py` edit plus a comment on `n1`'s file.

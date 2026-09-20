@@ -68,6 +68,7 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         "node_hash": "",
         "kind": "",
         "target_files": [],
+        "tree_hash": "",
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
@@ -121,6 +122,7 @@ def test_build_record_seals_thinking_into_hash() -> None:
         "node_hash": "",
         "kind": "",
         "target_files": [],
+        "tree_hash": "",
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert record.record_hash == hashlib.sha256(canonical.encode()).hexdigest()
@@ -238,6 +240,35 @@ def test_build_from_gate_seals_the_task_hash_node_hash_and_kind(tmp_path: Path) 
     append_record(path, record)
     assert verify_journal(path) == []
     assert read_records(path) == [record]
+
+
+def test_build_from_gate_seals_the_tree_hash_it_was_proven_on(tmp_path: Path) -> None:
+    """Known-good (T3-10): the record names the worktree its gate passed
+    on, so a resume can tell whether it is resuming onto that tree rather
+    than assuming the edits are still there.
+
+    Known-bad below: the field is inside the record hash, so a record
+    re-pointed at another tree is corruption, not a reusable proof.
+    """
+    record = build_from_gate(
+        _proof_node(),
+        "diff n1\n",
+        _passing_result(),
+        [],
+        "e1",
+        thinking="why n1",
+        task_hash="a" * 64,
+        tree_hash="b" * 40,
+    )
+    assert record.tree_hash == "b" * 40
+    good = tmp_path / "good.jsonl"
+    append_record(good, record)
+    assert verify_journal(good) == []
+    assert read_records(good)[0].tree_hash == "b" * 40
+    bad = tmp_path / "bad.jsonl"
+    append_record(bad, record.model_copy(update={"tree_hash": "c" * 40}))
+    (issue,) = verify_journal(bad)
+    assert issue.code == "bad-hash"
 
 
 def test_altering_a_sealed_task_hash_fails_verification(tmp_path: Path) -> None:

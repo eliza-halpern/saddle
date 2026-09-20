@@ -26,11 +26,13 @@ from saddle.dag import Dag, ExecutionConstraints, Node, planned_requirement_ids
 from saddle.evidence import (
     CapturedRun,
     git_changed_files,
+    proven_ref,
     restore_baseline,
     run_argv,
     run_shell,
     run_stdin,
     snapshot_baseline,
+    snapshot_tree,
 )
 from saddle.gates import SHELL_TIMEOUT, GateCheck, Tier1Result
 from saddle.journal import (
@@ -508,6 +510,11 @@ async def _run_node(
                 planned_requirements=planned,
             )
             if result.passed:
+                # The tree the gate just passed on, sealed into the record
+                # and kept at its own ref (T3-10): a later resume has to
+                # land on this tree, and `git restore --source` is how the
+                # user puts it back when it does not.
+                tree = snapshot_tree(workdir, proven_ref(node.id), recorder=recorder)
                 parents = [proofs[dep] for dep in node.dependencies]
                 record = build_from_gate(
                     node,
@@ -518,6 +525,7 @@ async def _run_node(
                     thinking=proposal.reasoning,
                     attempts=attempt,
                     task_hash=task_hash,
+                    tree_hash=tree,
                 )
                 append_record(journal_path, record)
                 proofs[node.id] = record.record_hash
@@ -687,7 +695,9 @@ def _transcribe(
     )
 
 
-def _seed_proofs(journal_path: Path, dag: Dag, task_hash: str) -> tuple[dict[str, str], str | None]:
+def _seed_proofs(
+    journal_path: Path, dag: Dag, task_hash: str
+) -> tuple[dict[str, str], str | None, ProofRecord | None]:
     """Which journalled proofs this run may reuse, and what it decided.
 
     A proof is reusable only for the task and the node it was sealed
@@ -699,8 +709,10 @@ def _seed_proofs(journal_path: Path, dag: Dag, task_hash: str) -> tuple[dict[str
     A record whose node no longer hashes the same, or that predates these
     fields, is simply not reused: the node is scheduled again.
 
-    Returns the seed and a one-line summary, or `None` when the journal
-    held no proof and there was nothing to decide.
+    Returns the seed, a one-line summary (`None` when the journal held no
+    proof and there was nothing to decide), and the last record actually
+    reused -- whose `tree_hash` says which worktree the caller must be
+    resuming onto (T3-10).
     """
     candidates = list(proven_records(journal_path).values())
     expected = {node.id: hash_node(node) for node in dag.nodes}
@@ -715,9 +727,11 @@ def _seed_proofs(journal_path: Path, dag: Dag, task_hash: str) -> tuple[dict[str
             raise ValueError(msg)
     proofs: dict[str, str] = {}
     decided: list[str] = []
+    reused: ProofRecord | None = None
     for record in candidates:
         if record.node_hash == expected.get(record.node_id):
             proofs[record.node_id] = record.record_hash
+            reused = record
             decided.append(f"reused {record.node_id}")
         elif not record.node_hash:
             # Sealed before the node was named in the record: nothing says
@@ -725,7 +739,7 @@ def _seed_proofs(journal_path: Path, dag: Dag, task_hash: str) -> tuple[dict[str
             decided.append(f"dropped {record.node_id} (no node hash)")
         else:
             decided.append(f"dropped {record.node_id} (node changed)")
-    return proofs, "; ".join(decided) if candidates else None
+    return proofs, "; ".join(decided) if candidates else None, reused
 
 
 def run_slice(
@@ -748,10 +762,14 @@ def run_slice(
     another task raises before any node runs, a record whose node has
     changed is dropped and the node scheduled again, and when the journal
     held any proof the decision is sealed as a `resume` span under the run
-    span so the transcript and `saddle tail` show it. A journal that does
-    not verify raises before anything runs. When `replan` is given, each
-    exhausted node recompiles once into a replacement subgraph; replanned
-    nodes that fail again stay failed.
+    span so the transcript and `saddle tail` show it. So does the tree the
+    proof was sealed on (T3-10): if any proof is reused, the tracked
+    worktree must hash to the `tree_hash` of the last one, or the run
+    raises naming both ids and the `git restore` that puts the proven tree
+    back. A journal that does not verify raises before anything runs.
+
+    When `replan` is given, each exhausted node recompiles once into a
+    replacement subgraph; replanned nodes that fail again stay failed.
 
     Every node is gated by its own scoped `test_command`; nothing checks
     the union of their diffs until `merge_command` runs, once, unscoped,
@@ -764,7 +782,26 @@ def run_slice(
     started = now()
     run_start = perf_counter()
     run_span_id = uuid.uuid4().hex
-    proofs, resumed = _seed_proofs(journal_path, dag, task_hash)
+    proofs, resumed, reused = _seed_proofs(journal_path, dag, task_hash)
+    if reused is not None:
+        # A proof is a proof about one worktree (T3-10). `rebuild_proven`
+        # promises a crash loses at most the in-flight node, which holds
+        # only while the tree still carries the proven edits: reverting
+        # one and resuming used to gate the next node against code the
+        # journal says is proven and the disk does not have.
+        expected = reused.tree_hash
+        current = snapshot_tree(workdir, None)
+        if current != expected:
+            msg = (
+                "worktree does not match the proof being resumed onto: node "
+                f"{reused.node_id!r} was proven on tree {expected}, "
+                f"{str(workdir)!r} now hashes to {current}. Restore it with "
+                f"git restore --source {proven_ref(reused.node_id)} "
+                "--staged --worktree -- . "
+                "(a commit of the proven edits keeps the same tree), "
+                "or pass a fresh --journal path."
+            )
+            raise ValueError(msg)
     if resumed is not None:
         append_span(
             journal_path,

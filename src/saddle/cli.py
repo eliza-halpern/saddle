@@ -401,7 +401,16 @@ def _ensure_repo(repo: Path) -> bool:
 
 
 def _ensure_clean(repo: Path) -> None:
-    """Refuse repos with uncommitted changes against HEAD (tracked tree)."""
+    """Refuse repos with uncommitted changes against HEAD (tracked tree).
+
+    This is also the first half of the resume flow after a crash (T3-10).
+    A run that died left its proven edits staged, so this check refuses
+    the repo; the user commits them (`git add -u && git commit`) and runs
+    again. `run_slice`'s tree check then passes, because a commit names
+    the tracked tree without changing it -- the worktree still hashes to
+    the `tree_hash` the last reused proof was sealed on. Reverting those
+    edits instead is what the tree check exists to catch.
+    """
     if run_argv(["git", "diff-index", "--quiet", "HEAD", "--"], repo) != 0:
         msg = f"{str(repo)!r} has uncommitted changes; commit or stash first"
         raise RunError(msg)
