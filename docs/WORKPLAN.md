@@ -114,14 +114,15 @@ T6-7 ──► T4-6b (bench-side; baselines change only after the round's table 
 T3-26 (`saddle run --dag FILE`) ──► T4-5 (half A runs a hand-written DAG)
 T4-6a table (DONE) ──► T4-6b (same seven tasks, same frozen oracles)
 T6-2, T6-3, T6-4, T6-5 ──► T4-1, T4-5, T4-2, T4-3, T4-6b (measure the harness after the specification hole is closed, not before)
-T5-0 ──► T5-1 ──► T5-3 ──► T5-2 ──► T5-4, T5-5 (either order) ──► T5-6
+T5-0 ──► T5-7 ──► T5-9 ──► T5-1, T5-3, T5-2 (rewritten against the chat surface) ──► T5-4, T5-5 ──► T5-6
+T6-9, T5 seed ──► Tier 5 (the chat surface is built on a harness that can seal what it has)
 T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (session 35 done): T6-17, T6-15, T6-18,
 T6-9 (main session, one or two sittings) → T5 seed (executor) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
-→ T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0 first) → T4-1, T4-5,
+→ T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
 Contract changes stay in the main session; executors take docs,
 fixtures and measurement.
@@ -3362,9 +3363,20 @@ the API key is the only environment input (cli.py:781); `--base-url`,
 `--model`, efforts and temperatures are flags with hard-coded defaults
 on five subcommands.
 
-Sequencing: T5-0 first (it is the evidence the rest cites), then T5-1,
-T5-3, T5-2 in that order (each is one session), then T5-4 and T5-5 in
-either order, T5-6 last. T5-7 and T5-8 are decisions, not work.
+Decided 2026-09-20: `saddle up` is the surface and `saddle run` is an
+episode inside it. A task typed into the chat runs `run_slice` with its
+own journal, plan record and proofs, exactly as `run` does today; the
+chat is a front end to a proof-producing episode, never a way around
+one. `run` stays as the tested core and the bench driver. The session,
+not the run, is the long-lived thing, so context management is a Tier 5
+anchor rather than polish: runs are referenced in the chat by a
+compiled recap and recalled from their journals, and the session itself
+compacts deterministically (T5-9). No model call is made to summarise.
+Sequencing: T5-0 first (it is the evidence the rest cites), then T5-7
+(the chat-driven run) and T5-9 (recap, recall, compaction) in that
+order; then T5-1, T5-3, T5-2 rewritten against the chat surface
+(each is one session), then T5-4 and T5-5 in either order, T5-6 last.
+T5-8 is a decision, not work.
 
 ### T5-0 — Dogfood transcript: every manual step of one real run (record; no code)
 Files: none in the repo. Write `../saddle-notes/dogfood-2026-XX-XX.md`.
@@ -3567,21 +3579,90 @@ Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__
 1. render the pass mark unconditionally -> the fail-mark test red.
 Done when: mutant red; `./check.sh` green.
 
-### T5-7 — Chat-driven runs (#23): decision needed
-`saddle up` is a streaming chat with tools; `saddle run` is the gated
-pipeline. #23 asks for a chat turn to execute through the pipeline.
-Options: (A) a `/run TASK` command inside `up` that calls `run_run`
-with `on_event` streaming into the chat pane -- small once T5-1 exists;
-(B) the model in `up` gets a `saddle_run` tool -- lets the model decide
-to run, which is the #65 shape (the model choosing its own gate path)
-and is not recommended; (C) leave separate. Recommend A after T5-1..3.
-No steps until decided.
+### T5-7 — Chat-driven runs: `saddle up` starts a gated episode (Major; decided)
+Files: `src/saddle/chat.py` (`run_chat` ~:164, the tool loop), `src/saddle/cli.py`
+(`run_task` ~:564: the part after `_emit_valid_dag` ~:571 and the
+confirmation ~:589 becomes callable from the chat with a `RunOptions`;
+`run_slice` call ~:656), `src/saddle/journal.py` (a `run` reference
+record in the chat journal: task, journal path, run span id, verdict;
+beside `SpanRecord` ~:102), `tests/test_chat.py`, `tests/test_cli.py`.
+Decision 2026-09-20, the user's: `run` is to become unnecessary as a
+command; every capability it has is reachable from the chat.
+Contract: (1) a chat turn that asks for a task starts an episode with
+its own journal under the workdir's `.saddle/runs/<id>/proofs.jsonl`;
+the plan is shown and confirmed in the chat; the run's live events
+stream into the chat as `render_event` lines; (2) the episode's
+gates, plan record, sidecars and proofs are byte-for-byte what `run`
+produces for the same task (one code path, not a second one); (3) when
+the episode ends, the chat journal gets a `run` reference record naming
+the journal and verdict, and the chat context gets the compiled recap
+of T5-9, not the transcript. Direction: none for the gates; tightened
+for the chat (a task can no longer be "done" in chat without a proof).
+Known-good: a scripted chat that asks for the fixture task yields a
+run journal that `saddle verify` passes and a chat journal with one
+`run` reference; the recap in the next turn's context names the verdict.
+Known-bad: a chat that edits files through tools without starting an
+episode produces no proof and the recap says so.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the episode calls a copy of the loop with one gate removed -> the
+   byte-equality test against `run`'s journal red.
+2. the `run` reference record not appended -> the chat-journal test red.
+Done when: mutants red; `./check.sh` green; T5-0's transcript re-done
+through the chat with no step that needs `run`. Owner: main session.
+The load-bearing clause is (2): an implementation that ends up with two
+loops has failed the item even if every test passes.
 
 ### T5-8 — Rich TUI (#17): not now
 Every item above is plain stdout/stderr on purpose: it works over ssh,
 in CI logs, and in `saddle run > file`. A TUI is a second renderer over
 the same journal and can come after T5-0 is rerun on the finished tier
 and still shows time spent reading. Keep #17 open, unchanged.
+
+### T5-9 — The session compacts without a model: run recap, journal recall, deterministic summary (Major; tightened)
+Files: `src/saddle/transcript.py` (new `render_run_recap(journal)`:
+verdict, nodes proven and failed, files changed, gates that failed
+with one line each, attempts, wall time; fixed section order; beside
+`render_journal_transcript` ~:160), `src/saddle/chat.py` (a `recall`
+tool and the compaction hook; `run_chat` ~:164), `src/saddle/journal.py`
+(`read_entries` ~:569 over a run journal by span or proof id; sidecar
+lookup by span id via `attempt_sidecar_path` ~:280), `src/saddle/cli.py`
+(`saddle status` reuses `render_run_recap`, T5-5), `tests/test_transcript.py`,
+`tests/test_chat.py`.
+Why: the session is long-lived (T5-7) and accumulates runs. A model-
+written summary drifts, costs a call, and cannot be verified; the
+journal is already a content-addressed record of everything a recap
+needs, so the recap is compiled from it and the same input always
+gives the same bytes.
+Contract: (1) `render_run_recap` is a pure function of the journal and
+its sidecars; (2) a `recall` tool takes a span id, proof id, node id,
+or a search term and returns the matching records or sidecar text,
+capped at a fixed byte budget with a marker naming what was omitted and
+how to page; it reads the journal files, never the chat context; (3)
+when the chat context passes a threshold, the turns before the tail
+are replaced by one block: session goal, decisions and preferences the
+user stated (quoted, not paraphrased), files touched, every run's
+recap, outstanding failures, then the last N turns verbatim; no model
+call; a footer says what was compacted and that `recall` recovers
+exact text. Direction: tightened (a summary is now derivable and
+checkable; before, none existed).
+Known-good: two runs (one PASS, one FAIL on a named gate) in a scripted
+session compact to a block that names both verdicts and the failed
+gate, and `recall <span id>` returns that attempt's sidecar thinking;
+rendering twice gives identical bytes. Known-bad: a recap with a
+tampered sidecar fails `verify` and the recap says the sidecar does not
+hash; a `recall` over a term with no match returns an empty result and
+the marker, not an error.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the FAIL run's gate line dropped from the recap -> the two-run test red.
+2. `recall` reads the chat context instead of the journal -> the
+   tampered-sidecar test red.
+3. the byte cap removed -> the paging test red.
+Done when: mutants red; `./check.sh` green; T5-0's transcript, run
+through the chat, compacts once and the next turn still names the
+verdicts. Owner: main session. Not in this item: model-driven
+observation and reflection workers (§10).
+
+---
 
 ## 9. Tier 6 — the specification is the blind spot (from round 3)
 
@@ -4355,6 +4436,7 @@ Done when: mutant red; `./check.sh` green. Owner: main session, with T6-15.
 | HANG as a first-class verdict field | already surfaced in `detail` (#55 closed); a field is T2-4's job | nothing |
 | Rich TUI (#17), chat-driven runs (#23) | see T5-7 and T5-8 | Tier 5 |
 | Property soundness (#62) | see T3-3 | design decision |
+| Model-driven memory workers (observe / reflect / prune) for the chat session | they are model calls whose output the agent then trusts; under "everything deterministic" they are opt-in at most | T5-9 measured as insufficient on a real long session |
 | `repetition_penalty` / `top_p` / `min_p` on worker calls (F21.9c item 14) | at 1.05 it failed 3/3 where today's shape passed 3/3 (F21.10) | a node that repeats without a penalty on record, then a value sweep with the penalty-on/grammar-off cell (F21.11 items 22, 23) |
 | Repetition oracle over sections and motifs (F21.10 item 19) | nothing to gate on until degeneration recurs without the penalty | the same record |
 
