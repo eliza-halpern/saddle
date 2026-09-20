@@ -3041,6 +3041,46 @@ under `../saddle-bench/runs/<id>/` with the pre-registered prediction copied
 in before the run starts.
 
 ### T4-6a — Viability sweep: saddle alone on all seven tasks, oracles fixed first (F21; RUN FIRST)
+Status 2026-09-20: DONE by session 33. Commits: saddle 9e30280
+(BENCHMARK-RECORD round-3 section, docs-only); `../saddle-bench` d9bd23b
+(the freeze: seven oracles, hidden suites, patched `run_arm.sh`,
+PREDICTION.md, committed 01:02:21, earliest journal 01:10:39), 93157ce
+(F21 + PROGRESS.log), dff4b81 (the T1/T2 hardening notes). Thirteen runs,
+not twelve: the item's own allocation (1 seed x 4 + 3 seeds x 3) is
+thirteen and its summary count was the reviewer's arithmetic error;
+PREDICTION.md repeats the slip and was left frozen. Two corrections to
+this item's premises, both found by the executor and approved by the
+user before run 1: `../saddle-bench` was not a git checkout (it was an
+untracked directory of the parent repo), so it was initialised as its
+own repo for the freeze; and `run_arm.sh` "as it is" could not run the
+item (it fetched the key by exec into the container, passed no
+`--sample-temperature`, and `rm -rf`'d the round-2 run directories), so
+it was patched additively -- env key when set, `RUN_DIR`, `SAMPLE_TEMP`
+-- with defaults unchanged and the patch inside the freeze commit.
+Result: **5 of 13 runs pass their oracle; 3 of 13 on the strict reading**
+(oracle PASS and a sealed proof covering the implementation). T1 0/1
+(11/18, all 22 gates passed -- F21.6), T2 1/1, T3 1/1, T4 1/1, T5 0/3
+(timeout x3, truncate/apply-fail/truncate, worktree untouched), T6 2/3
+oracle but 0/3 strict (the correct module is unproven residue of a
+failed impl attempt, F21.2), T7 0/3 (two timeouts, one exhausted replan;
+test nodes sealed, no implementation). Not one of the nine large-task
+runs completed. Prediction lines 1, 2 and 4 FALSIFIED, line 3 held. Line
+4's wording was the reviewer's error: it meant an impl diff touching
+tests (the #44 shape) and as written it is falsified by `test`-kind
+nodes sealing their own test files, which is that kind's contract; the
+#44 shape did not occur in the round. Every failure is labelled HARNESS
+in F21; the model-ceiling column is empty because no large task was
+asked in a shape the model could answer (F21.1: the worker's output cap
+is `WORKER_OUTPUT_TOKENS[planner-chosen effort]`, recomputed on every
+retry, and the truncation message's advice is acted on by no caller; T5's
+three seeds fail identically to the second). Oracle contract mutants,
+all three KILLED after two needed a constructed known-bad (F21.7: a
+"ghost arm" holding only `pyproject.toml` scored 61/63 with provenance
+off; a memory ceiling was added after the grader reached 57 GB). Three
+mid-sweep claims by the executor were wrong and are recorded as
+corrections in F21, not fixed silently. Reviewer verified: clean-room in
+the saddle repo, `./check.sh` at 9e30280 green (see the commit carrying
+this line). Follow-on: Tier 6 (§9), whose items cite F21.x.
 Files: `../saddle-bench/sweep.sh`, `run_arm.sh` (as they are),
 `../saddle-bench/baselines/t1..t7`, `prompts/t1..t7.prompt`, `oracles/`
 (one per-task correctness oracle to add for each task that lacks one),
@@ -3061,7 +3101,7 @@ committed in the bench checkout before the first run:
   a stricter bar and why this is not that bar. An oracle changed after
   its task has run voids that task for the round.
 - Seeds: one on T1-T4 (T4-1 and T4-5 add nine more there later), three
-  on T5-T7. Twelve saddle runs; `--sample-temperature 0.7`.
+  on T5-T7. Thirteen saddle runs (4 + 9); `--sample-temperature 0.7`.
 - Per run record: oracle verdict; `saddle verify` verdict; wall time;
   node count, kinds, `target_files` declared or empty; sealed proofs; the
   first failing gate per failed node with its detail; and how the run
@@ -3084,7 +3124,7 @@ gate) plus a twelve-row appendix; BENCHMARK-RECORD.md round-3 section.
 5. Every failed line becomes a workplan item with the run log as its
 Evidence, labelled harness or model-ceiling.
 Done when: PREDICTION.md and every oracle predate every journal in
-`runs/round3/`; twelve runs recorded (fewer only with each gap
+`runs/round3/`; thirteen runs recorded (fewer only with each gap
 explained); F21 written with the seven-row table and the verdicts.
 Stop if: container down (report); an oracle is found wrong mid-round
 (void that task, do not rewrite); any run crashes rather than fails a
@@ -3545,7 +3585,489 @@ in CI logs, and in `saddle run > file`. A TUI is a second renderer over
 the same journal and can come after T5-0 is rerun on the finished tier
 and still shows time spent reading. Keep #17 open, unchanged.
 
-## 9. Deferred and not recommended
+## 9. Tier 6 — the specification is the blind spot (from round 3)
+
+Added 2026-09-20 from the executor's mid-sweep notes on T1 and T2
+(`../saddle-bench/runs/round3/DESIGN-NOTES-T1-T2.md`, commit dff4b81; F21.6
+records the diagnosis, F21.8 the executor's own follow-on list, which this
+tier supersedes item by item). The finding: T1 sealed a pristine proof
+over an implementation the oracle scored 11/18, and the worker met its
+specification exactly; the planner's requirement statements were weaker
+than the task, the test node's reading became the contract (red-phase),
+and every gate then verified consistency with that reading. Eleven
+gates, one premise. Nothing here makes the harness *right* about an
+under-specified task; the goal is that it deterministically knows when
+it cannot certify. Design constraint, set by the user: **no adversarial
+review nodes.** Every mechanism below is procedural code whose verdict
+the model cannot argue with and whose thresholds live in `gates.py`,
+never in the plan.
+
+Sequencing: T6-14 and T6-8 first, one sitting (the T5 class: a
+truncated attempt is retried with more room, the emission budget stops
+being a side effect of the reasoning effort, and a node-too-large plan
+is rejected before any model call; none needs the retrospective because
+T5's journal is the known-bad), T6-12 and T6-13 second, one sitting (a failed attempt's reasoning
+and the plan itself are journaled, so the next T5-shaped failure is
+diagnosable from the journal alone), then T6-1 (one session, no GPU; it scores everything else
+against the thirteen labelled runs and decides which items proceed).
+T6-2 and T6-3 have their known-bad already (T2's log) and follow
+directly. T6-4 with T6-5 in one main-session sitting. T6-6 only if T6-1
+says Proposal A separates. T6-7 is bench-side and waits for the round to
+close. Then Tier 5 (T5-0..), then the rest of Tier 4 (T4-1, T4-5, T4-2,
+T4-3, T4-6b): measurement of a harness that no longer has this hole is
+worth more than measurement of one that does.
+
+### T6-0 — F21.6 is the diagnosis; DESIGN-NOTES gets the pointer (docs-only)
+Files: `docs/DESIGN-NOTES.md` (D-list entry pointing at F21.6 and T6-*;
+also fix the D14 :425 fragment and :629 summary the T4-4 executor
+noticed), `docs/BENCHMARK-RECORD.md` (already carries round 3). F21.6 in
+`../saddle-bench/runs/FINDINGS.md` records the "eleven gates, one
+premise" diagnosis with the run paths; nothing in the repo restates it
+beyond a pointer. Done when: DESIGN-NOTES names F21.6 and every T6 item
+below cites its F21.x.
+### T6-1 — Retrospective: score every candidate gate on the round-3 corpus (no GPU)
+Files: `../saddle-bench/oracles/retro/` (new; one script per candidate,
+each takes a run worktree + journal and prints FIRE/QUIET with a
+number), `../saddle-bench/runs/round3/RETRO.md` (the table), read only:
+every `runs/round3/*/` worktree and journal. Requires T4-6a complete
+(13 runs with gate verdict and oracle verdict both recorded).
+Question: for each of {A behavioural mutation, B accepts/rejects
+near-miss rule, C property polarity, 6a baseline-relative ruff, 6b
+generated-artefact exclusion}, would the gate have fired on the
+oracle-FAIL runs and stayed quiet on the oracle-PASS runs, on runs that
+already happened?
+Pre-registered (write into RETRO.md before scoring): A fires on T1 and
+on no PASS; B fires on T1 (REQ-002 has no reject) and on no PASS; C
+fires on T1 and possibly on PASS runs with positive-only properties
+(record which -- that is its false-positive rate); 6a is QUIET on every
+run's *introduced* lint but FIRE on T2's baseline lint (i.e. today's
+gate failed a node for lint the baseline carried); 6b fires on T2's
+replan (bytecode declared as targets) and nowhere else.
+Steps: one script per candidate, deterministic, no model calls; A on
+predicate-shaped nodes only, flipping the entry point's return at each
+probe input derived from the requirement literals by regex, one suite
+run per probe (cap 200, sampled, seed recorded); B and C as AST/regex
+over the journal's DAG and test diff; 6a as `ruff check` on the baseline
+vs the node's worktree, diffed by (file, line-of-introduction); 6b as the
+touched-file list with the fixed exclusion set applied. RETRO.md: one
+row per run per candidate, then a summary per candidate: fires on
+FAILs, fires on PASSes, verdict (worth implementing / tax / decorative).
+Known-good / Known-bad: the prediction is the bar.
+Done when: RETRO.md has 13 x 5 cells and five verdicts; each T6 item
+below carries a `Retro:` line citing its row. Stop if: fewer than 13
+runs have both verdicts (score what exists, say so).
+
+### T6-2 — target-scope ignores generated artefacts (scope narrowed; tightened in effect)
+Files: `src/saddle/gates.py` (`check_target_files` ~:416; new module
+constant `GENERATED_ARTEFACTS` beside `PYTEST_TESTS_FAILED`),
+`src/saddle/runner.py` (where `touched` is computed from
+`git_changed_files` | `git_added_files`), `tests/test_gates.py`,
+`tests/test_runner.py`.
+Contract: a touched path is excluded from target-scope when any of its
+`/`-segments is `__pycache__`, `.pytest_cache`, `.hypothesis`, or the
+file name matches `*.pyc`, `.coverage*`; the list is a frozen tuple in
+`gates.py` and nothing in the plan or the node can add to it. Excluded
+paths are named in the gate detail (`ignored 2 generated file(s)`) so
+the proof still says they moved.
+Direction: scope narrowed (fewer paths compared), and tightened in
+effect: a node can no longer pass target-scope by declaring bytecode as
+a deliverable, which T2's replan did (`target_files = ['retries.py',
+'__pycache__/retries.cpython-312.pyc', ...]`) -- declaring a generated
+path is rejected at validation.
+Evidence: T2 s1 log (`runs/round3/t2-s1/`), the replan's target list;
+6b in the executor's note, hypothesis weakened but the fix standing.
+Retro: T6-1 row 6b.
+Steps: 1. `GENERATED_ARTEFACTS` + `is_generated(path) -> bool`. 2.
+`check_target_files` filters `touched_files` through it and reports the
+count. 3. `Node._repo_relative_posix` rejects a `target_files` entry
+that `is_generated`. 4. Tests: known-good `check_target_files(["n.py"],
+["n.py", "__pycache__/n.cpython-312.pyc", ".coverage.tier1"])` passes
+with `ignored 2`; known-bad `["n.py"], ["n.py", "other.py"]` still fails
+naming `other.py`; `target_files: ["__pycache__/x.pyc"]` raises
+`ValidationError`.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `GENERATED_ARTEFACTS` -> `()` -> the known-good red (bytecode counted as a stray).
+2. drop the validator clause -> the declared-bytecode known-bad red.
+Done when: mutants red; `./check.sh` green.
+
+### T6-3 — ruff fails a node only for lint its own diff introduced (scope narrowed)
+Files: `src/saddle/gates.py` (`check_ruff` ~:106), `src/saddle/runner.py`
+(the ruff runner: it must run twice, baseline leg on the T3-8 snapshot
+and current leg, and diff the findings), `src/saddle/evidence.py`,
+`tests/test_gates.py`, `tests/test_runner.py`.
+Contract: the ruff gate fails when the current worktree has a finding
+(rule, file, line-content) absent from the node's baseline; a finding
+the baseline already carried is reported in the detail as `inherited: N`
+and does not fail the node. Formatting (`ruff format --check`) is
+unchanged: the harness already formats the diff, so a format failure is
+always introduced. Autofixable findings are still fixed before the gate,
+as today (#66).
+Direction: scope narrowed. Not a loosening of the standard: every
+finding the node introduces still fails it. The evidence CLAUDE.md asks
+for: T2's impl node burned three attempts on BLE001 at a line
+`baselines/t2/retries.py` already shipped, and the accepted fix was
+`# noqa: BLE001` on pre-existing code -- suppression, not repair. A
+correct `range(attempts)` fix was refused three times over lint the
+node did not write. Same principle as T3-8 (gate the node against its
+own baseline), applied to lint.
+Retro: T6-1 row 6a.
+Steps: 1. runner captures `ruff check --output-format json` on both
+legs (the baseline leg from the T3-8 snapshot ref, same as red-phase).
+2. `check_ruff(introduced, inherited, format_exit)` becomes the
+predicate; match findings by (code, path, stripped source line) so a
+pure line shift is not "introduced". 3. Tests: known-good a baseline
+with BLE001 and a diff that adds a clean function passes with
+`inherited: 1`; known-bad a diff adding `except Exception:` to a clean
+baseline fails naming BLE001; a diff that moves the inherited line down
+three lines still passes.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. compare against `set()` instead of the baseline findings -> the known-good red (inherited counted as introduced).
+2. `if introduced:` -> `if False:` -> the known-bad red (introduced BLE001 no longer fails).
+Done when: mutants red; `./check.sh` green. Owner: main session.
+
+### T6-4 — Requirements carry accepts and rejects, and rejects must be near-misses (Proposal B; tightened)
+Files: `src/saddle/dag.py` (`Requirement` ~:36: new `accepts:
+list[str]`, `rejects: list[str]`, both `min_length=1`; validator: every
+reject within edit distance `REQ_NEAR_MISS_K` of some accept),
+`src/saddle/gates.py` (`REQ_NEAR_MISS_K` constant; new
+`check_requirement_examples(examples, run)`: the node's implementation
+is exercised on every cited example through the node's own test command
+by a generated example test, or -- simpler and preferred -- the examples
+are required to appear as literal assertions in the test node's diff and
+the gate checks presence AND that the suite is green), `src/saddle/cli.py`
+(planner prompt ~:172-178 gains the two arrays and the near-miss rule
+with T1's own `"user"` as the counter-example; worker prompt ~:258
+prints them), `src/saddle/vllm.py` (schema: the arrays, `minItems: 1`;
+NOT the distance rule -- pydantic post-hoc, per T3-2's lesson on
+patterns), `tests/test_dag.py`, `tests/test_gates.py`, `tests/test_cli.py`.
+Contract: a requirement without at least one accept and one reject is
+invalid; a reject farther than `k` edits from every accept is invalid
+(`k` in gates.py; start at 3 and let T6-1's row B tune it); the
+requirement-binding gate additionally fails when a cited example has no
+assertion in the node's tests.
+Direction: tightened. Known-bad from the run: T1's REQ-002 has no reject
+at all; REQ-001's `"user"` is 12 edits from `user@example.com`.
+Retro: T6-1 row B.
+Known-good: `accepts=["user@example.com"], rejects=["user@@example.com",
+"user@example.com."]` validates; known-bad: `rejects=["user"]` raises
+naming the distance; empty `rejects` raises.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the distance check `> REQ_NEAR_MISS_K` -> `> 10**6` -> `"user"` accepted, known-bad red.
+2. `min_length=1` on `rejects` -> `0` -> empty-rejects known-bad red.
+3. the examples-present check -> `True` -> the gate known-bad red.
+Done when: mutants red; `./check.sh` green; the planner prompt test pins
+the new sentence (T3-12 style). Owner: main session (schema + prompt +
+gate; the planner-schema change must be verified against the decoder,
+CLAUDE.md "Match the enforcing engine").
+
+### T6-5 — A test node's properties must include a rejecting one (Proposal C; tightened, floor)
+Files: `src/saddle/gates.py` (`check_property_coverage` ~:446: new
+polarity clause), `src/saddle/evidence.py` (the AST walk that finds
+`@given` functions gains a polarity classifier: a property whose
+assertions are all `is True` / `== True` / truthy on the target call is
+positive; one with `is False` / `not f(x)` / `pytest.raises` is
+negative), `tests/test_gates.py`, `tests/test_evidence.py`.
+Contract: a `test` node passes property-coverage only if at least one
+property is negative-polarity. Direction: tightened. Known-bad: T1's
+single positive-only property. Known limit, stated in the detail: a lazy
+negative generator passes this floor; T6-6 is the real defence.
+Retro: T6-1 row C (its false-positive rate on PASS runs decides whether
+this lands at all).
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. polarity clause `-> True` -> T1-shaped known-bad red.
+Done when: mutant red; `./check.sh` green. Bundle with T6-4 in one sitting.
+
+### T6-6 — Behavioural mutation on predicate nodes (Proposal A; tightened; pilot)
+Files: `src/saddle/evidence.py` (new `behaviour_probe(...)`: derive probe
+inputs from the requirement literals -- single-character edits: insert
+space, duplicate dot, move dot to a boundary, second `@`, hyphen at a
+label edge, delete one char; wrap the entry point so it returns the
+negation at exactly that input; run the suite; count unconstrained),
+`src/saddle/gates.py` (`check_behaviour_constraint(ratio)`,
+`BEHAVIOUR_CONSTRAINED_MIN` beside `PYTEST_TESTS_FAILED`),
+`src/saddle/runner.py` (runs it for `impl` nodes whose target function
+returns bool -- detected from the annotation or from the suite's
+assertion shapes; otherwise `not required: non-predicate`),
+`tests/test_evidence.py`, `tests/test_gates.py`, `tests/test_runner.py`.
+Contract: for a predicate-shaped impl node, the fraction of probe inputs
+whose flipped answer the suite detects must be at least
+`BEHAVIOUR_CONSTRAINED_MIN`; the ratio and the probe count are in the
+proof. The threshold and the edit set live in gates.py.
+Direction: tightened. Prerequisite: T6-1 row A shows separation (fires
+on T1, quiet on PASSes); otherwise this item is not started.
+Known-good: a validator with both-sided tests on the T1 stub is
+constrained on most probes; known-bad: the T1 shipped two-liner with its
+shipped suite reports ~4/200.
+Costs, stated: one suite run per probe; cap and sampling in evidence.py
+with the seed sealed; non-boolean returns out of scope for the pilot.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `BEHAVIOUR_CONSTRAINED_MIN` -> `0.0` -> known-bad red.
+2. the flip `not original(x)` -> `original(x)` -> no probe is ever detected, so the known-good's ratio reads 0 -> red.
+Done when: mutants red; `./check.sh` green; a rerun of T1 alone (one
+seed, container) shows the node not sealing with the ratio in the
+transcript. Owner: main session.
+
+### T6-7 — Baselines stop committing bytecode (bench-side; after the round)
+Files: `../saddle-bench/baselines/t2,t3,t4` (tracked `.pyc`: 2, 4, 6),
+`../saddle-bench/.gitignore`, `runs/round3/BASELINES.txt` (record the
+before/after HEADs). Not before T4-6a's table is written: the baselines
+are frozen pre-registration material for the round. Then: remove the
+tracked bytecode, add `__pycache__/` to the ignore, record new HEADs,
+and note in BENCHMARK-RECORD that round 4 baselines differ from round 3
+in this and only this.
+
+### T6-8 — Node-size pre-flight: a plan whose node cannot be emitted in one diff is rejected before execution (#64; tightened)
+Files: `src/saddle/dag.py` (`validate_dag` ~:330; new `_oversized_nodes(dag,
+sizes, budget)` beside `_uncovered_requirements` ~:288; `Node.target_files`
+becomes required non-empty for `impl` and `refactor` nodes), `src/saddle/cli.py`
+(`WORKER_OUTPUT_TOKENS` ~:77 is the budget source; `_emit_valid_dag` ~:419
+feeds the issue back to the planner as a replan reason; planner prompt
+~:186 gains the rule), `src/saddle/slice.py` (`splice_replan` path: a
+replacement DAG is validated the same way), `tests/test_dag.py`,
+`tests/test_cli.py`.
+Contract: for every node, `sum(baseline line count of each target_file)`
+times a fixed per-line token factor must not exceed
+`WORKER_OUTPUT_TOKENS[effort]` for the node's effort; otherwise
+`validate_dag` yields a `node-too-large` issue naming the node, its
+estimate and the budget, and the run re-plans before any worker call. A
+missing file counts by the node's own estimate (a new file is what it
+adds, so it is bounded by the budget alone). An `impl` or `refactor`
+node with empty `target_files` is invalid: the check cannot be evaded
+by declaring nothing. The factor and the rule live in `dag.py`/`gates.py`,
+not in the plan. The budget must be the *emission* budget: on this
+server thinking tokens count against the same `max_tokens` cap, so
+`WORKER_OUTPUT_TOKENS[effort]` minus the reasoning allowance for that
+effort is what the diff can occupy -- T5 s1 truncated twice at 81920
+output tokens for a diff that needs ~8 KB, which is reasoning filling
+the cap. The allowance per effort is a constant next to the factor,
+measured by T4-3, not guessed; until T4-3 reports use the round-3
+journals' `usage` once T6-12 records it. Whether the planner keeps
+choosing the worker's `reasoning_budget` at all is T4-3's decision
+(#50-shaped: a resource, not a bar, so integrity is not at stake, but
+viability is).
+Direction: tightened. Evidence: round-3 T5 s1 (`runs/round3/t5-s1/`):
+one node over four modules of a 443-line repo; attempt 1 truncated
+(`finish_reason=length`), attempt 2 unappliable, attempt 3 the same;
+worktree untouched after ~1800 s. Round 2 F10 recorded the identical
+shape. #64 asked for exactly this check; #51's part 1 is the same defect.
+Known-good: a one-node DAG over a 40-line file at medium effort
+validates; the same node with `target_files` naming four 100+-line files
+raises `node-too-large`; the two-node split of it validates. Known-bad:
+T5's emitted DAG from the round-3 journal, replayed through
+`validate_dag`, is rejected.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the comparison `estimate > budget` -> `estimate > 10**9` -> T5's DAG validates, known-bad red.
+2. the non-empty `target_files` rule -> dropped -> an `impl` node with `[]` validates, red.
+3. `_emit_valid_dag` ignores `node-too-large` when deciding to re-plan -> the CLI test red (worker called on an oversized node).
+Done when: mutants red; `./check.sh` green; then one container run of T5
+(one seed) to see whether the planner produces a plan that validates,
+and how many nodes -- that run is the measurement, recorded in F21's
+successor. Owner: main session. Note: this supersedes the "opt-in"
+decision in T3-2 and closes #64's remaining half; say so in the commit.
+
+### T6-9 — A run on a clock seals what it has (deadline; no gate change)
+Files: `src/saddle/slice.py` (`run_slice(..., deadline_s: float | None =
+None)`; `_schedule_until_done` stops dispatching new nodes when
+`remaining < median node wall so far`, or at the deadline, and
+`_seal_run` writes the run span with `detail="deadline: N proven, M
+undispatched"`), `src/saddle/cli.py` (`--deadline SECONDS`),
+`tests/test_slice.py`, `tests/test_cli.py`; `../saddle-bench/run_arm.sh`
+(pass `--deadline 1700` instead of relying on `timeout 1800` alone).
+Contract: with a deadline, a run never ends with an empty journal when
+at least one node has sealed, and never leaves a failed attempt's diff in
+the worktree: the in-flight node is given until the deadline to finish
+its current attempt, then `_abandon` runs for it exactly as on any other
+give-up path (T3-23), so the worktree holds proven edits only -- F21.2's
+"unproven residue" (t6-s1, t6-s2: the correct module in the tree, the
+proof covering only the test file) cannot recur under an external kill
+that saddle can see coming. F21.8 item 4 is this clause; proofs already sealed stay sealed, no node is started that cannot
+finish, exit code is distinct (3) and the run span says so; a later `saddle run` on the same journal resumes (T3-1,
+T3-9, T3-10). Direction: none for the gates. Evidence: round 2 twice and
+round 3 T5 ended with "produced nothing, worktree untouched" under an
+external kill that saddle could not see. Known-good: a three-node
+fixture with a deadline that fits one node seals one proof and exits 3;
+resuming with no deadline finishes the other two. Known-bad: a node
+already running at the deadline is not killed mid-gate -- it finishes
+and seals; assert that.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the dispatch guard -> `if False:` -> the three-node known-good dispatches all three, red.
+Done when: mutant red; `./check.sh` green.
+
+### T6-10 — The 3-way rung of the apply ladder is dead for model diffs (scope narrowed, with proof)
+Files: `src/saddle/slice.py` (`_apply_diff` ~:171; `_APPLY_MODES`),
+`tests/test_slice.py`. Evidence: round-3 T5 s1 attempt 2: `error:
+repository lacks the necessary blob to perform 3-way merge`. A worker
+diff carries invented `index <a>..<b>` lines; `git apply --3way` needs
+those blobs to exist in the object store, so the last rung has never
+been able to succeed on any model-emitted diff and only adds a failed
+subprocess and its stderr to every apply failure.
+Contract: `_apply_diff` strips `index ...` lines from the proposal
+before the ladder runs (they carry no information git needs for a
+non-3-way apply), and the 3-way rung is removed; the ladder is `strict
+-> ignore-whitespace -> reduced-context`. Direction: scope narrowed
+(one rung fewer; nothing that could apply before fails to apply now --
+prove it: the existing apply fixtures pass on every remaining rung
+exactly as before, byte-identical spans minus the 3-way one). Known-good:
+a diff with fake index lines that applies on the strict rung still
+applies; known-bad: a diff that only 3-way could apply -- none exists
+for a model diff, and the test asserts the 3-way rung is not attempted.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. re-add the 3-way rung to `_APPLY_MODES` -> the not-attempted test red (an extra `git apply --3way` span).
+2. skip the `index` strip -> the test that asserts the applied diff carries no `index` line red.
+Done when: mutant red; `./check.sh` green; the T2-1/T3-8 span pins updated with the reason in the commit.
+
+### T6-11 — Not an item: sequential sampling already stops early
+Recorded so it is not proposed again. `_best_of_samples` draws one
+sample at a time, gates it, and `break`s on the first with zero failing
+checks (T2-1). T1's 119 s / 126 s per attempt were spent gating
+candidates (each runs full Tier-1 including mutmut), not drawing
+redundant samples. If sampling cost is worth attacking, the item is a
+cheaper gate ordering (syntax, ruff, tests before mutation) measured on
+the round-3 journals' span durations -- write that item only after the
+numbers are read.
+
+### T6-12 — A failed attempt keeps its evidence: reasoning, finish reason, token usage (tightened; journal format)
+Files: `src/saddle/vllm.py` (`propose_diff` ~:313: the truncation branch
+raises `VllmResponseError` and drops the partial `reasoning`/`content`
+and `usage` the response carried; the error must carry them out),
+`src/saddle/slice.py` (`_seal_attempt` ~:301: the agent span for a
+failed attempt today has `detail` only; `_best_of_samples` ~:358: a
+sample that fails gates or does not apply loses its reasoning as well),
+`src/saddle/journal.py` (`SpanRecord`: new optional `attempt_hash`;
+new sidecar `attempts/<span_id>.json` beside the journal holding
+`thinking`, `finish_reason`, `usage` (prompt/completion/reasoning
+tokens), `failure`, `diff_hash`; the sidecar's sha256 is the span's
+`attempt_hash`, so `verify_journal` can check it and a missing or edited
+sidecar is a verify failure), `src/saddle/transcript.py` (`saddle verify`
+renders "attempt 1 of 3: truncated at 81920 tokens, 61k reasoning, see
+attempts/…" for failed attempts), `tests/test_vllm.py`,
+`tests/test_slice.py`, `tests/test_journal.py`, `tests/test_transcript.py`.
+Finding (round-3 T5 s1, executor): `thinking` is written only onto sealed
+proof records. T1 sealed two proofs and both carry ~4 KB of worker
+reasoning; T5 sealed nothing and its journal is 9.2 KB of git spans --
+three attempts, two of them truncated at the 81920 cap, at least
+160k output tokens, none retained. The one artefact that could say why a
+node truncated is the one discarded; a successful node's reasoning is
+kept although its diff and eleven gate results already stand for it.
+`build_replan_task` consumes the failure history in memory and drops it.
+Contract: every worker attempt, sealed or not, leaves a sidecar whose
+hash is sealed in its agent span; a truncated call records
+`finish_reason=length`, the cap it hit, the token usage the server
+reported, and whatever reasoning and content arrived; a sample that
+failed gates records its gate outcomes and diff hash; `saddle verify`
+fails on a span whose sidecar is missing or does not hash. Sealed proof
+records are unchanged (their `thinking` stays where it is; the record
+hash does not move, so existing journals still verify).
+Direction: tightened (more is sealed; nothing is accepted that was not).
+Size: the sidecar can be hundreds of KB per attempt; it lives beside the
+journal, not in it, so `saddle tail` and the chain stay small; a
+`--no-attempt-sidecars` flag is NOT offered -- the evidence is the point.
+Known-good: a two-attempt fixture (first fails ruff, second seals) leaves
+two sidecars, the failed one carrying its reasoning and `failure`, both
+hashed into their spans, `verify` OK. Known-bad: a fixture whose worker
+raises the truncation error leaves a sidecar with `finish_reason=length`
+and the partial reasoning, and the transcript line says so; editing one
+byte of a sidecar makes `verify` fail naming the span.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the truncation branch raises without attaching `reasoning`/`usage` -> the truncation known-bad red (sidecar lacks them).
+2. `attempt_hash` not checked in `verify_journal` -> the edited-sidecar known-bad red.
+3. `_seal_attempt` writes the sidecar only when `exit_code == 0` -> the failed-attempt known-good red.
+Done when: mutants red; `./check.sh` green; T5 rerun after T6-8 shows
+its attempts' sidecars in `runs/…/.saddle/attempts/`. Owner: main
+session (journal format change; the vllm error type changes shape).
+
+### T6-13 — The journal records what was asked, not only what happened: a `plan` record (tightened; journal format)
+Files: `src/saddle/journal.py` (new record type `plan`: the validated DAG
+as emitted -- node ids, kinds, `target_files`, requirement ids and
+statements, `execution_constraints` including `reasoning_budget` and
+`max_context_tokens`, `deterministic_gate` -- plus `task_hash` and the
+`hash_node` of every node; sealed into the chain like a span),
+`src/saddle/slice.py` (`run_slice` appends it before the first node is
+dispatched, and again after every `splice_replan` with `replaces:
+<failed id>`), `src/saddle/cli.py` (`saddle verify` and `saddle status`
+render it: "plan: 1 node; node-1 impl xhigh, 4 target files, 30000 ctx"),
+`tests/test_journal.py`, `tests/test_slice.py`, `tests/test_cli.py`.
+Finding (round-3 T5 s1): the run timed out with an empty log (buffered
+stdout killed by SIGTERM) and a journal of spans only; nothing recorded
+which kind the node was, what effort the planner assigned it, or what
+files it declared, so the reasoning-budget hypothesis for the truncation
+could not be checked from the artefacts. The journal records outcomes
+and not the plan that produced them.
+Contract: every run's journal carries the plan it executed before any
+worker call, and every replan's replacement; the record is in the hash
+chain; `verify` fails a journal whose proofs cite a node the plan
+records do not contain (a proof for a node nobody planned). T3-9's
+`node_hash` on each proof must equal the `hash_node` the plan record
+carries for that id, checked by `verify`.
+Direction: tightened. Known-good: the two-node fixture's journal has one
+plan record with two nodes, and a replan fixture has two plan records,
+the second naming `replaces: n1`; `verify` OK. Known-bad: a proof whose
+`node_hash` differs from the plan's -> `verify` names the node; a
+journal with proofs and no plan record -> `verify` fails.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `run_slice` appends the plan record after the first node instead of before -> the span-order test red.
+2. `verify` skips the node_hash-vs-plan check -> the mismatched-hash known-bad red.
+Done when: mutants red; `./check.sh` green. Owner: main session. Cheap;
+lands with T6-12. Note: `max_context_tokens` is capped at 30000 by the
+schema (`dag.py:98`) while the server holds 175k; that is a read
+ceiling, not what truncated T5 (an output cap), and is left alone until
+a run shows a worker starved of context.
+
+### T6-14 — A truncated attempt is retried with more room, and the emission budget is not the reasoning effort's side effect (tightened in effect; #51 part 2 reopened)
+Files: `src/saddle/cli.py` (`WORKER_OUTPUT_TOKENS` ~:77 with its comment
+"thinking dominates output, so the budget tracks reasoning effort";
+`propose` ~:505-541: `output_tokens = WORKER_OUTPUT_TOKENS[effort]` is
+recomputed identically on every call, so the retry after a truncation
+resends with the same cap, after an extra recovery-plan call and a
+longer repair prompt), `src/saddle/vllm.py` (~:314 the message "retry
+with more max_tokens" -- advice no caller acts on; a mechanism must be
+able to do what it reports), `src/saddle/slice.py` (`_run_node` ~:418:
+the retry loop must tell `propose` this is a post-truncation retry),
+`tests/test_cli.py`, `tests/test_slice.py`, `tests/test_vllm.py`.
+Finding (round-3 T5 s1, executor, every link read from source): the
+worker's output cap is `WORKER_OUTPUT_TOKENS[effort]` where effort comes
+from the planner's `reasoning_budget`; the server's lifetime histogram
+shows 7 generations in the 20k-50k band and none above 50k, consistent
+with `medium = 32768` as the ceiling that truncated node-1 twice; the
+`--max-tokens 81920` flag governs emission and planning only; the
+truncation error names a remedy nothing applies; the retry adds a
+recovery-plan call and a longer prompt under the same cap. The #51
+comment posted 2026-09-19 said b127e55 retries "at the next larger
+output budget" -- b127e55 made truncation retryable and rewrote the
+planner's sizing rule; it did not raise the budget. Correct the comment.
+Contract: (1) a worker attempt that follows a `finish_reason=length`
+failure runs with an output cap at least one step larger
+(`WORKER_OUTPUT_TOKENS` order, capped at the server's `max_model_len`
+minus the prompt), and the attempt span records the cap used; (2) the
+emission budget is computed from the node's declared work -- the
+baseline size of its `target_files` times the T6-8 factor plus a fixed
+diff-overhead constant -- and the reasoning effort governs reasoning
+only, via the request's `reasoning_effort` field; if the server counts
+thinking against `max_tokens`, the cap sent is emission budget plus the
+reasoning allowance for the effort (the T6-8 constant), so buying room
+to write never buys room to think and vice versa; (3) the truncation
+message says what will happen ("retrying with N tokens") or, on the last
+attempt, that nothing will.
+Direction: tightened in effect (a failure the harness manufactured is
+removed; no gate changes). Evidence: T5 s1's three attempts; the
+histogram; `propose` as read. Known-good: a fixture worker that
+truncates once at cap C and succeeds at the next step seals with two
+attempt spans whose caps differ; known-bad: with the old code the second
+attempt's cap equals the first (assert on the recorded `max_tokens` in
+the stub client's calls).
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the escalation step -> `+ 0` -> the two-caps-differ test red.
+2. emission budget computed from `effort` again instead of the declared work -> the "same effort, larger files, larger cap" test red.
+3. the message: keep "retry with more max_tokens" unconditionally -> the last-attempt message test red.
+Done when: mutants red; `./check.sh` green; T5 rerun (one seed) after
+T6-8+T6-14 shows attempt caps in the spans and no truncation, or a
+truncation at the server's real ceiling -- which would then be the
+model-ceiling column, honestly. Owner: main session. Also: post the
+correction on #51 (the user's word first).
+
+---
+
+## 10. Deferred and not recommended
 
 | Item | Why not now | Would need |
 |---|---|---|
@@ -3561,7 +4083,7 @@ and still shows time spent reading. Keep #17 open, unchanged.
 
 ---
 
-## 10. Evidence label legend (as used above)
+## 11. Evidence label legend (as used above)
 
 - **PROVEN-IN-PRODUCTION** — shipped and load-bearing somewhere with a public
   record (git's apply semantics, merge-queue full-suite runs, vLLM grammar
