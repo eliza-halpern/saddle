@@ -8,9 +8,9 @@ purpose — JSON Schema `number` accepts ints, so `float` fields must too.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -285,6 +285,64 @@ def _ceiling_violations(dag: Dag, context_ceiling: int) -> list[DagIssue]:
     return issues
 
 
+# Emission estimate for a node (T6-8): what its diff costs to write, from the
+# repo, not from the planner. A unified diff re-emits the changed lines with
+# context and headers; measured on round 3 (T5: ~250 diff lines, ~4000
+# tokens), 16 tokens per baseline line of the declared files plus a fixed
+# header/hunk overhead is a ceiling, not a mean. Both constants live here so
+# nothing the planner emits can move them.
+TOKENS_PER_LINE: Final = 16
+DIFF_OVERHEAD_TOKENS: Final = 2048
+SCOPED_KINDS: Final = ("impl", "refactor")
+
+
+def emission_estimate(node: Node, file_lines: Mapping[str, int]) -> int | None:
+    """Tokens a diff over `node.target_files` needs; None when no scope is declared.
+
+    A declared file the repo lacks is one the node creates: it costs what
+    the node writes, bounded by the budget alone, so it adds nothing here.
+    """
+    if not node.target_files:
+        return None
+    lines = sum(file_lines.get(path, 0) for path in node.target_files)
+    return lines * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
+
+
+def _undeclared_scope(dag: Dag) -> list[DagIssue]:
+    return [
+        DagIssue(
+            code="undeclared-scope",
+            node_id=node.id,
+            message=f"node {node.id!r} is {node.kind} and declares no target_files;"
+            " name the files it will touch so its size can be checked",
+        )
+        for node in dag.nodes
+        if node.kind in SCOPED_KINDS and not node.target_files
+    ]
+
+
+def _oversized_nodes(
+    dag: Dag, file_lines: Mapping[str, int], emission_budget: Callable[[Node], int]
+) -> list[DagIssue]:
+    issues: list[DagIssue] = []
+    for node in dag.nodes:
+        estimate = emission_estimate(node, file_lines)
+        if estimate is None:
+            continue
+        budget = emission_budget(node)
+        if estimate > budget:
+            issues.append(
+                DagIssue(
+                    code="node-too-large",
+                    node_id=node.id,
+                    message=f"node {node.id!r} declares {len(node.target_files)} file(s)"
+                    f" whose diff is estimated at {estimate} tokens, over its"
+                    f" {budget}-token emission budget; split it by module or behaviour",
+                )
+            )
+    return issues
+
+
 def _uncovered_requirements(dag: Dag, required_ids: Collection[str]) -> list[DagIssue]:
     covered = {req for node in dag.nodes for req in node.requirement_ids}
     return [
@@ -333,8 +391,17 @@ def validate_dag(
     allowed_tools: Collection[str],
     context_ceiling: int,
     required_ids: Collection[str],
+    file_lines: Mapping[str, int] | None = None,
+    emission_budget: Callable[[Node], int] | None = None,
 ) -> list[DagIssue]:
-    """Zero-LLM semantic checks over a parsed DAG. Empty list means valid."""
+    """Zero-LLM semantic checks over a parsed DAG. Empty list means valid.
+
+    With `file_lines` (baseline line count per repo file) the scope checks
+    run too (T6-8): an `impl`/`refactor` node must declare `target_files`,
+    and with `emission_budget` a node whose estimated diff exceeds the
+    budget its caller allows is `node-too-large`. Callers that validate a
+    DAG with no repo behind it leave both unset.
+    """
     issues: list[DagIssue] = []
     issues.extend(_duplicate_ids(dag))
     issues.extend(_unknown_dependencies(dag))
@@ -342,4 +409,8 @@ def validate_dag(
     issues.extend(_disallowed_tools(dag, allowed_tools))
     issues.extend(_ceiling_violations(dag, context_ceiling))
     issues.extend(_uncovered_requirements(dag, required_ids))
+    if file_lines is not None:
+        issues.extend(_undeclared_scope(dag))
+        if emission_budget is not None:
+            issues.extend(_oversized_nodes(dag, file_lines, emission_budget))
     return issues

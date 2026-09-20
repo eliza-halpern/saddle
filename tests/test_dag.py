@@ -9,10 +9,13 @@ import pytest
 from pydantic import ValidationError
 
 from saddle.dag import (
+    DIFF_OVERHEAD_TOKENS,
+    TOKENS_PER_LINE,
     Dag,
     DagIssue,
     Node,
     dag_json_schema,
+    emission_estimate,
     planned_requirement_ids,
     validate_dag,
 )
@@ -540,3 +543,80 @@ def test_planned_requirement_ids_is_the_sorted_union_over_every_node() -> None:
 def test_planned_requirement_ids_of_a_single_node_plan_is_its_own_ids() -> None:
     dag = Dag.model_validate({"nodes": [_node("a", reqs=["REQ-002", "REQ-001"])]})
     assert planned_requirement_ids(dag) == ("REQ-001", "REQ-002")
+
+
+def _scoped(node_id: str, files: list[str], *, kind: str = "impl", budget: str = "low") -> Node:
+    return Node.model_validate(
+        {**_node(node_id, budget=budget), "kind": kind, "target_files": files}
+    )
+
+
+def test_emission_estimate_is_none_without_scope_and_counts_only_existing_files() -> None:
+    """Known-good (T6-8): the estimate is sized from the repo, not the plan.
+    A declared file the repo lacks is one the node creates and adds nothing."""
+    lines = {"a.py": 100, "b.py": 50}
+    assert emission_estimate(_scoped("n", []), lines) is None
+    assert (
+        emission_estimate(_scoped("n", ["a.py"]), lines)
+        == 100 * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
+    )
+    assert (
+        emission_estimate(_scoped("n", ["a.py", "b.py", "new.py"]), lines)
+        == 150 * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
+    )
+
+
+def test_validate_dag_scope_checks_are_off_without_file_lines() -> None:
+    """A caller with no repo behind the DAG (fixtures, unit tests) sees the
+    six structural checks and nothing about scope."""
+    dag = Dag(nodes=[_scoped("n1", [])])
+    assert _check(dag, required=["REQ-001"]) == []
+
+
+def test_validate_dag_flags_undeclared_scope_on_impl_and_refactor_only() -> None:
+    """Known-bad (T6-8): an impl or refactor node with no `target_files`
+    cannot be size-checked, so it is invalid once a repo is in view; a
+    `test` node writes tests it names itself and is not gated on scope."""
+    dag = Dag(
+        nodes=[_scoped("i", []), _scoped("r", [], kind="refactor"), _scoped("t", [], kind="test")]
+    )
+    issues = validate_dag(
+        dag,
+        allowed_tools={"read_file"},
+        context_ceiling=30000,
+        required_ids=["REQ-001"],
+        file_lines={},
+    )
+    assert [(issue.code, issue.node_id) for issue in issues] == [
+        ("undeclared-scope", "i"),
+        ("undeclared-scope", "r"),
+    ]
+    assert "declares no target_files" in issues[0].message
+
+
+def test_validate_dag_rejects_a_node_too_large_for_its_budget_and_accepts_its_split() -> None:
+    """Known-bad (T6-8): one node over files whose diff estimate exceeds the
+    budget its caller allows; known-good: the same files split across two
+    nodes, each under budget, and a small node at the same budget."""
+    lines = {"a.py": 4000, "b.py": 4000, "c.py": 10}
+    budget = 70_000  # what a caller derives from its largest cap minus the effort's allowance
+
+    def check(dag: Dag) -> list[DagIssue]:
+        return validate_dag(
+            dag,
+            allowed_tools={"read_file"},
+            context_ceiling=30000,
+            required_ids=["REQ-001"],
+            file_lines=lines,
+            emission_budget=lambda node: budget,
+        )
+
+    big = Dag(nodes=[_scoped("n1", ["a.py", "b.py"])])
+    (issue,) = check(big)
+    assert issue.code == "node-too-large"
+    assert issue.node_id == "n1"
+    assert f"estimated at {8000 * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS} tokens" in issue.message
+    assert f"over its {budget}-token emission budget" in issue.message
+    split = Dag(nodes=[_scoped("n1", ["a.py"]), _scoped("n2", ["b.py"])])
+    assert check(split) == []
+    assert check(Dag(nodes=[_scoped("n1", ["c.py"])])) == []

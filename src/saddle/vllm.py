@@ -297,8 +297,14 @@ def _delta_tokens(delta: Mapping[str, Any]) -> list[StreamToken]:
     return tokens
 
 
-def _parse_message(data: object) -> tuple[str, str]:
-    """Validated (content, reasoning) from a chat envelope; truncations raise."""
+def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str, str]:
+    """Validated (content, reasoning) from a chat envelope; truncations raise.
+
+    A truncation names the cap it hit when the caller passes it. It no
+    longer advises "retry with more max_tokens": for a year no caller did,
+    and a message that names a remedy nothing applies is a claim the
+    mechanism cannot back (T6-14). Escalation is the caller's contract.
+    """
     if not isinstance(data, dict):
         msg = f"expected a JSON object envelope, got {type(data).__name__}"
         raise VllmResponseError(msg)
@@ -311,7 +317,8 @@ def _parse_message(data: object) -> tuple[str, str]:
         msg = "first choice is not an object"
         raise VllmResponseError(msg)
     if first.get("finish_reason") == "length":
-        msg = "completion truncated (finish_reason=length); retry with more max_tokens"
+        at = f" at {max_tokens} output tokens" if max_tokens is not None else ""
+        msg = f"completion truncated{at} (finish_reason=length)"
         raise VllmResponseError(msg)
     message = first.get("message")
     if not isinstance(message, dict):
@@ -346,14 +353,14 @@ def _parse_text_response(data: object) -> str:
     return content
 
 
-def _parse_diff_response(data: object) -> DiffProposal:
+def _parse_diff_response(data: object, *, max_tokens: int | None = None) -> DiffProposal:
     """The content IS the diff: DIFF_GRAMMAR constrains raw text, not JSON.
 
     Structural rejection stays in `slice._apply_diff` rather than here, so
     a bad packet remains a retryable attempt rather than throwing the run
     away. Blank content is already refused by `_parse_message`.
     """
-    content, reasoning = _parse_message(data)
+    content, reasoning = _parse_message(data, max_tokens=max_tokens)
     return DiffProposal(diff=content, reasoning=reasoning)
 
 
@@ -470,7 +477,7 @@ class VllmClient:
             temperature=temperature,
             reasoning_effort=reasoning_effort,
         )
-        return _parse_diff_response(self._post(payload))
+        return _parse_diff_response(self._post(payload), max_tokens=max_tokens)
 
     def complete(
         self,

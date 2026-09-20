@@ -16,12 +16,15 @@ import pytest
 from saddle.cli import (
     CONTENTS_WITHHELD,
     MAX_FILES_IN_PROMPT,
+    MAX_WORKER_OUTPUT,
     RUN_ALLOWLIST,
     TOOL_BINDINGS,
+    WORKER_OUTPUT_STEPS,
     WORKER_OUTPUT_TOKENS,
     DagOptions,
     RunError,
     RunOptions,
+    _file_lines,
     build_emit_prompt,
     build_parser,
     build_recovery_plan_prompt,
@@ -29,6 +32,7 @@ from saddle.cli import (
     build_replan_task,
     build_worker_prompt,
     check_server,
+    emission_budget,
     main,
     render_dag_plan,
     run_dag,
@@ -36,8 +40,9 @@ from saddle.cli import (
     run_tail,
     run_task,
     run_verify,
+    worker_output_cap,
 )
-from saddle.dag import Dag, Node
+from saddle.dag import DIFF_OVERHEAD_TOKENS, TOKENS_PER_LINE, Dag, Node
 from saddle.evidence import CapturedRun, git_ls_files, run_argv
 from saddle.gates import GateCheck, Tier1Result, check_node_scope
 from saddle.journal import (
@@ -101,6 +106,9 @@ def _node_dict(
         "id": node_id,
         "kind": "impl",
         "dependencies": [],
+        # Declared scope is required of an impl node since T6-8 (the planner
+        # cannot leave it empty); the fixture's diff touches `n.py` alone.
+        "target_files": ["n.py"],
         "task_prompt": "Fix f and test it.",
         "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
         "execution_constraints": {
@@ -122,6 +130,16 @@ def _node_dict(
             },
         },
     }
+
+
+def _expected_cap(repo: Path, effort: str, *, escalations: int = 0) -> int:
+    """The worker cap the fixture node earns: `n.py`'s lines sized as a diff,
+    plus the effort's reasoning allowance, climbed `escalations` steps (T6-14)."""
+    lines = (repo / "n.py").read_text().count("\n")
+    cap = WORKER_OUTPUT_TOKENS[effort] + lines * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
+    for _ in range(escalations):
+        cap = next(step for step in WORKER_OUTPUT_STEPS if step > cap)
+    return cap
 
 
 def _emit_response(payload: dict[str, Any]) -> httpx.Response:
@@ -263,7 +281,9 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "smallest figure that covers the files" in prompt
     assert "red_phase_required is always true." in prompt
     assert "read_file, write_file, run_tests, lint" in prompt
-    assert "target_files (optional) lists the repo-relative files" in prompt
+    assert "target_files lists the repo-relative files the node may touch" in prompt
+    assert "Required for impl and refactor nodes" in prompt
+    assert "rejected before it runs" in prompt
     assert "may not create or rename files" in prompt
     assert 'never start one with "/"' in prompt
     assert 'never use "/"' not in prompt
@@ -290,7 +310,7 @@ def test_build_worker_prompt_tells_the_worker_its_target_files() -> None:
     prompt = build_worker_prompt(task=TASK, node=scoped, files=["n.py"], contents={})
     assert "Touch only these files: n.py, m.py." in prompt
     assert "rejects a diff that names any other file" in prompt
-    unscoped = Node.model_validate(_node_dict())
+    unscoped = Node.model_validate({**_node_dict(), "target_files": []})
     prompt = build_worker_prompt(task=TASK, node=unscoped, files=["n.py"], contents={})
     assert "Touch only these files" not in prompt
 
@@ -502,7 +522,7 @@ def test_run_task_honors_sampling_options(tmp_path: Path) -> None:
     assert seen[0]["max_tokens"] == 100
     assert seen[0]["temperature"] == 0.5
     assert seen[0]["reasoning_effort"] == "low"
-    assert seen[1]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
+    assert seen[1]["max_tokens"] == _expected_cap(tmp_path, "low")
     assert seen[1]["temperature"] == 0.9
 
 
@@ -510,9 +530,9 @@ def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path
     """Regression: spending the read ceiling as the output cap truncated work.
 
     `max_context_tokens` bounds what the worker reads; generation gets its
-    own budget keyed to reasoning effort.
+    own budget: the diff's estimated size plus the effort's reasoning
+    allowance (T6-14).
     """
-    from saddle.cli import WORKER_OUTPUT_TOKENS
 
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
@@ -524,7 +544,7 @@ def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path
     code, _ = _run(options, client)
     assert code == 0
     assert seen[0]["max_tokens"] == 100
-    assert seen[1]["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
+    assert seen[1]["max_tokens"] == _expected_cap(tmp_path, "low")
     assert seen[1]["max_tokens"] != 8000
     assert seen[1]["reasoning_effort"] == "low"
 
@@ -795,7 +815,7 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     assert len(diff_calls) >= PROPOSAL_SAMPLES
     recovery = next(call for call in seen if "Diagnose the root cause" in _prompt(call))
     assert recovery["reasoning_effort"] == "low"
-    assert recovery["max_tokens"] == WORKER_OUTPUT_TOKENS["low"]
+    assert recovery["max_tokens"] == _expected_cap(tmp_path, "low")
     assert recovery["temperature"] == 0.5
     assert "structured_outputs" not in recovery
 
@@ -1008,6 +1028,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "│   requirements: REQ-001\n"
         "│   depends on: (none)\n"
         "│   tools: read_file, write_file, run_tests, lint\n"
+        "│   targets: n.py\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
         "├── n2 [budget: medium, context: 8000 tokens]\n"
@@ -1015,6 +1036,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "│   requirements: REQ-001, REQ-002\n"
         "│   depends on: n1\n"
         "│   tools: read_file, write_file\n"
+        "│   targets: n.py\n"
         "│   gate: pytest test_w.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 90.0% changed-lines)\n"
         "└── n3 [budget: xhigh, context: 12000 tokens]\n"
@@ -1022,6 +1044,7 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
         "    requirements: REQ-001\n"
         "    depends on: n1, n2\n"
         "    tools: lint\n"
+        "    targets: n.py\n"
         "    gate: pytest test_p.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 95.0% changed-lines)\n"
     )
@@ -1037,7 +1060,9 @@ def test_render_dag_plan_shows_target_files_only_when_declared() -> None:
         "    targets: n.py, test_n.py\n"
         "    gate: "
     ) in text
-    bare = Dag.model_validate({"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]})
+    bare = Dag.model_validate(
+        {"nodes": [{**_node_dict("n1", "low", kill_threshold=85.0), "target_files": []}]}
+    )
     assert "targets:" not in render_dag_plan("Do the thing.", bare)
 
 
@@ -1051,6 +1076,7 @@ def test_render_dag_plan_single_node() -> None:
         "    requirements: REQ-001\n"
         "    depends on: (none)\n"
         "    tools: read_file, write_file, run_tests, lint\n"
+        "    targets: n.py\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
     )
@@ -1082,6 +1108,7 @@ def test_run_dag_prints_plan() -> None:
         "│   requirements: REQ-001\n"
         "│   depends on: (none)\n"
         "│   tools: read_file, write_file, run_tests, lint\n"
+        "│   targets: n.py\n"
         "│   gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
         "└── n2 [budget: low, context: 8000 tokens]\n"
@@ -1089,6 +1116,7 @@ def test_run_dag_prints_plan() -> None:
         "    requirements: REQ-001\n"
         "    depends on: n1\n"
         "    tools: read_file, write_file, run_tests, lint\n"
+        "    targets: n.py\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
     )
@@ -1502,6 +1530,7 @@ def test_main_dag_passes_flags_through(
         "    requirements: REQ-001\n"
         "    depends on: (none)\n"
         "    tools: read_file, write_file, run_tests, lint\n"
+        "    targets: n.py\n"
         "    gate: pytest test_n.py (coverage >= 100.0%, red-phase required, "
         "mutation 100 @ 85.0% changed-lines)\n"
     )
@@ -2361,3 +2390,124 @@ def test_run_dag_shows_the_planner_the_repo_files(tmp_path: Path) -> None:
     client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]}, seen)
     assert run_dag(empty, client, stdout=io.StringIO()) == 0
     assert "(no tracked files)" in json.loads(seen[1].content)["messages"][0]["content"]
+
+
+def _truncated_response() -> httpx.Response:
+    body = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "diff --git a/n.py", "reasoning": ""},
+                "finish_reason": "length",
+            }
+        ],
+        "model": "m",
+    }
+    return httpx.Response(200, json=body)
+
+
+def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path) -> None:
+    """Known-good (T6-14): attempt 1's samples and its fallback all come back
+    `finish_reason=length`; attempt 2 -- the recovery plan and the diff --
+    runs one ladder step up. Known-bad was the old `propose`: every call
+    recomputed the same cap, so round-3 T5 truncated three attempts in a
+    row at 32768 with a longer prompt each time."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    truncate_first = PROPOSAL_SAMPLES + 1  # the k samples and attempt 1's fallback
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if not _is_diff_request(payload):
+            if "Decompose the mechanical coding task" in _prompt(payload):
+                return _emit_response({"nodes": [_node_dict()]})
+            return _text_response("Plan: emit the whole diff.")
+        diffs = sum(1 for call in seen if _is_diff_request(call))
+        return _truncated_response() if diffs <= truncate_first else _diff_response()
+
+    client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+    code, out = _run(_options(tmp_path), client)
+    assert code == 0, out
+    assert "- Verdict: PASS\n" in out
+    assert "- Attempts: 2\n" in out
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    assert len(diff_calls) == truncate_first + 1
+    first = _expected_cap(tmp_path, "low")
+    assert [call["max_tokens"] for call in diff_calls[:-1]] == [first] * truncate_first
+    assert diff_calls[-1]["max_tokens"] == _expected_cap(tmp_path, "low", escalations=1)
+    assert diff_calls[-1]["max_tokens"] > first
+    recovery = next(call for call in seen if "Diagnose the root cause" in _prompt(call))
+    assert recovery["max_tokens"] == diff_calls[-1]["max_tokens"]
+    assert f"completion truncated at {first} output tokens" in _prompt(recovery)
+    assert "retry with more" not in _prompt(recovery)
+
+
+def test_worker_output_cap_is_sized_from_declared_files_not_effort_alone() -> None:
+    """T6-14: same effort, more declared lines, larger cap; no scope, the
+    allowance alone; escalation climbs the ladder and stops at its top."""
+    lines = {"a.py": 100, "b.py": 900}
+    small = Node.model_validate({**_node_dict(), "target_files": ["a.py"]})
+    large = Node.model_validate({**_node_dict(), "target_files": ["a.py", "b.py"]})
+    bare = Node.model_validate({**_node_dict(), "target_files": []})
+    allowance = WORKER_OUTPUT_TOKENS["low"]
+    assert worker_output_cap(bare, "low", lines, 0) == allowance
+    assert (
+        worker_output_cap(small, "low", lines, 0)
+        == allowance + 100 * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
+    )
+    assert worker_output_cap(large, "low", lines, 0) > worker_output_cap(small, "low", lines, 0)
+    assert worker_output_cap(bare, "low", lines, 1) == 32768
+    assert worker_output_cap(bare, "low", lines, 2) == 65536
+    assert worker_output_cap(bare, "xhigh", lines, 5) == MAX_WORKER_OUTPUT
+    assert emission_budget(bare) == MAX_WORKER_OUTPUT - allowance
+
+
+def test_run_task_emission_rejects_an_undeclared_scope_and_replans(tmp_path: Path) -> None:
+    """Known-bad (T6-8): the planner's first plan leaves `target_files` empty
+    on an impl node; it is fed back as `undeclared-scope` and the second
+    plan, which declares, runs."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    script = [
+        _emit_response({"nodes": [{**_node_dict(), "target_files": []}]}),
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(),
+    ]
+    code, out = _run(_options(tmp_path), _scripted_client(script, seen))
+    assert code == 0, out
+    assert "undeclared-scope: node 'n1' is impl and declares no target_files" in _prompt(seen[1])
+
+
+def test_run_task_emission_rejects_a_node_too_large_before_any_worker_call(tmp_path: Path) -> None:
+    """Known-bad (T6-8): a node whose declared files cannot be diffed within
+    the largest cap the harness sends is rejected at planning time with the
+    estimate and budget named; no worker call happens for it. Round-3 T5's
+    plan (four modules, 249 lines) is NOT this case -- its failure was the
+    cap, T6-14 -- so the fixture declares a genuinely oversized file."""
+    _git_repo(tmp_path)
+    (tmp_path / "big.py").write_text("x = 1\n" * 8000)
+    assert run_argv(["git", "add", "big.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-q", "-m", "big"], tmp_path) == 0
+    seen: list[dict[str, Any]] = []
+    script = [
+        _emit_response({"nodes": [{**_node_dict(), "target_files": ["n.py", "big.py"]}]}),
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(),
+    ]
+    code, out = _run(_options(tmp_path), _scripted_client(script, seen))
+    assert code == 0, out
+    assert "node-too-large: node 'n1' declares 2 file(s)" in _prompt(seen[1])
+    assert (
+        f"over its {MAX_WORKER_OUTPUT - WORKER_OUTPUT_TOKENS['low']}-token emission budget"
+        in _prompt(seen[1])
+    )
+    assert not _is_diff_request(seen[0])
+    assert not _is_diff_request(seen[1])
+
+
+def test_file_lines_skips_files_that_do_not_read_as_text(tmp_path: Path) -> None:
+    """A binary or missing file has no line count to size a diff from, so
+    it contributes nothing rather than failing the plan (T6-8)."""
+    (tmp_path / "n.py").write_text("a\nb\n")
+    (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00\x80")
+    assert _file_lines(tmp_path, ["n.py", "blob.bin", "missing.py"]) == {"n.py": 2}

@@ -20,7 +20,7 @@ from rich.console import Console
 
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
-from saddle.dag import Dag, Node, validate_dag
+from saddle.dag import Dag, Node, emission_estimate, validate_dag
 from saddle.evidence import git_ls_files, run_argv
 from saddle.journal import read_entries, read_records, read_spans, verify_journal
 from saddle.slice import ReplanFailedError, run_slice
@@ -73,13 +73,67 @@ BUDGET_TO_EFFORT: Final[dict[str, str]] = {
 # `max_context_tokens` is the worker's INPUT ceiling (ARCHITECTURE.md §2:
 # "each subagent receives a clean ~28,000-30,000-token ceiling"). Generation
 # is a separate budget: spending it as an output cap truncated real work
-# mid-diff. Thinking dominates output, so the budget tracks reasoning effort.
+# mid-diff. Thinking counts against the same output cap on this server, so
+# this table is the *reasoning allowance* per effort: what the think block
+# may spend before the diff starts. It is also the whole cap for a node that
+# declares no `target_files` (there is nothing to size the diff from). A
+# scoped node's cap is its emission estimate (dag.py `emission_estimate`,
+# from the repo) plus this allowance, so buying room to write never buys
+# room to think (T6-14; round-3 T5 truncated three seeds at the medium
+# entry with a ~4000-token diff outstanding).
 WORKER_OUTPUT_TOKENS: Final[dict[str, int]] = {
     "none": 8192,
     "low": 16384,
     "medium": 32768,
     "xhigh": 65536,
 }
+# After a `finish_reason=length` failure the next attempt for that node runs
+# one step up this ladder (the first step strictly above its current cap);
+# the top is the most the harness ever asks for in one response. Before
+# T6-14 the retry resent the identical cap, after a longer prompt.
+WORKER_OUTPUT_STEPS: Final[tuple[int, ...]] = (8192, 16384, 32768, 65536, 131072)
+MAX_WORKER_OUTPUT: Final = WORKER_OUTPUT_STEPS[-1]
+TRUNCATED_MARK: Final = "finish_reason=length"
+
+
+def worker_output_cap(
+    node: Node, effort: str, file_lines: Mapping[str, int], escalations: int
+) -> int:
+    """The `max_tokens` a worker call for `node` sends (T6-14).
+
+    Emission estimate plus reasoning allowance when the node declares
+    scope; the allowance alone otherwise. Each escalation (one per
+    truncation already suffered by this node) climbs one ladder step.
+    """
+    estimate = emission_estimate(node, file_lines)
+    cap = WORKER_OUTPUT_TOKENS[effort] + (estimate or 0)
+    for _ in range(escalations):
+        cap = next((step for step in WORKER_OUTPUT_STEPS if step > cap), MAX_WORKER_OUTPUT)
+    return min(cap, MAX_WORKER_OUTPUT)
+
+
+def emission_budget(node: Node) -> int:
+    """Most a node's diff may be estimated at and still be planned (T6-8).
+
+    The top of the ladder minus the node's own reasoning allowance: a diff
+    that cannot fit beside its thinking at the largest cap the harness
+    sends is a node no retry can rescue, so it is rejected before any
+    worker call and the planner splits it.
+    """
+    effort = BUDGET_TO_EFFORT[node.execution_constraints.reasoning_budget]
+    return MAX_WORKER_OUTPUT - WORKER_OUTPUT_TOKENS[effort]
+
+
+def _file_lines(repo: Path, files: Sequence[str]) -> dict[str, int]:
+    """Baseline line count per listed file that exists and reads as text."""
+    counts: dict[str, int] = {}
+    for name in files:
+        path = repo / name
+        try:
+            counts[name] = path.read_text().count("\n")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return counts
 
 
 class RunError(Exception):
@@ -192,8 +246,11 @@ Rules:
   gets only because it listed it, so list what the node needs and nothing
   else:
 {bindings}
-- target_files (optional) lists the repo-relative files the node may touch,
-  e.g. ["src/app/login.py"].
+- target_files lists the repo-relative files the node may touch, e.g.
+  ["src/app/login.py"]. Required for impl and refactor nodes: the harness
+  sizes the node's output budget from those files, and a node whose
+  files are too large to diff in one response is rejected before it runs
+  (split it by module or behaviour). A "test" node may leave it empty.
   Entries look like the example: never start one with "/" and never use "..".
   A node that touches a file outside its list fails.
   List every file the node will create as well as edit, including a new
@@ -421,11 +478,18 @@ def _emit_valid_dag(
     task: str,
     *,
     files: Sequence[str],
+    file_lines: Mapping[str, int],
     max_tokens: int,
     temperature: float,
     reasoning_effort: str,
 ) -> Dag:
-    """Emit a DAG, feeding validation errors back (bounded recompile)."""
+    """Emit a DAG, feeding validation errors back (bounded recompile).
+
+    `file_lines` (baseline lines per file) turns on the scope checks: an
+    impl/refactor node must declare its files and its estimated diff must
+    fit its emission budget (T6-8). Both come back to the planner as
+    validation errors, like every other issue.
+    """
     prompt = build_emit_prompt(task, files)
     errors: list[str] = []
     for _ in range(EMIT_ROUNDS):
@@ -455,6 +519,8 @@ def _emit_valid_dag(
             allowed_tools=RUN_ALLOWLIST,
             context_ceiling=CONTEXT_CEILING,
             required_ids=sorted(required),
+            file_lines=file_lines,
+            emission_budget=emission_budget,
         )
         if not issues:
             return dag
@@ -483,10 +549,12 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         if _ensure_repo(options.repo):
             stdout.write(f"created baseline commit in {str(options.repo)!r}\n")
         _ensure_clean(options.repo)
+        files = git_ls_files(options.repo)
         dag = _emit_valid_dag(
             client,
             options.task,
-            files=git_ls_files(options.repo),
+            files=files,
+            file_lines=_file_lines(options.repo, files),
             max_tokens=options.max_tokens,
             temperature=options.temperature,
             reasoning_effort=options.reasoning_effort,
@@ -502,11 +570,20 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         stdout.write("aborted.\n")
         return 1
 
+    escalations: dict[str, int] = {}
+
     def propose(node: Node, failure: str | None) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
-        output_tokens = WORKER_OUTPUT_TOKENS[effort]
         files = git_ls_files(options.repo)
+        # `failure` is the immediately preceding attempt's verdict; a
+        # truncation in it is one more step up the ladder for this node,
+        # and the count persists so a later apply failure does not reset it.
+        if failure is not None and TRUNCATED_MARK in failure:
+            escalations[node.id] = escalations.get(node.id, 0) + 1
+        output_tokens = worker_output_cap(
+            node, effort, _file_lines(options.repo, files), escalations.get(node.id, 0)
+        )
         contents = {
             name: (options.repo / name).read_text() for name in files if name.endswith(".py")
         }
@@ -544,10 +621,12 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
 
     def replan(node: Node, history: str) -> Dag:
         try:
+            files = git_ls_files(options.repo)
             return _emit_valid_dag(
                 client,
                 build_replan_task(task=options.task, node=node, history=history),
-                files=git_ls_files(options.repo),
+                files=files,
+                file_lines=_file_lines(options.repo, files),
                 max_tokens=options.max_tokens,
                 temperature=options.temperature,
                 reasoning_effort=options.reasoning_effort,
@@ -631,10 +710,12 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
     """Emit the plan and print it; execute nothing."""
     try:
         check_server(client, base_url=options.base_url, model=options.model)
+        files = _listable_files(options.repo)
         dag = _emit_valid_dag(
             client,
             options.task,
-            files=_listable_files(options.repo),
+            files=files,
+            file_lines=_file_lines(options.repo, files) if options.repo is not None else {},
             max_tokens=options.max_tokens,
             temperature=options.temperature,
             reasoning_effort=options.reasoning_effort,

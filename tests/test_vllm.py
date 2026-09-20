@@ -171,10 +171,7 @@ def test_emit_truncated_completion_raises() -> None:
     client, _ = _json_client(_ok_body(content=json.dumps({"nodes": []}), finish_reason="length"))
     with pytest.raises(VllmResponseError) as exc_info:
         client.emit_dag(PLAN_PROMPT)
-    assert (
-        str(exc_info.value)
-        == "completion truncated (finish_reason=length); retry with more max_tokens"
-    )
+    assert str(exc_info.value) == "completion truncated (finish_reason=length)"
 
 
 def test_emit_auth_failures_raise_auth_error() -> None:
@@ -337,9 +334,7 @@ def test_complete_blank_content_and_truncation_raise() -> None:
     cut, _ = _json_client(_ok_body(content="half", finish_reason="length"))
     with pytest.raises(VllmResponseError, match="truncated") as cut_info:
         cut.complete("Do x.")
-    assert str(cut_info.value) == (
-        "completion truncated (finish_reason=length); retry with more max_tokens"
-    )
+    assert str(cut_info.value) == "completion truncated (finish_reason=length)"
 
 
 def test_list_models_returns_served_ids() -> None:
@@ -768,3 +763,12 @@ def test_parse_diff_response_passes_prose_through_to_the_apply_backstop() -> Non
     """
     client, _ = _json_client(_ok_body(content="Sure! I will fix that."))
     assert client.propose_diff("Do x.").diff == "Sure! I will fix that."
+
+
+def test_diff_truncation_names_the_cap_it_hit() -> None:
+    """T6-14: the message states the cap and no longer advises a retry the
+    caller may not make; escalation is the caller's contract."""
+    client, _ = _json_client(_ok_body(content="diff --git a/x", finish_reason="length"))
+    with pytest.raises(VllmResponseError) as info:
+        client.propose_diff("Do x.", max_tokens=4321)
+    assert str(info.value) == "completion truncated at 4321 output tokens (finish_reason=length)"
