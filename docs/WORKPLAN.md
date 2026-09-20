@@ -3040,6 +3040,122 @@ in `SADDLE_VLLM_API_KEY`, no source edits during the run, results written
 under `../saddle-bench/runs/<id>/` with the pre-registered prediction copied
 in before the run starts.
 
+### T4-6a — Viability sweep: saddle alone on all seven tasks, oracles fixed first (F21; RUN FIRST)
+Files: `../saddle-bench/sweep.sh`, `run_arm.sh` (as they are),
+`../saddle-bench/baselines/t1..t7`, `prompts/t1..t7.prompt`, `oracles/`
+(one per-task correctness oracle to add for each task that lacks one),
+`oracles/test_quality.py` (as is), `../saddle-bench/runs/FINDINGS.md`
+(F21), `runs/PROGRESS.log`, `docs/BENCHMARK-RECORD.md` (round 3 section).
+Requires: container healthy, key in the environment, nothing else. This
+item is deliberately ahead of T4-1..T4-5: it answers the one question
+the user needs answered first, and its journals feed the others.
+Question: can the local model, driven by saddle at HEAD, take each of the
+seven benchmark tasks from prompt to a verified journal whose worktree a
+pre-committed oracle accepts?
+Pre-registered, written into `runs/round3/PREDICTION.md` and the oracles
+committed in the bench checkout before the first run:
+- Oracles. Every task has a per-task correctness oracle in `oracles/`
+  that scores a worktree PASS/FAIL without knowing which arm made it.
+  T4's: "the two totals agree AND the regression test pins the value the
+  prompt's example implies"; its docstring records that round 1 withdrew
+  a stricter bar and why this is not that bar. An oracle changed after
+  its task has run voids that task for the round.
+- Seeds: one on T1-T4 (T4-1 and T4-5 add nine more there later), three
+  on T5-T7. Twelve saddle runs; `--sample-temperature 0.7`.
+- Per run record: oracle verdict; `saddle verify` verdict; wall time;
+  node count, kinds, `target_files` declared or empty; sealed proofs; the
+  first failing gate per failed node with its detail; and how the run
+  ended -- verdict, truncation, diff-apply failure, or timeout. The last
+  column is the one that separates "saddle refused a wrong diff" (the
+  harness working) from "the model could not produce the diff" (the
+  model's ceiling on this hardware), and the record must name which.
+- Prediction (numbers first, then do not touch them): T1-T4 pass the
+  oracle; T5 and T6 complete (F10's "nothing" is gone) and at least one
+  of three seeds passes each; T7 is the open case, predicted to complete
+  and fail the oracle on at least one seed; no run seals a proof the
+  oracle fails whose diff touches a test file.
+Falsified if any line comes out the other way; each is its own finding.
+Steps: 1. Oracles + PREDICTION.md, committed in the bench checkout.
+2. `sweep.sh tN saddle` for N=1..7 (three passes for N=5..7), journal
+moved aside between passes; nothing edited in either checkout while a
+run is in flight. 3. Score with the frozen oracles. 4. F21: the seven-row
+table (task, seeds, oracle pass count, how each run ended, first failing
+gate) plus a twelve-row appendix; BENCHMARK-RECORD.md round-3 section.
+5. Every failed line becomes a workplan item with the run log as its
+Evidence, labelled harness or model-ceiling.
+Done when: PREDICTION.md and every oracle predate every journal in
+`runs/round3/`; twelve runs recorded (fewer only with each gap
+explained); F21 written with the seven-row table and the verdicts.
+Stop if: container down (report); an oracle is found wrong mid-round
+(void that task, do not rewrite); any run crashes rather than fails a
+gate (T3-shaped defect: record and stop the sweep). Never print the key.
+
+### T4-6b — Round 3 comparison: the baseline arm on the same seven tasks and oracles (F22)
+Files: `../saddle-bench/sweep.sh`, `run_arm.sh` (as they are; one GPU, arms
+never overlap), `../saddle-bench/baselines/t1..t7`, `prompts/t1..t7.prompt`,
+`oracles/test_quality.py` (the arm-agnostic grader), `oracles/` (one
+per-task oracle file to add for each task that lacks one),
+`../saddle-bench/runs/FINDINGS.md` (F21), `runs/PROGRESS.log`,
+`docs/BENCHMARK-RECORD.md` (round 3 section). Requires T4-6a (its oracles and saddle runs are reused as-is;
+only the baseline arm's runs are new).
+Why: T4-1 and T4-5 answer one question each on one task. "Saddle handles
+tasks" is a claim about the task distribution and about a comparison,
+and round 2 (F10) recorded that saddle produced nothing on T5 and T6
+while the baseline arm beat it on T1 correctness. Nothing since has
+re-measured that; every Tier 2-3 item was verified on fixtures.
+Pre-registered, all of it written into `runs/round3/PREDICTION.md`
+before the first arm runs, and the oracles frozen in the same commit:
+- Oracles. Every task has a per-task correctness oracle in `oracles/`
+  that scores a worktree PASS/FAIL without reading which arm made it,
+  committed before any round-3 arm runs. T4's is the contested one:
+  write it as "the two totals agree AND the regression test pins the
+  value the prompt's example implies", and record in the oracle's
+  docstring that round 1 withdrew a stricter bar and why this one is
+  not that bar. An oracle changed after its task has run voids that
+  task for the round (the round-1 error, written down so it cannot
+  repeat).
+- Arms: `saddle` and `untouched` (the baseline arm at its default
+  effort). The three probe arms are optional and cost a day; run them
+  only if the two-arm result is close.
+- Seeds: three per task per arm (`--sample-temperature 0.7` for saddle;
+  the baseline arm's own default). 7 tasks x 2 arms x 3 seeds = 42 runs;
+  at round-2 wall times that is one long day on the container, T5-T7
+  dominating.
+- Per run, record: oracle verdict, `test_quality.py` tautology rate and
+  kill rate, wall time, and for saddle: node count, kinds, `target_files`
+  declared or not, sealed proofs, the first failing gate per failed
+  node, and whether the run ended by verdict or by truncation/timeout.
+- Prediction (write the numbers before running, then do not touch
+  them): saddle completes T5 and T6 (F10's "nothing" is gone: T2-1's
+  truncation retry and the grammar); saddle's oracle pass rate on T1-T4
+  is at least the baseline arm's; on T5-T7 saddle is at or below the
+  baseline arm on pass rate, because decomposition is still unforced
+  (#64); saddle's tautology rate is lower and kill rate higher than the
+  baseline arm's on every task where both complete, because those are
+  what the gates gate; no saddle run seals a proof the oracle fails
+  AND whose diff touches a test file (the #44 shape, after T4-5).
+Falsified if: any of those five lines comes out the other way. Each is
+its own finding; the fifth is the one that matters most and is the
+only one that would send an item back to Tier 2.
+Steps: 1. Oracles and PREDICTION.md, committed in the bench checkout.
+2. `sweep.sh tN saddle untouched` for N=1..7, three passes, PROGRESS.log
+timestamps as the audit trail; nothing edited in either checkout while
+a run is in flight. 3. Score with the frozen oracles and
+`test_quality.py`. 4. F21: one table per prediction line, 42 rows in an
+appendix; BENCHMARK-RECORD.md round-3 section with the verdicts.
+5. Every falsified line becomes a workplan item with the run log as its
+Evidence.
+Known-good / Known-bad: the prediction is the bar.
+Done when: PREDICTION.md and every oracle predate every journal in
+`runs/round3/`; 42 runs recorded (or fewer with each gap explained);
+F21 written with five verdicts.
+Stop if: container down (report); an oracle turns out to be wrong
+mid-round (record the task as void for this round, do not rewrite it);
+any saddle run crashes rather than fails a gate (T3-shaped defect:
+record and stop the sweep).
+Decision this feeds: the sentence "saddle handles tasks", which is not
+to be written anywhere before this item's F21 exists.
+
 ### T4-1 — Rerun the v3 T1 arm against the HEAD grammar (F15)
 Files: `tools/diff_grammar_check.py` (`--emit` here; `--run` inside the
 container, per its docstring); `src/saddle/cli.py` (`--sample-temperature`,
@@ -3088,7 +3204,7 @@ best effort: the same task with `read_file` omitted from every node, then
 with `run_tests` omitted — the two bindings that remove prompt content —
 so D15/D16's context-cost argument gets its first number.
 
-### T4-5 — Rerun the T4 arm against HEAD's gates: does anything catch the #44 shape? (F16)
+### T4-5 — Rerun the T4 arm against HEAD's gates: does anything catch the #44 shape? (F20)
 Files: `../saddle-bench/run_arm.sh` (the `saddle` arm; add `--dag` for
 half A), `../saddle-bench/baselines/t4` (`orders.py`, `discounts.py`,
 `invoice.py`, `tests/`), `../saddle-bench/runs/T4-RESULT.md` (the round-2
@@ -3136,12 +3252,12 @@ node-scope failure, not a crash). Run three seeds
 t4 saddle` three times with the journal moved aside between runs. 4. For
 every seed, record: files in each attempt's diff (from the journal
 records' diffs), the first failing gate and its detail, whether a proof
-sealed, the sealed diff's file set. 5. F16 in FINDINGS.md: one table,
+sealed, the sealed diff's file set. 5. F20 in FINDINGS.md: one table,
 six rows; BENCHMARK-RECORD.md gets the summary and the prediction's
 verdict. Never print the key.
 Known-good / Known-bad: the prediction is the bar; both halves are records.
 Done when: PREDICTION.md predates every journal in `runs/t4v3/`, six
-seeds recorded, F16 written with the verdict (held / falsified) and, if
+seeds recorded, F20 written with the verdict (held / falsified) and, if
 falsified, the gate named.
 Stop if: the container is down (report); T3-26 not landed (run half B
 only and say so); any seed crashes rather than fails a gate (that is a
@@ -3150,6 +3266,26 @@ Decision this feeds: whether `target_files` stays opt-in (#64) and
 whether the #65 residual needs a run of its own.
 
 ### T4-4 — `structural_tag` / `enable_in_reasoning` against vLLM 0.28 (precedes D14)
+Status 2026-09-19: DONE by session 29, commit f955883 (measurement +
+record; no contract change). Prediction written before any request;
+records in `../saddle-bench/runs/t4-4-structured-output-2026-09-19/`
+(F16-F19 in its RESULT.md; the F-numbers after F15 are therefore taken
+through F19). Result: with `structured_outputs={"grammar":
+DIFF_GRAMMAR}` and reasoning on, the think block is byte-identical to
+the unconstrained control and the completion is a diff -- the D14
+alternation is already what the shipped payload does, no flag involved.
+An `enable_in_reasoning`-style key is silently dropped (200, identical
+output, same as a made-up key), so it must never be written into a
+payload. Structural tags validate only in the legacy `response_format`
+shape, carry a JSON Schema rather than a grammar, and fire only if the
+model chooses to emit the tag: D14 is closed against them, with the
+reasoning in DESIGN-NOTES D14. Three probe mutants KILLED, one after the
+executor added a guard because its first form survived silently -- the
+right call, recorded. Reviewer re-ran `./check.sh` at f955883 (see the
+commit carrying this line). Noticed by the executor, left for a docs
+item: DESIGN-NOTES:425 dangling fragment and :629 summary line now
+understate D14; item line numbers drifted (`DIFF_GRAMMAR` :66, request
+:217).
 Files: `src/saddle/vllm.py:57` (`DIFF_GRAMMAR`), `:206` (the request that
 sends `structured_outputs={"grammar": DIFF_GRAMMAR}`); a new probe script
 `tools/structured_output_probe.py` (the only file to create); `docs/DESIGN-NOTES.md`
