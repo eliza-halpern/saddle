@@ -2059,10 +2059,21 @@ Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_
 Dry run: not run.
 
 ### T3-11 — Replacement ids are unique across the journal (Medium)
-Files: `src/saddle/slice.py` (`splice_replan` ~:448: `mapping` numbers
+Status 2026-09-19: session 25 STOPPED before editing, correctly: point
+(2) as first written claimed `_seed_proofs` already emits `dropped n2.r1
+(not in DAG)` and "needs only its test". It does not -- the executor ran
+`_seed_proofs` against a synthetic journal (`n1` proven, `n2.r1` proven,
+DAG `{n1, n2}`) and got `dropped n2.r1 (node changed)`: T3-9's filter
+has no branch for an id the DAG lacks, so it falls into the catch-all.
+Item corrected below: (2) now authorises that branch in `_seed_proofs`
+(the drop itself was already right; only the reason string changes), and
+the line numbers are current at 6e39747. Re-run as session 25b.
+Files: `src/saddle/slice.py` (`splice_replan` ~:576: `mapping` numbers
 `.r<index>` from 1 and checks collisions against the current DAG only,
-~:457-460; `run_slice` ~:602-603: `replanned_from`/`generated` start empty
-on every run; the `splice_replan` call ~:637); `tests/test_slice.py`
+~:584-585; `run_slice` ~:745: `replanned_from`/`generated` start empty
+on every run; `_seed_proofs` ~:698-742: the reuse filter, whose `else`
+branch reads `(node changed)` for every non-matching hash, including an
+id the DAG does not contain); `tests/test_slice.py`
 (beside `test_splice_replan_rejects_collision` ~:996 and
 `test_run_slice_replan_recovers_failed_node` ~:1051; `_first_run` ~:1210).
 Contract: (1) a replacement id is unique across the journal, not just the
@@ -2070,10 +2081,12 @@ run: `splice_replan` takes the ids already sealed in the journal and
 numbers past them, so a resumed run that replans `n2` after an earlier run
 sealed `n2.r1` produces `n2.r2`; (2) a journal proof whose id is not in
 the DAG being run (`n2.r1` from an earlier run's replan) is never reused —
-T3-9's `node_hash` comparison has no DAG node to compare it with — and the
-`resume` span lists it as `dropped n2.r1 (not in DAG)`.
+T3-9's `node_hash` comparison has no DAG node to compare it with, and
+today that case falls into the `(node changed)` catch-all — and the
+`resume` span lists it as `dropped n2.r1 (not in DAG)`, so a reader can
+tell a replan leftover from an edited node.
 Direction: **tightened** for (1) (ids that could collide no longer can);
-(2) is T3-9's contract applied to replan ids and needs only its test.
+(2) keeps T3-9's drop and only names its reason (span text, tightened).
 Evidence: VERIFIED by reading — `generated` and `replanned_from` are fresh
 sets at ~:602-603 and `splice_replan`'s collision check ~:457 sees only
 `dag.nodes`, so a second run restarts at `.r1`; `rebuild_proven` keeps the
@@ -2085,7 +2098,10 @@ Steps: 1. `splice_replan(dag, failed_id, new, *, taken: Collection[str] =
 each replacement with the smallest index whose id is not in `existing`
 (spell the loop `while candidate in existing:`, mutant 1 targets it).
 `run_slice` passes `taken={record.node_id for record in
-read_records(journal_path)}`. 2. Test (2): `_first_run`, append a
+read_records(journal_path)}`. 2. In `_seed_proofs`, after the reuse
+branch add `elif record.node_id not in expected:` appending `dropped
+{record.node_id} (not in DAG)`, before the `no node hash` branch (an
+absent id is more specific than a missing hash). Test (2): `_first_run`, append a
 `build_from_gate` record for a node `n2.r1` with T3-9's fields, resume
 with DAG `{n1, n2}` where `n2` fails once and the replanner returns one
 replacement: `n2.r2` is proposed, the `resume` span reads `dropped n2.r1
@@ -2097,9 +2113,10 @@ Known-bad: with the old numbering the journal holds two `n2.r1` records —
 the test asserts one record per id.
 Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
 1. `sed -i 's/while candidate in existing:/while False:/' src/saddle/slice.py` → `pytest tests/test_slice.py -k replan_across_resume -q --no-cov` red (two `n2.r1` records).
+2. `sed -i 's/elif record.node_id not in expected:/elif False:/' src/saddle/slice.py` → same test red (span reads `(node changed)`).
 Done when: mutant red; `./check.sh` green.
-Stop if: T3-9 has not landed (its `resume` span and `node_hash` filter are
-what (2) asserts on).
+Stop if: `_seed_proofs` at HEAD already has a `not in expected` branch
+(then step 2's source change is done and only its test is owed).
 Passing instance at HEAD: `test_run_slice_replan_recovers_failed_node` (a replan
 through `splice_replan` and back into the loop).
 Dry run: not run.
