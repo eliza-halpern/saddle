@@ -79,6 +79,10 @@ def _worktree(
     for argv in setup:
         assert run_argv(argv, root) == 0
     (root / "n.py").write_text(baseline_code)
+    # Any test file already in `root` is earlier sealed work: it goes in
+    # the baseline commit, not the node's diff (F21.12a fixture).
+    for earlier in sorted(root.glob("test_*.py")):
+        assert run_argv(["git", "add", earlier.name], root) == 0
     assert run_argv(["git", "add", "n.py"], root) == 0
     if baseline_test is not None:
         (root / test_name).write_text(baseline_test)
@@ -656,11 +660,15 @@ def test_run_node_gate_impl_node_property_oracle_passes_with_basis(tmp_path: Pat
 def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A mutmut stub that can answer the two calls differently (T3-3).
 
-    `run` reads the scratch `pyproject.toml` it is launched beside: when a
-    test path was appended to `pytest_add_cli_args` (the oracle's narrowed
-    run) it marks the scratch and `results` reports survivors; the main
-    gate's unrestricted run reports kills. The conftest stub cannot tell
-    the calls apart, so a fixture built on it could never fail this gate.
+    The gate's run comes first and the oracle's second (`runner.py`
+    calls `mutation_sample` in that order); every call gets a fresh
+    scratch copy, so the marker lives beside the stub: `run` sets it on
+    its second call and `results` then reports survivors; the first call
+    reports kills. Since F21.12a both runs carry the node's declared
+    scope, so the two `pyproject.toml`s no longer tell the calls apart
+    (here the scope and the property target are the same file); the
+    conftest stub never could, so a fixture built on it could never fail
+    this gate.
     """
     stub_dir.mkdir(exist_ok=True)
     show = "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
@@ -668,8 +676,9 @@ def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     script.write_text(
         "#!/bin/sh\n"
         'case "$1" in\n'
-        "  run) grep -q 'no:cacheprovider\", \"' pyproject.toml && touch .narrowed; exit 0;;\n"
-        "  results) if [ -f .narrowed ]; then v=survived; else v=killed; fi;"
+        '  run) d=$(dirname "$0"); if [ -f "$d/.gate-run" ]; then touch "$d/.narrowed";'
+        ' else touch "$d/.gate-run"; fi; exit 0;;\n'
+        '  results) if [ -f "$(dirname "$0")/.narrowed" ]; then v=survived; else v=killed; fi;'
         ' for i in 1 2 3 4 5; do echo "  m$i: $v"; done;;\n'
         f"  show) printf '%s' '{show}';;\n"
         "esac\n"
@@ -696,6 +705,53 @@ def test_run_node_gate_impl_node_property_that_cannot_discriminate_fails(
             "property killed 0 of 5 mutant(s): no discriminating power (test_n.py)"
         )
     }
+
+
+def _scope_checking_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutmut stub shaped like round 3c's arms A and B (F21.12a).
+
+    `run` reads the scratch `pyproject.toml`: unless `pytest_add_cli_args`
+    names the node's declared scope (`test_n.py`) it behaves as real
+    mutmut did against the red whole suite -- exits 1 with the stats
+    failure -- and otherwise reports kills.
+    """
+    stub_dir.mkdir(exist_ok=True)
+    show = "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  run) grep -q '\"test_n.py\"' pyproject.toml && exit 0;"
+        ' echo "failed to collect stats. runner returned 1" >&2; exit 1;;\n'
+        '  results) for i in 1 2 3 4 5; do echo "  m$i: killed"; done;;\n'
+        f"  show) printf '%s' '{show}';;\n"
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_run_node_gate_mutation_runs_the_declared_scope_not_the_red_suite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F21.12a, end to end. Known-good: an impl node whose declared scope
+    is green while a sibling specification (`test_other.py`, written red
+    by an earlier test node) still fails. The tests gate already honours
+    the scope; the mutation gate must baseline against the same scope,
+    or no impl node on a TDD plan can seal until the last one lands.
+    Known-bad in the stub: an unscoped run is the red suite and fails.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    # The sibling specification is the earlier test node's sealed work, so
+    # it sits at baseline, outside this node's diff and coverage scope.
+    (tmp_path / "test_other.py").write_text("def test_later_module():\n    assert False\n")
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    _scope_checking_mutmut(tmp_path / "stub", monkeypatch)
+    result = run_node_gate(_node(test_command="pytest test_n.py"), tmp_path)
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["tests"].passed is True
+    assert by_name["mutation"].passed is True, by_name["mutation"].detail
+    assert [(c.name, c.detail) for c in result.checks if not c.passed] == []
 
 
 def test_run_node_gate_failed_mutmut_run_is_named_end_to_end(

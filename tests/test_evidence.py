@@ -29,6 +29,7 @@ from saddle.evidence import (
     materialize_baseline,
     mutation_sample,
     property_modules,
+    pytest_scope,
     restore_baseline,
     run_argv,
     run_capture,
@@ -681,6 +682,17 @@ def test_mutmut_scratch_config_appends_run_tests_to_pytest_args() -> None:
     )
 
 
+def test_mutmut_scratch_config_keeps_a_declared_scope_in_order() -> None:
+    """F21.12a: a declared scope is a sequence and its `-k expr` pair
+    survives; sorting would put `-k` before the path and split the pair."""
+    assert _mutmut_scratch_config(["a.py"], run_tests=("tests/test_a.py", "-k", "slow")) == (
+        "[tool.mutmut]\n"
+        'source_paths = ["a.py"]\n'
+        'pytest_add_cli_args = ["-q", "-x", "-p", "no:cacheprovider", '
+        '"tests/test_a.py", "-k", "slow"]\n'
+    )
+
+
 def _without_stubbed_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drop the conftest `mutmut` stub from PATH so the real engine runs."""
     kept = [p for p in os.environ["PATH"].split(os.pathsep) if "mutmut-stub" not in p]
@@ -718,6 +730,31 @@ def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
     assert prop == MutationOutcome(killed=0, total=1, generated=1, survivors=("n.x_f__mutmut_1",))
 
 
+def test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F21.12a against the real engine, round 3c's arms A and B. Known-bad:
+    with no `run_tests` mutmut's stats run collects the red sibling
+    specification and the tool fails before any mutant is judged.
+    Known-good: the declared scope alone baselines and kills.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f():\n    return 2\n")
+    (workdir / "test_n.py").write_text("from n import f\n\n\ndef test_f():\n    assert f() == 2\n")
+    (workdir / "test_later.py").write_text("def test_later_module():\n    assert False\n")
+    changed = {(str(workdir / "n.py"), 2)}
+    tests = {"test_n.py", "test_later.py"}
+    unscoped = mutation_sample(workdir, changed, 5, test_files=tests)
+    assert unscoped.total == 0
+    assert unscoped.survivors == (
+        "mutmut run exited 1: failed to collect stats. runner returned 1",
+    )
+    scoped = mutation_sample(workdir, changed, 5, test_files=tests, run_tests=("test_n.py",))
+    assert scoped == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+
+
 def test_property_modules_selects_property_bearing_modules_that_import_a_change() -> None:
     """Known-good: a `@given` module importing the changed module, by stem,
     by dotted path, or by package `__init__`. Known-bad: a property over
@@ -751,6 +788,22 @@ def test_property_modules_selects_property_bearing_modules_that_import_a_change(
     assert property_modules(sources, ["/w/os.py"]) == {"test_os.py": sources["test_os.py"]}
     assert property_modules(sources, ["/w/xn.py", "/w/pkgm.py"]) == {}
     assert property_modules({}, changed) == {}
+
+
+def test_pytest_scope_is_the_arguments_after_pytest() -> None:
+    """F21.12a. Known-good: the declared command's arguments after `pytest`,
+    in order, whatever precedes the module (`coverage run -m pytest`).
+    Known-bad: a command that never names pytest yields nothing, so the
+    engine runs its whole tree as before, and `pytest` itself is never
+    an argument.
+    """
+    assert pytest_scope("pytest tests/test_accounts.py tests/test_fees.py") == (
+        "tests/test_accounts.py",
+        "tests/test_fees.py",
+    )
+    assert pytest_scope("coverage run -m pytest -q 'tests/te st.py'") == ("-q", "tests/te st.py")
+    assert pytest_scope("pytest") == ()
+    assert pytest_scope("python -m nose tests") == ()
 
 
 def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -465,6 +465,20 @@ def under_coverage(test_command: str, data_file: str) -> str:
     return test_command.replace("pytest", f"coverage run --data-file={data_file} -m pytest", 1)
 
 
+def pytest_scope(test_command: str) -> tuple[str, ...]:
+    """The arguments a declared `test_command` hands to pytest, in order.
+
+    Everything after the first `pytest` token, so the mutation gate's
+    engine collects the same tests the tests gate ran (F21.12a). A
+    command that never names pytest yields nothing, and the engine runs
+    its whole tree as before.
+    """
+    argv = shlex.split(test_command)
+    if "pytest" not in argv:
+        return ()
+    return tuple(argv[argv.index("pytest") + 1 :])
+
+
 @dataclass(frozen=True)
 class MutationOutcome:
     """Sampled kill-rate evidence over changed-line mutants."""
@@ -574,13 +588,16 @@ def _mutant_lines(show_output: str, source: str) -> set[int]:
 def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) -> str:
     """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
 
-    `run_tests` are collection paths appended to pytest's arguments, so
-    only those modules run against each mutant; empty means the whole
-    scratch tree, as before. A kill scored by a narrowed set belongs to
-    that set (T3-3), which the unrestricted run cannot say.
+    `run_tests` are pytest arguments appended after the fixed flags, so
+    only what they collect runs against each mutant; empty means the
+    whole scratch tree, as before. A kill scored by a narrowed set
+    belongs to that set (T3-3), which the unrestricted run cannot say.
+    A sequence keeps its order (a declared scope's `-k expr` must stay a
+    pair, F21.12a); an unordered collection is sorted for a stable file.
     """
     quoted = ", ".join(json.dumps(source) for source in sources)
-    args = ["-q", "-x", "-p", "no:cacheprovider", *sorted(run_tests)]
+    ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
+    args = ["-q", "-x", "-p", "no:cacheprovider", *ordered]
     joined = ", ".join(json.dumps(arg) for arg in args)
     return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
 

@@ -26,6 +26,7 @@ from saddle.evidence import (
     materialize_baseline,
     mutation_sample,
     property_modules,
+    pytest_scope,
     run_capture,
     run_shell_capture,
     statement_lines,
@@ -203,11 +204,22 @@ def run_node_gate(
     sample = gate.mutation_sample
     # A test node changes no source, so there is nothing to mutate and the
     # check is substituted with "not required" (T3-7a): skip the mutmut run.
+    # The engine runs the node's declared scope, the same tests the tests
+    # gate ran above (F21.12a): a TDD plan's test node writes every module's
+    # specification red up front, so the whole suite is red until the last
+    # impl node lands, and mutmut cannot baseline against a red suite --
+    # round 3c's three impl attempts all died on `failed to collect stats`
+    # and no impl node could seal.
     mutation = (
         MutationOutcome(killed=0, total=0, generated=0, survivors=())
         if node.kind == "test"
         else mutation_sample(
-            workdir, changed, sample.max_mutants, test_files=test_sources, recorder=recorder
+            workdir,
+            changed,
+            sample.max_mutants,
+            test_files=test_sources,
+            run_tests=pytest_scope(gate.test_command),
+            recorder=recorder,
         )
     )
     # The property oracle (T3-3), `impl` nodes only: the property-bearing
