@@ -120,9 +120,10 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 to T6-26 done → T6-27 with T6-30 (main session) → T6-28 (executor,
-metrics sampler) → T6-3 with T6-31 (main session) → T6-29 measure-first
-probe (executor) → T6-29 (main session) → round 3e, one T5 seed → T6-1
+T6-22 to T6-27 done, T6-30 withdrawn → session 38 = T6-28 (executor,
+metrics sampler) and session 39 = T6-29a (executor, probe), either order
+→ T6-3 with T6-31 (main session) → T6-29 (main session) → round 3e, one
+T5 seed → T6-1 (with the reasoning read)
 → T6-2 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -3718,6 +3719,16 @@ premise" diagnosis with the run paths; nothing in the repo restates it
 beyond a pointer. Done when: DESIGN-NOTES names F21.6 and every T6 item
 below cites its F21.x.
 ### T6-1 — Retrospective: score every candidate gate on the round-3 corpus (no GPU)
+
+**Added 2026-09-20 (user's question):** the retrospective reads the
+model's reasoning. Every failed attempt in rounds 3c and 3d has a
+sidecar with the full reasoning text (T6-12) and, from round 3e, the
+emitted diff (T6-27); `saddle explain JOURNAL --attempt PREFIX` prints
+one. Nobody has read them end to end. Required section: for each failed
+attempt, what the model said it was doing when it failed, and the
+failure mode named -- did n2 know `money.py:33` was uncovered and could
+not act, or never notice? This is the cheapest evidence the plan has
+not yet used.
 Files: `../saddle-bench/oracles/retro/` (new; one script per candidate,
 each takes a run worktree + journal and prints FIRE/QUIET with a
 number), `../saddle-bench/runs/round3/RETRO.md` (the table), read only:
@@ -4772,6 +4783,21 @@ duration; (2) `args_hash` back over `[]`; (3) the retained-diff check
 removed from verify. Owner: main session. Ahead of T6-1: the
 retrospective is scored on exactly the evidence this item keeps.
 
+**Status (2026-09-20):** DONE, `647e76f`, main session. Clauses 1-6
+landed; clause 2 with one deviation: `args_hash` stays the hash of argv
+(one rule for every span) and the prompt's sha256 is an argv element, so
+the hash differs per call and the prompt hash is visible. Cached prompt
+tokens needed no new field: `usage` has carried `cached_tokens` since
+T6-12. verify gained `sidecar-diff-hash`; the pre-basis fixture still
+verifies unchanged. Mutants three, all killed; `./check.sh` green.
+Observed while verifying an outside claim: the worker's requests do not
+stream (only `saddle up`'s chat payload does), so `usage` arrives in the
+body and every round-3d sidecar carries it; but when the think block
+never closes the server's `reasoning_tokens` stays 0 beside a full
+`completion_tokens` (round 3d n1 attempt 2: 20823 and 0), so
+`completion_tokens` is the count to trust when content is empty, and
+`explain` prints it.
+
 ### T6-28 — The run samples the server it is talking to (bench-side; measurement infrastructure; no saddle code)
 
 Files: `../saddle-bench/run_arm.sh`, a new `../saddle-bench/metrics_sample.py`
@@ -4857,6 +4883,27 @@ kills nothing is not kept; a third round is not started. Mutants: (1)
 the stub replaced by the real module in the sandbox; (2) the kill filter
 inverted; (3) the round bound removed. Owner: main session, after T6-27.
 
+### T6-29a — Measure first for T6-29: ten reasoning-off draws on round 3d's gap (measurement; F21.14; no saddle code)
+
+Files: `../saddle-bench/probes/t6_29_probe.py` (new),
+`../saddle-bench/runs/round3d-probe/`, `../saddle-bench/runs/FINDINGS.md`.
+
+The question T6-29 needs answered before k=10 at effort `none` is the
+default: how many such draws pass all three filters. Procedure: take
+round 3d's n2 tree at its baseline ref (`runs/round3d/t5-s1/t5-saddle`,
+`refs/saddle/baseline/n2` plus the sealed `money.py`); build the brief
+exactly as T6-29 step 2 says -- the node's requirement ids and text from
+the T5 prompt, `money.py` replaced by its signature-preserving stub
+(`saddle.runner._stub_module`), the function name `to_decimal`, the
+existing test file conventions -- and nothing from the implementation;
+draw ten times with `reasoning_effort: none`, seeds 0-9, temperature
+0.7, each into `tests/test_money_probe_<seed>.py`; run each file against
+the stubbed tree (must fail), the real tree (must pass), and record
+whether it executes `money.py:33` and which of round 3d's surviving
+mutants it kills (mutmut over the same `source_paths`, seeded). Report
+the 10x4 table and the pass count. Ten draws at a few seconds each: one
+short session. Owner: executor (needs the key). After T6-27.
+
 ### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
 
 Files: `src/saddle/vllm.py` (`DEFAULT_TIMEOUT` and its comment, the
@@ -4877,6 +4924,17 @@ longer than the total budget is cut at the budget, with the partial text
 in the error. Known-bad: the same stream under the old code runs to the
 end. Mutants: (1) the clock check removed; (2) the partial text dropped
 from the error. Owner: main session; small, lands with T6-27.
+
+**Status (2026-09-20): WITHDRAWN on evidence, scope narrowed to T6-27.**
+Only the chat REPL's payload (`_build_chat_payload`, `saddle up`) sets
+`stream: true`; the worker's diff and text requests are plain POSTs, so
+the 1800 s read timeout is a whole-request bound for them and the
+`DEFAULT_TIMEOUT` comment is right for the path it governs. The 2494 s
+attempt was two requests, the recovery-plan `complete()` call and the
+diff call, each inside its own bound; the plan call was simply never
+recorded, which T6-27 fixes by recording every call's start and wall. A
+total bound on the chat stream is a T5 concern, and an inter-chunk
+stall detector is the right semantic there.
 
 ### T6-31 — The output of a gate the node failed always reaches the worker (loosening of T3-4's withholding, with evidence)
 
