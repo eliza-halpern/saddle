@@ -436,6 +436,11 @@ def _evaluate_candidate(
             _apply_diff(candidate, diff)
         except RuntimeError as exc:
             return None, str(exc)
+        # The live path runs `autofix` before the gate; a candidate scored
+        # without it read one gate redder than the tree the node would
+        # actually be gated on, and `failures == 0` never ended sampling
+        # (round 3c, F21.12c: delta one on three of four nodes).
+        autofix(candidate, baseline=baseline)
         return run_node_gate(node, candidate, baseline=baseline, planned_requirements=planned), None
 
 
@@ -543,6 +548,9 @@ async def _run_node(
     last_result: Tier1Result | None = None
     attempt = 0
     while attempt < max_attempts:
+        # A sidecar's `samples` are the calls this attempt made: round 3c's
+        # retries carried attempt 1's three draws byte for byte (F21.12c).
+        samples = []
         # The attempt in flight runs to its end and may seal; the next one
         # is not started past the deadline (T6-9). The give-up path below
         # then restores the tree exactly as on any other exhaustion.
@@ -582,6 +590,9 @@ async def _run_node(
                     sampling = f"{distinct} distinct of {PROPOSAL_SAMPLES} sample(s)"
                 else:
                     proposal = propose(node, failure)
+                    samples = [
+                        {**_proposal_evidence(proposal), "outcome": "retry draw, gated in place"}
+                    ]
             except VllmResponseError as exc:
                 failure = f"Attempt {attempt} of {max_attempts}: worker call failed: {exc}"
                 _seal_attempt(

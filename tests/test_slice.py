@@ -1059,6 +1059,112 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
     assert error.failure.startswith("Attempt 3 of 3: worker call failed: ")
 
 
+def test_retry_sidecar_reports_its_own_draw_not_the_first_attempts_samples(
+    tmp_path: Path,
+) -> None:
+    """T6-24a known-bad. Attempt 1 draws PROPOSAL_SAMPLES and fails; attempt
+    2 makes one call and seals. Round 3c's n2 carried attempt 1's
+    `samples` byte for byte into attempts 2 and 3 (identical SHA-256), so
+    the sidecar said three draws where the attempt made one. A sidecar's
+    `samples` are the calls that attempt made.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(BAD_DIFF if failure is None else FIX_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    assert [s.exit_code for s in agents] == [1, 0]
+    failed = _sidecar(journal, agents[0])
+    sealed = _sidecar(journal, agents[1])
+    assert len(failed["samples"]) == PROPOSAL_SAMPLES
+    assert [x["diff_hash"] for x in sealed["samples"]] == [
+        hashlib.sha256(FIX_DIFF.encode()).hexdigest()
+    ]
+    assert sealed["samples"][0]["outcome"] == "retry draw, gated in place"
+
+
+def test_failed_retry_call_sidecar_carries_no_earlier_samples(tmp_path: Path) -> None:
+    """T6-24a, the path a retry's own assignment cannot cover: attempt 2's
+    single worker call fails before any proposal exists. Its sidecar has
+    no draws to report, and must not report attempt 1's.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        retries = sum(1 for f in calls if f is not None)
+        if failure is None:
+            return DiffProposal(BAD_DIFF, "")
+        if retries == 1:
+            raise VllmResponseError(TRUNCATED)
+        return DiffProposal(FIX_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    assert [s.exit_code for s in agents] == [1, 1, 0]
+    assert len(_sidecar(journal, agents[0])["samples"]) == PROPOSAL_SAMPLES
+    assert _sidecar(journal, agents[1])["samples"] == []
+    assert len(_sidecar(journal, agents[2])["samples"]) == 1
+
+
+SLOPPY_DIFF = GOOD_DIFF.replace("+    return 2\n", "+    return  2\n")
+
+
+def test_sampler_scores_a_candidate_the_way_the_gate_will_see_it(tmp_path: Path) -> None:
+    """T6-24b known-bad. The only thing wrong with the sample is spacing
+    `ruff format` repairs; the live path runs `autofix` before the gate,
+    so the node passes on the first draw. The sampler scored it one gate
+    red (round 3c: delta one on three of four nodes) and drew all
+    PROPOSAL_SAMPLES, each identical, paying two worker calls for a
+    candidate that had already won. A candidate is scored by the same
+    sequence the node is gated by.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        return DiffProposal(SLOPPY_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert calls == [None], "the first sample gates clean once autofixed; sampling stops"
+    sealed = _sidecar(journal, next(s for s in read_spans(journal) if s.name == "worker:n1"))
+    assert [x["outcome"] for x in sealed["samples"]] == ["0 gate(s) failed"]
+
+
 def test_run_node_transport_failure_restores_the_tree_and_names_itself(tmp_path: Path) -> None:
     """F21.12b known-bad. Attempt 1 applies a diff that fails its gate;
     attempt 2's worker call dies in transport (round 3c: `request failed:
