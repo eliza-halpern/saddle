@@ -111,6 +111,46 @@ stay separate.
 Eleven follow-on items, each labelled harness or model-ceiling with its
 run log as evidence, are in F21.8.
 
+### Round 3b (the T6-14 measurement, 2026-09-20)
+
+One T5 seed against T6-8+T6-14 (`9b18dad`), predictions frozen in
+`../saddle-bench/runs/round3b/PREDICTION.md` before the run. Full record
+in F21.9. **TIMEOUT at 1800 s, 0 sealed proofs**, worktree clean at exit.
+
+```
+attempt 1/3: 3 gate(s) failed: syntax, tests, red-phase
+Attempt 2 of 3: completion truncated at 32624 output tokens
+Attempt 3 of 3: completion truncated at 32768 output tokens
+```
+
+**T6-14's mechanism works.** The truncation message names its cap, the
+advice no caller acted on is gone, and attempt 3 ran a ladder rung above
+attempt 2 — where round 3a's three seeds resent an identical cap forever.
+
+**Two harness defects defeat it**, both solved to the token. The emission
+estimate is computed from the *live* worktree, so attempt 1's 699 lines
+of failed output inflated attempt 2's budget: `194 + 699 - 6 = 887`
+lines, and `16384 + 887*16 + 2048 = 32624`, the observed cap exactly.
+Degeneration produces bigger files, bigger files produce a bigger cap.
+And that inflated cap landed 144 tokens below the 32768 rung, so the
+escalation bought 0.4 % more room (F21.9a, F21.9b).
+
+**The failure underneath is degeneration, not budget.** Attempt 1 did not
+truncate; it emitted a complete, applying diff containing 19
+byte-identical copies of one test and a 20th cut off mid-signature. The
+`syntax` gate caught it correctly. `temperature` is the only sampling
+parameter saddle sends — no `repetition_penalty`, `top_p`, `top_k` or
+`min_p` appears anywhere in `src/` — and retries drop to temperature 0.0,
+the most degeneration-prone setting available (F21.9c).
+
+That reframes round 3a: its truncations were plausibly this same
+degeneration meeting a lower ceiling, in which case T6-14 converted a
+truncation into a syntax error rather than curing the cause. Progress —
+the gate now sees the failure and the work reaches the worktree — but not
+the cure. Labelled **harness**: the truncations were at a quarter of the
+ladder's top, so the honest model-ceiling row T6-14 predicted was never
+reached.
+
 ## Harness defects found and fixed
 
 Three checks reported PASS without verifying their property. All three
@@ -161,6 +201,11 @@ implementation **zero** times in nine attempts.
 
 The crossover hypothesis -- saddle loses on small tasks and wins on large
 ones -- remains untested, because the large tasks never reached a verdict.
-F21.1 is the blocker: a planner-set output ceiling the retry path never
-raises. Until that is fixed, a T4-6b comparison against the baseline arm
-would measure that ceiling rather than the architecture.
+F21.1's ceiling is fixed (T6-14, `9b18dad`) and round 3b confirms the
+ladder engages. The blocker moved rather than cleared: the emission
+estimate is inflated by failed attempts, the escalation step can be 144
+tokens, and the worker call sends no repetition controls at all, so the
+model degenerates into a loop and fills whatever budget it is given.
+Items 12-17 in F21.8/F21.9. A T4-6b comparison still has nothing to
+compare on the large tasks: across four T5 attempts in two rounds,
+saddle has sealed zero proofs.
