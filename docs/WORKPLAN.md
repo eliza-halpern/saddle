@@ -3074,7 +3074,251 @@ shape. D14 (structural tags) stays deferred until this is known.
 
 ---
 
-## 8. Deferred and not recommended
+## 8. Tier 5 — the harness feels like a session, not a pipeline (QoL)
+Added 2026-09-19 after Tier 3 closed. Same template and rules as Tiers 2-3: every
+item names a contract, a direction, known-good and known-bad instances,
+and 1-3 contract mutants. UX work goes through the same gate; nothing in
+this tier may loosen a check.
+
+Goal, in the user's words: "I would like the QoL to be really nice for
+this harness, where it feels like using claude code." What that feel is,
+concretely: one command takes a task in prose and you watch it work in
+the same terminal; when it stops, the last line tells you what to type
+next; picking a run back up needs no journal plumbing; the defaults are
+where you left them.
+
+Facts at HEAD the items lean on (verified by reading `cli.py`):
+`saddle run TASK` emits, asks `ask_confirm` unless `--yes`, runs, then
+writes the finished transcript to stdout at the end (cli.py:571); live
+progress exists only as `saddle tail JOURNAL` in a second terminal
+(`render_event`, cli.py:687); every failure is an `error: ...` line and
+exit 1, with the T3-10 mismatch the only one that names a next command;
+the API key is the only environment input (cli.py:781); `--base-url`,
+`--model`, efforts and temperatures are flags with hard-coded defaults
+on five subcommands.
+
+Sequencing: T5-0 first (it is the evidence the rest cites), then T5-1,
+T5-3, T5-2 in that order (each is one session), then T5-4 and T5-5 in
+either order, T5-6 last. T5-7 and T5-8 are decisions, not work.
+
+### T5-0 — Dogfood transcript: every manual step of one real run (record; no code)
+Files: none in the repo. Write `../saddle-notes/dogfood-2026-XX-XX.md`.
+Contract: one person runs one small real task through `saddle run` on a
+scratch repo against the container, from an empty shell to a verified
+journal, and writes down every command typed, every output read, every
+moment of "what do I do now", and the wall-clock time of each. Then
+repeats after a deliberate failure (kill the run mid-node with Ctrl-C,
+then get it back to green).
+Direction: none (record).
+Evidence: this is the evidence; T5-1..T5-6 cite its line numbers the
+way Tier 3 cites F-numbers. An item below with no line in this record
+behind it is speculation and waits.
+Steps: run, record, count. The count that matters: commands typed
+between "task in hand" and "verified journal", and seconds spent
+reading output that did not tell you what to do next.
+Known-good / Known-bad: n/a. Done when: the record exists and each
+T5 item below carries a `Dogfood:` line citing it.
+Stop if: the container is down (report, do not restart it).
+
+### T5-1 — `saddle run` shows the run as it happens (Major)
+Files: `src/saddle/cli.py` (`run_run` ~:481-571, the final
+`stdout.write(result.transcript)`; `run_tail` ~:660-695 is the renderer
+to reuse); `src/saddle/slice.py` (`run_slice` takes a `now` callable
+today; it needs an `on_event: Callable[[ProofRecord | SpanRecord],
+None] | None = None` it calls after every `append_record`/`append_span`);
+`src/saddle/transcript.py` (`render_event`); `tests/test_cli.py`,
+`tests/test_slice.py`.
+Contract: while `saddle run` is running, every journal entry is
+rendered to stderr by `render_event` the moment it is sealed, in
+journal order, so the user never opens a second terminal; the finished
+transcript still goes to stdout at the end unchanged, so `saddle run
+... > transcript.md` keeps working; `--quiet` suppresses the live
+lines and nothing else.
+Direction: none for the gates (presentation only); the journal is still
+the record and `saddle tail` still works on it. Say so in the commit.
+Dogfood: cite the T5-0 line where the second terminal was opened.
+Steps: 1. `run_slice(..., on_event=None)`: after each
+`append_record(journal_path, record)` and `append_span(journal_path,
+span)` call `if on_event: on_event(entry)`. There are several call
+sites; grep `append_record(\|append_span(` in slice.py and cover each.
+2. `run_run` passes `on_event=lambda e: _emit(stderr, e)` where `_emit`
+writes `render_event(e)` lines and flushes; `--quiet` passes `None`.
+3. Tests: a `run_slice` test with a recording `on_event` asserts the
+callback sequence equals `read_entries(journal)` (same objects, same
+order); a `run_run` test asserts stderr carries the `[n1] sealed` line
+and stdout carries the transcript; `--quiet` asserts stderr is empty.
+Known-good: the two-node pass fixture streams N lines to stderr and
+stdout equals today's transcript byte for byte. Known-bad: an
+`on_event` that raises must not corrupt the journal -- the entry is
+already appended before the callback; test that a raising callback
+leaves `verify_journal` clean.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. drop the `on_event(record)` call after the sealing `append_record` -> the callback-sequence test red (missing the proof entry).
+2. `run_run`: pass `on_event=None` unconditionally -> the stderr test red.
+Done when: mutants red; `./check.sh` green; T5-0's second-terminal step is gone on a rerun.
+Stop if: `run_slice` already has an event callback (then only the CLI half is owed).
+
+### T5-2 — Picking a run back up needs no journal plumbing (Major)
+Files: `src/saddle/cli.py` (`run_run`; the T3-10 `ValueError` path that
+prints `git restore --source ...`); `src/saddle/slice.py`
+(`_seed_proofs`, `_ensure_clean`); `tests/test_cli.py`, `tests/test_slice.py`.
+Contract: (1) `saddle run TASK` with the default journal already holding
+proofs for this task says, before the plan confirmation, what it will
+reuse and what it will redo (`resuming: 2 proven, 1 to run, 1 dropped
+(node changed)`), from `_seed_proofs`'s existing summary; (2) when the
+worktree does not match the proven tree, `saddle run --restore` performs
+the `git restore --source <ref> --staged --worktree -- .` itself after
+`ask_confirm` shows the exact command, then continues; without
+`--restore` the message is unchanged and the exit is 1; (3) a journal
+sealed for a different task still stops the run, but the message names
+the two commands that resolve it (`--journal PATH` for a new journal,
+or `saddle status` to see what the old one holds).
+Direction: (2) is a convenience over an action the user already had to
+take by hand -- it is **not** a loosening because the restore only runs
+on the tree hash the proof sealed, and only after confirmation; say so.
+Dogfood: cite the T5-0 lines for the restore-by-hand and the
+"which journal is this" moment.
+Steps: 1. `run_run` calls `_seed_proofs` (or a thin `plan_resume`
+wrapper in slice.py that returns the summary without running) before
+`ask_confirm` and prints the summary line. 2. Add `--restore`; on the
+mismatch `ValueError`, if set, confirm and run the restore via
+`run_argv`, then call `run_slice` again once. 3. Tests: the mismatch
+fixture from T3-10 with `--restore --yes` ends green and the journal
+holds the resumed proof; without `--restore` it is byte-identical to
+today's error; a different-task journal's message contains
+`--journal`.
+Known-good: resume after a clean Ctrl-C mid-node ends with the same
+proofs a fresh run would seal. Known-bad: `--restore` on a tree that
+has *uncommitted user edits outside the proven files* must refuse, not
+restore -- `_ensure_clean`'s check runs first; test that it does.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `--restore`: skip `ask_confirm` -> the confirmation test red.
+2. `--restore`: run the restore without re-checking `_ensure_clean` -> the dirty-tree known-bad red.
+Done when: mutants red; `./check.sh` green.
+Stop if: T5-1 has not landed (the summary line reuses its stderr channel).
+
+### T5-3 — Every stop names the next command (Medium)
+Files: `src/saddle/cli.py` (every `return 1` path: ~:496, :503, :570,
+:581, :644, :655, :682, :685, :800, :822, :854); `src/saddle/ux.py`;
+`tests/test_cli.py`.
+Contract: every line `saddle` prints that begins `error:` is followed by
+a line beginning `next:` that holds one runnable command or one
+sentence naming the file to edit; the `next:` line is produced by one
+helper (`ux.stop(reason, next_command)`) so no path can forget it.
+Direction: none (messages). Evidence: T3-10's restore message is the
+one example of this today and the T5-0 record shows the rest.
+Steps: 1. `ux.stop(stderr, reason, *, then)` writes both lines. 2.
+Replace each `error:` write with it; the `then` text per path: missing
+key -> `export SADDLE_VLLM_API_KEY=... (or put it in ~/.config/saddle/env)`;
+doctor failure -> `saddle doctor --base-url ...`; invalid DAG ->
+`saddle dag "TASK"` to see the plan; journal corrupt -> `saddle verify
+JOURNAL`; declined confirmation -> `saddle run --yes ...`; T3-10
+mismatch -> `saddle run --restore ...` (after T5-2) or the git command
+(before). 3. Test: parametrize over every failure fixture in
+`test_cli.py` and assert `next:` follows `error:` in the captured
+stderr; add a test that greps `cli.py` for `"error:` outside `ux.stop`
+and asserts zero -- that is the structural half, and it is decorative
+alone, so keep the behavioural parametrization as the load-bearing one.
+Known-good: each fixture's `next:` is a command that, typed, resolves
+that failure (the test for the confirmation path actually runs it).
+Known-bad: an `error:` with no `next:` fails the parametrized test.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `ux.stop`: drop the `next:` write -> every parametrized case red.
+Done when: mutant red; `./check.sh` green; `grep -c '"error:' src/saddle/cli.py` counts only the helper.
+
+### T5-4 — Defaults live in a config file, flags override (Medium)
+Files: `src/saddle/cli.py` (`build_parser` ~:700-770, `_api_key` ~:781);
+new `src/saddle/config.py`; `tests/test_cli.py`, `tests/test_config.py`.
+Contract: `saddle` reads `REPO/.saddle/config.toml` then
+`~/.config/saddle/config.toml` (repo wins) for `base_url`, `model`,
+`reasoning_effort`, `worker_effort`, `temperature`,
+`sample_temperature`, `max_tokens`, `journal`; precedence is flag >
+repo file > user file > built-in default, and `saddle doctor` prints
+where each effective value came from. The API key stays environment
+only (never in a file the repo could see; the existing rule).
+Direction: none for the gates. Note that `.saddle/config.toml` must be
+listed in the harness's own untracked-artefact set wherever
+`.saddle/proofs.jsonl` is (T2-2's untracked rule) -- grep for
+`proofs.jsonl` in `gates.py`/`evidence.py` docstrings.
+Dogfood: cite the T5-0 lines where `--base-url`/`--model` were retyped.
+Steps: 1. `config.load(repo) -> Settings` (a frozen dataclass; `tomllib`
+is stdlib). 2. `build_parser` takes `defaults=Settings` and sets
+`default=` from it; `argparse` then gives flag-over-file for free. 3.
+`doctor` prints `model: qwen... (from .saddle/config.toml)` per key. 4.
+Tests: precedence for one key across all four layers (four tests, one
+per winner); a key the file misspells raises with the file path and
+key named; the API key present in a file is *ignored* and a warning
+names the rule.
+Known-good: an empty file changes nothing (byte-identical `--help`).
+Known-bad: `api_key = "..."` in the file is ignored and warned.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. swap the merge order (user file over repo file) -> the precedence test red.
+2. read `api_key` from the file into the client -> the warned-and-ignored test red.
+Done when: mutants red; `./check.sh` green.
+
+### T5-5 — `saddle status [JOURNAL]`: what a journal holds, without running anything (Medium)
+Files: `src/saddle/cli.py` (new subcommand beside `verify`);
+`src/saddle/journal.py` (`proven_records`, read only); `src/saddle/slice.py`
+(`_seed_proofs` needs a DAG; `status` reports what it can without one);
+`tests/test_cli.py`.
+Contract: prints, from the journal alone: the task hash and the first
+record's timestamp; each proven node with its record hash, kind,
+target files and tree hash; the last span (so an interrupted run shows
+where it stopped); whether the current worktree's `git write-tree`
+equals the last reused proof's tree hash (`worktree: matches proof
+n2` / `worktree: differs from proof n2 -- saddle run --restore`); and
+the chain verdict from `verify_journal`. Exit 0 if the chain verifies,
+1 otherwise; never writes.
+Direction: none (read-only). Dogfood: cite the "which journal is this"
+line.
+Steps: `run_status(journal, repo, stdout)`; render via a small function
+in `transcript.py` beside `render_journal_transcript`; tests over the
+T3-10 fixtures (matching, mismatching, empty journal, missing file ->
+`error:` + `next: saddle run`).
+Known-good: after the two-node pass fixture, `status` lists n1, n2 and
+`matches`. Known-bad: after `git checkout HEAD -- n.py`, `status` says
+`differs` and names the restore.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. compare the tree hash against `""` instead of the worktree -> the `differs` test red.
+Done when: mutant red; `./check.sh` green.
+
+### T5-6 — The live view reads like a session transcript (Minor)
+Files: `src/saddle/transcript.py` (`render_event` :80-104); `tests/test_transcript.py`.
+Contract: the live lines carry, per node, a header when a node starts
+(`── n2  impl  target: n.py`), one line per attempt (`attempt 2/3`),
+one line per gate with a pass/fail mark and its detail, elapsed time
+per node at seal, and the run verdict as the last line; the journal
+format does not change (this is rendering of spans that already exist
+-- check each field is already sealed before rendering it; a field
+that is not there is a T2-4-shaped change and out of scope).
+Direction: none. Depends on T5-1 (nobody sees this without it).
+Dogfood: cite the lines spent reading `tool git: exit 0 in 12ms: ...`.
+Steps: extend `render_event`; keep `is_run_end` untouched; snapshot
+tests on a fixed journal fixture (the existing `verify` fixtures), one
+per line kind.
+Known-good: a fixture journal renders to the expected text. Known-bad:
+a span with `exit_code != 0` renders the fail mark, not the pass mark.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. render the pass mark unconditionally -> the fail-mark test red.
+Done when: mutant red; `./check.sh` green.
+
+### T5-7 — Chat-driven runs (#23): decision needed
+`saddle up` is a streaming chat with tools; `saddle run` is the gated
+pipeline. #23 asks for a chat turn to execute through the pipeline.
+Options: (A) a `/run TASK` command inside `up` that calls `run_run`
+with `on_event` streaming into the chat pane -- small once T5-1 exists;
+(B) the model in `up` gets a `saddle_run` tool -- lets the model decide
+to run, which is the #65 shape (the model choosing its own gate path)
+and is not recommended; (C) leave separate. Recommend A after T5-1..3.
+No steps until decided.
+
+### T5-8 — Rich TUI (#17): not now
+Every item above is plain stdout/stderr on purpose: it works over ssh,
+in CI logs, and in `saddle run > file`. A TUI is a second renderer over
+the same journal and can come after T5-0 is rerun on the finished tier
+and still shows time spent reading. Keep #17 open, unchanged.
+
+## 9. Deferred and not recommended
 
 | Item | Why not now | Would need |
 |---|---|---|
@@ -3085,12 +3329,12 @@ shape. D14 (structural tags) stays deferred until this is known.
 | Rolling wave, stall detection, Phase -1/0, Phase 4 | specified, no measurement asks for them | a failing run that they would have caught |
 | Remaining `refactor` exemptions (gates.py:250, :321) | need a behaviour-preservation oracle | design in #65 after T2-2 |
 | HANG as a first-class verdict field | already surfaced in `detail` (#55 closed); a field is T2-4's job | nothing |
-| Rich TUI (#17), chat-driven runs (#23) | future-facing | user priority |
+| Rich TUI (#17), chat-driven runs (#23) | see T5-7 and T5-8 | Tier 5 |
 | Property soundness (#62) | see T3-3 | design decision |
 
 ---
 
-## 9. Evidence label legend (as used above)
+## 10. Evidence label legend (as used above)
 
 - **PROVEN-IN-PRODUCTION** — shipped and load-bearing somewhere with a public
   record (git's apply semantics, merge-queue full-suite runs, vLLM grammar
