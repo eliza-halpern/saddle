@@ -120,9 +120,9 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 (F21.12a, main session, implemented) → T6-23 → T6-24 (main session)
-→ one more T5 seed under them (executor; the first run in which an impl
-node has ever faced a mutation gate that could pass) → T6-1
+T6-22 and T6-23 done → T6-24 → T6-25 (main session) → session 37 =
+T6-26 (round 3d, executor; the first run in which an impl node faces a
+mutation gate that can pass) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -3782,7 +3782,10 @@ the baseline already carried is reported in the detail as `inherited: N`
 and does not fail the node. Formatting (`ruff format --check`) is
 unchanged: the harness already formats the diff, so a format failure is
 always introduced. Autofixable findings are still fixed before the gate,
-as today (#66).
+as today (#66). The detail names the introduced findings' rules
+(`E501 x2, F401`), not only the exit: round 3c's n2.r2 sidecar reads
+`ruff check exited 1, format exited 0` and a reader cannot tell lint
+from formatting without re-running (F21.12c).
 Direction: scope narrowed. Not a loosening of the standard: every
 finding the node introduces still fails it. The evidence CLAUDE.md asks
 for: T2's impl node burned three attempts on BLE001 at a line
@@ -4567,8 +4570,8 @@ known-good/known-bad; config order. Mutants (three, all KILLED): runner
 passes `run_tests=()`; `pytest_scope` keeps the `pytest` token;
 `_mutmut_scratch_config` always sorts.
 
-**Status (2026-09-20):** implemented in the main session; `./check.sh`
-green (700 passed, 3 skipped, 100%). Awaiting commit.
+**Status (2026-09-20):** DONE, `2af0d5d`, main session; `./check.sh`
+green (700 passed, 3 skipped, 100%).
 
 ### T6-23 — Every give-up path abandons the node's diff and keeps its evidence (F21.12b; tightened)
 
@@ -4587,6 +4590,15 @@ type and message at least; reasoning and usage where the client has
 them). Known-bad: a propose that raises a timeout leaves no staged diff
 and a sidecar naming the exception. Owner: main session.
 
+**Status (2026-09-20):** DONE, `073f9bc`, main session. The `except
+BaseException` branch seals, then `_abandon`s, then re-raises; every
+failed worker call's sidecar carries `error_type`, and this branch's
+carries `samples`. A transport failure has no envelope, so there is no
+reasoning or usage to keep; what was added is what the client knew.
+Whether a transport error should be a spent attempt rather than a dead
+node is a separate loosening, not made. Mutants three, all killed;
+`./check.sh` green.
+
 ### T6-24 — The sampler scores what the gate will see, and a retry's sidecar reports its own draws (F21.12c; tightened)
 
 Files: `src/saddle/slice.py` (`_best_of_samples`, `_evaluate_candidate`,
@@ -4602,6 +4614,57 @@ real failure count on three of four nodes and `failures == 0` never ended
 sampling early. Contract: a candidate is scored by the same sequence the
 node is gated by. Ties still fall to sample index; recorded, not changed
 (a tie is a tie). Owner: main session.
+
+### T6-25 — Draw k samples concurrently; evaluate serially in seed order; seal the first pass (tightened in effect)
+
+Files: `src/saddle/slice.py` (`_best_of_samples`), `src/saddle/vllm.py`
+(seed on the request; a pool over the sync client), `src/saddle/cli.py`
+(the proposer), `tests/test_slice.py`, `tests/test_vllm.py`.
+
+Premise (the user's, 2026-09-20): the model is local, tokens cost
+nothing, and vLLM batches concurrent requests (the container's own
+table: 1 stream 111 tok/s, 2 streams 191, 4 streams 268). Serial k
+sampling saves nothing and costs k-1 full worker latencies whenever
+sample 1 fails. Round 3c sized it: n1's first attempt drew three samples
+one after another for 1028 s of wall and n2's for 722 s; every other node
+waits on n1. Concurrent draws cost roughly one draw's wall.
+
+Contract: (1) `_best_of_samples` issues its k worker calls concurrently,
+each with its own `seed`, at the sample temperature; (2) the returned
+diffs are evaluated serially in the worktree in seed order (arrival
+order is not deterministic) and the first that passes seals, gates
+unchanged; (3) retries draw k too, since T6-15 made them non-greedy;
+(4) the distinct-sample count still varies and a test shows it (CLAUDE.md
+vacuity rule); (5) k is bounded by the context left: round 3c's largest
+sample was 52442 tokens on a 175k window, so three at that size fit and
+three at the 165k cap do not (vLLM preempts and the draws go serial
+again). Interaction with T6-24b: with k paid up front, early stop on
+`failures == 0` no longer saves wall; scoring through `autofix` then
+matters for picking the right sample, not for time.
+
+Known-good: a fake server that records request start times shows k
+calls overlapping; a scripted set of k distinct diffs where only the
+last-by-seed passes seals that one after evaluating the others in seed
+order. Known-bad: k identical samples at temperature 0.0 still report
+`1 distinct of k`. Mutants: (1) the pool size forced to 1 -> the overlap
+test red; (2) evaluation in arrival order -> the seed-order test red
+(the fake makes arrival order adversarial). Owner: main session.
+
+### T6-26 — Round 3d: one T5 seed under T6-22 to T6-25 (measurement; F21.13; no code)
+
+Same procedure as T6-19 (`RUN_DIR=runs/round3d/t5-s1 SAMPLE_TEMP=0.7
+DEADLINE=7200 ./run_arm.sh t5 saddle`, PREDICTION.md before the run).
+This is the first run in which an impl node faces a mutation gate that
+can pass, so P4 (the first impl node seals) is the live question. P1-P3
+as in T6-19. P5 (oracle) uncertain. Pre-registered observations, not
+predictions: (a) round 3c's retry output collapsed 29439 -> 14246 -> 3250
+completion tokens on n2, opposite to F21.9a; does it recur once retry
+sidecars report their own draws (T6-24a)? (b) sample attempts decoded at
+89-102 tok/s and the two single-call retries at 58-61; speculative
+decoding acceptance differing between a long sample and a short retry
+is a guess, written here as one. (c) coverage failed at 88.9%/89.7% on
+the one impl node that reached it (MODEL); does it recur? Owner:
+executor (needs the key). Not in this item: any fix.
 
 ---
 
