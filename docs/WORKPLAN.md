@@ -98,35 +98,34 @@ Two authoring rules, added 2026-09-18 after the stops on T2-2, T2-3 and T3-3
 
 ## 2. Sequencing
 
+Outstanding items only (rewritten 2026-09-20; everything done is
+recorded in its own item's status paragraph, and the retired
+dependencies with it). An arrow reads "left must land before right".
+
 ```
-T0-1 ──► T1-4 (check.sh green needs the staged file gone)
-T1-1, T1-2, T1-3 ──► T1-4
-T0-11 ──► T1-4 (check.sh runs `ruff format --check .`, which covers Markdown)
-T0-3 (gate names test) ──► T2-2 (extends the same test module)
-T2-2a (honest impl fixtures) ──► T2-2 (the tightened check rejects the old fixtures)
-T2-1 ──► T2-1b (the seal-count test T2-1 left behind)
-T2-1 ──► T4-1 (a benchmark rerun with vacuous k is not worth the GPU time)
-T4-4 ──► any future D14 work (deferred)
-T4-1 ──► #61 decision
-T3-8 ──► T3-10 (the tree-snapshot helper is reused for the proven-tree ref)
-T3-9 ──► T3-10 (T3-10 adds a field to the record shape T3-9 defines)
-T3-9 ──► T3-11 (the `node_hash` filter is what drops a foreign `.r1` proof)
-T3-4 ──► T3-12, T3-15 (both edit lines T3-4 rewrites: `cli.py:128-131`, `ARCHITECTURE.md:180`)
-T3-4 is independent of T3-8, T3-13, T3-14, T3-16 (T3-4 owns `check_node_scope`/`run_tier1`; none of these edit them)
-T3-8, T3-9, T3-10 ──► T3-6 (decompose `run_slice` after the resume seed settles)
-T3-7a ──► T3-3 (the oracle runs on the impl node a red specification feeds)
-T3-7a ──► T3-12 (the planner prompt must also say a test node's tests are expected to fail)
-T3-4 ──► T3-7a's test-node fixtures (a test node that creates its test file needs `write_file`)
-T3-8 ──► any two-node fixture or run (until it lands, the second node is gated against `HEAD` and fails `node-scope` on the first node's staged files)
-T3-7a, T3-8 ──► T3-7b (the smoke run, session 20a) ──► T3-3, T3-9, T3-10, T3-11 (write them after watching the path execute)
-T3-7b ──► T3-17, T3-18, T3-19, T3-20, T3-21 (each is a smoke-run finding; T3-17 needs the user's word, T3-18 needs the container)
-T3-17, T3-18, T3-19 ──► T4-1 (a benchmark against a merge gate that cannot import, a grammar that admits headerless hunks, or a planner that cannot see the repo measures those defects, not the harness)
-T3-7b (20b) ──► T3-23, T3-24, T3-25 (each is a rerun finding; T3-24 needs the user's word)
-T3-23, T3-24 ──► T4-1 (a benchmark in which no replacement node can pass `red-phase` and no impl node can pass `requirement-binding` measures those two defects, not the harness)
-T3-22 ──► nothing (saddle's own self-mutation score; not a 20b or T4 prerequisite)
-T3-9 ──► T3-21's task line (the verdict half stands alone)
+T6-16 (replay T5 attempt 1: repetition_penalty, temperature, grammar off) ──► T6-15 (the constant and the non-greedy retries are set from what the replay shows, not guessed)
+T6-15 ──► a T5 seed with full evidence (the first run under T6-12/T6-13; also the check that T6-14's cap and T6-8's pre-flight hold on the task that motivated them)
+T6-1 (retrospective over the thirteen labelled runs, no GPU) ──► T6-6 (Proposal A goes ahead only if row A separates PASS from FAIL)
+T6-1 ──► T6-4, T6-5 (both proceed regardless; T6-1 decides thresholds and whether T6-5 is worth a session of its own)
+T6-2, T6-3 ──► nothing (known-bad is T2's log; independent of T6-1 and of each other)
+T6-0 ──► nothing (docs-only pointer; any sitting)
+T6-9 (deadline) ──► the next timed sweep (a run on a clock must seal what it has, or its evidence is what T6-12 saved and no more)
+T6-10 ──► nothing (scope narrowing with proof; independent)
+T6-7 ──► T4-6b (bench-side; baselines change only after the round's table is written, or T4-6b is not comparable to T4-6a)
+T3-26 (`saddle run --dag FILE`) ──► T4-5 (half A runs a hand-written DAG)
+T4-6a table (DONE) ──► T4-6b (same seven tasks, same frozen oracles)
+T6-2, T6-3, T6-4, T6-5 ──► T4-1, T4-5, T4-2, T4-3, T4-6b (measure the harness after the specification hole is closed, not before)
+T5-0 ──► T5-1 ──► T5-3 ──► T5-2 ──► T5-4, T5-5 (either order) ──► T5-6
+T5-7, T5-8 ──► nothing (decisions, not work)
 ```
-Everything in Tier 0 is independent of everything else and can go in any order.
+
+Order of sessions from here: session 35 (T6-16 + the T6-15 measurement,
+one item, settled tree) → T6-15 code (main session) → T5 seed → T6-1
+→ T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
+→ T6-9, T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0 first) → T4-1,
+T4-5, T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
+Contract changes stay in the main session; executors take docs,
+fixtures and measurement.
 
 ---
 
@@ -3950,6 +3949,25 @@ the round-3 journals' span durations -- write that item only after the
 numbers are read.
 
 ### T6-12 — A failed attempt keeps its evidence: reasoning, finish reason, token usage (tightened; journal format)
+Status 2026-09-20: DONE by the main session, with T6-13, in the commit
+carrying this line. Landed: `SpanRecord.attempt_hash` (written only when
+set, so pre-T6-12 spans hash as before); `write_attempt_sidecar` /
+`attempt_sidecar_path` in journal.py (`attempts/<span_id>.json` beside
+the journal, scrubbed like every journaled text); `_seal_attempt` writes
+one for every attempt -- truncation (partial reasoning, content length,
+usage, the cap, `finish_reason=length`), identical re-proposal, apply
+failure, gate failure (with every gate's outcome), and the sealing
+attempt -- plus one summary per sample from `_best_of_samples` (diff
+hash, reasoning, outcome). `VllmResponseError` carries `reasoning`,
+`content`, `usage`, `max_tokens`, `finish_reason` on a truncation;
+`DiffProposal` carries `usage` and `max_tokens` (excluded from
+equality). `verify_journal` reports `attempt-sidecar` (missing / does
+not hash). Deviation, stated: the cap and usage live in the sidecar, not
+as span fields, so span hashes and `saddle tail` are unchanged. Known-bad
+shown by mutant (the old code is the mutant): M1 truncation drops the
+partial reasoning -> `'' != 'thought so far'`; M2 verify ignores
+`attempt_hash` -> the edited-sidecar test finds no issue; M3 sidecar
+only on success -> the failed attempt's sidecar is missing. All KILLED.
 Files: `src/saddle/vllm.py` (`propose_diff` ~:313: the truncation branch
 raises `VllmResponseError` and drops the partial `reasoning`/`content`
 and `usage` the response carried; the error must carry them out),
@@ -4003,6 +4021,24 @@ implemented there; round 3b could verify its prediction 2 only by
 arithmetic because of it -- F21.9 follow-on 17).
 
 ### T6-13 — The journal records what was asked, not only what happened: a `plan` record (tightened; journal format)
+Status 2026-09-20: DONE by the main session, with T6-12. Landed:
+`PlanRecord`/`PlanNode`, `build_plan`, `append_plan`, `read_plans`;
+`run_slice` seals the plan right after `_seed_proofs` and before any
+worker call, and `_schedule_until_done` seals each replan's replacement
+nodes with `replaces=<failed id>`; `verify_journal` reports
+`unplanned-proof` for a proof sealed *after* a plan record whose
+`node_hash` no plan names (proofs before any plan predate T6-13 and are
+not judged -- deviation from the item, so old journals and hand-seeded
+resume fixtures still verify); `render_event` renders a plan as a header
+and one line per node, so `saddle tail` shows it; `saddle verify` prints
+`N plan(s)` and the plan lines before the transcript. Also landed here,
+from T5-1/F21.3: `saddle run` flushes stdout after the plan line, so a
+killed run keeps at least that. Known-bad by mutant: M1 plan not sealed
+-> the journal's first entry is not a plan; M2 verify skips the check ->
+the stray proof passes; M3 the replan plan forgets `replaces`. All
+KILLED. ARCHITECTURE's journal paragraph names both record kinds. Not
+done here: T6-9's deadline (the external kill still ends the run; the
+evidence now survives it).
 Files: `src/saddle/journal.py` (new record type `plan`: the validated DAG
 as emitted -- node ids, kinds, `target_files`, requirement ids and
 statements, `execution_constraints` including `reasoning_budget` and
