@@ -246,8 +246,14 @@ def git_ls_files(cwd: Path) -> list[str]:
 
 
 def git_changed_files(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> list[str]:
-    """Worktree-relative paths differing from `ref`, for scoping autofixes."""
-    argv = ["git", "-C", str(cwd), "diff", "--name-only", ref, "--", "."]
+    """Worktree-relative paths differing from `ref`, for scoping autofixes.
+
+    `--no-renames` (T3-14): with git's default rename detection a staged
+    `git mv n.py m.py` prints only `m.py`, so the path a node deleted
+    never reached target-scope and a `target_files` list naming the new
+    path alone let the rename through. Both paths are the node's.
+    """
+    argv = ["git", "-C", str(cwd), "diff", "--no-renames", "--name-only", ref, "--", "."]
     start = perf_counter()
     proc = subprocess.run(argv, capture_output=True, text=True)
     _record(recorder, argv, start, proc)

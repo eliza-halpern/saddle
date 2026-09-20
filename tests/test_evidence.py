@@ -268,6 +268,22 @@ def test_git_added_files_lists_staged_adds_and_ignores_untracked(tmp_path: Path)
     assert git_added_files(tmp_path, "HEAD") == ["b.py"]
 
 
+def test_git_diff_helpers_see_a_staged_rename_as_both_paths(tmp_path: Path) -> None:
+    """Known-good (T3-14): a staged `git mv n.py m.py` is an add of `m.py`
+    (so a `refactor` node fails node-scope) and touches both paths (so a
+    `target_files` list must name the old file too). Git's default rename
+    detection would fold it into one `R100` entry: `--diff-filter=A` then
+    prints nothing and `--name-only` prints only the new name -- the
+    known-bad, reached by dropping either `--no-renames`."""
+    _git_repo(tmp_path)
+    (tmp_path / "n.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-q", "-m", "n"], tmp_path) == 0
+    assert run_argv(["git", "mv", "n.py", "m.py"], tmp_path) == 0
+    assert git_added_files(tmp_path, "HEAD") == ["m.py"]
+    assert git_changed_files(tmp_path, "HEAD") == ["m.py", "n.py"]
+
+
 def test_git_added_files_unknown_ref_raises(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     with pytest.raises(RuntimeError, match="git diff --diff-filter=A against 'no-such-ref'"):
