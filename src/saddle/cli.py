@@ -103,12 +103,20 @@ def worker_output_cap(
 
     Emission estimate plus reasoning allowance when the node declares
     scope; the allowance alone otherwise. Each escalation (one per
-    truncation already suffered by this node) climbs one ladder step.
+    truncation already suffered by this node) at least doubles the cap
+    and lands no lower than the next ladder rung: round 3b (F21.9b)
+    showed a cap of 32624 "escalating" to the 32768 rung, 144 tokens of
+    room, so a step is measured from the cap, not from the rung table.
+    `file_lines` must be the node's *baseline* tree: a failed attempt's
+    diff is still applied when the next attempt is proposed, and sizing
+    from it let a degenerate 699-line failure buy itself a bigger cap
+    (F21.9a).
     """
     estimate = emission_estimate(node, file_lines)
     cap = WORKER_OUTPUT_TOKENS[effort] + (estimate or 0)
     for _ in range(escalations):
-        cap = next((step for step in WORKER_OUTPUT_STEPS if step > cap), MAX_WORKER_OUTPUT)
+        rung = next((step for step in WORKER_OUTPUT_STEPS if step > cap), MAX_WORKER_OUTPUT)
+        cap = max(rung, 2 * cap)
     return min(cap, MAX_WORKER_OUTPUT)
 
 
@@ -571,18 +579,25 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         return 1
 
     escalations: dict[str, int] = {}
+    baseline_lines: dict[str, dict[str, int]] = {}
 
     def propose(node: Node, failure: str | None) -> DiffProposal:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
         files = git_ls_files(options.repo)
+        # The node's first proposal sees its baseline tree (nodes run
+        # synchronously and a node's earlier attempts are the only edits
+        # since); size every attempt from that snapshot, never from the
+        # tree a failed attempt left behind (F21.9a).
+        if node.id not in baseline_lines:
+            baseline_lines[node.id] = _file_lines(options.repo, files)
         # `failure` is the immediately preceding attempt's verdict; a
         # truncation in it is one more step up the ladder for this node,
         # and the count persists so a later apply failure does not reset it.
         if failure is not None and TRUNCATED_MARK in failure:
             escalations[node.id] = escalations.get(node.id, 0) + 1
         output_tokens = worker_output_cap(
-            node, effort, _file_lines(options.repo, files), escalations.get(node.id, 0)
+            node, effort, baseline_lines[node.id], escalations.get(node.id, 0)
         )
         contents = {
             name: (options.repo / name).read_text() for name in files if name.endswith(".py")

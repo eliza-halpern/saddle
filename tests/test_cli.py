@@ -138,8 +138,8 @@ def _expected_cap(repo: Path, effort: str, *, escalations: int = 0) -> int:
     lines = (repo / "n.py").read_text().count("\n")
     cap = WORKER_OUTPUT_TOKENS[effort] + lines * TOKENS_PER_LINE + DIFF_OVERHEAD_TOKENS
     for _ in range(escalations):
-        cap = next(step for step in WORKER_OUTPUT_STEPS if step > cap)
-    return cap
+        cap = max(next(step for step in WORKER_OUTPUT_STEPS if step > cap), 2 * cap)
+    return min(cap, MAX_WORKER_OUTPUT)
 
 
 def _emit_response(payload: dict[str, Any]) -> httpx.Response:
@@ -2459,6 +2459,14 @@ def test_worker_output_cap_is_sized_from_declared_files_not_effort_alone() -> No
     assert worker_output_cap(bare, "low", lines, 1) == 32768
     assert worker_output_cap(bare, "low", lines, 2) == 65536
     assert worker_output_cap(bare, "xhigh", lines, 5) == MAX_WORKER_OUTPUT
+    # F21.9b: a cap just under a rung must not "escalate" onto that rung.
+    just_under = Node.model_validate({**_node_dict(), "target_files": ["u.py"]})
+    under_lines = {
+        "u.py": (32624 - WORKER_OUTPUT_TOKENS["low"] - DIFF_OVERHEAD_TOKENS) // TOKENS_PER_LINE
+    }
+    base = worker_output_cap(just_under, "low", under_lines, 0)
+    assert base == 32624
+    assert worker_output_cap(just_under, "low", under_lines, 1) >= 2 * base
     assert emission_budget(bare) == MAX_WORKER_OUTPUT - allowance
 
 
@@ -2511,3 +2519,43 @@ def test_file_lines_skips_files_that_do_not_read_as_text(tmp_path: Path) -> None
     (tmp_path / "n.py").write_text("a\nb\n")
     (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00\x80")
     assert _file_lines(tmp_path, ["n.py", "blob.bin", "missing.py"]) == {"n.py": 2}
+
+
+def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree(
+    tmp_path: Path,
+) -> None:
+    """Known-bad (F21.9a, round 3b): attempt 1 applied 699 lines of
+    degenerate output and failed `syntax`; attempt 2's estimate was then
+    taken from the bloated tree and its cap rose from 21536 to 32624.
+    Here attempt 1 bloats `n.py` by 300 lines and fails syntax; attempt
+    2's cap must equal the baseline's, escalations aside (none: a syntax
+    failure is not a truncation)."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    head = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,2 +1,302 @@\n"
+    bloat = (
+        head
+        + " def f():\n-    return 1\n+    return 2\n"
+        + "".join(f"+def g{i}():\n" for i in range(300))
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if not _is_diff_request(payload):
+            if "Decompose the mechanical coding task" in _prompt(payload):
+                return _emit_response({"nodes": [_node_dict()]})
+            return _text_response("Plan: fix the syntax.")
+        diffs = sum(1 for call in seen if _is_diff_request(call))
+        return _diff_response(bloat) if diffs <= PROPOSAL_SAMPLES else _diff_response()
+
+    client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+    _, out = _run(_options(tmp_path), client)
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    assert len(diff_calls) >= PROPOSAL_SAMPLES + 1, out
+    assert "Gate syntax: FAIL" in out
+    baseline_cap = _expected_cap(tmp_path, "low")
+    # Every attempt, including the one proposed on top of the 300-line
+    # failure, is sized from the baseline: the mutant that sizes from the
+    # live tree reads 23264 here for attempt 2.
+    assert [call["max_tokens"] for call in diff_calls] == [baseline_cap] * len(diff_calls)
