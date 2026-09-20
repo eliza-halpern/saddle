@@ -2225,6 +2225,12 @@ record's `dag.txt` and `gates-failed.txt`. Tests: the two new sentences
 present, the mutant shape as above (delete each sentence → red).
 
 ### T3-13 — `target_files` spellings the gate can never match (Medium)
+Status 2026-09-19: DONE by session 26, commit 66f2c9a (tightened).
+`_repo_relative_posix` rejects any `/`-separated segment that is `""`,
+`"."` or `".."` (subsumes the old `startswith("/")` clause). Known-good
+includes `.github/x.yml`; known-bad adds `./n.py`, `a//b.py`,
+`src/./x.py`, `dir/`. Both mutants KILLED (`("..",)`: 5 failed;
+`("", ".")`: 2 failed). Reviewer verified at HEAD; check.sh 661 passed.
 Files: `src/saddle/dag.py` (`_repo_relative_posix` ~:126-138);
 `src/saddle/gates.py` (`check_target_files` ~:323, read only: it compares
 strings exactly against what `git` prints); `tests/test_dag.py` (the
@@ -2266,6 +2272,23 @@ Passing instance at HEAD: the `target_files` known-good in `tests/test_dag.py`
 Dry run: not run.
 
 ### T3-14 — `git_added_files` sees a staged rename (Minor, test-only)
+Status 2026-09-19: session 26 STOPPED, correctly: the item's known-good
+said `git_changed_files` lists both paths of a staged rename; it listed
+only `m.py`, because that diff had no `--no-renames` and git's default
+rename detection folds the move into one `R100` entry. That is a gap in
+target-scope, not just a wrong sentence: the path a node deleted never
+reached the gate, so `target_files: [m.py]` let `git mv n.py m.py`
+through. Reviewer landed the item in the main session (contract change,
+**tightened**): `git_changed_files` gains `--no-renames` and its
+docstring says why; one test
+`test_git_diff_helpers_see_a_staged_rename_as_both_paths` asserts
+`git_added_files == ["m.py"]` and `git_changed_files == ["m.py",
+"n.py"]`. Known-bad shown red on the old source (`['m.py'] == ['m.py',
+'n.py']`). Mutants, both KILLED: M1 drop `--no-renames` from
+`git_added_files` (`[] == ['m.py']`); M2 drop it from
+`git_changed_files` (`['m.py'] == ['m.py', 'n.py']`). check.sh 662
+passed, 100%. The leftover check (evidence.py `snapshot`/leftover
+caller) now sees a renamed-away path too, which is the same direction.
 Files: `tests/test_evidence.py` (beside
 `test_git_added_files_lists_staged_adds_and_ignores_untracked` ~:254);
 `src/saddle/evidence.py:270` (`"--no-renames"`, read only).
