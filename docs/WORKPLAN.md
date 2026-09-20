@@ -1502,6 +1502,51 @@ attempt 1 cannot be recovered from the record (the seal keeps a count) →
 T3-25. Also seen: `.coverage.tier1` is left untracked in the repo under
 test after the run (evidence.py ~:323 keeps it out of the tree by design;
 no item).
+Rerun (session 20c), after the 20b findings landed — T3-23 `c306b6d`,
+T3-25 `44e68f0`, T3-24 `879a837`, T3-12 `0bd08ad` + `a2dd63a` (each must
+be an ancestor of HEAD; record the harness commit): same task, same
+scratch-repo shape in a FRESH `/tmp/saddle-smoke` (delete the 20b
+leftovers first), same record shape, written to a NEW directory
+`../saddle-bench/runs/smoke-2026-09-19c/` — never overwrite 20a or 20b.
+Expected: `N proven, 0 failed, 0 undispatched, merge exit 0`, run exit 0,
+`saddle verify` printing `Verdict: PASS`. Confirm live, and say which
+span or gate line shows it: R1 → T3-23 (if any node gives up, a
+`restore-baseline` span follows and the replacement's
+`refs/saddle/baseline/<node>.r1` equals the pre-node tree; with no
+give-up, record "not discriminated"); R2 → T3-24 (the impl node's
+`requirement-binding: PASS (... bound)` although its id is cited only by
+the test node's file); R3 → T3-12 (the worker prompt names the node's
+`target_files`; no file outside any node's list appears in the worktree);
+R4 → T3-25 (any failed attempt's seal reads `attempt i/N: k gate(s)
+failed: <names>`). Also record whether the planner obeyed the four rules
+`a2dd63a` added: the test node's spec cites every node's id, its
+`target_files` names every test file, no package named `src`. Known open
+at run time: nothing in the gates; a planner that ignores the cite rule
+fails the impl node with `unbound requirements: REQ-00n` — record that as
+T3-12's rule not followed, quote the plan, fix nothing.
+Third outcome (session 20c, 2026-09-19; record
+`../saddle-bench/runs/smoke-2026-09-19c/`, reviewer re-ran `saddle verify`
+on the journal: 2 proofs, 65 spans, chain verifies): **known-good** —
+`2 proven, 0 failed, 0 undispatched, merge exit 0`, run exit 0, 230 s
+wall, `saddle verify` → `Verdict: PASS`. The first run of this item to
+meet its known-good. Harness `a2dd63a`. Same split, `node-1` (test) →
+`node-2` (impl), both declaring `REQ-001, REQ-002`; `node-1` proved first
+attempt, `node-2` on attempt 2 after `attempt 1/3: 1 gate(s) failed:
+mutation` (R4 → T3-25 confirmed verbatim); 3 of 3 `git apply` clean.
+R3 → T3-12 confirmed on the observable half (worktree holds exactly
+`n.py`, `tests/test_n.py`; all four new planner rules obeyed). R2 → T3-24
+NOT discriminated: the planner gave both nodes both ids, so no citation
+was an orphan under the old rule either. R1 → T3-23 not discriminated (no
+node gave up). Newly discriminated: T3-17 — on the final tree bare
+`pytest -q` exits 2 (`No module named 'n'`) while `python -m pytest -q`
+passes, and the merge suite ran the latter. Still undiscriminated: T3-18,
+T3-20. Still open: T3-9 (`Task: (unknown)` in `saddle verify`). A first
+attempt launched without `.venv/bin` on `PATH` (every gate tool exit 127,
+each reported as an explicit `unavailable` FAIL) was discarded and kept
+as `smoke-2026-09-19c-aborted-path/`; it measured nothing. Caveats for
+anyone reading this as more than it is: one sample of a two-node toy task
+on a 27B model; the mutation gate steered `node-2` to `return x + x` and a
+bare `raise ValueError` to starve mutmut (recorded, no item).
 Findings, each now an item (reviewer-verified against the code, 2026-09-19):
 S1 merge suite and node gates disagree on `sys.path` → T3-17; S2 the
 grammar lets a hunk follow `diff --git` with no `---`/`+++` lines → T3-18;
