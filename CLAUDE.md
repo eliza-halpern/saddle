@@ -131,6 +131,38 @@ exist to be load-bearing.
 - A claimed guarantee in a commit message is a claim like any other and
   needs the same discrimination evidence as a defect claim.
 
+## A test that flips from red to green is a loosening in test form
+
+Red-then-green proves a new test can see a defect. The reverse edit --
+an existing assertion whose expected outcome changes direction, a
+`pytest.raises` that becomes a plain call, an expected-failure fixture
+that now expects success -- proves nothing by itself. The diff is
+identical in two stories: the old expectation pinned a bug and the fix
+is right, or the old expectation pinned the contract and the fix broke
+it. Every other test change leaves a visible mark; only the flip silently
+converts "must fail" into "must pass".
+
+So a flip carries the loosening rule's burden, in the commit message:
+
+- Label it: `flip: <test name>`, with the item, finding, or run that
+  shows the old expectation was wrong. "It fails now" is not that.
+- Show the old expectation pinned a defect, not a contract: a known-good
+  instance the old assertion rejected, or a live run where it let
+  something wrong through. T3-23's three replan tests proposed a repair
+  of `return 3` and were green only because the failed diff was still in
+  the worktree; run 20b showed the same shape producing an unprovable
+  replacement node. That run is the evidence, not the fix.
+- Say what the old assertion was accidentally protecting and add a
+  red-then-green test for it, or state that nothing was. The
+  `_apply_diff` "did not apply cleanly" path was covered only by the
+  defective replan tests until a direct test replaced them.
+
+A commit that flips a test with no such line is a loosening, and the
+reviewer treats it as one: revert the flip, or produce the evidence.
+The worker cannot do this at all (`check_node_scope` forbids an impl
+node from editing tests); this rule is for the humans and executors who
+can.
+
 ## A mechanism must be able to do what it reports
 
 Check new machinery for vacuity before trusting its output:

@@ -1872,8 +1872,8 @@ M3 rather than pre-change in order; known-bad (b) proved with `n1` as a
 refactor in both runs because an impl node cannot be red-phase-red on a
 green worktree; `build_record` takes `Sequence[str] = ()` (ruff B006);
 `_run_node`'s `task_hash` is keyword-only and required; the optional
-transcript display was not taken. Issue "Resume reuses proofs across
-tasks and node edits" still to be opened (body in the commit message).
+transcript display was not taken. Issue #67 "Resume reuses proofs across
+tasks and node edits" opened by the reviewer.
 Note for the record: sessions 23 and 37 shared one worktree; each used
 byte-copy restore instead of `git checkout --` and both re-ran the gate
 on a settled tree. Two sessions in one checkout is not to be repeated.
@@ -1965,6 +1965,33 @@ Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_
 Dry run: not run.
 
 ### T3-10 — Resume checks the worktree it resumes onto (Major)
+Status 2026-09-19: DONE by session 24, commit 206894e (tightened).
+Landed: each proof seals `tree_hash` (the `git write-tree` id of the
+tracked worktree its gate passed on), kept at `refs/saddle/proven/<slug>`
+(`proven_ref`, `PROVEN_REF_PREFIX` in evidence.py; `snapshot_tree` is the
+shared helper, commit message now `saddle snapshot <ref>`); a resume
+whose worktree hashes to anything else raises `ValueError` before any
+node runs, naming both ids and the `git restore --source` that puts the
+proven tree back; `saddle run` reports it as `error:` exit 1;
+ARCHITECTURE.md:227 says what resume checks. Mutants, both KILLED: M1
+`if current != expected` -> `if False` (two resume-tree tests `DID NOT
+RAISE`); M2 `"tree_hash": tree_hash` -> `""` (`assert '' == 'bbb...'`).
+Reviewer verified at HEAD: both targets occur once, clean-room, and
+`./check.sh` on the settled tree green (see the commit that carries this
+line). Corrections to this item, found by the executor: the reproduce
+command below (`git checkout -- n.py`) does not provoke the defect -- a
+proven edit is staged, so an index checkout restores it; the known-bad
+uses `git checkout HEAD -- n.py`, which is what a user reaches for after
+`_ensure_clean` refuses a crashed run's tree. The test docstring that
+still said the old command was fixed by the reviewer in the next commit.
+Two existing pins were extended, not flipped: the end-to-end tool-span
+sequence (four more `git` spans) and the two-node ref set (`proven/n1`,
+`proven/n2`). Known limit, stated by the executor: a resume that reuses
+some proofs and drops others (a changed node beside an unchanged one)
+finds the dropped node's edits still in the worktree, so the tree does
+not hash to the reused proof's `tree_hash` and the run stops; the escape
+is a fresh `--journal`. No test reaches it; T3-11 should decide whether
+that flow deserves its own message.
 Files: `src/saddle/evidence.py` (T3-8's helper generalised to
 `snapshot_tree(cwd, ref, *, recorder)`; `snapshot_baseline` calls it);
 `src/saddle/journal.py` (`ProofRecord`/`build_record`/`build_from_gate`:
