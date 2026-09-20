@@ -1919,7 +1919,7 @@ def test_run_slice_resume_tree_check_passes_after_the_proven_edits_are_committed
 def test_run_slice_resume_tree_refuses_a_worktree_missing_the_proven_edit(
     tmp_path: Path,
 ) -> None:
-    """Known-bad (T3-10): `git checkout -- n.py` throws away what `n1`
+    """Known-bad (T3-10): `git checkout HEAD -- n.py` throws away what `n1`
     proved. The resume used to seed `n1` as proven and gate the next node
     against a tree without its change; it now stops before any node runs,
     naming both trees and the way back."""

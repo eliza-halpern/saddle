@@ -346,7 +346,7 @@ def test_snapshot_baseline_outside_a_repo_raises(tmp_path: Path) -> None:
     """Known-bad (T3-8): no silent ref. A caller handed `HEAD` back for a
     failed snapshot would gate the node against the wrong tree and say
     nothing; the argv that failed is named so the transcript can explain it."""
-    with pytest.raises(RuntimeError, match=r"git -C .* add -u -- \. failed: fatal: not a git"):
+    with pytest.raises(RuntimeError, match=r"git -C .* add -u failed: fatal: not a git"):
         snapshot_baseline(tmp_path, "n1")
 
 

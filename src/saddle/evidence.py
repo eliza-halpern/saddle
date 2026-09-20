@@ -331,7 +331,10 @@ def proven_ref(node_id: str) -> str:
 def snapshot_tree(cwd: Path, ref: str | None, *, recorder: SpanRecorder | None = None) -> str:
     """Stage the tracked files at `cwd`; return their `git write-tree` id.
 
-    `git add -u -- .` stages tracked files only, so `.coverage.tier1`,
+    `git add -u` stages tracked files only (no pathspec: git 2.45 and later
+    reject `-- .` when nothing is tracked yet, as after `commit
+    --allow-empty`; 2.43 did not, which is why CI was red while check.sh was
+    green), so `.coverage.tier1`,
     `.saddle/` and bytecode stay out of the tree, while a file `git apply
     --index` added is already tracked and does go in. The id is a pure
     function of that content and nothing else: the same tracked tree
@@ -357,7 +360,7 @@ def snapshot_tree(cwd: Path, ref: str | None, *, recorder: SpanRecorder | None =
             raise RuntimeError(msg)
         return proc.stdout.strip()
 
-    git("add", "-u", "--", ".")
+    git("add", "-u")
     tree = git("write-tree")
     if ref is not None:
         commit = git("commit-tree", tree, "-p", "HEAD", "-m", f"saddle snapshot {ref}")
