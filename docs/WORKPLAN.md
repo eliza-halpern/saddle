@@ -3003,6 +3003,36 @@ check.passed` → the seal names the passing gates, test red; 2. delete the
 `f": {names}"` append → test red.
 Dry run: not run.
 
+### T3-26 — `saddle run --dag FILE`: run a hand-written DAG (small; prerequisite for T4-5)
+Files: `src/saddle/cli.py` (`run_run` ~:481: the emission block before
+`ask_confirm`; `build_parser` ~:734: the `run` subparser); `src/saddle/dag.py`
+(`Dag.model_validate`, `validate_dag`, read only); `tests/test_cli.py`.
+Contract: `saddle run --dag FILE TASK` reads a JSON DAG from FILE, runs
+`validate_dag` on it exactly as an emitted DAG is validated, and skips the
+planner call; every later step (confirmation, gates, replan, journal) is
+unchanged, so a run from a file and a run from the planner differ only in
+where the DAG came from. An invalid file stops with `error:` naming the
+first issue and exit 1 before any model call.
+Direction: none for the gates (the DAG still passes `validate_dag`); say
+so. Measurement needs it: without a fixed DAG a gate can only be
+exercised when the planner happens to emit the shape that reaches it.
+Steps: 1. `--dag` (type `Path`, default `None`); in `run_run`, if set:
+`dag = Dag.model_validate(json.loads(path.read_text()))`, then the same
+`validate_dag` check and `error:` path the emitted DAG takes. 2. Tests:
+a valid file runs the two-node pass fixture end to end with no `emit_dag`
+call (assert the stub client's emit was never invoked); an invalid file
+(a node depending on a missing id) prints `error:` and exits 1 with no
+client call; `--dag` with `--yes` needs no confirmation.
+Known-good: the fixture DAG from `tests/test_cli.py` written to a file
+runs to the same transcript as the emitted one. Known-bad: a file whose
+node lists `target_files: ["../x.py"]` is rejected at validation.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. skip `validate_dag` on the file path -> the invalid-file test red.
+2. call `emit_dag` even when `--dag` is set -> the never-invoked test red.
+Done when: mutants red; `./check.sh` green. Owner: main session (contract change).
+
+---
+
 ## 7. Tier 4 — measurement (needs the container; each run is a record, not a code change)
 
 Preconditions for every item: container healthy (`saddle doctor` green), key
@@ -3057,6 +3087,67 @@ Report pass rate and median worker tokens. This decides whether
 best effort: the same task with `read_file` omitted from every node, then
 with `run_tests` omitted — the two bindings that remove prompt content —
 so D15/D16's context-cost argument gets its first number.
+
+### T4-5 — Rerun the T4 arm against HEAD's gates: does anything catch the #44 shape? (F16)
+Files: `../saddle-bench/run_arm.sh` (the `saddle` arm; add `--dag` for
+half A), `../saddle-bench/baselines/t4` (`orders.py`, `discounts.py`,
+`invoice.py`, `tests/`), `../saddle-bench/runs/T4-RESULT.md` (the round-2
+record and the withdrawn-oracle note), `../saddle-bench/runs/t4-saddle.log`
+(the run that passed all seven gates), `docs/BENCHMARK-RECORD.md` (append),
+`../saddle-bench/runs/FINDINGS.md` (F16). Requires T3-26 for half A.
+Why this item exists: Tier 4 was drafted before Tiers 2-3 built the gates
+that answer #44, and no item measured them on the task that motivated
+them. T4-1 measures the grammar; this measures the gates.
+What the old run did (from `t4-saddle.log:48`, harness at 975bf52): one
+node, no `kind`, no `target_files`; the diff changed `discounts.py` and
+`tests/test_discounts.py` together (the ruff span lists both), and all
+seven gates passed. T4-RESULT.md records that the C2 bar was withdrawn
+mid-run and that which module is "right" is genuinely undeclared by the
+prompt; this item does not reopen that. It asks a narrower question that
+does not depend on module policy: **can a single node still edit a
+source module and its test in the same diff and seal a proof?**
+Pre-registered prediction (copy into the run directory before starting):
+- Half A (fixed DAG via `--dag`, three seeds): one `impl` node with
+  `target_files: ["invoice.py", "tests/test_invoice.py"]` and `test_command:
+  "pytest tests/"`. Prediction: any diff touching `discounts.py` fails
+  `target-scope` naming it; any diff touching `tests/test_invoice.py` fails
+  `node-scope` (an impl node may not touch tests); a diff confined to
+  `invoice.py` passes both and reaches red-phase. Expected outcome: at
+  least one of three seeds is stopped by one of those two gates, and no
+  seed seals a proof whose diff touches `discounts.py` or `tests/`.
+- Half B (planner-driven, `run_arm.sh t4 saddle`, three seeds): record per
+  seed the node count, each node's `kind` and `target_files` (declared or
+  empty), and the gate that failed first, if any. Prediction: the planner
+  emits an `impl` node for the fix; if it also emits a `test` node the
+  red-specification path (T3-7a) is exercised on a benchmark task for the
+  first time; a plan with an empty `target_files` is recorded as such
+  (this is the #64 number). Expected: no sealed proof whose diff edits a
+  source file and a test file together. If one seals, that is the finding
+  and it names the gate that let it through.
+Falsified if: any seed in either half seals a proof over a diff that
+touches both a source module and a test file, or (half A) over a diff
+that touches `discounts.py`.
+Steps: 1. Copy the prediction above into `../saddle-bench/runs/t4v3/PREDICTION.md`
+before the first run. 2. Half A: write `../saddle-bench/prompts/t4.dag.json`
+(the one-node DAG above; validate it with `saddle run --dag ... --yes`
+against an empty scratch repo first, expecting a target-scope or
+node-scope failure, not a crash). Run three seeds
+(`--sample-temperature 0.7`, journal per seed). 3. Half B: `run_arm.sh
+t4 saddle` three times with the journal moved aside between runs. 4. For
+every seed, record: files in each attempt's diff (from the journal
+records' diffs), the first failing gate and its detail, whether a proof
+sealed, the sealed diff's file set. 5. F16 in FINDINGS.md: one table,
+six rows; BENCHMARK-RECORD.md gets the summary and the prediction's
+verdict. Never print the key.
+Known-good / Known-bad: the prediction is the bar; both halves are records.
+Done when: PREDICTION.md predates every journal in `runs/t4v3/`, six
+seeds recorded, F16 written with the verdict (held / falsified) and, if
+falsified, the gate named.
+Stop if: the container is down (report); T3-26 not landed (run half B
+only and say so); any seed crashes rather than fails a gate (that is a
+T3-shaped defect, record and stop).
+Decision this feeds: whether `target_files` stays opt-in (#64) and
+whether the #65 residual needs a run of its own.
 
 ### T4-4 — `structural_tag` / `enable_in_reasoning` against vLLM 0.28 (precedes D14)
 Files: `src/saddle/vllm.py:57` (`DIFF_GRAMMAR`), `:206` (the request that
