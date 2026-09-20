@@ -414,7 +414,26 @@ Worth stating plainly: saddle has emitted **1 node on six of seven tasks**
 
 ### D14. Constrain the output, never the reasoning
 
-**Already in the spec, worth making explicit before D2 lands.**
+**Settled 2026-09-19 against the serving build, and closed against
+structural tags** (T4-4; `tools/structured_output_probe.py`, records in
+`../saddle-bench/runs/t4-4-structured-output-2026-09-19/`, findings F16-F19).
+vLLM 0.28.0 already gives this alternation for the shipped payload: with
+`structured_outputs={"grammar": DIFF_GRAMMAR}` and reasoning on, a prompt
+asking for *one sentence of prose* returned a git diff, while the same
+prompt with no grammar returned the sentence -- and the think block was
+**byte-identical** across the two arms (144 B, 61 reasoning tokens each).
+The completion is constrained, the reasoning is untouched, and no flag is
+involved. Two things follow. An `enable_in_reasoning`-style flag must not
+be written into any payload: this build answers 200 to it, to a top-level
+spelling of it, and to `saddle_not_a_real_key` alike, with byte-identical
+output in all three -- unknown keys are dropped silently, so such a flag
+would read as configured while doing nothing (F17). And structural tags
+are the wrong instrument here, not merely deferred: only the legacy shape
+on `response_format` validates at all, its span constraint is a JSON
+Schema rather than a grammar, and the trigger is the model's choice -- a
+worker that never emits `<diff>` is never constrained (F18, F19). Using
+one would put the diff back inside a JSON string, the shape recorded at
+`src/saddle/vllm.py:36-52` as having cost the whole v3 sweep.
 ARCHITECTURE.md §1 says "snapping schema constraints down only after
 freeform reasoning concludes" — which is exactly [CRANE][crane]'s design,
 arrived at independently. CRANE proves grammar-constrained decoding confines
