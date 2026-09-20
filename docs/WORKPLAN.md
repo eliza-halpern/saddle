@@ -103,7 +103,7 @@ recorded in its own item's status paragraph, and the retired
 dependencies with it). An arrow reads "left must land before right".
 
 ```
-T6-17 (reasoning is not budgeted; the ladder goes) ──► T6-15 (retries not greedy; narrowed after F21.10) ──► T6-18 (null-content response named) ──► T6-9 (deadline) ──► a T5 seed with full evidence and a deadline sized for this model (the first run under T6-12/T6-13)
+T6-17, T6-15, T6-18, T6-9 (DONE) ──► T6-19 (round 3c: one T5 seed with full evidence and a deadline sized for this model)
 T6-1 (retrospective over the thirteen labelled runs, no GPU) ──► T6-6 (Proposal A goes ahead only if row A separates PASS from FAIL)
 T6-1 ──► T6-4, T6-5 (both proceed regardless; T6-1 decides thresholds and whether T6-5 is worth a session of its own)
 T6-2, T6-3 ──► nothing (known-bad is T2's log; independent of T6-1 and of each other)
@@ -119,8 +119,8 @@ T6-9, T5 seed ──► Tier 5 (the chat surface is built on a harness that can 
 T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
-Order of sessions from here (session 35 done): T6-17, T6-15, T6-18,
-T6-9 (main session, one or two sittings) → T5 seed (executor) → T6-1
+Order of sessions from here (T6-17, T6-15, T6-18, T6-9 done): session 36
+= T6-19 (T5 seed, executor) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -4468,6 +4468,53 @@ Known-bad: a normal diff response is unaffected.
 Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
 1. the null-content branch -> falls through to the old path -> known-good red.
 Done when: mutant red; `./check.sh` green. Owner: main session, with T6-15.
+
+---
+
+### T6-19 — Round 3c: one T5 seed under T6-17, T6-15, T6-18, T6-9, T6-12 and T6-13 (measurement; F21.12; no code)
+Files: `../saddle-bench/runs/round3c/PREDICTION.md` (new; committed
+before the run), `../saddle-bench/run_arm.sh` (as committed at bench
+b4661a2: `--deadline "$DEADLINE"`, outer timeout = DEADLINE + 600; do
+not edit), `../saddle-bench/oracles/oracle_t5.py` (run after; do not
+edit), `../saddle-bench/runs/FINDINGS.md` (F21.12),
+`../saddle-bench/runs/PROGRESS.log`. Nothing under saddle `src/` or
+`tests/` changes; the harness is saddle HEAD 60eaea0.
+Why: the last two T5 seeds (round 3a x3, round 3b x1) all ended with
+nothing sealed. Since then: reasoning is not budgeted and the worker
+gets the window left after its prompt (T6-17); retries are not greedy
+(T6-15); a no-content response is named (T6-18); the run stops on its
+own clock and seals what it has (T6-9); every attempt leaves a sidecar
+and the plan is journaled (T6-12, T6-13). This seed is the first run in
+which a failure is readable from the journal alone, and the first test
+of whether T5's failure class was the harness's budget model.
+Pre-register in `runs/round3c/PREDICTION.md`, committed in saddle-bench
+before `run_arm.sh` starts: P1 no worker call ends with
+`finish_reason=length` (T6-17; every sidecar's `finish_reason` is `stop`
+or the attempt failed for another named reason). P2 `saddle verify` on
+the run's journal passes, every `worker:*` attempt span has a sidecar
+that hashes, and the journal holds one `plan` record per plan emitted.
+P3 the run ends with saddle's own exit code (0, 1 or 3), never the outer
+`timeout`'s 124; if 3, the run span reads `deadline:`. P4 node 1 (the
+first impl node) seals a proof (F21.10 arm (a) completed 3/3 at a 20256
+cap; the cap is now ~165k). P5, stated as uncertain: the oracle passes.
+Procedure: `set -a; . ~/.config/saddle/env; set +a;` on every command
+that needs the server; `saddle doctor` green; `RUN_DIR=runs/round3c/t5-s1
+SAMPLE_TEMP=0.7 DEADLINE=7200 ./run_arm.sh t5 saddle` (two hours: with
+T6-17 one worker call can run 15-20 min on the 3090, so a four-node plan
+with retries needs room; the outer backstop is 7800 s). Follow with
+`saddle tail runs/round3c/t5-s1/t5-saddle/.saddle/proofs.jsonl` in a
+second shell; do not edit any file while it runs. After: `saddle verify`
+on that journal; `python3 oracles/oracle_t5.py runs/round3c/t5-s1/t5-saddle`;
+a per-attempt table from the sidecars (node, attempt, `finish_reason`,
+`completion_tokens`, `max_tokens` sent, gates failed, wall) -> F21.12,
+with each of P1-P5 marked HELD or FALSIFIED and every failure labelled
+HARNESS or MODEL with the sidecar that shows it. One line in
+PROGRESS.log. Stop and report, without retrying, if `run_arm.sh` exits
+90 (workdir not pristine) or the server is down.
+Done when: PREDICTION.md committed before the run, the run directory and
+F21.12 committed after it, P1-P5 each resolved with evidence. Owner:
+executor (needs the key). Not in this item: any fix; a FALSIFIED P1-P3
+is a main-session item, a FALSIFIED P4/P5 is data.
 
 ---
 
