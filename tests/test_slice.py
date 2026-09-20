@@ -1333,11 +1333,29 @@ def test_splice_replan_rewires_dependents_to_new_leaves() -> None:
     assert by_id["z"].dependencies == []
 
 
-def test_splice_replan_rejects_collision() -> None:
+def test_splice_replan_numbers_past_ids_the_dag_already_holds() -> None:
+    """flip (T3-11): this pinned `ReplanFailedError("collides")` for a DAG
+    that already held `a.r1`. `a.r1` is a legal, non-duplicate node id
+    (`dag.py` rejects duplicates on its own), so the raise refused a
+    legitimate input rather than guarding a contract; numbering past the
+    taken id makes the collision unreachable."""
     dag = Dag.model_validate({"nodes": [_node_dict("a", []), _node_dict("a.r1", [])]})
     new = Dag.model_validate({"nodes": [_node_dict("m1", [])]})
-    with pytest.raises(ReplanFailedError, match="collides"):
-        splice_replan(dag, "a", new)
+    spliced, generated = splice_replan(dag, "a", new)
+    assert generated == ["a.r2"]
+    assert [node.id for node in spliced.nodes] == ["a", "a.r1", "a.r2"]
+
+
+def test_splice_replan_numbers_past_taken_ids() -> None:
+    """Known-good (T3-11): ids sealed in a journal count as taken even when
+    the DAG does not carry them, and two replacements skip together."""
+    dag = Dag.model_validate({"nodes": [_node_dict("a", []), _node_dict("b", ["a"])]})
+    new = Dag.model_validate({"nodes": [_node_dict("m1", []), _node_dict("m2", ["m1"])]})
+    spliced, generated = splice_replan(dag, "a", new, taken={"a.r1", "a.r3"})
+    assert generated == ["a.r2", "a.r4"]
+    by_id = {node.id: node for node in spliced.nodes}
+    assert by_id["a.r4"].dependencies == ["a.r2"]
+    assert by_id["b"].dependencies == ["a.r4"]
 
 
 def test_splice_replan_rejects_unknown_dependency() -> None:
@@ -1425,6 +1443,56 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
     assert result.transcript.count("- Attempts: 2\n") == 1
     (record,) = read_records(journal)
     assert (record.node_id, record.attempts) == ("n1.r1", 1)
+
+
+def test_run_slice_replan_across_resume_numbers_past_sealed_ids(tmp_path: Path) -> None:
+    """Known-good (T3-11): a journal that already seals `n1.r1` from an
+    earlier run's replan is not reused (the DAG has no `n1.r1` to compare
+    with) and the `resume` span says why; the new replan is `n1.r2`, so
+    the journal holds one record per id.
+
+    Known-bad: with numbering that saw only the DAG, the second replan was
+    `n1.r1` again and the journal held two records under that id, the
+    later shadowing the earlier in `rebuild_proven`.
+    """
+    _slice_repo(tmp_path)
+    journal = tmp_path / "proofs.jsonl"
+    append_record(
+        journal,
+        build_record(
+            evidence_id="n1.r1#1",
+            node_id="n1.r1",
+            diff="diff n1.r1\n",
+            parent_proofs=[],
+            gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+            requirement_ids=["REQ-001"],
+            thinking="an earlier run's replacement",
+            node_hash="0" * 64,
+        ),
+    )
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
+
+    def replan(node: Node, history: str) -> Dag:
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        replan=replan,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["n1.r2"]
+    assert _resume_span(journal).detail == "dropped n1.r1 (not in DAG)"
+    ids = [record.node_id for record in read_records(journal)]
+    assert ids == ["n1.r1", "n1.r2"]
+    assert len(ids) == len(set(ids))
 
 
 def test_run_slice_replanned_node_failure_stays_failed(tmp_path: Path) -> None:

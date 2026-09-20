@@ -573,19 +573,30 @@ async def _run_node(
     raise NodeGateFailedError(last_result, max_attempts, failure)
 
 
-def splice_replan(dag: Dag, failed_id: str, new: Dag) -> tuple[Dag, list[str]]:
+def splice_replan(
+    dag: Dag, failed_id: str, new: Dag, *, taken: Collection[str] = ()
+) -> tuple[Dag, list[str]]:
     """Replace `failed_id` with `new`'s nodes, rewiring dependents to new leaves.
 
-    New ids are namespaced under the failed id; new roots inherit its
+    New ids are namespaced under the failed id and numbered past every id
+    the DAG or `taken` already holds (T3-11): a resumed run whose journal
+    sealed `n2.r1` replans `n2` as `n2.r2`, so one journal never carries
+    two records under one id and `rebuild_proven`'s last-record-wins
+    cannot shadow a proof. New roots inherit the failed node's
     dependencies. The failed node itself stays put so the transcript
     keeps its verdict. Acyclicity survives splicing: every new edge runs
     from proven nodes to new nodes, or new nodes to downstream nodes.
     """
-    existing = {node.id for node in dag.nodes}
-    mapping = {node.id: f"{failed_id}.r{index}" for index, node in enumerate(new.nodes, 1)}
-    if set(mapping.values()) & existing:
-        msg = f"replan for node {failed_id!r} collides with existing node ids"
-        raise ReplanFailedError(msg)
+    existing = {node.id for node in dag.nodes} | set(taken)
+    mapping: dict[str, str] = {}
+    for node in new.nodes:
+        index = 1
+        candidate = f"{failed_id}.r{index}"
+        while candidate in existing:
+            index += 1
+            candidate = f"{failed_id}.r{index}"
+        mapping[node.id] = candidate
+        existing.add(candidate)
     internal = {node.id for node in new.nodes}
     for node in new.nodes:
         for dep in node.dependencies:
@@ -707,7 +718,9 @@ def _seed_proofs(
     task. A record sealed for a different task is fatal -- the run stops
     before anything executes and the user picks a fresh `--journal` path.
     A record whose node no longer hashes the same, or that predates these
-    fields, is simply not reused: the node is scheduled again.
+    fields, is simply not reused: the node is scheduled again. A record
+    for an id the DAG does not contain (an earlier run's replacement) is
+    dropped too, and named as such (T3-11).
 
     Returns the seed, a one-line summary (`None` when the journal held no
     proof and there was nothing to decide), and the last record actually
@@ -733,6 +746,12 @@ def _seed_proofs(
             proofs[record.node_id] = record.record_hash
             reused = record
             decided.append(f"reused {record.node_id}")
+        elif record.node_id not in expected:
+            # A replan's leftover from an earlier run (T3-11): the DAG being
+            # run has no node to compare the hash with, so it is not proof
+            # of anything scheduled here -- and the reader should not
+            # mistake it for an edited node.
+            decided.append(f"dropped {record.node_id} (not in DAG)")
         elif not record.node_hash:
             # Sealed before the node was named in the record: nothing says
             # it proved this DAG's node, so it does not count as proof.
@@ -865,7 +884,8 @@ def run_slice(
         for node_id, exc in eligible.items():
             try:
                 new = replan(by_id[node_id], format_replan_history(node_id, exc))
-                remaining, gen_ids = splice_replan(remaining, node_id, new)
+                taken = {record.node_id for record in read_records(journal_path)}
+                remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
             except ReplanFailedError:
                 continue
             replanned_from.add(node_id)
