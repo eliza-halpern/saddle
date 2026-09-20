@@ -772,3 +772,41 @@ def test_diff_truncation_names_the_cap_it_hit() -> None:
     with pytest.raises(VllmResponseError) as info:
         client.propose_diff("Do x.", max_tokens=4321)
     assert str(info.value) == "completion truncated at 4321 output tokens (finish_reason=length)"
+
+
+def test_truncation_error_carries_the_partial_reasoning_and_usage() -> None:
+    """T6-12: what did arrive is not lost with the exception."""
+    body = _ok_body(content="diff --git a/x", reasoning="thought so far", finish_reason="length")
+    body["usage"] = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 4321,
+        "completion_tokens_details": {"reasoning_tokens": 4000},
+        "total_tokens": 5321,
+    }
+    client, _ = _json_client(body)
+    with pytest.raises(VllmResponseError) as info:
+        client.propose_diff("Do x.", max_tokens=4321)
+    exc = info.value
+    assert (exc.reasoning, exc.content, exc.max_tokens, exc.finish_reason) == (
+        "thought so far",
+        "diff --git a/x",
+        4321,
+        "length",
+    )
+    assert exc.usage == {
+        "prompt_tokens": 1000,
+        "completion_tokens": 4321,
+        "reasoning_tokens": 4000,
+        "total_tokens": 5321,
+    }
+
+
+def test_diff_proposal_carries_usage_and_cap_without_changing_equality() -> None:
+    """T6-12: a sealed attempt records what its call cost and was allowed."""
+    body = _ok_body(content=REAL_DIFF)
+    body["usage"] = {"completion_tokens": 77, "ignored": "text"}
+    client, _ = _json_client(body)
+    proposal = client.propose_diff("Do x.", max_tokens=999)
+    assert proposal.usage == {"completion_tokens": 77}
+    assert proposal.max_tokens == 999
+    assert proposal == DiffProposal(diff=REAL_DIFF, reasoning="decomposing the task...")

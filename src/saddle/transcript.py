@@ -12,7 +12,14 @@ from dataclasses import dataclass
 from typing import Final
 
 from saddle.gates import GateCheck
-from saddle.journal import ProofRecord, SpanRecord, tool_spans_by_node, tool_spans_for_node
+from saddle.journal import (
+    JournalEntry,
+    PlanRecord,
+    ProofRecord,
+    SpanRecord,
+    tool_spans_by_node,
+    tool_spans_for_node,
+)
 
 MAX_THOUGHT_EXCERPT_CHARS: Final = 200
 
@@ -67,7 +74,7 @@ def _timeline_lines(node: NodeTranscript) -> list[str]:
     return lines
 
 
-def is_run_end(entry: ProofRecord | SpanRecord) -> bool:
+def is_run_end(entry: JournalEntry) -> bool:
     """True only for the run span that seals a finished run."""
     return (
         isinstance(entry, SpanRecord)
@@ -77,8 +84,23 @@ def is_run_end(entry: ProofRecord | SpanRecord) -> bool:
     )
 
 
-def render_event(entry: ProofRecord | SpanRecord) -> list[str]:
+def render_plan(plan: PlanRecord) -> list[str]:
+    """A plan record as one header and one line per node (T6-13)."""
+    head = f"replan of {plan.replaces}" if plan.replaces else "plan"
+    lines = [f"{head}: {len(plan.nodes)} node(s)"]
+    for node in plan.nodes:
+        targets = ", ".join(node.target_files) if node.target_files else "(no target_files)"
+        lines.append(
+            f"  {node.id}  {node.kind}  budget={node.reasoning_budget}"
+            f"  ctx={node.max_context_tokens}  targets: {targets}"
+        )
+    return lines
+
+
+def render_event(entry: JournalEntry) -> list[str]:
     """One journal entry as live-tail lines (no trailing newlines)."""
+    if isinstance(entry, PlanRecord):
+        return render_plan(entry)
     if isinstance(entry, ProofRecord):
         passed = sum(1 for output in entry.gate_outputs if output.passed)
         total = len(entry.gate_outputs)

@@ -22,9 +22,9 @@ from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import Dag, Node, emission_estimate, validate_dag
 from saddle.evidence import git_ls_files, run_argv
-from saddle.journal import read_entries, read_records, read_spans, verify_journal
+from saddle.journal import read_entries, read_plans, read_records, read_spans, verify_journal
 from saddle.slice import ReplanFailedError, run_slice
-from saddle.transcript import is_run_end, render_event, render_journal_transcript
+from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
 from saddle.vllm import (
     DEFAULT_BASE_URL,
@@ -572,6 +572,9 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         return 1
     ids = ", ".join(node.id for node in dag.nodes)
     stdout.write(f"Plan: {len(dag.nodes)} node(s): {ids}\n")
+    # A killed run (round 3: `timeout` SIGTERM) took its block-buffered log
+    # with it; the plan line reaches the file before any node runs.
+    stdout.flush()
     if not options.yes and not ask_confirm(
         f"Run {len(dag.nodes)} node(s)?", stdin=stdin, stdout=stdout
     ):
@@ -751,9 +754,14 @@ def run_verify(journal: Path, *, stdout: IO[str]) -> int:
         return 1
     records = read_records(journal)
     spans = read_spans(journal)
+    plans = read_plans(journal)
     stdout.write(
-        f"OK: {journal}: {len(records)} proof(s), {len(spans)} span(s), chain verifies\n\n"
+        f"OK: {journal}: {len(records)} proof(s), {len(spans)} span(s), "
+        f"{len(plans)} plan(s), chain verifies\n"
     )
+    for plan in plans:
+        stdout.write("".join(f"{line}\n" for line in render_plan(plan)))
+    stdout.write("\n")
     stdout.write(render_journal_transcript(records, spans, str(journal)))
     return 0
 

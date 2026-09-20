@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Final
 
@@ -92,7 +92,30 @@ class VllmRequestError(VllmError):
 
 
 class VllmResponseError(VllmError):
-    """Server replied 200 with a malformed or non-JSON envelope."""
+    """Server replied 200 with a malformed or non-JSON envelope.
+
+    A truncation carries what did arrive (T6-12): the partial reasoning
+    and content, the usage the server reported, and the cap the call
+    sent, so the attempt's sidecar can hold them instead of the journal
+    losing the most expensive failure's only evidence.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reasoning: str = "",
+        content: str = "",
+        usage: Mapping[str, int] | None = None,
+        max_tokens: int | None = None,
+        finish_reason: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.reasoning = reasoning
+        self.content = content
+        self.usage = dict(usage or {})
+        self.max_tokens = max_tokens
+        self.finish_reason = finish_reason
 
 
 @dataclass(frozen=True)
@@ -106,10 +129,18 @@ class DagEmission:
 
 @dataclass(frozen=True)
 class DiffProposal:
-    """One guided diff plus the worker reasoning that produced it."""
+    """One guided diff plus the worker reasoning that produced it.
+
+    `usage` and `max_tokens` (T6-12) are the server's token accounting and
+    the cap the call was sent; they ride along so the attempt's sidecar
+    can record them. Equality on the two text fields is what callers and
+    tests compare, so the extras are excluded from it.
+    """
 
     diff: str
     reasoning: str
+    usage: dict[str, int] = field(default_factory=dict, compare=False)
+    max_tokens: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -297,6 +328,24 @@ def _delta_tokens(delta: Mapping[str, Any]) -> list[StreamToken]:
     return tokens
 
 
+def _text_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _usage(data: Mapping[str, Any]) -> dict[str, int]:
+    """The server's token accounting, integers only; absent fields are absent."""
+    raw = data.get("usage")
+    if not isinstance(raw, dict):
+        return {}
+    flat: dict[str, int] = {}
+    for key, value in raw.items():
+        if isinstance(value, int) and not isinstance(value, bool):
+            flat[key] = value
+        elif isinstance(value, dict):
+            flat.update({k: v for k, v in value.items() if isinstance(v, int)})
+    return flat
+
+
 def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str, str]:
     """Validated (content, reasoning) from a chat envelope; truncations raise.
 
@@ -319,7 +368,16 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
     if first.get("finish_reason") == "length":
         at = f" at {max_tokens} output tokens" if max_tokens is not None else ""
         msg = f"completion truncated{at} (finish_reason=length)"
-        raise VllmResponseError(msg)
+        raw_partial = first.get("message")
+        partial: dict[str, Any] = raw_partial if isinstance(raw_partial, dict) else {}
+        raise VllmResponseError(
+            msg,
+            reasoning=_text_or_empty(partial.get("reasoning")),
+            content=_text_or_empty(partial.get("content")),
+            usage=_usage(data),
+            max_tokens=max_tokens,
+            finish_reason="length",
+        )
     message = first.get("message")
     if not isinstance(message, dict):
         msg = "first choice has no message object"
@@ -361,7 +419,8 @@ def _parse_diff_response(data: object, *, max_tokens: int | None = None) -> Diff
     away. Blank content is already refused by `_parse_message`.
     """
     content, reasoning = _parse_message(data, max_tokens=max_tokens)
-    return DiffProposal(diff=content, reasoning=reasoning)
+    usage = _usage(data) if isinstance(data, dict) else {}
+    return DiffProposal(diff=content, reasoning=reasoning, usage=usage, max_tokens=max_tokens)
 
 
 def _model_ids(data: object) -> list[str]:

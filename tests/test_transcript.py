@@ -412,3 +412,41 @@ def test_render_journal_transcript_last_run_span_governs() -> None:
         _run_span(0, "2 proven, 0 failed, 0 undispatched, merge exit 0"),
     ]
     assert "- Verdict: PASS\n" in render_journal_transcript([record], spans, "/tmp/proofs.jsonl")
+
+
+def test_render_event_plan_record_lists_every_node() -> None:
+    """T6-13: `saddle tail` shows what was asked as soon as it is sealed."""
+    from saddle.journal import PlanNode, PlanRecord
+
+    plan = PlanRecord(
+        task_hash="t" * 64,
+        nodes=[
+            PlanNode(
+                id="n1",
+                kind="impl",
+                target_files=["a.py", "b.py"],
+                requirement_ids=["REQ-001"],
+                reasoning_budget="medium",
+                max_context_tokens=9000,
+                node_hash="h" * 64,
+            ),
+            PlanNode(
+                id="t1",
+                kind="test",
+                target_files=[],
+                requirement_ids=[],
+                reasoning_budget="low",
+                max_context_tokens=8000,
+                node_hash="g" * 64,
+            ),
+        ],
+        record_hash="r" * 64,
+    )
+    assert render_event(plan) == [
+        "plan: 2 node(s)",
+        "  n1  impl  budget=medium  ctx=9000  targets: a.py, b.py",
+        "  t1  test  budget=low  ctx=8000  targets: (no target_files)",
+    ]
+    replan = plan.model_copy(update={"replaces": "n0"})
+    assert render_event(replan)[0] == "replan of n0: 2 node(s)"
+    assert is_run_end(plan) is False

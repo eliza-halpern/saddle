@@ -66,6 +66,39 @@ class ProofRecord(BaseModel):
     record_hash: str
 
 
+class PlanNode(BaseModel):
+    """One node as planned: what was asked of it, sealed before it runs (T6-13)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: str
+    target_files: list[str]
+    requirement_ids: list[str]
+    reasoning_budget: str
+    max_context_tokens: int
+    node_hash: str
+
+
+class PlanRecord(BaseModel):
+    """The plan a run executed, in the chain beside its outcomes (T6-13).
+
+    Round-3 T5 timed out with a journal of spans and an empty log: nothing
+    said which kind its node was, what effort it ran at, or which files it
+    declared. Sealing the plan before the first worker call means a run's
+    journal records what was asked, not only what happened; a replan
+    seals its replacement with `replaces` naming the failed node.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_type: Literal["plan"] = "plan"
+    task_hash: str
+    nodes: list[PlanNode]
+    replaces: str = ""
+    record_hash: str
+
+
 class SpanRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -80,6 +113,11 @@ class SpanRecord(BaseModel):
     duration_ms: int
     exit_code: int
     detail: str
+    # sha256 of the attempt sidecar `attempts/<span_id>.json` beside the
+    # journal (T6-12): the attempt's reasoning, finish reason, token usage,
+    # the cap it was sent, and its failure. Empty for tool spans and for
+    # spans sealed before T6-12.
+    attempt_hash: str = ""
     record_hash: str
 
 
@@ -190,6 +228,7 @@ def build_span(
     name: str | None = None,
     parent_id: str | None = None,
     span_id: str | None = None,
+    attempt_hash: str = "",
 ) -> SpanRecord:
     """Seal one span: scrubbed argv, hashed args, capped detail."""
     scrubbed = [scrub_thinking(part) for part in argv]
@@ -207,7 +246,61 @@ def build_span(
         "exit_code": exit_code,
         "detail": scrub_thinking(detail)[:MAX_SPAN_DETAIL_CHARS],
     }
+    if attempt_hash:
+        payload["attempt_hash"] = attempt_hash
     return SpanRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
+
+
+def build_plan(nodes: Sequence[Node], *, task_hash: str, replaces: str = "") -> PlanRecord:
+    """Seal what was asked: every node's kind, scope, budgets and hash (T6-13)."""
+    payload: dict[str, Any] = {
+        "record_type": "plan",
+        "task_hash": task_hash,
+        "nodes": [
+            {
+                "id": node.id,
+                "kind": node.kind,
+                "target_files": list(node.target_files),
+                "requirement_ids": list(node.requirement_ids),
+                "reasoning_budget": node.execution_constraints.reasoning_budget,
+                "max_context_tokens": node.execution_constraints.max_context_tokens,
+                "node_hash": hash_node(node),
+            }
+            for node in nodes
+        ],
+    }
+    if replaces:
+        payload["replaces"] = replaces
+    return PlanRecord.model_validate({**payload, "record_hash": _canonical_hash(payload)})
+
+
+ATTEMPTS_DIR: Final = "attempts"
+
+
+def attempt_sidecar_path(journal_path: Path, span_id: str) -> Path:
+    """Where an attempt's evidence lives: `attempts/<span_id>.json` beside the journal."""
+    return journal_path.parent / ATTEMPTS_DIR / f"{span_id}.json"
+
+
+def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[str, Any]) -> str:
+    """Write one attempt's evidence and return its sha256 for the span (T6-12).
+
+    The evidence is what a failed attempt used to lose: the worker's
+    reasoning (scrubbed like every other journaled text), the finish
+    reason, the token usage the server reported, the cap the call was
+    sent, and the failure. It lives beside the journal rather than in it
+    so the chain and `saddle tail` stay small; the span's `attempt_hash`
+    is what makes it tamper-evident.
+    """
+    path = attempt_sidecar_path(journal_path, span_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    scrubbed = {
+        key: scrub_thinking(value) if isinstance(value, str) else value
+        for key, value in evidence.items()
+    }
+    encoded = json.dumps(scrubbed, sort_keys=True, indent=1).encode()
+    path.write_bytes(encoded)
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _append_line(path: Path, line: str) -> None:
@@ -226,7 +319,12 @@ def append_record(path: Path, record: ProofRecord) -> None:
 
 def append_span(path: Path, span: SpanRecord) -> None:
     """Append one tool-span line."""
-    _append_line(path, json.dumps(span.model_dump(), sort_keys=True))
+    _append_line(path, json.dumps(span.model_dump(exclude_unset=True), sort_keys=True))
+
+
+def append_plan(path: Path, plan: PlanRecord) -> None:
+    """Append one plan record line."""
+    _append_line(path, json.dumps(plan.model_dump(exclude_unset=True), sort_keys=True))
 
 
 @dataclass(frozen=True)
@@ -265,13 +363,22 @@ class SpanRecorder:
         )
 
 
-def _parse_line(raw: object) -> ProofRecord | SpanRecord:
+JournalEntry = ProofRecord | SpanRecord | PlanRecord
+
+
+def _parse_line(raw: object) -> JournalEntry:
     """Validate one decoded line as the record kind it claims to be."""
     if isinstance(raw, dict) and raw.get("record_type") == "span":
         try:
             return SpanRecord.model_validate(raw)
         except ValidationError as exc:
             msg = "line is not a span record"
+            raise ValueError(msg) from exc
+    if isinstance(raw, dict) and raw.get("record_type") == "plan":
+        try:
+            return PlanRecord.model_validate(raw)
+        except ValidationError as exc:
+            msg = "line is not a plan record"
             raise ValueError(msg) from exc
     try:
         return ProofRecord.model_validate(raw)
@@ -282,8 +389,14 @@ def _parse_line(raw: object) -> ProofRecord | SpanRecord:
 
 def _load_journal(
     path: Path,
-) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalIssue], list[ProofRecord | SpanRecord]]:
-    """Read and verify: recompute every hash, check every parent link."""
+) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalIssue], list[JournalEntry]]:
+    """Read and verify: recompute every hash, check every parent link.
+
+    Also (T6-12, T6-13): an agent span carrying `attempt_hash` must have
+    its sidecar beside the journal hashing to it, and once a journal
+    holds a plan record, every proof's `node_hash` must be one the plan
+    records name -- a proof for a node nobody planned is a chain error.
+    """
     if not path.exists():
         return ([], [], [], [])
     text = path.read_bytes().decode()
@@ -298,8 +411,10 @@ def _load_journal(
         lines = lines[:-1]
     records: list[ProofRecord] = []
     span_entries: list[tuple[int, SpanRecord]] = []
-    ordered: list[ProofRecord | SpanRecord] = []
+    ordered: list[JournalEntry] = []
     seen: set[str] = set()
+    planned_hashes: set[str] = set()
+    proof_lines: list[tuple[int, ProofRecord]] = []
     for number, line in enumerate(lines, start=1):
         try:
             raw = json.loads(line)
@@ -315,17 +430,33 @@ def _load_journal(
             continue
         payload = entry.model_dump(exclude={"record_hash"}, exclude_unset=True)
         if _canonical_hash(payload) != entry.record_hash:
+            who = f"for node {entry.node_id!r}" if not isinstance(entry, PlanRecord) else "for plan"
             issues.append(
-                JournalIssue(
-                    code="bad-hash",
-                    line=number,
-                    message=f"record hash mismatch for node {entry.node_id!r}",
-                )
+                JournalIssue(code="bad-hash", line=number, message=f"record hash mismatch {who}")
             )
+            continue
+        if isinstance(entry, PlanRecord):
+            planned_hashes.update(node.node_hash for node in entry.nodes)
+            ordered.append(entry)
             continue
         if isinstance(entry, SpanRecord):
             span_entries.append((number, entry))
             ordered.append(entry)
+            if entry.attempt_hash:
+                sidecar = attempt_sidecar_path(path, entry.span_id)
+                try:
+                    actual = hashlib.sha256(sidecar.read_bytes()).hexdigest()
+                except OSError:
+                    actual = ""
+                if actual != entry.attempt_hash:
+                    state = "missing" if not actual else "does not hash"
+                    issues.append(
+                        JournalIssue(
+                            code="attempt-sidecar",
+                            line=number,
+                            message=f"attempt sidecar for span {entry.span_id!r} {state}",
+                        )
+                    )
             continue
         if any(parent not in seen for parent in entry.parent_proofs):
             issues.append(
@@ -339,6 +470,20 @@ def _load_journal(
         records.append(entry)
         ordered.append(entry)
         seen.add(entry.record_hash)
+        # Only a proof sealed after a plan record is judged against plans:
+        # earlier proofs predate T6-13 or were resumed from a journal that
+        # never had one.
+        if planned_hashes:
+            proof_lines.append((number, entry))
+    for number, record in proof_lines:
+        if record.node_hash and record.node_hash not in planned_hashes:
+            issues.append(
+                JournalIssue(
+                    code="unplanned-proof",
+                    line=number,
+                    message=f"proof for node {record.node_id!r} matches no plan record",
+                )
+            )
     spans = [entry for _, entry in span_entries]
     known = {entry.span_id for entry in spans}
     for number, entry in span_entries:
@@ -361,7 +506,7 @@ def verify_journal(path: Path) -> list[JournalIssue]:
 
 def _verified_contents(
     path: Path,
-) -> tuple[list[ProofRecord], list[SpanRecord], list[ProofRecord | SpanRecord]]:
+) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalEntry]]:
     """Verified sealed entries; refuses hard corruption.
 
     A torn tail and in-flight orphans (children precede their parents)
@@ -415,7 +560,13 @@ def read_spans(path: Path) -> list[SpanRecord]:
     return spans
 
 
-def read_entries(path: Path) -> list[ProofRecord | SpanRecord]:
+def read_plans(path: Path) -> list[PlanRecord]:
+    """Verified plan records in journal order: what each run (and replan) asked."""
+    _, _, ordered = _verified_contents(path)
+    return [entry for entry in ordered if isinstance(entry, PlanRecord)]
+
+
+def read_entries(path: Path) -> list[JournalEntry]:
     """Verified sealed entries in journal order, for live tailing."""
     _, _, entries = _verified_contents(path)
     return entries

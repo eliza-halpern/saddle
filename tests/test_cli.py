@@ -1598,7 +1598,7 @@ def test_run_verify_reports_ok_with_rerendered_transcript(tmp_path: Path) -> Non
     out = io.StringIO()
     assert run_verify(journal, stdout=out) == 0
     body = out.getvalue()
-    assert body.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), chain verifies\n\n")
+    assert body.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), 0 plan(s), chain verifies\n\n")
     assert "# Saddle slice transcript\n" in body
     assert "- Verdict: PASS\n" in body
     assert "## Node n1\n" in body
@@ -1611,7 +1611,9 @@ def test_run_verify_missing_journal_is_fresh(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     out = io.StringIO()
     assert run_verify(journal, stdout=out) == 0
-    assert out.getvalue().startswith(f"OK: {journal}: 0 proof(s), 0 span(s), chain verifies\n\n")
+    assert out.getvalue().startswith(
+        f"OK: {journal}: 0 proof(s), 0 span(s), 0 plan(s), chain verifies\n\n"
+    )
     assert "- Proven nodes: 0\n" in out.getvalue()
 
 
@@ -1653,7 +1655,7 @@ def test_main_verify_needs_no_key(
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["verify", str(journal)]) == 0
     out = capsys.readouterr().out
-    assert out.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), chain verifies\n\n")
+    assert out.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), 0 plan(s), chain verifies\n\n")
 
 
 def test_main_verify_defaults_to_repo_journal(
@@ -2559,3 +2561,37 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     # failure, is sized from the baseline: the mutant that sizes from the
     # live tree reads 23264 here for attempt 2.
     assert [call["max_tokens"] for call in diff_calls] == [baseline_cap] * len(diff_calls)
+
+
+def test_run_verify_prints_the_plan_a_run_sealed(tmp_path: Path) -> None:
+    """T6-13: `saddle verify` shows what was asked before what happened."""
+    _git_repo(tmp_path)
+    script = [_emit_response({"nodes": [_node_dict()]}), _diff_response()]
+    code, _ = _run(_options(tmp_path), _scripted_client(script, []))
+    assert code == 0
+    out = io.StringIO()
+    assert run_verify(tmp_path / "proofs.jsonl", stdout=out) == 0
+    body = out.getvalue()
+    assert "1 proof(s), " in body
+    assert ", 1 plan(s), chain verifies\n" in body
+    assert "plan: 1 node(s)\n  n1  impl  budget=low  ctx=8000  targets: n.py\n" in body
+
+
+def test_run_task_flushes_the_plan_line_before_any_node_runs(tmp_path: Path) -> None:
+    """T5-1/F21.3: a killed run (SIGTERM from `timeout`) took its buffered
+    log with it; the plan line reaches the file before the first worker call."""
+    _git_repo(tmp_path)
+    flushed_at: list[str] = []
+
+    class _Stream(io.StringIO):
+        def flush(self) -> None:
+            flushed_at.append(self.getvalue())
+            super().flush()
+
+    out = _Stream()
+    script = [_emit_response({"nodes": [_node_dict()]}), _diff_response()]
+    code = run_task(
+        _options(tmp_path), _scripted_client(script, []), stdin=io.StringIO(), stdout=out
+    )
+    assert code == 0
+    assert any(value.endswith("Plan: 1 node(s): n1\n") for value in flushed_at)

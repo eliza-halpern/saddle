@@ -22,14 +22,18 @@ from saddle.journal import (
     ProofRecord,
     SpanRecord,
     SpanRecorder,
+    append_plan,
     append_record,
     append_span,
+    attempt_sidecar_path,
     build_from_gate,
+    build_plan,
     build_record,
     build_span,
     hash_node,
     proven_records,
     read_entries,
+    read_plans,
     read_records,
     read_spans,
     rebuild_proven,
@@ -37,6 +41,7 @@ from saddle.journal import (
     tool_spans_by_node,
     tool_spans_for_node,
     verify_journal,
+    write_attempt_sidecar,
 )
 
 
@@ -625,7 +630,9 @@ def test_spans_round_trip_beside_proofs(tmp_path: Path) -> None:
     assert read_spans(path) == [span]
     assert read_records(path) == [proof]
     lines = path.read_text().splitlines()
-    assert lines[0] == json.dumps(span.model_dump(), sort_keys=True)
+    # Unset fields stay off the line (T6-12: `attempt_hash` is written only
+    # when an attempt sidecar exists), so the sealed payload and the line agree.
+    assert lines[0] == json.dumps(span.model_dump(exclude_unset=True), sort_keys=True)
 
 
 def test_verify_catches_tampered_span(tmp_path: Path) -> None:
@@ -763,3 +770,175 @@ def test_read_entries_refuses_corruption_tolerates_torn_tail(tmp_path: Path) -> 
     with torn.open("a", encoding="utf-8") as handle:
         handle.write('{"half": ')
     assert read_entries(torn) == [record]
+
+
+def _plan_node(node_id: str = "n1", *, files: list[str] | None = None) -> Node:
+    return Node.model_validate(
+        {
+            "id": node_id,
+            "kind": "impl",
+            "dependencies": [],
+            "target_files": files if files is not None else ["n.py"],
+            "task_prompt": f"Do {node_id}.",
+            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+            "execution_constraints": {
+                "reasoning_budget": "medium",
+                "allowed_tools": ["read_file"],
+                "max_context_tokens": 9000,
+            },
+            "deterministic_gate": {
+                "test_command": "pytest tests/",
+                "changed_line_coverage_min": 100.0,
+                "red_phase_required": True,
+                "mutation_sample": {
+                    "scope": "changed-lines",
+                    "max_mutants": 100,
+                    "kill_threshold": 85.0,
+                },
+            },
+        }
+    )
+
+
+def test_plan_record_seals_what_was_asked_and_round_trips(tmp_path: Path) -> None:
+    """Known-good (T6-13): the plan is in the chain before any outcome, with
+    every node's kind, scope, budgets and hash; a replan names what it
+    replaces; `verify` accepts it and `read_plans` returns it in order."""
+    path = tmp_path / "proofs.jsonl"
+    node = _plan_node()
+    plan = build_plan([node], task_hash="t" * 64)
+    append_plan(path, plan)
+    replan = build_plan(
+        [_plan_node("n1.r1", files=["n.py", "m.py"])], task_hash="t" * 64, replaces="n1"
+    )
+    append_plan(path, replan)
+    assert verify_journal(path) == []
+    plans = read_plans(path)
+    assert [p.replaces for p in plans] == ["", "n1"]
+    (only,) = plans[0].nodes
+    assert (
+        only.id,
+        only.kind,
+        only.target_files,
+        only.reasoning_budget,
+        only.max_context_tokens,
+    ) == (
+        "n1",
+        "impl",
+        ["n.py"],
+        "medium",
+        9000,
+    )
+    assert only.node_hash == hash_node(node)
+    assert '"replaces"' not in path.read_text().splitlines()[0]
+    assert read_entries(path)[0] == plan
+
+
+def test_verify_rejects_a_tampered_plan_and_a_proof_no_plan_asked_for(tmp_path: Path) -> None:
+    """Known-bad (T6-13): editing a plan record breaks its hash; a proof
+    sealed after a plan whose node hash no plan names is `unplanned-proof`.
+    A proof sealed before any plan predates T6-13 and is not judged."""
+    path = tmp_path / "proofs.jsonl"
+    node = _plan_node()
+    legacy = build_record(
+        evidence_id="old#1",
+        node_id="old",
+        diff="diff old\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="",
+        node_hash="9" * 64,
+    )
+    append_record(path, legacy)
+    append_plan(path, build_plan([node], task_hash="t" * 64))
+    planned = build_record(
+        evidence_id="n1#1",
+        node_id="n1",
+        diff="diff n1\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="",
+        node_hash=hash_node(node),
+    )
+    append_record(path, planned)
+    assert verify_journal(path) == []
+    stray = build_record(
+        evidence_id="ghost#1",
+        node_id="ghost",
+        diff="diff ghost\n",
+        parent_proofs=[],
+        gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
+        requirement_ids=["REQ-001"],
+        thinking="",
+        node_hash="8" * 64,
+    )
+    append_record(path, stray)
+    (issue,) = verify_journal(path)
+    assert (issue.code, issue.line) == ("unplanned-proof", 4)
+    assert "node 'ghost' matches no plan record" in issue.message
+    lines = path.read_text().splitlines()
+    raw = json.loads(lines[1])
+    raw["nodes"][0]["kind"] = "refactor"
+    lines[1] = json.dumps(raw, sort_keys=True)
+    path.write_text("\n".join(lines) + "\n")
+    codes = [(issue.code, issue.line) for issue in verify_journal(path)]
+    assert ("bad-hash", 2) in codes
+    line_two = next(i for i in verify_journal(path) if i.line == 2)
+    assert "record hash mismatch for plan" in line_two.message
+
+
+def test_attempt_sidecar_is_sealed_into_its_span_and_verified(tmp_path: Path) -> None:
+    """Known-good (T6-12): the sidecar's hash rides in the agent span and
+    `verify` checks it; known-bad: one edited byte, or a missing file, is
+    an `attempt-sidecar` issue naming the span."""
+    path = tmp_path / "proofs.jsonl"
+    evidence = {
+        "node_id": "n1",
+        "thinking": "Bearer sk-secret then thought",
+        "finish_reason": "length",
+    }
+    digest = write_attempt_sidecar(path, "abc123", evidence)
+    sidecar = attempt_sidecar_path(path, "abc123")
+    assert sidecar == tmp_path / "attempts" / "abc123.json"
+    stored = json.loads(sidecar.read_bytes())
+    assert stored["finish_reason"] == "length"
+    assert "sk-secret" not in stored["thinking"]
+    span = build_span(
+        node_id="n1",
+        argv=[],
+        duration_ms=1,
+        exit_code=1,
+        detail="truncated",
+        kind="agent",
+        name="worker:n1",
+        span_id="abc123",
+        attempt_hash=digest,
+    )
+    append_span(path, span)
+    assert verify_journal(path) == []
+    assert read_spans(path)[0].attempt_hash == digest
+    plain = build_span(node_id="n1", argv=["pytest"], duration_ms=1, exit_code=0, detail="")
+    assert plain.attempt_hash == ""
+    assert "attempt_hash" not in plain.model_dump(exclude_unset=True)
+    sidecar.write_bytes(sidecar.read_bytes().replace(b"length", b"stop  "))
+    (issue,) = verify_journal(path)
+    assert (issue.code, issue.line) == ("attempt-sidecar", 1)
+    assert "span 'abc123' does not hash" in issue.message
+    sidecar.unlink()
+    (issue,) = verify_journal(path)
+    assert "span 'abc123' missing" in issue.message
+
+
+def test_verify_rejects_a_malformed_plan_line(tmp_path: Path) -> None:
+    """A line that claims to be a plan and is not one is `invalid-record`,
+    like a malformed span or proof; it is never silently skipped."""
+    path = tmp_path / "proofs.jsonl"
+    path.write_text(json.dumps({"record_type": "plan", "bogus": 1}) + "\n")
+    (issue,) = verify_journal(path)
+    assert (issue.code, issue.line, issue.message) == (
+        "invalid-record",
+        1,
+        "line is not a plan record",
+    )

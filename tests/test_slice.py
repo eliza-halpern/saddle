@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import stat
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
@@ -20,14 +21,20 @@ from saddle.evidence import CapturedRun, run_argv, run_capture
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, GateCheck, Tier1Result
 from saddle.journal import (
     GateOutput,
+    PlanRecord,
     ProofRecord,
     SpanRecord,
     SpanRecorder,
     append_record,
     append_span,
+    attempt_sidecar_path,
     build_record,
+    hash_node,
+    read_entries,
+    read_plans,
     read_records,
     read_spans,
+    verify_journal,
 )
 from saddle.slice import (
     MAX_RECOVERY_RETRIES,
@@ -2718,3 +2725,151 @@ def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     assert result.transcript.count(bound) == 2
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
+
+
+def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any]:
+    path = attempt_sidecar_path(journal, span.span_id)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == span.attempt_hash
+    loaded: dict[str, Any] = json.loads(path.read_bytes())
+    return loaded
+
+
+def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path: Path) -> None:
+    """Known-good (T6-13): the journal's first entry is the plan, sealed
+    before any worker call; a replan seals its replacement naming the
+    failed node; `verify` is clean and the proofs match the plans."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
+
+    def replan(node: Node, history: str) -> Dag:
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        replan=replan,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    entries = read_entries(journal)
+    first = entries[0]
+    assert isinstance(first, PlanRecord)
+    assert [n.id for n in first.nodes] == ["n1"]
+    assert first.nodes[0].node_hash == hash_node(dag.nodes[0])
+    assert first.task_hash == hashlib.sha256(b"Fix f.").hexdigest()
+    plans = read_plans(journal)
+    assert [(p.replaces, [n.id for n in p.nodes]) for p in plans] == [
+        ("", ["n1"]),
+        ("n1", ["n1.r1"]),
+    ]
+    assert verify_journal(journal) == []
+    (record,) = read_records(journal)
+    assert record.node_hash == plans[1].nodes[0].node_hash
+
+
+def test_run_slice_every_attempt_leaves_a_sidecar_with_its_evidence(tmp_path: Path) -> None:
+    """Known-good (T6-12): a failed attempt keeps its reasoning, gate
+    outcomes, samples and diff hash beside the journal, hashed into its
+    span; the sealing attempt keeps the same. Known-bad was round-3 T5:
+    three failed attempts, 160k tokens, nothing journaled."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        if failure is None:
+            return DiffProposal(
+                BAD_DIFF, "first thought", usage={"completion_tokens": 10}, max_tokens=500
+            )
+        return DiffProposal(
+            FIX_DIFF, "second thought", usage={"completion_tokens": 20}, max_tokens=600
+        )
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    assert [s.exit_code for s in agents] == [1, 0]
+    failed = _sidecar(journal, agents[0])
+    assert failed["thinking"] == "first thought"
+    assert failed["finish_reason"] == "stop"
+    assert failed["usage"] == {"completion_tokens": 10}
+    assert failed["max_tokens"] == 500
+    assert failed["diff_hash"] == hashlib.sha256(BAD_DIFF.encode()).hexdigest()
+    assert [g["name"] for g in failed["gates"] if not g["passed"]] == [
+        "tests",
+        "red-phase",
+        "mutation",
+    ]
+    assert len(failed["samples"]) == PROPOSAL_SAMPLES
+    assert failed["samples"][0]["outcome"] == "3 gate(s) failed"
+    assert failed["samples"][1]["outcome"] == "identical to an earlier sample"
+    sealed = _sidecar(journal, agents[1])
+    assert sealed["thinking"] == "second thought"
+    assert sealed["max_tokens"] == 600
+    assert verify_journal(journal) == []
+    # The sidecar is load-bearing: editing it fails verification.
+    path = attempt_sidecar_path(journal, agents[0].span_id)
+    path.write_bytes(path.read_bytes().replace(b"first thought", b"first  thought"))
+    assert [i.code for i in verify_journal(journal)] == ["attempt-sidecar"]
+
+
+def test_run_slice_truncated_attempt_keeps_its_partial_reasoning(tmp_path: Path) -> None:
+    """Known-bad shape (T6-12, F21.4): the most expensive failure used to
+    leave nothing. A truncated call's sidecar carries the finish reason,
+    the cap, the usage and the partial reasoning; the transcript line names
+    the cap."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    attempts: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        attempts.append(failure)
+        if len(attempts) <= PROPOSAL_SAMPLES + 1:
+            msg = "completion truncated at 4096 output tokens (finish_reason=length)"
+            raise VllmResponseError(
+                msg,
+                reasoning="I was thinking about",
+                content="diff --git a/n.py",
+                usage={"completion_tokens": 4096, "reasoning_tokens": 4000},
+                max_tokens=4096,
+                finish_reason="length",
+            )
+        return DiffProposal(GOOD_DIFF, "done", max_tokens=8192)
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    assert agents[0].exit_code == 1
+    assert "truncated at 4096 output tokens" in agents[0].detail
+    truncated = _sidecar(journal, agents[0])
+    assert truncated["finish_reason"] == "length"
+    assert truncated["thinking"] == "I was thinking about"
+    assert truncated["partial_content_chars"] == len("diff --git a/n.py")
+    assert truncated["usage"] == {"completion_tokens": 4096, "reasoning_tokens": 4000}
+    assert truncated["max_tokens"] == 4096
+    assert all(s["finish_reason"] == "length" for s in truncated["samples"])
+    assert verify_journal(journal) == []

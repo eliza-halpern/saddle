@@ -15,12 +15,12 @@ import shlex
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from time import perf_counter
-from typing import Final
+from typing import Any, Final
 
 from saddle.dag import Dag, ExecutionConstraints, Node, planned_requirement_ids
 from saddle.evidence import (
@@ -39,9 +39,11 @@ from saddle.journal import (
     ProofRecord,
     SpanRecord,
     SpanRecorder,
+    append_plan,
     append_record,
     append_span,
     build_from_gate,
+    build_plan,
     build_span,
     hash_node,
     proven_records,
@@ -50,6 +52,7 @@ from saddle.journal import (
     tool_spans_by_node,
     tool_spans_for_node,
     verify_journal,
+    write_attempt_sidecar,
 )
 from saddle.runner import run_node_gate
 from saddle.scheduler import Proof, schedule
@@ -298,6 +301,30 @@ def format_attempt_failure(
     return "\n".join(lines) + "\n"
 
 
+def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
+    """What a proposal leaves behind for its attempt's sidecar (T6-12)."""
+    return {
+        "thinking": proposal.reasoning,
+        "diff_hash": hashlib.sha256(proposal.diff.encode()).hexdigest(),
+        "finish_reason": "stop",
+        "usage": dict(proposal.usage),
+        "max_tokens": proposal.max_tokens,
+    }
+
+
+def _error_evidence(exc: BaseException) -> dict[str, Any]:
+    """What a failed worker call leaves behind: a truncation keeps its partial text."""
+    if isinstance(exc, VllmResponseError):
+        return {
+            "thinking": exc.reasoning,
+            "partial_content_chars": len(exc.content),
+            "finish_reason": exc.finish_reason,
+            "usage": dict(exc.usage),
+            "max_tokens": exc.max_tokens,
+        }
+    return {}
+
+
 def _seal_attempt(
     journal_path: Path,
     node_id: str,
@@ -306,8 +333,24 @@ def _seal_attempt(
     start: float,
     exit_code: int,
     detail: str,
+    evidence: Mapping[str, Any] | None = None,
 ) -> None:
-    """Append one attempt's agent span under the run span."""
+    """Append one attempt's agent span under the run span, with its sidecar.
+
+    Every attempt, sealed or not, leaves `attempts/<span_id>.json` beside
+    the journal (T6-12): round-3 T5 spent 160k output tokens on three
+    failed attempts and journaled none of their reasoning, because
+    `thinking` was written only onto proof records. The sidecar's hash is
+    sealed in the span, so `verify` catches a missing or edited one.
+    """
+    payload: dict[str, Any] = {
+        "node_id": node_id,
+        "span_id": worker_id,
+        "exit_code": exit_code,
+        "detail": detail,
+        **(evidence or {}),
+    }
+    attempt_hash = write_attempt_sidecar(journal_path, worker_id, payload)
     append_span(
         journal_path,
         build_span(
@@ -320,6 +363,7 @@ def _seal_attempt(
             name=f"worker:{node_id}",
             parent_id=run_span_id,
             span_id=worker_id,
+            attempt_hash=attempt_hash,
         ),
     )
 
@@ -357,33 +401,42 @@ def _evaluate_candidate(
 
 def _best_of_samples(
     node: Node, workdir: Path, propose: Proposer, baseline: str, planned: tuple[str, ...]
-) -> tuple[DiffProposal | None, int]:
+) -> tuple[DiffProposal | None, int, list[dict[str, Any]]]:
     """Draw PROPOSAL_SAMPLES unconditioned proposals; keep the best.
 
-    Returns the winning diff and how many distinct diffs were drawn --
-    agreement is the correlation signal. LLM samples "often fail on the
+    Returns the winning diff, how many distinct diffs were drawn --
+    agreement is the correlation signal: LLM samples "often fail on the
     same inputs", so k buys little when they agree, and recording it
-    means rho is measured rather than assumed.
+    means rho is measured rather than assumed -- and one summary per
+    sample for the attempt's sidecar (T6-12): a sample that failed its
+    gates or did not apply used to vanish with its reasoning.
     """
     scored: list[tuple[int, int, DiffProposal]] = []
     drawn: list[str] = []
     last: DiffProposal | None = None
+    samples: list[dict[str, Any]] = []
     for index in range(PROPOSAL_SAMPLES):
         # A truncated or malformed completion loses this draw, not the
         # other two: the samples are independent, so one bad packet is
         # not evidence about the rest.
         try:
             proposal = propose(node, None)
-        except VllmResponseError:
+        except VllmResponseError as exc:
+            samples.append({**_error_evidence(exc), "outcome": f"worker call failed: {exc}"})
             continue
         last = proposal
         drawn.append(proposal.diff)
+        summary = _proposal_evidence(proposal)
+        samples.append(summary)
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
+            summary["outcome"] = "identical to an earlier sample"
             continue
         result, unappliable = _evaluate_candidate(node, workdir, proposal.diff, baseline, planned)
         if unappliable is not None or result is None:
+            summary["outcome"] = f"did not apply: {unappliable}"
             continue
         failures = sum(1 for check in result.checks if not check.passed)
+        summary["outcome"] = f"{failures} gate(s) failed"
         # `index` breaks ties toward the earliest sample, so selection is
         # deterministic rather than dependent on sort stability.
         scored.append((failures, index, proposal))
@@ -394,9 +447,9 @@ def _best_of_samples(
         # sample rather than paying for another call: the attempt still
         # needs a diff to seal a failure against, and a fourth draw buys
         # no information the three already spent did not.
-        return last, len(set(drawn))
+        return last, len(set(drawn)), samples
     scored.sort(key=lambda entry: entry[:2])
-    return scored[0][2], len(set(drawn))
+    return scored[0][2], len(set(drawn)), samples
 
 
 def _abandon(
@@ -443,6 +496,7 @@ async def _run_node(
     baseline: str | None = None
     failure: str | None = None
     sampling = ""
+    samples: list[dict[str, Any]] = []
     seen: list[str] = []
     applied: list[str] = []
     last_result: Tier1Result | None = None
@@ -470,7 +524,9 @@ async def _run_node(
             # node with the worktree untouched and nothing retried.
             try:
                 if attempt == 1:
-                    best, distinct = _best_of_samples(node, workdir, propose, baseline, planned)
+                    best, distinct, samples = _best_of_samples(
+                        node, workdir, propose, baseline, planned
+                    )
                     proposal = best if best is not None else propose(node, failure)
                     # Agreement across independent samples is the correlation
                     # signal: LLM samples "often fail on the same inputs", so
@@ -481,7 +537,16 @@ async def _run_node(
                     proposal = propose(node, failure)
             except VllmResponseError as exc:
                 failure = f"Attempt {attempt} of {max_attempts}: worker call failed: {exc}"
-                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, failure)
+                _seal_attempt(
+                    journal_path,
+                    node.id,
+                    run_span_id,
+                    worker_id,
+                    start,
+                    1,
+                    failure,
+                    {**_error_evidence(exc), "samples": samples},
+                )
                 continue
             if proposal.diff in seen:
                 detail = (
@@ -489,14 +554,32 @@ async def _run_node(
                     "worker re-proposed an identical diff; stopping recovery"
                 )
                 # No tool spans precede this seal, so its span id is unlinkable by design.
-                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, detail)
+                _seal_attempt(
+                    journal_path,
+                    node.id,
+                    run_span_id,
+                    worker_id,
+                    start,
+                    1,
+                    detail,
+                    _proposal_evidence(proposal),
+                )
                 raise _HaltRecoveryError(last_result, attempt, failure)
             seen.append(proposal.diff)
             try:
                 _apply_diff(workdir, proposal.diff, recorder=recorder)
             except RuntimeError as exc:
                 failure = f"Attempt {attempt} of {max_attempts}: diff did not apply: {exc}"
-                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, failure)
+                _seal_attempt(
+                    journal_path,
+                    node.id,
+                    run_span_id,
+                    worker_id,
+                    start,
+                    1,
+                    failure,
+                    {**_proposal_evidence(proposal), "samples": samples},
+                )
                 continue
             applied.append(proposal.diff)
             autofix(workdir, baseline=baseline, recorder=recorder)
@@ -530,7 +613,16 @@ async def _run_node(
                 append_record(journal_path, record)
                 proofs[node.id] = record.record_hash
                 detail = sampling if attempt == 1 else f"recovered after {attempt} attempts"
-                _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 0, detail)
+                _seal_attempt(
+                    journal_path,
+                    node.id,
+                    run_span_id,
+                    worker_id,
+                    start,
+                    0,
+                    detail,
+                    {**_proposal_evidence(proposal), "samples": samples},
+                )
                 return Proof(node_id=node.id)
             last_result = result
             failure = format_attempt_failure(
@@ -554,6 +646,14 @@ async def _run_node(
                 1,
                 f"attempt {attempt}/{max_attempts}: {len(failed_names)} gate(s) failed"
                 f": {', '.join(failed_names)}",
+                {
+                    **_proposal_evidence(proposal),
+                    "samples": samples,
+                    "gates": [
+                        {"name": check.name, "passed": check.passed, "detail": check.detail}
+                        for check in result.checks
+                    ],
+                },
             )
         except _HaltRecoveryError as exc:
             _abandon(workdir, baseline, applied, recorder)
@@ -562,7 +662,16 @@ async def _run_node(
                 raise NodeUnappliableError(node.id, detail, exc.attempts, exc.failure) from exc
             raise NodeGateFailedError(exc.result, exc.attempts, exc.failure) from exc
         except BaseException as exc:
-            _seal_attempt(journal_path, node.id, run_span_id, worker_id, start, 1, str(exc))
+            _seal_attempt(
+                journal_path,
+                node.id,
+                run_span_id,
+                worker_id,
+                start,
+                1,
+                str(exc),
+                _error_evidence(exc),
+            )
             raise
     # `recorder` is the last attempt's: the restore span hangs off the
     # attempt that failed, so the journal shows when the tree was reset.
@@ -831,6 +940,11 @@ def _schedule_until_done(
                 remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
             except ReplanFailedError:
                 continue
+            by_new = {node.id: node for node in remaining.nodes}
+            append_plan(
+                journal_path,
+                build_plan([by_new[gen] for gen in gen_ids], task_hash=task_hash, replaces=node_id),
+            )
             replanned_from.add(node_id)
             generated.update(gen_ids)
             progressed = True
@@ -980,6 +1094,9 @@ def run_slice(
     run_start = perf_counter()
     run_span_id = uuid.uuid4().hex
     proofs, resumed, reused = _seed_proofs(journal_path, dag, task_hash)
+    # What was asked, sealed before anything is done about it (T6-13): a
+    # run that dies leaves its plan in the chain, not in a buffered log.
+    append_plan(journal_path, build_plan(dag.nodes, task_hash=task_hash))
     if reused is not None:
         # A proof is a proof about one worktree (T3-10). `rebuild_proven`
         # promises a crash loses at most the in-flight node, which holds
