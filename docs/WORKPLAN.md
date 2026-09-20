@@ -120,7 +120,7 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22, T6-23, T6-24 done → T6-25 (main session) → session 37 =
+T6-22 to T6-25 done → session 37 =
 T6-26 (round 3d, executor; the first run in which an impl node faces a
 mutation gate that can pass) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
@@ -4658,6 +4658,18 @@ order. Known-bad: k identical samples at temperature 0.0 still report
 test red; (2) evaluation in arrival order -> the seed-order test red
 (the fake makes arrival order adversarial). Owner: main session.
 
+**Status (2026-09-20):** DONE, `e270fd7`, main session. Clauses (1)-(4)
+landed: thread pool of PROPOSAL_SAMPLES over the sync client, `seed` on
+the diff request (0..k-1; a retry's seed follows), evaluation in seed
+order with the rest recorded `not evaluated: an earlier sample passed`,
+the constant-proposer pin still `1 distinct of k`. Clause (5), bounding k
+by the context left, is **not** implemented: vLLM handles KV pressure by
+preemption, not rejection, and round 3c's largest sample was 52442 tokens
+on a 175k window, so three fit; T6-26 observation (d) measures whether
+three in flight ever preempt, and a bound is added on that evidence.
+Eleven tests that pinned one worker call per passing node now pin k, each
+named in the commit. Mutants three, all killed; `./check.sh` green.
+
 ### T6-26 — Round 3d: one T5 seed under T6-22 to T6-25 (measurement; F21.13; no code)
 
 Same procedure as T6-19 (`RUN_DIR=runs/round3d/t5-s1 SAMPLE_TEMP=0.7
@@ -4671,7 +4683,10 @@ sidecars report their own draws (T6-24a)? (b) sample attempts decoded at
 89-102 tok/s and the two single-call retries at 58-61; speculative
 decoding acceptance differing between a long sample and a short retry
 is a guess, written here as one. (c) coverage failed at 88.9%/89.7% on
-the one impl node that reached it (MODEL); does it recur? Owner:
+the one impl node that reached it (MODEL); does it recur? (d) with
+T6-25's three draws in flight, does the server preempt (vLLM logs, or a
+sample wall far above the others'); the sidecar walls and the container
+log answer it, and T6-25's clause (5) waits on it. Owner:
 executor (needs the key). Not in this item: any fix.
 
 ---
