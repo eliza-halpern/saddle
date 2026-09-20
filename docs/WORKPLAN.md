@@ -1847,6 +1847,36 @@ Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_
 Dry run: not run (the probe fixture was run in a scratch copy at `15e5c3e`, not the fix).
 
 ### T3-9 — A proof record names the task and the node it proves (Major)
+Status 2026-09-19: DONE by session 23, commit 64ff581 (tightened).
+Landed: `ProofRecord` gains `task_hash`, `node_hash`, `kind`,
+`target_files` (defaulted, sealed inside the hash; older journals still
+parse and re-verify because verification dumps with `exclude_unset`);
+`hash_node`, `proven_records`, `build_record`/`build_from_gate` seal the
+four; `slice._seed_proofs` reuses a proof only for the same task and the
+same node hash -- a record sealed for another task raises `ValueError`
+before any node runs (the CLI prints `error: ...` and exits 1), a record
+whose node changed or that predates `node_hash` is dropped and the node
+rescheduled, and a `resume` span under the run span records the decision
+(`is_run_end` does not match it, pinned). Tests: four in test_journal
+(seals, altered task_hash fails verification, `hash_node` pinned to a
+fixed digest, `proven_records` last-per-node) and four in test_slice
+(resume span names reuse, different-task refusal, node-changed
+reschedule, pre-node_hash record dropped). Mutants, all KILLED: M1
+`"task_hash": task_hash` -> `""` (`assert '' == 'aaa...'`); M2 node-hash
+compare -> `True` (edited n1 reused, `assert [] == ['n1']`); M3 task
+guard -> `False` (`DID NOT RAISE ValueError`). Reviewer verified at
+HEAD: the three targets each occur once, the commit is clean-room, and
+`./check.sh` on the settled tree is green (649 passed, 3 skipped, 100%).
+Deviations, stated by the executor and accepted: known-bad (a) shown via
+M3 rather than pre-change in order; known-bad (b) proved with `n1` as a
+refactor in both runs because an impl node cannot be red-phase-red on a
+green worktree; `build_record` takes `Sequence[str] = ()` (ruff B006);
+`_run_node`'s `task_hash` is keyword-only and required; the optional
+transcript display was not taken. Issue "Resume reuses proofs across
+tasks and node edits" still to be opened (body in the commit message).
+Note for the record: sessions 23 and 37 shared one worktree; each used
+byte-copy restore instead of `git checkout --` and both re-ran the gate
+on a settled tree. Two sessions in one checkout is not to be repeated.
 Files: `src/saddle/journal.py` (`ProofRecord` ~:41: four new fields;
 `build_record` ~:112: parameters and payload; `build_from_gate` ~:383:
 computes and passes them; new `proven_records(path) -> dict[str,
@@ -2566,6 +2596,40 @@ Done when: mutants 1 and 2 red, 3 survives as stated; `./check.sh` green.
 Stop if: mutmut's `also_copy` cannot carry a directory outside
 `source_paths` — then move the reads (a `docs`-relative fixture, a
 `tools` package under `src`) instead of the copy.
+Status 2026-09-19: DONE -- landed by the main session in the commit that
+carries this line (session 37's slot; no executor). What landed:
+`also_copy = ["benchmark/", "docs/", "tools/"]` (pyproject, reason in its
+comment); `tests/test_mutmut_layout.py` rebuilds the copy once per module
+(fixture), keeps the collect-only test, and adds
+`test_mutant_layout_runs_the_tests_that_read_outside_src`, parametrized
+over `OUTSIDE_READERS` (`tests/test_docs.py`; the T3-18 grammar test by
+node id, so a rename is pytest exit 4 -- red, not silence); the grammar
+test's in-function-import comment now says why (tools/ arrives via
+also_copy and the layout test proves it). Stop-if did not fire: mutmut
+3.8.0's `copy_also_copy_files` copytrees any listed directory
+(`benchmark/` already was one outside `source_paths`).
+Evidence, in order. Known-bad first: the new run test against the
+unchanged `also_copy` -- both readers red (`FileNotFoundError:
+.../mutants/docs/ARCHITECTURE.md`; `ModuleNotFoundError: No module named
+'tools'`), collect-only green as before. Known-good after the fix: 3
+passed. Contract mutants (exact replacement, count-checked, restored from
+a saved copy, `__pycache__` dropped): M1 `docs/` dropped -> 1 failed
+(the test_docs reader); M2 `tools/` dropped -> 1 failed (the grammar
+reader); M3 harness check, run step reverted to `--collect-only` with M1
+applied -> 3 passed (SURVIVED), then with M2 -> 3 passed (SURVIVED): the
+run step carries the contract, as the item required.
+Gate: `./check.sh` in the shared tree read 91% (journal.py, slice.py)
+because session 23 was editing those two files mid-run (CLAUDE.md, "do
+not edit files during a measurement run"); the gate was re-run on a
+`git archive HEAD` copy plus the three changed files with `PYTHONPATH`
+pointing at the copy's `src`: ruff, format and mypy clean; 640 passed, 3
+skipped, 100% line+branch. The copy's single failure
+(`test_grammar_check_corpus_carries_the_grammar_it_checks`) runs `git
+log`, and an archive has no `.git`; it passes in the repo (1 passed).
+Limit, stated: step 3 holds for the modules in `OUTSIDE_READERS`. A later
+outside reader that is not listed still kills every mutant in CI until it
+is added; the full-suite run in the layout is the net for that and belongs
+in the CI mutation job, not `check.sh`.
 Passing instance at HEAD: none — the layout test collects, it does not run.
 Dry run: not run.
 
