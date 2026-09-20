@@ -119,8 +119,10 @@ T6-9, T5 seed ──► Tier 5 (the chat surface is built on a harness that can 
 T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
-Order of sessions from here (T6-17, T6-15, T6-18, T6-9 done): session 36
-= T6-19 (T5 seed, executor) → T6-1
+Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
+T6-22 (F21.12a, main session, implemented) → T6-23 → T6-24 (main session)
+→ one more T5 seed under them (executor; the first run in which an impl
+node has ever faced a mutation gate that could pass) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -4515,6 +4517,91 @@ Done when: PREDICTION.md committed before the run, the run directory and
 F21.12 committed after it, P1-P5 each resolved with evidence. Owner:
 executor (needs the key). Not in this item: any fix; a FALSIFIED P1-P3
 is a main-session item, a FALSIFIED P4/P5 is data.
+
+**Status (2026-09-20):** DONE, bench `c1e60bd` (PREDICTION.md before the
+run) and `50ebbb8` (`runs/round3c/t5-s1`, F21.12). P1, P2, P3 HELD: 18
+worker calls all `finish_reason=stop` (largest sample 52442 tokens against
+a 165642 cap); verify OK, 7/7 sidecars hash, one `plan` record per plan;
+exit 1 at 5222 s, 1978 s inside the deadline. P4 and P5 FALSIFIED. P4's
+cause is HARNESS (F21.12a, fixed by T6-22 below), not model: no impl node
+ever faced a mutation gate that could pass. Also found: F21.12b (a timed
+out request skips `_abandon`, 530-line `money.py` left staged unproven;
+`_error_evidence` empty for non-`VllmResponseError`), stale `samples` in
+retry sidecars, the sampler scores without `autofix`, ties fall to index,
+`--3way` unreachable (T6-10 confirmed), ruff detail names no rule. Each is
+a main-session item in turn (T6-23, T6-24); T6-19 fixed nothing.
+
+### T6-22 — The mutation gate runs the node's declared pytest scope, not the whole suite (F21.12a; scope narrowed)
+
+Files: `src/saddle/evidence.py` (`pytest_scope`, `_mutmut_scratch_config`
+order), `src/saddle/runner.py` (the gate's `mutation_sample` call),
+`tests/test_evidence.py`, `tests/test_runner.py`.
+
+The gate's `mutation_sample` call passed no `run_tests`, so mutmut
+baselined against the whole scratch tree. On a TDD plan the test node
+writes every module's specification red up front and impl nodes green
+them one at a time, so the suite is red until the last impl node lands;
+the tests gate honoured the declared scope and passed, the mutation gate
+ignored it and died with `failed to collect stats` on all three impl
+attempts of round 3c. Reproduced in the bench with real mutmut (arm A
+unscoped: exit 1; arm B the declared scope: 331 mutants). No impl node
+could seal on this plan or any plan shaped like it, which is a candidate
+cause for eight T5 seeds completing nothing.
+
+Contract: the mutation gate's engine collects the same tests the tests
+gate ran. `pytest_scope(test_command)` is the arguments after the first
+`pytest` token; the runner passes it as `run_tests`. A command that never
+names pytest yields nothing and the engine runs its whole tree as before.
+`_mutmut_scratch_config` keeps a sequence's order (a `-k expr` pair) and
+still sorts an unordered collection. The property oracle's narrower
+`run_tests` is unchanged. Direction: scope narrowed. A mutant is judged by
+the node's declared tests only; before, a green whole suite could kill it
+with any test and a red one issued no verdict.
+
+Tests: red first, `test_run_node_gate_mutation_runs_the_declared_scope_not_the_red_suite`
+fails on the pre-change source with the production detail and passes
+after; known-bad against the real engine,
+`test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification`
+(unscoped: stats failure; scoped: 1 of 1 killed); `pytest_scope`
+known-good/known-bad; config order. Mutants (three, all KILLED): runner
+passes `run_tests=()`; `pytest_scope` keeps the `pytest` token;
+`_mutmut_scratch_config` always sorts.
+
+**Status (2026-09-20):** implemented in the main session; `./check.sh`
+green (700 passed, 3 skipped, 100%). Awaiting commit.
+
+### T6-23 — Every give-up path abandons the node's diff and keeps its evidence (F21.12b; tightened)
+
+Files: `src/saddle/slice.py` (`_run_node` `except BaseException`,
+`_error_evidence`), `tests/test_slice.py`.
+
+Round 3c's n2.r2 attempt 2 timed out after 1826 s. The `except
+BaseException` branch seals the attempt and re-raises without calling
+`_abandon`, so the applied diff stayed in the worktree: `money.py` (530
+lines) staged with no proof, and the oracle graded it. `_error_evidence`
+returns `{}` for anything that is not a `VllmResponseError`, so the
+sidecar had four keys and thirty minutes of generation are unrecorded.
+Contract: a node that ends on any exception leaves the worktree at its
+baseline, and its sidecar carries whatever the client had (exception
+type and message at least; reasoning and usage where the client has
+them). Known-bad: a propose that raises a timeout leaves no staged diff
+and a sidecar naming the exception. Owner: main session.
+
+### T6-24 — The sampler scores what the gate will see, and a retry's sidecar reports its own draws (F21.12c; tightened)
+
+Files: `src/saddle/slice.py` (`_best_of_samples`, `_evaluate_candidate`,
+`_run_node` `samples`), `tests/test_slice.py`.
+
+Two defects from the same run. (a) `samples` is built once per node and
+reassigned only on attempt 1, so attempts 2 and 3 of n2 carried attempt
+1's samples byte for byte (identical SHA-256). Contract: a sidecar's
+`samples` are the calls that attempt made; a retry with one call records
+one. (b) `_evaluate_candidate` goes apply then gate while the real path
+runs `autofix` between them, so a sample's score was one higher than its
+real failure count on three of four nodes and `failures == 0` never ended
+sampling early. Contract: a candidate is scored by the same sequence the
+node is gated by. Ties still fall to sample index; recorded, not changed
+(a tie is a tie). Owner: main session.
 
 ---
 
