@@ -1305,6 +1305,14 @@ Measurement follow-up: T4-3's sweep gains an axis — the T1 task with
 and median worker tokens beside the effort axis.
 
 ### T3-5 — Issue hygiene (comments only; the user closes)
+Status 2026-09-19: DONE by the reviewer (session 16's scope, run in the
+main session while 28 held `slice.py`). Drafts at
+`../saddle-notes/issue-comments.md`; posted with the user's word to
+#66, #51, #64, #67, #65, #62, #61; the user closed #66, #51, #67, #62.
+#64 stays open narrowed to the size budget, #61 until T4-1 reports,
+#65 open on its residual (`kind` is still a planner-written label
+selecting the differential red-phase leg). #44 was already closed; #23
+and #17 untouched.
 Files: none in the repo. Write the drafts to `../saddle-notes/issue-comments.md`
 (outside the repo; the human posts them). Read only the commits named below
 via `git show --stat <sha>` and `src/saddle/slice.py` `_apply_diff` (~:136,
@@ -1322,6 +1330,13 @@ for the `--recount` claim).
 - #23, #17: unchanged; both are future-facing.
 
 ### T3-6 — `slice.py` decomposition (optional, no contract change)
+Status 2026-09-19: DONE by session 28, commit 7947b54 (refactor, no
+contract change). `run_slice` now wires `_seed_proofs`,
+`_schedule_until_done` (worker closure plus the schedule/replan loop),
+`_merge_gate` and `_seal_run` in the original order; the diff touches
+`slice.py` only; the five pinned private names are untouched and the
+patched globals are still looked up through the module. Reviewer re-ran
+`./check.sh` at 7947b54: 662 passed, 3 skipped, 100%.
 Files: `src/saddle/slice.py` (`run_slice`, :764-960 at e305e8c);
 `tests/test_slice.py` (read as the oracle; do not edit).
 `run_slice` is now ~195 lines with the resume seed (T3-1/T3-9/T3-10,
