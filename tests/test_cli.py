@@ -1384,6 +1384,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "temperature": 0.0,
         "sample_temperature": 0.7,
         "recovery_temperature": None,
+        "deadline": None,
         "reasoning_effort": "medium",
         "worker_effort": None,
         "yes": False,
@@ -1425,6 +1426,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "temperature": 0.5,
         "sample_temperature": 0.9,
         "recovery_temperature": None,
+        "deadline": None,
         "reasoning_effort": "low",
         "worker_effort": "xhigh",
         "yes": True,
@@ -1447,7 +1449,8 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--sample-temperature SAMPLE_TEMPERATURE]\n"
         "                  [--recovery-temperature RECOVERY_TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
-        "                  [--worker-effort {none,low,medium,xhigh}] [--yes]\n"
+        "                  [--worker-effort {none,low,medium,xhigh}]\n"
+        "                  [--deadline DEADLINE] [--yes]\n"
         "                  task\n"
         "\n"
         "positional arguments:\n"
@@ -1476,6 +1479,8 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                        Emission reasoning effort.\n"
         "  --worker-effort {none,low,medium,xhigh}\n"
         "                        Worker effort override (default: per-node budget).\n"
+        "  --deadline DEADLINE   Seconds after which no node or attempt starts; the run\n"
+        "                        seals what it has (exit 3).\n"
         "  --yes                 Skip the plan confirmation.\n"
     )
 
@@ -2528,6 +2533,22 @@ def test_run_task_no_content_response_is_a_named_failure_with_its_reasoning_kept
     assert sidecar["usage"]["completion_tokens"] == 12436
     recovery = next(c for c in seen if "Diagnose the root cause" in _prompt(c))
     assert expected in _prompt(recovery)
+
+
+def test_run_task_deadline_seals_what_it_has_and_exits_3(tmp_path: Path) -> None:
+    """T6-9 wiring: a deadline that leaves no room starts no node; the run
+    still writes its plan and run span, says `deadline:` in the span, and
+    exits 3, not 0 or 1."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    script = [_emit_response({"nodes": [_node_dict()]})]
+    code, out = _run(_options(tmp_path, deadline_s=0.0), _scripted_client(script, seen))
+    assert code == 3, out
+    assert "- Verdict: FAIL\n" in out
+    assert not any(_is_diff_request(call) for call in seen)
+    run = [s for s in read_spans(tmp_path / "proofs.jsonl") if s.name == "run"][-1]
+    assert run.exit_code == 3
+    assert run.detail == "deadline: 0 proven, 0 failed, 1 undispatched"
 
 
 def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path) -> None:

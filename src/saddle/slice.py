@@ -16,9 +16,10 @@ import shutil
 import tempfile
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from statistics import median
 from time import perf_counter
 from typing import Any, Final
 
@@ -93,6 +94,10 @@ Replanner = Callable[[Node, str], Dag]
 """Re-emit a failed node's scope; history carries the failure evidence."""
 
 MAX_RECOVERY_RETRIES: Final = 2
+# Exit code of a run its deadline stopped (T6-9): not 0 (nothing is
+# claimed proven that is not), not 1 (nothing failed), and the run span
+# carries the same verdict so `verify` can tell the two apart.
+DEADLINE_EXIT: Final = 3
 # Independent proposals drawn for the first attempt. Sequential retry
 # conditions each sample on the last rejection, which optimises against
 # whichever gate pushes back hardest: on T7 recovery drove the node from
@@ -126,6 +131,30 @@ CAPTURED_RUN_TOOL: Final[dict[str, str]] = {
 }
 
 
+class _DeadlineSkipError(Exception):
+    """A node not dispatched because the run's deadline leaves no room for it (T6-9)."""
+
+
+@dataclass
+class _Deadline:
+    """A run's clock (T6-9): when it ends, and how long nodes have taken so far."""
+
+    at: float
+    clock: Callable[[], float]
+    walls: list[float] = field(default_factory=list)
+
+    def expired(self) -> bool:
+        return self.clock() >= self.at
+
+    def room_for_node(self) -> bool:
+        """Whether a node can still be started: time left, and at least the
+        median node wall so far when any node has run to completion."""
+        remaining = self.at - self.clock()
+        if remaining <= 0:
+            return False
+        return not self.walls or remaining >= median(self.walls)
+
+
 class _HaltRecoveryError(Exception):
     """Identical re-proposal: the attempt span is sealed, exit the loop."""
 
@@ -144,6 +173,7 @@ class SliceResult:
     passed: bool
     transcript: str
     proofs: dict[str, str]
+    deadline_hit: bool = False
 
 
 def _utcnow() -> str:
@@ -478,6 +508,7 @@ async def _run_node(
     planned: tuple[str, ...],
     *,
     task_hash: str,
+    deadline: _Deadline | None = None,
 ) -> Proof:
     """Execute one node: propose, apply, gate, seal — with bounded recovery.
 
@@ -502,6 +533,12 @@ async def _run_node(
     last_result: Tier1Result | None = None
     attempt = 0
     while attempt < max_attempts:
+        # The attempt in flight runs to its end and may seal; the next one
+        # is not started past the deadline (T6-9). The give-up path below
+        # then restores the tree exactly as on any other exhaustion.
+        if attempt and deadline is not None and deadline.expired():
+            failure = f"deadline reached after {attempt} of {max_attempts} attempt(s); {failure}"
+            break
         attempt += 1
         start = perf_counter()
         worker_id = uuid.uuid4().hex
@@ -677,9 +714,9 @@ async def _run_node(
     # attempt that failed, so the journal shows when the tree was reset.
     _abandon(workdir, baseline, applied, recorder)
     if last_result is None:
-        detail = f"no proposed diff applied in {max_attempts} attempts"
-        raise NodeUnappliableError(node.id, detail, max_attempts, failure)
-    raise NodeGateFailedError(last_result, max_attempts, failure)
+        detail = f"no proposed diff applied in {attempt} attempts"
+        raise NodeUnappliableError(node.id, detail, attempt, failure)
+    raise NodeGateFailedError(last_result, attempt, failure)
 
 
 def splice_replan(
@@ -880,35 +917,48 @@ def _schedule_until_done(
     proofs: dict[str, str],
     run_span_id: str,
     task_hash: str,
-) -> tuple[Dag, dict[str, BaseException], set[str]]:
+    deadline: _Deadline | None = None,
+) -> tuple[Dag, dict[str, BaseException], set[str], bool]:
     """Run the schedule/replan loop until no node can progress further.
 
     Returns the final DAG (after any replan splices), every node's
-    terminal failure, and the set of node ids replanned away (excused
-    from `failed_unexcused`).
+    terminal failure, the set of node ids replanned away (excused from
+    `failed_unexcused`), and whether the deadline stopped the run (T6-9):
+    a node is not started when the time left is under the median node
+    wall so far, or gone; a node that was skipped for that reason is
+    undispatched, not failed, and nothing is replanned past the deadline.
     """
     remaining = dag
     replanned_from: set[str] = set()
     generated: set[str] = set()
     ever_failed: dict[str, BaseException] = {}
+    deadline_hit = False
 
     async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
+        if deadline is not None and not deadline.room_for_node():
+            raise _DeadlineSkipError(node.id)
         # The scheduler sees a copy with proven dependencies stripped; the
         # proof record must cite every parent, so run the original node.
         original = next(candidate for candidate in remaining.nodes if candidate.id == node.id)
         # From the plan as it stands: a replacement node's ids are planned
         # too, and a replaced node's are not (T3-24).
         planned = planned_requirement_ids(remaining)
-        return await _run_node(
-            original,
-            workdir,
-            journal_path,
-            propose,
-            proofs,
-            run_span_id,
-            planned,
-            task_hash=task_hash,
-        )
+        started = deadline.clock() if deadline is not None else 0.0
+        try:
+            return await _run_node(
+                original,
+                workdir,
+                journal_path,
+                propose,
+                proofs,
+                run_span_id,
+                planned,
+                task_hash=task_hash,
+                deadline=deadline,
+            )
+        finally:
+            if deadline is not None:
+                deadline.walls.append(deadline.clock() - started)
 
     while True:
         ready = _schedulable_nodes(remaining, proofs, ever_failed)
@@ -918,7 +968,12 @@ def _schedule_until_done(
             break
         schedulable = Dag(nodes=ready)
         outcome = asyncio.run(schedule(schedulable, worker))
-        ever_failed.update(outcome.failures)
+        skipped = {n for n, exc in outcome.failures.items() if isinstance(exc, _DeadlineSkipError)}
+        deadline_hit = deadline_hit or bool(skipped)
+        ever_failed.update({n: exc for n, exc in outcome.failures.items() if n not in skipped})
+        if deadline_hit or (deadline is not None and deadline.expired()):
+            deadline_hit = True
+            break
         if replan is None:
             break
         eligible: dict[str, NodeGateFailedError | NodeUnappliableError] = {}
@@ -950,7 +1005,7 @@ def _schedule_until_done(
             progressed = True
         if not progressed:
             break
-    return remaining, ever_failed, replanned_from
+    return remaining, ever_failed, replanned_from, deadline_hit
 
 
 def _merge_gate(
@@ -1002,8 +1057,15 @@ def _seal_run(
     task: str,
     started: str,
     now: Callable[[], str],
+    deadline_hit: bool = False,
 ) -> SliceResult:
-    """Write the run's terminal span and verdict, and render its transcript."""
+    """Write the run's terminal span and verdict, and render its transcript.
+
+    A run the deadline stopped (T6-9) seals exit code 3 and says so in
+    the span, so `verify` and the transcript distinguish "ran out of
+    time" from "failed"; proofs already sealed stay sealed and a later
+    `saddle run` on the same journal resumes them.
+    """
     sealed = {record.node_id: record for record in read_records(journal_path)}
     tools = tool_spans_by_node(read_spans(journal_path))
     transcripts = tuple(
@@ -1018,15 +1080,21 @@ def _seal_run(
     failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
     undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
     passed = not failed_unexcused and not undispatched and merge_exit == 0
+    if deadline_hit:
+        exit_code = DEADLINE_EXIT
+    elif passed:
+        exit_code = 0
+    else:
+        exit_code = 1
     append_span(
         journal_path,
         build_span(
             node_id="",
             argv=[],
             duration_ms=_elapsed_ms(run_start),
-            exit_code=0 if passed else 1,
+            exit_code=exit_code,
             detail=(
-                f"{len(proofs)} proven, "
+                ("deadline: " if deadline_hit else "") + f"{len(proofs)} proven, "
                 f"{len(failed_unexcused)} failed, "
                 f"{len(undispatched)} undispatched"
                 + (f", merge exit {merge_exit}" if merge_ran else "")
@@ -1050,7 +1118,7 @@ def _seal_run(
             journal_path=str(journal_path),
         )
     )
-    return SliceResult(passed=passed, transcript=text, proofs=proofs)
+    return SliceResult(passed=passed, transcript=text, proofs=proofs, deadline_hit=deadline_hit)
 
 
 def run_slice(
@@ -1063,6 +1131,8 @@ def run_slice(
     replan: Replanner | None = None,
     merge_command: str | None = MERGE_COMMAND,
     now: Callable[[], str] = _utcnow,
+    deadline_s: float | None = None,
+    clock: Callable[[], float] = perf_counter,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
@@ -1088,10 +1158,21 @@ def run_slice(
     It runs only if at least one node was proven, seals a tool span named
     `merge-suite` under the run span, and a non-zero exit fails the run
     without revisiting any per-node verdict. `None` disables it.
+
+    With `deadline_s` (T6-9) the run is on a clock: no node is started
+    that the time left cannot fit (median node wall so far), no attempt
+    is started past the deadline, the attempt in flight finishes and may
+    seal, a node that gives up restores its tree as on any other give-up,
+    the merge suite still runs over what was proven, and the run seals
+    exit 3 with `deadline:` in its span. Round 2 twice and round 3's T5
+    ended under an external `timeout` with nothing sealed and a log lost
+    with the process; a deadline saddle can see coming ends with a
+    journal that resumes.
     """
     task_hash = hashlib.sha256(task.encode()).hexdigest()
     started = now()
     run_start = perf_counter()
+    deadline = _Deadline(at=clock() + deadline_s, clock=clock) if deadline_s is not None else None
     run_span_id = uuid.uuid4().hex
     proofs, resumed, reused = _seed_proofs(journal_path, dag, task_hash)
     # What was asked, sealed before anything is done about it (T6-13): a
@@ -1130,7 +1211,7 @@ def run_slice(
                 parent_id=run_span_id,
             ),
         )
-    remaining, ever_failed, replanned_from = _schedule_until_done(
+    remaining, ever_failed, replanned_from, deadline_hit = _schedule_until_done(
         dag,
         replan=replan,
         workdir=workdir,
@@ -1139,6 +1220,7 @@ def run_slice(
         proofs=proofs,
         run_span_id=run_span_id,
         task_hash=task_hash,
+        deadline=deadline,
     )
     merge_exit, merge_ran = _merge_gate(
         merge_command,
@@ -1160,4 +1242,5 @@ def run_slice(
         task=task,
         started=started,
         now=now,
+        deadline_hit=deadline_hit,
     )

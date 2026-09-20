@@ -23,7 +23,7 @@ from saddle.chat import ChatOptions, run_chat
 from saddle.dag import Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
 from saddle.journal import read_entries, read_plans, read_records, read_spans, verify_journal
-from saddle.slice import ReplanFailedError, run_slice
+from saddle.slice import DEADLINE_EXIT, ReplanFailedError, run_slice
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
 from saddle.vllm import (
@@ -151,6 +151,7 @@ class RunOptions:
     yes: bool = False
     context_window: int = DEFAULT_CONTEXT_WINDOW
     recovery_temperature: float | None = None
+    deadline_s: float | None = None
 
 
 def worker_temperature(options: RunOptions, failure: str | None) -> float:
@@ -660,11 +661,14 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             journal_path=options.journal,
             propose=propose,
             replan=replan,
+            deadline_s=options.deadline_s,
         )
     except (ValueError, RuntimeError) as exc:
         stdout.write(f"error: {exc}\n")
         return 1
     stdout.write(result.transcript)
+    if result.deadline_hit:
+        return DEADLINE_EXIT
     return 0 if result.passed else 1
 
 
@@ -875,6 +879,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(REASONING_EFFORTS),
         help="Worker effort override (default: per-node budget).",
     )
+    run.add_argument(
+        "--deadline",
+        type=float,
+        help="Seconds after which no node or attempt starts; the run seals what it has (exit 3).",
+    )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
@@ -974,6 +983,7 @@ def main(
             yes=args.yes,
             context_window=server_context_window(client, args.context_window),
             recovery_temperature=args.recovery_temperature,
+            deadline_s=args.deadline,
         )
         return run_task(
             options,

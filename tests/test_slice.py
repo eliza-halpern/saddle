@@ -1707,6 +1707,153 @@ def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(
     ) in second.transcript
 
 
+class _Ticks:
+    """A clock the test advances: every worker call costs `step` seconds."""
+
+    def __init__(self, step: float) -> None:
+        self.now = 0.0
+        self.step = step
+
+    def __call__(self) -> float:
+        return self.now
+
+    def spend(self) -> None:
+        self.now += self.step
+
+
+def test_run_slice_deadline_seals_what_it_has_and_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (T6-9): two nodes, a deadline that fits one. `n1` runs
+    (one 5 s worker call; its first sample passes), then `n2` is not
+    started: 3 s are left and the median node wall is 5 s. The run seals `n1`'s proof,
+    exits 3 with `deadline:` in its span, leaves the tree holding proven
+    edits only, and a resume with no deadline finishes `n2` and passes.
+    Known-bad, round 2 and round 3 T5: an external `timeout` ended the
+    process with nothing sealed."""
+    _slice_repo(tmp_path)
+    tidy = _node_dict("n2", ["n1"])
+    tidy["kind"] = "refactor"
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", []), tidy]})
+    journal = tmp_path / "proofs.jsonl"
+    ticks = _Ticks(step=5.0)
+    proposed: list[str] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        proposed.append(node.id)
+        ticks.spend()
+        return DiffProposal(GOOD_DIFF if node.id == "n1" else REFACTOR_DIFF, "ok")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+        deadline_s=8.0,
+        clock=ticks,
+    )
+    assert result.deadline_hit is True
+    assert result.passed is False
+    assert list(result.proofs) == ["n1"]
+    assert proposed == ["n1"]
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.exit_code == 3
+    assert run.detail == "deadline: 1 proven, 0 failed, 1 undispatched, merge exit 0"
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
+    assert verify_journal(journal) == []
+    # Resume, no clock: n2 runs on the proven tree and the run passes. Its
+    # mutants sit on the line the refactor writes (as in the T3-8 tests).
+    _refactor_mutmut(tmp_path / "stub", monkeypatch)
+    second = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert second.passed is True, second.transcript
+    assert second.deadline_hit is False
+    assert list(second.proofs) == ["n1", "n2"]
+    assert proposed[1:] == ["n2"]
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.exit_code == 0
+
+
+def test_run_slice_deadline_lets_the_attempt_in_flight_finish_and_seal(tmp_path: Path) -> None:
+    """Known-bad half (T6-9): a node running at the deadline is not killed
+    mid-gate. The deadline (3 s) passes during `n1`'s worker call (5 s);
+    the attempt finishes, its gate passes and its proof is sealed; only
+    then does the run stop, `n2` undispatched, with the deadline recorded."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", []), _node_dict("n2", ["n1"])]})
+    journal = tmp_path / "proofs.jsonl"
+    ticks = _Ticks(step=5.0)
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        ticks.spend()
+        return DiffProposal(GOOD_DIFF, "ok")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+        deadline_s=3.0,
+        clock=ticks,
+    )
+    assert ticks.now == 5.0
+    assert list(result.proofs) == ["n1"]
+    assert result.deadline_hit is True
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.exit_code == 3
+    assert run.detail.startswith("deadline: 1 proven, 0 failed, 1 undispatched")
+
+
+def test_run_slice_deadline_starts_no_retry_and_restores_the_tree(tmp_path: Path) -> None:
+    """T6-9: attempt 1 fails its gate and the deadline has passed, so no
+    recovery attempt is proposed; the node gives up through the ordinary
+    path (T3-23): its diff leaves the worktree, the node counts as failed
+    after one attempt, and nothing is sealed as proven. Three identical
+    samples at 5 s each put the clock at 15 s against a 10 s deadline."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    ticks = _Ticks(step=5.0)
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None) -> DiffProposal:
+        calls.append(failure)
+        ticks.spend()
+        return DiffProposal(BAD_DIFF, "wrong value")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+        deadline_s=10.0,
+        clock=ticks,
+    )
+    assert calls == [None] * PROPOSAL_SAMPLES
+    assert result.proofs == {}
+    assert result.deadline_hit is True
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 1\n"
+    workers = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    assert [w.detail for w in workers] == [
+        "attempt 1/3: 3 gate(s) failed: tests, red-phase, mutation"
+    ]
+    run = [span for span in read_spans(journal) if span.name == "run"][-1]
+    assert run.exit_code == 3
+    assert run.detail == "deadline: 0 proven, 1 failed, 0 undispatched"
+
+
 def test_run_slice_resumed_comment_only_refactor_proves_nothing(tmp_path: Path) -> None:
     """Known-bad (T3-8): the fixture the resume test used to run.
 
