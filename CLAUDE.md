@@ -125,7 +125,7 @@ exist to be load-bearing.
   message: *tightened*, *loosened*, or *scope narrowed*. Unlabelled
   changes drift loose.
 - Never pair a loosening with an unverified compensating tightening.
-  `0cd4042` is titled "Make a non-diff worker response unrepresentable,
+  `7282e1e` is titled "Make a non-diff worker response unrepresentable,
   then retryable". The loosening (fatal → retryable) was real and
   correct; "unrepresentable" was fiction and cost the whole v3 sweep.
 - A claimed guarantee in a commit message is a claim like any other and

@@ -1,7 +1,7 @@
 # Hardening saddle: a research-grounded design note
 
 Status: **draft, pre-registered before the v3 re-run.** Written 2026-09-18
-against harness `fix/gate-integrity @ d7c3a4a`, after the v2 benchmark sweep
+against harness `fix/gate-integrity @ 49864ec`, after the v2 benchmark sweep
 (`../saddle-bench/runs/FINDINGS.md`, F1–F14).
 
 This document exists because the v2 sweep produced a clear diagnosis and no

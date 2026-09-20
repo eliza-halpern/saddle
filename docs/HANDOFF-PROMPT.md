@@ -157,7 +157,7 @@ executor only comments (WORKPLAN T3-5).
 
 Each rule maps to a failure this repo has already had: the "Commit first" and
 "verify the mutation applied" rules are from CLAUDE.md; the scope and
-loosening rules are from commit `0cd4042` and issue #65; the instruction-source
+loosening rules are from commit `7282e1e` and issue #65; the instruction-source
 rule is because a 5,000-line transcript and two recommendation files sit in the
 tree, and a smaller model treats visible prose as guidance. The read order
 puts the rules before the item so the executor meets them before it has a

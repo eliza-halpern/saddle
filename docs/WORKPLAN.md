@@ -5,7 +5,7 @@ executing agent that has **not** read this conversation and may be less capable
 than the author. Each item names the files and lines it may touch, the contract
 in one sentence, the known-good and known-bad instance that pin it, the 1–3
 contract mutants that must die, the evidence it rests on, and the observable
-"done" condition. Line numbers are as of `fix/gate-integrity` HEAD `3669f9a`
+"done" condition. Line numbers are as of `fix/gate-integrity` HEAD `52a0e05`
 (main `a47c911`). If a line number no longer matches its quoted text, **stop and
 report** rather than guess.
 
@@ -401,7 +401,7 @@ depend on — report, do not edit.
 ### T0-11 — Formatter debt
 Files: `CLAUDE.md:65` area, `docs/benchmark-archive.md:~1033-1075`,
 `docs/WORKPLAN.md:164-169` (the code block in T0-3), and
-`tests/test_gates.py:295-298` (the run-order assertion T0-3 added in 71e21c1,
+`tests/test_gates.py:295-298` (the run-order assertion T0-3 added in 27eb9a1,
 which ruff wants one-name-per-line). ruff formats fenced Python blocks in
 Markdown here, so the Markdown files count.
 Contract: `uv run ruff format --check .` exits 0.
@@ -877,7 +877,7 @@ Stop if: `grep -c "passed = not failed_unexcused and not undispatched" src/saddl
 Files: `src/saddle/gates.py` (`GateCheck` at ~:80, `check_changed_line_coverage`
 ~:150-175, `check_mutation` ~:520-560); `src/saddle/journal.py` (`GateOutput`
 ~:28, `build_from_gate` ~:378); `.gitignore` (one exception line);
-`tests/fixtures/pre-basis-proofs.jsonl` (new, generated at d944b08 — see
+`tests/fixtures/pre-basis-proofs.jsonl` (new, generated at 9854b5f — see
 below); `tests/test_gates.py`; `tests/test_journal.py` (two hand-built hash
 payloads plus two new tests); `tests/test_slice.py` (one assertion block in
 the merge-suite known-good test).
@@ -914,7 +914,7 @@ Steps:
    the old hash matches. Two pre-existing tests in `test_journal.py` rebuild
    the payload by hand and now include `"basis": None`.
 4. Fixture: `tests/fixtures/pre-basis-proofs.jsonl` is a journal produced by
-   the slice fixture at d944b08 (one proof record, no `basis` keys). It is
+   the slice fixture at 9854b5f (one proof record, no `basis` keys). It is
    the known-good for the compatibility half and must never be regenerated.
    `.gitignore` ignores `*.jsonl`; the exception `!tests/fixtures/*.jsonl` is
    part of this item. (The benchmark journals in `../saddle-bench/runs/`
@@ -1124,7 +1124,7 @@ Passing instance at HEAD: `test_run_node_gate_end_to_end_pass` (the `impl` mutat
 Dry run: not run.
 
 ### T3-4 — Bind `allowed_tools` to harness behaviour (RUN_ALLOWLIST stops being decorative)
-Status 2026-09-18: DONE — a700aa7 (executor, session 19) plus the reviewer's
+Status 2026-09-18: DONE — dbf8062 (executor, session 19) plus the reviewer's
 follow-up commit below. Landed as specified, with these differences from the
 text that follows: `build_worker_prompt` replaces the context block with
 `CONTENTS_WITHHELD` rather than emptying `contents` (`run_task` still reads
@@ -1135,7 +1135,7 @@ that resolves to no binding (git, mutmut) is kept; `check_node_scope`'s
 default. Reviewer re-ran the committed table's three mutants and two more
 (`"ruff": "lint"` → `"run_tests"`; `run_tier1`'s `may_create=` → `True`):
 all five KILLED, tree hash identical after each revert, caches dropped;
-`./check.sh` green at a700aa7 (558 passed, 100%). Process defect, reported
+`./check.sh` green at dbf8062 (558 passed, 100%). Process defect, reported
 by the executor itself: the commit message's mutant table was written
 before the mutants ran (HANDOFF-PROMPT forbids this); every recorded
 verdict was then reproduced, first by the executor and then here.
@@ -1247,10 +1247,10 @@ Files: none in the repo. Write the drafts to `../saddle-notes/issue-comments.md`
 (outside the repo; the human posts them). Read only the commits named below
 via `git show --stat <sha>` and `src/saddle/slice.py` `_apply_diff` (~:136,
 for the `--recount` claim).
-- #66: fixed by `21c179e` ("Fix mechanically what ruff can fix, before the
+- #66: fixed by `693d766` ("Fix mechanically what ruff can fix, before the
   worker is asked to") — propose closing with that SHA.
 - #51: superseded by #64 — propose closing #51 with a pointer.
-- #61: the grammar landed in `3669f9a`; the issue's remaining question is
+- #61: the grammar landed in `52a0e05`; the issue's remaining question is
   whether the CFG stops the exit-128 corrupt-patch failure. It cannot by
   construction (a CFG cannot enforce hunk-header line counts, audit §9), so
   #61 stays open pending T4-1's measurement and a decision between (i)
@@ -1457,8 +1457,8 @@ suite failed with `ModuleNotFoundError: No module named 'src'` although
 the same tree passes `python -m pytest -q` (6 passed). Confirmed working:
 T3-7a on the live path, T3-8 (every span names `refs/saddle/baseline/<node>`,
 none `HEAD`), non-vacuous sampling, journal chain integrity.
-Rerun (session 20b), after T3-17..T3-21 landed (5014996, bf7c645 +
-3ce1100, ee2bf84, b887d30, 221fc1b): same task, same scratch-repo shape in
+Rerun (session 20b), after T3-17..T3-21 landed (6d43dd1, 3938d32 +
+8ee25cc, 12ab1ed, 44c2538, 15a349f): same task, same scratch-repo shape in
 a FRESH `/tmp/saddle-smoke` (delete the old one first), same record shape,
 written to a NEW directory `../saddle-bench/runs/smoke-2026-09-19b/` —
 never overwrite the first record. Expected: `N proven, 0 failed, 0
@@ -1502,8 +1502,8 @@ attempt 1 cannot be recovered from the record (the seal keeps a count) →
 T3-25. Also seen: `.coverage.tier1` is left untracked in the repo under
 test after the run (evidence.py ~:323 keeps it out of the tree by design;
 no item).
-Rerun (session 20c), after the 20b findings landed — T3-23 `c306b6d`,
-T3-25 `44e68f0`, T3-24 `879a837`, T3-12 `0bd08ad` + `a2dd63a` (each must
+Rerun (session 20c), after the 20b findings landed — T3-23 `ae29677`,
+T3-25 `ae9339f`, T3-24 `9b65f2a`, T3-12 `1efcc57` + `321d180` (each must
 be an ancestor of HEAD; record the harness commit): same task, same
 scratch-repo shape in a FRESH `/tmp/saddle-smoke` (delete the 20b
 leftovers first), same record shape, written to a NEW directory
@@ -1519,7 +1519,7 @@ the test node's file); R3 → T3-12 (the worker prompt names the node's
 `target_files`; no file outside any node's list appears in the worktree);
 R4 → T3-25 (any failed attempt's seal reads `attempt i/N: k gate(s)
 failed: <names>`). Also record whether the planner obeyed the four rules
-`a2dd63a` added: the test node's spec cites every node's id, its
+`321d180` added: the test node's spec cites every node's id, its
 `target_files` names every test file, no package named `src`. Known open
 at run time: nothing in the gates; a planner that ignores the cite rule
 fails the impl node with `unbound requirements: REQ-00n` — record that as
@@ -1529,7 +1529,7 @@ Third outcome (session 20c, 2026-09-19; record
 on the journal: 2 proofs, 65 spans, chain verifies): **known-good** —
 `2 proven, 0 failed, 0 undispatched, merge exit 0`, run exit 0, 230 s
 wall, `saddle verify` → `Verdict: PASS`. The first run of this item to
-meet its known-good. Harness `a2dd63a`. Same split, `node-1` (test) →
+meet its known-good. Harness `321d180`. Same split, `node-1` (test) →
 `node-2` (impl), both declaring `REQ-001, REQ-002`; `node-1` proved first
 attempt, `node-2` on attempt 2 after `attempt 1/3: 1 gate(s) failed:
 mutation` (R4 → T3-25 confirmed verbatim); 3 of 3 `git apply` clean.
@@ -1567,7 +1567,7 @@ exit code); the reviewer adds the outcome to this item's Status line.
 Contract: none — this is a measurement of whether the path every later item
 is built on executes at all: planner emission → worker diff under the EBNF
 grammar → Tier-1 gates → merge-suite. It exists because no run has happened
-since `3669f9a`, the audit (§8) says the corrupt-patch class is still
+since `52a0e05`, the audit (§8) says the corrupt-patch class is still
 representable under the grammar, and T3-7 was found by an executor building
 a fixture, not by anyone running the harness. The next premise error of that
 kind is cheapest to find here, before T3-3 and T3-9..T3-11 are written
@@ -1581,7 +1581,7 @@ key in `SADDLE_VLLM_API_KEY`, user present; no source edits during the run.
 Direction: none (no code change).
 Evidence: VERIFIED — the T3-8 probe (its Evidence paragraph) shows the
 second node's gates reading the first node's staged diff; T3-7 shows the
-test path unexecutable at `a700aa7`.
+test path unexecutable at `dbf8062`.
 Issue: none.
 Steps:
 1. A scratch repo outside this checkout (`/tmp/saddle-smoke`): `git init`,
@@ -1612,7 +1612,7 @@ Passing instance at HEAD: none — that is the point of the run.
 Dry run: not applicable.
 
 **Audit 2026-09-18 (post T3-2), items T3-8 – T3-16.** An audit of the T2-2,
-T3-1 (`295fbd0`) and T3-2 (`a6c1a68`) changes found nine things no later
+T3-1 (`c93cdab`) and T3-2 (`f262521`) changes found nine things no later
 item covers (T3-7 above is a separate finding from the T3-3 session).
 Ranked: **Major** — T3-8 (every node after the first is gated
 against `HEAD`, not its own baseline), T3-9 (a proof record names neither
@@ -1621,7 +1621,7 @@ looks at the worktree); **Medium** — T3-11 (replacement ids across resume),
 T3-12 (the planner prompt contradicts the gates), T3-13 (`target_files`
 admits spellings the gate can never match); **Minor** — T3-14 (rename case
 untested), T3-15 (docs drift), T3-16 (three consistency fixes). Anchors are
-as of `4b25506`. T3-4 owns `check_node_scope` and `run_tier1`; nothing
+as of `15e5c3e`. T3-4 owns `check_node_scope` and `run_tier1`; nothing
 below edits them.
 
 ### T3-8 — Gate every node against its own baseline, not `HEAD` (Major)
@@ -1777,12 +1777,12 @@ Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__
 Done when: mutants red; `./check.sh` green; `git for-each-ref refs/saddle/`
 after the two-node test lists two refs.
 Stop if: `_run_node` already commits between nodes on this branch (it does
-not at `4b25506`), or `git diff --name-only <ref>` fails to list a staged
+not at `15e5c3e`), or `git diff --name-only <ref>` fails to list a staged
 new file (it lists it: tracked-ness comes from the index, not the ref).
 Passing instance at HEAD: `test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs`
 (two nodes through `run_slice` and `_run_node` across two runs) and
 `test_run_node_gate_target_files_binds_end_to_end` (the `target-scope` path).
-Dry run: not run (the probe fixture was run in a scratch copy at `4b25506`, not the fix).
+Dry run: not run (the probe fixture was run in a scratch copy at `15e5c3e`, not the fix).
 
 ### T3-9 — A proof record names the task and the node it proves (Major)
 Files: `src/saddle/journal.py` (`ProofRecord` ~:41: four new fields;
@@ -1986,7 +1986,7 @@ through `splice_replan` and back into the loop).
 Dry run: not run.
 
 ### T3-12 — The planner prompt says what the gates enforce (Medium)
-Status 2026-09-19: DONE in two commits. 0bd08ad (executor, session 27)
+Status 2026-09-19: DONE in two commits. 1efcc57 (executor, session 27)
 landed steps 1–3 exactly as written: both sentences present, `never use
 "/"` absent, mutants 1–2 red (reviewer re-ran both at HEAD), check.sh
 632/100%. The executor declined the four "Added 2026-09-19" rules below
@@ -2053,13 +2053,13 @@ starts with "src.", which is invalid`) and the mutation gate then fails
 with no mutants decided (T3-20 makes that failure name itself). Known-bad
 for both: the smoke record's `dag.txt`.
 Added 2026-09-19 (smoke rerun 20b, R2 and R3; after T3-24 landed as
-879a837): two more. (3) A `test` node's specification cites, on its tests,
+9b65f2a): two more. (3) A `test` node's specification cites, on its tests,
 the requirement ids of every node it specifies — the impl node that makes
 it pass declares its own id and the binding gate's unbound half requires
 some test to cite it; in 20b `node-1`'s `test_n.py` cited `REQ-001` only,
 so with T3-24 in place `node-2` (`REQ-002`) would now fail "unbound
 requirements: REQ-002" instead of the orphan it failed then. Citing an id
-another node of the plan declares is allowed since 879a837; citing one no
+another node of the plan declares is allowed since 9b65f2a; citing one no
 node declares is not. (4) `target_files` of a `test` node names every
 test file it will write, and the worker is told the gate rejects any
 other — `node-2` in 20b wrote a second file `test_n_req002.py` that no
@@ -2135,13 +2135,13 @@ Passing instance at HEAD: `test_git_added_files_lists_staged_adds_and_ignores_un
 Dry run: not run.
 
 ### T3-15 — Docs and docstrings say what landed (Minor, docs-only)
-Status 2026-09-19: DONE — aff70c3 (executor, session 27). The four edits
+Status 2026-09-19: DONE — 61eea7d (executor, session 27). The four edits
 as specified; gate 6 also carries the "no kind adds files without
-`write_file`" clause since T3-4 (a700aa7) had landed. `run_tier1`'s
+`write_file`" clause since T3-4 (dbf8062) had landed. `run_tier1`'s
 docstring already said eleven at HEAD. The item's grep still matches
 `gates.py:510` ("is exempt" in assertion-preservation's note), which is not
 one of the three targets. Open: the T3-8 addendum below, whose wording is
-now stale — since T3-24 (879a837) the orphan half excludes every id the
+now stale — since T3-24 (9b65f2a) the orphan half excludes every id the
 plan declares. ARCHITECTURE's Requirement Binding item (:179, which also
 said "failing-pre/passing-post test") was rewritten in the main session's
 T3-12 follow-up commit; the addendum below is closed by it.
@@ -2179,10 +2179,10 @@ Dry run: n/a (docs-only).
 Added 2026-09-19 (T3-8 finding): ARCHITECTURE's Requirement Binding item should say the check is suite-granular — citations are read from every discovered test source, not from the node's scoped command, so a plan with two test modules must declare every `REQ-` id either module cites on every node whose gate can see it (see `_declares_both_requirements` in `tests/test_slice.py`).
 
 ### T3-16 — Three consistency fixes (Minor)
-Status 2026-09-19: DONE — aaca5a0 (executor, session 27). (a) union
+Status 2026-09-19: DONE — bbcc961 (executor, session 27). (a) union
 removed after the staged-new-file test passed both with and without it;
 (b) `entry is entries[-1]`, two tail tests; (c) already correct at HEAD
-(7035a29 had reworded the T3-2 paragraph), no edit. Reviewer re-ran both
+(dc82327 had reworded the T3-2 paragraph), no edit. Reviewer re-ran both
 mutants at HEAD (2 failed each) and check.sh: 632 passed, 100%.
 Files: `src/saddle/runner.py:128-130` (`touched` and its comment);
 `src/saddle/cli.py` (`run_tail` loop ~:561-577); `src/saddle/transcript.py`
@@ -2215,7 +2215,7 @@ Evidence: (a) VERIFIED — `git diff HEAD --name-only` lists a file added with
 `git add` (git's tracked-set semantics; the T3-2 end-to-end test exercises
 a staged new file only through `added`). (b) VERIFIED by reading —
 `cli.py:574` returns inside the `for entry in entries[shown:]` loop at the
-first `is_run_end`. (c) VERIFIED — `dag_json_schema()` run at `4b25506`
+first `is_run_end`. (c) VERIFIED — `dag_json_schema()` run at `15e5c3e`
 prints `{'items': {'minLength': 1, 'type': 'string'}, ...}` for the field.
 Issue: none.
 Steps: (a) the test, then the one-line change and its comment at `:128-129`;
@@ -2294,7 +2294,7 @@ Dry run: not run.
 
 ### T3-18 — The diff grammar requires the `---`/`+++` lines before a hunk (Major; container)
 Status 2026-09-19: DONE. Grammar edit, structural test and the tool's
-reject entry landed by the executor (bf7c645, session 36); the reviewer
+reject entry landed by the executor (3938d32, session 36); the reviewer
 re-ran four mutants, all KILLED (`from to` dropped from `section`;
 `"--- " | "+++ "` back in `meta_pfx`; the reject entry deleted from the
 tool; `REJECT_AT` off by one). Container half run by the user against the
@@ -2350,7 +2350,7 @@ Passing instance at HEAD: the 40-diff accept set in the tool.
 Dry run: not run.
 
 ### T3-19 — The planner is shown the repository it is planning for (Major)
-Status 2026-09-19: DONE by the reviewer (ee2bf84). `build_emit_prompt(task,
+Status 2026-09-19: DONE by the reviewer (12ab1ed). `build_emit_prompt(task,
 files=())` lists the tracked files (capped like the worker prompt) and
 states the existing-file rule; `_emit_valid_dag(..., files=)` is fed from
 `run_task`, the replan path and `run_dag`; `saddle dag --repo` (default
@@ -2387,7 +2387,7 @@ Passing instance at HEAD: `test_emit_prompt_asks_for_the_test_impl_split`.
 Dry run: not run.
 
 ### T3-20 — A failed `mutmut run` names itself (Medium)
-Status 2026-09-19: DONE by the reviewer (b887d30). `mutation_sample` binds
+Status 2026-09-19: DONE by the reviewer (44c2538). `mutation_sample` binds
 the `mutmut run` capture; an exit other than 0 or `SHELL_TIMEOUT` returns
 `survivors=("mutmut run exited N: <last output line>",)` before `results`
 is read (mutmut exits 0 with survivors — checked on a real run, so
@@ -2428,7 +2428,7 @@ Passing instance at HEAD: `test_run_node_gate_full_sample_catches_what_a_small_c
 Dry run: not run.
 
 ### T3-21 — `saddle verify` cannot call a failed run PASS (Medium)
-Status 2026-09-19: DONE by the reviewer (221fc1b). The last `run` span's
+Status 2026-09-19: DONE by the reviewer (15a349f). The last `run` span's
 exit governs when one exists (`run_ok`); a journal with no run span keeps
 the proof-only verdict, so the golden fixture and a live `tail` are
 unchanged — a deliberate narrowing of the item's "no run span → FAIL",

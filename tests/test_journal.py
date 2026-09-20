@@ -147,7 +147,7 @@ PRE_BASIS_JOURNAL = Path(__file__).parent / "fixtures" / "pre-basis-proofs.jsonl
 def test_pre_basis_journal_still_verifies(tmp_path: Path) -> None:
     """A journal sealed before GateOutput.basis existed keeps its hash.
 
-    The fixture was generated at d944b08 by the slice fixture and must not
+    The fixture was generated at 9854b5f by the slice fixture and must not
     be regenerated: its records carry no `basis` key, so the field parses
     unset and the verification payload (exclude_unset=True) omits it,
     reproducing the hash that was sealed at the time (T2-4, known-good for
