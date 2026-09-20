@@ -1322,13 +1322,25 @@ for the `--recount` claim).
 - #23, #17: unchanged; both are future-facing.
 
 ### T3-6 — `slice.py` decomposition (optional, no contract change)
-Files: `src/saddle/slice.py` (`run_slice`, ~:580-720); `tests/test_slice.py`
-(read as the oracle; do not edit).
-`run_slice` is now ~130 lines with the resume seed (T3-1), the replan loop,
-the merge gate (T2-3), sealing and the verdict inline. Split into
+Files: `src/saddle/slice.py` (`run_slice`, :764-960 at e305e8c);
+`tests/test_slice.py` (read as the oracle; do not edit).
+`run_slice` is now ~195 lines with the resume seed (T3-1/T3-9/T3-10,
+:804), the replan loop (:860-895, `taken=` since T3-11), the merge gate
+(T2-3, :898), sealing and the verdict inline. Split into
 `_schedule_until_done`, `_merge_gate`, `_seal_run`.
 Pure refactor: the existing `tests/test_slice.py` is the oracle; no new
 tests; no mutants; commit labelled "refactor, no contract change".
+Pre-verified 2026-09-19 by the reviewer against e305e8c. Constraints the
+oracle pins, so the split must keep them: the tests import
+`_apply_diff`, `_HaltRecoveryError`, `_run_node`, `_schedulable_nodes`
+and `_utcnow` by name (keep those names and signatures); they
+monkeypatch `slice_module.perf_counter`, `append_span` and
+`append_record` (the new helpers must call those through the module's
+globals, as `run_slice` does now -- do not bind them as defaults or
+import them locally); and several tests pin the exact `git`/agent span
+sequence, so the order of subprocess and span calls must not move
+across helper boundaries. Done when: `git diff --stat` touches
+`src/saddle/slice.py` only and `./check.sh` is green at 100%.
 
 ### T3-7 — A `test`-kind node cannot pass Tier-1 (finding; decision needed)
 Files: none to edit until decided. Read `src/saddle/gates.py`
