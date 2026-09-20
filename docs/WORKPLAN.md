@@ -123,9 +123,20 @@ Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
 T6-22 to T6-26 done → T6-27 with T6-30 (main session) → T6-28 (executor,
 metrics sampler) → T6-3 with T6-31 (main session) → T6-29 measure-first
 probe (executor) → T6-29 (main session) → round 3e, one T5 seed → T6-1
-→ T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
+→ T6-2 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
+T6-3 sits before round 3e rather than after T6-1 with T6-2: it is a
+round-3e blocker in T6-31's class, where T6-2 is not. A node failed for
+lint its own baseline carried burns an attempt for a non-reason, and the
+sidecar cannot say which (T6-3's F21.12c; T6-31's F21.13d, ruff 2/2 in
+round 3d). T6-2 cannot cost an attempt today --
+`git_added_files` counts staged adds only, so generated artefacts never
+reach `touched_files`, and `check_target_files` is one-directional, so a
+declared `.pyc` is inert. It guards a node *passing*, not failing.
+T6-1 row 6a is therefore a post-hoc confirmation of T6-3, scored against
+runs 1-13 as before, and row 6b the same for T6-2: both keep their slot
+after the retro on priority, not dependency (line 109 stands).
 Contract changes stay in the main session; executors take docs,
 fixtures and measurement.
 
