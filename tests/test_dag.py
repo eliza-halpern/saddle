@@ -471,23 +471,46 @@ def test_node_kind_is_constrained_to_the_three_kinds() -> None:
 
 
 def test_target_files_default_empty_and_repo_relative_accepted() -> None:
-    """Known-good (T3-2): the field is optional and plain repo-relative POSIX
-    paths, including nested ones, are representable."""
+    """Known-good (T3-2, widened T3-13): the field is optional and plain
+    repo-relative POSIX paths, including nested ones and a dotfile-led
+    segment that is not a bare '.' segment, are representable."""
     plain = Node.model_validate(_node("n1"))
     assert plain.target_files == []
     node = _node("n1")
-    node["target_files"] = ["n.py", "src/app/login.py", "tests/test_login.py"]
+    node["target_files"] = [
+        "n.py",
+        "src/app/login.py",
+        "tests/test_login.py",
+        ".github/x.yml",
+    ]
     assert Node.model_validate(node).target_files == [
         "n.py",
         "src/app/login.py",
         "tests/test_login.py",
+        ".github/x.yml",
     ]
 
 
-@pytest.mark.parametrize("bad", ["/etc/passwd", "../n.py", "src/../n.py", "src\\n.py", " n.py", ""])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/etc/passwd",
+        "../n.py",
+        "src/../n.py",
+        "src\\n.py",
+        " n.py",
+        "",
+        "./n.py",
+        "a//b.py",
+        "src/./x.py",
+        "dir/",
+    ],
+)
 def test_target_files_rejects_escapes_and_absolute_paths(bad: str) -> None:
-    """Known-bad (T3-2): anything that could name a file outside the repo,
-    or that is not a clean POSIX path, is refused at validation."""
+    """Known-bad (T3-2, widened T3-13): anything that could name a file
+    outside the repo, is not a clean POSIX path, or contains an empty or
+    '.' segment that the gate's exact-string match could never see again
+    as the node's own file, is refused at validation."""
     node = _node("n1")
     node["target_files"] = [bad]
     with pytest.raises(ValidationError):

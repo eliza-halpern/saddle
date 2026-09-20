@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -128,12 +127,14 @@ class Node(BaseModel):
     def _repo_relative_posix(cls, paths: list[str]) -> list[str]:
         for path in paths:
             if (
-                path.startswith("/")
-                or "\\" in path
+                "\\" in path
                 or path != path.strip()
-                or ".." in PurePosixPath(path).parts
+                or any(segment in ("", ".", "..") for segment in path.split("/"))
             ):
-                msg = f"target_files entry {path!r} must be a repo-relative POSIX path without '..'"
+                msg = (
+                    f"target_files entry {path!r} must be a repo-relative POSIX path "
+                    "without empty, '.' or '..' segments"
+                )
                 raise ValueError(msg)
         return paths
 
