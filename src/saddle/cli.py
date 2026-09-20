@@ -150,6 +150,25 @@ class RunOptions:
     worker_effort: str | None = None
     yes: bool = False
     context_window: int = DEFAULT_CONTEXT_WINDOW
+    recovery_temperature: float | None = None
+
+
+def worker_temperature(options: RunOptions, failure: str | None) -> float:
+    """The temperature a worker diff call samples at (T6-15).
+
+    First attempts use `sample_temperature`; retries use it too unless
+    `recovery_temperature` is given. Until T6-15 a retry dropped to
+    `temperature` (0.0 by default) for a reproducible repair (T2-1); F21.10
+    arm (c) measured that: three seeds at 0.0 were one byte-identical
+    sample and truncated 3/3, and a retry that resends a greedy walk after
+    a degenerate one walks the same way. `temperature` still governs
+    planning and the recovery-plan prose.
+    """
+    if failure is None:
+        return options.sample_temperature
+    if options.recovery_temperature is not None:
+        return options.recovery_temperature
+    return options.sample_temperature
 
 
 @dataclass(frozen=True)
@@ -612,7 +631,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         return client.propose_diff(
             prompt,
             max_tokens=worker_max_tokens(prompt, options.context_window),
-            temperature=options.sample_temperature if failure is None else options.temperature,
+            temperature=worker_temperature(options, failure),
             reasoning_effort=effort,
         )
 
@@ -838,7 +857,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--sample-temperature",
         type=float,
         default=0.7,
-        help="Temperature for first-attempt worker samples (recovery uses --temperature).",
+        help="Temperature for worker diff samples, first attempt and retries alike.",
+    )
+    run.add_argument(
+        "--recovery-temperature",
+        type=float,
+        help="Temperature for retry diff samples (default: --sample-temperature).",
     )
     run.add_argument(
         "--reasoning-effort",
@@ -949,6 +973,7 @@ def main(
             worker_effort=args.worker_effort,
             yes=args.yes,
             context_window=server_context_window(client, args.context_window),
+            recovery_temperature=args.recovery_temperature,
         )
         return run_task(
             options,

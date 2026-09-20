@@ -27,7 +27,7 @@ PLAN_PROMPT = "Plan a two-node DAG that adds input validation to the login form.
 
 
 def _ok_body(
-    *, content: str, reasoning: Any = "decomposing the task...", finish_reason: Any = "stop"
+    *, content: str | None, reasoning: Any = "decomposing the task...", finish_reason: Any = "stop"
 ) -> dict[str, Any]:
     message: dict[str, Any] = {"role": "assistant", "content": content}
     if reasoning is not None:
@@ -225,11 +225,26 @@ def test_emit_malformed_envelopes_raise() -> None:
         ({"choices": [None]}, "first choice is not an object"),
         ({"choices": [{}]}, "first choice has no message object"),
         ({"choices": [{"message": None}]}, "first choice has no message object"),
-        ({"choices": [{"message": {}}]}, "message has no text content"),
-        ({"choices": [{"message": {"content": None}}]}, "message has no text content"),
-        ({"choices": [{"message": {"content": 7}}]}, "message has no text content"),
-        ({"choices": [{"message": {"content": ""}}]}, "message has no text content"),
-        ({"choices": [{"message": {"content": "   "}}]}, "message has no text content"),
+        (
+            {"choices": [{"message": {}}]},
+            "message has no text content (finish_reason=unknown, 0 reasoning chars)",
+        ),
+        (
+            {"choices": [{"message": {"content": None}}]},
+            "message has no text content (finish_reason=unknown, 0 reasoning chars)",
+        ),
+        (
+            {"choices": [{"message": {"content": 7}}]},
+            "message has no text content (finish_reason=unknown, 0 reasoning chars)",
+        ),
+        (
+            {"choices": [{"message": {"content": ""}}]},
+            "message has no text content (finish_reason=unknown, 0 reasoning chars)",
+        ),
+        (
+            {"choices": [{"message": {"content": "   "}}]},
+            "message has no text content (finish_reason=unknown, 0 reasoning chars)",
+        ),
         (
             {"choices": [{"message": {"content": "{oops"}}]},
             "content is not valid JSON: Expecting property name enclosed in double "
@@ -288,7 +303,35 @@ def test_diff_missing_or_blank_content_fails() -> None:
         client, _ = _json_client(_ok_body(content=content))
         with pytest.raises(VllmResponseError, match="no text content") as exc_info:
             client.propose_diff("Do x.")
-        assert str(exc_info.value) == "message has no text content"
+        assert str(exc_info.value) == (
+            "message has no text content (finish_reason=stop, 23 reasoning chars)"
+        )
+
+
+def test_no_content_response_names_itself_and_keeps_the_reasoning() -> None:
+    """T6-18 known-good (F21.10 b-s2): `content: null`, `finish_reason:
+    "stop"`, a long think block cut mid-word. The error says what happened
+    and carries the reasoning, usage, cap and finish reason out, like a
+    truncation does (T6-12). Known-bad: the bare message with the reasoning
+    discarded, which is what every such response got before."""
+    reasoning = "x" * 45428
+    body = _ok_body(content=None, reasoning=reasoning, finish_reason="stop")
+    body["usage"] = {
+        "completion_tokens": 12436,
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    }
+    client, _ = _json_client(body)
+    with pytest.raises(VllmResponseError) as info:
+        client.propose_diff("Do x.", max_tokens=20256)
+    exc = info.value
+    assert str(exc) == "message has no text content (finish_reason=stop, 45428 reasoning chars)"
+    assert (exc.reasoning, exc.content, exc.finish_reason, exc.max_tokens) == (
+        reasoning,
+        "",
+        "stop",
+        20256,
+    )
+    assert exc.usage == {"completion_tokens": 12436, "reasoning_tokens": 0}
 
 
 def test_complete_posts_unguided_payload_and_returns_prose() -> None:
@@ -330,7 +373,10 @@ def test_complete_blank_content_and_truncation_raise() -> None:
     blank, _ = _json_client(_ok_body(content="  "))
     with pytest.raises(VllmResponseError, match="no text content") as exc_info:
         blank.complete("Do x.")
-    assert str(exc_info.value) == "message has no text content"
+    assert (
+        str(exc_info.value)
+        == "message has no text content (finish_reason=stop, 23 reasoning chars)"
+    )
     cut, _ = _json_client(_ok_body(content="half", finish_reason="length"))
     with pytest.raises(VllmResponseError, match="truncated") as cut_info:
         cut.complete("Do x.")

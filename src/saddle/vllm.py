@@ -384,8 +384,24 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
         raise VllmResponseError(msg)
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        msg = "message has no text content"
-        raise VllmResponseError(msg)
+        # T6-18 (F21.10 b-s2): HTTP 200, `finish_reason: "stop"`, `content:
+        # null`, 45k chars of reasoning cut mid-word. The think block ran
+        # out and the turn ended with nothing emitted. Name it, and carry
+        # the reasoning out so the attempt sidecar shows what happened.
+        reasoning = _text_or_empty(message.get("reasoning"))
+        raw_finish = first.get("finish_reason")
+        finish = raw_finish if isinstance(raw_finish, str) else ""
+        msg = (
+            "message has no text content"
+            f" (finish_reason={finish or 'unknown'}, {len(reasoning)} reasoning chars)"
+        )
+        raise VllmResponseError(
+            msg,
+            reasoning=reasoning,
+            usage=_usage(data),
+            max_tokens=max_tokens,
+            finish_reason=finish,
+        )
     # vLLM 0.28 surfaces the think block as `reasoning` (not `reasoning_content`).
     raw_reasoning = message.get("reasoning")
     reasoning = raw_reasoning if isinstance(raw_reasoning, str) else ""

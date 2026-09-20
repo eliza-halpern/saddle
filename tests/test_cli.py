@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -52,6 +53,7 @@ from saddle.journal import (
     SpanRecord,
     append_record,
     append_span,
+    attempt_sidecar_path,
     build_record,
     build_span,
     read_records,
@@ -828,6 +830,12 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
 def test_run_task_sample_temperature_routes_first_attempt_vs_recovery(
     tmp_path: Path,
 ) -> None:
+    """flip (T6-15, F21.10 arm (c)): this test pinned T2-1's greedy recovery
+    -- a retry diff at `--temperature`, 0.0 by default. Three seeds at 0.0
+    were one byte-identical sample and truncated 3/3, so a retry after a
+    degenerate attempt walked the same way. Retries now sample at
+    `--sample-temperature` unless `--recovery-temperature` is given; the
+    recovery-plan prose still runs at `--temperature`."""
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     bad = DIFF.replace("+    return 2\n", "+    return 3\n")
@@ -856,7 +864,43 @@ def test_run_task_sample_temperature_routes_first_attempt_vs_recovery(
     assert first_attempt
     assert recovery
     assert all(c["temperature"] == 0.9 for c in first_attempt)
-    assert all(c["temperature"] == 0.3 for c in recovery)
+    assert all(c["temperature"] == 0.9 for c in recovery)
+    plan = next(c for c in seen if "Diagnose the root cause" in _prompt(c))
+    assert plan["temperature"] == 0.3
+
+
+def test_run_task_recovery_temperature_flag_sets_the_retry_temperature(tmp_path: Path) -> None:
+    """T6-15 known-good: `--recovery-temperature 0.4` is what retry diff
+    calls sample at; first attempts keep `--sample-temperature`. Known-bad:
+    the old routing (retries at `--temperature`, 0.3 here) is gone."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    bad = DIFF.replace("+    return 2\n", "+    return 3\n")
+    fix = (
+        "diff --git a/n.py b/n.py\n"
+        "--- a/n.py\n"
+        "+++ b/n.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def f():\n"
+        "-    return 3\n"
+        "+    return 2\n"
+    )
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(bad),
+        _text_response("1. Change the return value.\n"),
+        _diff_response(fix),
+    ]
+    options = _options(tmp_path, temperature=0.3, sample_temperature=0.9, recovery_temperature=0.4)
+    code, _out = _run(options, _scripted_client(script, seen))
+    assert code == 0
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    recovery = [c for c in diff_calls if "The previous attempt failed" in _prompt(c)]
+    first_attempt = [c for c in diff_calls if c not in recovery]
+    assert recovery
+    assert all(c["temperature"] == 0.4 for c in recovery)
+    assert all(c["temperature"] == 0.9 for c in first_attempt)
+    assert not any(c["temperature"] == 0.3 for c in diff_calls)
 
 
 def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
@@ -1339,6 +1383,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "context_window": None,
         "temperature": 0.0,
         "sample_temperature": 0.7,
+        "recovery_temperature": None,
         "reasoning_effort": "medium",
         "worker_effort": None,
         "yes": False,
@@ -1379,6 +1424,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "context_window": None,
         "temperature": 0.5,
         "sample_temperature": 0.9,
+        "recovery_temperature": None,
         "reasoning_effort": "low",
         "worker_effort": "xhigh",
         "yes": True,
@@ -1399,6 +1445,7 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--context-window CONTEXT_WINDOW]\n"
         "                  [--temperature TEMPERATURE]\n"
         "                  [--sample-temperature SAMPLE_TEMPERATURE]\n"
+        "                  [--recovery-temperature RECOVERY_TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  [--worker-effort {none,low,medium,xhigh}] [--yes]\n"
         "                  task\n"
@@ -1420,8 +1467,11 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --temperature TEMPERATURE\n"
         "                        Sampling temperature.\n"
         "  --sample-temperature SAMPLE_TEMPERATURE\n"
-        "                        Temperature for first-attempt worker samples (recovery\n"
-        "                        uses --temperature).\n"
+        "                        Temperature for worker diff samples, first attempt and\n"
+        "                        retries alike.\n"
+        "  --recovery-temperature RECOVERY_TEMPERATURE\n"
+        "                        Temperature for retry diff samples (default: --sample-\n"
+        "                        temperature).\n"
         "  --reasoning-effort {none,low,medium,xhigh}\n"
         "                        Emission reasoning effort.\n"
         "  --worker-effort {none,low,medium,xhigh}\n"
@@ -2415,6 +2465,69 @@ def _truncated_response() -> httpx.Response:
         "model": "m",
     }
     return httpx.Response(200, json=body)
+
+
+def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any]:
+    """The attempt sidecar a span seals, checked against its hash (T6-12)."""
+    path = attempt_sidecar_path(journal, span.span_id)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == span.attempt_hash
+    loaded: dict[str, Any] = json.loads(path.read_bytes())
+    return loaded
+
+
+def _no_content_response(reasoning: str) -> httpx.Response:
+    """F21.10 b-s2: HTTP 200, `finish_reason: "stop"`, `content: null`, all reasoning."""
+    body = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": None, "reasoning": reasoning},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"completion_tokens": 12436, "completion_tokens_details": {"reasoning_tokens": 0}},
+        "model": "m",
+    }
+    return httpx.Response(200, json=body)
+
+
+def test_run_task_no_content_response_is_a_named_failure_with_its_reasoning_kept(
+    tmp_path: Path,
+) -> None:
+    """T6-18 known-good (F21.10 b-s2): a worker response with no content
+    fails the attempt with a message that says so, the run retries, and
+    the attempt's sidecar holds the reasoning that ran out. Known-bad was
+    the bare "message has no text content" with the think block discarded."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    silent_first = PROPOSAL_SAMPLES + 1
+    thinking = "3. Third-party imports\n4. Local/fir"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if not _is_diff_request(payload):
+            if "Decompose the mechanical coding task" in _prompt(payload):
+                return _emit_response({"nodes": [_node_dict()]})
+            return _text_response("Plan: emit the diff this time.")
+        diffs = sum(1 for call in seen if _is_diff_request(call))
+        return _no_content_response(thinking) if diffs <= silent_first else _diff_response()
+
+    client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+    code, out = _run(_options(tmp_path), client)
+    assert code == 0, out
+    assert "- Attempts: 2\n" in out
+    journal = tmp_path / "proofs.jsonl"
+    agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    assert agents[0].exit_code == 1
+    expected = f"message has no text content (finish_reason=stop, {len(thinking)} reasoning chars)"
+    assert expected in agents[0].detail
+    sidecar = _sidecar(journal, agents[0])
+    assert sidecar["thinking"] == thinking
+    assert sidecar["finish_reason"] == "stop"
+    assert sidecar["partial_content_chars"] == 0
+    assert sidecar["usage"]["completion_tokens"] == 12436
+    recovery = next(c for c in seen if "Diagnose the root cause" in _prompt(c))
+    assert expected in _prompt(recovery)
 
 
 def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path) -> None:
