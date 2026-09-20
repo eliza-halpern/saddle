@@ -120,7 +120,7 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 and T6-23 done → T6-24 → T6-25 (main session) → session 37 =
+T6-22, T6-23, T6-24 done → T6-25 (main session) → session 37 =
 T6-26 (round 3d, executor; the first run in which an impl node faces a
 mutation gate that can pass) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
@@ -4614,6 +4614,14 @@ real failure count on three of four nodes and `failures == 0` never ended
 sampling early. Contract: a candidate is scored by the same sequence the
 node is gated by. Ties still fall to sample index; recorded, not changed
 (a tie is a tie). Owner: main session.
+
+**Status (2026-09-20):** DONE, `a1c3586`, main session. `samples` resets
+at the top of every attempt; a retry's single call records one entry, a
+retry whose call fails records none. `_evaluate_candidate` autofixes the
+candidate copy before its gate run. Mutants three: the reset mutant
+survived the first two tests (every non-failing retry path reassigns)
+and a third test for the failed-retry-call path killed it. `./check.sh`
+green.
 
 ### T6-25 — Draw k samples concurrently; evaluate serially in seed order; seal the first pass (tightened in effect)
 
