@@ -2068,6 +2068,27 @@ has no branch for an id the DAG lacks, so it falls into the catch-all.
 Item corrected below: (2) now authorises that branch in `_seed_proofs`
 (the drop itself was already right; only the reason string changes), and
 the line numbers are current at 6e39747. Re-run as session 25b.
+Session 25b STOPPED again, also correctly: step 1 as written makes the
+DAG-collision raise in `splice_replan` unreachable, and
+`test_splice_replan_rejects_collision` pinned that raise; the item
+authorised neither its removal nor a flip. Reviewer landed the item in
+the main session (contract change): `splice_replan(..., taken=())`
+numbers each replacement past `dag.nodes | taken` with `while candidate
+in existing:`; `run_slice` passes the journal's record ids; the
+collision raise is gone and its test is flipped to
+`test_splice_replan_numbers_past_ids_the_dag_already_holds` --
+`flip:` evidence: `a.r1` is a legal, non-duplicate node id (`dag.py`
+`_duplicate_ids` guards duplicates on its own), so the raise refused a
+legitimate input and protected no other contract; the flipped test now
+pins `a.r2`. `_seed_proofs` gained the `(not in DAG)` branch. Known-bad
+shown red first: the new tests on the old source raise `collides` and
+produce a second `n1.r1`. Mutants, all KILLED: M1 `while candidate in
+existing:` -> `while False:` (`['a.r1'] == ['a.r2']`); M2 `elif
+record.node_id not in expected:` -> `elif False:` (span reads `(node
+changed)`); M3 `splice_replan(remaining, node_id, new, taken=taken)`
+without `taken` (`['n1.r1'] == ['n1.r2']`). check.sh 657 passed, 100%.
+Tests: `test_splice_replan_numbers_past_taken_ids`,
+`test_run_slice_replan_across_resume_numbers_past_sealed_ids`.
 Files: `src/saddle/slice.py` (`splice_replan` ~:576: `mapping` numbers
 `.r<index>` from 1 and checks collisions against the current DAG only,
 ~:584-585; `run_slice` ~:745: `replanned_from`/`generated` start empty
