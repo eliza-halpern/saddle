@@ -3998,6 +3998,9 @@ Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__
 Done when: mutants red; `./check.sh` green; T5 rerun after T6-8 shows
 its attempts' sidecars in `runs/…/.saddle/attempts/`. Owner: main
 session (journal format change; the vllm error type changes shape).
+Also carries: the `max_tokens` each attempt sent (T6-14 clause 1, not
+implemented there; round 3b could verify its prediction 2 only by
+arithmetic because of it -- F21.9 follow-on 17).
 
 ### T6-13 — The journal records what was asked, not only what happened: a `plan` record (tightened; journal format)
 Files: `src/saddle/journal.py` (new record type `plan`: the validated DAG
@@ -4056,9 +4059,33 @@ allowance); M3 message drops the cap (recovery prompt lacks `truncated
 at N`). Fixture correction: `tests/test_cli.py::_node_dict` now declares
 `target_files: ["n.py"]`, so every cap pin became
 `_expected_cap(repo, effort)`; four plan-render pins gained the `targets:
-n.py` line. Measurement owed: one T5 seed on the container (session 34);
-the prediction is that node-1 no longer truncates at 32768 -- a
-truncation at 131072 would be the first honest model-ceiling row.
+n.py` line.
+Measurement (session 34, round 3b, F21.9; saddle b91e996, bench a20a4fc
++ 37f494f): one T5 seed. The ladder worked as coded and a feedback loop
+defeated it. Attempt 1 did not truncate: it applied a 699-line diff that
+was 19 byte-identical copies of one test and failed `syntax`. Attempt 2
+was then sized from the *live* tree -- the failed diff still applied --
+so its cap rose to 32624 (arithmetic matches to the token), 144 tokens
+under the 32768 rung; the "escalation" for attempt 3 bought 0.4% and it
+truncated at once. Prediction lines 1 and 3 held, 2 held by arithmetic
+only (the cap is journaled nowhere), 4 falsified (the tree was clean at
+exit). Label: HARNESS; no model-ceiling row, the ladder never came near
+131072. Two corrections to this item, landed by the main session in the
+commit carrying this paragraph (tightened in effect): the estimate is
+taken from the node's baseline tree, cached on the node's first
+proposal, never from the tree a failed attempt left behind (F21.9a);
+and an escalation is `max(next rung, 2 x cap)`, so a step is measured
+from the cap, not from where the rung table happens to fall (F21.9b).
+Known-bad shown by mutant: M7 size from the live tree again -> attempt 2
+reads 23264 in the 300-line-bloat fixture (`[18464, ..., 23264, 18464]
+!= all 18464`); M8 escalation lands on the nearest rung -> `32768 >=
+2*32624` red. Both KILLED; check.sh 673 passed, 100%. Clause (1)'s "the
+attempt span records the cap used" is NOT implemented -- the executor is
+right -- and is folded into T6-12's sidecar, which is where the cap
+belongs with the finish reason and usage. The degeneration itself
+(F21.9c) is T6-15 and T6-16; a second T5 seed (session 35) follows them,
+not this fix alone, because F21.9c says the next failure would be the
+same loop hitting a higher wall.
 Files: `src/saddle/cli.py` (`WORKER_OUTPUT_TOKENS` ~:77 with its comment
 "thinking dominates output, so the budget tracks reasoning effort";
 `propose` ~:505-541: `output_tokens = WORKER_OUTPUT_TOKENS[effort]` is
@@ -4109,6 +4136,59 @@ T6-8+T6-14 shows attempt caps in the spans and no truncation, or a
 truncation at the server's real ceiling -- which would then be the
 model-ceiling column, honestly. Owner: main session. Also: post the
 correction on #51 (the user's word first).
+
+### T6-15 — Worker sampling discourages degeneration: repetition penalty, and retries that are not greedy (tightened in effect; measured first)
+Files: `src/saddle/vllm.py` (`_build_diff_payload` ~:238: the request sends
+`temperature` only -- no `repetition_penalty`, `top_p`, `top_k`, `min_p`
+anywhere in `src/`), `src/saddle/cli.py` (`propose`: `temperature=
+options.sample_temperature if failure is None else options.temperature`,
+and `--temperature` defaults to 0.0, so every retry is greedy), `tests/test_vllm.py`,
+`tests/test_cli.py`; `../saddle-bench/runs/round3b/t5-s1/` (the evidence).
+Finding (F21.9c): round-3b T5 attempt 1 emitted 19 byte-identical copies
+of one test function inside a well-formed diff; attempts 2 and 3 ran at
+temperature 0.0 and truncated. Greedy decoding over a long constrained
+generation with no repetition control is the textbook degeneration
+setup, and the grammar constrains form, not content.
+Contract: (1) every worker diff call sends `repetition_penalty =
+WORKER_REPETITION_PENALTY` (a constant in cli.py, start 1.05; vLLM
+honours it) -- the planner cannot set it; (2) a recovery attempt does
+not drop to temperature 0.0 by default: `--temperature` keeps its
+meaning for planning, and retries use `--sample-temperature` unless
+`--recovery-temperature` is given, so an attempt that follows a
+degenerate one is not the same greedy walk. Direction: tightened in
+effect (a failure the harness invited is discouraged; no gate changes).
+The T2-1 argument for greedy recovery (reproducible repair) is recorded
+as superseded by the observed loop; say so in the commit.
+Measure first, no GPU: before changing defaults, replay round-3b T5's
+attempt-1 prompt from its record against the server at (a) today's
+settings, (b) `repetition_penalty=1.05`, (c) temperature 0.7 on the
+retry prompt; count repeated function bodies in each output. One
+session, three requests; the result decides (1)'s constant and whether
+(2) lands as default or as a flag. Pre-register: (b) and (c) each cut
+the repeat count; (a) reproduces it.
+Known-good: the payload test asserts the penalty is present with the
+constant's value; the cli test asserts a retry's temperature equals the
+sample temperature by default and the flag when given. Known-bad: a
+payload without the penalty (the old shape) fails the payload test.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. drop `"repetition_penalty"` from the payload -> payload test red.
+2. retry temperature -> `options.temperature` again -> the cli retry test red.
+Done when: the three-request measurement recorded (F21.10); mutants red;
+`./check.sh` green. Owner: main session for the code; the measurement is
+an executor session (needs the key).
+
+### T6-16 — Does `DIFF_GRAMMAR` aggravate repetition? (measurement; no code)
+Files: `../saddle-bench/runs/round3b/t5-s1/` (attempt-1 prompt),
+`tools/structured_output_probe.py` (the request shape to copy),
+`../saddle-bench/runs/FINDINGS.md` (F21.11). Question (F21.9c, point 3):
+constrained decoding narrows the legal token set; does the same prompt
+repeat less without the grammar? Pre-register: same prompt, same
+temperature, three seeds each with and without `structured_outputs`;
+count repeated function bodies and total output tokens. Prediction:
+repetition is present in both arms (the loop is the model's); the
+grammar arm is not markedly worse. If the grammar arm is markedly
+worse, D2/D14 need a note and T6-15's penalty matters more. No
+conclusion is written without the six outputs on disk. Owner: executor.
 
 ---
 
