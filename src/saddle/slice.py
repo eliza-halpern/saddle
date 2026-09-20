@@ -761,6 +761,184 @@ def _seed_proofs(
     return proofs, "; ".join(decided) if candidates else None, reused
 
 
+def _schedule_until_done(
+    dag: Dag,
+    *,
+    replan: Replanner | None,
+    workdir: Path,
+    journal_path: Path,
+    propose: Proposer,
+    proofs: dict[str, str],
+    run_span_id: str,
+    task_hash: str,
+) -> tuple[Dag, dict[str, BaseException], set[str]]:
+    """Run the schedule/replan loop until no node can progress further.
+
+    Returns the final DAG (after any replan splices), every node's
+    terminal failure, and the set of node ids replanned away (excused
+    from `failed_unexcused`).
+    """
+    remaining = dag
+    replanned_from: set[str] = set()
+    generated: set[str] = set()
+    ever_failed: dict[str, BaseException] = {}
+
+    async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
+        # The scheduler sees a copy with proven dependencies stripped; the
+        # proof record must cite every parent, so run the original node.
+        original = next(candidate for candidate in remaining.nodes if candidate.id == node.id)
+        # From the plan as it stands: a replacement node's ids are planned
+        # too, and a replaced node's are not (T3-24).
+        planned = planned_requirement_ids(remaining)
+        return await _run_node(
+            original,
+            workdir,
+            journal_path,
+            propose,
+            proofs,
+            run_span_id,
+            planned,
+            task_hash=task_hash,
+        )
+
+    while True:
+        ready = _schedulable_nodes(remaining, proofs, ever_failed)
+        if not ready:
+            # Only reachable on resume: every node already proven (or
+            # blocked). A fresh DAG always has at least one root to run.
+            break
+        schedulable = Dag(nodes=ready)
+        outcome = asyncio.run(schedule(schedulable, worker))
+        ever_failed.update(outcome.failures)
+        if replan is None:
+            break
+        eligible: dict[str, NodeGateFailedError | NodeUnappliableError] = {}
+        for node_id, exc in outcome.failures.items():
+            if (
+                isinstance(exc, (NodeGateFailedError, NodeUnappliableError))
+                and node_id not in replanned_from
+                and node_id not in generated
+            ):
+                eligible[node_id] = exc
+        if not eligible:
+            break
+        by_id = {node.id: node for node in remaining.nodes}
+        progressed = False  # Observed only via `not`; falsy-init mutants are equivalent.
+        for node_id, exc in eligible.items():
+            try:
+                new = replan(by_id[node_id], format_replan_history(node_id, exc))
+                taken = {record.node_id for record in read_records(journal_path)}
+                remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
+            except ReplanFailedError:
+                continue
+            replanned_from.add(node_id)
+            generated.update(gen_ids)
+            progressed = True
+        if not progressed:
+            break
+    return remaining, ever_failed, replanned_from
+
+
+def _merge_gate(
+    merge_command: str | None,
+    *,
+    workdir: Path,
+    proofs: dict[str, str],
+    run_span_id: str,
+    journal_path: Path,
+) -> tuple[int, bool]:
+    """Run the unscoped merge-time suite once, after every node's own gate.
+
+    Only runs when at least one node was proven (ARCHITECTURE Tier 2,
+    #60); a non-zero exit fails the run without revisiting any per-node
+    verdict.
+    """
+    merge_exit = 0
+    merge_ran = merge_command is not None and bool(proofs)
+    if merge_command is not None and proofs:
+        merge_start = perf_counter()
+        merge_exit = run_shell(merge_command, workdir)
+        timed_out = " (timed out)" if merge_exit == SHELL_TIMEOUT else ""
+        append_span(
+            journal_path,
+            build_span(
+                node_id="",
+                argv=shlex.split(merge_command),
+                duration_ms=_elapsed_ms(merge_start),
+                exit_code=merge_exit,
+                detail=f"merge-time full suite: exit {merge_exit}{timed_out}",
+                name="merge-suite",
+                parent_id=run_span_id,
+            ),
+        )
+    return merge_exit, merge_ran
+
+
+def _seal_run(
+    remaining: Dag,
+    *,
+    journal_path: Path,
+    proofs: dict[str, str],
+    ever_failed: dict[str, BaseException],
+    replanned_from: set[str],
+    run_span_id: str,
+    run_start: float,
+    merge_exit: int,
+    merge_ran: bool,
+    task: str,
+    started: str,
+    now: Callable[[], str],
+) -> SliceResult:
+    """Write the run's terminal span and verdict, and render its transcript."""
+    sealed = {record.node_id: record for record in read_records(journal_path)}
+    tools = tool_spans_by_node(read_spans(journal_path))
+    transcripts = tuple(
+        _transcribe(
+            node,
+            sealed.get(node.id),
+            ever_failed.get(node.id),
+            tool_spans_for_node(tools, node.id),
+        )
+        for node in remaining.nodes
+    )
+    failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
+    undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
+    passed = not failed_unexcused and not undispatched and merge_exit == 0
+    append_span(
+        journal_path,
+        build_span(
+            node_id="",
+            argv=[],
+            duration_ms=_elapsed_ms(run_start),
+            exit_code=0 if passed else 1,
+            detail=(
+                f"{len(proofs)} proven, "
+                f"{len(failed_unexcused)} failed, "
+                f"{len(undispatched)} undispatched"
+                + (f", merge exit {merge_exit}" if merge_ran else "")
+            ),
+            kind="agent",
+            name="run",
+            span_id=run_span_id,
+        ),
+    )
+    tail = [issue for issue in verify_journal(journal_path) if issue.code == "torn-tail"]
+    if tail:
+        msg = f"journal {str(journal_path)!r} has a torn tail after our own writes"
+        raise RuntimeError(msg)
+    text = render_transcript(
+        RunTranscript(
+            task=task,
+            started=started,
+            finished=now(),
+            verdict="PASS" if passed else "FAIL",
+            nodes=transcripts,
+            journal_path=str(journal_path),
+        )
+    )
+    return SliceResult(passed=passed, transcript=text, proofs=proofs)
+
+
 def run_slice(
     task: str,
     dag: Dag,
@@ -835,126 +1013,34 @@ def run_slice(
                 parent_id=run_span_id,
             ),
         )
-    remaining = dag
-    replanned_from: set[str] = set()
-    generated: set[str] = set()
-    ever_failed: dict[str, BaseException] = {}
-
-    async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
-        # The scheduler sees a copy with proven dependencies stripped; the
-        # proof record must cite every parent, so run the original node.
-        original = next(candidate for candidate in remaining.nodes if candidate.id == node.id)
-        # From the plan as it stands: a replacement node's ids are planned
-        # too, and a replaced node's are not (T3-24).
-        planned = planned_requirement_ids(remaining)
-        return await _run_node(
-            original,
-            workdir,
-            journal_path,
-            propose,
-            proofs,
-            run_span_id,
-            planned,
-            task_hash=task_hash,
-        )
-
-    while True:
-        ready = _schedulable_nodes(remaining, proofs, ever_failed)
-        if not ready:
-            # Only reachable on resume: every node already proven (or
-            # blocked). A fresh DAG always has at least one root to run.
-            break
-        schedulable = Dag(nodes=ready)
-        outcome = asyncio.run(schedule(schedulable, worker))
-        ever_failed.update(outcome.failures)
-        if replan is None:
-            break
-        eligible: dict[str, NodeGateFailedError | NodeUnappliableError] = {}
-        for node_id, exc in outcome.failures.items():
-            if (
-                isinstance(exc, (NodeGateFailedError, NodeUnappliableError))
-                and node_id not in replanned_from
-                and node_id not in generated
-            ):
-                eligible[node_id] = exc
-        if not eligible:
-            break
-        by_id = {node.id: node for node in remaining.nodes}
-        progressed = False  # Observed only via `not`; falsy-init mutants are equivalent.
-        for node_id, exc in eligible.items():
-            try:
-                new = replan(by_id[node_id], format_replan_history(node_id, exc))
-                taken = {record.node_id for record in read_records(journal_path)}
-                remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
-            except ReplanFailedError:
-                continue
-            replanned_from.add(node_id)
-            generated.update(gen_ids)
-            progressed = True
-        if not progressed:
-            break
-    sealed = {record.node_id: record for record in read_records(journal_path)}
-    merge_exit = 0
-    merge_ran = merge_command is not None and bool(proofs)
-    if merge_command is not None and proofs:
-        merge_start = perf_counter()
-        merge_exit = run_shell(merge_command, workdir)
-        timed_out = " (timed out)" if merge_exit == SHELL_TIMEOUT else ""
-        append_span(
-            journal_path,
-            build_span(
-                node_id="",
-                argv=shlex.split(merge_command),
-                duration_ms=_elapsed_ms(merge_start),
-                exit_code=merge_exit,
-                detail=f"merge-time full suite: exit {merge_exit}{timed_out}",
-                name="merge-suite",
-                parent_id=run_span_id,
-            ),
-        )
-    tools = tool_spans_by_node(read_spans(journal_path))
-    transcripts = tuple(
-        _transcribe(
-            node,
-            sealed.get(node.id),
-            ever_failed.get(node.id),
-            tool_spans_for_node(tools, node.id),
-        )
-        for node in remaining.nodes
+    remaining, ever_failed, replanned_from = _schedule_until_done(
+        dag,
+        replan=replan,
+        workdir=workdir,
+        journal_path=journal_path,
+        propose=propose,
+        proofs=proofs,
+        run_span_id=run_span_id,
+        task_hash=task_hash,
     )
-    failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
-    undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
-    passed = not failed_unexcused and not undispatched and merge_exit == 0
-    append_span(
-        journal_path,
-        build_span(
-            node_id="",
-            argv=[],
-            duration_ms=_elapsed_ms(run_start),
-            exit_code=0 if passed else 1,
-            detail=(
-                f"{len(proofs)} proven, "
-                f"{len(failed_unexcused)} failed, "
-                f"{len(undispatched)} undispatched"
-                + (f", merge exit {merge_exit}" if merge_ran else "")
-            ),
-            kind="agent",
-            name="run",
-            span_id=run_span_id,
-        ),
+    merge_exit, merge_ran = _merge_gate(
+        merge_command,
+        workdir=workdir,
+        proofs=proofs,
+        run_span_id=run_span_id,
+        journal_path=journal_path,
     )
-    tail = [issue for issue in verify_journal(journal_path) if issue.code == "torn-tail"]
-    if tail:
-        msg = f"journal {str(journal_path)!r} has a torn tail after our own writes"
-        raise RuntimeError(msg)
-    text = render_transcript(
-        RunTranscript(
-            task=task,
-            started=started,
-            finished=now(),
-            verdict="PASS" if passed else "FAIL",
-            nodes=transcripts,
-            journal_path=str(journal_path),
-        )
+    return _seal_run(
+        remaining,
+        journal_path=journal_path,
+        proofs=proofs,
+        ever_failed=ever_failed,
+        replanned_from=replanned_from,
+        run_span_id=run_span_id,
+        run_start=run_start,
+        merge_exit=merge_exit,
+        merge_ran=merge_ran,
+        task=task,
+        started=started,
+        now=now,
     )
-    return SliceResult(passed=passed, transcript=text, proofs=proofs)
