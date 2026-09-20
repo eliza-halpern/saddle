@@ -103,8 +103,7 @@ recorded in its own item's status paragraph, and the retired
 dependencies with it). An arrow reads "left must land before right".
 
 ```
-T6-16 (replay T5 attempt 1: repetition_penalty, temperature, grammar off) ──► T6-15 (the constant and the non-greedy retries are set from what the replay shows, not guessed)
-T6-15 ──► a T5 seed with full evidence (the first run under T6-12/T6-13; also the check that T6-14's cap and T6-8's pre-flight hold on the task that motivated them)
+T6-17 (reasoning is not budgeted; the ladder goes) ──► T6-15 (retries not greedy; narrowed after F21.10) ──► T6-18 (null-content response named) ──► T6-9 (deadline) ──► a T5 seed with full evidence and a deadline sized for this model (the first run under T6-12/T6-13)
 T6-1 (retrospective over the thirteen labelled runs, no GPU) ──► T6-6 (Proposal A goes ahead only if row A separates PASS from FAIL)
 T6-1 ──► T6-4, T6-5 (both proceed regardless; T6-1 decides thresholds and whether T6-5 is worth a session of its own)
 T6-2, T6-3 ──► nothing (known-bad is T2's log; independent of T6-1 and of each other)
@@ -119,11 +118,11 @@ T5-0 ──► T5-1 ──► T5-3 ──► T5-2 ──► T5-4, T5-5 (either o
 T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
-Order of sessions from here: session 35 (T6-16 + the T6-15 measurement,
-one item, settled tree) → T6-15 code (main session) → T5 seed → T6-1
+Order of sessions from here (session 35 done): T6-17, T6-15, T6-18,
+T6-9 (main session, one or two sittings) → T5 seed (executor) → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
-→ T6-9, T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0 first) → T4-1,
-T4-5, T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
+→ T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0 first) → T4-1, T4-5,
+T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
 Contract changes stay in the main session; executors take docs,
 fixtures and measurement.
 
@@ -4173,7 +4172,18 @@ truncation at the server's real ceiling -- which would then be the
 model-ceiling column, honestly. Owner: main session. Also: post the
 correction on #51 (the user's word first).
 
-### T6-15 — Worker sampling discourages degeneration: repetition penalty, and retries that are not greedy (tightened in effect; measured first)
+### T6-15 — Retries are not greedy (tightened in effect; measured first, F21.10)
+Status 2026-09-20: measurement DONE by session 35 (bench 17636b7
+pre-registration, 496e3f6 result; F21.10; twelve response bodies under
+`runs/round3b/degeneration/`). Contract (1), an unconditional
+`repetition_penalty = 1.05`, is WITHDRAWN on that evidence: the arm that
+carried it failed 3/3 (nine repeated `fees.py` sections; a reasoning-only
+response with `content: null`; a 350-cycle `+`/`+`/`\ No newline` motif
+that applies cleanly), while today's shape produced a complete diff 3/3.
+The item is narrowed to contract (2) below. The measurement's other
+result -- temperature-0.0 retries truncated 3/3 with 17571 of 20256
+tokens spent on reasoning, byte-identical across seeds 1-3 -- is the
+evidence for (2) and for T6-17. Code: main session, after T6-17.
 Files: `src/saddle/vllm.py` (`_build_diff_payload` ~:238: the request sends
 `temperature` only -- no `repetition_penalty`, `top_p`, `top_k`, `min_p`
 anywhere in `src/`), `src/saddle/cli.py` (`propose`: `temperature=
@@ -4185,46 +4195,122 @@ of one test function inside a well-formed diff; attempts 2 and 3 ran at
 temperature 0.0 and truncated. Greedy decoding over a long constrained
 generation with no repetition control is the textbook degeneration
 setup, and the grammar constrains form, not content.
-Contract: (1) every worker diff call sends `repetition_penalty =
-WORKER_REPETITION_PENALTY` (a constant in cli.py, start 1.05; vLLM
-honours it) -- the planner cannot set it; (2) a recovery attempt does
-not drop to temperature 0.0 by default: `--temperature` keeps its
-meaning for planning, and retries use `--sample-temperature` unless
-`--recovery-temperature` is given, so an attempt that follows a
-degenerate one is not the same greedy walk. Direction: tightened in
-effect (a failure the harness invited is discouraged; no gate changes).
-The T2-1 argument for greedy recovery (reproducible repair) is recorded
-as superseded by the observed loop; say so in the commit.
-Measure first, no GPU: before changing defaults, replay round-3b T5's
-attempt-1 prompt from its record against the server at (a) today's
-settings, (b) `repetition_penalty=1.05`, (c) temperature 0.7 on the
-retry prompt; count repeated function bodies in each output. One
-session, three requests; the result decides (1)'s constant and whether
-(2) lands as default or as a flag. Pre-register: (b) and (c) each cut
-the repeat count; (a) reproduces it.
-Known-good: the payload test asserts the penalty is present with the
-constant's value; the cli test asserts a retry's temperature equals the
-sample temperature by default and the flag when given. Known-bad: a
-payload without the penalty (the old shape) fails the payload test.
+Contract (narrowed 2026-09-20): a recovery attempt does not drop to
+temperature 0.0 by default. `--temperature` keeps its meaning for
+planning and recovery-plan text; worker diff retries use
+`--sample-temperature` unless `--recovery-temperature` is given, so an
+attempt that follows a failed one is not the same greedy walk, and k
+recovery samples are k samples. Direction: tightened in effect (a
+failure the harness invited is discouraged; no gate changes). The T2-1
+argument for greedy recovery (reproducible repair) is superseded by
+F21.10 arm (c): three seeds, one sample, three truncations; say so in
+the commit. No sampling parameter other than temperature is added; the
+penalty is deferred (§10) until a node that repeats *without* one is on
+record (F21.11 follow-on 22, 23).
+Measurement: done, see the status paragraph and F21.10.
+Known-good: the cli test asserts a retry's worker call carries the
+sample temperature by default and `--recovery-temperature` when given;
+the recovery-plan `complete` call still carries `--temperature`.
+Known-bad: a retry at `options.temperature` (the old shape) fails it.
 Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
-1. drop `"repetition_penalty"` from the payload -> payload test red.
-2. retry temperature -> `options.temperature` again -> the cli retry test red.
-Done when: the three-request measurement recorded (F21.10); mutants red;
-`./check.sh` green. Owner: main session for the code; the measurement is
-an executor session (needs the key).
+1. retry temperature -> `options.temperature` again -> the cli retry test red.
+2. `--recovery-temperature` ignored (always sample temperature) -> the flag test red.
+Done when: mutants red; `./check.sh` green; T2-1's greedy-recovery
+sentence in ARCHITECTURE/cli docstrings updated to cite F21.10.
 
 ### T6-16 — Does `DIFF_GRAMMAR` aggravate repetition? (measurement; no code)
-Files: `../saddle-bench/runs/round3b/t5-s1/` (attempt-1 prompt),
-`tools/structured_output_probe.py` (the request shape to copy),
-`../saddle-bench/runs/FINDINGS.md` (F21.11). Question (F21.9c, point 3):
-constrained decoding narrows the legal token set; does the same prompt
-repeat less without the grammar? Pre-register: same prompt, same
-temperature, three seeds each with and without `structured_outputs`;
-count repeated function bodies and total output tokens. Prediction:
-repetition is present in both arms (the loop is the model's); the
-grammar arm is not markedly worse. If the grammar arm is markedly
-worse, D2/D14 need a note and T6-15's penalty matters more. No
-conclusion is written without the six outputs on disk. Owner: executor.
+Status 2026-09-20: DONE by session 35 (bench 00ac5ee; F21.11). Result:
+unanswered. Neither arm repeated anything (0 repeated bodies in all six
+responses), so the registered discriminator ("(d) has fewer than half of
+(a)'s repeated bodies") could not fire; recorded as a test that could
+not run, not a result. Side findings: 2 of 3 unconstrained outputs were
+markdown-fenced and unappliable (the grammar earns its keep on form);
+the grammar permits unbounded repetition at `section+` and `hline+`, and
+the only degeneration seen used both, but always under the penalty, so
+cause is not established. Re-asking needs a node that repeats without a
+penalty (§10).
+Files: `../saddle-bench/runs/round3b/degeneration/` (T6-15's
+`prompt.txt`, `settings.json`, arm (a) responses), `tools/
+structured_output_probe.py` (the request shape), `src/saddle/vllm.py`
+(`_build_text_payload`, the unconstrained shape), `../saddle-bench/runs/
+FINDINGS.md` (F21.11). Question (F21.9c, point 3): constrained decoding
+narrows the legal token set; does the same prompt repeat less without
+the grammar? Corrected 2026-09-20: there is no recorded attempt-1 prompt;
+use the one T6-15's measurement regenerated, and arm (a) as the
+with-grammar arm (do not re-run it). Arm (d): the same prompt, cap and
+temperature 0.7, seeds 1-3, as the exact `_build_text_payload` dict (no
+`structured_outputs`), saved as `d-s<seed>.json`. Count repeated bodies
+and `completion_tokens` as in T6-15, and record whether each (d) output
+is a diff that `git apply --check` accepts against the scratch copy.
+Pre-register in the same `PREDICTION.md` before the first (d) request:
+repetition is present in both arms (the loop is the model's); (d) is not
+markedly better (fewer than half of (a)'s repeated bodies in every seed
+would be "markedly"). If (d) is markedly better, D2/D14 get a note and
+T6-15's penalty matters more. No conclusion is written without the
+twelve outputs on disk. Owner: executor.
+
+---
+
+### T6-17 — Reasoning is not budgeted: the worker's `max_tokens` is the context that is left (scope narrowed; supersedes T6-14's ladder)
+Files: `src/saddle/cli.py` (`WORKER_OUTPUT_TOKENS`, `WORKER_OUTPUT_STEPS`,
+`MAX_WORKER_OUTPUT`, `worker_output_cap`, `emission_budget`, `propose`'s
+`escalations`), `src/saddle/dag.py` (`validate_dag(..., emission_budget=)`,
+`node-too-large`), `src/saddle/vllm.py` (`check_server`/`doctor`: read
+`max_model_len` from `GET /models`), `docs/ARCHITECTURE.md` (gate 7 /
+budget paragraph), `tests/test_cli.py`, `tests/test_dag.py`, `tests/test_vllm.py`.
+Premise (the user's, 2026-09-20, and F21.10): this model's strategy is
+long test-time compute; it reasoned 17571 tokens at effort `low` against
+a 16384 "allowance", and vLLM enforces no split between reasoning and
+content. T6-14's model -- a reasoning allowance per effort plus an
+emission estimate, escalated on truncation -- caps the thing that makes
+the model work and then pays for it with a cut-off diff. Contract: (1)
+every worker call sends `max_tokens = context_window - prompt_tokens -
+margin`, where `context_window` comes from the server's `max_model_len`
+(fallback flag `--context-window`, default 175000, the container's
+`MAX_LEN`) and `prompt_tokens` from the server's own count of the
+previous call when known, else `len(prompt) // CHARS_PER_TOKEN`;
+`reasoning_effort` is still sent, as advice. (2) The ladder,
+`escalations`, and `WORKER_OUTPUT_TOKENS` go; `finish_reason=length` is
+then a genuine ceiling and stays a retryable attempt failure with its
+evidence in the sidecar (T6-12). (3) T6-8's pre-flight keeps
+`node-too-large`, computed against `context_window - node.max_context_tokens
+- margin` instead of `emission_budget(node)`. Direction: scope narrowed
+(budgets stop pretending to cap reasoning; no gate loosens, and
+`node-too-large` stays). Evidence: F21.10 arm (c) 3/3 `length` at 20256
+with 87% of tokens on reasoning; F21.9 truncations at 32624/32768.
+Known-good: a worker call against a fake `/models` reporting
+`max_model_len` 175000 and a 6586-token prompt sends `max_tokens` =
+175000 - 6586 - margin. Known-bad: the old cap (20256 for the F21.10
+node) is not what is sent; an oversized node still fails `node-too-large`.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. `max_tokens` -> a constant 16384 -> known-good red.
+2. `node-too-large` check -> `if False:` -> the pre-flight known-bad red.
+3. `max_model_len` ignored (fallback always) -> the fake-server test red.
+Done when: mutants red; `./check.sh` green; T6-14's status says which
+of its clauses this supersedes. Owner: main session. Then T6-15, T6-18,
+T6-9, and one T5 seed with `--deadline` sized for this model (a call at
+this cap can run 15-20 min on the 3090; `run_arm.sh`'s `timeout 1800`
+is the clock that killed round 3's T5, not the harness).
+
+### T6-18 — A worker response with no content is a named failure, not an empty diff (tightened)
+Files: `src/saddle/vllm.py` (`_parse_diff_response`: the `content is None`
+/ empty path), `src/saddle/slice.py` (`_error_evidence`), `tests/test_vllm.py`.
+Evidence: F21.10 b-s2 -- HTTP 200, `finish_reason: "stop"`, `content:
+null`, 45428 chars of reasoning that stop mid-word, and the server's
+`reasoning_tokens: 0`. Today this is either a grammar-parse error or
+whatever the empty-string path does; neither names what happened.
+Contract: a response whose content is null or empty raises
+`VllmResponseError("worker emitted no diff (finish_reason=stop, N
+reasoning chars)")` carrying the reasoning, usage and `finish_reason`
+(the T6-12 fields), so the attempt fails retryably and the sidecar
+shows the think block ran out. Do not trust `reasoning_tokens` (F21.10
+follow-on 20). Direction: tightened (a distinct verdict for a shape that
+was folded into another). Known-good: the b-s2 body, reduced to its
+shape, produces that message and the reasoning in the sidecar.
+Known-bad: a normal diff response is unaffected.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the null-content branch -> falls through to the old path -> known-good red.
+Done when: mutant red; `./check.sh` green. Owner: main session, with T6-15.
 
 ---
 
@@ -4241,6 +4327,8 @@ conclusion is written without the six outputs on disk. Owner: executor.
 | HANG as a first-class verdict field | already surfaced in `detail` (#55 closed); a field is T2-4's job | nothing |
 | Rich TUI (#17), chat-driven runs (#23) | see T5-7 and T5-8 | Tier 5 |
 | Property soundness (#62) | see T3-3 | design decision |
+| `repetition_penalty` / `top_p` / `min_p` on worker calls (F21.9c item 14) | at 1.05 it failed 3/3 where today's shape passed 3/3 (F21.10) | a node that repeats without a penalty on record, then a value sweep with the penalty-on/grammar-off cell (F21.11 items 22, 23) |
+| Repetition oracle over sections and motifs (F21.10 item 19) | nothing to gate on until degeneration recurs without the penalty | the same record |
 
 ---
 
