@@ -4255,6 +4255,19 @@ model-ceiling column, honestly. Owner: main session. Also: post the
 correction on #51 (the user's word first).
 
 ### T6-15 — Retries are not greedy (tightened in effect; measured first, F21.10)
+Status 2026-09-20 (later): code DONE by the main session (commit below),
+with T6-18. `worker_temperature(options, failure)` in cli.py: first
+attempts at `--sample-temperature`; retries at `--recovery-temperature`
+when given, else `--sample-temperature`; `--temperature` still governs
+planning and the recovery-plan prose. flip:
+`test_run_task_sample_temperature_routes_first_attempt_vs_recovery` --
+it pinned T2-1's greedy retry (0.3 = `--temperature`); F21.10 arm (c) is
+the evidence the old expectation pinned a defect (three seeds at 0.0,
+one sample, 3/3 truncated); the retry now asserts the sample temperature
+and the recovery-plan call is asserted at `--temperature`, which the old
+test left unpinned. Mutants: M1 retry → `options.temperature` KILLED; M2
+`--recovery-temperature` ignored KILLED. No sampling parameter other
+than temperature is sent (penalty deferred, §10).
 Status 2026-09-20: measurement DONE by session 35 (bench 17636b7
 pre-registration, 496e3f6 result; F21.10; twelve response bodies under
 `runs/round3b/degeneration/`). Contract (1), an unconditional
@@ -4402,6 +4415,18 @@ this cap can run 15-20 min on the 3090; `run_arm.sh`'s `timeout 1800`
 is the clock that killed round 3's T5, not the harness).
 
 ### T6-18 — A worker response with no content is a named failure, not an empty diff (tightened)
+Status 2026-09-20: DONE by the main session (commit below), with T6-15.
+`_parse_message`'s no-content branch (shared by emit, complete and
+propose_diff) now raises `message has no text content (finish_reason=
+<reason|unknown>, N reasoning chars)` carrying reasoning, usage,
+max_tokens and finish_reason like a truncation does, so `_error_evidence`
+puts the think block in the sidecar unchanged. Known-good: the b-s2
+shape end to end through `run_task` (attempt fails with that message,
+retry runs, sidecar holds the reasoning and usage, repair prompt names
+it). Mutant: reasoning dropped → `""` KILLED (vllm test and the cli
+integration test). Wording deviation from the item: the message keeps
+the old prefix so the five malformed-envelope pins still read as one
+family; "the think block ran out" is what the count says.
 Files: `src/saddle/vllm.py` (`_parse_diff_response`: the `content is None`
 / empty path), `src/saddle/slice.py` (`_error_evidence`), `tests/test_vllm.py`.
 Evidence: F21.10 b-s2 -- HTTP 200, `finish_reason: "stop"`, `content:
