@@ -120,9 +120,9 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 to T6-25 done → session 37 =
-T6-26 (round 3d, executor; the first run in which an impl node faces a
-mutation gate that can pass) → T6-1
+T6-22 to T6-26 done → T6-27 with T6-30 (main session) → T6-28 (executor,
+metrics sampler) → T6-3 with T6-31 (main session) → T6-29 measure-first
+probe (executor) → T6-29 (main session) → round 3e, one T5 seed → T6-1
 → T6-2 with T6-3 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -4688,6 +4688,207 @@ T6-25's three draws in flight, does the server preempt (vLLM logs, or a
 sample wall far above the others'); the sidecar walls and the container
 log answer it, and T6-25's clause (5) waits on it. Owner:
 executor (needs the key). Not in this item: any fix.
+
+**Status (2026-09-20):** DONE, bench `8cb4096` (PREDICTION.md before the
+run) and `d3ad1c8` (`runs/round3d/t5-s1`, F21.13). P1-P3 HELD (13 worker
+calls all `stop`; 6/6 sidecars hash, one plan record; exit 1 at 4524 s).
+P4, P5 FALSIFIED. Confirmed live: T6-22 (the mutation gate measured,
+`75.3% < 85.0%` and `78.3%` with named survivors, where round 3c could
+only say the tool failed), T6-23 (a 2494 s timeout left the tree at
+baseline with an `error_type` sidecar and no staged `money.py`), T6-25
+(the same three-draw attempt 1028 s -> 257 s, 213.6 tok/s aggregate).
+Observations: (a) no recurrence; (b) **refuted**: the 58-61 tok/s figure
+was computed from the stale sidecars T6-24 fixed, so the gap never
+existed; (c) recurs at 89.9%; (d) no preemption signature in aggregate
+throughput, container log not gathered (out of the executor's scope).
+New HARNESS findings, each an item below: F21.13c the request timeout is
+inter-chunk, not total (T6-30); F21.13d the repair brief withheld ruff's
+output and ruff failed 2/2 while the gates whose detail is inline
+improved (T6-31); F21.13e `money.py:33` is a spec-mandated branch no
+sealed test exercises and the impl node may not write one, so it had no
+legal move (T6-29); F21.13f the journal attests and cannot explain
+(T6-27, T6-28). n1 sealed on attempt 3: the first T5 node sealed in four
+rounds. Everything remains n=1 per configuration.
+
+### T6-27 — The journal explains a failure, not only attests to it (tightened; journal format)
+
+Files: `src/saddle/journal.py` (`SpanRecord`, `PlanNode`, verify),
+`src/saddle/slice.py` (`_seal_attempt`, `_proposal_evidence`,
+`_error_evidence`, `_best_of_samples`), `src/saddle/cli.py` (the
+proposer; a `saddle explain` command), `src/saddle/vllm.py` (cached
+prompt tokens from usage), `tests/test_journal.py`, `tests/test_slice.py`,
+`tests/test_cli.py`, `tests/fixtures/pre-basis-proofs.jsonl` (read, never
+regenerated).
+
+Round 3d's audit of its own evidence (F21.13f): no record carries an
+absolute time (0 ISO-8601 fields, 0 epoch fields; spans have
+`duration_ms` only); no sidecar carries the seed T6-25 sent, the sampling
+temperature, or the served model id; every worker span is appended with
+an empty argv, so its `args_hash` is the hash of `[]` and cannot tell two
+calls apart; the submitted diff survives as a hash only and `git apply`'s
+stderr is dropped; the plan record omits each node's `allowed_tools`, so
+F21.13d's cause is not recoverable from evidence. One design decision
+surfacing six times: the chain was built to prove integrity, and a hash
+is designed to not give its input back. Diagnosis needs the inputs.
+
+Contract, alongside the hashes, never instead of them:
+1. Every span carries `started_at` (UTC ISO-8601 from the run's `now`)
+   beside `duration_ms`; the run span carries the served model id and
+   server version (from `/models`), the sample and recovery temperatures,
+   and the context window used.
+2. A worker span's `argv` is `["worker", node_id, "attempt", n]`, its
+   `args_hash` is the hash of the prompt, and the prompt text is retained
+   in the sidecar.
+3. Every sample and retry draw records its `seed`, `temperature`,
+   `started_at` and wall, the diff text (not only its hash), the cached
+   prompt tokens the server reported, and on an apply failure `git
+   apply`'s stderr and which rung of the ladder failed.
+4. `PlanNode` carries `allowed_tools`.
+5. `saddle explain <journal> [--attempt SPAN]` renders the redacted tier
+   (identifiers, times, counts, hashes, gate verdicts, finding codes) and,
+   for one named attempt, its raw sidecar. Nothing else prints prompt or
+   diff text.
+6. `verify` reads both shapes: the pre-basis fixture still verifies, a
+   new journal verifies, and a sidecar whose retained diff does not hash
+   to `diff_hash` is a new verify code.
+Direction: tightened (the record says more, and one more thing can fail
+verification). Known-bad: a failed attempt that cannot be replayed from
+its sidecar (no seed, or no prompt); a retained diff that does not hash
+to its `diff_hash` passing verify. Known-good: replaying a recorded
+attempt's prompt, seed and temperature through a fake client reproduces
+the recorded diff hash. Mutants: (1) `started_at` written as the
+duration; (2) `args_hash` back over `[]`; (3) the retained-diff check
+removed from verify. Owner: main session. Ahead of T6-1: the
+retrospective is scored on exactly the evidence this item keeps.
+
+### T6-28 — The run samples the server it is talking to (bench-side; measurement infrastructure; no saddle code)
+
+Files: `../saddle-bench/run_arm.sh`, a new `../saddle-bench/metrics_sample.py`
+and `metrics_report.py`, `../saddle-bench/runs/FINDINGS.md`.
+
+Round 3d's observation (d) was answerable only from aggregate throughput,
+and the rate gap in observation (b) took a round to refute. The server
+publishes what both needed on its metrics endpoint, on the port saddle
+already uses. Contract: while `run_arm.sh` runs an arm, a sampler GETs
+`/metrics` once a second (read-only, no container access) and appends one
+NDJSON row per sample with the UTC time and these counters: requests
+running and waiting, KV-cache usage percent, request queue, prefill and
+decode time sums and counts, time to first token, prompt tokens and
+cached prompt tokens, generation tokens, speculative-decode draft and
+accepted tokens, plus one `nvidia-smi` sample (utilisation, memory). The
+report joins the rows to the run's attempt spans by `started_at` once
+T6-27 provides it, and answers per attempt: queued or slow (queue time),
+preempted or not (KV usage with requests waiting), acceptance rate
+(accepted over draft), prefill share (prefill over decode). Never records
+prompts or the key. Known-good: a fake metrics endpoint whose counters
+step on schedule yields a report with the expected per-attempt values;
+known-bad: rows with no attempt in their window are reported as idle, not
+attributed. Owner: executor (needs the container up, not the key). After
+T6-27; before the next seed, so round 3e answers (d) rather than guessing.
+
+### T6-29 — A surviving mutant or an uncovered branch inserts a test node, briefed with the requirement and the function, never the code (tightened in effect)
+
+Files: `src/saddle/slice.py` (recovery path, `_best_of_samples` with a
+union combiner), `src/saddle/runner.py` (`_stub_module` reuse; the
+enclosing-function lookup), `src/saddle/cli.py` (the test node's brief;
+`replan` insertion), `src/saddle/gates.py` (`check_node_scope`
+unchanged), `tests/test_slice.py`, `tests/test_runner.py`, `tests/test_cli.py`.
+
+F21.13e: n2 had to cover `money.py:33`, a branch the spec mandates and no
+sealed test exercises, and `check_node_scope` forbids an impl node from
+editing tests. Its legal moves were to delete the branch, contort the
+function, or fail. F21.13a's caveat: the survivors at 75.3% and 78.3% are
+over different populations (`max_mutants=100` resampled per attempt), so
+"killed" and "not sampled" are indistinguishable across attempts.
+
+Design, as agreed 2026-09-20. The gap is a plan defect, and the recovery
+path answers it with a test node, not another impl retry:
+1. **Locate.** Each survivor and each uncovered line maps to its enclosing
+   function by AST (deterministic). The mutant sample is seeded by node id
+   so attempts compare the same population.
+2. **Brief.** The inserted test node receives the node's requirement ids
+   and text, the changed modules replaced by their signature-preserving
+   stubs (`_stub_module`, as red-phase already does), and the names of
+   the functions found in step 1. It never sees the implementation, a
+   line number, or a mutant. The expected values must come from the
+   spec; the function name only aims the draw.
+3. **Draw.** The node draws k samples concurrently through T6-25's
+   sampler at `reasoning_effort: none` (thinking disabled: each draw is
+   its prompt plus the test file it emits, so ten draws fit the KV pool
+   with room). Each sample writes its own new test file named by
+   requirement and seed, so k diffs never conflict. k defaults to 10;
+   k=1 is the node-sized version on the same code path.
+4. **Select, deterministically.** A sample is kept when its tests fail
+   against the stubbed tree, pass against the real tree, and kill at
+   least one still-surviving mutant or execute a still-uncovered line.
+   Samples that pass the first two and add nothing are dropped. Kept
+   samples are spliced in by the ordinary apply; node scope still forbids
+   a test node from touching source.
+5. **Retry, bounded.** Survivors left standing get one more round of k.
+   After two rounds they are recorded as surviving; for an equivalent
+   mutant that is the correct verdict. Then the impl node retries with
+   the kept tests in scope, its coverage and mutation gates re-run, and a
+   kept test that fails against the real tree is the impl node's next
+   brief (a real defect, found by a spec-derived test).
+What this is not: a sample is never told which mutant to kill. A test
+that asserts what the code does pins the implementation; a wrong branch
+then scores 100% with a green test protecting it. The kill check happens
+after the draw, against the real code, and the score stays a
+measurement of whether the spec would have caught a wrong
+implementation. Direction: tightened in effect (more tests, from the
+spec, on the gaps the gates found; no threshold moves). Measure first: a
+ten-draw probe at effort `none` on round 3d's n2 gap, counting how many
+draws pass all three filters (executor, needs the key); if it is one in
+fifty rather than one in ten, effort goes to `low` for these draws and k
+drops. Known-bad: a draw briefed with the implementation (the mutant
+kill test passes on a wrong branch) is not representable; a sample that
+kills nothing is not kept; a third round is not started. Mutants: (1)
+the stub replaced by the real module in the sandbox; (2) the kill filter
+inverted; (3) the round bound removed. Owner: main session, after T6-27.
+
+### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
+
+Files: `src/saddle/vllm.py` (`DEFAULT_TIMEOUT` and its comment, the
+streaming read loop), `src/saddle/cli.py` (a `--request-timeout` flag if
+one is wanted), `tests/test_vllm.py`.
+
+F21.13c: the comment on `DEFAULT_TIMEOUT` says the request is
+non-streaming so the timeout is the whole-generation deadline; the
+payload sets `stream: true`, and an httpx timeout on a streamed response
+bounds the gap between reads. Round 3c's timed-out attempt ran 1826 s and
+round 3d's 2494 s against a documented 1800 s bound. Contract: the
+streaming loop checks a monotonic clock against a total budget on every
+chunk and raises `VllmRequestError("request exceeded N s")` carrying the
+partial reasoning, content and usage seen so far (so T6-27's sidecar has
+them); the inter-chunk timeout stays as the stall detector. Direction:
+tightened. Known-good: a fake stream that emits a chunk every second for
+longer than the total budget is cut at the budget, with the partial text
+in the error. Known-bad: the same stream under the old code runs to the
+end. Mutants: (1) the clock check removed; (2) the partial text dropped
+from the error. Owner: main session; small, lands with T6-27.
+
+### T6-31 — The output of a gate the node failed always reaches the worker (loosening of T3-4's withholding, with evidence)
+
+Files: `src/saddle/slice.py` (`format_attempt_failure`, `_run_is_allowed`),
+`tests/test_slice.py`.
+
+F21.13d: n2's repair brief for a failed ruff gate was the one line `ruff
+check exited 1, format exited 0`, because T3-4 withholds a captured run's
+output unless the node's `allowed_tools` names the tool. Ruff failed 2/2.
+In the same two attempts coverage went 89.9% -> 98.5% and mutation 75.3%
+-> 78.3%, because those verdicts carry file:line and mutant names inline.
+The worker repairs what it can see. Whether the plan declared `lint` is
+not recoverable (the plan record omits `allowed_tools`; T6-27 fixes
+that), and the contract is right either way: `allowed_tools` bounds what
+the worker may *do*; the verdict of a gate the node failed is the node's
+own evidence, not a capability. Contract: a captured run whose exit code
+made a gate fail is included in the brief regardless of `allowed_tools`;
+a run for a gate that passed stays governed by T3-4. Direction: loosening
+of T3-4's withholding, evidenced by F21.13d. Known-good: a node without
+`lint` that fails ruff sees ruff's rule, file and line; known-bad: the
+same node with ruff passing sees no ruff output. Mutant: the
+failed-gate exception removed -> the known-good red. Owner: main session;
+lands with T6-3 (which names the rule in the gate detail).
 
 ---
 
