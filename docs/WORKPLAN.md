@@ -3817,6 +3817,29 @@ and note in BENCHMARK-RECORD that round 4 baselines differ from round 3
 in this and only this.
 
 ### T6-8 — Node-size pre-flight: a plan whose node cannot be emitted in one diff is rejected before execution (#64; tightened)
+Status 2026-09-20: DONE by the main session, with T6-14. Landed in
+dag.py: `TOKENS_PER_LINE = 16`, `DIFF_OVERHEAD_TOKENS = 2048`,
+`emission_estimate(node, file_lines)`, and two validators run by
+`validate_dag` only when the caller passes `file_lines` (a repo is in
+view): `undeclared-scope` for an `impl`/`refactor` node with empty
+`target_files`, and `node-too-large` when the estimate exceeds the
+caller's `emission_budget(node)` -- cli.py defines it as the top of the
+ladder minus the node's reasoning allowance. `_emit_valid_dag` passes
+both, so the planner sees the issue text and re-plans like any other
+validation error; the planner prompt says `target_files` is required for
+impl and refactor and why; ARCHITECTURE gate 7 no longer says opt-in.
+Deviation from the item, stated: the requirement is enforced in
+`validate_dag` on the emit path, not in the `Node` model, so fixtures
+that build nodes directly keep working and the planner still cannot
+leave scope empty. Correction to the item's known-bad: round-3 T5's
+plan (four modules, 249 lines, ~6k tokens) is NOT oversized by this
+measure and validates -- its failure was the cap (T6-14); the known-bad
+fixture declares an 8000-line file. Mutants, all KILLED: M4 `estimate >
+budget` -> `> 10**9` (the oversized node runs); M5 the undeclared clause
+-> `if False`; M6 `_emit_valid_dag` passes `file_lines=None` (the emit
+path skips both checks). `./check.sh`: 672 passed, 3 skipped, 100%.
+Closes #64's remaining half and supersedes T3-2's opt-in decision; the
+user closes the issue.
 Files: `src/saddle/dag.py` (`validate_dag` ~:330; new `_oversized_nodes(dag,
 sizes, budget)` beside `_uncovered_requirements` ~:288; `Node.target_files`
 becomes required non-empty for `impl` and `refactor` nodes), `src/saddle/cli.py`
@@ -4014,6 +4037,28 @@ ceiling, not what truncated T5 (an output cap), and is left alone until
 a run shows a worker starved of context.
 
 ### T6-14 — A truncated attempt is retried with more room, and the emission budget is not the reasoning effort's side effect (tightened in effect; #51 part 2 reopened)
+Status 2026-09-20: DONE by the main session, with T6-8, in the commit
+that carries this line. Landed: `worker_output_cap(node, effort,
+file_lines, escalations)` in cli.py -- the effort's entry in
+`WORKER_OUTPUT_TOKENS` is now the *reasoning allowance*; a scoped node's
+cap is `emission_estimate` (dag.py, 16 tokens per baseline line of its
+`target_files` + 2048) plus that allowance; an unscoped node keeps the
+allowance alone. `propose` counts one escalation per attempt whose
+`failure` carries `finish_reason=length` (persisting across a later
+apply failure) and climbs `WORKER_OUTPUT_STEPS = (8192, 16384, 32768,
+65536, 131072)` one step per escalation, capped at the top. The vllm
+truncation message names the cap it hit and no longer advises a retry.
+Known-bad shown red: old vllm.py against the new message test; the old
+same-cap behaviour is reproduced by mutants M1 and M2 below. Mutants,
+all KILLED: M1 `range(escalations)` -> `range(0)` (attempt 2 at 18464
+not 32768); M2 `+ (estimate or 0)` -> `+ 0` (scoped cap equals the
+allowance); M3 message drops the cap (recovery prompt lacks `truncated
+at N`). Fixture correction: `tests/test_cli.py::_node_dict` now declares
+`target_files: ["n.py"]`, so every cap pin became
+`_expected_cap(repo, effort)`; four plan-render pins gained the `targets:
+n.py` line. Measurement owed: one T5 seed on the container (session 34);
+the prediction is that node-1 no longer truncates at 32768 -- a
+truncation at 131072 would be the first honest model-ceiling row.
 Files: `src/saddle/cli.py` (`WORKER_OUTPUT_TOKENS` ~:77 with its comment
 "thinking dominates output, so the budget tracks reasoning effort";
 `propose` ~:505-541: `output_tokens = WORKER_OUTPUT_TOKENS[effort]` is
