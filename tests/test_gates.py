@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -22,6 +24,7 @@ from saddle.gates import (
     Tier1Inputs,
     check_assertion_preservation,
     check_changed_line_coverage,
+    check_dead_additions,
     check_mutation,
     check_node_scope,
     check_property_coverage,
@@ -89,6 +92,8 @@ def _passing_inputs() -> Tier1Inputs:
         current_runner=lambda: 0,
         flipped_tests={"test_a": "def test_a():  # REQ-001\n    assert True\n"},
         mutation=MutationOutcome(killed=9, total=10, generated=10, survivors=("m1",)),
+        added_lines={},
+        dead_code_runner=lambda _edited: 0,
     )
 
 
@@ -406,13 +411,14 @@ def test_run_tier1_hands_the_plans_ids_to_the_binding_gate() -> None:
     assert binding.passed is True
 
 
-def test_run_tier1_runs_exactly_the_eleven_documented_checks_in_order() -> None:
+def test_run_tier1_runs_exactly_the_twelve_documented_checks_in_order() -> None:
     names = [check.name for check in run_tier1(_node(), _passing_inputs()).checks]
     assert names == [
         "syntax",
         "ruff",
         "tests",
         "coverage",
+        "dead-code",
         "red-phase",
         "node-scope",
         "target-scope",
@@ -439,6 +445,7 @@ def test_run_tier1_all_green_passes() -> None:
         "ruff",
         "tests",
         "coverage",
+        "dead-code",
         "red-phase",
         "node-scope",
         "target-scope",
@@ -457,7 +464,7 @@ def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 11  # +assertion-preservation (#44)
+    assert len(result.checks) == 12  # +assertion-preservation (#44), +dead-code (T6-41)
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
 
@@ -1357,14 +1364,15 @@ def test_red_phase_spec_node_mirrors_the_tests_verdict() -> None:
     assert missing.detail == "specification is not red: no tests verdict to mirror"
 
 
-def test_run_tier1_spec_node_keeps_eleven_checks_and_substitutes_source_only_ones() -> None:
-    """T3-7a known-good at the aggregate: every check runs, two read "not required"."""
+def test_run_tier1_spec_node_keeps_twelve_checks_and_substitutes_source_only_ones() -> None:
+    """T3-7a known-good at the aggregate: every check runs, three read "not required"."""
     result = run_tier1(_node(kind="test"), _spec_inputs(PYTEST_TESTS_FAILED, "1 failed in 0.01s"))
     assert [check.name for check in result.checks] == [
         "syntax",
         "ruff",
         "tests",
         "coverage",
+        "dead-code",
         "red-phase",
         "node-scope",
         "target-scope",
@@ -1377,7 +1385,7 @@ def test_run_tier1_spec_node_keeps_eleven_checks_and_substitutes_source_only_one
     by_name = {check.name: check for check in result.checks}
     assert by_name["tests"].detail == "red specification: 1 failing test(s)"
     assert by_name["red-phase"].detail == "red by construction: the specification fails now"
-    for name in ("coverage", "mutation"):
+    for name in ("coverage", "dead-code", "mutation"):
         assert by_name[name].detail == "not required: no source changed"
         assert by_name[name].basis == "test node"
 
@@ -1462,3 +1470,214 @@ def test_run_tier1_result_reports_no_gap_when_everything_is_pinned() -> None:
     inputs = replace(_passing_inputs(), mutation=_STRONG)
     result = run_tier1(_node(kind="impl"), inputs)
     assert (result.survivors, result.gaps) == ((), ())
+
+
+FIXTURES: Final = Path(__file__).parent / "fixtures"
+
+
+def _rewritten(diff: str, path: str) -> tuple[str, set[int]]:
+    """`path` as `diff` leaves it, and the line numbers the diff added.
+
+    The fixtures rewrite each file in one whole-file hunk, so the new side
+    is the file; `+` lines are what the node wrote and context lines are
+    what it kept.
+    """
+    lines = diff.splitlines(keepends=True)
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"diff --git a/{path} "))
+    after = (i for i in range(start + 1, len(lines)) if lines[i].startswith("diff --git "))
+    body = lines[start : next(after, len(lines))]
+    hunk = next(i for i, line in enumerate(body) if line.startswith("@@ "))
+    out: list[str] = []
+    added: set[int] = set()
+    for line in body[hunk + 1 :]:
+        if line.startswith("+"):
+            out.append(line[1:])
+            added.add(len(out))
+        elif line.startswith(" "):
+            out.append(line[1:])
+    return "".join(out), added
+
+
+def _fixture_tree(name: str) -> tuple[dict[str, str], dict[str, set[int]]]:
+    """The three modules a round-3e implementation draw wrote, plus the
+    suite that names their public surface."""
+    diff = (FIXTURES / name).read_text()
+    sources: dict[str, str] = {}
+    added: dict[str, set[int]] = {}
+    for path in ("money.py", "accounts.py", "fees.py"):
+        sources[path], added[path] = _rewritten(diff, path)
+    sources["tests/test_fees.py"] = (
+        "from fees import FEES, FLAT_FEE, apply_fee, fee_for, total_fees\n"
+        "from accounts import Account, transfer\n"
+        "from money import quantize, to_decimal, validate_currency\n"
+    )
+    return sources, added
+
+
+def test_dead_additions_rejects_the_round3e_repeated_block() -> None:
+    """The real artifact: nine of eleven gates passed it (F21.16 §1).
+
+    `fees.py` grew from 41 lines to 1334 by repeating one 21-line block,
+    and mutation still read 88.8% over 80 mutants because a `pass` body
+    admits no mutant while importing the module executes it. Nothing in
+    the tree mentions any of those names, and the suite does not notice
+    them going, so they implement nothing.
+    """
+    sources, added = _fixture_tree("degenerate_round3e.diff")
+    seen: dict[str, str] = {}
+
+    def run_without(edited: Mapping[str, str]) -> int:
+        seen.update(edited)
+        return 0
+
+    check = check_dead_additions(sources, added, suite_passed=True, run_without=run_without)
+    assert not check.passed
+    assert check.name == "dead-code"
+    assert "fees.py adds" in check.detail
+    assert "_ensure_executed (60 copies)" in check.detail
+    assert "_hypothesis_helper (60 copies)" in check.detail
+    assert "implement no requirement" in check.detail
+    assert check.basis == "dead-definitions=4"
+    # What it handed the runner is the module without them and with its
+    # own work intact -- not a reformatted file.
+    assert "_noop" not in seen["fees.py"]
+    assert "def total_fees(count, currency=" in seen["fees.py"]
+    assert seen["fees.py"] in sources["fees.py"] or len(seen["fees.py"]) < len(sources["fees.py"])
+
+
+def test_dead_additions_accepts_the_same_draw_without_the_repeated_block() -> None:
+    """The discriminating half: the identical draw, cut before the block.
+
+    Same three modules, same public functions, same tests naming them --
+    so what the gate rejects above is the block and nothing else about the
+    draw. The suite is never re-run because no candidate is found.
+    """
+    sources, added = _fixture_tree("implementation_round3e.diff")
+
+    def run_without(edited: Mapping[str, str]) -> int:
+        never = "no candidate, so the suite must not be re-run"
+        raise AssertionError(never)
+
+    check = check_dead_additions(sources, added, suite_passed=True, run_without=run_without)
+    assert check.passed
+    assert check.detail == "every private definition added is mentioned elsewhere in the tree"
+
+
+def test_dead_additions_keeps_a_private_helper_the_suite_depends_on() -> None:
+    """A private helper nothing names is a candidate, not a verdict.
+
+    `_round_half_up` is mentioned by no other module and by no test, which
+    is true of every implementation detail. Removing it takes its callers
+    with it and the suite goes red, so the gate passes and says why.
+    """
+    source = (
+        "def _round_half_up(value):\n"
+        "    return int(value + 0.5)\n"
+        "\n"
+        "\n"
+        "def quantize(value):\n"
+        "    return _round_half_up(value)\n"
+    )
+    sources = {"money.py": source, "tests/test_money.py": "from money import quantize\n"}
+    added = {"money.py": set(range(1, 7))}
+    check = check_dead_additions(sources, added, suite_passed=True, run_without=lambda edited: 1)
+    assert check.passed
+    assert check.detail == (
+        "money.py adds _round_half_up; the suite fails without them, so they carry the work"
+    )
+    assert check.basis == "dead-candidates=1"
+
+
+def test_dead_additions_reads_a_name_spelled_as_a_string() -> None:
+    """A name reached by string is mentioned: `__all__`, a marker, a getattr.
+
+    The identifier set is deliberately over-wide because it decides what
+    is NOT dead, and a mention this misses fails a node for code something
+    uses.
+    """
+    sources = {
+        "m.py": "def _handler():\n    return 1\n",
+        "app.py": 'import m\n\nrun = getattr(m, "_handler")\n',
+    }
+    check = check_dead_additions(
+        sources,
+        {"m.py": {1, 2}},
+        suite_passed=True,
+        run_without=lambda edited: 0,
+    )
+    assert check.passed
+    assert check.detail == "every private definition added is mentioned elsewhere in the tree"
+
+
+def test_dead_additions_says_nothing_when_the_suite_is_already_red() -> None:
+    """Removing code from a failing tree proves nothing about the code."""
+    sources, added = _fixture_tree("degenerate_round3e.diff")
+
+    def run_without(edited: Mapping[str, str]) -> int:
+        never = "a red suite must not be re-run"
+        raise AssertionError(never)
+
+    check = check_dead_additions(sources, added, suite_passed=False, run_without=run_without)
+    assert check.passed
+    assert check.basis == "suite=red"
+    assert check.detail == "the suite is already failing; removing anything proves nothing"
+
+
+def test_dead_additions_leaves_an_unparseable_module_to_the_syntax_gate() -> None:
+    """Two gates must not report the same defect in different words."""
+    check = check_dead_additions(
+        {"m.py": "def _f(:\n", "t.py": "x = 1\n"},
+        {"m.py": {1}},
+        suite_passed=True,
+        run_without=lambda edited: 0,
+    )
+    assert check.passed
+    assert check.detail == "every private definition added is mentioned elsewhere in the tree"
+
+
+def test_dead_additions_skips_a_changed_path_with_no_source(tmp_path: Path) -> None:
+    """`added` can name a file the source map does not: a deleted module,
+    or one the reader skipped. It is not evidence of anything."""
+    check = check_dead_additions(
+        {"m.py": "def _f():\n    return 1\n"},
+        {"gone.py": {1}},
+        suite_passed=True,
+        run_without=lambda _edited: 0,
+    )
+    assert check.passed
+    assert check.basis == "modules=1"
+
+
+def test_dead_additions_reads_mentions_past_a_module_that_does_not_parse() -> None:
+    """One unparseable file elsewhere must not turn every private name dead.
+
+    The syntax gate fails the node for it; this check skips that file when
+    collecting mentions, so the names it can still read keep protecting.
+    """
+    sources = {
+        "m.py": "def _f():\n    return 1\n",
+        "broken.py": "def oops(:\n",
+        "uses.py": "from m import _f\n",
+    }
+
+    def run_without(edited: Mapping[str, str]) -> int:
+        never = "_f is mentioned by uses.py, so there is nothing to re-run"
+        raise AssertionError(never)
+
+    check = check_dead_additions(
+        sources, {"m.py": {1, 2}}, suite_passed=True, run_without=run_without
+    )
+    assert check.passed
+    assert check.detail == "every private definition added is mentioned elsewhere in the tree"
+
+
+def test_dead_additions_ignores_a_public_definition_no_test_names_yet() -> None:
+    """A public name is the module's surface, and the node that writes the
+    tests naming it may not have run: round 3e's `fee_for` is new, public,
+    and mentioned nowhere in the tree it was gated in."""
+    sources = {"fees.py": "def fee_for(amount):\n    return 1\n", "t.py": "x = 1\n"}
+    check = check_dead_additions(
+        sources, {"fees.py": {1, 2}}, suite_passed=True, run_without=lambda edited: 0
+    )
+    assert check.passed
+    assert check.detail == "every private definition added is mentioned elsewhere in the tree"

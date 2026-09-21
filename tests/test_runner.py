@@ -270,6 +270,59 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
     ]
 
 
+def test_run_node_gate_fails_a_node_whose_addition_nothing_depends_on(tmp_path: Path) -> None:
+    """T6-41 end to end: the private helper is executed and still carries nothing.
+
+    `_touched()` runs at import, so every one of its lines is covered and
+    the coverage gate is satisfied; it admits no mutant, so the mutation
+    population never sees it. Removing it changes no test's verdict, and
+    that is the whole of what the gate asks.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    honest = "def f():\n    return 2\n"
+    with_dead = honest + "\n\ndef _touched():\n    pass\n\n\n_touched()\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body, fixed_code=with_dead)
+    result = run_node_gate(_node(), tmp_path)
+    assert [check.name for check in result.checks if not check.passed] == ["dead-code"]
+    dead = {check.name: check for check in result.checks}["dead-code"]
+    assert dead.detail == (
+        "n.py adds _touched, which nothing else in the tree mentions; the suite still "
+        "passes with them removed, so they implement no requirement"
+    )
+    assert dead.basis == "dead-definitions=1"
+    # The worktree the other gates measured is untouched: the question was
+    # asked in a copy.
+    assert (tmp_path / "n.py").read_text() == with_dead
+
+
+def test_run_node_gate_keeps_a_private_helper_its_tests_need(tmp_path: Path) -> None:
+    """The known-good at the same boundary: same shape, load-bearing.
+
+    `_double` is private and named by nothing outside the module either,
+    so it is the same candidate; the suite goes red without it and the
+    node seals.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    with_helper = "def _double(value):\n    return value * 2\n\n\ndef f():\n    return _double(1)\n"
+    # The baseline shares no line with the rewrite, so every line of the
+    # module is the node's own and `_double` is a real candidate: a helper
+    # whose only caller the node also wrote is the case that must not fail.
+    _worktree(
+        tmp_path,
+        test_body,
+        baseline_test=test_body,
+        baseline_code="x = 0\n",
+        fixed_code=with_helper,
+    )
+    result = run_node_gate(_node(), tmp_path)
+    dead = {check.name: check for check in result.checks}["dead-code"]
+    assert dead.passed is True
+    assert dead.detail == (
+        "n.py adds _double; the suite fails without them, so they carry the work"
+    )
+    assert dead.basis == "dead-candidates=1"
+
+
 def test_run_node_gate_target_files_binds_end_to_end(tmp_path: Path) -> None:
     """T3-2, #64: the same honest impl node passes when it names the file
     it changes and fails, naming the stray, when it names a different one.

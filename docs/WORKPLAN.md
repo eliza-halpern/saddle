@@ -129,7 +129,9 @@ round kill anything on a real gap; is T6-29a's 0/10 an effort effect?)
 (F21.16: mutation 88.8% passes; UP031 kept the survivor round
 unreachable; the sidecar scrub broke T6-27's check) → T6-36 done (the
 scrub) → T6-37 done, option (a) (pinned isolated rule set, `ruff=` and
-`ruff_rules=` sealed) → T6-38 (blank-line drift rung) → T6-34 (attempt
+`ruff_rules=` sealed) → T6-38 done (`blank-lines` rung) → T6-41 done
+(the `dead-code` gate; Goal G1) → T6-42 (a repair may not delete what
+the metric measured — round 3d's repair reasoning) → T6-34 (attempt
 refs, stale comment) → round 3f, one T5
 seed (first run where the survivor round is reachable and every test
 node carries rejects; its first plan is also the `minItems` decoder
@@ -5248,6 +5250,24 @@ red (1 failed). Full `./check.sh` green before commit.
 Not done here: T6-34's attempt-tree refs and the stale gates.py comment
 remain T6-34.
 
+**Verified against the round-3e artifacts, 2026-09-21** (the check this
+item predicted but had not measured). Both fixtures applied to
+`refs/saddle/baseline/n2` and run through saddle's own leg
+(`_apply_diff` -> `autofix` -> `ruff_findings` -> `introduced_findings`,
+`PATH=.venv/bin:$PATH`):
+
+| rule set | degenerate draw | honest implementation |
+| --- | --- | --- |
+| HEAD, `--isolated --select F,E4,E7,E9,B` | exit 1, E402 x60 introduced | exit 0, no findings |
+| ruff 0.16.7 default (what round 3e ran) | FURB157 x5, UP031 x4, PIE790, I001 | FURB157 x4, UP031 x4, I001 |
+
+So the run's rule set failed the *correct* implementation on nine
+findings, none of them a defect, and that is why n2 never reached
+`{coverage}` alone. At HEAD the correct implementation passes and the
+degenerate one fails sixty times on `E402` -- one per repeated
+`import sys`, a finding that names the repetition itself. Known-good and
+known-bad, measured rather than predicted.
+
 ### T6-38 — An apply rung for blank-line drift (tightened in effect)
 Files: `src/saddle/slice.py` (`_APPLY_MODES`, `_apply_diff`),
 `tests/test_slice.py`.
@@ -5265,6 +5285,172 @@ from `runs/round3e/t5-s1/evidence/attempts/4fd718eb….json` must apply;
 known-good: a diff whose *code* lines mismatch must still be refused
 (a drifted `return` is a wrong edit, not drift).
 Owner: main session. After T6-37.
+
+**Status (2026-09-21): DONE (tightened in effect).** A fifth rung,
+`blank-lines`, after `three-way` in `_apply_diff`: `_reanchor_blank_lines`
+rewrites every hunk against a file the tree has so that its blank old
+lines are the file's (`_reanchor_hunk`), then applies the result with the
+strict flags. A hunk's non-blank old lines (context and deletions) must
+occur exactly once, in order, at or after the previous hunk's end, with
+only blank lines between consecutive ones, each compared with whitespace
+collapsed (the tolerance `ignore-whitespace` already grants); otherwise
+the rung is skipped whole and the failure still names `three-way`. Blank
+lines the file has become context, blank lines only the hunk has are
+dropped (the rung never deletes a blank line), and additions keep their
+place relative to the old lines around them. Hunks against files the
+diff creates pass through.
+Evidence, not the sidecar's diff: the top-level `diff` of every round-3e
+sidecar is cut at 4000 chars by the T6-36 defect, and the `-1,42 +1,56`
+hunk F21.16 §5 reconstructs is sample 0 of n2's attempt 1 (nested
+`samples[0].diff`, 30 943 chars, whole). Reproduced on a copy of the
+baseline: all four rungs refuse it; GNU `patch --fuzz=3` rejects the
+same diff as malformed at its accounts.py hunk, so fuzz was not an
+option. With the rung the fees.py hunk applies and the file's non-blank
+lines are exactly the hunk's new side. The whole sample still fails, on
+accounts.py, and correctly: that hunk lists two import lines as context
+the file never had and omits `_usd`, a wrong edit the rung refuses.
+Attempt 2's own failure (`fees.py:58`, hunk `-58,1300`) was against
+attempt 1's tree, whose 1334-line degenerate fees.py the run's git object
+store still holds; its diff is truncated in the sidecar and was not
+reproduced. The "restored to the node's baseline" reading in F21.16 §5
+is contradicted by that tree: T6-40 stands.
+Tests (`tests/test_slice.py`): the round-3e baseline and hunk verbatim
+apply as `blank-lines`; the same hunk with one deleted or one context
+code line altered is refused with the tree untouched; an anchor the
+file has twice is refused; three placement cases pin where additions
+land (file has the blank, hunk has the blank, two edits with drift
+between them).
+Contract mutants (scoped `-k apply_diff`, each red; restored, caches
+dropped): rung absent (`reanchored = None`) -> 3 failed; anchor text not
+compared -> 3 failed; first match instead of unique -> 1 failed; hunk
+blank lines never consumed -> 1 failed (survived until the two-edit
+case was added: the reduced-context rung hides it for a single edit).
+Full `./check.sh` green before commit.
+
+### T6-41 — Code nothing depends on is inadmissible (tightened) — DONE 2026-09-21
+Files: `src/saddle/gates.py` (`check_dead_additions`, `_identifiers`,
+`_without_dead_additions`), `src/saddle/runner.py` (`suite_without`),
+`tests/test_gates.py`, `tests/test_runner.py`,
+`tests/fixtures/{degenerate_round3e,implementation_round3e,tests_round3d}.diff`.
+
+Contract: a node fails when a private top-level definition it adds is
+mentioned by no line of the tree and the suite still passes once it and
+the statements naming it are removed. Twelfth Tier-1 check, `dead-code`,
+after `coverage`; substituted with "not required" for a `test` node.
+
+**Premise corrected before the code was written.** The first reading of
+F21.16 §1 was that round 3e's draw gamed the coverage gate. The reasoning
+says otherwise and the record is now: that draw is n2 **attempt 1**, which
+carries no failure brief; its 47 586 characters of reasoning name no gate,
+no percentage, and none of the emitted helpers; it does not loop (the
+most repeated fragment is `validate_currency(currency)`, 14 times, spread
+evenly) and it ends coherently on "Let me finalize and write the diff".
+The repetition begins only in the content tokens after it. The worker's
+prompt uses "executed" exactly once -- "Every changed line must be
+executed by the new tests" -- which is **already** the behavioural
+phrasing, not a percentage, and it did not help. Execution is a proxy
+under any wording; `pass` satisfies it and admits no mutant, so mutation
+read 88.8% over 80 mutants on a tree 95% of which was repeated dead code.
+
+So this gate reads no intent and counts no lines. In `keep_candidate`'s
+image, it removes what nothing mentions and re-runs the suite in a copy:
+the artifact fails by construction. Public names are exempt -- the node
+that writes the tests naming a new public function may not have run yet,
+and round 3e's `fee_for` is new, public and mentioned nowhere in the tree
+it was gated in. The identifier set counts string constants, so `__all__`,
+a marker and a `getattr` all protect a name; it decides what is NOT dead,
+so it errs wide.
+
+Known-bad: `tests/fixtures/degenerate_round3e.diff` (the real
+`samples[1].diff`, whole, 23 201 chars) fails, naming
+`_ensure_executed (60 copies)`, `_hypothesis_helper (60 copies)`,
+`_noop (59 copies)`, `_check`. Known-good: `implementation_round3e.diff`
+-- the identical draw cut before the block -- passes with no candidate at
+all, so what the gate rejects is the block and nothing else about the
+draw. Also known-good: a private helper whose only caller the node also
+wrote (the suite goes red without it), a name reached only as a string, a
+new public function no test names yet, an unparseable module (left to the
+syntax gate), and a suite already red (removing code from a failing tree
+proves nothing). End to end in `test_runner.py`: a node adding
+`_touched()` fails on `dead-code` alone and the worktree the other gates
+measured is unchanged, because the question is asked in a copy.
+
+Contract mutants (scoped `-k dead_additions`, each red; restored, caches
+dropped; each target confirmed unique before applying): verdict inverted
+-> 1 failed; the suite never re-run -> 2 failed; public names admitted ->
+1 failed; string constants not counted as mentions -> 1 failed; the
+known-bad fixture repointed at the known-good -> 1 failed (so the fixture
+does the work, not the path). Full `./check.sh` green.
+
+Scope limit: this makes one shape of unobservable code inadmissible. It
+does not make gaming inadmissible, and the measure is Goal G1's
+gate/oracle agreement, not a count of blocked shapes.
+
+Two instrument facts found while closing the diagnostic mandate on this
+item. **`saddle explain` cannot read round 3e at all**: it refuses the
+journal with `sidecar-diff-hash@line 24, 289, 294` -- the T6-36 defect --
+in every mode, `--attempt` included, so the tool the mandate requires was
+unavailable for the run it had to diagnose. Round 3d verifies clean, and
+explaining it corrects a premise: **the plan had four nodes**, `1 proven,
+1 failed, 2 undispatched`, which is why `report.py` and `store.py` were
+never implemented. It also shows a loss mode not yet itemised -- n1
+attempt 2, "worker call failed: message has no text content
+(finish_reason=stop, 67268 reasoning chars)". `metrics_report.py` on
+round 3e joins 2394 samples to 4 attempts: no preemption anywhere, KV
+never above 0.573, accept 0.73-0.87, and n2 attempt 1 at 1058.6 s for
+115 116 generated tokens -- the degenerate sample's 72 450 dominates the
+attempt, which is the wall cost T6-43 and T6-39 share.
+
+### T6-42 — A repair may not raise a metric by deleting what it measured (tightened)
+Files: `src/saddle/slice.py` (the repair brief and the retry's gate
+inputs), `src/saddle/gates.py`, `tests/test_slice.py`.
+Finding, and the sharpest evidence yet for the goal: round 3d's n2
+attempt 2 is the **first draw in either round whose reasoning names the
+gates** -- mutation 26 times, gate 25, coverage 14, uncovered 12, kill 9,
+against **zero** for every first attempt in rounds 3d and 3e. The brief
+(T6-31) is what put them there, and what it produced is explicit:
+
+- "So to fix coverage, I need to either: 1. Remove the uncovered code
+  (to_dict, from_dict, `__eq__`, `__repr__`, and the `if value <= 0` in
+  transfer) 2. Or add tests that cover them (but the instructions say
+  'do not modify any test file')" -- and it took option 1, three times
+  ("let me just take a completely different approach... Removes uncovered
+  code from accounts.py").
+- "mutation: The simplified transfer will have **fewer mutation sites**,
+  and all will be killed by the tests."
+
+That is the `max_mutants=1` exploit (#50) re-derived by the model, on its
+own, from the brief: the kill *rate* rises when the denominator falls.
+`store.py` needs `to_dict`/`from_dict`, so the repair proposed deleting
+required behaviour to raise two metrics. Both gates are gameable by
+deletion and the brief is what points at them. WORKPLAN §0.6 forbids
+exactly this move for items; nothing forbids it for the worker.
+Contract: a retry may not remove a public definition present in the
+previous attempt's tree, or shrink the mutant population, unless a
+requirement it cites changed. Known-bad: round 3d n2 attempt 2's diff
+(recoverable from the run's object store; its sidecar's top-level `diff`
+is empty and the sample reads `retry draw, gated in place`). Known-good:
+a repair that adds a test-covered branch and leaves the population alone.
+Owner: main session. Before round 3f, because the brief reaches the
+worker on every retry.
+
+### T6-43 — Verbatim repetition in an emission is a defect, not a draw (tightened)
+Files: `src/saddle/vllm.py` (the sampler), `src/saddle/slice.py`
+(candidate scoring), `tests/test_vllm.py`.
+Finding: 2 of the 3 samples in round 3e's n2 attempt 1 degenerated into
+verbatim repetition -- sample 1 repeats a 21-line block 60 times
+(23 201 chars), sample 2 repeats "# Expose the property test so pytest
+can discover it." 333 times and `@given(` 151 times across 186 264 chars
+and 72 450 completion tokens. Sample 0 does not repeat and is the only
+one of the three that is a clean implementation. In both cases the
+reasoning is coherent and the repetition begins after it, so this is an
+emission-level pathology, not a planning one, and the cheap levers are
+the sampler's (a repetition or frequency penalty) and a candidate filter
+that drops a draw whose diff repeats a multi-line block beyond a plain
+duplicate. Note the interaction with T6-39: the 186 264-char draw also
+dominates the attempt's wall.
+Owner: main session. Measure first -- the penalty is a decode change and
+one seed cannot separate it from the 3x wall spread (goal clause 3).
 
 ### T6-39 — `_best_of_samples` scores candidates as they arrive (wall)
 Files: `src/saddle/slice.py`. `list(pool.map(...))` blocks on the

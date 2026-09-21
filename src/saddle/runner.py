@@ -10,7 +10,9 @@ baseline diff sees them.
 from __future__ import annotations
 
 import ast
+import shutil
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path, PurePath
 
 from saddle.dag import Node
@@ -264,6 +266,26 @@ def run_node_gate(
         if node.kind == "impl" and property_targets
         else None
     )
+    added_lines: dict[str, list[int]] = {}
+    for absolute, line in changed:
+        rel = Path(absolute).relative_to(workdir).as_posix()
+        if rel in test_sources:
+            continue
+        added_lines.setdefault(rel, []).append(line)
+
+    def suite_without(edited: Mapping[str, str]) -> int:
+        """The node's own test command over the tree minus `edited`'s losses.
+
+        A copy, so the gate that asks the question cannot answer it by
+        changing the tree every later gate measures (T6-41).
+        """
+        with tempfile.TemporaryDirectory(prefix="saddle-dead-code-") as tmp:
+            sandbox = Path(tmp) / "tree"
+            shutil.copytree(workdir, sandbox, ignore=shutil.ignore_patterns("__pycache__", ".git"))
+            for rel, text in edited.items():
+                (sandbox / rel).write_text(text)
+            return run_shell_capture(gate.test_command, sandbox, recorder=recorder).exit_code
+
     inputs = Tier1Inputs(
         sources=sources,
         ruff_files=ruff_files,
@@ -281,6 +303,8 @@ def run_node_gate(
         current_runner=lambda: current_exit,
         flipped_tests=test_sources,
         mutation=mutation,
+        added_lines={rel: tuple(sorted(lines)) for rel, lines in sorted(added_lines.items())},
+        dead_code_runner=suite_without,
         added_files=[str(workdir / p) for p in added],
         touched_files=touched,
         test_output=suite.stdout + suite.stderr,

@@ -347,6 +347,190 @@ def check_changed_line_coverage(
     )
 
 
+def _identifiers(node: ast.AST) -> set[str]:
+    """Every name `node` could be referring to, spelled any way it could be.
+
+    Bare names, attribute tails, imported names and *string constants*, so
+    `__all__`, a `getattr` and a pytest marker all count as mentions. The
+    set is deliberately over-wide: it decides what is NOT dead, and a name
+    this misses is a node failed for code that something does use.
+    """
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name):
+            names.add(child.id)
+        elif isinstance(child, ast.Attribute):
+            names.add(child.attr)
+        elif isinstance(child, ast.alias):
+            names.add(child.name.split(".")[0])
+            names.add(child.name.rsplit(".", 1)[-1])
+        elif isinstance(child, ast.Constant) and isinstance(child.value, str):
+            names.add(child.value)
+    return names
+
+
+def _statement_span(statement: ast.stmt) -> tuple[int, int]:
+    """First and last source line of `statement`, decorators included."""
+    decorators = getattr(statement, "decorator_list", [])
+    start = min([statement.lineno, *(node.lineno for node in decorators)])
+    return start, statement.end_lineno or statement.lineno
+
+
+def _without_dead_additions(
+    source: str, added: Collection[int], elsewhere: set[str]
+) -> tuple[dict[str, int], str]:
+    """The definitions `source` adds that nothing mentions, and `source` without them.
+
+    A top-level definition is the node's own when every statement line it
+    spans is in `added`. It is dead when its name appears nowhere in
+    `elsewhere` -- no other module, no test, and no line of this module the
+    node did not write. Only private names are candidates: a public one is
+    the module's surface, and the node that writes the tests naming it may
+    not have run yet -- round 3e's `fee_for` is new, public, and mentioned
+    by nothing in the tree it was gated in. Statements that mention a dead name go with it, so
+    a call that exists only to run a dead body is removed alongside its
+    definition; the remaining lines are untouched, not reformatted.
+
+    The count is how many times the name is defined: a definition repeated
+    sixty times is one name and sixty copies, and the reader needs both.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # the syntax gate owns this; say nothing about it here
+        return {}, source
+    lines = set(added)
+    spans = [
+        (statement, {node.lineno for node in ast.walk(statement) if isinstance(node, ast.stmt)})
+        for statement in tree.body
+    ]
+    definitions = [
+        statement
+        for statement, span in spans
+        if span <= lines
+        and isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        and statement.name.startswith("_")
+        and not statement.name.startswith("__")
+    ]
+    mentioned = set(elsewhere)
+    for statement, span in spans:
+        if not span <= lines:
+            mentioned |= _identifiers(statement)
+    dead: dict[str, int] = {}
+    for statement in definitions:
+        if statement.name not in mentioned:
+            dead[statement.name] = dead.get(statement.name, 0) + 1
+    if not dead:
+        return {}, source
+    cut: set[int] = set()
+    for statement, span in spans:
+        if not span <= lines:
+            continue
+        names = _identifiers(statement)
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names = names | {statement.name}
+        if names & set(dead):
+            start, end = _statement_span(statement)
+            cut |= set(range(start, end + 1))
+    kept = [
+        line for number, line in enumerate(source.splitlines(keepends=True), 1) if number not in cut
+    ]
+    return dead, "".join(kept)
+
+
+def check_dead_additions(
+    sources: Mapping[str, str],
+    added: Mapping[str, Collection[int]],
+    *,
+    suite_passed: bool,
+    run_without: Callable[[Mapping[str, str]], int],
+) -> GateCheck:
+    """Code nothing depends on is not an implementation (T6-41).
+
+    Round 3e's n2 attempt 1 emitted a 21-line block sixty times, taking
+    `fees.py` from 41 lines to 1334, and nine of eleven gates passed it --
+    mutation included, at 88.8% over 80 mutants, because a `pass` body
+    admits no mutant and so never enters the population, while importing
+    the module executes it and satisfies coverage.
+
+    Not a gaming story, and the record was corrected: that was attempt 1,
+    which carries no failure brief, and its 47 586 characters of reasoning
+    name no gate, no percentage and none of the emitted helpers. The
+    repetition is an emission phenomenon -- the reasoning ends coherently
+    and the duplication begins in the content tokens after it. The
+    worker's prompt states the requirement behaviourally already ("every
+    changed line must be executed by the new tests") and that phrasing did
+    not help, because execution is a proxy under any wording.
+
+    So this check does not read intent and does not count lines: it asks
+    whether anything depends on what the node added, in `keep_candidate`'s
+    image. The private definitions no line of the tree mentions are
+    removed and the suite is run again; if it still passes, they carry
+    nothing. The suite failing is the honest answer and passes the gate.
+    A suite already red says nothing either way and the node fails on the
+    tests check instead.
+
+    The general form of the defect is that a line counts as exercised when
+    a test fails if its behaviour changes, not when it runs; this check
+    reaches one shape of that and T6-42 carries the rest.
+    """
+    if not suite_passed:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail="the suite is already failing; removing anything proves nothing",
+            basis="suite=red",
+        )
+    edited: dict[str, str] = {}
+    dead: dict[str, dict[str, int]] = {}
+    for path in sorted(added):
+        source = sources.get(path)
+        if source is None:
+            continue
+        elsewhere: set[str] = set()
+        for other, text in sources.items():
+            if other == path:
+                continue
+            try:
+                elsewhere |= _identifiers(ast.parse(text))
+            except SyntaxError:
+                continue
+        found, rest = _without_dead_additions(source, added[path], elsewhere)
+        if found:
+            dead[path] = found
+            edited[path] = rest
+    if not dead:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail="every private definition added is mentioned elsewhere in the tree",
+            basis=f"modules={len(added)}",
+        )
+    listing = "; ".join(
+        f"{path} adds "
+        + ", ".join(
+            name if count == 1 else f"{name} ({count} copies)"
+            for name, count in sorted(found.items())
+        )
+        for path, found in sorted(dead.items())
+    )
+    if run_without(edited) != 0:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail=f"{listing}; the suite fails without them, so they carry the work",
+            basis=f"dead-candidates={sum(len(f) for f in dead.values())}",
+        )
+    return GateCheck(
+        name="dead-code",
+        passed=False,
+        detail=(
+            f"{listing}, which nothing else in the tree mentions; the suite still "
+            f"passes with them removed, so they implement no requirement"
+        ),
+        basis=f"dead-definitions={sum(len(f) for f in dead.values())}",
+    )
+
+
 def _check_behaviour_preserved(coverage: GateCheck, mutation: MutationOutcome) -> GateCheck:
     """Red-phase stand-in for a node whose diff changes no test.
 
@@ -912,6 +1096,10 @@ class Tier1Inputs:
     current_runner: Callable[[], int]
     flipped_tests: Mapping[str, str]
     mutation: MutationOutcome
+    # T6-41: the lines the node added, per changed non-test module, and a
+    # runner that re-runs the suite over sources with some of them gone.
+    added_lines: Mapping[str, tuple[int, ...]]
+    dead_code_runner: Callable[[Mapping[str, str]], int]
     added_files: Collection[str] = ()
     # Repo-relative paths of every file the node changed or added (T3-2).
     touched_files: Collection[str] = ()
@@ -1018,12 +1206,12 @@ def _not_required(name: str) -> GateCheck:
 
 
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
-    """Run all eleven Tier-1 checks against `node`'s gate spec and aggregate.
+    """Run all twelve Tier-1 checks against `node`'s gate spec and aggregate.
 
     A `test` node is a red specification (T3-7a): its tests check inverts,
-    red-phase mirrors that verdict, and the two source-only checks
-    (coverage, mutation) are substituted with "not required" so the
-    order pin and the count stay the same for every kind.
+    red-phase mirrors that verdict, and the three source-only checks
+    (coverage, dead-code, mutation) are substituted with "not required" so
+    the order pin and the count stay the same for every kind.
     """
     gate = node.deterministic_gate
     sample = gate.mutation_sample
@@ -1055,6 +1243,14 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         ruff,
         tests,
         coverage,
+        _not_required("dead-code")
+        if is_spec
+        else check_dead_additions(
+            inputs.sources,
+            inputs.added_lines,
+            suite_passed=tests.passed,
+            run_without=inputs.dead_code_runner,
+        ),
         check_red_phase(
             inputs.baseline_exits,
             inputs.current_runner,
