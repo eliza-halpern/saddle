@@ -142,8 +142,8 @@ disagreement, G1's count stays at zero, and both plans died on the same
 gate) → T6-50 done (a call-shaped example binds to the test that
 performs it; the blocker, with the rejected tree now passing) → T6-51
 done (the sidecar keeps its reasoning whole) → T6-52 done (round 3g;
-F21.21: first node sealed, first impl node dispatched, Q8 a disagreement
-in the opposite direction — the gate rejected the correct artifact) →
+F21.21: Q8 a disagreement in the opposite direction — the gate rejected
+an artifact ground truth accepts) →
 **T6-54** (a recovery plan may not prescribe what a gate rejects; small,
 known-bad in hand) → **T6-53** (coverage may not demand what the graded
 node cannot supply; needs the user's fork decided) → round 3h, the next
@@ -6412,8 +6412,11 @@ fix. A falsified Q3-Q7, or a Q8 disagreement, is a main-session item.
 
 **DONE 2026-09-21 — Q8 DISAGREEMENT; G1's count stays at zero. F21.21.**
 `EXIT=1 WALL=6406`, 1 proven, 1 failed, 2 undispatched, oracle FAIL.
-The first run to seal a node (`refs/saddle/proven/n1`) and the first to
-dispatch an impl node. Q2–Q6 held; **Q3 and Q4 are T6-51's and T6-50's
+**Not** a first on either count, contrary to this entry's first draft:
+round 3c proved two nodes (`n1` and the impl node `n2.r1`) and 3d proved
+`n1`, and 3e reached `n2`. Only 3f died before an impl node, so Q6's
+pre-registered premise was wrong, and on proven count 3g is behind 3c.
+Q2–Q6 held; **Q3 and Q4 are T6-51's and T6-50's
 first live uses and both held** — no nested `thinking` truncated
 (115 239 characters retained at most) and `n1` sealed with
 `requirement-binding: PASS (1 requirement(s) bound, 4 example(s)
