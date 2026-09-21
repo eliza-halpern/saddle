@@ -305,11 +305,11 @@ def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[st
     """Write one attempt's evidence and return its sha256 for the span (T6-12).
 
     The evidence is what a failed attempt used to lose: the worker's
-    reasoning (scrubbed like every other journaled text), the finish
-    reason, the token usage the server reported, the cap the call was
-    sent, and the failure. It lives beside the journal rather than in it
-    so the chain and `saddle tail` stay small; the span's `attempt_hash`
-    is what makes it tamper-evident.
+    reasoning (redacted, and whole -- T6-51), the finish reason, the
+    token usage the server reported, the cap the call was sent, and the
+    failure. It lives beside the journal rather than in it so the chain
+    and `saddle tail` stay small; the span's `attempt_hash` is what makes
+    it tamper-evident.
     """
     path = attempt_sidecar_path(journal_path, span_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,11 +319,15 @@ def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[st
     return hashlib.sha256(encoded).hexdigest()
 
 
-# Sidecar text that is retained whole (T6-36): a `diff` has to hash to its
-# `diff_hash` or T6-27's check fails the journal, and a prompt is what a
-# replay needs verbatim. Both are still redacted. Every other string --
-# `thinking` above all -- is capped like the journal's own thinking.
-_RETAINED_WHOLE: Final = frozenset({"diff", "prompt"})
+# Sidecar text that is retained whole: a `diff` has to hash to its
+# `diff_hash` or T6-27's check fails the journal (T6-36), a prompt is what
+# a replay needs verbatim, and `thinking` is the reasoning every reading of
+# a failed attempt starts from (T6-51). All three are still redacted, and
+# every other string is capped. The journal's own entries are unaffected --
+# they cap thinking through `scrub_thinking`, and this set is read only by
+# `write_attempt_sidecar`, so `proofs.jsonl` and `saddle tail` stay small
+# while the per-attempt file beside them keeps the whole record.
+_RETAINED_WHOLE: Final = frozenset({"diff", "prompt", "thinking"})
 
 
 def _scrub_evidence(key: str, value: Any) -> Any:
@@ -335,6 +339,14 @@ def _scrub_evidence(key: str, value: Any) -> Any:
     aborted on its own journal and `saddle explain` refused it -- while
     the nested `samples[i]` text, where nearly all of the sidecar lives,
     was neither capped nor redacted.
+
+    Round 3f (F21.20): going recursive carried the cap *into* that nested
+    text, and `samples[i].thinking` is where a draw's reasoning lives.
+    Three samples lost 31 911, 58 927 and 45 345 characters, so the first
+    step of reading a failed attempt -- what did the model think it was
+    doing -- could not be taken from the record at all. Reasoning is
+    retained whole here for that reason; the cap still applies to every
+    other string, at every depth.
     """
     if isinstance(value, str):
         return redact_secrets(value) if key in _RETAINED_WHOLE else scrub_thinking(value)

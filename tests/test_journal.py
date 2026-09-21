@@ -904,8 +904,17 @@ def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_p
     aborted on its own journal and `saddle explain` refused it; and the
     scrub was one level deep, so nested `samples[i]` text was neither
     capped nor redacted. Known-good: a diff five times the cap is stored
-    whole and verifies; nested thinking is capped and nested secrets are
-    redacted; nested diffs and prompts keep their length."""
+    whole and verifies; nested secrets are redacted; nested diffs and
+    prompts keep their length. Known-bad: a nested string under a key
+    that is not retained is still capped, which is what says the scrub
+    reaches the nesting at all.
+
+    flip: the two `thinking` assertions, from capped to whole (T6-51,
+    F21.20). The old expectation pinned a defect -- the cap reaching
+    nested reasoning -- not a contract; the contract it was accidentally
+    protecting is that the scrub descends and redacts, and that is now
+    carried by `usage.note`, which is capped and redacted at the same
+    depth."""
     journal = tmp_path / "proofs.jsonl"
     diff = "diff --git a/n.py b/n.py\n" + "+x\n" * (MAX_THINKING_CHARS)
     long_thought = "t" * (MAX_THINKING_CHARS + 5)
@@ -920,7 +929,7 @@ def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_p
                 "diff_hash": hashlib.sha256(diff.encode()).hexdigest(),
                 "thinking": "key sk-abcdefghijkl then " + long_thought,
                 "prompt": "Bearer sk-abcdefghijkl " + "p" * MAX_THINKING_CHARS,
-                "usage": {"note": "AKIAABCDEFGHIJKLMNOP"},
+                "usage": {"note": "AKIAABCDEFGHIJKLMNOP " + long_thought},
                 "seed": 7,
             }
         ],
@@ -944,14 +953,57 @@ def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_p
     stored = json.loads(attempt_sidecar_path(journal, "a" * 32).read_bytes())
     assert stored["diff"] == diff
     assert stored["prompt"] == "p" * (MAX_THINKING_CHARS + 1)
-    assert stored["thinking"] == "t" * MAX_THINKING_CHARS + "\n[truncated 5 chars]"
+    assert stored["thinking"] == long_thought
     (sample,) = stored["samples"]
     assert sample["diff"] == diff
-    assert sample["thinking"].startswith("key *** then ")
-    assert sample["thinking"].endswith("\n[truncated 18 chars]")
+    assert sample["thinking"] == "key *** then " + long_thought
     assert sample["seed"] == 7
     assert sample["prompt"] == "Bearer *** " + "p" * MAX_THINKING_CHARS
-    assert sample["usage"] == {"note": "***"}
+    assert sample["usage"] == {
+        "note": ("*** " + long_thought)[:MAX_THINKING_CHARS] + "\n[truncated 9 chars]"
+    }
+
+
+def test_attempt_sidecar_keeps_reasoning_whole_at_every_depth(tmp_path: Path) -> None:
+    """T6-51, from round 3f (F21.20): the recursive scrub capped
+    `samples[i].thinking`, where a draw's reasoning lives, so three
+    samples lost 31 911, 58 927 and 45 345 characters and the first step
+    of reading a failed attempt could not be taken from the record.
+
+    Known-good: reasoning longer than the cap survives whole, at the top
+    level and nested, and a secret inside it is still redacted -- the
+    half that may not be lost when the cap goes. Known-bad: a string of
+    the same length under any other key is still truncated, in the same
+    sidecar, so this cannot pass by nothing being long enough. The
+    journal's own record is unchanged: `build_from_gate` caps through
+    `scrub_thinking`, which this does not touch."""
+    journal = tmp_path / "proofs.jsonl"
+    reasoning = "Let me read the failure. " + "r" * (MAX_THINKING_CHARS * 3)
+    evidence: dict[str, object] = {
+        "thinking": reasoning,
+        "detail": reasoning,
+        "samples": [{"thinking": "sk-abcdefghijkl said " + reasoning}],
+    }
+    write_attempt_sidecar(journal, "b" * 32, evidence)
+    stored = json.loads(attempt_sidecar_path(journal, "b" * 32).read_bytes())
+
+    assert stored["thinking"] == reasoning
+    assert stored["samples"][0]["thinking"] == "*** said " + reasoning
+    assert len(stored["detail"]) < len(reasoning)
+    assert stored["detail"].endswith(f"[truncated {len(reasoning) - MAX_THINKING_CHARS} chars]")
+
+    record = build_from_gate(
+        _proof_node(),
+        "diff n1\n",
+        _passing_result(),
+        [],
+        "e1",
+        thinking=reasoning,
+        task_hash="a" * 64,
+    )
+    assert record.thinking == reasoning[:MAX_THINKING_CHARS] + (
+        f"\n[truncated {len(reasoning) - MAX_THINKING_CHARS} chars]"
+    )
 
 
 def test_attempt_sidecar_is_sealed_into_its_span_and_verified(tmp_path: Path) -> None:
