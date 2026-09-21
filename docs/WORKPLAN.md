@@ -7238,7 +7238,7 @@ reports the true failing one. Contract mutants: revert to the prefix;
 force the step to 1; take the tail. Cap value stays `Literal[100]`; this
 changes *which* mutants, never how many.
 
-### T6-62 — A whole-file diff the ladder rejects is recoverable, and the recovery flips an existing contract (open: design decision first)
+### T6-62 — A whole-file diff the ladder rejects is recoverable (decided: A1 + A2, with C first)
 
 Files: `src/saddle/slice.py` (`_apply_diff`, `_APPLY_MODES`),
 `tests/test_slice.py` (`test_apply_diff_that_does_not_match_the_tree_raises`).
@@ -7324,7 +7324,81 @@ resulting tree, so a reconstruction that lost content fails `tests`.
 Treating apply as a correctness gate is what discards work that the
 gates were never given the chance to judge.
 
-### T6-63 — The mutation gate's detail must say whose fault a missing verdict is (tightened; detail wording)
+**Decision (2026-09-21): (A), as two items, plus (C).** Three of the
+costs priced against (A) above do not exist, and (B)'s central premise
+does not hold.
+
+What checking changed, each verified rather than estimated:
+
+- **Headroom is not a consideration either way.** Across every sidecar
+  in every round, `finish_reason` is `stop` 123 times and `length` once
+  — that one a 165 141-token reasoning blowout in round 3g, not content.
+  The whole t5 baseline is 7 170 bytes across four modules; re-emitting
+  every file whole is ~2k tokens against a median completion of 18 030.
+- **The gates never see the envelope.** `changed_lines` is computed from
+  `git_diff(workdir, baseline)` in `run_node_gate` — the tree, not the
+  worker's output. Mutation scoping, coverage and `check_dead_additions`
+  all read the tree and are indifferent to how it got there. The blast
+  radius priced above should not have included them.
+- **The frozen G1 known-bad survives.** `degenerate_round3e.diff` is
+  consumed through `_fixture_tree`, which parses it into `(sources,
+  added)`. It is a tree builder, not a worker-envelope sample.
+
+**(B) is withdrawn as a serious alternative.** Its premise was that the
+flip could be confined to whole-file diffs.
+`test_apply_diff_that_does_not_match_the_tree_raises` uses `@@ -1 +1 @@`
+on a one-line file, so the deliberate contract test *is itself*
+whole-file-shaped: there is nothing to confine the flip away from. And
+(B)'s rung fires only after a diff has already failed to apply — that
+is, on exactly the emissions whose relationship to the current tree is
+unverified. It concentrates the hazard that (A2) exists to handle,
+rather than avoiding it.
+
+**T6-62/A1 — the whole-file envelope.** The worker grammar,
+`vllm.propose_diff`, `_apply_diff`'s callers, the brief, and the
+diff-shaped fixtures. Not the gates.
+
+**T6-62/A2 — a write may not silently revert this node's earlier work.**
+Retries are cumulative by design: "Attempts 2..N keep the ref: a
+recovery diff lands on the previous attempt's tree, and the proof is the
+accumulated diff" (`_run_node` in slice.py), and `build_repair_prompt`
+tells the worker "Do not restate the whole change." Under a diff
+envelope, a write carrying stale content fails the apply loudly. Under
+whole files it succeeds and discards the earlier attempt, and every gate
+then judges a self-consistent tree and re-reports the original failure.
+The rule, deterministic and with no threshold: *a write may not return a
+file to a byte-identical copy of this node's baseline revision once the
+tree has moved past it.* Known-good, a retry that edits forward;
+known-bad, a retry that re-emits the baseline verbatim.
+
+State honestly what A2 is: **prophylaxis, not a repair.** The hazard has
+zero observed instances. All five recoverable rejected diffs reconstruct
+to implementations passing the hidden oracle 16/16, which is only
+possible if their content was current rather than baseline — and one of
+them (3i `n2` attempt 2) is itself a retry, the exact path at risk. A2
+is required because (A1) removes the loud detector, not because the
+detector has caught anything.
+
+**(C) is narrowed, and keeps its own number.** Per F21.39, recommendation
+row 36 asked for the submitted diff *or* `git apply`'s stderr on a failed
+apply and **both halves already landed** — the stderr rides in the
+failure message (T6-27) and the diff is `samples[i].diff` in the sidecar.
+The evidence is therefore not lost; it is unassembled. (C) is the
+smaller remaining step: reconstruct the file the context lines describe
+at failure time, record whether it parses, and attach it — so a reader
+sees the candidate tree instead of redoing by hand the work F21.38 did
+four times and F21.38a a fifth. Land it first; it is additive, it
+conflicts with nothing, and it is the only one of the three that pays
+off even if (A1) is never built.
+
+**One correction to carry into A1.** The `_APPLY_MODES` comment block in
+slice.py states the ladder's dominant cause as "context reproduced from
+memory with drifted whitespace". F21.38 measured otherwise: the context
+is reproduced from memory, but it drifts toward the model's *intended
+output*, which no whitespace flag reaches. Correct that comment wherever
+the ladder is next touched.
+
+### T6-63 — The mutation gate's detail must say whose fault a missing verdict is (LANDED `aedd098`)
 
 Files: `src/saddle/evidence.py` (`mutation_sample`, the non-zero exit
 branch ~:879), `tests/test_evidence.py`.
@@ -7353,6 +7427,30 @@ Known-good: a genuinely broken mutmut still renders as a tool failure.
 Known-bad: a tree whose own tests fail no longer does. G1's "state the
 behaviour" applies — the current string names a tool the worker cannot
 act on, instead of the failing suite it can.
+
+**Status: landed `aedd098`.** `mutation_sample` takes `suite_passed` — a
+fact about the tree, the way `check_dead_additions` already takes one —
+and marks the suite's case; `check_mutation` renders `mutation not
+measured: suite is red: …`. The exit-code interpretation stays in
+`runner.py`, which passes `current_exit == 0`, the tests gate's own
+verdict, already computed before the mutation call. Reproduced at HEAD
+first on a tree whose single test fails: mutmut was fine and the detail
+said the tool had failed.
+
+Both known-goods were pre-existing and are unchanged, so nothing flips:
+`test_mutation_failed_tool_is_named_not_undecided` (T3-20's wording) and
+`test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification`
+(a red *sibling* outside the node's scope stays the tool's case).
+
+Contract mutants: invert the decision DIED (3 tests); default
+`suite_passed` to False DIED (2); break the `red_suite` prefix DIED (1);
+runner passes `suite_passed=True` **SURVIVED the whole suite** — the
+conftest mutmut stub always exits 0 on `run`, so the branch was
+unreachable end-to-end and the fix was inert. A runner-level pair with a
+stub that fails the way the real engine does now kills it. The
+property-oracle call site's mutant is **equivalent**, proved by reading
+the consumer: `_check_property_oracle` branches only on `total` and
+`killed` and never reads `survivors`.
 
 ### T6-64 — Nothing tests the failure mode where the test node writes a wrong spec (open: no evidence either way)
 
