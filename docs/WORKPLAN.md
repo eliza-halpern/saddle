@@ -182,6 +182,33 @@ after the retro on priority, not dependency (line 109 stands).
 Contract changes stay in the main session; executors take docs,
 fixtures and measurement.
 
+**After round 3i (2026-09-21), by measured share of live failures.**
+F21.36 counted the failure modes, F21.37 corrected it — the census had
+pooled attempts across 19 gate-code revisions and indicted gates that
+were already repaired (`coverage`, `requirement-binding`, and the mutmut
+`failed to collect stats` crash: all fixed before the census ran). On
+the two rounds run against near-current code, emission is **53%** of
+failures and `mutation` is the only substance gate still rejecting work.
+So:
+
+```
+T6-62 (emission: 53% of live failures; round 3i's deciding node spent
+       two of three attempts on envelope shape while carrying
+       oracle-correct code) ──► the next seed
+T6-61 (stride; decided) ──► any seed read as evidence about the 85% threshold
+T6-63 (detail wording; independent, small) ──► nothing
+T6-64 (the unappealable test spec) ──► closes only on a completed run,
+       so it cannot precede one; its mitigation rides with T6-4/T6-5
+```
+
+T6-62 goes first because it is the only item whose absence is *known* to
+have cost a run: F21.38a. T6-64 is last not because it is least
+important — it is the one failure mode that yields a green run and a
+broken artifact — but because nothing can test it until a run completes,
+which is what T6-62 is for. O4 (the eleven-gate conjunction) and O5 (the
+37 168-character brief) are recorded in F21.36 as weakly supported and
+unevidenced respectively, and carry no item.
+
 ---
 
 ## 3. Tier 0 — make the documentation true (docs-only, no contract changes)
