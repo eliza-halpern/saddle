@@ -137,12 +137,14 @@ what the metric measured — round 3d's repair reasoning) → T6-44 done
 attempt records its reasoning effort; blocks every replay cell) → T6-48
 done (the apply ladder forgives packaging; a loosening with proof, and
 the precondition for T6-43 touching the grammar) → T6-34 done (attempt
-refs, stale comment) → round 3f, one T5
-seed (first run where the survivor round is reachable and every test
-node carries rejects; its first plan is also the `minItems` decoder
-check T6-4 owes) → T6-46 (the refusal path, once its discriminator is
-decided; not a round 3f precondition) → T6-1 (with the reasoning read, over rounds 3-3f; row
-B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39, T6-40 →
+refs, stale comment) → **T6-49 = round 3f**, one T5 seed and the first
+of Goal G1's three (worker effort stays at the node budget; first run
+where the survivor round is reachable and every test node carries
+rejects; its first plan is also the `minItems` decoder check T6-4 owes)
+→ T6-46 (the refusal path, once its discriminator is decided; not a
+round 3f precondition) → T6-1 (with the reasoning read, over rounds
+3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
+T6-40 →
 T6-2 → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -6078,6 +6080,77 @@ Where UP031 came from: no config file in the workdir or any ancestor,
 no user config, no env -- ruff 0.16.7's own default rule set includes
 UP, DTZ, YTT (`ruff check --show-settings` in the workdir), so the ruff
 gate's verdict is a function of the installed ruff version (T6-37).
+
+### T6-49 — Round 3f: one T5 seed under T6-36..T6-48 and T6-34, and the first of Goal G1's three seeds (measurement; no code)
+
+Same procedure as T6-35 (`RUN_DIR=runs/round3f/t5-s1 SAMPLE_TEMP=0.7
+DEADLINE=7200 ./run_arm.sh t5 saddle`, PREDICTION.md committed before
+the run), with saddle at the T6-34 commit or later. Everything between
+round 3e and this run is committed: T6-36 (the sidecar scrub), T6-37
+(saddle's own ruff rule set, sealed), T6-38 (the blank-lines apply
+rung), T6-41 (the dead-code gate), T6-42 (public deletions), T6-44
+(behaviour, not ratios, in every string the worker reads), T6-45 (the
+sealed server version), T6-47 (the effort on the record), T6-48 (the
+apply ladder forgives packaging), T6-34 (the attempt refs).
+
+**`--worker-effort` stays unset.** `run_arm.sh:66` passes
+`--reasoning-effort xhigh`, which is planner and replan only; the worker
+falls through `cli.py:677` to the plan's per-node `reasoning_budget`,
+which the planner sets to `low`. That is what rounds 3b-3e ran, and
+round 3f exists to count agreement under a stack that changed for other
+reasons -- raising the worker effort here would change two things at
+once and make the comparison with 3e unreadable. It also costs: F21.18
+timed `low` at 149-296 s a draw against `xhigh` at 721-1517 s, and
+`PROPOSAL_SAMPLES` draws on four nodes with retries does not fit
+DEADLINE=7200 at the high end. What this leaves open, stated so it is
+not mistaken for a result: **effort remains untested as a lever.** No
+cell has varied it with the grammar on and everything else held
+(F21.18's `low`/`xhigh` cells were confounded with the grammar). That
+is its own measurement, not this one.
+
+Pre-registered predictions. P1: every worker call finishes `stop`
+(12/12 in 3e). P2: the journal verifies and `saddle explain` runs on
+every attempt -- 3e's P2 was falsified by the 4000-character scrub cap
+that T6-36 fixed. P3: no gate verdict depends on a rule saddle did not
+select; `ruff=` and `ruff_rules=` are on the run span, and UP031 cannot
+fire from the pinned set (T6-37). P4: no attempt fails at apply for
+blank-line drift (T6-38) or for packaging -- a missing final newline or
+one enclosing fence (T6-48); an apply failure for any other reason is
+not a falsification. P5: every attempt that reaches a gate leaves
+`refs/saddle/attempt/<node-slug>/<n>` and its sidecar names that tree
+(T6-34) -- a known-good on live data, and its failure is a harness
+defect, not a worker one. P6: the survivor round becomes eligible on at
+least one impl node (3e's blocker was `ruff`, which is not in
+`SURVIVOR_GATES`; the pinned rule set removes the UP031 that kept it
+red). P7: at least one survivor draw is kept. P8: the impl node then
+seals behind the spliced test node and the proven count beats round
+3d's one.
+
+P9 is Goal G1 and is the reason for the run: **the run's gate verdicts
+and `oracles/oracle_t5.py` agree.** Either every node seals and the
+oracle passes, or a named node fails and the oracle fails for a reason
+that node's gate detail already gave. The oracle is never a gate and
+the worker never sees it. A run where every gate passes and the oracle
+fails is a gate defect and resets G1's count to zero; three consecutive
+agreeing seeds at temperature 0.7 is the floor, and this is seed one.
+
+Observations, pre-registered but not predictions: (a) `saddle explain`
+on every failed attempt, quoted in the finding (T6-1's reasoning read);
+(b) the reasoning effort each attempt ran at, read from the sidecar --
+the first round where it is on the record at all (T6-47); (c) whether
+any draw repeats a definition, and what the dead-code and
+public-deletions gates said about it (T6-41, T6-42, T6-43's population);
+(d) wall per draw and the metrics report's prefix-cache hit rate at the
+node budget, as the baseline the effort cell will be compared against.
+
+Do not `git gc` the run worktree: T6-34's refs are what makes a failed
+attempt's tree re-scorable without `lost-found` (F21.15). No verdict
+from a summary line -- read the reasoning whole, read `samples[i].diff`
+whole and count repeats, reproduce any disputed gate with saddle's own
+functions on a restored copy, and say which steps were done and which
+were not. Owner: executor (needs the key and the container up). Not in
+this item: any fix. A falsified P2-P8, or a P9 disagreement, is a
+main-session item.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
