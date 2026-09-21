@@ -153,7 +153,10 @@ host's git config and the host stopped supplying one) → round 3h, the next
 G1 seed → **T6-57** (a failed node reports the gate verdicts it actually
 produced; F21.26 -- two impl nodes' real verdicts were absent from their
 run's own report, and the scoring picture was wrong until the sidecars
-were read) → T6-46 (still no admissible example; round 3g checked and does
+were read) → **T6-58** (a requirement may not restate the gate; T6-44
+fixed saddle's own sentence and the planner still regenerates the proxy
+into requirement statements the worker reads — shown on 3g's retained
+prompt, post-T6-44) → T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
@@ -6878,6 +6881,97 @@ never gated.
 Owner: main session. Independent of everything queued; blocks nothing,
 but every measurement round until it lands can hide a verdict from the
 person scoring it.
+
+### T6-58 — A requirement may not restate the gate (tightened)
+
+Files: `src/saddle/cli.py` (`build_emit_prompt`, and the repair prompt),
+`src/saddle/gates.py` (a new plan-side predicate in
+`plan_prescribes_deletion`'s image), `tests/test_gates.py`,
+`tests/test_cli.py`.
+
+T6-44 removed the execution proxy from **saddle's own** worker rule and
+replaced it with the mutation form. It did not touch the instruction that
+regenerates the proxy, and the proxy still reaches the worker — laundered
+through the plan.
+
+`build_emit_prompt` still tells the planner (cli.py:347):
+
+```
+- changed_line_coverage_min is always 100.0: every line you change must
+  be executed by a test.
+```
+
+The planner then writes that into the artefacts the worker reads as
+binding. Round 3g's `n2.r1` prompt, retained whole (64 399 chars, and
+`e52912b` (T6-44) is an ancestor of the run's HEAD `9de4367` — so this is
+**after** the fix):
+
+```
+Node n2.r1: ... quantize with ROUND_HALF_UP to 2dp for USD/EUR and 0dp
+for JPY. Keep all changed lines covered by the gate command.
+Requirements (each test must fail if its statement is violated):
+  REQ-002: In accounts.py and fees.py, the system shall implement the
+  shared Decimal/USD-EUR-JPY money rules, with fee_for returning the fee
+  ..., and every changed line executed by tests/test_accounts.py and
+  tests/test_fees.py.
+```
+
+Two separate model-authored strings — the node description and the
+requirement statement — both restating the coverage gate as though it
+were behaviour, inside the one block headed "each test must fail if its
+statement is violated". Saddle's own rules block contains no such
+sentence any more (`grep` finds it only in `build_emit_prompt`).
+
+This is the exact shape Goal G1 names: a requirement satisfiable by a
+no-op. "Every changed line executed by tests/test_accounts.py" is
+satisfied by calling a function whose body is `pass`; "fee_for returns
+the fee for a positive amount below the fee" is not. The round-3e
+known-bad's placeholder docstring paraphrases a requirement of the first
+kind — "Placeholder to satisfy the requirement that every changed line is
+executed by tests" — and says so in the word *requirement*. That draw's
+own prompt cannot be read back (a pre-T6-36 record truncates it at 4 000
+chars with `[truncated 33168 chars]`), so 3e is consistent with this and
+does not prove it; 3g's retained prompt is the proof.
+
+A prompt change alone would be decorative (T6-45's rule: an instruction
+the harness cannot verify). So the item has two halves:
+
+1. **Instruction.** `build_emit_prompt` states the field's purpose
+   without restating it as a requirement the planner should echo, and
+   says requirements describe behaviour a test can falsify — never how
+   the gate measures.
+2. **Check.** A plan-side predicate, in `plan_prescribes_deletion`'s
+   image, rejects a plan whose requirement statement or node description
+   asserts that changed/added lines are *executed* or *covered*, or names
+   a coverage ratio. Rejected the way T6-54 rejects a recovery plan that
+   prescribes a deletion — the plan is refused and redrawn, not silently
+   rewritten.
+
+Direction: **tightened**. Nothing a gate accepts or rejects changes; the
+population of admissible *plans* narrows.
+
+- **known-good:** a requirement that names falsifiable behaviour passes
+  (3g REQ-002 with the trailing clause removed; 3f's and 3h's statements
+  as written), and a test node's requirement that legitimately names a
+  test file is not caught — the predicate keys on the execution/coverage
+  claim, not on the file name.
+- **known-bad:** 3g `n2.r1`'s REQ-002 verbatim, and its node description
+  sentence "Keep all changed lines covered by the gate command", both
+  frozen as fixtures from the retained prompt.
+
+Contract mutants to record: (1) drop the coverage-claim clause so the
+known-bad passes; (2) key the predicate on the gate's test-file names
+instead of the claim, so the known-good test-node requirement is caught;
+(3) bypass the call site in `run_task` (the T6-53/T6-54 wiring-mutant
+lesson — a predicate's mutants say nothing about whether anything calls
+it).
+
+Noted in passing, and not this item: the plan record journals requirement
+**ids** only, never their statements. The text a node was held to is
+recoverable solely from an attempt prompt, so a run whose prompts are
+truncated (anything before T6-36) cannot be audited on this at all.
+
+Owner: main session, after round 3h. Does not block 3h.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
