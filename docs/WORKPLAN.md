@@ -135,7 +135,9 @@ the metric measured — round 3d's repair reasoning) → T6-44 (behaviour,
 not a ratio, in every string the worker reads; owed before round 3f) →
 T6-45 (the sealed server version is one saddle asked for) → T6-47 (an
 attempt records its reasoning effort; blocks every replay cell) → T6-46
-(the refusal path, once its discriminator is decided) → T6-34
+(the refusal path, once its discriminator is decided) → T6-48 (the
+apply ladder forgives packaging; a loosening with proof, and the
+precondition for T6-43 touching the grammar) → T6-34
 (attempt refs, stale comment) → round 3f, one T5
 seed (first run where the survivor round is reachable and every test
 node carries rejects; its first plan is also the `minItems` decoder
@@ -4446,16 +4448,19 @@ not run, not a result. **Re-asked 2026-09-21** on the node T6-16 said it needed
 -- round 3e's n2 attempt 1, which repeats with no penalty set -- by
 replaying that attempt's retained prompt at its own three seeds and
 temperature, once with `DIFF_GRAMMAR` and once without, the two payloads
-differing in exactly one key. **Read the verdict as F21.17 in
-`../saddle-bench/runs/FINDINGS.md` before round 3f**, with the
-reproducer and raw per-draw records under
-`../saddle-bench/runs/round3e-probe/`. A grammar-implicated degeneration
-changes what T6-43 should fix (the grammar, not only the sampler) and
-what T6-38 and T6-39 should measure.
+differing in exactly one key. **Read the verdict as F21.18 in
+`../saddle-bench/runs/FINDINGS.md` before round 3f** -- F21.17 is the
+first pass and was not a control (it replayed a `low` attempt at
+`xhigh`); read it only for what F21.18 corrects. Reproducer and raw
+per-draw records under `../saddle-bench/runs/round3e-probe/`. A
+grammar-implicated degeneration changes what T6-43 should fix (the
+grammar, not only the sampler) and what T6-38 and T6-39 should
+measure.
 
-**Raw result read by the main session 2026-09-21, before F21.17 is
-written.** The discriminator could not fire, for the second time and a
-new reason: **neither arm degenerated**. All six draws are clean, with
+**First pass, superseded. Raw result read by the main session
+2026-09-21, before F21.17 was written.** The discriminator could not
+fire, for the second time and a new reason: **neither arm degenerated**.
+All six draws are clean, with
 most-repeated-line counts of 3 to 6 and 2 to 5 distinct blocks, against
 an original that repeated a 21-line block 60 times.
 
@@ -4497,6 +4502,42 @@ the grammar permits unbounded repetition at `section+` and `hline+`, and
 the only degeneration seen used both, but always under the penalty, so
 cause is not established. Re-asking needs a node that repeats without a
 penalty (§10).
+
+**Status 2026-09-21: ANSWERED, as F21.18.** The re-ask was run twice
+more, held at `low` -- the effort the run actually used, confirmed per
+draw by `prompt_tokens == 10615` -- with the grammar as the only
+manipulated variable: a seed cell (seeds 0/1/2, three concurrent per
+arm) and a replicate cell (one payload three times, sequential per arm).
+Eighteen draws.
+
+Both halves of the side finding above are now settled, and both are
+worse than it said. On form: not 2 of 3 but **0 of 9** unconstrained
+draws would have landed a change in saddle -- 8 of 8 non-empty
+grammar-on draws end with the newline `git apply` requires and 0 of 9
+grammar-off draws do (p = 4.1e-05), three of the nine are ```diff-fenced
+and all nine open with two blank lines. The grammar earns its keep on
+form decisively: 7/9 against 0/9 on landing at all (p = 0.0023). Six of
+those nine failures are packaging rather than content, which is T6-48.
+
+On repetition: the registered discriminator fires this time and in the
+opposite direction to "no difference". At `low`, **4 of 6 grammar-on
+draws degenerate, 1 emits nothing, 1 is clean; 0 of 6 grammar-off draws
+degenerate** (p = 0.061; 0.015 counting the empty emission), with a
+content spread of 10 235-45 332 chars against 9 381-12 057. Cause is
+still not established and F21.18 does not claim it: `root ::= section+`
+accepts after any complete `hline`, so the grammar does not prevent
+stopping. What is established is that the arm with the unbounded
+`section+` / `hline+` is the only one that overruns. T6-43 owns the
+experiment; do not let it buy a sampler penalty on this.
+
+Two constraints this places on every later cell. The server is not
+seed-deterministic -- six identical requests returned six distinct
+outputs -- so no replay is a control for a recorded draw, and Goal G1's
+three consecutive seeds means three runs. And `blocks_of`, the statistic
+F21.17 scored its whole table with, cannot see the increment costume at
+all: the worst draw here scores 5, because each of its 148 filler stubs
+has a different name. Score with `check_dead_additions` (T6-41), not
+with a max-repeat count.
 Files: `../saddle-bench/runs/round3b/degeneration/` (T6-15's
 `prompt.txt`, `settings.json`, arm (a) responses), `tools/
 structured_output_probe.py` (the request shape), `src/saddle/vllm.py`
@@ -5542,12 +5583,17 @@ passed, 3 skipped, 100% line+branch.
 ### T6-43 — Verbatim repetition in an emission is a defect, not a draw (tightened)
 Files: `src/saddle/vllm.py` (the sampler), `src/saddle/slice.py`
 (candidate scoring), `tests/test_vllm.py`.
-Finding: 2 of the 3 samples in round 3e's n2 attempt 1 degenerated into
-verbatim repetition -- sample 1 repeats a 21-line block 60 times
-(23 201 chars), sample 2 repeats "# Expose the property test so pytest
-can discover it." 333 times and `@given(` 151 times across 186 264 chars
-and 72 450 completion tokens. Sample 0 does not repeat and is the only
-one of the three that is a clean implementation. In both cases the
+Finding, corrected 2026-09-21 (F21.18): **3 of the 3** samples in round
+3e's n2 attempt 1 degenerated, each in a different costume. Sample 1
+repeats a 21-line block 60 times (23 201 chars; `_hypothesis_helper`,
+`_ensure_executed` and `_noop` 60/60/59 times, 183 of its 196 `+def`
+lines underscore filler). Sample 2 repeats "# Expose the property test
+so pytest can discover it." 333 times and `@given(` 151 times across
+186 264 chars and 72 450 completion tokens. **Sample 0 is not clean** --
+this item said it was, on no evidence: it defines `fee_for` 24 times,
+`apply_fee` 23 and `total_fees` 23 inside a single `fees.py` hunk, and
+`blocks_of` already scored it 72. The base rate for this node at
+`low` with the grammar on is 3/3, not 2/3. In both cases the
 reasoning is coherent and the repetition begins after it, so this is an
 emission-level pathology, not a planning one, and the cheap levers are
 the sampler's (a repetition or frequency penalty) and a candidate filter
@@ -5556,10 +5602,84 @@ duplicate. Note the interaction with T6-39: the 186 264-char draw also
 dominates the attempt's wall.
 Owner: main session. Measure first -- the penalty is a decode change and
 one seed cannot separate it from the 3x wall spread (goal clause 3).
-The measurement is T6-16's re-ask, reported as F21.17; read it before
-choosing a lever, because if the grammar is implicated then a sampler
-penalty is the wrong fix and `DIFF_GRAMMAR`'s unbounded `section+` and
-`hline+` are the right one.
+The measurement is T6-16's re-ask, reported as **F21.18** (F21.17 is the
+first, unfaithful pass; read both). Held at `low`, the effort the run
+used, with the grammar as the only manipulated variable and n=6 per arm
+across two cells of opposite scheduling: 4 of 6 grammar-on draws
+degenerate, 1 emits nothing, 1 is clean; 0 of 6 grammar-off draws
+degenerate (Fisher two-tailed p = 0.061, or 0.015 counting the empty
+emission). So the grammar is implicated and a sampler penalty is not the
+first lever. It is **not** a mechanism, and F21.18 refuses to claim one:
+`root ::= section+` is accepting after any complete `hline`, so the
+grammar never prevents stopping -- the grammar-off draws stop exactly on
+the diff's last line. What is established is that the arm holding the
+unbounded `section+` / `hline+` is the only one that overruns. Bounding
+them, and restricting the `"\\"` alternative to where git emits it, is
+this item's candidate; it must be measured, and F21.18's Result 5 sets
+the price: the server returns six distinct outputs for six identical
+requests (10 235-40 358 chars at one payload), so n=3 arms cannot
+separate a grammar or sampler change from noise.
+Do not drop the grammar: it is worth 7/9 against 0/9 on whether a draw
+lands at all. Anything that weakens it needs T6-48 landed first, because
+T6-48 is what forgives the packaging the grammar currently enforces.
+
+### T6-48 — The apply ladder discards a correct diff over its packaging (loosening, with proof)
+
+Files: `src/saddle/slice.py` (`_apply_diff`, the precheck at ~364 and
+the `_APPLY_MODES` ladder at ~371-395), `tests/test_slice.py`.
+
+Finding (F21.18). Of nine unconstrained draws of round 3e's n2 attempt 1
+-- two cells, both efforts -- **none applies as saddle sends it, and six
+of the nine are correct diffs rejected over packaging alone**. Four fail
+`corrupt patch at line N` for want of a final newline, and appending one
+`\n` makes them apply on the `strict` rung. Two more are wrapped in a
+complete ```diff fence, rejected by the precheck at `slice.py:364`
+before git runs; unfencing plus that newline also lands them on
+`strict`. Three genuinely do not apply and should not. All nine also
+open with two blank lines, which the ladder already tolerates.
+
+Nothing normalizes on the way: `run_stdin_capture` passes the text
+verbatim to stdin and `DiffProposal(diff=content, ...)` (vllm.py:476)
+does not touch it.
+
+Contract: a missing final newline, and a single enclosing markdown
+fence, are packaging and not content; the ladder judges the diff inside
+them. Direction: **LOOSENED**, and this is the proof the loosening rule
+requires -- the contract as written rejects six legitimate inputs, which
+is a claim that the contract is wrong, not that something is failing
+against it. The compensating tightening is not "unrepresentable"
+(`7282e1e`'s mistake): nothing here weakens what the ladder does once
+the diff is unwrapped, and a fence with anything outside it, or two
+fences, is still not a diff.
+
+Known-good: each of the six draws named above applies after the change,
+from the bytes the server returned, with no other edit. Known-bad: a
+response that is prose with a fenced diff embedded in it, and a response
+with two fenced blocks, are both still rejected by the precheck -- the
+allowance is one fence that encloses the whole content, nothing less.
+Fixtures come from `../saddle-bench/runs/round3e-probe/*.json`; do not
+hand-write them.
+
+Contract mutants (each target occurs once; abort if `grep -c` is not 1;
+drop `__pycache__` after each revert):
+1. Strip the fence but not the trailing newline -> the four
+   newline-only draws stay red on `corrupt patch`.
+2. Accept a fence anywhere rather than one enclosing the whole content
+   -> the prose-with-embedded-fence known-bad passes.
+3. Append the newline unconditionally, including to a diff that already
+   ends with one -> a grammar-on draw that applied on `strict` before
+   must still apply (this mutant should be *survivable*; if it is, say
+   so and keep the guard for shape, not for behaviour).
+
+**Vacuity note, stated honestly.** With `DIFF_GRAMMAR` on, the worker's
+output always ends with `\n` and never carries a fence (8/8 and 0/9 in
+F21.18), so this cannot fire in the production arm today. It is not
+dead: it is the precondition for T6-43 touching the grammar at all, and
+it is what the ladder owes if `--worker-effort` or a future model ever
+emits without one. Say this in the commit rather than implying the item
+fixes a live failure.
+
+Owner: main session; after T6-47, before any T6-43 grammar change.
 
 ### T6-44 — A requirement states a behaviour, and a gate detail names no ratio (tightened)
 
@@ -5734,17 +5854,31 @@ guess. Mutant: drop the field from the retained record -> the known-good
 red. Owner: main session; blocks T6-16 and any re-ask of T6-43, because
 neither is interpretable while the replay cannot reproduce its baseline.
 
-**Second finding, a hypothesis and not a result.** That node ran at
-`low`. The planner's own instruction (cli.py, `reasoning_budget`) is to
+**Second finding, was a hypothesis, now partly measured (F21.18).**
+That node ran at `low`. The planner's own instruction (cli.py, `reasoning_budget`) is to
 "reserve medium/xhigh for complex algorithmic nodes", and this node
 wrote three modules with per-currency rounding. At `low` it degenerated
-in 2 of 3 draws; at `xhigh` it did not degenerate in 6. That is
-uncontrolled -- different n, one prompt, no repetition -- and it is not
-evidence that effort causes the degeneration. It is enough to say the
-next cell should vary effort rather than the grammar, and that T6-43
-should not buy a sampler penalty before that is run. Note also that the
-planner chose `low` for this node, so if effort matters the lever may be
-the planner's budget assignment, not the sampler.
+in 3 of 3 draws (F21.18 corrects the 2 of 3 this item first recorded);
+at `xhigh` it did not degenerate in 6.
+
+That contrast was uncontrolled -- different n, one prompt, no
+repetition, and confounded with the grammar, since every round 3e worker
+draw had the grammar on. F21.18 removed the grammar confound by holding
+`low` and varying the grammar alone over 12 more draws: the grammar-on
+arm degenerates 4 of 6 and the grammar-off arm 0 of 6, so the `low` arm
+of the effort contrast was really *low + grammar*. Effort itself is
+still untested as a lever -- no cell has varied effort with the grammar
+held off -- so the sentence that stands is narrower: the next cell that
+wants to blame effort must run that arm. Note also that the planner
+chose `low` for this node, so if effort matters the lever may be the
+planner's budget assignment, not the sampler.
+
+One thing T6-47 can no longer promise. F21.18 showed this deployment
+returns six distinct outputs for six byte-identical requests, so
+recording `reasoning_effort` buys a cell that is *faithful*, never one
+that is a *reproduction*. Write the contract as fidelity (a replay built
+from the sidecar bills the attempt's own `prompt_tokens`) and do not
+claim replay.
 
 ---
 
