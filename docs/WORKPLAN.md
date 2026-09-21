@@ -5037,7 +5037,10 @@ Owner: main session for the change; the container run is the user's or
 an executor's with the container up.
 
 **Status (2026-09-20):** DONE, `592f906`, main session; structural pin
-and corpus cases committed. Container run of the corpus: pending.
+and corpus cases committed. Container run of the corpus: **56/56 cases
+correct** (user, 2026-09-20, `tools/diff_grammar_check.py --run` in the
+serving container at `592f906`; 53 before, plus the two rejects and the
+creation admit). Closed.
 
 ### T6-33 — Text-only mutants leave the mutation population (scope narrowed, with proof)
 
@@ -5061,6 +5064,25 @@ that remain, all of which a specification could pin.
 **Status (2026-09-20):** DONE, `592f906`, main session. Whether n2's
 existing tests clear the bar over the behavioural population is round
 3e's first question.
+
+### T6-33a — Measure T6-33 on round 3d's n2 without a draw (measurement; F21.15; no code)
+
+Files: `../saddle-bench/probes/t6_33_measure.py` (new),
+`../saddle-bench/runs/round3d-measure/`, `../saddle-bench/runs/FINDINGS.md`.
+
+Round 3d's n2 scored `78.3% < 85.0%` over a population the probe showed
+was half text-only. Procedure: with saddle at `592f906` or later,
+reconstruct n2's attempt-2 tree as T6-29a did (`runs/round3d/t5-s1`,
+baseline ref plus the sealed diff), run `saddle.evidence.mutation_sample`
+over the same changed lines with the same `max_mutants` and scoped
+`run_tests` the gate would use, and report: total, killed, survivors,
+`text_only`, the percentage, and the gate verdict `check_mutation`
+would give at 85%. Also the same for attempt 1. Needs no key and no
+container. Known-good: `text_only` is greater than zero and the
+survivors list contains no message-only mutant; known-bad: a mutant the
+probe classed behavioural is still in the population. Owner: executor.
+Before round 3e: if n2 clears the bar on its existing tests, round 3e is
+a rerun; if not, the gap is real and T6-29c closes it.
 
 ### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
 
