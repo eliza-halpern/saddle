@@ -5119,6 +5119,36 @@ whole-tree survivor count, not the gate's denominator (13 on attempt 2).
 The `check_mutation` comment in `src/saddle/gates.py` still says "a
 66-survivor gap"; T6-34 fixes the wording.
 
+### T6-35 — Round 3e: one T5 seed under T6-29c (measurement; F21.16; no code)
+
+Same procedure as T6-26 (`RUN_DIR=runs/round3e/t5-s1 SAMPLE_TEMP=0.7
+DEADLINE=7200 ./run_arm.sh t5 saddle`, PREDICTION.md before the run),
+with saddle at `85ef057` or later. `--survivor-effort low` and
+`--survivor-samples 10` are the defaults, so `run_arm.sh` needs no
+change; the run span's settings record both. Before the run, one
+bench-side fix from T6-28's preflight: `metrics_sample.py` declares
+`vllm:prefix_cache_queries` and `vllm:prefix_cache_hits` where this
+server exposes them with a `_total` suffix (17/19 names matched); spell
+them as the server does, so the preflight reads 19/19 and the report has
+the prefix-cache hit rate. P1-P3 as T6-19. P4 (the first impl node
+seals) held in round 3d for n1. The live questions are T6-29c's: P6, the
+first impl node that fails only coverage or mutation gets a
+`survivor-tests` span rather than a retry; P7, at least one of its ten
+draws is kept (kills a survivor or covers a gap line); P8, the impl node
+then seals behind the spliced test node, and the run's proven count is
+higher than round 3d's one. Pre-registered observations: (a) the
+survivor draws' walls and finish reasons at effort `low` under the 6000
+token cap (T6-29a's reasoning-off draws were 1/10 truncated; does `low`
+fit the cap?); (b) how many draws parse (T6-29a: 6/10) and how many are
+dropped as red on the real tree (T6-29a: 3/10 plausible-but-wrong); (c)
+whether a kept candidate's test node passes its own gate (red on the
+baseline, property present, ruff clean) or the recovery burns on the
+gate; (d) `saddle explain` on every failed attempt, quoted in the
+finding (T6-1's reasoning read starts here). Known-bad worth stating:
+if no node reaches a coverage or mutation miss, P6-P8 are unresolved,
+not falsified. Owner: executor (needs the key and the container up).
+Not in this item: any fix; a FALSIFIED P6-P8 is a main-session item.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
