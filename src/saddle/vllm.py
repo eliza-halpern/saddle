@@ -520,6 +520,26 @@ def _checked_json(response: httpx.Response) -> Any:
         raise VllmResponseError(msg) from exc
 
 
+API_ROOT_SEGMENT: Final = "v1"
+
+
+def _version_url(base_url: httpx.URL) -> httpx.URL:
+    """The version endpoint beside the API root, not under it (T6-45).
+
+    vLLM serves its version at the server root while the OpenAI-compatible
+    API is mounted under `/v1`, so a request built relative to the API root
+    asks for `/v1/version` and is answered 404 -- which `served_version`
+    then records as `unknown`, a refusal the server never made. A
+    deployment mounted under a prefix keeps that prefix, so only the API
+    segment itself is dropped: `/inference/v1` -> `/inference/version`.
+    """
+    segments = [part for part in base_url.path.split("/") if part]
+    if segments and segments[-1] == API_ROOT_SEGMENT:
+        segments.pop()
+    segments.append("version")
+    return base_url.copy_with(path="/" + "/".join(segments), query=None, fragment=None)
+
+
 class VllmClient:
     """Sync httpx client for guided DAG emission."""
 
@@ -717,9 +737,11 @@ class VllmClient:
         return _model_ids(self._models())
 
     def server_version(self) -> str | None:
-        """GET /version; the server's version string, or None when it has none (T6-27)."""
+        """The server's version string, or None when it has none (T6-27, T6-45)."""
         try:
-            response = self._client.get("/version", timeout=PREFLIGHT_TIMEOUT)
+            response = self._client.get(
+                _version_url(self._client.base_url), timeout=PREFLIGHT_TIMEOUT
+            )
         except httpx.HTTPError as exc:
             msg = f"request failed: {exc}"
             raise VllmRequestError(msg) from exc

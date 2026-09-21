@@ -950,8 +950,40 @@ def test_server_version_reads_the_version_endpoint() -> None:
     """T6-27: the served version, or None when the endpoint has none."""
     client, seen = _json_client({"version": "0.28.0"})
     assert client.server_version() == "0.28.0"
-    assert seen[0].url.path.endswith("/version")
+    assert seen[0].url.path == "/version"
     client, _ = _json_client({})
     assert client.server_version() is None
     with pytest.raises(VllmRequestError, match="request failed"):
         _failing_client(httpx.ConnectError("down")).server_version()
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("http://127.0.0.1:18020/v1", "/version"),
+        ("http://127.0.0.1:18020/v1/", "/version"),
+        ("http://127.0.0.1:18020", "/version"),
+        ("http://example.test/inference/v1", "/inference/version"),
+    ],
+    ids=["default", "trailing slash", "no api segment", "mounted under a prefix"],
+)
+def test_server_version_asks_beside_the_api_root_not_under_it(base_url: str, expected: str) -> None:
+    """T6-45: /version is a sibling of the /v1 API root, not a child of it.
+
+    Known-bad: the live server answers 200 at its root and 404 at
+    `/v1/version`, so a request built relative to the API root seals
+    `unknown` for a version the server was willing to give.
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"version": "0.28.0"})
+
+    client = VllmClient(
+        api_key="test-key",
+        base_url=base_url,
+        transport=httpx.MockTransport(handler),
+    )
+    assert client.server_version() == "0.28.0"
+    assert seen[0].url.path == expected
