@@ -36,6 +36,7 @@ from saddle.gates import (
     check_target_files,
     check_test_command,
     introduced_findings,
+    plan_prescribes_deletion,
     run_tier1,
 )
 
@@ -1998,3 +1999,108 @@ def test_public_deletions_accepts_an_async_definition_kept() -> None:
     gone = check_public_deletions(before, {"m.py": "x = 1\n"})
     assert not gone.passed
     assert gone.detail.startswith("m.py no longer defines fetch;")
+
+
+def test_plan_prescribes_deletion_rejects_the_round3g_brief_that_prescribed_it() -> None:
+    """The real artifact: the harness told the worker to do what T6-42 rejects.
+
+    `n2.r1` attempt 1 failed `coverage` on eleven lines. The diagnosis
+    step answered with a numbered plan whose step 2 removes `to_dict`,
+    `from_dict`, `__eq__` and `__repr__` -- round 3d's behaviour, routed
+    to the worker by saddle itself. The attempt that followed spent
+    1871 s and 149 151 output tokens and ended `length` with no diff,
+    because `check_public_deletions` would have rejected any diff that
+    obeyed it.
+    """
+    plan = (FIXTURES / "recovery_plan_deletes_public_round3g.txt").read_text()
+    diff = (FIXTURES / "repair_deletes_public_round3d.diff").read_text()
+    baseline = {"accounts.py": _baseline(diff, "accounts.py")}
+    offending = plan_prescribes_deletion(plan, baseline)
+    assert offending is not None
+    assert "remove the `to_dict()`, `from_dict()`, `__eq__`, and `__repr__`" in offending
+
+
+def test_plan_prescribes_deletion_routes_a_plan_that_names_the_same_members() -> None:
+    """The discriminating half, and the vacuity check in one.
+
+    A diagnosis that names exactly the members the rejected plan names,
+    without proposing their removal, is the plan we want the worker to
+    get. If this returned an offending line the check would be pinning
+    the names rather than the instruction, and nothing would ever route.
+    """
+    diff = (FIXTURES / "repair_deletes_public_round3d.diff").read_text()
+    baseline = {"accounts.py": _baseline(diff, "accounts.py")}
+    plan = (
+        "1. `to_dict`, `from_dict`, `__eq__` and `__repr__` are uncovered "
+        "because the test that exercises them belongs to another node.\n"
+        "2. Cover the two `bool` guards from the tests this node owns.\n"
+    )
+    assert plan_prescribes_deletion(plan, baseline) is None
+
+
+def test_plan_prescribes_deletion_routes_the_removal_of_a_private_helper() -> None:
+    """Deleting an implementation detail is advice a gate would accept."""
+    baseline = {"m.py": "def _helper():\n    return 1\n\n\ndef api():\n    return _helper()\n"}
+    plan = "1. Remove the `_helper` function and inline its body into `api`.\n"
+    assert plan_prescribes_deletion(plan, baseline) is None
+
+
+def test_plan_prescribes_deletion_rejects_removing_a_dunder() -> None:
+    """Three of round 3d's four deletions were dunders.
+
+    A rule keyed on the leading underscore would route the instruction
+    that produced most of the artifact `public-deletions` exists to
+    reject.
+    """
+    baseline = {"m.py": "class A:\n    def __eq__(self, other):\n        return True\n"}
+    plan = "1. Delete `__eq__`; no test compares two instances.\n"
+    assert plan_prescribes_deletion(plan, baseline) == (
+        "1. Delete `__eq__`; no test compares two instances."
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Do not remove `api`; it is required by a later node.",
+        "Never delete `api`.",
+        "Fix the guard rather than remove `api`.",
+        "Cover the branch instead of deleting `api`.",
+        "Repair it without removing `api`.",
+    ],
+)
+def test_plan_prescribes_deletion_routes_a_negated_removal(line: str) -> None:
+    """A negator binds the verb beside it, so the opposite instruction routes."""
+    baseline = {"m.py": "def api():\n    return 1\n"}
+    assert plan_prescribes_deletion(line + "\n", baseline) is None
+
+
+def test_plan_prescribes_deletion_still_reads_a_removal_after_an_unrelated_not() -> None:
+    """The negator window is short so a `not` earlier in the line cannot shield it."""
+    baseline = {"m.py": "def api():\n    return 1\n"}
+    plan = "The failure is not in `fees.py`; remove `api` from `m.py`.\n"
+    assert plan_prescribes_deletion(plan, baseline) is not None
+
+
+def test_plan_prescribes_deletion_ignores_a_test_files_own_definitions() -> None:
+    """A test node may legitimately be told to drop a test it wrote."""
+    baseline = {"tests/test_m.py": "def test_api():\n    assert True\n"}
+    plan = "1. Remove `test_api`, which asserts nothing.\n"
+    assert plan_prescribes_deletion(plan, baseline) is None
+
+
+def test_plan_prescribes_deletion_routes_everything_when_no_baseline_is_public() -> None:
+    """With nothing public to protect there is no instruction to withhold."""
+    assert plan_prescribes_deletion("Remove everything.\n", {"m.py": "x = 1\n"}) is None
+
+
+def test_plan_prescribes_deletion_reads_only_what_the_verb_governs() -> None:
+    """A public name the instruction preserves is not its object.
+
+    "Keep `api` but remove `_helper`" removes the helper. A check that
+    asked only whether the clause mentions a public name would withhold
+    the plan that says to keep it.
+    """
+    baseline = {"m.py": "def _helper():\n    return 1\n\n\ndef api():\n    return _helper()\n"}
+    plan = "1. Keep `api` but remove `_helper`.\n"
+    assert plan_prescribes_deletion(plan, baseline) is None

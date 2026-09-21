@@ -23,6 +23,7 @@ from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.evidence import RUFF_RULES, git_ls_files, ruff_version, run_argv
+from saddle.gates import plan_prescribes_deletion
 from saddle.journal import (
     JournalIssue,
     SpanRecord,
@@ -490,18 +491,24 @@ def build_repair_prompt(
     files: Sequence[str],
     contents: Mapping[str, str],
     failure: str,
-    plan: str,
+    plan: str | None,
 ) -> str:
     """Repair prompt: the worker brief plus evidence and the recovery plan.
 
     The tree already holds the failed attempt, so the worker fixes
     forward against the current contents instead of restating the change.
+
+    `plan` is `None` when the diagnosis step produced an instruction a
+    gate would reject (T6-54); the section is then absent rather than
+    replaced, so the worker fixes forward on the failure alone and the
+    harness does not hand it a plan it cannot legally follow.
     """
     base = build_worker_prompt(task=task, node=node, files=files, contents=contents)
+    recovery = "" if plan is None else "\n\nRecovery plan:\n" + plan
     return (
         base + "\nThe previous attempt failed. Fix forward: propose a diff against "
         "the CURRENT tree state above that repairs the failure below. "
-        "Do not restate the whole change.\n\nRecovery plan:\n" + plan + "\n\n" + failure
+        "Do not restate the whole change." + recovery + "\n\n" + failure
     )
 
 
@@ -700,13 +707,14 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 temperature=options.temperature,
                 reasoning_effort=effort,
             )
+            prescribed = plan_prescribes_deletion(plan, contents)
             prompt = build_repair_prompt(
                 task=options.task,
                 node=node,
                 files=files,
                 contents=contents,
                 failure=failure,
-                plan=plan,
+                plan=None if prescribed is not None else plan,
             )
         return client.propose_diff(
             prompt,

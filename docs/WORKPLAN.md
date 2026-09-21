@@ -146,8 +146,8 @@ F21.21: Q8 a disagreement in the opposite direction — the gate rejected
 an artifact ground truth accepts) →
 **T6-54** (a recovery plan may not prescribe what a gate rejects; small,
 known-bad in hand) → **T6-53** (coverage may not demand what the graded
-node cannot supply; BLOCKED — F21.22 falsified the premise the user's
-fork choice rested on, needs re-deciding) → round 3h, the next
+node cannot supply; option (c) as the user chose, premise re-verified
+against the task prompt's §7) → round 3h, the next
 G1 seed → T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
@@ -6504,7 +6504,22 @@ fixture — it must be accepted, since ground truth accepts it. Known-bad
 is a node that adds a private helper nothing will ever reach, which must
 still fail. Both halves, or not done.
 
-**BLOCKED 2026-09-21 — the chosen option rests on a falsified premise.**
+**UNBLOCKED 2026-09-21 — option (c) stands; the block below is retracted.**
+The record shape those eleven lines implement is the one the task prompt
+specifies under **§7 Store** (`{"owner": str, "balances": {currency:
+"decimal-string"}}`), i.e. **REQ-004**, node `n4`; §4 Accounts requires
+no serialization change and explicitly keeps `.balance`. So the
+behaviour is REQ-004's, the code sits in `accounts.py` which only `n2`
+may edit, and the test is `tests/test_store.py` which belongs to `n3`.
+The covering node is absent **when the gate asks** and present later —
+exactly the shape a deferral answers. Coverage at drain is contingent on
+`n4` routing `save_accounts` through `Account.to_dict`, and if it does
+not, failing the run is correct: nothing ever exercised REQ-004's record
+format. The G1-disagreement objection does not arise, because the oracle
+cannot pass while those lines are unexercised — the hidden store suite is
+what exercises them. Proceed with **(c)** as chosen.
+
+**Retracted block, kept for the record.**
 The user chose **(c)** on 2026-09-21, on this entry's first-draft
 reading that the exerciser "belongs to a requirement no sealed node
 owns" — i.e. that a *later* node would supply the coverage. F21.22
@@ -6586,6 +6601,33 @@ dunders and T6-42 already counts them public.
 Vacuity: a test must show the check is capable of passing a plan that
 mentions the same names, or it is pinning the string rather than the
 instruction.
+
+**DONE 2026-09-21 — `plan_prescribes_deletion` (gates.py) + the routing
+at cli.py's `propose`; tightened.** A removal verb governs the names in
+its own clause, and a negator in that clause turns it around; a plan
+that offends is withheld and `build_repair_prompt` omits the section
+rather than emitting an empty heading. Test files are excluded from the
+protected set, since a test node may legitimately be told to drop a test
+it wrote. The round 3g brief is frozen at
+`tests/fixtures/recovery_plan_deletes_public_round3g.txt`.
+
+Mutants, all killed: **M1** negation ignored (5 tests died); **M2**
+clause split dropped so the whole line is one clause (2); **M3** test
+files counted as public API (1); **M4** the verb governs the whole
+clause rather than what follows it (1); **M5** the call-site wiring
+bypassed so every plan routes (1).
+
+**M5 SURVIVED on the first run, against the whole 850-test suite**, and
+that is the finding worth keeping. The predicate was well tested and
+`build_repair_prompt(plan=None)` was well tested, but nothing drove
+`run_task` with a plan that prescribes a deletion, so deleting the
+wiring changed no test. `cli.py` was at 100% line *and* branch coverage
+throughout — other tests took both sides of the conditional — which is
+CLAUDE.md's opening case reproduced exactly: coverage proves a line ran,
+not that anything could catch it changing. Closed by
+`test_run_task_withholds_a_recovery_plan_that_prescribes_a_deletion`,
+parametrized over a withheld plan and a routed one so the diagnosis step
+does not become dead weight. `./check.sh` green, 852 passed, 100%.
 
 Owner: main session. Independent of T6-53 and much smaller; it can land
 first.

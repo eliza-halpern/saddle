@@ -528,6 +528,94 @@ def check_public_deletions(
     )
 
 
+# Verbs a recovery plan uses to propose taking code out, and the words that
+# turn one into its opposite. Both are read within a clause, never across
+# one: a removal verb governs the names standing with it, so "remove the
+# `_helper` and inline its body into `api`" removes only the helper, and a
+# negator turns around only the verb it shares a clause with, so "the
+# failure is not in fees.py; remove `to_dict`" keeps its removal.
+_REMOVAL_VERBS: Final = (
+    "remove",
+    "removing",
+    "delete",
+    "deleting",
+    "drop",
+    "dropping",
+    "strip",
+    "stripping",
+    "eliminate",
+    "eliminating",
+)
+_NEGATORS: Final = (
+    "not",
+    "never",
+    "avoid",
+    "without",
+    "cannot",
+    "can't",
+    "don't",
+    "doesn't",
+    "shouldn't",
+    "mustn't",
+    "than",
+    "of",
+)
+_REMOVAL_RE: Final = re.compile(r"\b(?:" + "|".join(_REMOVAL_VERBS) + r")\b", re.IGNORECASE)
+# What separates one instruction from the next inside a single line.
+_CLAUSE_RE: Final = re.compile(r";|\band\b|\bthen\b", re.IGNORECASE)
+
+
+def plan_prescribes_deletion(plan: str, baseline_sources: Mapping[str, str]) -> str | None:
+    """A recovery plan instruction that takes out public API (T6-54).
+
+    Returns the offending line, or `None` when the plan is safe to route.
+
+    Round 3g's `n2.r1` failed `coverage` on eleven lines, and the
+    harness's own diagnosis step answered with "In `accounts.py`, remove
+    the `to_dict()`, `from_dict()`, `__eq__`, and `__repr__` methods (no
+    test exercises them)" -- round 3d's behaviour, prescribed to the
+    worker by the harness. `check_public_deletions` would have rejected
+    the diff that followed it, so the instruction cost an attempt that
+    could not have succeeded: 1871 s and 149 151 output tokens ending
+    `length` with no diff.
+
+    The judgement is the same set `check_public_deletions` computes, read
+    against the plan's text instead of against a tree, so no model
+    decides whether a plan is good advice. A line offends when it pairs
+    an un-negated removal verb with a name the baseline defines publicly;
+    a plan that merely names those members, or that proposes removing a
+    private helper, routes unchanged.
+    """
+    public: set[str] = set()
+    for rel, text in baseline_sources.items():
+        if _is_test_file(rel):
+            # A test's own helpers are not the API later nodes expect, and
+            # a test node may legitimately be told to drop a test it wrote.
+            continue
+        names = _public_definitions(text)
+        if names is None:
+            continue
+        for name in names:
+            public.add(name)
+            # `Class.method` is how the gate spells a method and "remove
+            # the `to_dict()` methods" is how a plan does.
+            public.add(name.rpartition(".")[2])
+    if not public:
+        return None
+    named = re.compile(r"\b(?:" + "|".join(re.escape(name) for name in sorted(public)) + r")\b")
+    for line in plan.splitlines():
+        if not named.search(line):
+            continue
+        for clause in _CLAUSE_RE.split(line):
+            match = _REMOVAL_RE.search(clause)
+            if match is None or not named.search(clause[match.end() :]):
+                continue
+            before = clause[: match.start()].lower().split()
+            if not any(word.strip(".,;:()`\"'") in _NEGATORS for word in before):
+                return line.strip()
+    return None
+
+
 def check_dead_additions(
     sources: Mapping[str, str],
     added: Mapping[str, Collection[int]],

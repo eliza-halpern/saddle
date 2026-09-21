@@ -3052,3 +3052,69 @@ def test_run_parses_the_survivor_knobs() -> None:
     assert (args.survivor_effort, args.survivor_samples) == ("none", 4)
     defaults = build_parser().parse_args(["run", "task"])
     assert (defaults.survivor_effort, defaults.survivor_samples) == ("low", SURVIVOR_SAMPLES)
+
+
+def test_build_repair_prompt_omits_the_section_when_no_plan_survives() -> None:
+    """A withheld plan leaves no `Recovery plan:` heading behind (T6-54).
+
+    The worker fixes forward on the failure alone rather than being
+    handed an empty heading, which reads as a diagnosis that found
+    nothing.
+    """
+    node = Node.model_validate(_node_dict())
+    prompt = build_repair_prompt(
+        task=TASK,
+        node=node,
+        files=["n.py"],
+        contents={"n.py": "def f():\n    return 3\n"},
+        failure="Attempt 1 of 3 failed 1 gate(s):\n- tests: exited 1\n",
+        plan=None,
+    )
+    assert "Recovery plan:" not in prompt
+    assert "Do not restate the whole change.\n\nAttempt 1 of 3" in prompt
+    assert "--- n.py ---\ndef f():\n    return 3\n" in prompt
+
+
+@pytest.mark.parametrize(
+    ("plan", "routed"),
+    [
+        ("Plan: remove `f` from `n.py`; no test calls it.", False),
+        ("Plan: `f` returns the wrong value, so return 2 instead.", True),
+    ],
+)
+def test_run_task_withholds_a_recovery_plan_that_prescribes_a_deletion(
+    tmp_path: Path, plan: str, routed: bool
+) -> None:
+    """The wiring, not the predicate (T6-54).
+
+    Known-bad is round 3g's attempt 2: the diagnosis step answered a
+    coverage failure with "remove the `to_dict()`, `from_dict()`,
+    `__eq__`, and `__repr__` methods" and saddle handed that to the
+    worker, which spent 1871 s and 149 151 output tokens ending `length`
+    with no diff -- a deletion `public-deletions` would have rejected.
+    The routed half is here because a check that withheld every plan
+    would pass a one-sided test while making the diagnosis step dead
+    weight: the same run must still carry a plan that only says what is
+    wrong.
+    """
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    truncate_first = PROPOSAL_SAMPLES + 1
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if not _is_diff_request(payload):
+            if "Decompose the mechanical coding task" in _prompt(payload):
+                return _emit_response({"nodes": [_node_dict()]})
+            return _text_response(plan)
+        diffs = sum(1 for call in seen if _is_diff_request(call))
+        return _truncated_response() if diffs <= truncate_first else _diff_response()
+
+    client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+    code, out = _run(_options(tmp_path), client)
+    assert code == 0, out
+    repair = _prompt([call for call in seen if _is_diff_request(call)][-1])
+    assert "Attempt 1 of 3" in repair
+    assert ("Recovery plan:" in repair) is routed
+    assert (plan in repair) is routed
