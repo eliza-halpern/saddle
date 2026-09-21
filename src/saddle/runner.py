@@ -27,12 +27,19 @@ from saddle.evidence import (
     mutation_sample,
     property_modules,
     pytest_scope,
+    ruff_findings,
     run_capture,
     run_shell_capture,
     statement_lines,
     under_coverage,
 )
-from saddle.gates import RED_PHASE_SAMPLES, Tier1Inputs, Tier1Result, run_tier1
+from saddle.gates import (
+    RED_PHASE_SAMPLES,
+    Tier1Inputs,
+    Tier1Result,
+    introduced_findings,
+    run_tier1,
+)
 from saddle.journal import SpanRecorder
 
 
@@ -147,9 +154,19 @@ def run_node_gate(
     current_exit = suite.exit_code
     covered = covered_lines(data_file, changed_files)
     test_sources = read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")
+    ruff_files = [
+        Path(path).relative_to(workdir).as_posix() for path in changed_files if path.endswith(".py")
+    ]
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp)
         materialize_baseline(workdir, baseline, dest, recorder=recorder)
+        # The ruff baseline leg (T6-3), on the untouched baseline tree
+        # before red-phase writes stubs and tests into it: findings the
+        # node inherited are reported, not charged to it.
+        at_baseline = [rel for rel in ruff_files if (dest / rel).exists()]
+        baseline_findings = (
+            ruff_findings(dest, at_baseline, recorder=recorder)[1] if at_baseline else []
+        )
         baseline_tests = read_sources(dest, "test_*.py") | read_sources(dest, "*_test.py")
         tests_changed = _test_signatures(baseline_tests) != _test_signatures(test_sources)
         # Red-phase means the node's own tests against pre-change sources.
@@ -195,11 +212,17 @@ def run_node_gate(
             if sample_index == 0:
                 baseline_output = baseline_run.stdout + baseline_run.stderr
 
-    def ruff_runner(argv: list[str]) -> int:
-        run = run_capture(argv, workdir, recorder=recorder)
+    if ruff_files:
+        lint_run, current_findings = ruff_findings(workdir, ruff_files, recorder=recorder)
+        format_run = run_capture(
+            ["ruff", "format", "--check", *ruff_files], workdir, recorder=recorder
+        )
         if capture is not None:
-            capture.append(run)
-        return run.exit_code
+            capture.extend((lint_run, format_run))
+        lint_exit, format_exit = lint_run.exit_code, format_run.exit_code
+    else:
+        current_findings, lint_exit, format_exit = [], 0, 0
+    introduced, inherited = introduced_findings(current_findings, baseline_findings)
 
     sample = gate.mutation_sample
     # A test node changes no source, so there is nothing to mutate and the
@@ -242,12 +265,11 @@ def run_node_gate(
     )
     inputs = Tier1Inputs(
         sources=sources,
-        ruff_files=[
-            Path(path).relative_to(workdir).as_posix()
-            for path in changed_files
-            if path.endswith(".py")
-        ],
-        ruff_runner=ruff_runner,
+        ruff_files=ruff_files,
+        ruff_introduced=tuple(introduced),
+        ruff_inherited=inherited,
+        ruff_lint_exit=lint_exit,
+        ruff_format_exit=format_exit,
         test_runner=lambda _command: current_exit,
         changed=changed,
         covered=covered,

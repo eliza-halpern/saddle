@@ -300,10 +300,33 @@ def _captured_run_tool(argv: Sequence[str]) -> str | None:
     return CAPTURED_RUN_TOOL.get(name)
 
 
-def _run_is_allowed(run: CapturedRun, tools: Collection[str]) -> bool:
-    """Is this captured run's output a capability the node asked for (T3-4)?"""
+# Which `allowed_tools` name a failed gate's output belongs to (T6-31): a
+# captured run whose gate failed is the node's own evidence and reaches
+# the worker whatever the plan declared.
+GATE_TOOL: Final[dict[str, str]] = {
+    "ruff": "lint",
+    "tests": "run_tests",
+    "coverage": "run_tests",
+    "red-phase": "run_tests",
+}
+
+
+def _run_is_allowed(
+    run: CapturedRun, tools: Collection[str], failed_gates: Collection[str]
+) -> bool:
+    """Is this run's output a capability the node asked for (T3-4), or the
+    output of a gate the node failed (T6-31)?
+
+    Round 3d's n2 saw `ruff check exited 1, format exited 0` twice and
+    nothing else, because its plan had not declared `lint`; the gates
+    whose verdicts carry file:line inline improved in the same attempts.
+    `allowed_tools` bounds what the worker may do; a failed gate's output
+    is evidence, not a capability.
+    """
     governing = _captured_run_tool(run.argv)
-    return governing is None or governing in tools
+    if governing is None or governing in tools:
+        return True
+    return governing in {GATE_TOOL.get(name) for name in failed_gates}
 
 
 def format_attempt_failure(
@@ -317,18 +340,19 @@ def format_attempt_failure(
     """Render one failed attempt as repair evidence: gates plus failing output.
 
     `tools` is the node's `allowed_tools`, and it decides which captured
-    output the worker gets back: `run_tests` for the suite, `lint` for
-    ruff. The gate verdict lines are unconditional -- they are the node's
-    own result, not a tool's -- so a node that declared neither still
-    learns which gates failed, just not in what words.
+    output the worker gets back for gates that passed: `run_tests` for
+    the suite, `lint` for ruff. The output of a gate the node failed is
+    always included (T6-31). The gate verdict lines are unconditional --
+    they are the node's own result, not a tool's.
     """
     failed = [check for check in result.checks if not check.passed]
     lines = [f"Attempt {attempt} of {max_attempts} failed {len(failed)} gate(s):"]
     lines.extend(f"- {check.name}: {check.detail}" for check in failed)
+    failed_names = [check.name for check in failed]
     for run in captured:
         if run.exit_code == 0:
             continue
-        if not _run_is_allowed(run, tools):
+        if not _run_is_allowed(run, tools, failed_names):
             continue
         output = (run.stdout + "\n" + run.stderr).strip()
         if len(output) > RECOVERY_OUTPUT_CHARS:

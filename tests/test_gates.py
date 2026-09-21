@@ -14,9 +14,11 @@ from saddle.gates import (
     PYTEST_COLLECTION_ERROR,
     PYTEST_TESTS_FAILED,
     RED_PHASE_SAMPLES,
+    RUFF_NAMED_FINDINGS,
     SHELL_TIMEOUT,
     TOOL_UNAVAILABLE,
     GateCheck,
+    RuffFinding,
     Tier1Inputs,
     check_assertion_preservation,
     check_changed_line_coverage,
@@ -29,6 +31,7 @@ from saddle.gates import (
     check_syntax,
     check_target_files,
     check_test_command,
+    introduced_findings,
     run_tier1,
 )
 
@@ -70,7 +73,10 @@ def _passing_inputs() -> Tier1Inputs:
     return Tier1Inputs(
         sources={"n1.py": "x = 1\n"},
         ruff_files=["n1.py"],
-        ruff_runner=lambda _argv: 0,
+        ruff_introduced=(),
+        ruff_inherited=0,
+        ruff_lint_exit=0,
+        ruff_format_exit=0,
         test_runner=lambda _cmd: 0,
         changed={("n1.py", 1)},
         covered={("n1.py", 1)},
@@ -91,53 +97,78 @@ def test_syntax_killer_fixture_invalid_syntax_fails() -> None:
     assert "node.py" in check.detail
 
 
-def test_ruff_killer_fixture_lint_failure_fails() -> None:
-    def run(argv: list[str]) -> int:
-        return 1 if argv[1] == "check" else 0
+def _finding(
+    code: str = "F401", path: str = "n.py", row: int = 1, line: str = "import os"
+) -> RuffFinding:
+    return RuffFinding(code=code, path=path, row=row, message=f"{code} message", line=line)
 
-    check = check_ruff(["n.py"], run)
+
+def test_ruff_introduced_finding_fails_and_is_named() -> None:
+    """T6-3 known-bad: a finding the baseline did not carry fails the node,
+    and the detail names rule, file and line (F21.13d: `ruff check exited
+    1` told the worker nothing)."""
+    check = check_ruff(["n.py"], introduced=[_finding()], inherited=0, lint_exit=1, format_exit=0)
     assert check.passed is False
     assert check.name == "ruff"
-    assert "check exited 1" in check.detail
+    assert check.detail == "introduced 1 finding(s): n.py:1 F401 F401 message"
+
+
+def test_ruff_inherited_finding_is_reported_and_does_not_fail() -> None:
+    """T6-3 known-good: a finding the baseline already carried is inherited;
+    the node passes with it counted in the detail."""
+    check = check_ruff(["n.py"], introduced=[], inherited=1, lint_exit=1, format_exit=0)
+    assert check.passed is True
+    assert check.detail == "1 file(s) clean; inherited: 1"
 
 
 def test_ruff_format_failure_fails() -> None:
-    def run(argv: list[str]) -> int:
-        return 0 if argv[1] == "check" else 2
-
-    check = check_ruff(["n.py"], run)
+    check = check_ruff(["n.py"], introduced=[], inherited=0, lint_exit=0, format_exit=2)
     assert check.passed is False
-    assert "format exited 2" in check.detail
+    assert check.detail == "ruff format --check exited 2"
+
+
+def test_ruff_nonzero_with_nothing_parsed_fails_closed() -> None:
+    """A nonzero `ruff check` that yielded no findings and inherited none is
+    the tool failing, not a clean tree."""
+    check = check_ruff(["n.py"], introduced=[], inherited=0, lint_exit=2, format_exit=0)
+    assert check.passed is False
+    assert check.detail == "ruff check exited 2 with no findings parsed"
 
 
 def test_ruff_clean_passes() -> None:
-    seen: list[list[str]] = []
-
-    def run(argv: list[str]) -> int:
-        seen.append(argv)
-        return 0
-
-    check = check_ruff(["b.py", "a.py"], run)
+    check = check_ruff(["b.py", "a.py"], introduced=[], inherited=0, lint_exit=0, format_exit=0)
     assert check.passed is True
     assert check.detail == "2 file(s) clean"
-    assert seen == [
-        ["ruff", "check", "a.py", "b.py"],
-        ["ruff", "format", "--check", "a.py", "b.py"],
+
+
+def test_ruff_detail_elides_past_the_named_findings() -> None:
+    many = [_finding(row=i, line=f"line {i}") for i in range(1, RUFF_NAMED_FINDINGS + 3)]
+    check = check_ruff(["n.py"], introduced=many, inherited=2, lint_exit=1, format_exit=0)
+    assert check.detail.endswith("(+2 more); inherited: 2")
+    assert check.detail.count("F401 message") == RUFF_NAMED_FINDINGS
+
+
+def test_introduced_findings_match_by_source_line_not_row() -> None:
+    """T6-3 known-good: the inherited finding moved down three lines and is
+    still inherited; known-bad: a new finding on a new line is introduced,
+    and a second copy of an inherited one is introduced too."""
+    baseline = [_finding(row=2, line="except Exception:")]
+    current = [
+        _finding(row=5, line="except Exception:"),
+        _finding(code="E501", row=9, line="x = 1  # long"),
+        _finding(row=12, line="except Exception:"),
     ]
+    introduced, inherited = introduced_findings(current, baseline)
+    assert inherited == 1
+    assert [(f.code, f.row) for f in introduced] == [("E501", 9), ("F401", 12)]
+    assert introduced_findings([], baseline) == ([], 0)
 
 
 def test_ruff_no_files_passes_without_running() -> None:
-    seen: list[list[str]] = []
-
-    def run(argv: list[str]) -> int:
-        seen.append(argv)
-        return 0
-
-    check = check_ruff([], run)
+    check = check_ruff([], introduced=[], inherited=0, lint_exit=0, format_exit=0)
     assert check.passed is True
     assert check.name == "ruff"
     assert check.detail == "no files to lint"
-    assert seen == []
 
 
 def test_syntax_valid_sources_pass() -> None:
@@ -597,7 +628,9 @@ def test_tests_missing_tool_names_the_tool_not_an_exit_code() -> None:
 
 
 def test_ruff_missing_tool_names_the_tool() -> None:
-    check = check_ruff(["n.py"], lambda _argv: TOOL_UNAVAILABLE)
+    check = check_ruff(
+        ["n.py"], introduced=[], inherited=0, lint_exit=TOOL_UNAVAILABLE, format_exit=0
+    )
     assert check.passed is False
     assert "unavailable" in check.detail.lower()
 

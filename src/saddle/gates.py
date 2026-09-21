@@ -34,6 +34,8 @@ SHELL_TIMEOUT: Final = 124
 # reason: T1 v2 failed with no gate lines in the transcript, the only
 # evidence being a journal span reading "[Errno 2] ... 'coverage'".
 TOOL_UNAVAILABLE: Final = 127
+# How many introduced ruff findings the gate detail names before eliding (T6-3).
+RUFF_NAMED_FINDINGS: Final = 5
 # Baseline runs sampled per red-phase check. Red-phase is the only gate
 # that reasons over two runs, so its evidence is worth exactly what the
 # stability of the pre-change leg is worth; one observation cannot tell a
@@ -103,26 +105,108 @@ def check_syntax(sources: Mapping[str, str]) -> GateCheck:
     return GateCheck(name="syntax", passed=True, detail=f"{len(sources)} file(s) parsed")
 
 
-def check_ruff(files: Collection[str], run: Callable[[list[str]], int]) -> GateCheck:
-    """Ruff lint and format checks; either nonzero exit fails the gate."""
+@dataclass(frozen=True)
+class RuffFinding:
+    """One ruff diagnostic, keyed for matching across trees (T6-3).
+
+    `line` is the stripped source line the finding sits on, so a finding
+    the baseline already carried is the same finding after the node's
+    edit shifts it down three lines; `row` is for the human reading the
+    detail, not for matching.
+    """
+
+    code: str
+    path: str
+    row: int
+    message: str
+    line: str
+    column: int = 0
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        return (self.code, self.path, self.line)
+
+
+def introduced_findings(
+    current: Sequence[RuffFinding], baseline: Sequence[RuffFinding]
+) -> tuple[list[RuffFinding], int]:
+    """Split the current findings into (introduced, inherited count) (T6-3).
+
+    A current finding is inherited when the baseline holds one with the
+    same (code, path, source line) not already claimed by an earlier
+    current finding; every other current finding is the node's own.
+    """
+    pool: dict[tuple[str, str, str], int] = {}
+    for finding in baseline:
+        pool[finding.key] = pool.get(finding.key, 0) + 1
+    introduced: list[RuffFinding] = []
+    inherited = 0
+    for finding in current:
+        if pool.get(finding.key, 0) > 0:
+            pool[finding.key] -= 1
+            inherited += 1
+        else:
+            introduced.append(finding)
+    return introduced, inherited
+
+
+def check_ruff(
+    files: Collection[str],
+    *,
+    introduced: Sequence[RuffFinding],
+    inherited: int,
+    lint_exit: int,
+    format_exit: int,
+) -> GateCheck:
+    """The ruff gate (T6-3): a node fails for lint its own diff introduced.
+
+    `introduced` are the current tree's findings absent from the node's
+    baseline, `inherited` how many the baseline already carried;
+    `lint_exit` and `format_exit` are the two ruff runs' exits. A finding
+    the node inherited is reported and does not fail it (T2's impl node
+    burned three attempts on a BLE001 the baseline shipped, and the fix
+    that was finally accepted was a `noqa` on code it never wrote).
+    Formatting is unchanged: the harness formats the diff, so a format
+    failure is always the node's. The detail names the rules, file and
+    line (F21.13d: `ruff check exited 1` told the worker nothing).
+    """
     ordered = sorted(files)
     if not ordered:
         return GateCheck(name="ruff", passed=True, detail="no files to lint")
-    lint_code = run(["ruff", "check", *ordered])
-    format_code = run(["ruff", "format", "--check", *ordered])
-    if TOOL_UNAVAILABLE in (lint_code, format_code):
+    if TOOL_UNAVAILABLE in (lint_exit, format_exit):
         return GateCheck(
             name="ruff",
             passed=False,
             detail="ruff unavailable: the gate tool could not be launched",
         )
-    if lint_code != 0 or format_code != 0:
+    inherited_note = f"; inherited: {inherited}" if inherited else ""
+    if introduced:
+        named = ", ".join(
+            f"{f.path}:{f.row} {f.code} {f.message}" for f in introduced[:RUFF_NAMED_FINDINGS]
+        )
+        more = len(introduced) - RUFF_NAMED_FINDINGS
+        suffix = f" (+{more} more)" if more > 0 else ""
         return GateCheck(
             name="ruff",
             passed=False,
-            detail=f"ruff check exited {lint_code}, format exited {format_code}",
+            detail=f"introduced {len(introduced)} finding(s): {named}{suffix}{inherited_note}",
         )
-    return GateCheck(name="ruff", passed=True, detail=f"{len(ordered)} file(s) clean")
+    if lint_exit != 0 and not inherited:
+        # Nonzero with nothing parsed is the tool failing, not a verdict.
+        return GateCheck(
+            name="ruff",
+            passed=False,
+            detail=f"ruff check exited {lint_exit} with no findings parsed{inherited_note}",
+        )
+    if format_exit != 0:
+        return GateCheck(
+            name="ruff",
+            passed=False,
+            detail=f"ruff format --check exited {format_exit}{inherited_note}",
+        )
+    return GateCheck(
+        name="ruff", passed=True, detail=f"{len(ordered)} file(s) clean{inherited_note}"
+    )
 
 
 def _failing_test_count(output: str) -> int:
@@ -698,7 +782,13 @@ class Tier1Inputs:
 
     sources: Mapping[str, str]
     ruff_files: Collection[str]
-    ruff_runner: Callable[[list[str]], int]
+    # The two ruff legs, already run by the runner (T6-3): the current
+    # tree's findings the baseline did not carry, how many it did, and
+    # the exits of `ruff check` (current) and `ruff format --check`.
+    ruff_introduced: tuple[RuffFinding, ...]
+    ruff_inherited: int
+    ruff_lint_exit: int
+    ruff_format_exit: int
     test_runner: Callable[[str], int]
     changed: set[tuple[str, int]]
     covered: set[tuple[str, int]]
@@ -814,7 +904,13 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
     sample = gate.mutation_sample
     is_spec = node.kind == "test"
     syntax = check_syntax(inputs.sources)
-    ruff = check_ruff(inputs.ruff_files, inputs.ruff_runner)
+    ruff = check_ruff(
+        inputs.ruff_files,
+        introduced=inputs.ruff_introduced,
+        inherited=inputs.ruff_inherited,
+        lint_exit=inputs.ruff_lint_exit,
+        format_exit=inputs.ruff_format_exit,
+    )
     tests = check_test_command(
         gate.test_command,
         inputs.test_runner,

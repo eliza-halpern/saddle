@@ -2349,10 +2349,13 @@ def _captured(argv: tuple[str, ...], marker: str) -> list[CapturedRun]:
 
 
 def _failed_gate() -> Tier1Result:
+    # A failed gate that maps to no tool: under T6-31 a failed tests or
+    # ruff gate's output reaches the worker regardless, so the probes
+    # below must measure the binding on a gate that passed.
     return Tier1Result(
         node_id="n1",
         passed=False,
-        checks=(GateCheck(name="tests", passed=False, detail="'pytest test_n.py' exited 1"),),
+        checks=(GateCheck(name="node-scope", passed=False, detail="impl node changed tests"),),
     )
 
 

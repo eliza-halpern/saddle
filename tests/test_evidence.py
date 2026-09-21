@@ -31,6 +31,7 @@ from saddle.evidence import (
     property_modules,
     pytest_scope,
     restore_baseline,
+    ruff_findings,
     run_argv,
     run_capture,
     run_shell,
@@ -1093,3 +1094,43 @@ def test_mutation_sample_failed_run_names_the_tool(
         generated=0,
         survivors=("mutmut run exited 1: AssertionError: Module name starts with src.",),
     )
+
+
+def test_ruff_findings_parse_the_engine_and_render_human_lines(tmp_path: Path) -> None:
+    """T6-3 against the real engine: the JSON run yields findings keyed by
+    source line and a captured run whose stdout is one human line each;
+    a clean file yields none and exit 0."""
+    (tmp_path / "m.py").write_text("import os\n\nx = 1\n")
+    run, findings = ruff_findings(tmp_path, ["m.py"])
+    assert run.exit_code == 1
+    assert run.argv == ("ruff", "check", "m.py")
+    assert [(f.code, f.path, f.row, f.line) for f in findings] == [("F401", "m.py", 1, "import os")]
+    assert run.stdout.startswith("m.py:1:8: F401 ")
+    (tmp_path / "c.py").write_text("x = 1\n")
+    run, findings = ruff_findings(tmp_path, ["c.py"])
+    assert (run.exit_code, findings, run.stdout) == (0, [], "")
+
+
+def test_ruff_findings_tolerates_bad_json_and_unreadable_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T6-3 edges: output that is not JSON yields no findings (the exit code
+    still says the tool failed); a non-object entry is skipped; a finding
+    whose file cannot be read carries an empty source line."""
+    import saddle.evidence as evidence_module
+
+    def fake_run(argv: list[str], cwd: Path, *, recorder: object = None) -> CapturedRun:
+        return CapturedRun(argv=tuple(argv), exit_code=2, stdout=fake_run.stdout, stderr="boom")  # type: ignore[attr-defined]
+
+    monkeypatch.setattr(evidence_module, "run_capture", fake_run)
+    fake_run.stdout = "not json"  # type: ignore[attr-defined]
+    run, findings = ruff_findings(Path("/w"), ["m.py"])
+    assert (run.exit_code, findings, run.stdout, run.stderr) == (2, [], "", "boom")
+    fake_run.stdout = (  # type: ignore[attr-defined]
+        '[1, {"code": "E999", "filename": "/w/gone.py", "message": "m", "location": {"row": 3}}]'
+    )
+    run, findings = ruff_findings(Path("/w"), ["gone.py"])
+    assert [(f.code, f.path, f.row, f.line, f.column) for f in findings] == [
+        ("E999", "gone.py", 3, "", 0)
+    ]
+    assert run.stdout == "gone.py:3:0: E999 m"

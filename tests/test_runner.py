@@ -185,16 +185,21 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "git",
         "coverage",
         "git",
+        # T6-3: the ruff baseline leg on the snapshot, before red-phase
+        # writes stubs and tests into it.
+        "ruff",
         # One coverage span per red-phase baseline sample: the pre-change
         # leg is observed RED_PHASE_SAMPLES times so a flaky failure
         # cannot pass as a genuine red.
         *["coverage"] * RED_PHASE_SAMPLES,
+        # T6-3: both ruff legs on the current tree run in the runner, before
+        # the mutation sample, not inside the gate predicate.
+        "ruff",
+        "ruff",
         "timeout",
         # `results`, then one `show` per mutant in the sample.
         "mutmut",
         *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
-        "ruff",
-        "ruff",
     ]
     assert all(span.node_id == "n1" for span in spans)
     # Spans 4..6 are the red-phase baseline samples: same coverage-wrapped
@@ -204,6 +209,7 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     # The baseline samples all exit 1: unanimous, which is what a stable
     # pre-change leg looks like. Disagreement here is what fails the gate.
     assert [span.exit_code for span in spans] == [
+        0,
         0,
         0,
         0,
@@ -357,6 +363,41 @@ def test_run_node_gate_lint_dirty_fails(tmp_path: Path) -> None:
     assert result.passed is False
     ruff = next(check for check in result.checks if check.name == "ruff")
     assert ruff.passed is False
+    # T6-3: the detail names the rule, file and line.
+    assert ruff.detail.startswith("introduced 1 finding(s): n.py:1 F401 ")
+
+
+def test_run_node_gate_inherited_lint_does_not_fail_and_a_shift_is_still_inherited(
+    tmp_path: Path,
+) -> None:
+    """T6-3 known-good: the baseline ships `n.py` with an unused import; the
+    node adds a clean function below it (the finding moves down) and
+    passes with `inherited: 1`. Known-bad: a diff that adds its own
+    unused import to the same file fails naming that finding only."""
+    dirty = "import os\n\n\ndef f():\n    return 1\n"
+    clean_add = "import os\n\n\ndef g():\n    return 0\n\n\ndef f():\n    return 2\n"
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(
+        tmp_path, test_body, baseline_code=dirty, fixed_code=clean_add, baseline_test=test_body
+    )
+    captured: list[CapturedRun] = []
+    result = run_node_gate(_node(), tmp_path, capture=captured)
+    ruff = next(check for check in result.checks if check.name == "ruff")
+    assert ruff.passed is True, ruff.detail
+    assert ruff.detail == "1 file(s) clean; inherited: 1"
+    assert [run.argv[:2] for run in captured] == [
+        ("coverage", "run"),
+        ("ruff", "check"),
+        ("ruff", "format"),
+    ]
+    also_dirty = "import os\nimport sys\n\n\ndef f():\n    return 2\n"
+    (tmp_path / "n.py").write_text(also_dirty)
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    result = run_node_gate(_node(), tmp_path)
+    ruff = next(check for check in result.checks if check.name == "ruff")
+    assert ruff.passed is False
+    assert ruff.detail.startswith("introduced 1 finding(s): n.py:2 F401 ")
+    assert ruff.detail.endswith("; inherited: 1")
 
 
 def test_run_node_gate_suffix_style_test_binds(tmp_path: Path) -> None:

@@ -405,16 +405,20 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "git",
         "coverage",
         "git",
+        # T6-3: the ruff baseline leg on the snapshot.
+        "ruff",
         # One per red-phase baseline sample (#54): this node's test is
         # unchanged from its own baseline (T2-2a's honest impl fixture), so
         # `tests_changed` is False and only one sample is taken.
         *["coverage"] * 1,
+        # T6-3: both ruff legs on the current tree run in the runner, before
+        # the mutation sample, not inside the gate predicate.
+        "ruff",
+        "ruff",
         "timeout",
         # `results`, then one `show` per mutant in the sample (#49).
         "mutmut",
         *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
-        "ruff",
-        "ruff",
         # T3-10: the tree the gate passed on -- `add -u`, `write-tree`,
         # `commit-tree`, `update-ref` again -- taken after the verdict and
         # before the record is sealed, so the proof names its worktree.
@@ -788,8 +792,12 @@ def test_run_slice_withholds_suite_output_from_a_node_without_run_tests(
     assert failure is not None
     assert "Attempt 1 of 3 failed 3 gate(s):" in failure
     assert "- tests: 'pytest test_n.py' exited 1" in failure
-    assert "FAILED" not in failure
-    assert "coverage run" not in failure
+    # flip (T6-31, F21.13d): the tests gate failed, so its output reaches
+    # this `lint`-only node; before, it was withheld and the worker repaired
+    # only what it could see. The passed-gate half of T3-4 is pinned in
+    # test_repair_prompt_withholds_output_of_a_passed_gate_without_its_tool.
+    assert "FAILED" in failure
+    assert "coverage run" in failure
 
 
 def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
@@ -1433,16 +1441,48 @@ def test_repair_prompt_withholds_test_output_without_run_tests() -> None:
         ),
         CapturedRun(argv=("ruff", "check", "n.py"), exit_code=1, stdout="n.py:1:1 F401", stderr=""),
     ]
+    # T6-31: the tests gate FAILED in `_failed_result`, so its output is
+    # the node's own evidence and reaches the worker whatever the plan
+    # declared (flip: this assertion said "withheld" until F21.13d showed
+    # ruff failing 2/2 on a brief that named no rule while the gates with
+    # inline detail improved). The passed-gate half is the test below.
     text = format_attempt_failure(
         _failed_result(), captured, attempt=1, max_attempts=3, tools=["lint"]
     )
-    # Withheld: the suite's own output and its header.
-    assert "assert 1 == 2" not in text
-    assert "coverage run -m pytest" not in text
-    # Kept: the lint output this node did ask for, and the gate verdicts.
+    assert "assert 1 == 2" in text
     assert "--- `ruff check n.py` (exit 1) ---" in text
     assert "n.py:1:1 F401" in text
     assert "- tests: 'pytest test_n.py' exited 1" in text
+
+
+def test_repair_prompt_withholds_output_of_a_passed_gate_without_its_tool() -> None:
+    """T3-4 known-bad, kept under T6-31: a captured run whose gate PASSED
+    stays governed by `allowed_tools`. Here ruff failed and the suite
+    passed, so a `lint`-only node sees ruff and not the suite."""
+    result = Tier1Result(
+        node_id="n1",
+        passed=False,
+        checks=(
+            GateCheck(name="tests", passed=True, detail="'pytest test_n.py' exited 0"),
+            GateCheck(name="ruff", passed=False, detail="introduced 1 finding(s): n.py:1 F401"),
+        ),
+    )
+    captured = [
+        CapturedRun(
+            argv=("coverage", "run", "-m", "pytest"),
+            exit_code=1,
+            stdout="E   assert 1 == 2",
+            stderr="",
+        ),
+        CapturedRun(argv=("ruff", "check", "n.py"), exit_code=1, stdout="n.py:1:1 F401", stderr=""),
+    ]
+    text = format_attempt_failure(result, captured, attempt=1, max_attempts=3, tools=["lint"])
+    assert "assert 1 == 2" not in text
+    assert "n.py:1:1 F401" in text
+    # And the node that declared nothing still sees the failed gate's output.
+    text = format_attempt_failure(result, captured, attempt=1, max_attempts=3, tools=["read_file"])
+    assert "n.py:1:1 F401" in text
+    assert "assert 1 == 2" not in text
 
 
 def test_repair_prompt_withholds_lint_output_without_lint() -> None:
@@ -1491,11 +1531,16 @@ def test_repair_prompt_binding_matches_how_a_plan_spells_the_command(
     to no binding (mutmut, git) is kept whatever the node listed.
     """
     captured = [CapturedRun(argv=argv, exit_code=1, stdout="RUN-MARKER", stderr="")]
+    # A failed gate that maps to no tool (T6-31 includes a failed gate's
+    # output whatever the plan says), so only the binding decides here.
+    result = Tier1Result(
+        node_id="n1",
+        passed=False,
+        checks=(GateCheck(name="node-scope", passed=False, detail="impl node changed tests"),),
+    )
 
     def prompt(tools: list[str]) -> str:
-        return format_attempt_failure(
-            _failed_result(), captured, attempt=1, max_attempts=3, tools=tools
-        )
+        return format_attempt_failure(result, captured, attempt=1, max_attempts=3, tools=tools)
 
     if governing is None:
         assert "RUN-MARKER" in prompt([])

@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePath
 from time import perf_counter
-from typing import Final
+from typing import Any, Final
 
 import coverage
 
-from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
+from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding
 from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -122,6 +122,63 @@ def run_argv(
         return TOOL_UNAVAILABLE
     _record(recorder, argv, start, proc)
     return proc.returncode
+
+
+def ruff_findings(
+    workdir: Path, files: Sequence[str], *, recorder: SpanRecorder | None = None
+) -> tuple[CapturedRun, list[RuffFinding]]:
+    """Run `ruff check --output-format json` on `files` in `workdir` (T6-3).
+
+    Returns the run (exit code as ruff gave it; stdout replaced by one
+    human line per finding, `path:row:col: CODE message`, so a repair
+    brief reads findings rather than JSON) and the parsed findings, each
+    carrying the stripped source line it sits on. Unparseable output
+    yields no findings and leaves the exit code to say the tool failed.
+    """
+    argv = ["ruff", "check", "--output-format", "json", *files]
+    run = run_capture(argv, workdir, recorder=recorder)
+    findings: list[RuffFinding] = []
+    try:
+        raw = json.loads(run.stdout) if run.stdout.strip() else []
+    except ValueError:
+        raw = []
+    root = os.path.realpath(workdir)
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        raw_location = item.get("location")
+        location: dict[str, Any] = raw_location if isinstance(raw_location, dict) else {}
+        row = int(location.get("row", 0) or 0)
+        path = os.path.relpath(os.path.realpath(str(item.get("filename", ""))), root)
+        line = _source_line(workdir / path, row)
+        findings.append(
+            RuffFinding(
+                code=str(item.get("code") or "?"),
+                path=path,
+                row=row,
+                message=str(item.get("message") or ""),
+                line=line,
+                column=int(location.get("column", 0) or 0),
+            )
+        )
+    rendered = "\n".join(f"{f.path}:{f.row}:{f.column}: {f.code} {f.message}" for f in findings)
+    shown = CapturedRun(
+        argv=("ruff", "check", *files),
+        exit_code=run.exit_code,
+        stdout=rendered,
+        stderr=run.stderr,
+        timed_out=run.timed_out,
+    )
+    return shown, findings
+
+
+def _source_line(path: Path, row: int) -> str:
+    """The stripped text of line `row` (1-based) of `path`, or empty."""
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return lines[row - 1].strip() if 0 < row <= len(lines) else ""
 
 
 def run_stdin(
