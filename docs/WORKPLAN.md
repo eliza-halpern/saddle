@@ -150,7 +150,10 @@ node cannot supply; option (c) as the user chose, premise re-verified
 against the task prompt's §7) → **T6-56** (round 3h died at node 1 on
 `commit-tree` exit 128: saddle's snapshots borrowed an identity from the
 host's git config and the host stopped supplying one) → round 3h, the next
-G1 seed → T6-46 (still no admissible example; round 3g checked and does
+G1 seed → **T6-57** (a failed node reports the gate verdicts it actually
+produced; F21.26 -- two impl nodes' real verdicts were absent from their
+run's own report, and the scoring picture was wrong until the sidecars
+were read) → T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
@@ -6770,6 +6773,79 @@ direction.
 
 Owner: main session. Blocks round 3h: with this unfixed every run on
 this host dies at node 1.
+
+### T6-57 — A failed node reports the gate verdicts it actually produced (tightened)
+
+Files: `src/saddle/slice.py` (`_transcribe`), `tests/test_slice.py`.
+
+`_transcribe` chooses a failed node's gate table from the **type** of its
+terminal failure, not from what the node's attempts recorded:
+
+```python
+    if isinstance(failure, NodeGateFailedError):
+        checks = failure.result.checks
+    elif isinstance(failure, NodeUnappliableError):
+        checks = ()
+    else:
+        checks = ()
+```
+
+The attempt loop retries both gate failures and non-applying diffs. A
+transport failure -- `request failed: timed out`, `worker call failed` --
+is sealed and then **re-raised unchanged** by the loop's bare
+`except BaseException`. It arrives as itself, lands in the `else`, and
+the node renders `- Proof: none`, a complete tool timeline, and not one
+gate line. Every earlier attempt's verdict is gone from the report.
+
+A non-applying *final* attempt does not do this, because that path raises
+`_HaltRecoveryError`, which carries the retained gate result and is
+converted to `NodeGateFailedError`. So the same run reports two nodes
+with identical histories differently, decided by which exception happened
+to be in flight when the node gave up.
+
+Observed (F21.26, ../saddle-bench/runs/IMPL-NODE-TABLE.md):
+
+| node | last attempt | gate table in the transcript? | on disk |
+|---|---|---|---|
+| 3g n2.r1 | diff did not apply | yes, 13 gates | `coverage` FAIL, 12 PASS |
+| 3c n2 | gates failed | yes, 11 gates | `coverage`, `mutation` FAIL |
+| 3c n2.r2 | `request failed: timed out` | **no** | `ruff`, `mutation` FAIL; `coverage: 100.0%` PASS |
+| 3d n2 | `request failed: timed out` | **no** | two gated attempts; `coverage 98.5%`, one line |
+
+The cost is not cosmetic. 3d `n2` attempt 2 is the closest an impl node
+has come to sealing on a percentage coverage verdict -- 98.5%, uncovered
+`money.py:33` -- and it was invisible in the run's report, in
+`saddle explain`, and in every summary written from them. An operator's
+picture of how close the harness has ever got was wrong for a day
+because of a formatting branch. T3-25's comment beside `_seal_attempt`
+already states the premise ("the transcript renders its last attempt
+only, so the journal is the one place an earlier attempt's verdict can
+be read back from") and the journal does hold the failed gate *names*;
+only the sidecar holds each gate's *detail*, and nothing in the report
+sends a reader there.
+
+Change: retain the last `GateResult` the node produced and render it
+whatever the terminal failure was, labelled with the attempt it came from
+so a reader cannot mistake it for the final attempt's.
+
+Direction: **tightened** -- the report gains verdicts it was dropping;
+no gate's accept/reject set changes.
+
+- **known-good:** a node whose final attempt gates renders that
+  attempt's table, unlabelled-as-stale (today's behaviour, must not
+  change), and a node that never gated renders none.
+- **known-bad:** a node with a gated attempt 1 and a transport failure
+  on attempt 2 renders no table -- today's behaviour, so the test is red
+  before the change.
+
+Contract mutants to record: (1) drop the retained result so the
+transport path renders `()` again; (2) render the retained result
+without its attempt label; (3) render a retained result for a node that
+never gated.
+
+Owner: main session. Independent of everything queued; blocks nothing,
+but every measurement round until it lands can hide a verdict from the
+person scoring it.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
