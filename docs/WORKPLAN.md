@@ -137,12 +137,12 @@ what the metric measured — round 3d's repair reasoning) → T6-44 done
 attempt records its reasoning effort; blocks every replay cell) → T6-48
 done (the apply ladder forgives packaging; a loosening with proof, and
 the precondition for T6-43 touching the grammar) → T6-34 done (attempt
-refs, stale comment) → **T6-49 = round 3f**, one T5 seed and the first
-of Goal G1's three (worker effort stays at the node budget; first run
-where the survivor round is reachable and every test node carries
-rejects; its first plan is also the `minItems` decoder check T6-4 owes)
-→ T6-46 (the refusal path, once its discriminator is decided; not a
-round 3f precondition) → T6-1 (with the reasoning read, over rounds
+refs, stale comment) → T6-49 done (round 3f; F21.20: P1-P5 held, P9 is a
+disagreement, G1's count stays at zero, and both plans died on the same
+gate) → **T6-50** (the binding gate's examples clause is unsatisfiable
+by a real test -- the blocker) → **T6-51** (the sidecar keeps its
+reasoning whole; G1's own verification needs it) → round 3g, the next
+G1 seed → T6-46 (the refusal path, once its discriminator is decided) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
 T6-2 → T6-6 if T6-1 says
@@ -6130,7 +6130,7 @@ no user config, no env -- ruff 0.16.7's own default rule set includes
 UP, DTZ, YTT (`ruff check --show-settings` in the workdir), so the ruff
 gate's verdict is a function of the installed ruff version (T6-37).
 
-### T6-49 — Round 3f: one T5 seed under T6-36..T6-48 and T6-34, and the first of Goal G1's three seeds (measurement; no code)
+### T6-49 — Round 3f: one T5 seed under T6-36..T6-48 and T6-34, and the first of Goal G1's three seeds (measurement; no code) — DONE 2026-09-21
 
 Same procedure as T6-35 (`RUN_DIR=runs/round3f/t5-s1 SAMPLE_TEMP=0.7
 DEADLINE=7200 ./run_arm.sh t5 saddle`, PREDICTION.md committed before
@@ -6200,6 +6200,121 @@ functions on a restored copy, and say which steps were done and which
 were not. Owner: executor (needs the key and the container up). Not in
 this item: any fix. A falsified P2-P8, or a P9 disagreement, is a
 main-session item.
+
+**DONE 2026-09-21 -- P9 DISAGREEMENT; Goal G1's count stays at zero.
+F21.20.** `EXIT=1 WALL=1810`, 0 proven, 1 failed, 6 undispatched, oracle
+FAIL. Neither `n1` nor its replacement `n1.r1` passed
+`requirement-binding` on any of its three attempts; every other gate
+passed every attempt, and no impl node ran, so the survivor round was
+still not reached. P1-P5 all held -- including T6-34's refs on live data
+(5 gated attempts, 5 refs, every sidecar `tree` equal to `<ref>^{tree}`,
+the attempt that never applied carrying `tree=None` and no ref) and
+T6-47's effort on the record. P6-P8 unresolved. P10 half-held: the
+degenerate draw appeared at attempt 1 exactly as predicted, `dead-code`
+did not name it, and ruff's `F811` did -- fifteen errors, one per
+shadowed copy -- so the sampler discarded it and promoted the coherent
+candidate. T6-25, T6-37 and T6-48's ladder all did their jobs on live
+data.
+
+The disagreement is narrow and names its own repair: the gate's reason
+("the test file does not quote the planner's example text") is not the
+oracle's reason (multi-currency is not implemented). Two items follow,
+T6-50 (the blocker) and T6-51 (the evidence the next round needs). No
+third: the one thing left uncovered, duplicated test bodies under
+distinct names, has no instance in this run and so has no known-bad.
+
+### T6-50 — A requirement example is satisfiable by the test that asserts the behaviour (loosened for calls, tightened against quoting; with proof)
+
+Files: `src/saddle/gates.py` (`_asserted_literals`,
+`check_requirement_binding`), `tests/test_gates.py`, a fixture cut from
+round 3f's `n1` attempt 3.
+
+**Proof the contract is wrong, not merely failing** (F21.20). The
+planner writes REQ-001's examples as call expressions -- `deposit('10.00',
+'USD')`, `deposit('10.00', 'USX')` -- and `_asserted_literals` collects
+`ast.Constant` only. A call expression is not a constant, so no test can
+put that text in the set. Reproduced with saddle's own functions on the
+tree restored from `refs/saddle/attempt/n1/3`: 61 asserted literals,
+none containing `deposit(`, and `check_requirement_binding` returning
+the run's own detail byte for byte. Unsatisfiable for three independent
+reasons: a behavioural test contributes only the constants `10.00` and
+`USD`; the one source that does satisfy it quotes the example and
+asserts nothing, which Goal G1 declares inadmissible; and `autofix` runs
+`ruff format --isolated` first, normalising `'10.00'` to `"10.00"` and
+changing the literal before the gate sees it. This is the
+`^diff --git ` episode in a second component -- a constraint whose tests
+pinned its presence while it made the correct artifact unrepresentable.
+
+Contract after: an example that **parses as a call expression** is
+satisfied when some `test*` function both calls that callee and asserts
+on every constant argument of the example, compared by value. An example
+that parses as anything else keeps today's rule -- T6-4's own tests use
+constant examples and must stay green, which is a known-good this change
+may not move.
+
+Direction, both halves, in the commit message: **loosened** for
+call-shaped examples, which become satisfiable at all; **tightened**
+against the escape, because a test that quotes the example text as a
+string and asserts nothing no longer satisfies it -- it calls nothing
+and the constants are not in its asserted set. Comparing constants by
+value is also what removes `ruff format` from the verdict.
+
+Known-good: `assert acc.deposit("10.00", "USD") == Decimal("10.00")`
+satisfies `deposit('10.00', 'USD')`, under either quote style; and every
+existing constant-shaped example still passes.
+Known-bad: (a) `assert "deposit('10.00', 'USD')" == "deposit('10.00',
+'USD')"`, today's only satisfying input, now fails; (b) a test that
+asserts `10.00` and `USD` but never calls `deposit`; (c) a test that
+calls `deposit` but asserts neither constant; (d) a suite with no
+`test*` function.
+Vacuity: the fixture from `n1` attempt 3 must fail before the change and
+pass after only if it actually asserts the behaviour -- if the same
+fixture passes both ways the rule is not deciding anything.
+
+Owner: main session. Precondition for round 3g: no T5 seed can reach an
+impl node until this lands, because both plans die on their first test
+node.
+
+### T6-51 — An attempt's reasoning is in its sidecar, whole (loosening, with proof)
+
+Files: `src/saddle/journal.py` (`_RETAINED_WHOLE`),
+`tests/test_journal.py`.
+
+**Proof the contract is wrong** (F21.20). T6-36 fixed a real defect --
+the one-level scrub capped a 4001+ character `diff` so it no longer
+hashed to its `diff_hash`, every large attempt failed verification and
+`saddle explain` refused the journal -- and the fix made the scrub
+recursive. The cap then reached `samples[i].thinking`, where nearly all
+of a sidecar's reasoning lives: round 3f lost 31 911, 58 927 and 45 345
+characters, every nested `thinking` cut to 4024. Goal G1's verification
+procedure opens with "read the model's reasoning first
+(`samples[i].thinking`, whole)", which is now impossible from the
+record; F21.19 could be written only because round 3e predates T6-36.
+
+Scope is small and is the reason this is safe: `_scrub_evidence` has
+exactly one caller, `write_attempt_sidecar` (`journal.py:316`). The
+journal's own entries cap thinking by a different path
+(`scrub_thinking`, `journal.py:166`) and are untouched. So adding
+`thinking` to `_RETAINED_WHOLE` moves the sidecar alone -- `proofs.jsonl`
+and `saddle tail` stay small, which is what the cap is for.
+
+Direction: **loosened**, for the sidecar only.
+
+Known-good: a sidecar whose nested `samples[i].thinking` exceeds
+`MAX_THINKING_CHARS` keeps every character, and the same text in a
+journal entry is still capped. Redaction is unchanged: a key planted in
+nested `thinking` must still not appear, which is the half that may not
+be lost when the cap goes.
+Known-bad: T6-36's own tests stay green -- a 4001+ character `diff`
+still hashes to its `diff_hash`, and a nested string under any other key
+is still capped.
+Vacuity: the same test must show the cap is still capable of applying,
+by carrying a nested non-`thinking` string of the same length that is
+truncated in the same sidecar. Otherwise the test cannot tell "retained"
+from "nothing was long enough".
+
+Owner: main session, before round 3g -- the next run is the one whose
+reasoning has to be readable.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
