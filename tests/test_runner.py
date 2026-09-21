@@ -38,7 +38,9 @@ def _node(
             "target_files": target_files or [],
             "dependencies": [],
             "task_prompt": "Fix f.",
-            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+            "requirements": [
+                {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+            ],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 # All four by default (T3-4). Several tests below create a
@@ -630,7 +632,10 @@ SPEC_TEST: Final = (
     "    assert f() == 2\n\n\n"
     "@given(st.integers())\n"
     "def test_f_is_an_int(_value):  # REQ-001\n"
-    "    assert isinstance(f(), int)\n"
+    "    assert isinstance(f(), int)\n\n\n"
+    "@given(st.integers())\n"
+    "def test_f_is_never_three(_value):  # REQ-001\n"
+    "    assert (f() == 3) is False\n"
 )
 
 
@@ -673,7 +678,8 @@ def test_run_node_gate_test_node_greenfield_import_is_red(tmp_path: Path) -> Non
 
 def test_run_node_gate_test_node_whose_tests_pass_specifies_nothing(tmp_path: Path) -> None:
     """T3-7a known-bad: the tautological spec fails tests and red-phase, nothing else."""
-    _spec_worktree(tmp_path, SPEC_TEST.replace("assert f() == 2", "assert f() == 1"))
+    # The examples stay asserted on (T6-4): the only defect is that it passes.
+    _spec_worktree(tmp_path, SPEC_TEST.replace("assert f() == 2", "assert f() in (1, 2)"))
     result = run_node_gate(_node(kind="test"), tmp_path)
     assert result.passed is False
     failed = {check.name: check.detail for check in result.checks if not check.passed}

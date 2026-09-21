@@ -48,7 +48,7 @@ from saddle.cli import (
     survivor_drawer,
     worker_max_tokens,
 )
-from saddle.dag import DIFF_OVERHEAD_TOKENS, TOKENS_PER_LINE, Dag, Node
+from saddle.dag import DIFF_OVERHEAD_TOKENS, REQ_NEAR_MISS_K, TOKENS_PER_LINE, Dag, Node
 from saddle.evidence import CapturedRun, git_ls_files, run_argv
 from saddle.gates import GateCheck, Tier1Result, check_node_scope
 from saddle.journal import (
@@ -119,7 +119,9 @@ def _node_dict(
         # cannot leave it empty); the fixture's diff touches `n.py` alone.
         "target_files": ["n.py"],
         "task_prompt": "Fix f and test it.",
-        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+        "requirements": [
+            {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+        ],
         "execution_constraints": {
             "reasoning_budget": budget,
             # All four by default: T3-4 binds each name to a behaviour, and
@@ -361,8 +363,8 @@ def test_build_worker_prompt_caps_long_file_lists() -> None:
 def test_build_worker_prompt_joins_requirements_and_context() -> None:
     node_dict = _node_dict()
     node_dict["requirements"] = [
-        {"id": "REQ-001", "statement": "REQ-001 holds."},
-        {"id": "REQ-002", "statement": "REQ-002 holds."},
+        {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]},
+        {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]},
     ]
     node = Node.model_validate(node_dict)
     prompt = build_worker_prompt(
@@ -371,9 +373,34 @@ def test_build_worker_prompt_joins_requirements_and_context() -> None:
         files=["a.py", "b.py"],
         contents={"a.py": "1\n", "b.py": "2\n"},
     )
-    assert "  REQ-001: REQ-001 holds.\n" in prompt
-    assert "  REQ-002: REQ-002 holds.\n" in prompt
+    assert "  REQ-001: REQ-001 holds.\n    accepts: '2'\n    rejects: '3'\n" in prompt
+    assert "  REQ-002: REQ-002 holds.\n    accepts: '2'\n    rejects: '3'\n" in prompt
     assert "--- a.py ---\n1\n\n\n--- b.py ---\n2\n" in prompt
+    # The worker hears both T6-4 (assert on each example) and T6-5 (one
+    # property rejects an input), as rules it can follow.
+    assert "asserts on every listed accept and reject, each spelled\n  exactly as listed" in prompt
+    assert "At least one property must reject an\n  input" in prompt
+    assert "(`assert not ...`, `is False`, or `pytest.raises`)" in prompt
+
+
+def test_build_worker_prompt_lists_every_example() -> None:
+    node_dict = _node_dict()
+    node_dict["requirements"] = [
+        {
+            "id": "REQ-001",
+            "statement": "Rejects a local part ending in a dot.",
+            "accepts": ["user@example.com", "a.b@example.com"],
+            "rejects": ["user@@example.com", "user@example.com."],
+        }
+    ]
+    prompt = build_worker_prompt(
+        task=TASK, node=Node.model_validate(node_dict), files=[], contents={}
+    )
+    assert (
+        "  REQ-001: Rejects a local part ending in a dot.\n"
+        "    accepts: 'user@example.com', 'a.b@example.com'\n"
+        "    rejects: 'user@@example.com', 'user@example.com.'\n"
+    ) in prompt
 
 
 def test_build_worker_prompt_truncates_large_context() -> None:
@@ -456,8 +483,8 @@ def test_build_replan_task_names_scope_and_history() -> None:
 def test_build_replan_task_joins_multiple_requirements() -> None:
     data = _node_dict()
     data["requirements"] = [
-        {"id": "REQ-001", "statement": "REQ-001 holds."},
-        {"id": "REQ-002", "statement": "REQ-002 holds."},
+        {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]},
+        {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]},
     ]
     node = Node.model_validate(data)
     text = build_replan_task(task=TASK, node=node, history="x\n")
@@ -1058,8 +1085,8 @@ def test_render_dag_plan_lists_nodes_with_gates() -> None:
     second["dependencies"] = ["n1"]
     second["task_prompt"] = "Wire it up."
     second["requirements"] = [
-        {"id": "REQ-001", "statement": "REQ-001 holds."},
-        {"id": "REQ-002", "statement": "REQ-002 holds."},
+        {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]},
+        {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]},
     ]
     second["execution_constraints"]["allowed_tools"] = ["read_file", "write_file"]
     second["execution_constraints"]["max_context_tokens"] = 8000
@@ -2433,6 +2460,17 @@ def test_worker_prompt_asks_test_nodes_for_a_property() -> None:
     )
     assert "@given" in prompt
     assert "from_regex" in prompt
+
+
+def test_emit_prompt_states_the_example_rule_with_the_run_counter_example() -> None:
+    """T6-4 (T3-12 style): the planner hears the near-miss rule with the
+    bar the validator enforces and T1's own `"user"` as the counter-example."""
+    prompt = build_emit_prompt("Do the thing.")
+    assert '- Each requirement also carries "accepts" and "rejects"' in prompt
+    assert f"within {REQ_NEAR_MISS_K} edits of some accept" in prompt
+    assert '"user" is 12 edits away' in prompt
+    assert "the plan is invalid with it" in prompt
+    assert 'A "test" node\'s tests assert on every accept and every reject' in prompt
 
 
 def test_emit_prompt_says_a_test_node_is_expected_to_fail() -> None:

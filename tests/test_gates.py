@@ -49,7 +49,9 @@ def _node(tools: list[str] | None = None, kind: str = "refactor") -> Node:
             "kind": kind,
             "dependencies": [],
             "task_prompt": "Do n1.",
-            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+            "requirements": [
+                {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+            ],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": tools if tools is not None else list(ALL_TOOLS),
@@ -652,6 +654,99 @@ def test_requirement_binding_rejects_ids_the_node_never_declared() -> None:
     assert "undeclared" in check.detail.lower()
 
 
+def test_requirement_binding_needs_every_example_asserted_on() -> None:
+    """T6-4: a cited id is not a tested example. Known-bad is T1's shape:
+    the tests cite REQ-001 and probe no reject; the detail names each
+    example nothing asserts on. Known-good asserts on both, one as a
+    string in an `assert`, one in a `parametrize` table, one under
+    `raises`; a non-string constant is matched by its spelling."""
+    examples = [
+        ("REQ-001", "accepts", "user@example.com"),
+        ("REQ-001", "rejects", "user@@example.com"),
+        ("REQ-001", "rejects", "user@example.com."),
+    ]
+    only_accepts = {
+        "test_v.py": "def test_ok():  # REQ-001\n    assert valid('user@example.com')\n"
+    }
+    check = check_requirement_binding(["REQ-001"], only_accepts, examples=examples)
+    assert check.passed is False
+    assert check.detail == (
+        "examples no test asserts on: REQ-001 rejects 'user@@example.com', "
+        "REQ-001 rejects 'user@example.com.'"
+    )
+    every = {
+        "test_v.py": (
+            "import pytest\n\n\n"
+            "def test_ok():  # REQ-001\n    assert valid('user@example.com')\n\n\n"
+            "@pytest.mark.parametrize('bad', ['user@@example.com'])\n"
+            "def test_bad(bad):  # REQ-001\n    assert not valid(bad)\n\n\n"
+            "def test_trailing_dot():\n"
+            "    with pytest.raises(ValueError, match='user@example.com.'):\n"
+            "        parse('x')\n"
+        )
+    }
+    check = check_requirement_binding(["REQ-001"], every, examples=examples)
+    assert check.passed is True
+    assert check.detail == "1 requirement(s) bound, 3 example(s) asserted"
+    numeric = {"test_n.py": "def test_f():  # REQ-001\n    assert f() == 2\n"}
+    assert check_requirement_binding(
+        ["REQ-001"], numeric, examples=[("REQ-001", "accepts", "2")]
+    ).passed
+    assert not check_requirement_binding(
+        ["REQ-001"], numeric, examples=[("REQ-001", "accepts", "3")]
+    ).passed
+
+
+def test_requirement_binding_reads_examples_from_the_suite_it_is_given() -> None:
+    """The literal may sit in a test the node did not write (a sealed spec
+    node's, when a survivor round adds a file beside it): `suite` is what
+    is searched, `flipped_tests` still carries the citations. A literal
+    outside a test function, or outside an assert, does not count, and an
+    unparseable file holds none."""
+    flipped = {"test_more.py": "def test_more():  # REQ-001\n    assert f() == 2\n"}
+    suite = {**flipped, "test_n.py": "def test_f():\n    assert not f() == 3\n"}
+    examples = [("REQ-001", "rejects", "3")]
+    assert check_requirement_binding(["REQ-001"], flipped, examples=examples).passed is False
+    assert check_requirement_binding(["REQ-001"], flipped, examples=examples, suite=suite).passed
+    stray = {
+        "test_n.py": (
+            "THREE = 3  # REQ-001\n\n\ndef helper():\n    assert 3\n\n\n"
+            "def test_f():\n    x = 3\n    assert x\n"
+        )
+    }
+    assert check_requirement_binding(["REQ-001"], stray, examples=examples).passed is False
+    broken = {"test_n.py": "def test_f(:  # REQ-001\n    assert 3\n"}
+    assert check_requirement_binding(["REQ-001"], broken, examples=examples).passed is False
+
+
+def test_run_tier1_asks_a_spec_node_for_its_examples_and_no_other_kind() -> None:
+    """Wiring: a test node's binding check carries the node's examples over
+    the suite as it leaves it (baseline and flipped); an impl node cannot
+    edit tests and is not asked."""
+    inputs = _spec_inputs(PYTEST_TESTS_FAILED, "1 failed in 0.01s")
+    result = run_tier1(_node(kind="test"), inputs)
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["requirement-binding"].detail == "1 requirement(s) bound, 2 example(s) asserted"
+    without_reject = replace(
+        inputs, flipped_tests={"test_n.py": SPEC_SOURCE.replace("(f() == 3) is False", "f()")}
+    )
+    result = run_tier1(_node(kind="test"), without_reject)
+    by_name = {check.name: check for check in result.checks}
+    assert (
+        by_name["requirement-binding"].detail == "examples no test asserts on: REQ-001 rejects '3'"
+    )
+    in_baseline = replace(
+        without_reject,
+        baseline_tests={"test_old.py": "def test_o():\n    assert (f() == 3) is False\n"},
+    )
+    result = run_tier1(_node(kind="test"), in_baseline)
+    assert {c.name: c for c in result.checks}["requirement-binding"].passed is True
+    impl = run_tier1(_node(kind="impl"), _passing_inputs())
+    assert {c.name: c for c in impl.checks}[
+        "requirement-binding"
+    ].detail == "1 requirement(s) bound"
+
+
 def test_requirement_binding_passes_when_every_cited_id_is_declared() -> None:
     check = check_requirement_binding(
         ["REQ-001", "REQ-002"],
@@ -881,17 +976,79 @@ def test_test_node_must_contribute_a_property() -> None:
     assert "property" in check.detail.lower()
 
 
+T1_PROPERTY: Final = (
+    "from hypothesis import given\n"
+    "from hypothesis import strategies as st\n\n\n"
+    "@given(st.from_regex(r'^[a-z]+@[a-z]+\\.[a-z]{2,}$'))\n"
+    "def test_round_trip(address):  # REQ-001\n"
+    "    assert valid(address)\n"
+)
+
+
 def test_hypothesis_given_counts_as_a_property() -> None:
-    sources = {
-        "tests/test_v.py": (
-            "from hypothesis import given\n"
-            "from hypothesis import strategies as st\n\n\n"
-            "@given(st.from_regex(r'^[a-z]+@[a-z]+\\.[a-z]{2,}$'))\n"
-            "def test_round_trip(address):  # REQ-001\n"
-            "    assert valid(address)\n"
-        )
-    }
-    assert check_property_coverage("test", sources).passed is True
+    """A `@given` property is a property (presence), and at least one of
+    them must reject an input (polarity, T6-5).
+
+    Known-bad is T1's own shape: one property, positive, over a regex of
+    valid addresses. A validator that returns True for everything
+    satisfies it, and F1's did for `.u@example.com`. Known-good adds a
+    property over near-misses that asserts the rejection.
+    """
+    positive_only = {"tests/test_v.py": T1_PROPERTY}
+    check = check_property_coverage("test", positive_only)
+    assert check.passed is False
+    assert check.detail == (
+        "1 module(s) drive a property, none rejects an input: "
+        "a positive-only property cannot tell the code from one that accepts everything"
+    )
+    rejecting = T1_PROPERTY + (
+        "\n\n@given(st.from_regex(r'^[a-z]+@@[a-z]+\\.[a-z]{2,}$'))\n"
+        "def test_double_at_rejected(address):  # REQ-001\n"
+        "    assert not valid(address)\n"
+    )
+    check = check_property_coverage("test", {"tests/test_v.py": rejecting})
+    assert check.passed is True
+    assert check.detail == "1 module(s) drive a property, one rejects an input"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    assert valid(address) is False\n",
+        "    assert valid(address) == False\n",
+        "    with pytest.raises(ValueError):\n        parse(address)\n",
+        "    with raises(ValueError):\n        parse(address)\n",
+    ],
+)
+def test_property_polarity_recognises_each_rejecting_form(body: str) -> None:
+    """`is False`, `== False` and a `raises` block each count as a rejection."""
+    source = (
+        "import pytest\n"
+        "from pytest import raises\n"
+        "from hypothesis import given\n"
+        "from hypothesis import strategies as st\n\n\n"
+        "@given(st.text())\n"
+        "def test_rejects(address):  # REQ-001\n" + body
+    )
+    assert check_property_coverage("test", {"t.py": source}).passed is True
+
+
+def test_property_polarity_ignores_rejections_outside_a_property() -> None:
+    """An example that asserts `not valid(x)` is a case the author chose;
+    the rejecting assertion has to sit under `@given` to count. Nor does
+    `is True`, `== 1` or `!=` count as rejecting."""
+    example_rejects = T1_PROPERTY + (
+        "\n\ndef test_double_at():  # REQ-001\n    assert not valid('a@@b.co')\n"
+    )
+    assert check_property_coverage("test", {"t.py": example_rejects}).passed is False
+    for body in (
+        "    assert valid(address) is True\n",
+        "    assert valid(address) == 1\n",
+        "    assert valid(address) != 'x'\n",
+        "    with open('x'):\n        pass\n",
+    ):
+        source = T1_PROPERTY.replace("    assert valid(address)\n", body)
+        assert check_property_coverage("test", {"t.py": source}).passed is False, body
 
 
 def test_property_oracle_binds_the_impl_node(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -957,7 +1114,7 @@ def test_property_detection_handles_unparseable_and_bare_decorators() -> None:
             "    assert x\n\n\n"
             "@given\n"
             "def test_property(value):  # REQ-001\n"
-            "    assert value is not None\n"
+            "    assert not value is None\n"
         )
     }
     assert check_property_coverage("test", bare).passed is True
@@ -1068,7 +1225,10 @@ SPEC_SOURCE: Final = (
     "    assert f() == 2\n\n\n"
     "@given(st.integers())\n"
     "def test_f_is_an_int(_value):  # REQ-001\n"
-    "    assert isinstance(f(), int)\n"
+    "    assert isinstance(f(), int)\n\n\n"
+    "@given(st.integers())\n"
+    "def test_f_is_never_three(_value):  # REQ-001\n"
+    "    assert (f() == 3) is False\n"
 )
 
 

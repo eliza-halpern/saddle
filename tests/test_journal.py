@@ -192,7 +192,9 @@ def _proof_node(**overrides: object) -> Node:
         "kind": "impl",
         "dependencies": [],
         "task_prompt": "Do n1.",
-        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+        "requirements": [
+            {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+        ],
         "execution_constraints": {
             "reasoning_budget": "low",
             "allowed_tools": ["read_file"],
@@ -302,7 +304,7 @@ def test_node_hash_pins_the_serialisation_a_resume_keys_on(tmp_path: Path) -> No
     """
     assert (
         hash_node(_proof_node())
-        == "22ba4b044fe313cae15905871d3a7248725e15dfa6a9174cf257ca5f431f9499"
+        == "406304034176f5faf098021720b6a31554c7f4766f9b6f70c1cf8a2e42cc859f"
     )
 
 
@@ -501,7 +503,9 @@ def test_build_from_gate_maps_verdict_to_record(tmp_path: Path) -> None:
             "kind": "refactor",
             "dependencies": [],
             "task_prompt": "Do n1.",
-            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+            "requirements": [
+                {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+            ],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],
@@ -782,7 +786,9 @@ def _plan_node(node_id: str = "n1", *, files: list[str] | None = None) -> Node:
             "dependencies": [],
             "target_files": files if files is not None else ["n.py"],
             "task_prompt": f"Do {node_id}.",
-            "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+            "requirements": [
+                {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+            ],
             "execution_constraints": {
                 "reasoning_budget": "medium",
                 "allowed_tools": ["read_file"],

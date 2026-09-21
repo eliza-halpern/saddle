@@ -90,7 +90,9 @@ def _node_dict(
         "kind": "impl",
         "dependencies": deps,
         "task_prompt": f"Do {node_id}.",
-        "requirements": [{"id": "REQ-001", "statement": "REQ-001 holds."}],
+        "requirements": [
+            {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
+        ],
         "execution_constraints": {
             # All four by default (T3-4): these nodes create test files and
             # read the suite output back on a failed attempt, which is what
@@ -2688,6 +2690,11 @@ SPEC_DIFF = (
     "+@given(st.integers())\n"
     "+def test_f_is_an_int(_value):  # REQ-001\n"
     "+    assert isinstance(f(), int)\n"
+    "+\n"
+    "+\n"
+    "+@given(st.integers())\n"
+    "+def test_f_is_never_three(_value):  # REQ-001\n"
+    "+    assert (f() == 3) is False\n"
 )
 
 
@@ -2730,8 +2737,8 @@ def _declares_both_requirements(node: dict[str, object]) -> dict[str, object]:
     REQ-002" -- the orphan rule doing its job, not a T3-8 defect.
     """
     node["requirements"] = [
-        {"id": "REQ-001", "statement": "REQ-001 holds."},
-        {"id": "REQ-002", "statement": "REQ-002 holds."},
+        {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]},
+        {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]},
     ]
     return node
 
@@ -3065,7 +3072,9 @@ def test_run_slice_distinct_ids_first_node_sees_the_second_nodes_citation(
     _two_module_repo(tmp_path)
     _two_module_mutmut(tmp_path / "stub", monkeypatch)
     second = _node_dict("n2", ["n1"])
-    second["requirements"] = [{"id": "REQ-002", "statement": "REQ-002 holds."}]
+    second["requirements"] = [
+        {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]}
+    ]
     second["target_files"] = ["m.py"]
     gate = second["deterministic_gate"]
     assert isinstance(gate, dict)
@@ -3116,7 +3125,9 @@ def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     spec = _node_dict("t1", [])
     spec["kind"] = "test"
     impl = _node_dict("n1", ["t1"])
-    impl["requirements"] = [{"id": "REQ-002", "statement": "REQ-002 holds."}]
+    impl["requirements"] = [
+        {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]}
+    ]
     dag = Dag.model_validate({"nodes": [spec, impl]})
     journal = tmp_path / "proofs.jsonl"
 
@@ -3133,8 +3144,10 @@ def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     )
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["t1", "n1"]
-    bound = "- Gate requirement-binding: PASS (1 requirement(s) bound)\n"
+    bound = "- Gate requirement-binding: PASS (1 requirement(s) bound"
     assert result.transcript.count(bound) == 2
+    # The spec node's line also counts the examples it asserted on (T6-4).
+    assert result.transcript.count(bound + ", 2 example(s) asserted)\n") == 1
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
 
@@ -3483,6 +3496,7 @@ def _flag_test(flag: int, expect: int) -> str:
         "@given(st.integers(min_value=4))\n"
         "def test_f_other_flags_return_two(flag):  # REQ-001\n"
         "    assert f(flag=flag) == 2\n"
+        "    assert (f(flag=flag) == 3) is False\n"
     )
 
 

@@ -10,11 +10,13 @@ from pydantic import ValidationError
 
 from saddle.dag import (
     DIFF_OVERHEAD_TOKENS,
+    REQ_NEAR_MISS_K,
     TOKENS_PER_LINE,
     Dag,
     DagIssue,
     Node,
     dag_json_schema,
+    edit_distance,
     emission_estimate,
     planned_requirement_ids,
     validate_dag,
@@ -36,7 +38,7 @@ def _node(
         "dependencies": deps if deps is not None else [],
         "task_prompt": f"Do {node_id}.",
         "requirements": [
-            {"id": r, "statement": f"{r} holds."}
+            {"id": r, "statement": f"{r} holds.", "accepts": ["2"], "rejects": ["3"]}
             for r in (reqs if reqs is not None else ["REQ-001"])
         ],
         "execution_constraints": {
@@ -426,7 +428,14 @@ def test_requirements_carry_testable_statements() -> None:
     7/7 gates and 12/18 on hidden behaviour.
     """
     node = _node("n1")
-    node["requirements"] = [{"id": "REQ-001", "statement": "Rejects a local part ending in a dot."}]
+    node["requirements"] = [
+        {
+            "id": "REQ-001",
+            "statement": "Rejects a local part ending in a dot.",
+            "accepts": ["2"],
+            "rejects": ["3"],
+        }
+    ]
     dag = Dag.model_validate({"nodes": [node]})
     assert dag.nodes[0].requirements[0].statement.startswith("Rejects")
     # Downstream consumers (journal, transcript, gates) keep reading IDs.
@@ -438,9 +447,96 @@ def test_requirement_without_a_statement_is_unrepresentable() -> None:
     node["requirements"] = [{"id": "REQ-001"}]
     with pytest.raises(ValidationError):
         Dag.model_validate({"nodes": [node]})
-    node["requirements"] = [{"id": "REQ-001", "statement": "   "}]
+    node["requirements"] = [
+        {"id": "REQ-001", "statement": "   ", "accepts": ["2"], "rejects": ["3"]}
+    ]
     with pytest.raises(ValidationError):
         Dag.model_validate({"nodes": [node]})
+
+
+def _email_requirement(rejects: list[str]) -> dict[str, Any]:
+    return {
+        "id": "REQ-001",
+        "statement": "Rejects a local part ending in a dot.",
+        "accepts": ["user@example.com"],
+        "rejects": rejects,
+    }
+
+
+def test_requirement_examples_are_near_misses() -> None:
+    """T6-4 known-good: a reject within `REQ_NEAR_MISS_K` edits of some
+    accept validates, and the node lists every example for the gate."""
+    node = _node("n1")
+    node["requirements"] = [_email_requirement(["user@@example.com", "user@example.com."])]
+    dag = Dag.model_validate({"nodes": [node]})
+    assert dag.nodes[0].requirement_examples == [
+        ("REQ-001", "accepts", "user@example.com"),
+        ("REQ-001", "rejects", "user@@example.com"),
+        ("REQ-001", "rejects", "user@example.com."),
+    ]
+    # Empty is a legitimate reject for a validator; the floor is on the list.
+    node["requirements"] = [
+        {"id": "REQ-002", "statement": "Rejects blank.", "accepts": ["abc"], "rejects": [""]}
+    ]
+    assert Dag.model_validate({"nodes": [node]}).nodes[0].requirements[0].rejects == [""]
+
+
+def test_requirement_reject_far_from_every_accept_is_invalid() -> None:
+    """T6-4 known-bad from the run: T1's REQ-001 offered `"user"`, 12 edits
+    from `user@example.com`, which rejects nothing a lazy validator would
+    not; the error names the distance and the bar."""
+    node = _node("n1")
+    node["requirements"] = [_email_requirement(["user"])]
+    with pytest.raises(ValidationError, match=r"'user' is 12 edits from .*'user@example.com'"):
+        Dag.model_validate({"nodes": [node]})
+    with pytest.raises(ValidationError, match=f"within {REQ_NEAR_MISS_K}"):
+        Dag.model_validate({"nodes": [node]})
+    # One far reject spoils the requirement even beside a near one.
+    node["requirements"] = [_email_requirement(["user@@example.com", "user"])]
+    with pytest.raises(ValidationError, match="'user' is 12 edits"):
+        Dag.model_validate({"nodes": [node]})
+    # Exactly k edits is a near-miss; k + 1 is not.
+    at_k = "user@example.com"[:-REQ_NEAR_MISS_K]
+    node["requirements"] = [_email_requirement([at_k])]
+    Dag.model_validate({"nodes": [node]})
+    node["requirements"] = [_email_requirement([at_k[:-1]])]
+    with pytest.raises(ValidationError, match=f"is {REQ_NEAR_MISS_K + 1} edits"):
+        Dag.model_validate({"nodes": [node]})
+
+
+def test_requirement_without_examples_is_unrepresentable() -> None:
+    """T6-4 known-bad from the run: T1's REQ-002 had no reject at all.
+    Both lists are floored at one entry, and the floor is a `minItems`
+    the decoder can enforce, not a pattern it would compile as a full match."""
+    for missing in ("accepts", "rejects"):
+        node = _node("n1")
+        requirement = _email_requirement(["user@@example.com"])
+        requirement[missing] = []
+        node["requirements"] = [requirement]
+        with pytest.raises(ValidationError):
+            Dag.model_validate({"nodes": [node]})
+        del requirement[missing]
+        with pytest.raises(ValidationError):
+            Dag.model_validate({"nodes": [node]})
+    # dag_json_schema() is what reaches the decoder -- inlined, no $defs.
+    nodes = dag_json_schema()["properties"]["nodes"]["items"]
+    fields = nodes["properties"]["requirements"]["items"]["properties"]
+    for probe in ("accepts", "rejects"):
+        assert fields[probe] == {
+            "items": {"type": "string"},
+            "minItems": 1,
+            "title": probe.title(),
+            "type": "array",
+        }
+
+
+def test_edit_distance_is_levenshtein() -> None:
+    assert edit_distance("", "") == 0
+    assert edit_distance("abc", "") == 3
+    assert edit_distance("kitten", "sitting") == 3
+    assert edit_distance("user@example.com", "user@@example.com") == 1
+    assert edit_distance("user@example.com", "user") == 12
+    assert edit_distance("flaw", "lawn") == 2
 
 
 def test_requirement_id_shape_is_grammar_constrained() -> None:
@@ -448,7 +544,9 @@ def test_requirement_id_shape_is_grammar_constrained() -> None:
     DIFF_HEADER_PATTERN via xgrammar), so a malformed ID is unrepresentable
     rather than rejected after the packet exists."""
     node = _node("n1")
-    node["requirements"] = [{"id": "REQUIREMENT ONE", "statement": "Does a thing."}]
+    node["requirements"] = [
+        {"id": "REQUIREMENT ONE", "statement": "Does a thing.", "accepts": ["2"], "rejects": ["3"]}
+    ]
     with pytest.raises(ValidationError):
         Dag.model_validate({"nodes": [node]})
 

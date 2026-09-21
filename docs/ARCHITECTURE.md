@@ -129,8 +129,10 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
   "dependencies": ["init_graphics_engine"],
   "task_prompt": "Implement Gerstner wave mathematics in a Three.js ShaderMaterial.",
   "requirements": [
-    {"id": "REQ-014", "statement": "Wave displacement follows the Gerstner model."},
-    {"id": "REQ-015", "statement": "The shader compiles under the project's Three.js version."}
+    {"id": "REQ-014", "statement": "Wave displacement follows the Gerstner model.",
+     "accepts": ["steepness=0.5"], "rejects": ["steepness=1.5"]},
+    {"id": "REQ-015", "statement": "The shader compiles under the project's Three.js version.",
+     "accepts": ["three@0.160.0"], "rejects": ["three@0.16.0"]}
   ],
   "execution_constraints": {
     "reasoning_budget": "xhigh",

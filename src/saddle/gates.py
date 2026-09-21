@@ -489,12 +489,62 @@ def _has_property(source: str) -> bool:
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        for decorator in node.decorator_list:
-            call = decorator.func if isinstance(decorator, ast.Call) else decorator
-            name = call.attr if isinstance(call, ast.Attribute) else getattr(call, "id", "")
-            if name == "given":
+        if any(_decorator_name(d) == "given" for d in node.decorator_list):
+            return True
+    return False
+
+
+def _is_negative_assert(stmt: ast.Assert) -> bool:
+    """`assert not f(x)`, `assert f(x) is False`, `assert f(x) == False`."""
+    test = stmt.test
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return True
+    if isinstance(test, ast.Compare) and len(test.ops) == 1:
+        (op,) = test.ops
+        (right,) = test.comparators
+        return (
+            isinstance(op, ast.Is | ast.Eq)
+            and isinstance(right, ast.Constant)
+            and right.value is False
+        )
+    return False
+
+
+def _raises(stmt: ast.With) -> bool:
+    for item in stmt.items:
+        call = item.context_expr
+        func = call.func if isinstance(call, ast.Call) else call
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name == "raises":
+            return True
+    return False
+
+
+def _rejects_an_input(source: str) -> bool:
+    """True when some `@given` property in the module rejects an input (T6-5).
+
+    A property is negative when it asserts `not f(x)`, `f(x) is False`,
+    `f(x) == False`, or runs under `pytest.raises`. Everything else is
+    positive: it can only say what the code accepts, so a validator that
+    accepts everything satisfies it. Called only on sources `_has_property`
+    already parsed.
+    """
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if not any(_decorator_name(d) == "given" for d in node.decorator_list):
+            continue
+        for stmt in ast.walk(node):
+            if isinstance(stmt, ast.Assert) and _is_negative_assert(stmt):
+                return True
+            if isinstance(stmt, ast.With) and _raises(stmt):
                 return True
     return False
+
+
+def _decorator_name(decorator: ast.expr) -> str:
+    call = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return call.attr if isinstance(call, ast.Attribute) else getattr(call, "id", "")
 
 
 def check_target_files(target_files: Collection[str], touched_files: Collection[str]) -> GateCheck:
@@ -556,6 +606,12 @@ def check_property_coverage(
     required; targets with no oracle means the runner did not run what it
     should have, which fails rather than passes. A refactor preserves the
     tests it moves and is not bound.
+
+    Presence is floored by polarity (T6-5): at least one of the `test`
+    node's properties must reject an input, because T1's single property
+    was positive and a validator that accepts everything satisfied it.
+    Known limit: a lazy negative generator passes this floor; behavioural
+    mutation (T6-6) is the real defence.
     """
     if kind == "impl":
         return _check_property_oracle(oracle, tuple(targets))
@@ -568,10 +624,19 @@ def check_property_coverage(
             passed=False,
             detail="no hypothesis property in the node's tests: examples only",
         )
+    if not any(_rejects_an_input(test_sources[path]) for path in with_property):
+        return GateCheck(
+            name="property-coverage",
+            passed=False,
+            detail=(
+                f"{len(with_property)} module(s) drive a property, none rejects an input: "
+                "a positive-only property cannot tell the code from one that accepts everything"
+            ),
+        )
     return GateCheck(
         name="property-coverage",
         passed=True,
-        detail=f"{len(with_property)} module(s) drive a property",
+        detail=f"{len(with_property)} module(s) drive a property, one rejects an input",
     )
 
 
@@ -725,11 +790,41 @@ def check_node_scope(
     )
 
 
+def _asserted_literals(source: str) -> set[str]:
+    """Every literal a test function asserts on, spelled as the planner spells examples.
+
+    A string constant counts by value, any other constant by its source
+    spelling, when it sits in an `assert`, under a `with` (a `raises`
+    block) or in a decorator (a `parametrize` table) of a `test*`
+    function.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if not node.name.startswith("test"):
+            continue
+        holders: list[ast.AST] = [*node.decorator_list]
+        holders.extend(s for s in ast.walk(node) if isinstance(s, ast.Assert | ast.With))
+        for holder in holders:
+            for constant in ast.walk(holder):
+                if isinstance(constant, ast.Constant):
+                    value = constant.value
+                    found.add(value if isinstance(value, str) else ast.unparse(constant))
+    return found
+
+
 def check_requirement_binding(
     requirement_ids: Collection[str],
     flipped_tests: Mapping[str, str],
     *,
     planned_ids: Collection[str] = (),
+    examples: Collection[tuple[str, str, str]] = (),
+    suite: Mapping[str, str] | None = None,
 ) -> GateCheck:
     """Every declared requirement is cited, and every citation is planned.
 
@@ -746,6 +841,13 @@ def check_requirement_binding(
     both ids in one file, and with the node's own ids alone no node of
     such a plan can pass (session 20b). The first half is untouched: an
     id the node itself declares must be cited, whatever the plan holds.
+
+    `examples` (T6-4) are the `(id, "accepts"|"rejects", text)` triples the
+    node's requirements cite; each must be asserted on, literally, by some
+    test in `suite` (the tests as the node leaves them; `flipped_tests`
+    when the caller passes none). A statement can be cited without being
+    tested -- T1's tests probed no reject at all -- and a literal the
+    planner chose is the one thing the party being graded did not.
     """
     unbound = sorted(
         req
@@ -769,11 +871,22 @@ def check_requirement_binding(
             passed=False,
             detail=f"undeclared requirements cited: {', '.join(orphans)}",
         )
-    return GateCheck(
-        name="requirement-binding",
-        passed=True,
-        detail=f"{len(list(requirement_ids))} requirement(s) bound",
-    )
+    literals: set[str] = set()
+    for source in (suite if suite is not None else flipped_tests).values():
+        literals |= _asserted_literals(source)
+    unasserted = [
+        f"{rid} {polarity} {text!r}" for rid, polarity, text in examples if text not in literals
+    ]
+    if unasserted:
+        return GateCheck(
+            name="requirement-binding",
+            passed=False,
+            detail=f"examples no test asserts on: {', '.join(unasserted)}",
+        )
+    bound = f"{len(list(requirement_ids))} requirement(s) bound"
+    if examples:
+        bound += f", {len(list(examples))} example(s) asserted"
+    return GateCheck(name="requirement-binding", passed=True, detail=bound)
 
 
 @dataclass(frozen=True)
@@ -968,7 +1081,13 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         ),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(
-            node.requirement_ids, inputs.flipped_tests, planned_ids=inputs.planned_requirements
+            node.requirement_ids,
+            inputs.flipped_tests,
+            planned_ids=inputs.planned_requirements,
+            # A test node asserts the examples (T6-4); an impl node cannot
+            # edit tests and a refactor preserves them, so neither is asked.
+            examples=node.requirement_examples if is_spec else (),
+            suite={**inputs.baseline_tests, **inputs.flipped_tests},
         ),
         _not_required("mutation")
         if is_spec

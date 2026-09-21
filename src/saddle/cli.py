@@ -21,7 +21,7 @@ from rich.console import Console
 
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
-from saddle.dag import Dag, Node, validate_dag
+from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.evidence import git_ls_files, run_argv
 from saddle.journal import (
     JournalIssue,
@@ -297,6 +297,16 @@ Rules:
   a dot", not "Validates email correctly". A statement no test can
   contradict states nothing.
 - Requirement IDs are REQ- followed by exactly three digits.
+- Each requirement also carries "accepts" and "rejects": at least one
+  literal input the system shall accept and at least one it shall reject.
+  A reject is a near-miss, within {REQ_NEAR_MISS_K} edits of some accept,
+  so that a test on it tells this requirement from a looser one. For
+  accepts ["user@example.com"], "user@example.com." and "user@@example.com"
+  are rejects; "user" is 12 edits away and rejects nothing a lazy
+  validator would not, and the plan is invalid with it.
+- A "test" node's tests assert on every accept and every reject, literally:
+  the binding gate fails a test node whose tests assert on none of a
+  cited example.
 - A "test" node's tests cite the requirement id of every node they specify,
   the "impl" node's included: the binding gate fails a node whose id no
   test cites, and fails a node whose tests cite an id no node of the plan
@@ -379,7 +389,12 @@ def build_worker_prompt(
             context = context[:budget] + "\n[file context truncated]"
     else:
         context = CONTENTS_WITHHELD
-    reqs = "\n".join(f"  {req.id}: {req.statement}" for req in node.requirements)
+    reqs = "\n".join(
+        f"  {req.id}: {req.statement}\n"
+        f"    accepts: {', '.join(repr(text) for text in req.accepts)}\n"
+        f"    rejects: {', '.join(repr(text) for text in req.rejects)}"
+        for req in node.requirements
+    )
     scope = ""
     if node.target_files:
         # The planner's list reaches the gate; the worker has to hear it
@@ -416,11 +431,17 @@ Rules:
   computing them.
 - Mark new files with "new file mode 100644".
 - Mention each requirement ID in the new or changed test source.
-{scope}- A "test" node must include at least one hypothesis property, not only
+{scope}- A "test" node asserts on every listed accept and reject, each spelled
+  exactly as listed: the gate fails a test node whose tests assert on
+  none of them.
+- A "test" node must include at least one hypothesis property, not only
   examples: `@given(...)` over generated inputs. Examples probe the cases
   you already thought of; a property probes the ones you did not. For a
   requirement about a text format, `hypothesis.strategies.from_regex`
-  generates witnesses directly.
+  generates witnesses directly. At least one property must reject an
+  input (`assert not ...`, `is False`, or `pytest.raises`): a suite whose
+  every property is positive cannot tell the code from one that accepts
+  everything.
 - Make sure the gate command above passes after the diff applies.
 - Keep new code ruff-clean: double quotes, 4-space indent,
   two blank lines between top-level definitions, final newline, no unused imports,

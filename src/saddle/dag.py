@@ -12,7 +12,14 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 # min_length=1 admits "   ", which states nothing. Requirement statements
@@ -31,6 +38,22 @@ NodeKind = Literal["test", "impl", "refactor"]
 # `Regex("^diff --git ", json_string=true)` -- so a malformed ID is
 # unrepresentable rather than rejected after the packet exists.
 RequirementId = Annotated[str, Field(pattern=r"^REQ-\d{3}$")]
+# How far, in edits, a reject may sit from its nearest accept (T6-4).
+# Lives here rather than in gates.py because dag sits below gates in the
+# layering and the validator that enforces it is the model's own. Start
+# at 3; T6-1's row B tunes it.
+REQ_NEAR_MISS_K: Final = 3
+
+
+def edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance: insertions, deletions and substitutions, each cost 1."""
+    previous = list(range(len(b) + 1))
+    for i, x in enumerate(a, start=1):
+        current = [i]
+        for j, y in enumerate(b, start=1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (x != y)))
+        previous = current
+    return previous[-1]
 
 
 class Requirement(BaseModel):
@@ -48,6 +71,36 @@ class Requirement(BaseModel):
 
     id: RequirementId
     statement: Statement
+    # Concrete inputs the statement admits and refuses (T6-4). A statement
+    # alone left T1's REQ-002 with no reject at all, and a reject far from
+    # every accept -- REQ-001's `"user"`, 12 edits from `user@example.com`
+    # -- rejects nothing a lazy validator would not; a near-miss is what
+    # tells the requirement from a looser one. The lists are floored at
+    # one entry each in the wire schema (`minItems`); the distance rule is
+    # checked here, after the packet exists, because no grammar can state
+    # it (T3-2's lesson on patterns).
+    accepts: list[str] = Field(min_length=1)
+    rejects: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _rejects_are_near_misses(self) -> Requirement:
+        for reject in self.rejects:
+            nearest = min(self.accepts, key=lambda accept: edit_distance(reject, accept))
+            distance = edit_distance(reject, nearest)
+            if distance > REQ_NEAR_MISS_K:
+                msg = (
+                    f"{self.id}: reject {reject!r} is {distance} edits from its nearest "
+                    f"accept {nearest!r}; a near-miss is within {REQ_NEAR_MISS_K}"
+                )
+                raise ValueError(msg)
+        return self
+
+    @property
+    def examples(self) -> list[tuple[str, str, str]]:
+        """`(id, "accepts"|"rejects", text)` for every example, accepts first."""
+        return [(self.id, "accepts", text) for text in self.accepts] + [
+            (self.id, "rejects", text) for text in self.rejects
+        ]
 
 
 class MutationSample(BaseModel):
@@ -142,6 +195,11 @@ class Node(BaseModel):
     def requirement_ids(self) -> list[str]:
         """Declared IDs, for the journal, transcript and binding gate."""
         return [requirement.id for requirement in self.requirements]
+
+    @property
+    def requirement_examples(self) -> list[tuple[str, str, str]]:
+        """Every accept and reject the node's requirements cite, for the binding gate."""
+        return [example for requirement in self.requirements for example in requirement.examples]
 
 
 class Dag(BaseModel):

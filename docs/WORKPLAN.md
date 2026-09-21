@@ -125,8 +125,10 @@ withdrawn (T6-33a answered round 3e's first question: n2 does not clear
 85% over the behavioural population, 82.0%, so 3e is not a rerun) →
 round 3e, one T5 seed, with `--survivor-effort low` (does a survivor
 round kill anything on a real gap; is T6-29a's 0/10 an effort effect?)
-→ T6-34 (attempt refs, ruff version) → T6-1 (with the reasoning read)
-→ T6-2 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
+→ T6-4 with T6-5 done (main session, while 3e ran) → T6-34 (attempt
+refs, ruff version) → T6-1 (with the reasoning read; its row B tunes
+`REQ_NEAR_MISS_K`, row C reads T6-5's cost on PASS runs) → T6-2 → T6-6
+if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
 T6-3 sits before round 3e rather than after T6-1 with T6-2: it is a
@@ -3876,6 +3878,33 @@ the new sentence (T3-12 style). Owner: main session (schema + prompt +
 gate; the planner-schema change must be verified against the decoder,
 CLAUDE.md "Match the enforcing engine").
 
+**Status (2026-09-20):** DONE, `(commit below)`, main session, with T6-5, landed
+in a worktree while round 3e ran against the checkout's `src/`. Landed as
+written except: `REQ_NEAR_MISS_K` and `edit_distance` live in `dag.py`,
+not `gates.py` (dag sits below gates in the layering, and the validator
+that enforces the bar is the model's own); the examples check is a
+clause of `check_requirement_binding` (`examples=`, `suite=`), not a
+twelfth check, so the transcript's gate list is unchanged; it binds a
+`test` node only (an impl node cannot edit tests, a refactor preserves
+them) and reads the suite as the node leaves it (baseline plus the
+node's diff), so a survivor round's test node inherits the sealed
+specification's assertions rather than restating them; presence means
+the literal sits in an `assert`, under a `with` (a `raises` block) or in
+a decorator (a `parametrize` table) of a `test*` function, a string by
+value and any other constant by its spelling; "the suite is green" is
+not this clause's to check (a test node's suite is red by design) and
+stays the impl node's tests gate. The planner and worker prompts carry
+the rule; the worker prompt lists every example under its requirement.
+Wire schema: both arrays are `minItems: 1` (pydantic `min_length`), no
+pattern. NOT yet verified against the decoder: xgrammar documents
+`minItems`, but the check CLAUDE.md asks for runs in the serving
+container, which the main session may not exec into -- round 3f's first
+plan is that check (a plan with `accepts`/`rejects` decoded at all, and
+`saddle explain` on any 'plan invalid' for a distance failure). Known
+cost: every fixture requirement in the tests now carries
+`accepts=["2"], rejects=["3"]`, and every `test`-node fixture asserts on
+both. ARCHITECTURE.md's example node carries examples too.
+
 ### T6-5 — A test node's properties must include a rejecting one (Proposal C; tightened, floor)
 Files: `src/saddle/gates.py` (`check_property_coverage` ~:446: new
 polarity clause), `src/saddle/evidence.py` (the AST walk that finds
@@ -3892,6 +3921,28 @@ this lands at all).
 Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
 1. polarity clause `-> True` -> T1-shaped known-bad red.
 Done when: mutant red; `./check.sh` green. Bundle with T6-4 in one sitting.
+
+**Status (2026-09-20):** DONE, `(commit below)`, main session, bundled with T6-4.
+Deviation: the polarity classifier lives in `gates.py` beside
+`_has_property`, not in `evidence.py` -- gates may not import evidence at
+runtime (CLAUDE.md layering) and the check is a pure predicate over
+sources. Negative forms: `assert not ...`, `... is False`, `... == False`,
+a `with pytest.raises(...)` / `raises(...)` block, inside a `@given`
+function; `!=`, `is True`, `== 1` and an `assert not` in a plain example
+do not count. One observation from landing it: ruff's SIM201 rewrites
+`assert not f() == 3` to `f() != 3`, so a worker whose rejection is a
+comparison must spell it `is False` or `not valid(x)` to satisfy both
+gates; the worker prompt names those forms. Fixtures whose only property
+was positive (SPEC_DIFF, SPEC_TEST, SPEC_SOURCE, `_flag_test`) gained a
+rejecting property over the `3` reject. Flip, with its evidence: the
+former `test_hypothesis_given_counts_as_a_property` asserted that T1's
+own shape (one positive property over a regex of valid addresses)
+passes; F1 is the run where that shape let a validator accepting
+`.u@example.com` through 7/7 gates, so the old expectation pinned the
+defect; the test now holds that shape as the known-bad and a rejecting
+property as the known-good. The survivor round (T6-29c) is bound by this
+floor too: a kept candidate must reject an input or the spliced test
+node fails property-coverage; round 3f measures the cost.
 
 ### T6-6 — Behavioural mutation on predicate nodes (Proposal A; tightened; pilot)
 Files: `src/saddle/evidence.py` (new `behaviour_probe(...)`: derive probe

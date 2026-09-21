@@ -110,7 +110,9 @@ def _node(node_id: str = "n1", statement: str = "wrapped(v) returns v + 1.") -> 
             "kind": "impl",
             "dependencies": [],
             "task_prompt": "Implement wrapped.",
-            "requirements": [{"id": "REQ-001", "statement": statement}],
+            "requirements": [
+                {"id": "REQ-001", "statement": statement, "accepts": ["2"], "rejects": ["3"]}
+            ],
             "execution_constraints": {
                 "reasoning_budget": "low",
                 "allowed_tools": ["read_file"],
