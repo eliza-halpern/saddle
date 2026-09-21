@@ -5821,7 +5821,59 @@ outcome before the discriminator is decided.
 ### T6-47 — An attempt records the reasoning effort it ran at (tightened)
 
 Files: `src/saddle/vllm.py` (`propose_diff`'s retained record),
-`src/saddle/slice.py` (the sidecar), `tests/test_slice.py`.
+`src/saddle/slice.py` (the sidecar), `tests/test_slice.py`,
+`tests/test_vllm.py`, `docs/ARCHITECTURE.md`.
+
+Status 2026-09-21: DONE. `DiffProposal` gained `reasoning_effort` (empty
+by default, excluded from equality like the other T6-27 fields);
+`propose_diff` fills it from **`payload["reasoning_effort"]`** rather
+than from its own argument, on both the success path and the
+`exc.evidence` path, so the record is read back from the request that
+was actually sent and cannot drift from it; `_proposal_evidence` emits
+it, and `_error_evidence` inherits it through `_call_evidence`.
+ARCHITECTURE.md's sidecar sentence now names the call it retains
+(prompt, seed, temperature, effort) -- it named none of them before, so
+T6-27's fields are documented in the same touch.
+
+Deviation from the item, and it is a weakening of the promise, stated
+because the item's own wording overpromised. The contract written here
+is **fidelity**, not replay: "a replay built from the sidecar bills the
+attempt's own `prompt_tokens`". It is no longer "reproduces the draw",
+because F21.18 measured this deployment returning six distinct outputs
+for six byte-identical requests (10 235-40 358 characters at one
+payload, three per grammar arm). No field added to any record can buy a
+reproduction here. What it buys is a cell that varies the variable it
+means to vary, which is exactly what round 3e's grammar cell could not
+do.
+
+One case left deliberately empty: the survivor/test-node union at
+slice.py:1506 constructs a `DiffProposal` with no request behind it, and
+records `""`. That is the honest value -- there was no effort, because
+there was no draw.
+
+Known-good: a proposal's retained effort equals the `reasoning_effort`
+of the payload the client posted, at two values neither of which is
+`DEFAULT_REASONING_EFFORT` (one value would pass against a hardcoded
+constant); a failed call carries it on `exc.evidence` for both the
+transport and the truncation path, which matters because the draw most
+worth replaying is often the one that failed -- round 3e's zero-content
+emission is a `VllmResponseError`; and a sealed attempt's sidecar names
+`low`, from which a replay keyed on the record draws the arm the attempt
+drew while a guess of `xhigh` draws a different one. Known-bad: the
+sidecar as it stood, from which the only way to pick an effort was to
+guess -- and F21.18 records what the guess cost.
+
+Direction: TIGHTENED (a field added to the seal; nothing loosened).
+
+Contract mutants, each with a verified target count of 1, all KILLED:
+M1 `_proposal_evidence` drops the `reasoning_effort` key (the slice
+known-good red); M2 `propose_diff` records `DEFAULT_REASONING_EFFORT`
+instead of `payload["reasoning_effort"]` (both parametrized vllm cases
+red -- this is the mutant the single-value version of that test would
+have survived); M3 the `exc.evidence` path drops the key (the failed-call
+known-good red).
+`./check.sh` green: 824 passed, 3 skipped, 100% line+branch.
+
 
 The sidecar retains prompt, seed, temperature and `max_tokens`. It does
 not retain `reasoning_effort`, and that field changes both the request

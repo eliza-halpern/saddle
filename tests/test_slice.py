@@ -3646,6 +3646,52 @@ def test_a_recorded_attempt_replays_to_the_same_diff_hash(tmp_path: Path) -> Non
     assert hashlib.sha256(other.encode()).hexdigest() != sealed["diff_hash"]
 
 
+def test_a_recorded_attempt_names_the_effort_it_ran_at(tmp_path: Path) -> None:
+    """T6-47 known-good: a replay keyed on the sidecar's own effort draws the
+    arm the attempt drew; keyed on a guess, it draws a different one.
+
+    Known-bad, and it is on the record (F21.18). The sidecar had no such
+    field, so round 3e's grammar cell had to guess the effort. It guessed
+    `xhigh` against an attempt that ran at `low`, billed 10 627 prompt
+    tokens against the attempt's 10 615, and neither arm reproduced the
+    draw -- so the cell was not a control for the thing it replayed. The
+    recorded effort here is `low` precisely because it is not
+    `DEFAULT_REASONING_EFFORT`: a field pinned to the default would pass a
+    test that only asked whether a value was present.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def model(effort: str) -> str:
+        return GOOD_DIFF if effort == "low" else BAD_DIFF
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(
+            model("low"),
+            "",
+            prompt="fix f",
+            seed=seed,
+            temperature=0.7,
+            reasoning_effort="low",
+        )
+
+    assert run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    ).passed
+    sealed = _sidecar(journal, next(s for s in read_spans(journal) if s.name == "worker:n1"))
+    assert sealed["reasoning_effort"] == "low"
+    replayed = model(sealed["reasoning_effort"])
+    assert hashlib.sha256(replayed.encode()).hexdigest() == sealed["diff_hash"]
+    guessed = model("xhigh")
+    assert hashlib.sha256(guessed.encode()).hexdigest() != sealed["diff_hash"]
+
+
 def test_failed_worker_call_sidecar_keeps_the_call_the_client_attached(tmp_path: Path) -> None:
     """T6-27: a transport failure's sidecar carries prompt, seed, temperature
     and start from the error's `evidence`, and the span's argv names the

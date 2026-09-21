@@ -12,6 +12,7 @@ import pytest
 from saddle.dag import dag_json_schema
 from saddle.vllm import (
     DEFAULT_MODEL,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_TIMEOUT,
     DIFF_GRAMMAR,
     DiffProposal,
@@ -944,6 +945,36 @@ def test_failed_diff_call_carries_its_evidence() -> None:
     with pytest.raises(VllmResponseError) as truncated:
         client.propose_diff("Do y.", seed=2)
     assert truncated.value.evidence["seed"] == 2
+
+
+@pytest.mark.parametrize("effort", ["low", "xhigh"])
+def test_a_proposal_records_the_effort_its_own_request_carried(effort: str) -> None:
+    """T6-47 known-good: the retained effort is the one in the payload the
+    client sent, so a cell rebuilt from the record reaches the server the
+    same way it was reached. Two values, and neither is
+    `DEFAULT_REASONING_EFFORT`, because a single value would pass against a
+    hardcoded constant.
+    """
+    client, seen = _json_client(_ok_body(content=REAL_DIFF))
+    proposal = client.propose_diff("Do x.", seed=3, temperature=0.7, reasoning_effort=effort)
+    assert effort != DEFAULT_REASONING_EFFORT
+    assert proposal.reasoning_effort == json.loads(seen[0].content)["reasoning_effort"] == effort
+
+
+def test_a_failed_diff_call_carries_the_effort_it_ran_at() -> None:
+    """T6-47: the draw most worth replaying is often the one that failed --
+    round 3e's zero-content emission is a `VllmResponseError` -- so the
+    effort rides on the error's evidence, not only on a proposal that came
+    back.
+    """
+    client = _failing_client(httpx.ReadTimeout("timed out"))
+    with pytest.raises(VllmRequestError) as caught:
+        client.propose_diff("Do x.", seed=1, temperature=0.7, reasoning_effort="low")
+    assert caught.value.evidence["reasoning_effort"] == "low"
+    client, _ = _json_client(_ok_body(content=None, finish_reason="length"))
+    with pytest.raises(VllmResponseError) as truncated:
+        client.propose_diff("Do y.", seed=2, reasoning_effort="xhigh")
+    assert truncated.value.evidence["reasoning_effort"] == "xhigh"
 
 
 def test_server_version_reads_the_version_endpoint() -> None:

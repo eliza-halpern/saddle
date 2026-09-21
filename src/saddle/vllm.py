@@ -161,12 +161,19 @@ class DiffProposal:
     reasoning: str
     usage: dict[str, int] = field(default_factory=dict, compare=False)
     max_tokens: int | None = field(default=None, compare=False)
-    # The call that produced it (T6-27): enough to replay the draw.
+    # The call that produced it (T6-27): enough to rebuild the request.
     prompt: str = field(default="", compare=False)
     seed: int | None = field(default=None, compare=False)
     temperature: float | None = field(default=None, compare=False)
     started_at: str = field(default="", compare=False)
     wall_s: float | None = field(default=None, compare=False)
+    # T6-47. The effort is part of the request, not a detail of it: the
+    # served chat template injects a different instruction sentence per
+    # effort, so two draws at different efforts are different prompts.
+    # Without this field a cell rebuilt from the record has to guess, and
+    # F21.18 is what guessing cost -- a `low` attempt replayed at `xhigh`,
+    # 12 prompt tokens apart, neither arm reproducing the draw.
+    reasoning_effort: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -631,6 +638,7 @@ class VllmClient:
                 "prompt": prompt,
                 "seed": seed,
                 "temperature": temperature,
+                "reasoning_effort": payload["reasoning_effort"],
                 "started_at": started_at,
                 "wall_s": round(perf_counter() - start, 3),
             }
@@ -640,6 +648,7 @@ class VllmClient:
             prompt=prompt,
             seed=seed,
             temperature=temperature,
+            reasoning_effort=payload["reasoning_effort"],
             started_at=started_at,
             wall_s=round(perf_counter() - start, 3),
         )

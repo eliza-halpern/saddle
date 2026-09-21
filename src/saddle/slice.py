@@ -525,6 +525,7 @@ def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
         "prompt": proposal.prompt,
         "seed": proposal.seed,
         "temperature": proposal.temperature,
+        "reasoning_effort": proposal.reasoning_effort,
         "started_at": proposal.started_at,
         "wall_s": proposal.wall_s,
         "finish_reason": "stop",
