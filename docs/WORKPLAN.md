@@ -6596,6 +6596,37 @@ The fork needs re-deciding against the corrected premise before any of
 this lands. Until then T6-53 does not start; T6-54 is independent and
 goes first.
 
+### T6-55 — Round 3h: does an impl node seal? (measurement)
+
+Owner: main session. Pre-registration at `../saddle-bench/runs/round3h/PREDICTION.md`
+(bench `9919fa5`), run under T6-53 and T6-54.
+
+**This round is the falsifiable test of the gate-fixing loop, not just
+the next data point.** Rounds 3c–3g each ended by naming one gate defect
+and fixing it. Across all five, **no impl node has ever sealed** — every
+seal in the benchmark's history is a test node, read from the plan
+record at the head of each run's `proofs.jsonl`:
+
+| round | sealed | kinds |
+|---|---|---|
+| 3c | n1, n2.r1 | test, test |
+| 3d | n1 | test |
+| 3e | n1 | test |
+| 3f | — | — |
+| 3g | n1 | test |
+
+So the loop has a stated falsifier: **if 3h seals no impl node,
+gate-fixing is not the bottleneck and the next item may not be a sixth
+gate.** Q1 is that question. Q2 and Q3 are T6-53's and T6-54's first
+live uses; Q4 is Goal G1, whose count is at zero.
+
+Q1 is resolved **together with Q4, never alone**: T6-53 by design admits
+a node that adds code nothing runs, so a seal that happened only because
+deferral swallowed a real gap is hollow and must be reported as such.
+Three pre-registered ways a question ends UNRESOLVED rather than
+falsified are recorded in PREDICTION.md, so a quiet run is not read as a
+pass.
+
 ### T6-54 — A recovery plan may not prescribe what a gate rejects (tightened)
 
 Files: `src/saddle/slice.py` or wherever the recovery text is built and
