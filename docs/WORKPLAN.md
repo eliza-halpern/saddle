@@ -141,9 +141,14 @@ refs, stale comment) → T6-49 done (round 3f; F21.20: P1-P5 held, P9 is a
 disagreement, G1's count stays at zero, and both plans died on the same
 gate) → T6-50 done (a call-shaped example binds to the test that
 performs it; the blocker, with the rejected tree now passing) → T6-51
-done (the sidecar keeps its reasoning whole) → **T6-52 = round 3g**, the
-next G1 seed and the first that can reach an impl node → T6-46 (the
-refusal path, once its discriminator is decided) → T6-1 (with the reasoning read, over rounds
+done (the sidecar keeps its reasoning whole) → T6-52 done (round 3g;
+F21.21: first node sealed, first impl node dispatched, Q8 a disagreement
+in the opposite direction — the gate rejected the correct artifact) →
+**T6-54** (a recovery plan may not prescribe what a gate rejects; small,
+known-bad in hand) → **T6-53** (coverage may not demand what the graded
+node cannot supply; needs the user's fork decided) → round 3h, the next
+G1 seed → T6-46 (still no admissible example; round 3g checked and does
+not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
 T6-2 → T6-6 if T6-1 says
@@ -5900,6 +5905,16 @@ implementing the outcome would be buying a mechanism with no case. Owner
 unchanged; the trigger is now specific -- the first run in which a node
 seals every requirement but one.
 
+**Round 3g checked against this trigger and does NOT meet it
+(2026-09-21, F21.21).** `n2.r1` attempt 1 failed exactly one gate, which
+looks like the trigger and is not it. The discriminator admits a refusal
+when a **requirement** cannot be implemented; REQ-002 *was* implemented,
+correctly — the restored tree passes 16 of 16 hidden accounts+fees
+tests. What could not be satisfied was the `coverage` gate, and a
+refusal channel is the wrong repair for that: the node had nothing to
+refuse. T6-53 is the right item. T6-46 still has no admissible example
+and stays unimplemented for the same stated reason.
+
 ---
 
 ### T6-46 — A node may refuse a requirement instead of faking it (loosening, with evidence)
@@ -6333,7 +6348,7 @@ assertion was protecting -- that the scrub descends and redacts -- is
 carried in the same test by a nested non-retained string of the same
 length, still truncated. ./check.sh 833 passed, 100%, exit 0.
 
-### T6-52 — Round 3g: the first seed that can reach an impl node, and Goal G1 seed 1 of 3 (measurement; no code)
+### T6-52 — Round 3g: the first seed that can reach an impl node, and Goal G1 seed 1 of 3 (measurement; no code) — DONE 2026-09-21
 
 Same procedure as T6-49 (`RUN_DIR=runs/round3g/t5-s1 SAMPLE_TEMP=0.7
 DEADLINE=7200 ./run_arm.sh t5 saddle`, PREDICTION.md committed before
@@ -6394,6 +6409,120 @@ gate with saddle's own functions on the tree its ref names, and say
 which steps were done and which were not. Owner: main session or
 executor (needs the key and the container up). Not in this item: any
 fix. A falsified Q3-Q7, or a Q8 disagreement, is a main-session item.
+
+**DONE 2026-09-21 — Q8 DISAGREEMENT; G1's count stays at zero. F21.21.**
+`EXIT=1 WALL=6406`, 1 proven, 1 failed, 2 undispatched, oracle FAIL.
+The first run to seal a node (`refs/saddle/proven/n1`) and the first to
+dispatch an impl node. Q2–Q6 held; **Q3 and Q4 are T6-51's and T6-50's
+first live uses and both held** — no nested `thinking` truncated
+(115 239 characters retained at most) and `n1` sealed with
+`requirement-binding: PASS (1 requirement(s) bound, 4 example(s)
+asserted)`. Q1 falsified: two calls ended `length`, two ended `stop`
+with no text content. Q7 unresolved.
+
+The disagreement is the opposite of round 3f's. `n2.r1` attempt 1 failed
+exactly one gate, `coverage`, on eleven lines; restored from its attempt
+ref that tree passes **16 of 16** hidden accounts+fees tests, while the
+tree the run kept fails the hidden suite at collection. The gate
+rejected the correct artifact. It is not broken — reproduced to the same
+eleven lines with saddle's own arithmetic — but its demand is outside
+the graded node's power. Items T6-53 and T6-54 follow.
+
+### T6-53 — The coverage gate may not demand what the graded node cannot supply (design decision, then a contract change)
+
+Files: `src/saddle/gates.py` (`check_changed_line_coverage`, and what
+fills `changed`), `src/saddle/runner.py`, `docs/DESIGN-NOTES.md`.
+
+**Proof the contract is wrong** (F21.21). `n2.r1`'s eleven uncovered
+lines are `to_dict` (`:97`), `from_dict` (`:105-109`), `__eq__` (`:114`),
+`__repr__` (`:117`), two `raise TypeError` guards for a `bool` amount
+and one `raise ValueError` in `transfer`. The first four serialize an
+`Account`, so the tests that exercise them belong to **REQ-004**
+(`store.py`), node `n4`, which had not run and whose tests therefore do
+not exist. The node is caught between three of its own gates:
+`coverage` requires those lines executed, `public-deletions` (T6-42)
+forbids removing them — they are the same four members round 3d's repair
+deleted — and `check_node_scope` forbids an impl node writing the test
+that would execute them. The only move left is a call that exists so a
+line is recorded as executed, which Goal G1 rules inadmissible as
+specification, not as exhortation.
+
+So this is not the worker failing. It is a plan whose DAG order makes a
+gate unsatisfiable for a node, and the gate firing exactly as written.
+
+**The decision is the user's, and it is a real fork.** Three candidates,
+none free:
+
+(a) *Grade coverage over the plan, not the node.* The honest reading —
+a line added for REQ-004 is gradeable once `n4` has run. Costs: the
+proof stops being per-node, and a failure arrives late, after more work
+is built on it.
+
+(b) *Narrow `changed` to lines the node's own requirements reach.* Cheap
+and local, but it is a population narrowing, so WORKPLAN §0.6 applies:
+it may not land without exhibiting the known-bad it now admits — and
+the obvious one is real, a node adding unreachable code under a
+requirement nobody will test later.
+
+(c) *Defer the undecidable lines rather than pass them.* A changed line
+whose only plausible exerciser belongs to a requirement no sealed node
+owns is recorded as **deferred**, the node seals, and the run fails at
+the end if any deferred line is still uncovered when the DAG drains.
+Keeps the bar, moves the verdict to where the evidence exists; costs a
+new outcome state and a drain check.
+
+I recommend **(c)**: it neither lowers the bar nor pretends the question
+is answerable at the time it is currently asked, and unlike (b) it
+cannot be satisfied by narrowing. But (a) is simpler to reason about and
+the choice changes what a proof means, so it is not mine to make.
+
+Whichever lands: known-good is `refs/saddle/attempt/n2.r1/1` frozen as a
+fixture — it must be accepted, since ground truth accepts it. Known-bad
+is a node that adds a private helper nothing will ever reach, which must
+still fail. Both halves, or not done.
+
+### T6-54 — A recovery plan may not prescribe what a gate rejects (tightened)
+
+Files: `src/saddle/slice.py` or wherever the recovery text is built and
+routed (T6-31), `src/saddle/gates.py` (reuse the `public-deletions`
+predicate), `tests/`, plus the frozen brief as a fixture.
+
+**Known-bad, already in hand, verbatim from round 3g's attempt-2 sidecar:**
+
+> 2. In `accounts.py`, remove the `to_dict()`, `from_dict()`, `__eq__`,
+> and `__repr__` methods (no test exercises them).
+> 3. In `accounts.py`, remove the `if quantized <= 0: raise ValueError(...)`
+> guard from `transfer()` ...
+
+That is round 3d's behaviour — the behaviour T6-42's gate exists to
+reject — **prescribed to the worker by the harness itself**. The worker
+followed it and burned 1871 s and 149 151 output tokens ending `length`
+with no diff.
+
+Contract: a recovery plan that names a public definition the baseline
+has, in a removal instruction, is not routed to the worker. The
+predicate already exists — `public-deletions` computes exactly this set
+from the baseline tree — so this is a reuse, not a new judgement, and it
+stays deterministic: no model reads the plan to decide whether it is
+good advice.
+
+Direction: **tightened**. Nothing the worker could legally do becomes
+illegal; one thing the harness could say to the worker becomes
+unsayable.
+
+Known-good: a recovery plan that names those same methods without
+proposing their removal ("`to_dict` is untested; the test that covers it
+belongs to REQ-004") is routed unchanged. A plan proposing removal of a
+**private** helper is routed — `public-deletions` permits that and so
+does this. Known-bad: the frozen brief above, and a plan proposing
+removal of a dunder, since three of round 3d's four deletions were
+dunders and T6-42 already counts them public.
+Vacuity: a test must show the check is capable of passing a plan that
+mentions the same names, or it is pinning the string rather than the
+instruction.
+
+Owner: main session. Independent of T6-53 and much smaller; it can land
+first.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
