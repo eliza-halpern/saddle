@@ -156,7 +156,10 @@ run's own report, and the scoring picture was wrong until the sidecars
 were read) → **T6-58** (a requirement may not restate the gate; T6-44
 fixed saddle's own sentence and the planner still regenerates the proxy
 into requirement statements the worker reads — shown on 3g's retained
-prompt, post-T6-44) → T6-46 (still no admissible example; round 3g checked and does
+prompt, post-T6-44) → **T6-59** (the text-only mutant exclusion covers one
+spelling of a message-only mutation and not the other; F21.29 — two such
+mutants are the whole margin between round 3h's `n2` sealing and failing)
+→ T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
@@ -6972,6 +6975,68 @@ recoverable solely from an attempt prompt, so a run whose prompts are
 truncated (anything before T6-36) cannot be audited on this at all.
 
 Owner: main session, after round 3h. Does not block 3h.
+
+### T6-59 — A message-only mutant is excluded whichever way it is spelled (scope narrowed)
+
+Files: `src/saddle/evidence.py` (`text_only_mutant`,
+`_tokens_modulo_strings`), `tests/test_evidence.py`.
+
+`text_only_mutant` (T6-33) states its contract in its docstring: a mutant
+that "changes nothing but string-literal text", excluded because "no
+requirement constrains those words, so a spec-derived test cannot kill
+them and one that does pins the implementation's wording." It implements
+that as pairwise token equality with string *contents* blanked. So
+
+```diff
+-    raise TypeError("cannot convert")
++    raise TypeError("XXcannot convertXX")
+```
+
+is excluded (STRING vs STRING), and
+
+```diff
+-    raise TypeError("amount must be int, str, Decimal, or float")
++    raise TypeError(None)
+```
+
+is not (STRING vs NAME) — though by the docstring's own argument it is
+the same thing. `TypeError(None)` is a `TypeError`; every
+`pytest.raises(TypeError)` still passes; only the rendered message moves.
+
+Round 3h `n2` attempt 1 failed on **mutation alone**, twelve of thirteen
+gates passing, at `83.5% < 85.0%` — 76 killed of 91. The two mutants
+above are the first two names in the gate's own failure message
+(`accounts.x__to_decimal__mutmut_1`, `__mutmut_9`), and 76/89 = **85.4%**:
+excluding exactly those two seals the node. F21.29 has the reproduction —
+the two source files sha256-matched to the attempt tree, an independent
+`mutmut run`, and the scoped population rebuilt with saddle's own
+`changed_lines` / `_mutant_lines` / `text_only_mutant`.
+
+This is a **population narrowing**, so §0.6 applies and the known-bad is
+named first.
+
+1. **Known-bad it must still reject.** The T5 task's rule 1 requires the
+   currency `ValueError` message to *contain* `USD`, `EUR` and `JPY`.
+   There the wording **is** the requirement: a spec-derived test can kill
+   a mutant that blanks it, and such a mutant belongs in the population.
+   A test asserts the rule keeps it in.
+2. **Known-good it must now accept.** The `TypeError(None)` pair above,
+   plus `"%s is below the fee %s for %s" % (value, fee, currency)` → `None`
+   at a `raise` site.
+3. **Scope.** The narrowing is a *spelling* equivalence, not a new
+   category: the current rule already admits the known-bad in (1) for the
+   `"XX…XX"` spelling. The item is to make the rule match its docstring
+   and to say, in the docstring, what keeps a requirement-constrained
+   message in the population — not to introduce a message exemption.
+   Anything that does not tokenize line by line keeps failing closed.
+
+**Not in scope.** Fifteen of the 23 scoped survivors in the F21.29
+reconstruction are real, spec-derived, nameable test gaps — `rounding=`
+dropped from a `quantize`, `_quantize(v, currency)` → `(v, None)` (JPY
+only), both `fee_for` boundaries, the `deposit`/`withdraw` JPY branch.
+The gate is right about those and `n1`'s tests are thin. This item does
+not touch them, and must not be closed by a threshold move: after it, a
+node whose tests miss those fifteen still fails.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
