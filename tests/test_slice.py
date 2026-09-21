@@ -2615,6 +2615,253 @@ def test_apply_diff_reports_which_mode_applied(tmp_path: Path) -> None:
     assert _apply_diff(tmp_path, drifted) == "ignore-whitespace"
 
 
+# The baseline `fees.py` of the round-3e T5 seed and the hunk one draw
+# wrote against it: sample 0 of node n2's first attempt, kept whole in
+# its sidecar. Its old side is the file with one blank line moved and
+# one dropped (F21.16 §5); every `git apply` rung refuses it.
+ROUND_3E_FEES: Final = '''"""Flat USD fee schedule.
+
+Every transaction pays the same flat fee in US dollars. The fee is
+deducted from the transaction amount to produce the net credited
+amount; batch callers can price many transactions up front with
+total_fees.
+"""
+
+from __future__ import annotations
+
+FLAT_FEE = 0.30
+
+
+def fee_for(amount):
+    """Return the flat USD fee charged on a transaction amount.
+
+    The fee does not depend on the amount; the argument exists so
+    callers can validate the amount against the fee schedule.
+    Amounts below the fee cannot cover it and are rejected.
+    """
+    value = round(float(amount), 2)
+    if value < FLAT_FEE:
+        raise ValueError(
+            "amount %.2f is below the flat fee %.2f" % (value, FLAT_FEE)
+        )
+    return FLAT_FEE
+
+
+def apply_fee(amount):
+    """Deduct the flat USD fee; returns the net amount."""
+    net = round(float(amount), 2) - fee_for(amount)
+    return round(net, 2)
+
+
+def total_fees(count):
+    """Return the combined flat USD fees for count transactions."""
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise TypeError("count must be an int")
+    if count < 0:
+        raise ValueError("count must be >= 0")
+    return round(FLAT_FEE * count, 2)
+'''
+ROUND_3E_FEES_DIFF: Final = '''diff --git a/fees.py b/fees.py
+--- a/fees.py
++++ b/fees.py
+@@ -1,42 +1,56 @@
+-"""Flat USD fee schedule.
+-
+-Every transaction pays the same flat fee in US dollars. The fee is
+-deducted from the transaction amount to produce the net credited
+-amount; batch callers can price many transactions up front with
+-total_fees.
++"""Multi-currency fee schedule.
++
++Per-currency flat fees. The fee is deducted from the transaction amount
++to produce the net credited amount; batch callers can price many
++transactions up front with total_fees.
+ """
+ 
+ from __future__ import annotations
+ 
++from decimal import Decimal
++
++from money import quantize, to_decimal, validate_currency
++
++FEES = {
++    "USD": Decimal("0.30"),
++    "EUR": Decimal("0.25"),
++    "JPY": Decimal("30"),
++}
+ 
+-FLAT_FEE = 0.30
+ 
+-def fee_for(amount):
+-    """Return the flat USD fee charged on a transaction amount.
++def fee_for(amount, currency="USD"):
++    """Return the fee for the given currency.
+ 
+-    The fee does not depend on the amount; the argument exists so
+-    callers can validate the amount against the fee schedule.
+-    Amounts below the fee cannot cover it and are rejected.
++    Validates the currency and amount type; returns the per-currency
++    fee as a quantized Decimal.
+     """
+-    value = round(float(amount), 2)
+-    if value < FLAT_FEE:
+-        raise ValueError(
+-            "amount %.2f is below the flat fee %.2f" % (value, FLAT_FEE)
+-        )
+-    return FLAT_FEE
++    validate_currency(currency)
++    quantize(to_decimal(amount), currency)
++    return FEES[currency]
+ 
+ 
+-def apply_fee(amount):
+-    """Deduct the flat USD fee; returns the net amount."""
+-    net = round(float(amount), 2) - fee_for(amount)
+-    return round(net, 2)
++def apply_fee(amount, currency="USD"):
++    """Deduct the fee; returns the net amount as a quantized Decimal.
+ 
+-def total_fees(count):
+-    """Return the combined flat USD fees for count transactions."""
++    Raises ValueError when the quantized amount is below the fee.
++    """
++    validate_currency(currency)
++    value = quantize(to_decimal(amount), currency)
++    fee = FEES[currency]
++    if value < fee:
++        raise ValueError(
++            "amount %s is below the fee %s for %s" % (value, fee, currency)
++        )
++    net = value - fee
++    return quantize(net, currency)
++
++
++def total_fees(count, currency="USD"):
++    """Return the combined fees for count transactions."""
++    validate_currency(currency)
+     if isinstance(count, bool) or not isinstance(count, int):
+         raise TypeError("count must be an int")
+     if count < 0:
+         raise ValueError("count must be >= 0")
+-    return round(FLAT_FEE * count, 2)
++    return quantize(FEES[currency] * count, currency)
+'''
+
+
+def _git_repo_holding(root: Path, name: str, text: str) -> None:
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, root) == 0
+    (root / name).write_text(text)
+    assert run_argv(["git", "add", name], root) == 0
+    assert run_argv(["git", "commit", "-m", "base"], root) == 0
+
+
+def test_apply_diff_reanchors_blank_line_drift_no_flag_reaches(tmp_path: Path) -> None:
+    """A hunk whose only error is where its blank lines fall applies (T6-38).
+
+    `--ignore-whitespace` ignores whitespace within a line; a blank line
+    the file has and the hunk lacks is a line-level insertion, and this
+    was every `did not apply` loss in rounds 3d and 3e (F21.16 §5). The
+    rung re-derives the blank context from the file and applies strictly,
+    so the result's non-blank lines are exactly the hunk's new side.
+    """
+    _git_repo_holding(tmp_path, "fees.py", ROUND_3E_FEES)
+    assert _apply_diff(tmp_path, ROUND_3E_FEES_DIFF) == "blank-lines"
+    text = (tmp_path / "fees.py").read_text()
+    new_side = [line[1:] for line in ROUND_3E_FEES_DIFF.splitlines()[4:] if line[:1] in (" ", "+")]
+    assert [line for line in text.splitlines() if line.strip()] == [
+        line for line in new_side if line.strip()
+    ]
+    assert "FLAT_FEE" not in text
+    assert run_argv(["git", "diff", "--cached", "--quiet", "--", "fees.py"], tmp_path) == 1
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("-    return round(FLAT_FEE * count, 2)", "-    return round(FLAT_FEE * count, 3)"),
+        ("     if count < 0:", "     if count <= 0:"),
+    ],
+    ids=["deleted line", "context line"],
+)
+def test_apply_diff_blank_line_rung_refuses_a_code_line_the_file_lacks(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    """Blank-line tolerance is not code tolerance.
+
+    The same hunk with one old code line altered -- a deletion or a
+    context line -- is refused without the rung running git at all (the
+    failure still names `three-way`), and the tree is untouched: a
+    drifted `return` is a wrong edit, not drift.
+    """
+    assert ROUND_3E_FEES_DIFF.count(old + "\n") == 1
+    _git_repo_holding(tmp_path, "fees.py", ROUND_3E_FEES)
+    wrong = ROUND_3E_FEES_DIFF.replace(old + "\n", new + "\n")
+    with pytest.raises(RuntimeError, match=r"\(last rung three-way: "):
+        _apply_diff(tmp_path, wrong)
+    assert (tmp_path / "fees.py").read_text() == ROUND_3E_FEES
+
+
+def test_apply_diff_blank_line_rung_refuses_a_hunk_anchored_on_nothing(tmp_path: Path) -> None:
+    """A hunk whose old side is blank lines only has nothing to anchor on."""
+    _git_repo_holding(tmp_path, "d.py", "x = 1\ny = 2\n")
+    diff = "diff --git a/d.py b/d.py\n--- a/d.py\n+++ b/d.py\n@@ -1,1 +1,2 @@\n \n+z = 3\n"
+    with pytest.raises(RuntimeError, match=r"\(last rung three-way: "):
+        _apply_diff(tmp_path, diff)
+    assert (tmp_path / "d.py").read_text() == "x = 1\ny = 2\n"
+
+
+def test_apply_diff_blank_line_rung_passes_a_missing_file_through_to_git(tmp_path: Path) -> None:
+    """A section for a file the tree lacks is not re-anchored; git then
+    refuses the whole diff, and the failure names this rung."""
+    _git_repo_holding(tmp_path, "fees.py", ROUND_3E_FEES)
+    diff = (
+        ROUND_3E_FEES_DIFF
+        + "diff --git a/q.py b/q.py\n--- a/q.py\n+++ b/q.py\n@@ -1 +1 @@\n-a\n+b\n"
+    )
+    with pytest.raises(RuntimeError, match=r"\(last rung blank-lines: error: q\.py: "):
+        _apply_diff(tmp_path, diff)
+    assert (tmp_path / "fees.py").read_text() == ROUND_3E_FEES
+
+
+def test_apply_diff_blank_line_rung_refuses_an_anchor_the_file_has_twice(tmp_path: Path) -> None:
+    """A hunk whose old lines occur twice cannot say where it goes."""
+    _git_repo_holding(tmp_path, "d.py", "a = 1\n\nb = 2\n\n\na = 1\n\nb = 2\n")
+    diff = "diff --git a/d.py b/d.py\n--- a/d.py\n+++ b/d.py\n@@ -1,2 +1,3 @@\n"
+    diff += " a = 1\n+c = 3\n b = 2\n"
+    with pytest.raises(RuntimeError, match=r"\(last rung three-way: "):
+        _apply_diff(tmp_path, diff)
+    assert (tmp_path / "d.py").read_text() == "a = 1\n\nb = 2\n\n\na = 1\n\nb = 2\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "body", "expected"),
+    [
+        ("x = 1\n\ny = 2\n", " x = 1\n+z = 3\n y = 2\n", "x = 1\nz = 3\n\ny = 2\n"),
+        ("x = 1\ny = 2\n", " x = 1\n \n+z = 3\n y = 2\n", "x = 1\nz = 3\ny = 2\n"),
+        (
+            "x = 1\n\ny = 2\n\nw = 4\n",
+            " x = 1\n \n+z = 3\n y = 2\n-w = 4\n+w = 5\n",
+            "x = 1\n\nz = 3\ny = 2\n\nw = 5\n",
+        ),
+    ],
+    ids=["file has the blank", "hunk has the blank", "two edits, drift between them"],
+)
+def test_apply_diff_blank_line_rung_keeps_additions_where_the_hunk_put_them(
+    tmp_path: Path, text: str, body: str, expected: str
+) -> None:
+    """The file's blank lines are kept, the hunk's spurious ones dropped,
+    and an addition stays next to the old line it followed."""
+    _git_repo_holding(tmp_path, "d.py", text)
+    diff = "diff --git a/d.py b/d.py\n--- a/d.py\n+++ b/d.py\n@@ -1,2 +1,3 @@\n" + body
+    assert _apply_diff(tmp_path, diff) == "blank-lines"
+    assert (tmp_path / "d.py").read_text() == expected
+
+
 def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Path) -> None:
     """Sequential retry optimises against whichever gate shouts loudest.
 

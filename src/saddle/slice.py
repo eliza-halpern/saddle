@@ -232,13 +232,116 @@ def _elapsed_ms(start: float) -> int:
 # run to three consecutive failures one lint fix from passing (F4, F11,
 # F13). The dominant cause is context reproduced from memory with drifted
 # whitespace, not a wrong edit. Order matters -- a strict apply is tried
-# first so a fuzzy mode never pre-empts an exact match.
+# first so a fuzzy mode never pre-empts an exact match. `--ignore-whitespace`
+# only reaches whitespace *within* a line; a blank line the file has and
+# the hunk lacks (or the reverse) is a line-level drift no git flag
+# addresses, and it was the whole loss on `fees.py` in rounds 3d and 3e
+# (F21.16). The last rung, `blank-lines`, is not a flag: it re-derives
+# each hunk's blank context from the file and applies the result strictly.
 _APPLY_MODES: Final = (
     ("strict", ()),
     ("ignore-whitespace", ("--ignore-whitespace",)),
     ("reduced-context", ("--ignore-whitespace", "-C1")),
     ("three-way", ("--3way",)),
 )
+
+_HUNK_KINDS: Final = (" ", "-", "+", "\\", "")
+
+
+def _reanchor_hunk(
+    hunk: Sequence[str], file_lines: Sequence[str], start: int
+) -> tuple[list[str], int, int] | None:
+    """`hunk` with its blank old lines re-derived from `file_lines`.
+
+    The hunk's non-blank old lines (context and deletions) must occur
+    exactly once, in order, at or after `start`, with nothing but blank
+    lines between consecutive ones; a line is compared with its whitespace
+    collapsed, the same tolerance the `ignore-whitespace` rung already
+    grants. Anything else -- a code line the file does not have, or an
+    anchor the file has twice -- returns None and the diff is refused as
+    before: a drifted `return` is a wrong edit, not drift. Blank lines the
+    file has become context; blank lines only the hunk has are dropped, so
+    this rung never deletes a blank line. Additions keep their place
+    relative to the old lines around them.
+
+    Returns the rewritten body, the index of its first old line, and the
+    index just past its last.
+    """
+    anchors = [line[1:] for line in hunk if line[:1] in (" ", "-") and line[1:].strip()]
+    if not anchors:
+        return None
+    matches: list[tuple[int, int]] = []
+    for position in range(start, len(file_lines)):
+        cursor = position
+        for text in anchors:
+            while cursor < len(file_lines) and not file_lines[cursor].strip():
+                cursor += 1
+            if cursor >= len(file_lines) or file_lines[cursor].split() != text.split():
+                break
+            cursor += 1
+        else:
+            matches.append((position, cursor))
+    if len(matches) != 1:
+        return None
+    position, end = matches[0]
+    body: list[str] = []
+    cursor = position
+    for line in hunk:
+        kind, text = line[:1], line[1:]
+        if kind in ("+", "\\"):
+            body.append(line)
+        elif not text.strip():
+            if cursor < end and not file_lines[cursor].strip():
+                body.append(" " + file_lines[cursor])
+                cursor += 1
+        else:
+            while not file_lines[cursor].strip():
+                body.append(" " + file_lines[cursor])
+                cursor += 1
+            body.append(kind + file_lines[cursor])
+            cursor += 1
+    return body, position, end
+
+
+def _reanchor_blank_lines(workdir: Path, diff: str) -> str | None:
+    """`diff` with every hunk against an existing file re-anchored (T6-38).
+
+    Hunks against files the diff creates, or that are not in the tree,
+    pass through untouched. None when any hunk cannot be re-anchored, so
+    the rung is skipped rather than applied in part.
+    """
+    lines = diff.splitlines()
+    out: list[str] = []
+    file_lines: list[str] | None = None
+    cursor = delta = 0
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("diff --git "):
+            file_lines = None
+            cursor = delta = 0
+        elif line.startswith("--- a/"):
+            target = workdir / line.removeprefix("--- a/")
+            if target.is_file():
+                file_lines = target.read_text().splitlines()
+        elif line.startswith("@@ ") and file_lines is not None:
+            stop = index + 1
+            while stop < len(lines) and lines[stop][:1] in _HUNK_KINDS:
+                stop += 1
+            found = _reanchor_hunk(lines[index + 1 : stop], file_lines, cursor)
+            if found is None:
+                return None
+            body, position, cursor = found
+            olds = sum(entry[:1] in (" ", "-") for entry in body)
+            news = sum(entry[:1] in (" ", "+") for entry in body)
+            out.append(f"@@ -{position + 1},{olds} +{position + 1 + delta},{news} @@")
+            out.extend(body)
+            delta += news - olds
+            index = stop
+            continue
+        out.append(line)
+        index += 1
+    return "\n".join(out) + "\n"
 
 
 def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> str:
@@ -275,6 +378,14 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
             workdir,
             diff,
             recorder=recorder,
+        )
+        if exit_code == 0:
+            return mode
+    reanchored = _reanchor_blank_lines(workdir, diff)
+    if reanchored is not None:
+        mode = "blank-lines"
+        exit_code, stderr = run_stdin_capture(
+            ["git", "apply", "--index", "--recount", "-"], workdir, reanchored, recorder=recorder
         )
         if exit_code == 0:
             return mode
