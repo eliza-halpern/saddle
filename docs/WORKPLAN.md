@@ -120,10 +120,11 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 to T6-27, T6-3, T6-31 done, T6-30 withdrawn → sessions 38 (T6-28),
-39 (T6-29a) and 40 (T6-29b, saddle checkout: the main session stays out
-of the tree until it reports) → T6-29c (main session) → round 3e, one T5
-seed → T6-1 (with the reasoning read)
+T6-22 to T6-29b, T6-3, T6-31, T6-32, T6-33 done, T6-30 withdrawn →
+T6-29c (main session) → the T6-32 corpus run in the container (user or
+executor) → round 3e, one T5 seed (first question: does n2 clear 85% over
+the behavioural population with the tests it already wrote?) → T6-1
+(with the reasoning read)
 → T6-2 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -4912,6 +4913,19 @@ mutants it kills (mutmut over the same `source_paths`, seeded). Report
 the 10x4 table and the pass count. Ten draws at a few seconds each: one
 short session. Owner: executor (needs the key). After T6-27.
 
+**Status (2026-09-20):** DONE, bench `495014e`, F21.14. Two of ten
+reasoning-off draws pass all three filters (seeds 1 and 6: red on the
+stub, green on the real tree, execute `money.py:33`, kill no survivor);
+four do not parse; three are plausible-looking tests that are simply
+wrong (`Decimal('NaN') == Decimal('NaN')` asserted, `DID NOT RAISE` on
+inputs the spec accepts); one never stopped (32768 tokens). No draw
+returned empty content. Numeric length budgets in the brief are ignored
+at effort `none`; a cardinality bound (one section, one hunk) is
+honoured 6/6. Two harness findings: a creation without `new file mode`
+is representable and never applies (T6-32), and 34 of n2's 66 survivors
+edit only message text no requirement constrains (T6-33). The brief was
+iterated five times on emission shape only; both versions are committed.
+
 ### T6-29b — Survivor-driven test node, the machinery: locate, stub, brief, filter (tightened in effect; new module; executor)
 
 Files: `src/saddle/survivors.py` (new), `tests/test_survivors.py` (new).
@@ -4962,6 +4976,14 @@ kept); (3) the stub replaced by the real module in the sandbox. Owner:
 executor. Measure-first result from T6-29a goes into the docstring of
 (5) when it lands.
 
+**Status (2026-09-20):** DONE, `2e41e43`, executor (session 40).
+`src/saddle/survivors.py` with the five contracts; `keep_candidate`
+takes an injected `CandidateRunner` and no subprocess runner ships (that
+is T6-29c's). Noticed: `_stub_module` breaks a module that decorates a
+function with one of its own (the decorator stubs to `raise`); and
+`MutationOutcome` names survivors only, so killed sets are a difference
+of two runs.
+
 ### T6-29c — Survivor-driven test node, the splice (tightened in effect; main session)
 
 Files: `src/saddle/slice.py` (recovery path, `_best_of_samples` union
@@ -4982,6 +5004,63 @@ fixture with an uncovered branch, the run seals a test node then the
 impl node. Known-bad: a third round is not started; a node whose gap is
 already cited by a sealed test retries as today. Owner: main session,
 after T6-29b reports.
+
+**Amended 2026-09-20 on F21.14:** (a) a candidate red on the real tree
+is dropped and recorded, never handed to the impl node as its brief:
+three of ten probe draws were plausible tests that were simply wrong;
+(b) the filters run parse-first (`syntax` before pytest), since four of
+ten did not parse and a syntax error must not score as "fails against
+the stub"; (c) the draws run at effort `low` by default with a token
+cap sized for one test file and a cut to the last complete test
+function before the filters -- `none` yielded two usable drafts in ten
+and no kills, and numeric length instructions in the brief do not land;
+(d) the brief carries the cardinality bound (one section, one hunk)
+that the probe showed the model honours; (e) T6-33 lands first, so the
+survivors this node is asked to kill are ones a specification can pin.
+k and effort stay parameters and round 3e measures them.
+
+### T6-32 — A creation carries its mode line: the diff grammar's create and delete forms (tightened)
+
+Files: `src/saddle/vllm.py` (`DIFF_GRAMMAR`), `tools/diff_grammar_check.py`
+(corpus), `tests/test_vllm.py`.
+
+F21.14: `new file mode` was optional metadata, so a creation without it
+was representable and `git apply` read `/dev/null` as a path. Contract:
+`section ::= header (create | delete | modify)`; `create` requires `new
+file mode` before `--- /dev/null`, `delete` requires `deleted file mode`
+before `+++ /dev/null`, and a modify side's path never begins with `/`.
+Known-bad in the corpus: a creation and a deletion without their mode
+line, each rejected at the `/`. Known-good: git's own creation shape.
+Done when: `tools/diff_grammar_check.py --run` passes in the serving
+container (xgrammar lives there, not in the venv), as T3-18 was closed.
+Owner: main session for the change; the container run is the user's or
+an executor's with the container up.
+
+**Status (2026-09-20):** DONE, `592f906`, main session; structural pin
+and corpus cases committed. Container run of the corpus: pending.
+
+### T6-33 — Text-only mutants leave the mutation population (scope narrowed, with proof)
+
+Files: `src/saddle/evidence.py` (`text_only_mutant`, `mutation_sample`,
+`MutationOutcome.text_only`), `src/saddle/gates.py` (`check_mutation`
+detail), `tests/test_evidence.py`, `tests/test_gates.py`.
+
+F21.14: of the 66 survivors n2 was asked to kill, 34 changed only the
+text inside a string literal. No requirement constrains those words, so
+no spec-derived test can kill them, and a test that does pins the
+implementation's wording; `78.3% < 85.0%` was never "behaviour 78%
+pinned". Contract: a mutant whose removed and added lines tokenize
+identically with string contents blanked (f-string text dropped) and
+whose strings differ leaves the population and is counted; one that does
+not tokenize line by line stays. The detail reports the survivor count
+before the first five names and the excluded count. Direction: scope
+narrowed; the proof is the probe's classification (34 of 66). What this
+is not: a threshold change; a node still has to kill 85% of the mutants
+that remain, all of which a specification could pin.
+
+**Status (2026-09-20):** DONE, `592f906`, main session. Whether n2's
+existing tests clear the bar over the behavioural population is round
+3e's first question.
 
 ### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
 
