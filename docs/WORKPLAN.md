@@ -7159,6 +7159,35 @@ that the cap does not change the verdict on the draws in hand. Round 3h's
 `n2` passes at **exactly** 85.0%, so the margin is zero and the slice is
 load-bearing today, not hypothetically.
 
+**Measured on the one draw in hand.** The cap was lifted (measurement
+only, reverted from git) and the same reproduction re-run:
+
+| | population | verdict |
+|---|---|---|
+| capped at 100 | 85 killed of 100 | 85.0% >= 85.0% PASS |
+| uncapped | 88 killed of 103 | 85.4% >= 85.0% PASS |
+
+The scoped population is 103, so the cap discards three mutants — **all
+three killed**. Same shape as the defect T6-59 fixed: a truncation at the
+tail drops evidence the suite produced and lowers the ratio, here by
+0.4pp. It costs nothing to keep them: `mutmut run` has already decided
+every mutant and the `mutmut show` loop already runs for all of them
+before the cap is applied.
+
+**This does not block reading further seeds**: both readings give the same
+verdict on this draw, and the uncapped one is the more favourable. What it
+blocks is any conclusion *about the 85% threshold itself* drawn from a
+draw where the cap binds.
+
+The remaining decision is scope, not evidence. Dropping the truncation
+also makes `max_mutants` vestigial, and that field is in the plan schema
+(`dag.py:116`, `Literal[100]`), the worker-facing brief (`cli.py:821`)
+and a ceiling at `slice.py:1432`. That is a wider blast radius than the
+measurement warrants on its own, so it is left open for a decision rather
+than closed unilaterally. Note `max_mutants` is **not** a model knob —
+the `Literal[100]` closes the `max_mutants=1` exploit (#50) — so this is
+a fidelity question, not a gaming one.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
