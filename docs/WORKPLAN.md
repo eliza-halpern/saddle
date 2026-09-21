@@ -5487,6 +5487,58 @@ a repair that adds a test-covered branch and leaves the population alone.
 Owner: main session. Before round 3f, because the brief reaches the
 worker on every retry.
 
+Status 2026-09-21: DONE by the main session (commit below). Landed a
+thirteenth Tier-1 check, `public-deletions`, between `dead-code` and
+`red-phase`: `check_public_deletions(baseline_sources, sources)` in
+`gates.py` compares public definitions before against after, per module,
+and fails naming each one that went. Public means top-level functions
+and classes and the methods of public classes; a dunder counts as public
+(three of round 3d's four deletions were dunders, so a rule keyed on the
+leading underscore alone admits the artifact). Unparsable sources on
+either side report nothing -- the syntax gate owns that. `Tier1Inputs`
+gained `baseline_sources`, filled in `runner.py` from the materialized
+baseline tree before the red-phase loops write stubs and the node's own
+tests into it. A spec node substitutes `not required: no source changed`,
+as coverage, dead-code and mutation already do.
+
+Deviations from the item text: the contract is narrower than "may not
+remove a public definition present in the previous attempt's tree, or
+shrink the mutant population, unless a requirement it cites changed". It
+compares against the node's **baseline**, not the previous attempt, and
+it says nothing about the mutant population. The requirement-citing
+escape is not implemented: no node may delete public API, full stop.
+Reason: the population half needs a discriminator that does not fire on
+an honest refactor that deletes dead code, and "unless a requirement it
+cites changed" is a threshold the model supplies -- the `max_mutants=1`
+shape (#50) the item itself is about. `slice.py` is untouched.
+
+Known-bad, frozen: `tests/fixtures/repair_deletes_public_round3d.diff`,
+the real repair, recovered from the run's dangling blob `234923be`
+against `refs/saddle/baseline/n2:accounts.py` -- the sidecar's `diff` is
+empty and there is no attempt snapshot (T6-34). It is rejected naming
+`Account.__eq__`, `Account.__repr__`, `Account.from_dict`,
+`Account.to_dict`. Known-good, and the discriminating half: BOTH round
+3e draws -- `implementation_round3e.diff` and `degenerate_round3e.diff`
+-- pass, because each rewrites `accounts.py` end to end and re-adds all
+four. A check reading the diff would have rejected them; this one reads
+the tree the node left. The degenerate draw is in the known-good set on
+purpose: T6-41 is what rejects its repeated block, and T6-42 must not
+double as that gate.
+
+Direction: TIGHTENED. A node that could seal by deleting untested public
+API now cannot; nothing that previously failed now passes.
+
+Mutants, all KILLED: M1 `_is_public` drops the dunder branch (the round
+3d fixture then reports 2 deletions, not 4); M2 `_public_definitions`
+stops descending into a public class's body (the fixture reports 0,
+because `Account` is still defined); M3 `sorted(before - after)` →
+`sorted(after - before)` (additions reported instead of deletions); M4
+`run_tier1` always substitutes `_not_required("public-deletions")` (the
+gate never runs on an impl node, and the check-order pins still pass);
+M5 `runner.py` passes `baseline_sources=sources` (the node's own tree as
+its own baseline, so nothing is ever missing). `./check.sh` green: 820
+passed, 3 skipped, 100% line+branch.
+
 ### T6-43 — Verbatim repetition in an emission is a defect, not a draw (tightened)
 Files: `src/saddle/vllm.py` (the sampler), `src/saddle/slice.py`
 (candidate scoring), `tests/test_vllm.py`.

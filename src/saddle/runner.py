@@ -171,6 +171,15 @@ def run_node_gate(
             ruff_findings(dest, at_baseline, recorder=recorder)[1] if at_baseline else []
         )
         baseline_tests = read_sources(dest, "test_*.py") | read_sources(dest, "*_test.py")
+        # Captured before the two loops below write into `dest`: T6-42
+        # asks what the baseline defined, and after those loops `dest`
+        # also holds stubs of modules the node created and the node's own
+        # new test files -- neither of which the baseline had.
+        baseline_modules = {
+            rel: text
+            for rel, text in read_sources(dest, "*.py").items()
+            if rel not in baseline_tests
+        }
         tests_changed = _test_signatures(baseline_tests) != _test_signatures(test_sources)
         # Red-phase means the node's own tests against pre-change sources.
         # Without this copy the probe runs a suite that never contained the
@@ -305,6 +314,7 @@ def run_node_gate(
         mutation=mutation,
         added_lines={rel: tuple(sorted(lines)) for rel, lines in sorted(added_lines.items())},
         dead_code_runner=suite_without,
+        baseline_sources=baseline_modules,
         added_files=[str(workdir / p) for p in added],
         touched_files=touched,
         test_output=suite.stdout + suite.stderr,

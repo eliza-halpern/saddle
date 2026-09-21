@@ -295,6 +295,74 @@ def test_run_node_gate_fails_a_node_whose_addition_nothing_depends_on(tmp_path: 
     assert (tmp_path / "n.py").read_text() == with_dead
 
 
+def test_run_node_gate_fails_a_node_that_deleted_a_public_definition(tmp_path: Path) -> None:
+    """T6-42 end to end: round 3d's repair shape, with every other gate green.
+
+    `g` is public, the suite never names it, and removing it is therefore
+    invisible to tests, coverage, mutation and dead-code alike -- the
+    repair that deleted `Account.to_dict`, `from_dict`, `__eq__` and
+    `__repr__` sealed for exactly that reason. This gate reads the
+    baseline tree the node was given, not its diff.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(
+        tmp_path,
+        test_body,
+        baseline_test=test_body,
+        baseline_code="def f():\n    return 1\n\n\ndef g():\n    return 3\n",
+        fixed_code="def f():\n    return 2\n",
+    )
+    result = run_node_gate(_node(), tmp_path)
+    assert [check.name for check in result.checks if not check.passed] == ["public-deletions"]
+    gone = {check.name: check for check in result.checks}["public-deletions"]
+    assert gone.detail == (
+        "n.py no longer defines g; other modules and later nodes still expect them"
+    )
+    assert gone.basis == "deleted-public=1"
+
+
+def test_run_node_gate_passes_the_same_node_that_kept_it(tmp_path: Path) -> None:
+    """The known-good: same baseline, same change to `f`, `g` left alone.
+
+    So what fails above is the deletion and nothing else about the node --
+    not the untested public function, which is still here and still
+    untested.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(
+        tmp_path,
+        test_body,
+        baseline_test=test_body,
+        baseline_code="def f():\n    return 1\n\n\ndef g():\n    return 3\n",
+        fixed_code="def f():\n    return 2\n\n\ndef g():\n    return 3\n",
+    )
+    result = run_node_gate(_node(), tmp_path)
+    gone = {check.name: check for check in result.checks}["public-deletions"]
+    assert gone.passed is True
+    assert gone.detail == "every public definition the baseline had is still defined"
+    assert gone.basis == "baseline-modules=1"
+
+
+def test_run_node_gate_public_deletions_spans_only_the_baseline_tree(
+    tmp_path: Path,
+) -> None:
+    """A module the node created had no baseline, so it can lose nothing.
+
+    The count says which tree was read: the baseline here is `n.py` alone,
+    and `m.py` -- written by the node, stubbed into `dest` by the
+    red-phase loop, and holding a public `h` the final source drops -- is
+    not counted and not charged.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    (tmp_path / "m.py").write_text("def h():\n    return 4\n")
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    result = run_node_gate(_node(), tmp_path)
+    gone = {check.name: check for check in result.checks}["public-deletions"]
+    assert gone.passed is True
+    assert gone.basis == "baseline-modules=1"
+
+
 def test_run_node_gate_keeps_a_private_helper_its_tests_need(tmp_path: Path) -> None:
     """The known-good at the same boundary: same shape, load-bearing.
 

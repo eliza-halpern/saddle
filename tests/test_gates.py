@@ -28,6 +28,7 @@ from saddle.gates import (
     check_mutation,
     check_node_scope,
     check_property_coverage,
+    check_public_deletions,
     check_red_phase,
     check_requirement_binding,
     check_ruff,
@@ -94,6 +95,7 @@ def _passing_inputs() -> Tier1Inputs:
         mutation=MutationOutcome(killed=9, total=10, generated=10, survivors=("m1",)),
         added_lines={},
         dead_code_runner=lambda _edited: 0,
+        baseline_sources={"n1.py": "x = 0\n"},
     )
 
 
@@ -465,7 +467,7 @@ def test_run_tier1_hands_the_plans_ids_to_the_binding_gate() -> None:
     assert binding.passed is True
 
 
-def test_run_tier1_runs_exactly_the_twelve_documented_checks_in_order() -> None:
+def test_run_tier1_runs_exactly_the_thirteen_documented_checks_in_order() -> None:
     names = [check.name for check in run_tier1(_node(), _passing_inputs()).checks]
     assert names == [
         "syntax",
@@ -473,6 +475,7 @@ def test_run_tier1_runs_exactly_the_twelve_documented_checks_in_order() -> None:
         "tests",
         "coverage",
         "dead-code",
+        "public-deletions",
         "red-phase",
         "node-scope",
         "target-scope",
@@ -500,6 +503,7 @@ def test_run_tier1_all_green_passes() -> None:
         "tests",
         "coverage",
         "dead-code",
+        "public-deletions",
         "red-phase",
         "node-scope",
         "target-scope",
@@ -518,7 +522,8 @@ def test_run_tier1_one_red_check_fails_but_all_run() -> None:
     bad = replace(_passing_inputs(), sources={"n1.py": "def broken(:\n"})
     result = run_tier1(_node(), bad)
     assert result.passed is False
-    assert len(result.checks) == 12  # +assertion-preservation (#44), +dead-code (T6-41)
+    assert len(result.checks) == 13  # +assertion-preservation (#44), +dead-code (T6-41),
+    # +public-deletions (T6-42)
     assert result.checks[0].passed is False
     assert all(check.passed for check in result.checks[1:])
 
@@ -1418,8 +1423,8 @@ def test_red_phase_spec_node_mirrors_the_tests_verdict() -> None:
     assert missing.detail == "specification is not red: no tests verdict to mirror"
 
 
-def test_run_tier1_spec_node_keeps_twelve_checks_and_substitutes_source_only_ones() -> None:
-    """T3-7a known-good at the aggregate: every check runs, three read "not required"."""
+def test_run_tier1_spec_node_keeps_every_check_and_substitutes_source_only_ones() -> None:
+    """T3-7a known-good at the aggregate: every check runs, four read "not required"."""
     result = run_tier1(_node(kind="test"), _spec_inputs(PYTEST_TESTS_FAILED, "1 failed in 0.01s"))
     assert [check.name for check in result.checks] == [
         "syntax",
@@ -1427,6 +1432,7 @@ def test_run_tier1_spec_node_keeps_twelve_checks_and_substitutes_source_only_one
         "tests",
         "coverage",
         "dead-code",
+        "public-deletions",
         "red-phase",
         "node-scope",
         "target-scope",
@@ -1439,7 +1445,7 @@ def test_run_tier1_spec_node_keeps_twelve_checks_and_substitutes_source_only_one
     by_name = {check.name: check for check in result.checks}
     assert by_name["tests"].detail == "red specification: 1 failing test(s)"
     assert by_name["red-phase"].detail == "red by construction: the specification fails now"
-    for name in ("coverage", "dead-code", "mutation"):
+    for name in ("coverage", "dead-code", "public-deletions", "mutation"):
         assert by_name[name].detail == "not required: no source changed"
         assert by_name[name].basis == "test node"
 
@@ -1550,6 +1556,21 @@ def _rewritten(diff: str, path: str) -> tuple[str, set[int]]:
         elif line.startswith(" "):
             out.append(line[1:])
     return "".join(out), added
+
+
+def _baseline(diff: str, path: str) -> str:
+    """`path` as it stood before `diff`, from that same whole-file hunk.
+
+    The fixtures carry full context, so the `-` and context lines are the
+    original file. T6-42 compares what was defined before against what is
+    defined after, so it needs both sides of one diff.
+    """
+    lines = diff.splitlines(keepends=True)
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"diff --git a/{path} "))
+    after = (i for i in range(start + 1, len(lines)) if lines[i].startswith("diff --git "))
+    body = lines[start : next(after, len(lines))]
+    hunk = next(i for i, line in enumerate(body) if line.startswith("@@ "))
+    return "".join(line[1:] for line in body[hunk + 1 :] if line.startswith(("-", " ")))
 
 
 def _fixture_tree(name: str) -> tuple[dict[str, str], dict[str, set[int]]]:
@@ -1735,3 +1756,125 @@ def test_dead_additions_ignores_a_public_definition_no_test_names_yet() -> None:
     )
     assert check.passed
     assert check.detail == "every private definition added is mentioned elsewhere in the tree"
+
+
+def test_public_deletions_rejects_the_round3d_repair_that_deleted_the_api() -> None:
+    """The real artifact: n2's repair sealed by removing what it could not fix.
+
+    The node was handed a failing `Account.to_dict` and deleted `to_dict`,
+    `from_dict`, `__eq__` and `__repr__` rather than repair them. Every
+    gate passed, because the tree it left behind calls none of them and
+    the suite it ran was the tree's own. Recovered from the run's dangling
+    blobs; no attempt snapshot existed to read it from (T6-34).
+    """
+    diff = (FIXTURES / "repair_deletes_public_round3d.diff").read_text()
+    before = _baseline(diff, "accounts.py")
+    after, _ = _rewritten(diff, "accounts.py")
+    check = check_public_deletions({"accounts.py": before}, {"accounts.py": after})
+    assert not check.passed
+    assert check.name == "public-deletions"
+    assert check.detail == (
+        "accounts.py no longer defines Account.__eq__, Account.__repr__, "
+        "Account.from_dict, Account.to_dict; "
+        "other modules and later nodes still expect them"
+    )
+    assert check.basis == "deleted-public=4"
+
+
+@pytest.mark.parametrize("name", ["implementation_round3e.diff", "degenerate_round3e.diff"])
+def test_public_deletions_accepts_a_whole_file_rewrite_of_the_same_methods(name: str) -> None:
+    """The discriminating half: a rewrite is not a deletion.
+
+    Both round-3e draws rewrite `accounts.py` end to end, so each of those
+    four methods appears as a `-` line and again as a `+` line. A check
+    reading the diff would reject them; this one reads the tree the node
+    left and passes. The degenerate draw is here on purpose: T6-41 is what
+    rejects its repeated block, and T6-42 must not double as that gate.
+    """
+    diff = (FIXTURES / name).read_text()
+    paths = ("money.py", "accounts.py", "fees.py")
+    before = {path: _baseline(diff, path) for path in paths}
+    after = {path: _rewritten(diff, path)[0] for path in paths}
+    check = check_public_deletions(before, after)
+    assert check.passed
+    assert check.detail == "every public definition the baseline had is still defined"
+    assert check.basis == "baseline-modules=3"
+
+
+def test_public_deletions_ignores_a_private_helper_going() -> None:
+    """Deleting an implementation detail is refactoring, not amputation."""
+    before = {"m.py": "def _helper():\n    return 1\n\n\ndef api():\n    return _helper()\n"}
+    after = {"m.py": "def api():\n    return 1\n"}
+    check = check_public_deletions(before, after)
+    assert check.passed
+    assert check.basis == "baseline-modules=1"
+
+
+def test_public_deletions_ignores_the_methods_of_a_private_class() -> None:
+    """A private class's surface is private too, however it is spelled."""
+    before = {"m.py": "class _Impl:\n    def run(self):\n        return 1\n"}
+    after = {"m.py": "x = 1\n"}
+    assert check_public_deletions(before, after).passed
+
+
+def test_public_deletions_counts_a_dunder_as_public() -> None:
+    """`__eq__` reads private by prefix and is the caller-facing contract.
+
+    Three of round 3d's four deletions were dunders, so a rule keyed on
+    the leading underscore alone would have admitted the artifact this
+    gate exists to reject.
+    """
+    before = {"m.py": "class A:\n    def __eq__(self, other):\n        return True\n"}
+    after = {"m.py": "class A:\n    pass\n"}
+    check = check_public_deletions(before, after)
+    assert not check.passed
+    assert check.detail.startswith("m.py no longer defines A.__eq__;")
+    assert check.basis == "deleted-public=1"
+
+
+def test_public_deletions_names_a_module_that_went_entirely() -> None:
+    """A module the node removed defines nothing, so everything it had is gone."""
+    before = {"m.py": "def api():\n    return 1\n\n\nclass A:\n    pass\n"}
+    check = check_public_deletions(before, {})
+    assert not check.passed
+    assert check.detail == (
+        "m.py no longer defines A, api; other modules and later nodes still expect them"
+    )
+    assert check.basis == "deleted-public=2"
+
+
+def test_public_deletions_reports_every_module_it_found() -> None:
+    """Two modules stripped are two sentences, ordered by path, one basis."""
+    before = {"b.py": "def beta():\n    return 1\n", "a.py": "def alpha():\n    return 1\n"}
+    check = check_public_deletions(before, {"a.py": "", "b.py": ""})
+    assert check.detail == (
+        "a.py no longer defines alpha; b.py no longer defines beta; "
+        "other modules and later nodes still expect them"
+    )
+    assert check.basis == "deleted-public=2"
+
+
+def test_public_deletions_leaves_a_broken_result_to_the_syntax_gate() -> None:
+    """Unparsable sources report nothing here: syntax already fails the node,
+    and guessing at definitions in a half-written file would name the wrong
+    ones."""
+    before = {"m.py": "def api():\n    return 1\n"}
+    assert check_public_deletions(before, {"m.py": "def broken(:\n"}).passed
+    assert check_public_deletions({"m.py": "def broken(:\n"}, {"m.py": ""}).passed
+
+
+def test_public_deletions_passes_a_baseline_with_nothing_public_to_lose() -> None:
+    """A module of constants has no public definitions, so it cannot lose any."""
+    check = check_public_deletions({"conf.py": "TIMEOUT = 5\n"}, {"conf.py": ""})
+    assert check.passed
+    assert check.basis == "baseline-modules=1"
+
+
+def test_public_deletions_accepts_an_async_definition_kept() -> None:
+    """`async def` is a definition; a check reading only `FunctionDef` would
+    think every async function had been deleted."""
+    before = {"m.py": "async def fetch():\n    return 1\n"}
+    assert check_public_deletions(before, {"m.py": "async def fetch():\n    return 2\n"}).passed
+    gone = check_public_deletions(before, {"m.py": "x = 1\n"})
+    assert not gone.passed
+    assert gone.detail.startswith("m.py no longer defines fetch;")

@@ -444,6 +444,90 @@ def _without_dead_additions(
     return dead, "".join(kept)
 
 
+def _is_public(name: str) -> bool:
+    """A dunder is public API; a single or double underscore prefix is not."""
+    if name.startswith("__") and name.endswith("__"):
+        return True
+    return not name.startswith("_")
+
+
+def _public_definitions(source: str) -> set[str] | None:
+    """Public top-level definitions and the public methods of public classes.
+
+    `None` when the source does not parse, so the syntax gate owns that
+    and this check reports nothing. Methods are included because the
+    deletion this gate exists to reject was four of them.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    names: set[str] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            if _is_public(statement.name):
+                names.add(statement.name)
+        elif isinstance(statement, ast.ClassDef):
+            if not _is_public(statement.name):
+                continue
+            names.add(statement.name)
+            for child in statement.body:
+                if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and _is_public(
+                    child.name
+                ):
+                    names.add(f"{statement.name}.{child.name}")
+    return names
+
+
+def check_public_deletions(
+    baseline_sources: Mapping[str, str], sources: Mapping[str, str]
+) -> GateCheck:
+    """A node may not delete a public definition its baseline had (T6-42).
+
+    Round 3d's n2 attempt 2 is the first draw in either round whose
+    reasoning names the gates -- mutation 26 times, coverage 14, against
+    zero for every first attempt -- and what the repair brief produced
+    was a plan to delete: "to fix coverage, I need to either: 1. Remove
+    the uncovered code (to_dict, from_dict, `__eq__`, `__repr__` ...)",
+    and "the simplified transfer will have fewer mutation sites". That is
+    the `max_mutants=1` exploit (#50) re-derived from the brief, because
+    both rates rise when the denominator falls. `store.py` needs
+    `to_dict`/`from_dict`, so the repair proposed deleting required
+    behaviour to raise two metrics.
+
+    The check is a set difference, not a threshold: there is no number to
+    optimise, and a deletion either happened or did not. It compares the
+    tree against the node's baseline rather than the diff text, so a
+    node that rewrites a module wholesale passes as long as the
+    definitions come back -- which is what both round 3e draws do.
+    """
+    gone: dict[str, list[str]] = {}
+    for rel, text in baseline_sources.items():
+        before = _public_definitions(text)
+        after = _public_definitions(sources.get(rel, ""))
+        if before is None or after is None or not before:
+            continue
+        missing = sorted(before - after)
+        if missing:
+            gone[rel] = missing
+    if not gone:
+        return GateCheck(
+            name="public-deletions",
+            passed=True,
+            detail="every public definition the baseline had is still defined",
+            basis=f"baseline-modules={len(baseline_sources)}",
+        )
+    shown = "; ".join(
+        f"{rel} no longer defines {', '.join(names)}" for rel, names in sorted(gone.items())
+    )
+    return GateCheck(
+        name="public-deletions",
+        passed=False,
+        detail=f"{shown}; other modules and later nodes still expect them",
+        basis=f"deleted-public={sum(len(names) for names in gone.values())}",
+    )
+
+
 def check_dead_additions(
     sources: Mapping[str, str],
     added: Mapping[str, Collection[int]],
@@ -1110,6 +1194,7 @@ class Tier1Inputs:
     # runner that re-runs the suite over sources with some of them gone.
     added_lines: Mapping[str, tuple[int, ...]]
     dead_code_runner: Callable[[Mapping[str, str]], int]
+    baseline_sources: Mapping[str, str]
     added_files: Collection[str] = ()
     # Repo-relative paths of every file the node changed or added (T3-2).
     touched_files: Collection[str] = ()
@@ -1261,6 +1346,9 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             suite_passed=tests.passed,
             run_without=inputs.dead_code_runner,
         ),
+        _not_required("public-deletions")
+        if is_spec
+        else check_public_deletions(inputs.baseline_sources, inputs.sources),
         check_red_phase(
             inputs.baseline_exits,
             inputs.current_runner,
