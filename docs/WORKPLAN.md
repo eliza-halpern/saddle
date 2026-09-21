@@ -125,10 +125,16 @@ withdrawn (T6-33a answered round 3e's first question: n2 does not clear
 85% over the behavioural population, 82.0%, so 3e is not a rerun) →
 round 3e, one T5 seed, with `--survivor-effort low` (does a survivor
 round kill anything on a real gap; is T6-29a's 0/10 an effort effect?)
-→ T6-4 with T6-5 done (main session, while 3e ran) → T6-34 (attempt
-refs, ruff version) → T6-1 (with the reasoning read; its row B tunes
-`REQ_NEAR_MISS_K`, row C reads T6-5's cost on PASS runs) → T6-2 → T6-6
-if T6-1 says
+→ T6-4 with T6-5 done (main session, while 3e ran) → round 3e done
+(F21.16: mutation 88.8% passes; UP031 kept the survivor round
+unreachable; the sidecar scrub broke T6-27's check) → T6-36 done (the
+scrub) → T6-37 (ruff rule set: the user's decision) → T6-38 (blank-line
+drift rung) → T6-34 (attempt refs, ruff version) → round 3f, one T5
+seed (first run where the survivor round is reachable and every test
+node carries rejects; its first plan is also the `minItems` decoder
+check T6-4 owes) → T6-1 (with the reasoning read, over rounds 3-3f; row
+B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39, T6-40 →
+T6-2 → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
 T6-3 sits before round 3e rather than after T6-1 with T6-2: it is a
@@ -5170,6 +5176,87 @@ whole-tree survivor count, not the gate's denominator (13 on attempt 2).
 The `check_mutation` comment in `src/saddle/gates.py` still says "a
 66-survivor gap"; T6-34 fixes the wording.
 
+### T6-36 — The attempt sidecar retains its diff whole and scrubs every nesting (tightened)
+Files: `src/saddle/journal.py` (`write_attempt_sidecar`: recursive
+`_scrub_evidence`; `redact_secrets` split out of `scrub_thinking`),
+`tests/test_journal.py`.
+Contract: a sidecar's retained `diff` hashes to its `diff_hash` at any
+length, `prompt` is retained whole, both redacted; every other string at
+any depth (nested `samples[i].thinking` included) is redacted and capped
+at `MAX_THINKING_CHARS`.
+Direction: tightened (the sidecar now retains what T6-27 said it
+retained; nested text is now redacted at all).
+Known-bad from the run: round 3e's three sidecars at 4024 chars with a
+`[truncated N chars]` tail, `sidecar-diff-hash` x3, run aborted, `saddle
+explain` refused; nested thinking 8 194-83 912 chars unredacted.
+Contract mutants (each target occurs once; `__pycache__` dropped after each revert):
+1. `_RETAINED_WHOLE` loses `"diff"` -> KILLED (the run's failure).
+2. the Mapping branch returns `dict(value)` unscrubbed -> KILLED.
+3. a retained key returns `value` unredacted -> KILLED.
+Done when: mutants red; `./check.sh` green. Owner: main session.
+
+**Status (2026-09-20):** DONE, commit below, main session, the same day
+as F21.16.
+
+### T6-37 — The ruff gate's rule set is saddle's, not the installed ruff's default (decision, then tightened)
+Files: `src/saddle/evidence.py` (`ruff_findings` and the format leg:
+`--isolated` plus an explicit `--select`, or a config saddle writes),
+`src/saddle/cli.py` (settings seal the selection), `tests/test_evidence.py`.
+Finding (F21.16): the graded workdir carried no ruff config at any
+level, yet UP031, DTZ007 and the YTT rules fired: ruff 0.16.7's default
+rule set. A gate whose verdict changes with `pip install -U ruff` is not
+deterministic in the sense this project means, and T6-3's
+baseline-relative rule does not help when the *baseline's own idiom*
+(`%`-formatting in 4 of 5 modules) is what the new code copies. Two
+candidate contracts, the user's call: (a) pin the selection to what a
+gate should catch (F, E4/E7/E9, B, plus the format leg) and record it in
+the run settings beside `ruff=<version>` (T6-34); (b) keep the default
+set but exempt any rule the baseline already violates anywhere
+(style the repo has is style the node may use) -- a loosening with
+F21.16 as its evidence. Known-bad for either: round 3e's n2 attempt 1
+fails `ruff` today on `accounts.py:65 UP031` and would not. Known-good:
+a genuine new defect (F821 undefined name) still fails.
+Owner: main session after the decision. Before round 3f: with UP031
+gone, n2's failure set is `{coverage}` and the survivor round is
+reachable for the first time.
+
+### T6-38 — An apply rung for blank-line drift (tightened in effect)
+Files: `src/saddle/slice.py` (`_APPLY_MODES`, `_apply_diff`),
+`tests/test_slice.py`.
+Finding (F21.16): 3 of round 3e's 7 lost draws died with `fees.py:
+patch does not apply` at all four rungs. The hunk was the whole file
+(`@@ -1,42 +1,56 @@`) with two blank lines misplaced in its context.
+`--ignore-whitespace` ignores whitespace *within* a line; a missing or
+extra blank line is a line-level insertion and no rung addresses it,
+although the comment above `_APPLY_MODES` names exactly this cause.
+Candidate: a rung that re-derives the hunk against the file with blank
+context lines dropped from both sides (or GNU `patch --fuzz=3`, which
+tolerates mismatched context at hunk edges only -- test which one takes
+the round-3e diff; the sidecar retains it). Known-bad: attempt 2's diff
+from `runs/round3e/t5-s1/evidence/attempts/4fd718eb….json` must apply;
+known-good: a diff whose *code* lines mismatch must still be refused
+(a drifted `return` is a wrong edit, not drift).
+Owner: main session. After T6-37.
+
+### T6-39 — `_best_of_samples` scores candidates as they arrive (wall)
+Files: `src/saddle/slice.py`. `list(pool.map(...))` blocks on the
+slowest draw before scoring the first; `Executor.map` already yields in
+seed order, so scoring while later draws are still in flight keeps
+determinism and removes the wait. Cost in round 3e: ~9 min on one
+attempt. Contract: the seal is unchanged (first pass in seed order).
+Owner: main session; small; after T6-38.
+
+### T6-40 — A repair brief names only files the retry's tree has (verify first)
+Session 42 read attempt 2's brief as citing `money.py:28` after the
+tree had lost `money.py`. The code says a retry lands on the previous
+attempt's tree (`applied` is not restored between attempts), so the file
+should have been there; the `money.py: No such file` came from the
+executor's own `--recount` reproduction, not from saddle's rungs, which
+all reported `fees.py`. Verify from the sidecar before treating this as
+a defect; if the brief and the tree can disagree, the brief must be
+built from the tree the retry applies to. Owner: main session; after
+T6-38.
+
 ### T6-35 — Round 3e: one T5 seed under T6-29c (measurement; F21.16; no code)
 
 Same procedure as T6-26 (`RUN_DIR=runs/round3e/t5-s1 SAMPLE_TEMP=0.7
@@ -5199,6 +5286,30 @@ finding (T6-1's reasoning read starts here). Known-bad worth stating:
 if no node reaches a coverage or mutation miss, P6-P8 are unresolved,
 not falsified. Owner: executor (needs the key and the container up).
 Not in this item: any fix; a FALSIFIED P6-P8 is a main-session item.
+
+**Status (2026-09-20):** DONE by session 42 (bench `b77ea92` preflight
+fix, `ff88372` PREDICTION.md before the run, `caa80a3` + `217b90e`
+F21.16). `EXIT=1 WALL=2393`, oracle FAIL. P1 HELD (12/12 `stop`), P2
+FALSIFIED (`sidecar-diff-hash` x3: the sidecar scrub capped `diff` at
+4000 chars, so every large attempt failed T6-27's own check, the run
+aborted on its journal and `saddle explain` refused it -- T6-36, fixed
+in the commit below), P3 HELD, P4 HELD for n1 (a test node; the first
+impl node did not seal), P5 FALSIFIED, P6/P7/P8 UNRESOLVED: n2's failure
+set was `{ruff, coverage}` on attempts 1 and 3 (4x UP031 each, on
+`%`-formatting the baseline itself uses in 4 of 5 modules), and `ruff`
+is not in `SURVIVOR_GATES`, so the survivor round never became
+eligible; attempt 2 died at apply (`fees.py: patch does not apply` at
+all four rungs: two blank lines misplaced in a whole-file hunk, which
+`--ignore-whitespace` cannot touch -- T6-38). The one number that
+moved: **the mutation gate passed, 88.8% over 80 mutants**, against
+75.3/78.3% in round 3d and 82.0% re-scored (T6-33a). Verified by the
+main session against the bench: the four commits, F21.16, the three
+sidecars at exactly 4024 characters with nested samples up to 186 264,
+the worker spans' details. Observation (d) blocked by the same defect.
+Where UP031 came from: no config file in the workdir or any ancestor,
+no user config, no env -- ruff 0.16.7's own default rule set includes
+UP, DTZ, YTT (`ruff check --show-settings` in the workdir), so the ruff
+gate's verdict is a function of the installed ruff version (T6-37).
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 

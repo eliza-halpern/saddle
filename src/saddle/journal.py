@@ -152,12 +152,17 @@ def _scrub_bearer(text: str) -> str:
     return re.sub(r"(Bearer)\s+[A-Za-z0-9_.~+/-]+", r"\1 " + STAR, text)
 
 
-def scrub_thinking(text: str) -> str:
-    """Redact secret-shaped spans, then cap length with a truncation marker."""
+def redact_secrets(text: str) -> str:
+    """Redact secret-shaped spans; length untouched."""
     scrubbed = _KEY_PATTERN.sub(STAR, text)
     scrubbed = _AWS_PATTERN.sub(STAR, scrubbed)
     scrubbed = _NAMED_PATTERN.sub(r"\1=" + STAR, scrubbed)
-    scrubbed = _scrub_bearer(scrubbed)
+    return _scrub_bearer(scrubbed)
+
+
+def scrub_thinking(text: str) -> str:
+    """Redact secret-shaped spans, then cap length with a truncation marker."""
+    scrubbed = redact_secrets(text)
     if len(scrubbed) > MAX_THINKING_CHARS:
         over = len(scrubbed) - MAX_THINKING_CHARS
         scrubbed = scrubbed[:MAX_THINKING_CHARS] + f"\n[truncated {over} chars]"
@@ -308,13 +313,36 @@ def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[st
     """
     path = attempt_sidecar_path(journal_path, span_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    scrubbed = {
-        key: scrub_thinking(value) if isinstance(value, str) else value
-        for key, value in evidence.items()
-    }
+    scrubbed = {key: _scrub_evidence(key, value) for key, value in evidence.items()}
     encoded = json.dumps(scrubbed, sort_keys=True, indent=1).encode()
     path.write_bytes(encoded)
     return hashlib.sha256(encoded).hexdigest()
+
+
+# Sidecar text that is retained whole (T6-36): a `diff` has to hash to its
+# `diff_hash` or T6-27's check fails the journal, and a prompt is what a
+# replay needs verbatim. Both are still redacted. Every other string --
+# `thinking` above all -- is capped like the journal's own thinking.
+_RETAINED_WHOLE: Final = frozenset({"diff", "prompt"})
+
+
+def _scrub_evidence(key: str, value: Any) -> Any:
+    """Redact every string in `value`, at any depth; cap all but the retained keys.
+
+    Round 3e (F21.16): the scrub was one level deep and capped every
+    string, so a 4001+ character `diff` no longer hashed to its
+    `diff_hash` -- every large attempt failed verification, the run
+    aborted on its own journal and `saddle explain` refused it -- while
+    the nested `samples[i]` text, where nearly all of the sidecar lives,
+    was neither capped nor redacted.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value) if key in _RETAINED_WHOLE else scrub_thinking(value)
+    if isinstance(value, Mapping):
+        return {str(k): _scrub_evidence(str(k), v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_scrub_evidence(key, item) for item in value]
+    return value
 
 
 def _append_line(path: Path, line: str) -> None:

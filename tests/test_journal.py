@@ -897,6 +897,63 @@ def test_verify_rejects_a_tampered_plan_and_a_proof_no_plan_asked_for(tmp_path: 
     assert "record hash mismatch for plan" in line_two.message
 
 
+def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_path: Path) -> None:
+    """T6-36, from round 3e (F21.16): the scrub capped the top-level `diff`
+    at MAX_THINKING_CHARS, so every sidecar whose diff was longer than
+    4000 characters failed T6-27's `sidecar-diff-hash` check, the run
+    aborted on its own journal and `saddle explain` refused it; and the
+    scrub was one level deep, so nested `samples[i]` text was neither
+    capped nor redacted. Known-good: a diff five times the cap is stored
+    whole and verifies; nested thinking is capped and nested secrets are
+    redacted; nested diffs and prompts keep their length."""
+    journal = tmp_path / "proofs.jsonl"
+    diff = "diff --git a/n.py b/n.py\n" + "+x\n" * (MAX_THINKING_CHARS)
+    long_thought = "t" * (MAX_THINKING_CHARS + 5)
+    evidence: dict[str, object] = {
+        "diff": diff,
+        "diff_hash": hashlib.sha256(diff.encode()).hexdigest(),
+        "thinking": long_thought,
+        "prompt": "p" * (MAX_THINKING_CHARS + 1),
+        "samples": [
+            {
+                "diff": diff,
+                "diff_hash": hashlib.sha256(diff.encode()).hexdigest(),
+                "thinking": "key sk-abcdefghijkl then " + long_thought,
+                "prompt": "Bearer sk-abcdefghijkl " + "p" * MAX_THINKING_CHARS,
+                "usage": {"note": "AKIAABCDEFGHIJKLMNOP"},
+                "seed": 7,
+            }
+        ],
+    }
+    attempt_hash = write_attempt_sidecar(journal, "a" * 32, evidence)
+    append_span(
+        journal,
+        build_span(
+            node_id="n1",
+            argv=[],
+            duration_ms=1,
+            exit_code=1,
+            detail="x",
+            kind="agent",
+            name="worker:n1",
+            span_id="a" * 32,
+            attempt_hash=attempt_hash,
+        ),
+    )
+    assert verify_journal(journal) == []
+    stored = json.loads(attempt_sidecar_path(journal, "a" * 32).read_bytes())
+    assert stored["diff"] == diff
+    assert stored["prompt"] == "p" * (MAX_THINKING_CHARS + 1)
+    assert stored["thinking"] == "t" * MAX_THINKING_CHARS + "\n[truncated 5 chars]"
+    (sample,) = stored["samples"]
+    assert sample["diff"] == diff
+    assert sample["thinking"].startswith("key *** then ")
+    assert sample["thinking"].endswith("\n[truncated 18 chars]")
+    assert sample["seed"] == 7
+    assert sample["prompt"] == "Bearer *** " + "p" * MAX_THINKING_CHARS
+    assert sample["usage"] == {"note": "***"}
+
+
 def test_attempt_sidecar_is_sealed_into_its_span_and_verified(tmp_path: Path) -> None:
     """Known-good (T6-12): the sidecar's hash rides in the agent span and
     `verify` checks it; known-bad: one edited byte, or a missing file, is
