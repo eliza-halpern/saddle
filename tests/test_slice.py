@@ -51,6 +51,7 @@ from saddle.slice import (
     _HaltRecoveryError,
     _run_node,
     _schedulable_nodes,
+    _unwrapped,
     _utcnow,
     autofix,
     format_attempt_failure,
@@ -264,6 +265,72 @@ def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
     expected = f"worker diff has a header but no hunk ('@@ ' marker) in {str(tmp_path)!r}"
     with pytest.raises(RuntimeError, match=re.escape(expected)):
         _apply_diff(tmp_path, "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n")
+
+
+# --- T6-48: packaging is not content ----------------------------------------
+
+_PACKAGED = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+
+
+def test_apply_diff_forgives_a_missing_final_newline(tmp_path: Path) -> None:
+    """T6-48 known-good, loosened with proof. `git apply` calls a patch whose
+    last line has no newline `corrupt patch at line N`, and four of the nine
+    unconstrained round 3e draws died there with nothing else wrong -- a
+    final `\n` and they apply on `strict` (F21.18). The bytes the model sent
+    are still what the sidecar records; only the ladder sees the repair.
+    """
+    _git_repo(tmp_path)
+    assert _apply_diff(tmp_path, _PACKAGED.rstrip("\n")) == "strict"
+    assert (tmp_path / "n.py").read_text() == "x = 2\n"
+
+
+def test_apply_diff_forgives_one_enclosing_markdown_fence(tmp_path: Path) -> None:
+    """T6-48 known-good: three of the nine grammar-off draws wrapped the whole
+    diff in a ```diff fence, which the structural precheck rejected before git
+    ran at all."""
+    _git_repo(tmp_path)
+    fenced = "\n\n```diff\n" + _PACKAGED.rstrip("\n") + "\n```"
+    assert _apply_diff(tmp_path, fenced) == "strict"
+    assert (tmp_path / "n.py").read_text() == "x = 2\n"
+
+
+def test_apply_diff_still_refuses_a_fenced_diff_with_prose_around_it(tmp_path: Path) -> None:
+    """T6-48 known-bad: the allowance is one fence enclosing the whole content.
+    Prose beside it is a worker that ignored "output ONLY the diff", which is
+    the thing a fresh attempt can fix, so it stays a named precheck failure."""
+    _git_repo(tmp_path)
+    wrapped = "Here is the patch:\n\n```diff\n" + _PACKAGED.rstrip("\n") + "\n```"
+    expected = f"worker content is not a unified diff (no 'diff --git' header) in {str(tmp_path)!r}"
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _apply_diff(tmp_path, wrapped)
+
+
+def test_apply_diff_still_refuses_two_fenced_blocks(tmp_path: Path) -> None:
+    """T6-48 known-bad, and the one a lazy regex gets wrong: a non-greedy match
+    would splice two blocks into one body with a stray fence inside it. Two
+    blocks are two answers, not packaging."""
+    _git_repo(tmp_path)
+    block = "```diff\n" + _PACKAGED.rstrip("\n") + "\n```"
+    expected = f"worker content is not a unified diff (no 'diff --git' header) in {str(tmp_path)!r}"
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _apply_diff(tmp_path, block + "\n\n" + block)
+
+
+def test_a_fenced_round3e_draw_unwraps_to_the_bytes_inside_its_fence() -> None:
+    """T6-48 on real bytes, not a hand-written case. The fixture is round 3e
+    n2 attempt 1's seed-0 draw with `DIFF_GRAMMAR` off, verbatim from
+    `../saddle-bench/runs/round3e-probe/grammar_cell_low.json`: two leading
+    blank lines, a ```diff fence, and no final newline. Unwrapping must
+    change the packaging and nothing else.
+    """
+    raw = (Path(__file__).parent / "fixtures" / "fenced_draw_round3e.diff").read_text()
+    assert raw.startswith("\n\n```diff\n")
+    assert raw.endswith("\n```")
+    inside = raw.strip().removeprefix("```diff\n").removesuffix("\n```")
+    unwrapped = _unwrapped(raw)
+    assert unwrapped == inside + "\n"
+    assert unwrapped.startswith("diff --git ")
+    assert "```" not in unwrapped
 
 
 def test_autofix_fixes_what_ruff_can_fix(tmp_path: Path) -> None:

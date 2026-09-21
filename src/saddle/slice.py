@@ -344,6 +344,34 @@ def _reanchor_blank_lines(workdir: Path, diff: str) -> str | None:
     return "\n".join(out) + "\n"
 
 
+_FENCE = re.compile(r"```[A-Za-z]*\n(?P<body>.*)\n```", re.S)
+
+
+def _unwrapped(diff: str) -> str:
+    """Strip the packaging a worker response arrives in (T6-48).
+
+    Two things are packaging and not content. A missing final newline:
+    `git apply` calls such a patch `corrupt patch at line N`, and four of
+    the nine unconstrained round 3e draws failed on exactly that with
+    nothing else wrong (F21.18). And one markdown fence around the whole
+    answer: three more draws carried one, and the structural precheck
+    rejected them before git ran.
+
+    The fence must enclose everything. Prose beside it is a worker that
+    ignored "output ONLY the diff" -- the case a fresh attempt fixes --
+    and two fenced blocks are two answers, so a body that still contains
+    a fence is refused rather than spliced. That also declines to unwrap
+    a fenced diff *of* a fenced document, which is the conservative
+    direction for a loosening.
+
+    The bytes the server sent are what the sidecar records; only the
+    ladder sees this.
+    """
+    match = _FENCE.fullmatch(diff.strip())
+    text = match["body"] if match is not None and "```" not in match["body"] else diff
+    return text if text.endswith("\n") else text + "\n"
+
+
 def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> str:
     """Apply a proposed diff from stdin and stage it; gates diff tracked content.
 
@@ -361,6 +389,9 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     # structure is checked here, where a violation is deterministic,
     # inspectable and retryable -- prose is exactly the case a fresh
     # attempt can fix, and a fatal parse error would throw the run away.
+    # T6-48: the packaging comes off before anything judges the content,
+    # so the precheck and every rung see the same bytes.
+    diff = _unwrapped(diff)
     if not diff.lstrip().startswith("diff --git "):
         msg = f"worker content is not a unified diff (no 'diff --git' header) in {str(workdir)!r}"
         raise RuntimeError(msg)

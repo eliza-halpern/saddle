@@ -5625,8 +5625,80 @@ T6-48 is what forgives the packaging the grammar currently enforces.
 
 ### T6-48 — The apply ladder discards a correct diff over its packaging (loosening, with proof)
 
-Files: `src/saddle/slice.py` (`_apply_diff`, the precheck at ~364 and
-the `_APPLY_MODES` ladder at ~371-395), `tests/test_slice.py`.
+Files: `src/saddle/slice.py` (`_unwrapped`, `_apply_diff`),
+`tests/test_slice.py`, `tests/fixtures/fenced_draw_round3e.diff`.
+
+Status 2026-09-21: DONE. `_unwrapped` in slice.py runs once at the top
+of `_apply_diff`, before the structural precheck, so the precheck, all
+four `_APPLY_MODES` rungs and T6-38's `blank-lines` reanchor all see the
+same bytes. It does exactly two things: takes the body of one markdown
+fence that encloses the whole answer, and guarantees a final newline.
+The bytes the server sent are still what the sidecar records -- only the
+ladder sees the repair, so the evidence stays faithful to the draw.
+
+The fence must enclose everything and its body must not itself contain a
+fence. Both halves are load-bearing and both are pinned: `search` in
+place of `fullmatch(diff.strip())` admits prose with a fenced diff in
+it, and dropping the body guard splices two fenced blocks into one body
+with a stray fence inside. Refusing the second case also declines to
+unwrap a fenced diff *of* a fenced document, which is the conservative
+direction for a loosening.
+
+Direction: LOOSENED, with the proof the rule requires -- F21.18 shows
+the contract rejecting six legitimate inputs, which is a claim that the
+contract is wrong, not that something is failing against it. No
+compensating tightening is claimed: nothing here weakens what the ladder
+does once the diff is unwrapped, and `7282e1e`'s mistake was pairing a
+real loosening with a fictional "unrepresentable".
+
+Deviations from the item as written, both stated rather than quietly
+taken.
+
+1. **The apply known-goods are not the bench draws.** The item said to
+   take fixtures from `round3e-probe/*.json` and not hand-write them.
+   Those draws patch round 3e's `money.py` / `accounts.py` / `fees.py`
+   baseline, which this suite does not have, so making them *apply* in a
+   unit test would mean dragging a three-module tree into `test_slice`.
+   Instead the apply tests take `_PACKAGED` -- a diff this suite already
+   applies -- and put each packaging defect on it, and the real bytes are
+   frozen as `tests/fixtures/fenced_draw_round3e.diff` (round 3e n2
+   attempt 1, seed 0, grammar off: two leading blank lines, a ```diff
+   fence, no final newline) with a test that the unwrap changes its
+   packaging and nothing else. F21.18 is the evidence that these defects
+   occur in real draws; the fixture is the evidence that the unwrap
+   handles them as they actually arrive.
+2. **Mutant 3 as the item predicted it was dropped.** "Append the newline
+   unconditionally" is an equivalent mutation -- appending to a string
+   that already ends in one is a no-op -- so it would have SURVIVED and
+   said nothing. It was replaced by two that pin the known-bads.
+
+Not done, deliberately: the unfenced case keeps its leading blank lines
+(all nine grammar-off draws open with two, and `git apply` tolerates
+them). Only the fence path strips them, because they sit outside the
+fence.
+
+Known-good: a diff that applies, minus its final newline, applies on
+`strict`; the same diff inside a ```diff fence applies on `strict`; the
+frozen round-3e draw unwraps to exactly the bytes inside its fence plus
+a newline. Known-bad: prose around a fenced diff, and two fenced blocks,
+are both still the named precheck failure.
+
+Contract mutants, each with a verified target count of 1, all KILLED:
+M1 drop the trailing-newline half -> the missing-newline known-good red
+(and the fixture test). M2 never unwrap a fence -> the fence known-good
+red. M3 drop the "body still holds a fence" guard -> the two-blocks
+known-bad red. M4 `_FENCE.search(diff)` instead of
+`fullmatch(diff.strip())` -> the prose known-bad red.
+
+**Vacuity, restated now that it has landed.** With `DIFF_GRAMMAR` on,
+the worker's output always ends with `\n` and never carries a fence
+(8/8 and 0/9 in F21.18), so this cannot fire in the production arm
+today. It is a precondition for T6-43 touching the grammar at all, and
+what the ladder owes if `--worker-effort`, a bounded grammar or a later
+model ever emits without one. It does not fix a live failure, and this
+item does not claim it does.
+
+`./check.sh` green: 829 passed, 3 skipped, 100% line+branch.
 
 Finding (F21.18). Of nine unconstrained draws of round 3e's n2 attempt 1
 -- two cells, both efforts -- **none applies as saddle sends it, and six
