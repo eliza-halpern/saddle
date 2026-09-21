@@ -7199,6 +7199,174 @@ than closed unilaterally. Note `max_mutants` is **not** a model knob —
 the `Literal[100]` closes the `max_mutants=1` exploit (#50) — so this is
 a fidelity question, not a gaming one.
 
+**Decided: an even stride, not a prefix.** `sample = scoped[:max_mutants]`
+becomes a deterministic evenly-spread selection over the whole scoped
+population, so truncation no longer lops off whichever module sorts last.
+The dangerous direction of a prefix is that it discards *survivors* and
+inflates the ratio into a false pass; a stride cannot concentrate the
+loss in one module. Known-good: a population at or under the cap is taken
+whole, unchanged. Known-bad: a population whose survivors cluster at the
+alphabetical tail — the prefix reports a passing ratio, the stride
+reports the true failing one. Contract mutants: revert to the prefix;
+force the step to 1; take the tail. Cap value stays `Literal[100]`; this
+changes *which* mutants, never how many.
+
+### T6-62 — A whole-file diff the ladder rejects is recoverable, and the recovery flips an existing contract (open: design decision first)
+
+Files: `src/saddle/slice.py` (`_apply_diff`, `_APPLY_MODES`),
+`tests/test_slice.py` (`test_apply_diff_that_does_not_match_the_tree_raises`).
+
+Emission is the dominant live failure mode at HEAD — 53% of failures in
+rounds 3h and 3i (F21.37) — and `diff did not apply` is its largest
+shape. F21.38 and F21.38a establish what is being discarded: **every
+recoverable apply-failure in 3h and 3i reconstructs to an implementation
+the hidden oracle scores 16/16**, including two of the three attempts of
+round 3i's `n2`, the node whose failure ended the run.
+
+The cause is not arithmetic (`--recount` already neutralises it) and not
+a missing brief (the prompt carries the real file verbatim). The model
+writes its **intended output onto the context lines**: its reproduction
+of `accounts.py` is 105 lines against the file's 73, similarity 0.652,
+and every divergence is an edit it meant to make. No git flag addresses
+that.
+
+The candidate repair is a terminal rung: when every file in the diff is
+a single hunk anchored at line 1 and the reconstruction from its `+` and
+context lines parses, write the files wholesale. On the draws in hand
+that precondition separates the population exactly, with no threshold —
+the three recoverable candidates satisfy both halves, and the one junk
+candidate (498 bytes, round 3i `n2` a3) fails both.
+
+**Why this is not yet done.** The rung flips
+`test_apply_diff_that_does_not_match_the_tree_raises`, whose diff
+(`@@ -1 +1 @@`, `-x = 9` over a file holding `x = 1`) is *also* a single
+hunk from line 1. That test pins a deliberate contract from T3-23: a
+diff written against the tree a failed predecessor left behind must be
+refused, not applied. So the known-bad the rung newly admits is **a diff
+written against a stale or wrong tree, applied wholesale, silently
+destroying content the model never saw** (WORKPLAN §0.6).
+
+No cheap syntactic guard separates the two, because they are the same
+shape. "Every line of the real file must survive in the reconstruction
+or appear as a removed line" declines round 3i's case too — the model
+deliberately dropped `def _usd`. The only property that distinguishes a
+good reconstruction from a destructive one is whether the resulting tree
+passes the gates, which is downstream of the apply step.
+
+**Proposed, in preference order.**
+
+**(A) Stop asking for a diff. Ask for whole files.** This is the
+recommended fix, because it removes the failure class instead of
+recovering from it. The model has *already converged on whole-file
+output*: every failing diff in 3h and 3i is exactly one hunk per file
+anchored at line 1, and its context lines are the new file. It is
+emitting whole files and wrapping them in diff syntax it cannot get
+right. Under (A) there is no original side to reproduce, no hunk header
+to miscount, no context to match, and the five-rung ladder, `--recount`,
+`_reanchor_blank_lines` and `_unwrapped` all stop being load-bearing for
+this class. Headroom is not the obstacle: these attempts spent 12k-37k
+completion tokens against a `max_tokens` of ~161 000. The v3 sweep died
+on this same class (corrupt patch, every attempt), the ladder was built
+to survive it, and it still loses the deciding node of a run.
+Blast radius is real and must be priced: the worker grammar,
+`vllm.propose_diff`, `_apply_diff`'s callers, the brief, and every
+fixture spelled as a diff.
+
+**(B) A terminal whole-file rung, with the flip confined.** Keep the
+diff envelope; when every file is a single hunk from line 1 and the
+reconstruction parses, write the files wholesale. Keep
+`test_apply_diff_that_does_not_match_the_tree_raises`'s assertion for
+**partial** hunks, where T3-23's contract is what actually protects
+against a stale-tree diff, and add the whole-file known-good and the
+non-parsing known-bad beside it. The flip is then confined and carries
+F21.38a as its evidence, per the flip rule. Smaller change than (A) and
+recovers the same four draws; it leaves the model still emitting a form
+it cannot spell, so the class returns whenever a diff is not whole-file.
+
+**(C) Record the reconstruction even when the apply fails.** Independent
+of (A) and (B) and worth doing regardless: on a failed apply, attach the
+reconstruction and whether it parses to the attempt's sidecar. It
+recovers no attempt, but it ends the evidence loss — this item exists
+only because four discarded candidates happened to still be in their
+sidecars, and F21.38a shows the retry draws are reachable only through
+the *attempt's* `detail`, not the sample's `outcome`.
+
+The safety argument common to (A) and (B): **the apply step is an
+envelope check, not a correctness gate.** Every gate still judges the
+resulting tree, so a reconstruction that lost content fails `tests`.
+Treating apply as a correctness gate is what discards work that the
+gates were never given the chance to judge.
+
+### T6-63 — The mutation gate's detail must say whose fault a missing verdict is (tightened; detail wording)
+
+Files: `src/saddle/evidence.py` (`mutation_sample`, the non-zero exit
+branch ~:879), `tests/test_evidence.py`.
+
+`mutmut run` exiting non-zero renders as `mutation tool failed: mutmut
+run exited 1: failed to collect stats. runner returned 1`. That one
+string covers two unrelated situations, and F21.37 spent a session
+telling them apart:
+
+- round 3c: a saddle defect, repaired by `2af0d5d` (the gate now runs
+  the node's declared pytest scope). `tests` passed, coverage hit 100%,
+  and `property-coverage` reported `property killed 42 of 53 mutant(s)`
+  on the same tree seconds later.
+- round 3g: **correct behaviour.** The node's own `tests` gate exited 1,
+  so mutmut could not baseline against a red suite and was right to
+  refuse.
+
+`collect_stats` runs pytest and calls `exit(1)` on any non-zero pytest
+exit (`mutmut/__main__.py:333`), so a red baseline is indistinguishable
+from a broken tool *in the rendered string only* — saddle knows which,
+because the `tests` gate already ran. The detail should say "the suite
+this node must mutate against is red, so nothing can be measured" when
+that is the case, and blame the tool only when it is the tool.
+
+Known-good: a genuinely broken mutmut still renders as a tool failure.
+Known-bad: a tree whose own tests fail no longer does. G1's "state the
+behaviour" applies — the current string names a tool the worker cannot
+act on, instead of the failing suite it can.
+
+### T6-64 — Nothing tests the failure mode where the test node writes a wrong spec (open: no evidence either way)
+
+Files: none yet — this is a measurement gap, not a code defect.
+
+`check_node_scope` forbids an impl node editing tests, so `n1`'s
+assertions are unappealable: a test node that misreads the task writes a
+wrong answer key, the impl node correctly implements the wrong thing,
+every gate passes, and the oracle fails. That is precisely Goal G1's
+"gate defect" — the one failure mode that produces a green run and a
+broken artifact.
+
+Two things make it live rather than hypothetical. The task is
+demonstrably misreadable: F21.34 records five of six unharnessed
+base-rate seeds misreading rule 4 identically. And the test node runs
+first, with the largest output and the most freedom.
+
+**It has never been observed, and its absence is not evidence.**
+Detecting it requires a run in which every node seals — no run has
+reached that state (impl nodes seal 1 in 27 attempts, F21.36). Every
+failure the census can see announces itself with a red gate; this one
+would not. So it cannot be ranked against the other offenders by count,
+and it should not be dismissed for lacking one.
+
+**Proposed mitigation, partial but real.** The task's requirement
+`examples` — the `(id, "accepts"|"rejects", text)` triples — are an
+independent statement of truth supplied by the *planner*, not invented
+by the test node, and `check_requirement_binding` already forces the
+test node to assert on every one (T6-4/T6-5, T6-50). That makes the
+example set a partial oracle that is already inside the harness. The
+mitigation is to widen it until it pins the behaviour a wrong spec would
+get wrong: F21.34's rule-4 misreading — the untouched-currency seeding
+that defeats five of six base-rate seeds — is exactly a behaviour one
+`accepts` example would nail down, and no test node could then write the
+wrong key and still bind.
+
+This does not close the item. It narrows the surface on which a wrong
+spec can hide; it cannot prove none remains. **Nothing closes this but a
+completed run compared against the oracle.** Recorded so it is not
+mistaken for refuted, and so the mitigation is not mistaken for a close.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
