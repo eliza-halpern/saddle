@@ -146,7 +146,8 @@ F21.21: Q8 a disagreement in the opposite direction — the gate rejected
 an artifact ground truth accepts) →
 **T6-54** (a recovery plan may not prescribe what a gate rejects; small,
 known-bad in hand) → **T6-53** (coverage may not demand what the graded
-node cannot supply; needs the user's fork decided) → round 3h, the next
+node cannot supply; BLOCKED — F21.22 falsified the premise the user's
+fork choice rested on, needs re-deciding) → round 3h, the next
 G1 seed → T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
@@ -6413,9 +6414,13 @@ fix. A falsified Q3-Q7, or a Q8 disagreement, is a main-session item.
 **DONE 2026-09-21 — Q8 DISAGREEMENT; G1's count stays at zero. F21.21.**
 `EXIT=1 WALL=6406`, 1 proven, 1 failed, 2 undispatched, oracle FAIL.
 **Not** a first on either count, contrary to this entry's first draft:
-round 3c proved two nodes (`n1` and the impl node `n2.r1`) and 3d proved
-`n1`, and 3e reached `n2`. Only 3f died before an impl node, so Q6's
-pre-registered premise was wrong, and on proven count 3g is behind 3c.
+round 3c proved two nodes (`n1` and `n2.r1`) and 3d proved `n1`, and 3e
+reached `n2`. Only 3f died before an impl node, so Q6's pre-registered
+premise was wrong, and on proven count 3g is behind 3c. A second
+correction: 3c's `n2.r1` is a **test** node, not an impl one — 3c
+replanned its failed impl node into a test node and that is what sealed.
+Read from the plan record, not the node id. Across every round to date
+**no impl node has ever sealed** (F21.22).
 Q2–Q6 held; **Q3 and Q4 are T6-51's and T6-50's
 first live uses and both held** — no nested `thinking` truncated
 (115 239 characters retained at most) and `n1` sealed with
@@ -6436,17 +6441,32 @@ the graded node's power. Items T6-53 and T6-54 follow.
 Files: `src/saddle/gates.py` (`check_changed_line_coverage`, and what
 fills `changed`), `src/saddle/runner.py`, `docs/DESIGN-NOTES.md`.
 
-**Proof the contract is wrong** (F21.21). `n2.r1`'s eleven uncovered
-lines are `to_dict` (`:97`), `from_dict` (`:105-109`), `__eq__` (`:114`),
-`__repr__` (`:117`), two `raise TypeError` guards for a `bool` amount
-and one `raise ValueError` in `transfer`. The first four serialize an
-`Account`, so the tests that exercise them belong to **REQ-004**
-(`store.py`), node `n4`, which had not run and whose tests therefore do
-not exist. The node is caught between three of its own gates:
+**Proof the contract is wrong** (F21.21, corrected by F21.22).
+`n2.r1`'s eleven uncovered lines are the **bodies** of `to_dict`
+(`:97`), `from_dict` (`:105-109`), `__eq__` (`:114`), `__repr__`
+(`:117`), two `raise TypeError` guards for a `bool` amount and one
+`raise ValueError` in `transfer`. They are added lines, not baseline
+code the worker reproduced: REQ-002 replaces the scalar `balance` with a
+per-currency `_balances` map, so those four bodies *must* be rewritten
+or they reference a field that no longer exists.
+
+This entry's first draft said the tests that exercise them belong to
+REQ-004 / node `n4`, "which had not run". That is wrong. The plan
+record's target files say `to_dict` and friends live in `accounts.py` —
+**`n2`'s own target** — and the only file that can exercise
+`accounts.py` is `tests/test_accounts.py`, which belongs to **`n1`**
+(REQ-001). `n1` **sealed before `n2` was dispatched**, and its sealed
+tests touch those four members zero times. `n4` targets `report.py` and
+`store.py` and is irrelevant here.
+
+So the set of nodes that could ever cover those lines is empty at the
+moment the gate demands them, and one of them has already finished. The
+node is caught between three of its own gates:
 `coverage` requires those lines executed, `public-deletions` (T6-42)
 forbids removing them — they are the same four members round 3d's repair
 deleted — and `check_node_scope` forbids an impl node writing the test
-that would execute them. The only move left is a call that exists so a
+that would execute them, which in this plan is the test file a
+**sealed** node owns. The only move left is a call that exists so a
 line is recorded as executed, which Goal G1 rules inadmissible as
 specification, not as exhortation.
 
@@ -6483,6 +6503,49 @@ Whichever lands: known-good is `refs/saddle/attempt/n2.r1/1` frozen as a
 fixture — it must be accepted, since ground truth accepts it. Known-bad
 is a node that adds a private helper nothing will ever reach, which must
 still fail. Both halves, or not done.
+
+**BLOCKED 2026-09-21 — the chosen option rests on a falsified premise.**
+The user chose **(c)** on 2026-09-21, on this entry's first-draft
+reading that the exerciser "belongs to a requirement no sealed node
+owns" — i.e. that a *later* node would supply the coverage. F21.22
+shows the owning test node is `n1`, which had **already sealed**. Under
+the corrected structure (c) does not work:
+
+- The DAG always drains with those lines still uncovered, because no
+  node in it can cover them. Deferral converts an attempt-2 gate failure
+  into an end-of-run failure and changes no verdict.
+- In the case where `n3` and `n4` then succeed, the oracle **passes**
+  while the run **fails** on the deferred lines. That is a manufactured
+  G1 disagreement — the precise outcome the goal exists to eliminate —
+  produced by the fix rather than by a defect.
+
+(a) survives the correction: grading coverage over the plan rather than
+the node still answers the question later, but "later" now has to mean
+*after a node that can write the test has run*, and no such node exists
+in this plan either. (b) survives as a narrowing and still owes §0.6 its
+known-bad.
+
+A fourth candidate the fork did not contain, and which the correction
+points at:
+
+(d) *Fix the plan, not the gate.* The defect may be in planning: the
+planner assigned `tests/test_accounts.py` to `n1` and `accounts.py` to
+`n2`, so the test node for a file seals before the impl node that
+rewrites it. A plan that keeps a file's tests open until its
+implementation has sealed — or that pairs test and impl over the same
+files with the test node ordered *after* — dissolves the trap without
+touching a gate, and leaves `coverage` demanding exactly what it demands
+today. Cost: it is a planner change, the largest of the four, and it
+cannot retrofit a plan the model already emitted.
+
+Round 3c is the recorded evidence that the DAG *can* produce a node able
+to cover the lines: 3c replanned its failed impl node into a **test**
+node, which sealed. But that discharges no implementation requirement,
+and 3c still ended in an oracle FAIL.
+
+The fork needs re-deciding against the corrected premise before any of
+this lands. Until then T6-53 does not start; T6-54 is independent and
+goes first.
 
 ### T6-54 — A recovery plan may not prescribe what a gate rejects (tightened)
 
