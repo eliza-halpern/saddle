@@ -159,6 +159,8 @@ into requirement statements the worker reads — shown on 3g's retained
 prompt, post-T6-44) → **T6-59** (the text-only mutant exclusion covers one
 spelling of a message-only mutation and not the other; F21.29 — two such
 mutants are the whole margin between round 3h's `n2` sealing and failing)
+→ **T6-60** (the dead-code gate's known-bad half is closed for the
+repeated-name shape only; F21.30 — the all-distinct shape recurred at 3h)
 → T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
@@ -7037,6 +7039,47 @@ only), both `fee_for` boundaries, the `deposit`/`withdraw` JPY branch.
 The gate is right about those and `n1`'s tests are thin. This item does
 not touch them, and must not be closed by a threshold move: after it, a
 node whose tests miss those fifteen still fails.
+
+### T6-60 — The dead-code gate's known-bad half covers both degeneration shapes (no contract change)
+
+Files: `tests/test_gates.py`, `tests/fixtures/`.
+
+`check_dead_additions` (T6-41) is closed by a known-good
+(`implementation_round3e.diff`, accepted) and a known-bad
+(`degenerate_round3e.diff`, rejected: `dead-definitions=4`, naming
+`_ensure_executed (60 copies)`, `_hypothesis_helper (60 copies)`,
+`_noop (59 copies)`). Both halves execute and all nine
+`test_dead_additions_*` cases pass.
+
+But the known-bad is one *shape*: a small number of names repeated many
+times. The other observed shape is many names used once each — 3e draw 2
+emitted 343 definitions with 343 distinct names, and round 3h `n2`
+attempt 1 draw 2 emitted 192 with 192 distinct, 187 of them mentioned
+nowhere but their own `def` line (F21.30). A check that counted repeats
+would pass both; this one does not, because it asks whether anything
+depends on the definition. Nothing pins that.
+
+The mechanism is already correct. Executed against a hand-built parseable
+tree of 50 uniquely named uncalled private helpers beside real work:
+`passed=False`, `basis=dead-definitions=50`. So this item adds the test,
+not the behaviour, and the commit says so: **no contract change**.
+
+1. **Known-bad to add.** A fixture in the all-distinct shape, rejected,
+   with `dead-definitions` equal to the number added — so a future
+   implementation that special-cases repetition fails the test.
+2. **Known-good it must keep accepting.** `implementation_round3e.diff`
+   unchanged, plus `test_dead_additions_keeps_a_private_helper_the_suite
+   _depends_on`: fifty distinct helpers that *are* called must pass, or
+   the new test is pinning "many additions" rather than "dead additions".
+3. **Fixture source.** Not 3h draw 2's bytes: its patch is malformed
+   (`corrupt patch at line 182`) and no post-image tree exists, so the
+   fixture is built rather than restored, and the docstring says which.
+
+**Why it matters despite the mechanism being right.** Of the four
+degenerate draws on record, only the frozen fixture ever reached a gate;
+the other three died at patch application with corrupt diffs. The gate's
+behaviour on the all-distinct shape has never been exercised by a real
+artifact and would not be noticed if it regressed.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
