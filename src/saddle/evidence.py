@@ -752,12 +752,20 @@ def text_only_mutant(show_output: str) -> bool:
     """Whether a `mutmut show` diff changes nothing but string-literal text (T6-33).
 
     Round 3d's n2 was asked to kill 66 survivors of which 34 edited only a
-    message (`"cannot convert"` to `"XXcannot convertXX"`, F21.14): no
-    requirement constrains those words, so a spec-derived test cannot kill
-    them and one that does pins the implementation's wording. Pairwise: the
-    removed and added lines must tokenize identically once string contents
-    are blanked, and at least one string must differ. Anything that does
-    not tokenize line by line stays in the population (fail closed).
+    message (`"cannot convert"` to `"XXcannot convertXX"`, F21.14). Pairwise:
+    the removed and added lines must tokenize identically once string
+    contents are blanked, and at least one string must differ. Anything that
+    does not tokenize line by line stays in the population (fail closed).
+
+    This is a shape test, not a semantic one, and it cannot be more: whether
+    a string's contents are constrained is a property of the task, not of
+    the code. t5's rule 1 requires the `ValueError` message to name all
+    three currencies, and a string can equally be a currency code or a
+    `Decimal` exponent -- round 3h classified `currency == "XXJPYXX"` and
+    `Decimal("XX1XX")` as text-only, and the suite killed both (F21.32).
+    So `mutation_sample` consults this only for SURVIVORS, where an
+    exclusion costs nothing it could have learned; a killed mutant of any
+    shape is evidence the suite discriminates and stays in the population.
     """
     removed = [
         line[1:]
@@ -835,6 +843,7 @@ def mutation_sample(
     `run_tests` restricts which tests pytest collects against each mutant
     and leaves the scope alone -- the two are different sets (T3-3: a
     session read the first as the second and built a vacuous oracle).
+    Text-only mutants are excluded only when they SURVIVED (F21.32).
     Timeouts count as killed (behavior changed), and missing mutmut
     fails closed.
     """
@@ -908,7 +917,13 @@ def mutation_sample(
             hit = _mutant_lines(shown.stdout, target.read_text()) & lines
             if not hit:
                 continue
-            if text_only_mutant(shown.stdout):
+            # F21.32: only a SURVIVING text-only mutant is excluded. The
+            # tokenizer cannot tell a message from a currency code or a
+            # `Decimal` exponent, so round 3h dropped `currency == "XXJPYXX"`
+            # and `Decimal("XX1XX")` -- real behaviour changes the suite
+            # killed -- from both sides of the ratio. A kill is evidence the
+            # suite discriminates; the verdict decides, not the shape.
+            if verdict == "survived" and text_only_mutant(shown.stdout):
                 text_only += 1
                 continue
             scoped.append((name, verdict, key, hit))

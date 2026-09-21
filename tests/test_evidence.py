@@ -731,6 +731,64 @@ def test_mutation_sample_filters_scopes_and_counts(
     )
 
 
+def _text_only_workdir(root: Path) -> Path:
+    """Two string-literal lines and one numeric line, all mutable."""
+    workdir = root / "work"
+    (workdir / "tests").mkdir(parents=True)
+    (workdir / "a.py").write_text('m = "hello"\nn = "world"\nq = 5\n')
+    (workdir / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    return workdir
+
+
+def _text_only_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MutationOutcome:
+    """One killed text-only mutant, one survived, one real change."""
+    workdir = _text_only_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(
+        stub_dir,
+        "\n".join(["", "  m_killtext: killed", "  m_real: killed", "  m_survtext: survived", ""]),
+        {
+            "m_killtext": _show_diff("a.py", 'm = "hello"', 'm = "XXhelloXX"'),
+            "m_survtext": _show_diff("a.py", 'n = "world"', 'n = "XXworldXX"'),
+            "m_real": _show_diff("a.py", "q = 5", "q = 6"),
+        },
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), line) for line in (1, 2, 3)}
+    return mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
+
+
+def test_mutation_sample_counts_a_text_only_mutant_the_suite_killed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F21.32: a killed text-only mutant is evidence the suite discriminates.
+
+    `text_only_mutant` cannot tell a message from a currency code or a
+    `Decimal` exponent -- round 3h excluded `currency == "XXJPYXX"` and
+    `Decimal("XX1XX")`, both real behaviour changes the suite killed.
+    Dropping them removed a kill from both sides of the ratio and cost
+    the node the gate. The suite's verdict decides, not the shape.
+    """
+    outcome = _text_only_outcome(tmp_path, monkeypatch)
+    assert outcome.killed == 2
+    assert outcome.total == 2
+
+
+def test_mutation_sample_still_excludes_a_text_only_mutant_that_survived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6-33's purpose, kept: round 3d's 34 message survivors stay out.
+
+    A survivor whose only change is string text cannot be killed by a
+    spec-derived test, so it is not a missing test and does not count
+    against the node.
+    """
+    outcome = _text_only_outcome(tmp_path, monkeypatch)
+    assert outcome.survivors == ()
+    assert "m_survtext" not in outcome.survivors
+
+
 def test_mutmut_scratch_config_exact() -> None:
     assert _mutmut_scratch_config(["a.py", "tests/x.py"]) == (
         "[tool.mutmut]\n"
