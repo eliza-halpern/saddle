@@ -115,12 +115,17 @@ def run_node_gate(
     recorder: SpanRecorder | None = None,
     capture: list[CapturedRun] | None = None,
     planned_requirements: tuple[str, ...] = (),
+    owed_tests: tuple[str, ...] = (),
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
     `planned_requirements` is every id the node's plan declares, which the
     binding gate's orphan half subtracts before rejecting a citation
     (T3-24); a single node gated on its own leaves it empty.
+    `owed_tests` is the nodes the plan still expects tests from, which
+    defers an uncovered changed line rather than failing the node for a
+    question no node has yet been able to answer (T6-53); empty is the
+    pre-T6-53 behaviour.
 
     The current-tree suite runs once under coverage and its exit code
     serves both the tests check and the red-phase post leg; the baseline
@@ -315,6 +320,7 @@ def run_node_gate(
         added_lines={rel: tuple(sorted(lines)) for rel, lines in sorted(added_lines.items())},
         dead_code_runner=suite_without,
         baseline_sources=baseline_modules,
+        owed_tests=owed_tests,
         added_files=[str(workdir / p) for p in added],
         touched_files=touched,
         test_output=suite.stdout + suite.stderr,

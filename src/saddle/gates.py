@@ -323,6 +323,7 @@ def check_changed_line_coverage(
     changed: set[tuple[str, int]],
     covered: set[tuple[str, int]],
     minimum: float,
+    owed: Collection[str] = (),
 ) -> GateCheck:
     """Every changed line must be executed; `minimum` is the node threshold.
 
@@ -331,6 +332,24 @@ def check_changed_line_coverage(
     percentage is satisfiable by a call that runs the line and asserts
     nothing; the lines themselves are the evidence. The counts stay in
     `basis`, which is sealed rather than worker-facing.
+
+    `owed` is the nodes the plan still expects tests from (T6-53). When
+    it is non-empty the uncovered lines are **deferred** rather than
+    failed: the node seals, and `basis` records what was set aside. An
+    `impl` node may not write tests, so with a test node still owed the
+    gate is asking a question whose answer cannot exist yet, and round
+    3g shows what that costs -- `n2.r1` was failed for eleven lines on a
+    tree that passes 16 of 16 hidden accounts-and-fees tests, because
+    the record shape it had to write is exercised by a test file
+    belonging to a node that had not run.
+
+    Deferral does not fail the run later. A line still uncovered when
+    the DAG drains is uncovered against the arm's own suite, and the
+    hidden suite that decides the task is a different one, so failing on
+    it would fail runs whose artifact is correct. What this admits is
+    stated plainly: a node may add code nothing ever runs, and seal.
+    Coverage keeps full force on every line the node could have covered
+    -- with no test node owed, the check is exactly what it was.
     """
     if not changed:
         return GateCheck(
@@ -340,6 +359,16 @@ def check_changed_line_coverage(
     percent = (len(changed) - len(missing)) / len(changed) * 100.0
     if percent < minimum:
         gaps = ", ".join(f"{path}:{line}" for path, line in missing)
+        if owed:
+            return GateCheck(
+                name="coverage",
+                passed=True,
+                detail=f"deferred, no test node has run that can reach {gaps}",
+                basis=(
+                    f"changed-lines={len(changed)} deferred-lines={len(missing)} "
+                    f"owed={','.join(sorted(owed))}"
+                ),
+            )
         return GateCheck(
             name="coverage",
             passed=False,
@@ -1373,6 +1402,9 @@ class Tier1Inputs:
     added_lines: Mapping[str, tuple[int, ...]]
     dead_code_runner: Callable[[Mapping[str, str]], int]
     baseline_sources: Mapping[str, str]
+    # T6-53: nodes the plan still owes tests from. Non-empty defers an
+    # uncovered changed line instead of failing the node for it.
+    owed_tests: tuple[str, ...] = ()
     added_files: Collection[str] = ()
     # Repo-relative paths of every file the node changed or added (T3-2).
     touched_files: Collection[str] = ()
@@ -1514,7 +1546,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         _not_required("coverage")
         if is_spec
         else check_changed_line_coverage(
-            inputs.changed, inputs.covered, gate.changed_line_coverage_min
+            inputs.changed, inputs.covered, gate.changed_line_coverage_min, inputs.owed_tests
         )
     )
     checks = (

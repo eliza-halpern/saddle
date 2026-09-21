@@ -2104,3 +2104,77 @@ def test_plan_prescribes_deletion_reads_only_what_the_verb_governs() -> None:
     baseline = {"m.py": "def _helper():\n    return 1\n\n\ndef api():\n    return _helper()\n"}
     plan = "1. Keep `api` but remove `_helper`.\n"
     assert plan_prescribes_deletion(plan, baseline) is None
+
+
+# The eleven lines round 3g's coverage gate named on `n2.r1` attempt 1 --
+# the tree that passes 16 of 16 hidden accounts-and-fees tests (F21.21).
+_ROUND3G_UNCOVERED: Final = (
+    ("accounts.py", 27),
+    ("accounts.py", 97),
+    ("accounts.py", 105),
+    ("accounts.py", 106),
+    ("accounts.py", 107),
+    ("accounts.py", 108),
+    ("accounts.py", 109),
+    ("accounts.py", 114),
+    ("accounts.py", 117),
+    ("accounts.py", 126),
+    ("fees.py", 28),
+)
+_ROUND3G_COVERED: Final = tuple(("accounts.py", n) for n in range(200, 255))
+
+
+def test_coverage_defers_round3g_lines_while_a_test_node_is_owed() -> None:
+    """Known-good (T6-53): the artifact ground truth accepts, accepted.
+
+    `n2.r1` had to rewrite `Account.to_dict` because REQ-002 replaces the
+    scalar balance with a per-currency map, but the record shape it
+    writes is REQ-004's -- the task prompt's section 7, `store.py` -- and
+    the only file that can exercise it, `tests/test_store.py`, belongs to
+    `n3`, which had not run. An impl node may not write tests, so the
+    gate was asking a question no node had been able to answer.
+    """
+    changed = {*_ROUND3G_UNCOVERED, *_ROUND3G_COVERED}
+    check = check_changed_line_coverage(changed, set(_ROUND3G_COVERED), 100.0, ("n3",))
+    assert check.passed
+    assert check.detail.startswith("deferred, no test node has run that can reach accounts.py:27")
+    assert check.basis == "changed-lines=66 deferred-lines=11 owed=n3"
+
+
+def test_coverage_still_fails_the_same_lines_with_no_test_node_owed() -> None:
+    """The discriminating half: deferral is a schedule, not an exemption.
+
+    Identical inputs, empty `owed`. If this passed, T6-53 would have
+    turned the coverage gate off rather than moved when it asks.
+    """
+    changed = {*_ROUND3G_UNCOVERED, *_ROUND3G_COVERED}
+    check = check_changed_line_coverage(changed, set(_ROUND3G_COVERED), 100.0)
+    assert not check.passed
+    assert check.detail.startswith("no test runs accounts.py:27")
+    assert check.basis == "changed-lines=66"
+
+
+def test_coverage_deferral_admits_a_node_that_adds_code_nothing_runs() -> None:
+    """What T6-53 admits, exhibited rather than described (WORKPLAN 0.6).
+
+    This is the known-bad the rule now lets through: a node adds a
+    private helper no test reaches, and while any test node is owed it
+    seals. The alternative was failing the run at drain, which fails on
+    the arm's own suite while the hidden suite that decides the task is a
+    different one -- so it would fail runs whose artifact is correct.
+    The admission is bounded by the half above: once nothing is owed, the
+    same line fails.
+    """
+    changed = {("m.py", 1), ("m.py", 2)}
+    check = check_changed_line_coverage(changed, {("m.py", 1)}, 100.0, ("n3",))
+    assert check.passed
+    assert check.basis == "changed-lines=2 deferred-lines=1 owed=n3"
+
+
+def test_coverage_is_unchanged_when_every_line_runs_and_a_node_is_owed() -> None:
+    """Vacuity: `owed` may not turn a pass into a deferral."""
+    changed = {("m.py", 1)}
+    check = check_changed_line_coverage(changed, changed, 100.0, ("n3", "n4"))
+    assert check.passed
+    assert check.detail == "every changed line runs"
+    assert check.basis == "changed-lines=1"

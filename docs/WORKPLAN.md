@@ -6504,7 +6504,41 @@ fixture — it must be accepted, since ground truth accepts it. Known-bad
 is a node that adds a private helper nothing will ever reach, which must
 still fail. Both halves, or not done.
 
-**UNBLOCKED 2026-09-21 — option (c) stands; the block below is retracted.**
+**DONE 2026-09-21 — deferral without a drain failure; loosened, scope
+narrowed.** `pending_test_nodes` (dag.py) names the nodes a plan still
+owes tests from — kind other than `impl`, not yet proven — and
+`check_changed_line_coverage` takes it as `owed`. Non-empty defers the
+uncovered lines and seals the node, recording
+`changed-lines=N deferred-lines=M owed=…` in `basis`; empty is exactly
+the pre-T6-53 check.
+
+The user chose deferral **without** the run-end failure the original (c)
+carried, and the reason is G1: a deferred line is uncovered against the
+arm's own suite, while the oracle runs a different hidden suite, so a
+drain failure would fail runs whose artifact is correct — gates-fail
+with oracle-pass, which is not agreement.
+
+Direction: **loosened**, and §0.6's exhibit is a test, not a sentence.
+`test_coverage_deferral_admits_a_node_that_adds_code_nothing_runs` and
+`test_run_slice_defers_an_uncovered_line_while_a_test_node_is_owed`
+both show the admission: a node may add code nothing runs and seal,
+while any test node is owed. Proof the contract was wrong is F21.21 —
+round 3g rejected a tree that passes 16 of 16 hidden accounts-and-fees
+tests.
+
+Mutants, all killed: **M1** `owed` ignored, always defer; **M2**
+deferral never fires; **M3** `impl` nodes counted as able to write
+tests; **M4** proven nodes still counted as owed; **M5** the slice
+wiring forced to `()`. **M5 SURVIVED on its first run against all 857
+tests**, the same hollow-wiring shape T6-54 hit an hour earlier — the
+predicate and the gate were both tested, and nothing drove `run_slice`
+with an owed test node. Closed by the integration test above, whose
+known-bad sibling
+(`test_run_slice_gate_fail_leaves_dependent_undispatched`) is the
+identical diff and identical uncovered `unused` in a plan owing no
+tests, which still fails. `./check.sh` green, 858 passed, 100%.
+
+**Retracted block, kept for the record.**
 The record shape those eleven lines implement is the one the task prompt
 specifies under **§7 Store** (`{"owner": str, "balances": {currency:
 "decimal-string"}}`), i.e. **REQ-004**, node `n4`; §4 Accounts requires

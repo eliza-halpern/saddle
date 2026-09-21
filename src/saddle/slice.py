@@ -27,7 +27,13 @@ from statistics import median
 from time import perf_counter
 from typing import Any, Final
 
-from saddle.dag import Dag, ExecutionConstraints, Node, planned_requirement_ids
+from saddle.dag import (
+    Dag,
+    ExecutionConstraints,
+    Node,
+    pending_test_nodes,
+    planned_requirement_ids,
+)
 from saddle.evidence import (
     CapturedRun,
     attempt_ref,
@@ -660,7 +666,12 @@ def _seal_attempt(
 
 
 def _evaluate_candidate(
-    node: Node, workdir: Path, diff: str, baseline: str, planned: tuple[str, ...]
+    node: Node,
+    workdir: Path,
+    diff: str,
+    baseline: str,
+    planned: tuple[str, ...],
+    owed: tuple[str, ...],
 ) -> tuple[Tier1Result | None, str | None]:
     """Gate `diff` on a throwaway copy of `workdir`; never touches it.
 
@@ -692,11 +703,25 @@ def _evaluate_candidate(
         # actually be gated on, and `failures == 0` never ended sampling
         # (round 3c, F21.12c: delta one on three of four nodes).
         autofix(candidate, baseline=baseline)
-        return run_node_gate(node, candidate, baseline=baseline, planned_requirements=planned), None
+        return (
+            run_node_gate(
+                node,
+                candidate,
+                baseline=baseline,
+                planned_requirements=planned,
+                owed_tests=owed,
+            ),
+            None,
+        )
 
 
 def _best_of_samples(
-    node: Node, workdir: Path, propose: Proposer, baseline: str, planned: tuple[str, ...]
+    node: Node,
+    workdir: Path,
+    propose: Proposer,
+    baseline: str,
+    planned: tuple[str, ...],
+    owed: tuple[str, ...],
 ) -> tuple[DiffProposal | None, int, list[dict[str, Any]]]:
     """Draw PROPOSAL_SAMPLES unconditioned proposals concurrently; keep the best.
 
@@ -750,7 +775,9 @@ def _best_of_samples(
         if any(proposal.diff == earlier for earlier in drawn[:-1]):
             summary["outcome"] = "identical to an earlier sample"
             continue
-        result, unappliable = _evaluate_candidate(node, workdir, proposal.diff, baseline, planned)
+        result, unappliable = _evaluate_candidate(
+            node, workdir, proposal.diff, baseline, planned, owed
+        )
         if unappliable is not None or result is None:
             summary["outcome"] = f"did not apply: {unappliable}"
             continue
@@ -795,6 +822,9 @@ async def _run_node(
     proofs: dict[str, str],
     run_span_id: str,
     planned: tuple[str, ...],
+    # Empty is the strict reading: nothing owed, so every changed line is
+    # the node's to cover. A single node gated on its own gets that.
+    owed: tuple[str, ...] = (),
     *,
     task_hash: str,
     deadline: _Deadline | None = None,
@@ -855,7 +885,7 @@ async def _run_node(
             try:
                 if attempt == 1:
                     best, distinct, samples = _best_of_samples(
-                        node, workdir, propose, baseline, planned
+                        node, workdir, propose, baseline, planned, owed
                     )
                     proposal = (
                         best if best is not None else propose(node, failure, PROPOSAL_SAMPLES)
@@ -932,6 +962,7 @@ async def _run_node(
                 recorder=recorder,
                 capture=captured,
                 planned_requirements=planned,
+                owed_tests=owed,
             )
             if result.passed:
                 # The tree the gate just passed on, sealed into the record
@@ -1636,6 +1667,10 @@ def _schedule_until_done(
         # From the plan as it stands: a replacement node's ids are planned
         # too, and a replaced node's are not (T3-24).
         planned = planned_requirement_ids(remaining)
+        # T6-53: what the plan still owes tests from, as it stands. A node
+        # already proven writes nothing further, so a line only defers
+        # while some node that may write tests has yet to run.
+        owed = pending_test_nodes(remaining, proofs)
         started = deadline.clock() if deadline is not None else 0.0
         try:
             return await _run_node(
@@ -1646,6 +1681,7 @@ def _schedule_until_done(
                 proofs,
                 run_span_id,
                 planned,
+                owed,
                 task_hash=task_hash,
                 deadline=deadline,
             )

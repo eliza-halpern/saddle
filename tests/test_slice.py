@@ -4241,3 +4241,49 @@ def test_cut_to_last_test_keeps_what_parses() -> None:
     assert slice_module._cut_to_last_test("def test_broken(:\n    pass\n") is None
     assert slice_module._cut_to_last_test("from n import f\n\nx = (\n") is None
     assert slice_module._cut_to_last_test("from n import f\n\n\ndef helper():\n    pass\n") is None
+
+
+def test_run_slice_defers_an_uncovered_line_while_a_test_node_is_owed(tmp_path: Path) -> None:
+    """The wiring, not the predicate (T6-53).
+
+    Known-bad is the run above, `..._gate_fail_leaves_dependent_undispatched`:
+    the identical diff and the identical uncovered `unused`, in a plan
+    that owes no tests, and the node fails `coverage`. The only
+    difference here is a `test` node the plan has yet to run, which is
+    what round 3g's `n2.r1` had -- it was failed for eleven lines whose
+    record shape `tests/test_store.py` exercises, owned by a node that
+    had not been dispatched.
+
+    This half is also the admission T6-53 makes, exhibited: `unused`
+    really is code nothing runs, and it seals. Coverage keeps full force
+    the moment nothing is owed, which the sibling test pins.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate(
+        {
+            "nodes": [
+                _node_dict("a", []),
+                {**_node_dict("b", ["a"]), "kind": "test"},
+            ]
+        }
+    )
+    bad_diff = GOOD_DIFF.replace(
+        "+    return 2\n",
+        "+    return 2\n+\n+\n+def unused():\n+    return 3\n",
+    ).replace("@@ -1,2 +1,2 @@", "@@ -1,2 +1,6 @@")
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(bad_diff, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=tmp_path / "proofs.jsonl",
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert (
+        "- Gate coverage: PASS (deferred, no test node has run that can reach " in result.transcript
+    )
+    assert "a" in result.proofs

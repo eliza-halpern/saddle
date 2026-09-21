@@ -18,6 +18,7 @@ from saddle.dag import (
     dag_json_schema,
     edit_distance,
     emission_estimate,
+    pending_test_nodes,
     planned_requirement_ids,
     validate_dag,
 )
@@ -718,3 +719,26 @@ def test_validate_dag_rejects_a_node_too_large_for_its_budget_and_accepts_its_sp
     split = Dag(nodes=[_scoped("n1", ["a.py"]), _scoped("n2", ["b.py"])])
     assert check(split) == []
     assert check(Dag(nodes=[_scoped("n1", ["c.py"])])) == []
+
+
+def test_pending_test_nodes_names_only_what_can_still_write_tests() -> None:
+    """T6-53: an `impl` node may not write tests and a proven node is done.
+
+    The answer decides whether an uncovered changed line is a defect or a
+    schedule, so both exclusions are load-bearing: naming an `impl` node
+    would defer forever, and naming a proven one would defer against a
+    node that will never run again.
+    """
+    dag = Dag.model_validate(
+        {
+            "nodes": [
+                {**_node("n1"), "kind": "test"},
+                {**_node("n2"), "kind": "impl", "target_files": ["m.py"]},
+                {**_node("n3"), "kind": "test"},
+                {**_node("n4"), "kind": "refactor"},
+            ]
+        }
+    )
+    assert pending_test_nodes(dag, set()) == ("n1", "n3", "n4")
+    assert pending_test_nodes(dag, {"n1"}) == ("n3", "n4")
+    assert pending_test_nodes(dag, {"n1", "n3", "n4"}) == ()

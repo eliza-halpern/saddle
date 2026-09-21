@@ -224,6 +224,29 @@ def planned_requirement_ids(dag: Dag) -> tuple[str, ...]:
     return tuple(sorted({rid for node in dag.nodes for rid in node.requirement_ids}))
 
 
+def pending_test_nodes(dag: Dag, proven: Collection[str]) -> tuple[str, ...]:
+    """Ids of nodes that may still write tests, sorted (T6-53).
+
+    An `impl` node may not edit tests (`check_node_scope`), so a changed
+    line it cannot reach from the tests that exist is not a line it can
+    do anything about. Whether that is a defect or a schedule depends on
+    one fact the node cannot see: does the plan still owe a node that
+    writes tests? `test` and `refactor` are the kinds that may, and a
+    node already proven will not write anything further.
+
+    Round 3g is the case. `n2` had to rewrite `Account.to_dict` because
+    REQ-002 replaces the scalar balance with a per-currency map, but the
+    record shape it writes is REQ-004's (prompt section 7, `store.py`)
+    and the only file that can exercise it, `tests/test_store.py`,
+    belongs to `n3`, which had not run. The node was failed for eleven
+    lines while the tree it produced passes 16 of 16 hidden
+    accounts-and-fees tests.
+    """
+    return tuple(
+        sorted(node.id for node in dag.nodes if node.kind != "impl" and node.id not in proven)
+    )
+
+
 @dataclass(frozen=True)
 class DagIssue:
     """One machine-readable validation finding (`[]` from validate_dag is valid)."""
