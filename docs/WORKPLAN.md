@@ -5971,9 +5971,9 @@ outcome before the discriminator is decided.
 
 Status 2026-09-21: **still blocked, and the candidate discriminator is
 now falsified, not merely unproven.** The complete impl-node record for
-rounds 3c-3g is assembled in `../saddle-bench/runs/IMPL-NODE-TABLE.md`
-(six nodes reached a gate; F21.26). Taken one at a time, refusing would
-have been the correct move in **none** of them:
+rounds 3c-3h is assembled in `../saddle-bench/runs/IMPL-NODE-TABLE.md`
+(eight nodes reached a gate; F21.26, extended with 3h). Taken one at a
+time, refusing would have been the correct move in **none** of them:
 
 | node | failure | would refusing have been right? |
 |---|---|---|
@@ -5983,11 +5983,15 @@ have been the correct move in **none** of them:
 | 3e n2 | `ruff` UP031 ×4, `coverage` 71.4% | not yet — the honest move was to implement and stop, which the emission's first part did (unchanged from the paragraph above) |
 | 3g n2 | own tests fail, `red-phase`, `property-coverage`, `mutation` death | no — the tests are red because the implementation is wrong |
 | 3g n2.r1 | `coverage` only, on lines only a later test node can cover | no — the gate was wrong (F21.21) and the remedy was T6-53's deferral; a refusal would have recorded a false claim about the spec and hidden the defect |
+| 3h n2 | `mutation` 83.5%, and nothing else in the round | no — the gate was wrong (F21.32) and the remedy was T6-59; the draw passes 16 of 16 in-scope hidden tests, so a refusal would have claimed a spec defect where the harness's own exclusion was at fault |
+| 3h n2.r1 | `mutation` 80.0%, and nothing else | no — same, on a second draw with a different figure |
 
 Now apply the candidate discriminator — admissible only when the node's
 own tests are red and the worker names a requirement id the plan
-assigned to it. Of the six, exactly one has red tests at its gate: **3g
-n2**, the one node whose artifact was genuinely broken. The
+assigned to it. Of the eight, exactly one has red tests at its gate: **3g
+n2**, the one node whose artifact was genuinely broken. 3h's two nodes
+both gate with `tests: PASS`, so the discriminator excludes them -- the
+right call, but it does not rescue the rule. The
 discriminator therefore admits precisely the case where refusing is
 wrong and excludes all five where the node had a real grievance. It is
 not a filter on honesty; it is a filter on brokenness, and it points the
