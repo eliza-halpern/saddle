@@ -6934,9 +6934,16 @@ the fee for a positive amount below the fee" is not. The round-3e
 known-bad's placeholder docstring paraphrases a requirement of the first
 kind — "Placeholder to satisfy the requirement that every changed line is
 executed by tests" — and says so in the word *requirement*. That draw's
-own prompt cannot be read back (a pre-T6-36 record truncates it at 4 000
-chars with `[truncated 33168 chars]`), so 3e is consistent with this and
-does not prove it; 3g's retained prompt is the proof.
+own prompt **can** be read back, contrary to what this item said before:
+the top-level attempt record truncates it to 4 024 chars with
+`[truncated 33168 chars]`, but `samples[1]["prompt"]` holds all 37 168
+with no marker (4 000 + 33 168 = 37 168 -- take the richer copy, as with
+the two sidecar directories). Read in full it shows the proxy reaching
+that draw as **saddle's own worker rule**, in the emit-rules bullet list
+three lines above "Output ONLY the diff" -- the sentence T6-44 removed,
+not a planner-authored requirement. So 3e is still consistent with this
+item and still does not prove it; 3g's retained prompt remains the
+proof.
 
 A prompt change alone would be decorative (T6-45's rule: an instruction
 the harness cannot verify). So the item has two halves:
