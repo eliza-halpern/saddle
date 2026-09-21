@@ -6,6 +6,7 @@ import hashlib
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import warnings
 from collections.abc import Sequence
@@ -31,7 +32,9 @@ from saddle.evidence import (
     property_modules,
     pytest_scope,
     restore_baseline,
+    ruff_argv,
     ruff_findings,
+    ruff_version,
     run_argv,
     run_capture,
     run_shell,
@@ -1129,6 +1132,64 @@ def test_ruff_findings_parse_the_engine_and_render_human_lines(tmp_path: Path) -
     (tmp_path / "c.py").write_text("x = 1\n")
     run, findings = ruff_findings(tmp_path, ["c.py"])
     assert (run.exit_code, findings, run.stdout) == (0, [], "")
+
+
+def test_ruff_gate_runs_isolated_on_saddle_rules_not_the_installed_default(tmp_path: Path) -> None:
+    """T6-37 known-bad from round 3e (F21.16): `%`-formatting, the idiom the
+    task's own baseline uses, failed the ruff gate under ruff 0.16.7's
+    default rule set (UP031) although no config existed anywhere; a
+    workdir config selecting everything must not reach the gate either.
+    Known-good: an undefined name (F821) and a mutable default (B006) are
+    still findings, and the argv spells the isolation and the selection."""
+    (tmp_path / "pyproject.toml").write_text('[tool.ruff.lint]\nselect = ["ALL"]\n')
+    (tmp_path / "m.py").write_text(
+        'def show(owner, balance):\n    return "Account(owner=%r, balance=%r)" % (owner, balance)\n'
+    )
+    run, findings = ruff_findings(tmp_path, ["m.py"])
+    assert (run.exit_code, findings) == (0, [])
+    (tmp_path / "d.py").write_text("def f(items=[]):\n    return missing + items\n")
+    _, findings = ruff_findings(tmp_path, ["d.py"])
+    assert sorted(f.code for f in findings) == ["B006", "F821"]
+    assert ruff_argv("check", "--output-format", "json", "d.py") == [
+        "ruff",
+        "check",
+        "--isolated",
+        "--select",
+        "F,E4,E7,E9,B",
+        "--output-format",
+        "json",
+        "d.py",
+    ]
+    assert ruff_argv("format", "--check", "d.py") == [
+        "ruff",
+        "format",
+        "--isolated",
+        "--check",
+        "d.py",
+    ]
+
+
+def test_ruff_version_reads_the_engine_and_says_when_it_cannot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = ruff_version()
+    assert version.count(".") == 2, version
+    engine = subprocess.run(["ruff", "--version"], capture_output=True, text=True, check=False)
+    assert version == engine.stdout.split()[1]
+
+    def missing(*_args: object, **_kwargs: object) -> object:
+        msg = "ruff"
+        raise FileNotFoundError(msg)
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    assert ruff_version() == "unavailable"
+
+    class Odd:
+        returncode = 0
+        stdout = "ruff"
+
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: Odd())
+    assert ruff_version() == "unavailable"
 
 
 def test_ruff_findings_tolerates_bad_json_and_unreadable_sources(

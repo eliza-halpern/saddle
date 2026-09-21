@@ -39,6 +39,7 @@ from saddle.evidence import (
     proven_ref,
     pytest_scope,
     restore_baseline,
+    ruff_argv,
     run_argv,
     run_shell,
     run_shell_capture,
@@ -316,8 +317,8 @@ def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | N
     # on the mess the fixer just made. Exit codes are deliberately
     # ignored -- `ruff check --fix` reports what it could not fix, and
     # judging that is check_ruff's job.
-    run_argv(["ruff", "check", "--fix", *targets], workdir, recorder=recorder)
-    run_argv(["ruff", "format", *targets], workdir, recorder=recorder)
+    run_argv(ruff_argv("check", "--fix", *targets), workdir, recorder=recorder)
+    run_argv(ruff_argv("format", *targets), workdir, recorder=recorder)
     run_argv(["git", "add", "--", *targets], workdir, recorder=recorder)
 
 

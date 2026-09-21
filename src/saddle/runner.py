@@ -27,6 +27,7 @@ from saddle.evidence import (
     mutation_sample,
     property_modules,
     pytest_scope,
+    ruff_argv,
     ruff_findings,
     run_capture,
     run_shell_capture,
@@ -215,7 +216,7 @@ def run_node_gate(
     if ruff_files:
         lint_run, current_findings = ruff_findings(workdir, ruff_files, recorder=recorder)
         format_run = run_capture(
-            ["ruff", "format", "--check", *ruff_files], workdir, recorder=recorder
+            ruff_argv("format", "--check", *ruff_files), workdir, recorder=recorder
         )
         if capture is not None:
             capture.extend((lint_run, format_run))

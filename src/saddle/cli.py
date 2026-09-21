@@ -22,7 +22,7 @@ from rich.console import Console
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
-from saddle.evidence import git_ls_files, run_argv
+from saddle.evidence import RUFF_RULES, git_ls_files, ruff_version, run_argv
 from saddle.journal import (
     JournalIssue,
     SpanRecord,
@@ -743,6 +743,11 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         "worker_effort": options.worker_effort or "node budget",
         "survivor_effort": options.survivor_effort,
         "survivor_samples": str(options.survivor_samples),
+        # What the ruff gate ran with (T6-37, T6-34): the verdict is a
+        # function of both, and round 3d's trees could not say which ruff
+        # autofixed them.
+        "ruff": ruff_version(),
+        "ruff_rules": ",".join(RUFF_RULES),
     }
     try:
         result = run_slice(

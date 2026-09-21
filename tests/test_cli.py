@@ -49,7 +49,7 @@ from saddle.cli import (
     worker_max_tokens,
 )
 from saddle.dag import DIFF_OVERHEAD_TOKENS, REQ_NEAR_MISS_K, TOKENS_PER_LINE, Dag, Node
-from saddle.evidence import CapturedRun, git_ls_files, run_argv
+from saddle.evidence import CapturedRun, git_ls_files, ruff_version, run_argv
 from saddle.gates import GateCheck, Tier1Result, check_node_scope
 from saddle.journal import (
     GateOutput,
@@ -2879,6 +2879,8 @@ def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> Non
         "model=m",
         "reasoning_effort=medium",
         "recovery_temperature=0.7",
+        f"ruff={ruff_version()}",
+        "ruff_rules=F,E4,E7,E9,B",
         "sample_temperature=0.7",
         "server=0.28.0",
         "survivor_effort=low",
@@ -2886,6 +2888,7 @@ def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> Non
         "temperature=0.0",
         "worker_effort=node budget",
     ]
+    assert ruff_version() != "unavailable"
     # The k draws arrive in any order (T6-25); each carries its own seed.
     assert sorted(call["seed"] for call in seen[1:]) == list(range(PROPOSAL_SAMPLES))
 

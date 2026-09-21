@@ -126,6 +126,36 @@ def run_argv(
     return proc.returncode
 
 
+# The lint rules the ruff gate enforces (T6-37): defects, not style. Round
+# 3e (F21.16) was gated by ruff 0.16.7's *default* rule set -- no config
+# existed in the workdir or above it -- and UP031 failed a node for the
+# `%`-formatting its own baseline uses in 4 of 5 modules; a `pip install
+# -U ruff` would have changed the verdict. Every ruff call runs
+# `--isolated`, so neither the graded repo's config nor the machine's
+# reaches the gate, and `ruff check` selects exactly these: pyflakes (F),
+# the E4/E7/E9 subset ruff itself ships by default, and bugbear (B).
+RUFF_RULES: Final = ("F", "E4", "E7", "E9", "B")
+
+
+def ruff_argv(command: str, *args: str) -> list[str]:
+    """`ruff <command>` as the gate runs it: isolated, and for `check`, saddle's rules."""
+    argv = ["ruff", command, "--isolated"]
+    if command == "check":
+        argv.extend(["--select", ",".join(RUFF_RULES)])
+    argv.extend(args)
+    return argv
+
+
+def ruff_version() -> str:
+    """The installed ruff's version (`ruff --version`), or "unavailable"."""
+    try:
+        proc = subprocess.run(["ruff", "--version"], capture_output=True, text=True, check=False)
+    except OSError:
+        return "unavailable"
+    words = proc.stdout.split()
+    return words[1] if proc.returncode == 0 and len(words) >= 2 else "unavailable"
+
+
 def ruff_findings(
     workdir: Path, files: Sequence[str], *, recorder: SpanRecorder | None = None
 ) -> tuple[CapturedRun, list[RuffFinding]]:
@@ -137,7 +167,7 @@ def ruff_findings(
     carrying the stripped source line it sits on. Unparseable output
     yields no findings and leaves the exit code to say the tool failed.
     """
-    argv = ["ruff", "check", "--output-format", "json", *files]
+    argv = ruff_argv("check", "--output-format", "json", *files)
     run = run_capture(argv, workdir, recorder=recorder)
     findings: list[RuffFinding] = []
     try:

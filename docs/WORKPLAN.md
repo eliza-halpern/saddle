@@ -128,8 +128,9 @@ round kill anything on a real gap; is T6-29a's 0/10 an effort effect?)
 → T6-4 with T6-5 done (main session, while 3e ran) → round 3e done
 (F21.16: mutation 88.8% passes; UP031 kept the survivor round
 unreachable; the sidecar scrub broke T6-27's check) → T6-36 done (the
-scrub) → T6-37 (ruff rule set: the user's decision) → T6-38 (blank-line
-drift rung) → T6-34 (attempt refs, ruff version) → round 3f, one T5
+scrub) → T6-37 done, option (a) (pinned isolated rule set, `ruff=` and
+`ruff_rules=` sealed) → T6-38 (blank-line drift rung) → T6-34 (attempt
+refs, stale comment) → round 3f, one T5
 seed (first run where the survivor round is reachable and every test
 node carries rejects; its first plan is also the `minItems` decoder
 check T6-4 owes) → T6-1 (with the reasoning read, over rounds 3-3f; row
@@ -5219,6 +5220,33 @@ a genuine new defect (F821 undefined name) still fails.
 Owner: main session after the decision. Before round 3f: with UP031
 gone, n2's failure set is `{coverage}` and the survivor round is
 reachable for the first time.
+
+**Status (2026-09-21): DONE, option (a) (tightened).** The user chose
+(a). `evidence.RUFF_RULES = ("F", "E4", "E7", "E9", "B")` and
+`ruff_argv(command, *args)` build every ruff invocation the harness
+makes: `ruff <command> --isolated`, plus `--select F,E4,E7,E9,B` when the
+command is `check`. `ruff_findings`, the runner's format leg
+(`ruff format --check`) and the slice's `autofix` (`check --fix`,
+`format`) all go through it, so no `pyproject.toml`, `ruff.toml` or user
+config in or above the workdir can widen, narrow or restyle the verdict;
+`--isolated` also fixes the format leg's line length at ruff's default 88.
+`ruff_version()` reads `ruff --version` (second word, `"unavailable"` on
+OSError, non-zero exit or malformed output) and the run settings seal
+`ruff=<version>` and `ruff_rules=F,E4,E7,E9,B`, which lands the version
+half of T6-34.
+Known-good/known-bad (`tests/test_evidence.py`): a workdir whose
+`pyproject.toml` selects `ALL` and whose file uses `%`-formatting passes
+with no findings; `def f(items=[]): return missing + items` in the same
+workdir yields exactly `B006, F821`. `test_cli.py` pins both settings keys
+in the sealed argv and asserts the version is not `"unavailable"` on the
+dev box.
+Contract mutants (each red on the scoped tests, restored, caches
+dropped): drop `--isolated` -> pyproject-ALL known-good goes red (1 failed);
+drop `--select` -> the default set fires on the known-good (1 failed);
+seal `"ruff": "unavailable"` instead of `ruff_version()` -> settings pin
+red (1 failed). Full `./check.sh` green before commit.
+Not done here: T6-34's attempt-tree refs and the stale gates.py comment
+remain T6-34.
 
 ### T6-38 — An apply rung for blank-line drift (tightened in effect)
 Files: `src/saddle/slice.py` (`_APPLY_MODES`, `_apply_diff`),
