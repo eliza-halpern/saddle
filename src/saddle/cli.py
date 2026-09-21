@@ -428,15 +428,24 @@ Requirements (each test must fail if its statement is violated):
 {reqs}
 Gate command: {node.deterministic_gate.test_command}
 
-Produce a unified diff (git apply compatible) implementing exactly that.
+Produce the COMPLETE NEW CONTENTS of every file you change, implementing
+exactly that. You are not writing a patch: there is no original side to
+reproduce and no context to match.
 Rules:
 - Start each file section with a "diff --git a/<file> b/<file>" header line.
-- Every file section needs at least one "@@ ... @@" hunk with the actual
-  change; a header with no hunk applies nothing.
-- The apply step passes --recount, so hunk header line numbers/counts
-  (the "-a,b +c,d" part) do not need to be exact -- do not spend effort
-  computing them.
-- Mark new files with "new file mode 100644".
+- Follow it with exactly these two lines, verbatim:
+  "--- /dev/null" and "+++ b/<file>".
+- Then one "@@ -0,0 +1,<n> @@" line, where <n> is however many lines the
+  file now has. It is not checked -- do not spend effort counting.
+- Then EVERY line of the finished file, each prefixed with "+".
+  Unchanged lines get a "+" too. A line starting with " " or "-" is
+  rejected: those belong to a patch, and this is not one.
+- Write each file at most once. Emitting a file twice is refused, not
+  merged.
+- To delete a file, emit its header, then "deleted file mode 100644",
+  "--- a/<file>", "+++ /dev/null", and no body.
+- A file you do not name is left exactly as it is. Only name the files
+  you are changing.
 - Mention each requirement ID in the new or changed test source.
 {scope}- A "test" node asserts on every listed accept and reject, each spelled
   exactly as listed: the gate fails a test node whose tests assert on
@@ -456,7 +465,7 @@ Rules:
 - Every behaviour you add or change needs a test that fails if that
   behaviour changes. A test that only runs a line proves nothing about it.
 
-Output ONLY the diff, no commentary.
+Output ONLY the file sections, no commentary.
 """
 
 
@@ -501,8 +510,15 @@ def build_repair_prompt(
 ) -> str:
     """Repair prompt: the worker brief plus evidence and the recovery plan.
 
-    The tree already holds the failed attempt, so the worker fixes
-    forward against the current contents instead of restating the change.
+    The tree already holds the failed attempt, so `contents` above is
+    what the previous attempt left, and the worker fixes forward against
+    that rather than against the node's baseline.
+
+    Under the whole-file envelope "fix forward" is about WHICH TREE to
+    write against, not about how much to emit (T6-62/A1). Every write is
+    the complete file either way; the instruction that used to read "do
+    not restate the whole change" was a diff-envelope economy and is now
+    the opposite of what the worker must do.
 
     `plan` is `None` when the diagnosis step produced an instruction a
     gate would reject (T6-54); the section is then absent rather than
@@ -512,9 +528,11 @@ def build_repair_prompt(
     base = build_worker_prompt(task=task, node=node, files=files, contents=contents)
     recovery = "" if plan is None else "\n\nRecovery plan:\n" + plan
     return (
-        base + "\nThe previous attempt failed. Fix forward: propose a diff against "
-        "the CURRENT tree state above that repairs the failure below. "
-        "Do not restate the whole change." + recovery + "\n\n" + failure
+        base + "\nThe previous attempt failed. Fix forward: write the files above "
+        "as they should now be, starting from the CURRENT tree state shown, so "
+        "that the failure below is repaired. The contents above already include "
+        "the previous attempt's work -- keep what was right and change what was "
+        "not." + recovery + "\n\n" + failure
     )
 
 

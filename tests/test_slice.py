@@ -50,11 +50,13 @@ from saddle.slice import (
     SliceResult,
     _apply_diff,
     _HaltRecoveryError,
+    _payload_sections,
     _reconstruction_evidence,
     _run_node,
     _schedulable_nodes,
     _unwrapped,
     _utcnow,
+    _write_files,
     autofix,
     format_attempt_failure,
     format_replan_history,
@@ -152,27 +154,29 @@ def _slice_repo(root: Path) -> None:
     assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
 
 
-GOOD_DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def f():\n"
-    "-    return 1\n"
-    "+    return 2\n"
-)
+def whole_file(path: str, *lines: str) -> str:
+    """One write section: the envelope the worker grammar admits (T6-62/A1).
+
+    The inverse of `slice._payload_sections`. Tests spell payloads through
+    this rather than by hand so that a change to the envelope breaks in
+    one place instead of ninety.
+    """
+    body = "".join(f"+{line}\n" for line in lines)
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- /dev/null\n+++ b/{path}\n"
+        f"@@ -0,0 +1,{len(lines)} @@\n{body}"
+    )
+
+
+GOOD_DIFF = whole_file("n.py", "def f():", "    return 2")
 
 BAD_DIFF = GOOD_DIFF.replace("+    return 2\n", "+    return 3\n")
 
-FIX_DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def f():\n"
-    "-    return 3\n"
-    "+    return 2\n"
-)
+# A repair writes the file as it should end up, so the fix for BAD_DIFF is
+# byte-identical to GOOD_DIFF: under this envelope "what changed" is not
+# part of the payload.
+FIX_DIFF = whole_file("n.py", "def f():", "    return 2")
 
 JUNK1_DIFF = (
     "diff --git a/junk1.py b/junk1.py\n"
@@ -286,6 +290,177 @@ def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
     expected = f"worker diff has a header but no hunk ('@@ ' marker) in {str(tmp_path)!r}"
     with pytest.raises(RuntimeError, match=re.escape(expected)):
         _apply_diff(tmp_path, "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n")
+
+
+# --- T6-62/A1: the whole-file envelope ---------------------------------------
+
+
+def _staged(root: Path) -> list[str]:
+    done = subprocess.run(
+        ["git", "-C", str(root), "diff", "--cached", "--name-only"],
+        capture_output=True,
+        text=True,
+    )
+    return done.stdout.split()
+
+
+def test_write_files_replaces_the_whole_file_and_stages_it(tmp_path: Path) -> None:
+    """Known-good. The new side IS the file, so what the payload leaves out
+    is gone. That is the entire difference from a patch, and the reason
+    there is nothing to match against the tree."""
+    _git_repo(tmp_path)
+    (tmp_path / "n.py").write_text("x = 1\ny = 2\nz = 3\n")
+    _write_files(tmp_path, whole_file("n.py", "x = 9"))
+    assert (tmp_path / "n.py").read_text() == "x = 9\n"
+    assert _staged(tmp_path) == ["n.py"]
+
+
+def test_write_files_creates_a_file_and_its_parent_directories(tmp_path: Path) -> None:
+    """Known-good. A creation is spelled exactly like an overwrite, so a
+    node adding a module needs no separate form."""
+    _git_repo(tmp_path)
+    _write_files(tmp_path, whole_file("pkg/sub/m.py", "A = 1"))
+    assert (tmp_path / "pkg" / "sub" / "m.py").read_text() == "A = 1\n"
+    assert _staged(tmp_path) == ["pkg/sub/m.py"]
+
+
+def test_write_files_deletes_what_a_delete_section_names(tmp_path: Path) -> None:
+    """Known-good for the other branch: a delete carries no body, because
+    re-emitting a file in order to remove it is tokens spent on a
+    transcription the writer discards."""
+    _git_repo(tmp_path)
+    (tmp_path / "gone.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "gone.py"], tmp_path) == 0
+    payload = (
+        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n"
+    )
+    _write_files(tmp_path, payload)
+    assert not (tmp_path / "gone.py").exists()
+
+
+def test_write_files_forgives_one_enclosing_markdown_fence(tmp_path: Path) -> None:
+    """T6-48's packaging rule still holds: the wrapper comes off before
+    anything judges the content, so both paths see the same bytes."""
+    _git_repo(tmp_path)
+    fenced = "\n\n```diff\n" + whole_file("n.py", "x = 9").rstrip("\n") + "\n```"
+    _write_files(tmp_path, fenced)
+    assert (tmp_path / "n.py").read_text() == "x = 9\n"
+
+
+def test_write_files_refuses_a_context_line(tmp_path: Path) -> None:
+    """Known-bad, and the one that matters most. Silently keeping only the
+    `+` lines of a patch would write a file holding just the additions --
+    destroying content the model never saw, which is exactly the hazard
+    T6-62 named when it priced a whole-file rung."""
+    _git_repo(tmp_path)
+    patchy = (
+        "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n"
+        "@@ -0,0 +1,2 @@\n+def f():\n     return 1\n"
+    )
+    with pytest.raises(RuntimeError, match=re.escape("carries a context line in 'n.py'")):
+        _write_files(tmp_path, patchy)
+    # Refused before anything was written, not half-applied.
+    assert (tmp_path / "n.py").read_text() == "x = 1\n"
+
+
+def test_write_files_refuses_a_removal_line(tmp_path: Path) -> None:
+    """Known-bad, the other half of the same contract."""
+    _git_repo(tmp_path)
+    patchy = (
+        "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n"
+        "@@ -0,0 +1,2 @@\n+def f():\n-    return 1\n"
+    )
+    with pytest.raises(RuntimeError, match=re.escape("carries a removal line in 'n.py'")):
+        _write_files(tmp_path, patchy)
+
+
+def test_write_files_refuses_the_same_path_twice(tmp_path: Path) -> None:
+    """Known-bad, F21.9's b-s1: nine `fees.py` sections in one emission,
+    legal because `root ::= section+` repeats. A diff refused the second
+    copy loudly; whole files would let the last one win in silence."""
+    _git_repo(tmp_path)
+    twice = whole_file("n.py", "x = 1") + whole_file("n.py", "x = 2")
+    with pytest.raises(RuntimeError, match=re.escape("writes 'n.py' more than once")):
+        _write_files(tmp_path, twice)
+    assert (tmp_path / "n.py").read_text() == "x = 1\n"
+
+
+def test_write_files_refuses_a_path_outside_the_tree(tmp_path: Path) -> None:
+    """Known-bad. `git apply` refused an escaping path for free and writing
+    files directly gives that up, so this is the only thing between a
+    worker's header line and the rest of the filesystem."""
+    _git_repo(tmp_path)
+    for name in ("../escape.py", "/etc/saddle-escape.py", "."):
+        with pytest.raises(RuntimeError, match=re.escape("names a path outside the tree")):
+            _write_files(tmp_path, whole_file(name, "x = 1"))
+    assert not (tmp_path.parent / "escape.py").exists()
+
+
+def test_write_files_refuses_prose(tmp_path: Path) -> None:
+    """Known-bad, and retryable for the same reason it always was: prose is
+    exactly the case a fresh attempt can fix."""
+    _git_repo(tmp_path)
+    expected = f"worker content is not a file payload (no 'diff --git' header) in {str(tmp_path)!r}"
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _write_files(tmp_path, "not a payload\n")
+
+
+def test_write_files_refuses_a_section_with_no_contents(tmp_path: Path) -> None:
+    """Known-bad, both shapes. `_apply_diff` called this "a header but no
+    hunk" and it applied nothing; here it would write an EMPTY file, so
+    the same malformed emission turns from a no-op into a deletion."""
+    _git_repo(tmp_path)
+    headless = "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n"
+    with pytest.raises(RuntimeError, match=re.escape("names 'n.py' with no contents")):
+        _write_files(tmp_path, headless)
+    with pytest.raises(RuntimeError, match=re.escape("names 'n.py' with no contents")):
+        _write_files(tmp_path, headless + "@@ -0,0 +1,0 @@\n")
+    assert (tmp_path / "n.py").read_text() == "x = 1\n"
+
+
+def test_payload_sections_round_trips_what_whole_file_spells(tmp_path: Path) -> None:
+    """The encoder tests write with and the decoder the run reads with are
+    inverses, so a payload built here is the payload a worker sends."""
+    text = 'def f():\n    return "a b"\n\n# trailing comment\n'
+    payload = whole_file("n.py", *text.split("\n")[:-1])
+    assert _payload_sections(payload) == [("n.py", text)]
+
+
+def test_write_files_finds_sections_by_header_not_by_position(tmp_path: Path) -> None:
+    """A blank first line passes the envelope check, which reads
+    `payload.lstrip()`, but is not itself a header -- so the parser has to
+    locate sections by matching rather than assume the payload opens on
+    one. `_unwrapped` strips a fence and nothing else, so whatever leads
+    the response is still there when the parser sees it."""
+    _git_repo(tmp_path)
+    _write_files(tmp_path, "\n" + whole_file("n.py", "x = 9"))
+    assert (tmp_path / "n.py").read_text() == "x = 9\n"
+    assert _staged(tmp_path) == ["n.py"]
+
+
+def test_write_files_skips_a_no_newline_marker_instead_of_refusing_it(
+    tmp_path: Path,
+) -> None:
+    """`noeol` is in the grammar, so a worker may legally close a body with
+    it, and it is the only non-`+` line a body may carry. It is git's
+    marker rather than content: it neither lands in the file nor trips the
+    context-line refusal sitting next to it. The file gets its final
+    newline back, which is the direction that cannot destroy anything."""
+    _git_repo(tmp_path)
+    marker = "\\ No newline at end of file\n"
+    _write_files(tmp_path, whole_file("n.py", "x = 9") + marker)
+    assert (tmp_path / "n.py").read_text() == "x = 9\n"
+
+
+def test_write_files_refuses_a_header_line_that_names_no_file(tmp_path: Path) -> None:
+    """Known-bad. `header ::= "diff --git " line` admits a header carrying
+    no paths, so a payload can open on the literal the envelope check
+    looks for and still name nothing to write. That is refused, not taken
+    as an empty success that stages an unchanged tree."""
+    _git_repo(tmp_path)
+    with pytest.raises(RuntimeError, match=re.escape("names no file")):
+        _write_files(tmp_path, "diff --git \n")
+    assert _staged(tmp_path) == []
 
 
 # --- T6-48: packaging is not content ----------------------------------------
@@ -557,8 +732,11 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
     assert "  - thought: return two instead\n" in result.transcript
+    # T6-62/A1: the worker path writes files and stages them; `git apply`
+    # is no longer in it, so the span that proves the write happened is
+    # the staging one.
     assert re.search(
-        r"  - tool git: exit 0 in \d+ms: git apply --index --recount -\n",
+        r"  - tool git: exit 0 in \d+ms: git add -A -- n\.py\n",
         result.transcript,
     )
     # Red-phase baseline leg: coverage-wrapped like the current leg, failing
@@ -790,8 +968,11 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert "- Gate coverage: FAIL" in result.transcript
     assert "- Timeline:\n" in result.transcript
     assert "thought:" not in result.transcript
+    # T6-62/A1: the worker path writes files and stages them; `git apply`
+    # is no longer in it, so the span that proves the write happened is
+    # the staging one.
     assert re.search(
-        r"  - tool git: exit 0 in \d+ms: git apply --index --recount -\n",
+        r"  - tool git: exit 0 in \d+ms: git add -A -- n\.py\n",
         result.transcript,
     )
     journal = tmp_path / "proofs.jsonl"
@@ -2204,28 +2385,12 @@ def test_run_slice_pass_with_replan_callback_unused(tmp_path: Path) -> None:
     assert calls == []
 
 
-TIDY_DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,3 @@\n"
-    " def f():\n"
-    "     return 2\n"
-    "+# tidy\n"
-)
+TIDY_DIFF = whole_file("n.py", "def f():", "    return 2", "# tidy")
 
 # A refactor with a statement to its name: the value `n1` proved, spelled as
 # a sum. Behaviour preserved, the same test still pins it, and the changed
 # line is one coverage can cover and mutation can mutate.
-REFACTOR_DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def f():\n"
-    "-    return 2\n"
-    "+    return 1 + 1\n"
-)
+REFACTOR_DIFF = whole_file("n.py", "def f():", "    return 1 + 1")
 
 
 def _first_run(tmp_path: Path) -> tuple[Path, SliceResult]:
@@ -3229,15 +3394,7 @@ def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Pa
 
 # --- T3-8: a node is gated against its own baseline, so slices can be wide ---
 
-M_DIFF = (
-    "diff --git a/m.py b/m.py\n"
-    "--- a/m.py\n"
-    "+++ b/m.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def g():\n"
-    "-    return 1\n"
-    "+    return 2\n"
-)
+M_DIFF = whole_file("m.py", "def g():", "    return 2")
 
 # The `test` node's whole diff: one new file holding a failing specification
 # with a hypothesis property, which is what a `test` node must ship (T3-7a).
@@ -3451,15 +3608,7 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
 
 
 # `n2`'s own stray: the same `m.py` edit plus a comment on `n1`'s file.
-STRAY_DIFF = M_DIFF + (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,3 @@\n"
-    " def f():\n"
-    "     return 2\n"
-    "+# stray\n"
-)
+STRAY_DIFF = M_DIFF + whole_file("n.py", "def f():", "    return 2", "# stray")
 
 
 def test_run_slice_second_node_own_stray_still_fails_target_scope(tmp_path: Path) -> None:
@@ -3540,15 +3689,7 @@ def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
 
 # --- T3-17: the merge suite runs the way the node gates run tests ---------
 
-PKG_DIFF = (
-    "diff --git a/pkg/m.py b/pkg/m.py\n"
-    "--- a/pkg/m.py\n"
-    "+++ b/pkg/m.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def g():\n"
-    "-    return 1\n"
-    "+    return 2\n"
-)
+PKG_DIFF = whole_file("pkg/m.py", "def g():", "    return 2")
 
 
 def _packaged_repo(root: Path) -> None:
@@ -4054,35 +4195,21 @@ def test_failed_worker_call_sidecar_keeps_the_call_the_client_attached(tmp_path:
 
 # --- T6-29c: survivor-driven test node, the splice ---------------------------
 
-BRANCH_DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,4 @@\n"
-    "-def f():\n"
-    "-    return 1\n"
-    "+def f(flag=0):\n"
-    "+    if flag == 1:\n"
-    "+        return 5\n"
-    "+    return 2\n"
+BRANCH_DIFF = whole_file(
+    "n.py", "def f(flag=0):", "    if flag == 1:", "        return 5", "    return 2"
 )
 """`f` grows a branch no test reaches: `test_n.py` covers lines 1, 2 and 4."""
 
-THREE_BRANCH_DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,8 @@\n"
-    "-def f():\n"
-    "-    return 1\n"
-    "+def f(flag=0):\n"
-    "+    if flag == 1:\n"
-    "+        return 5\n"
-    "+    if flag == 2:\n"
-    "+        return 7\n"
-    "+    if flag == 3:\n"
-    "+        return 9\n"
-    "+    return 2\n"
+THREE_BRANCH_DIFF = whole_file(
+    "n.py",
+    "def f(flag=0):",
+    "    if flag == 1:",
+    "        return 5",
+    "    if flag == 2:",
+    "        return 7",
+    "    if flag == 3:",
+    "        return 9",
+    "    return 2",
 )
 
 
@@ -4306,17 +4433,13 @@ EXAMPLES_ONLY_SPEC = (
     "+    assert f() == 2\n"
 )
 
+# A delete carries no body: the contents of a file being removed are not
+# evidence of anything (T6-62/A1).
 DELETE_GONE = (
     "diff --git a/test_gone.py b/test_gone.py\n"
     "deleted file mode 100644\n"
     "--- a/test_gone.py\n"
     "+++ /dev/null\n"
-    "@@ -1,5 +0,0 @@\n"
-    "-from n import f\n"
-    "-\n"
-    "-\n"
-    "-def test_f():  # REQ-001\n"
-    "-    assert f() == 2\n"
 )
 
 

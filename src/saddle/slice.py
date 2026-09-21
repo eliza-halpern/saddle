@@ -533,6 +533,122 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     raise RuntimeError(msg)
 
 
+def _payload_sections(payload: str) -> list[tuple[str, str | None]]:
+    """The files a whole-file payload names, in order; `None` means delete.
+
+    Strict where `whole_file_reconstruction` is lenient, and the two are
+    not interchangeable. This reads the envelope the grammar admits, so a
+    body line is `+`-prefixed new content and nothing else; that one
+    reads a *rejected* diff of the old envelope, context lines and all,
+    to recover what it was trying to say. Keeping them apart is what lets
+    the forensic stay permissive while the live path stays exact.
+
+    The path comes from the `diff --git a/X b/Y` header's new side, which
+    is the only place it appears in a form the caller can use -- and note
+    that `header ::= "diff --git " line` leaves it UNCONSTRAINED by the
+    grammar. The grammar constrains form, not content (F21.9c); every
+    check on the path itself therefore has to happen in `_write_files`.
+    """
+    sections: list[tuple[str, str | None]] = []
+    lines = payload.splitlines()
+    index = 0
+    while index < len(lines):
+        header = _DIFF_GIT_PATHS.match(lines[index])
+        index += 1
+        if header is None:
+            continue
+        name, body, deleted = header["new"], [], False
+        anchored = False
+        while index < len(lines) and not lines[index].startswith("diff --git "):
+            line = lines[index]
+            index += 1
+            if line.startswith("+++ /dev/null"):
+                deleted = True
+            elif line.startswith("@@ "):
+                anchored = True
+            elif not anchored:
+                continue
+            elif line.startswith("+"):
+                body.append(line[1:])
+            elif not line.startswith("\\"):
+                # Refuse, do not skip. A context or removal line means the
+                # writer sent a PATCH, and the difference is not cosmetic:
+                # keeping only the `+` lines would write a file holding
+                # just the additions and silently delete everything else.
+                # Silently destroying content the model never saw is the
+                # known-bad T6-62 named; the grammar forbids these lines,
+                # but the grammar is enforced by the server and this is
+                # the only check that holds when it is not.
+                kind = "removal" if line.startswith("-") else "context"
+                msg = f"worker payload carries a {kind} line in {name!r}: {line[:60]!r}"
+                raise RuntimeError(msg)
+        if not deleted and not body:
+            # A section with no anchor, or an anchor with nothing under
+            # it, would otherwise write an EMPTY file -- a silent
+            # deletion of everything that file held. `_apply_diff` named
+            # the same shape "a header but no hunk"; it applies nothing
+            # there and destroys everything here, so it is refused.
+            msg = f"worker payload names {name!r} with no contents"
+            raise RuntimeError(msg)
+        sections.append((name, None if deleted else "".join(f"{x}\n" for x in body)))
+    return sections
+
+
+def _resolved_target(workdir: Path, name: str) -> Path:
+    """*name* inside *workdir*, or a refusal naming why it is not.
+
+    Under a diff envelope `git apply` refused an absolute path or one
+    climbing out of the tree, and refused it for free. Writing files
+    directly gives that up, so the check is re-established here: this is
+    the only thing standing between a worker's header line and the rest
+    of the filesystem (T6-62/A1).
+    """
+    root = workdir.resolve()
+    target = (root / name).resolve()
+    if not name.strip() or target == root or root not in target.parents:
+        msg = f"worker payload names a path outside the tree: {name!r}"
+        raise RuntimeError(msg)
+    return target
+
+
+def _write_files(workdir: Path, payload: str, *, recorder: SpanRecorder | None = None) -> None:
+    """Write the files a whole-file payload carries, and stage them.
+
+    The envelope replaces `git apply` on the worker path (T6-62/A1): the
+    new side IS the file, so there is no context to match and nothing to
+    reject for arithmetic. What remains is an envelope check, and every
+    refusal here is a retryable `RuntimeError` for the same reason the
+    old one was -- prose is exactly what a fresh attempt can fix.
+    """
+    payload = _unwrapped(payload)
+    if not payload.lstrip().startswith("diff --git "):
+        msg = f"worker content is not a file payload (no 'diff --git' header) in {str(workdir)!r}"
+        raise RuntimeError(msg)
+    sections = _payload_sections(payload)
+    if not sections:
+        msg = f"worker payload names no file in {str(workdir)!r}"
+        raise RuntimeError(msg)
+    # A repeated path is the one failure the diff envelope caught for
+    # free and this one does not: `root ::= section+` lets the model emit
+    # the same file twice, and F21.9's b-s1 emitted NINE copies of
+    # `fees.py`. Under a diff the second copy failed to apply, loudly.
+    # Here the last write would simply win and nothing would say so.
+    repeated = sorted({name for name, _ in sections if [n for n, _ in sections].count(name) > 1})
+    if repeated:
+        msg = f"worker payload writes {repeated[0]!r} more than once in {str(workdir)!r}"
+        raise RuntimeError(msg)
+    written: list[str] = []
+    for name, contents in sections:
+        target = _resolved_target(workdir, name)
+        if contents is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(contents, encoding="utf-8")
+        written.append(name)
+    run_argv(["git", "add", "-A", "--", *written], workdir, recorder=recorder)
+
+
 def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | None = None) -> None:
     """Apply ruff's mechanical fixes before any gate measures the tree.
 
@@ -792,7 +908,7 @@ def _evaluate_candidate(
         # run when `cp -r` produced "uncommitted changes" worktrees.
         run_argv(["git", "update-index", "--refresh"], candidate)
         try:
-            _apply_diff(candidate, diff)
+            _write_files(candidate, diff)
         except RuntimeError as exc:
             return None, str(exc)
         # The live path runs `autofix` before the gate; a candidate scored
@@ -1034,7 +1150,7 @@ async def _run_node(
                 raise _HaltRecoveryError(last_result, attempt, failure)
             seen.append(proposal.diff)
             try:
-                _apply_diff(workdir, proposal.diff, recorder=recorder)
+                _write_files(workdir, proposal.diff, recorder=recorder)
             except RuntimeError as exc:
                 failure = f"Attempt {attempt} of {max_attempts}: diff did not apply: {exc}"
                 # A retry's apply-failure is recorded HERE, in the
@@ -1515,7 +1631,7 @@ def _recovered_tree(workdir: Path, applied: Sequence[str], baseline: str, dest: 
     shutil.copytree(workdir, dest, symlinks=True)
     run_argv(["git", "update-index", "--refresh"], dest)
     for diff in applied:
-        _apply_diff(dest, diff)
+        _write_files(dest, diff)
     autofix(dest, baseline=baseline)
 
 

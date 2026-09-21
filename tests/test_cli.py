@@ -78,15 +78,23 @@ from saddle.vllm import (
 
 TASK = "Fix f to return 2 and add a passing test."
 
-DIFF = (
-    "diff --git a/n.py b/n.py\n"
-    "--- a/n.py\n"
-    "+++ b/n.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def f():\n"
-    "-    return 1\n"
-    "+    return 2\n"
-)
+
+def whole_file(path: str, *lines: str) -> str:
+    """One write section: the envelope the worker grammar admits (T6-62/A1).
+
+    The inverse of `slice._payload_sections`. Tests spell payloads through
+    this rather than by hand so that a change to the envelope breaks in
+    one place instead of ninety.
+    """
+    body = "".join(f"+{line}\n" for line in lines)
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- /dev/null\n+++ b/{path}\n"
+        f"@@ -0,0 +1,{len(lines)} @@\n{body}"
+    )
+
+
+DIFF = whole_file("n.py", "def f():", "    return 2")
 
 
 def _git_repo(root: Path) -> None:
@@ -339,10 +347,18 @@ def test_build_worker_prompt_covers_format_rules_and_files() -> None:
     assert "m.py" in prompt
     assert "--- n.py ---\nx = 1\n" in prompt
     assert 'diff --git a/<file> b/<file>" header line' in prompt
-    assert "new file mode 100644" in prompt
+    # The envelope's own rules, each the half a worker could get wrong
+    # (T6-62/A1). A brief that asks for whole files but still says "patch"
+    # is the defect this pins.
+    assert "COMPLETE NEW CONTENTS" in prompt
+    assert 'each prefixed with "+"' in prompt
+    assert 'A line starting with " " or "-" is' in prompt
+    assert "Write each file at most once" in prompt
+    assert "deleted file mode 100644" in prompt
+    assert "no original side to" in prompt
     assert "two blank lines between top-level definitions" in prompt
     assert "sorted import blocks" in prompt
-    assert "Output ONLY the diff" in prompt
+    assert "Output ONLY the file sections" in prompt
 
 
 def test_build_worker_prompt_caps_long_file_lists() -> None:
@@ -463,8 +479,9 @@ def test_build_repair_prompt_adds_failure_evidence() -> None:
     assert TASK in prompt
     assert "Fix forward" in prompt
     assert "CURRENT tree state" in prompt
-    assert "propose a diff against the CURRENT tree state above that repairs" in prompt
-    assert "repairs the failure below. Do not restate" in prompt
+    assert "write the files above" in prompt
+    assert "starting from the CURRENT tree state shown" in prompt
+    assert "so that the failure below is repaired." in prompt
     assert "Attempt 1 of 3 failed 1 gate(s):" in prompt
     assert "Recovery plan:\n1. Change the return value.\n" in prompt
     assert "1. Change the return value.\n\n\nAttempt 1 of 3" in prompt
@@ -827,15 +844,7 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     bad = DIFF.replace("+    return 2\n", "+    return 3\n")
-    fix = (
-        "diff --git a/n.py b/n.py\n"
-        "--- a/n.py\n"
-        "+++ b/n.py\n"
-        "@@ -1,2 +1,2 @@\n"
-        " def f():\n"
-        "-    return 3\n"
-        "+    return 2\n"
-    )
+    fix = whole_file("n.py", "def f():", "    return 2")
     script = [
         _emit_response({"nodes": [_node_dict()]}),
         _diff_response(bad),
@@ -878,15 +887,7 @@ def test_run_task_sample_temperature_routes_first_attempt_vs_recovery(
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     bad = DIFF.replace("+    return 2\n", "+    return 3\n")
-    fix = (
-        "diff --git a/n.py b/n.py\n"
-        "--- a/n.py\n"
-        "+++ b/n.py\n"
-        "@@ -1,2 +1,2 @@\n"
-        " def f():\n"
-        "-    return 3\n"
-        "+    return 2\n"
-    )
+    fix = whole_file("n.py", "def f():", "    return 2")
     script = [
         _emit_response({"nodes": [_node_dict()]}),
         _diff_response(bad),
@@ -915,15 +916,7 @@ def test_run_task_recovery_temperature_flag_sets_the_retry_temperature(tmp_path:
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     bad = DIFF.replace("+    return 2\n", "+    return 3\n")
-    fix = (
-        "diff --git a/n.py b/n.py\n"
-        "--- a/n.py\n"
-        "+++ b/n.py\n"
-        "@@ -1,2 +1,2 @@\n"
-        " def f():\n"
-        "-    return 3\n"
-        "+    return 2\n"
-    )
+    fix = whole_file("n.py", "def f():", "    return 2")
     script = [
         _emit_response({"nodes": [_node_dict()]}),
         _diff_response(bad),
@@ -2802,15 +2795,23 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     is given the window left after its own prompt, and the prompt shows the
     live tree: a bloated tree costs the next attempt room, it never buys
     any. Here attempt 1 bloats `n.py` by 300 lines and fails syntax;
-    attempt 2's cap must be below attempt 1's."""
+    attempt 2's cap must be below attempt 1's.
+
+    flip: this test's `Gate syntax: FAIL` assertion (T6-62/A1). It held
+    because attempt 2's modify-diff could not apply to the tree attempt 1
+    had bloated, so the node never recovered and the run's verdict WAS
+    attempt 1's failure. A whole-file write does not care what the tree
+    holds, so attempt 2 now repairs it and the run passes. That is the
+    defect the old expectation was resting on, not a contract: the
+    contract here is the cap, and it is unchanged and still asserted.
+    Attempt 1 must still bloat and still fail `syntax` or the cap proves
+    nothing, so that half is asserted directly instead of through the
+    run's verdict."""
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
-    head = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,2 +1,302 @@\n"
-    bloat = (
-        head
-        + " def f():\n-    return 1\n+    return 2\n"
-        + "".join(f"+def g{i}():\n" for i in range(300))
-    )
+    # Still 300 bodiless defs, so the tree is still bloated and still
+    # fails `syntax`; only the envelope changed (T6-62/A1).
+    bloat = whole_file("n.py", "def f():", "    return 2", *[f"def g{i}():" for i in range(300)])
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
@@ -2826,7 +2827,7 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     _, out = _run(_options(tmp_path), client)
     diff_calls = [call for call in seen if _is_diff_request(call)]
     assert len(diff_calls) >= PROPOSAL_SAMPLES + 1, out
-    assert "Gate syntax: FAIL" in out
+    assert "- syntax:" in _prompt(diff_calls[PROPOSAL_SAMPLES]), out
     assert [call["max_tokens"] for call in diff_calls] == [_expected_cap(c) for c in diff_calls]
     assert diff_calls[-1]["max_tokens"] < diff_calls[0]["max_tokens"]
 
@@ -3072,7 +3073,11 @@ def test_build_repair_prompt_omits_the_section_when_no_plan_survives() -> None:
         plan=None,
     )
     assert "Recovery plan:" not in prompt
-    assert "Do not restate the whole change.\n\nAttempt 1 of 3" in prompt
+    # Under the whole-file envelope a repair IS the whole file, so the
+    # instruction that used to sit here ("do not restate the whole
+    # change") would now contradict the brief.
+    assert "Do not restate" not in prompt
+    assert "keep what was right and change what was not.\n\nAttempt 1 of 3" in prompt
     assert "--- n.py ---\ndef f():\n    return 3\n" in prompt
 
 

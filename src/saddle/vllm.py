@@ -65,28 +65,56 @@ REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
 # that class, not the count half. Re-run in the container for this
 # tightening on 2026-09-19: 53/53 (44 admit, 6 reject with the headerless
 # section refused at its `@@`, 2 must-not-stop, 1 must-stop).
-# A section is a creation, a deletion or a modification (T6-32). A creation
-# must carry `new file mode` and a deletion `deleted file mode`: with the
-# mode line optional metadata, `--- /dev/null` with no mode was
-# representable and `git apply` then read `/dev/null` as a path (round 3d
-# probe, F21.14: `error: dev/null: No such file or directory`). `path`
-# never starts with `/`, so `/dev/null` is unrepresentable on a modify
-# side and only the structured forms can name it.
+# A section is a WRITE or a DELETE (T6-62/A1). A write carries the
+# complete new contents of one file and nothing else: there is no
+# original side to reproduce, no context to match, and the only hunk
+# header the grammar admits is the one anchored at line 1. That is the
+# whole point of the envelope. F21.38 measured what the diff envelope
+# cost: the model writes its *intended output* onto the context lines --
+# its reproduction of `accounts.py` ran 105 lines against the file's 73,
+# similarity 0.652, every divergence an edit it meant to make -- and no
+# git flag reaches that, because the context is not a transcription
+# error. It was already emitting whole files and spelling them as diffs
+# it could not get right (every failing diff in rounds 3h and 3i is one
+# hunk per file anchored at line 1). So ask for what it is already
+# writing. `@@ -0,0 +1` is a literal, not a count: "anchored at line 1"
+# is unrepresentable otherwise, by construction rather than by check.
+#
+# The syntax is still git's, deliberately. The model is fluent in it, the
+# grammar delta stays small, and `slice.whole_file_reconstruction` already
+# parses exactly this shape. Nothing is applied: the new side IS the file.
+#
+# SCOPE NARROWED, not loosened: `new file mode` is no longer required on a
+# write. It was required because `--- /dev/null` with no mode line let
+# `git apply` read `/dev/null` as a path (round 3d probe, F21.14:
+# `error: dev/null: No such file or directory`). `git apply` no longer
+# sees worker output at all, so the hazard that rule existed for cannot
+# occur; and under whole-file semantics every write is create-or-
+# overwrite, which makes a "new file" marker on an overwrite a lie. A
+# deletion still carries `deleted file mode`, which distinguishes the two
+# branches on their first byte. `path` never starts with `/`, so
+# `/dev/null` remains unrepresentable wherever a real path belongs.
+#
+# A delete carries no hunk: the content of a file being removed is not
+# evidence of anything, and re-emitting it whole is tokens spent on a
+# transcription the writer then discards.
 DIFF_GRAMMAR: Final = r"""root ::= section+
-section    ::= header (create | delete | modify)
-create     ::= meta* "new file mode " line "\n" meta* "--- /dev/null\n" to hunk+
-delete     ::= meta* "deleted file mode " line "\n" meta* from "+++ /dev/null\n" hunk+
-modify     ::= meta* from to hunk+
+section    ::= header (write | delete)
+write      ::= meta* "--- /dev/null\n" to anchor body
+delete     ::= meta* "deleted file mode " line "\n" meta* from "+++ /dev/null\n"
 header     ::= "diff --git " line "\n"
+anchor     ::= "@@ -0,0 +1" ("," digits)? " @@\n"
+body       ::= bline+ noeol?
+bline      ::= "+" line "\n"
+noeol      ::= "\\ No newline at end of file\n"
 meta       ::= meta_pfx line "\n"
-meta_pfx   ::= "index " | "old mode " | "new mode " | "similarity index "
-             | "dissimilarity index " | "rename from " | "rename to "
-             | "copy from " | "copy to " | "Binary files "
+meta_pfx   ::= "index " | "old mode " | "new mode " | "new file mode "
+             | "similarity index " | "dissimilarity index "
+             | "rename from " | "rename to " | "copy from " | "copy to "
 from       ::= "--- " path "\n"
 to         ::= "+++ " path "\n"
 path       ::= [^/\n] [^\n]*
-hunk       ::= "@@ " line "\n" hline+
-hline      ::= (" " | "+" | "-" | "\\") line "\n"
+digits     ::= [0-9]+
 line       ::= [^\n]*
 """
 

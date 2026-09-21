@@ -20,20 +20,25 @@ one 11-character string, and no working diff was representable. The test
 guarding it asserted the pattern *existed*. Existence was never the
 question -- so this checks both halves, on real inputs:
 
-- every diff in this repo's own history must be ADMITTED, plus rename,
-  mode-change, delete and "\\ No newline at end of file";
-- prose, markdown fences, a JSON wrapper, a `diff -u` header and a hunk
-  that follows `diff --git` with no `--- `/`+++ ` lines must be REJECTED,
-  the last one at the `@@` itself (`reject_at`) -- rejecting it later
-  would mean some other rule had swallowed the header;
-- and the model must be FORBIDDEN FROM STOPPING on a header with no hunk.
+- every FILE this repo has actually written must be ADMITTED as a write
+  section -- the envelope's job is to carry arbitrary real content, so
+  the corpus is the content itself (quotes, backslashes, regexes, the
+  grammar string, unicode), rendered whole-file;
+- prose, markdown fences, a JSON wrapper, a `diff -u` header, a hunk with
+  no file lines, and -- the envelope's own contract -- a CONTEXT line, a
+  REMOVAL line, or an anchor that is not line 1 must be REJECTED, each at
+  the byte where its own rule dies (`reject_at`); rejecting later would
+  mean some other rule had swallowed it;
+- and the model must be FORBIDDEN FROM STOPPING on a header with no body.
   That third check is the token-mask guarantee itself, and it needs a stop
-  token: a header-without-hunk is a valid *prefix*, so byte-acceptance
-  alone cannot see it. A contract mutant (`hunk+` -> `hunk*`) survived the
-  first two checks and is killed only by this one.
+  token: a header-without-body is a valid *prefix*, so byte-acceptance
+  alone cannot see it. A contract mutant (`bline+` -> `bline*`) survives
+  the first two checks and is killed only by this one.
 
-A construct missing from the grammar is a diff the worker cannot express,
-which is the exact failure the grammar exists to prevent.
+A construct missing from the grammar is a file the worker cannot express,
+which is the exact failure the grammar exists to prevent. Under T6-62/A1
+that means file CONTENT, not diff syntax: the old corpus was this repo's
+own `git show` output, which the whole-file envelope refuses by design.
 """
 
 from __future__ import annotations
@@ -47,67 +52,117 @@ from typing import Any
 CASES_PATH = "/tmp/cases.json"
 REPO = Path(__file__).resolve().parent.parent  # git runs here, whatever the cwd
 
+_W = "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n"
+
 MUST_REJECT = {
     "prose": "Sure! I will fix that.\n",
     "markdown fence": "```diff\ndiff --git a/n.py b/n.py\n",
     "json wrapper": '{"diff": "diff --git a/n.py b/n.py\\n"}',
-    "wrong header": "diff -u a/n.py b/n.py\n@@ -1 +1 @@\n-x\n+y\n",
-    "hunk before header": "@@ -1 +1 @@\n-x = 1\n+x = 2\n",
-    "hunk without file lines": "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n",
-    # T6-32: a creation without `new file mode` applied as `dev/null` (F21.14).
-    "creation without mode line": (
-        "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n@@ -0,0 +1 @@\n+x = 1\n"
+    "wrong header": "diff -u a/n.py b/n.py\n@@ -0,0 +1 @@\n+y\n",
+    "hunk before header": "@@ -0,0 +1 @@\n+x = 1\n",
+    "hunk without file lines": "diff --git a/x b/x\n@@ -0,0 +1 @@\n+b\n",
+    # The envelope's own contract, all three halves. A write carries the
+    # new file and nothing else, so there is no original side to drift
+    # against (T6-62/A1, F21.38).
+    "context line in body": _W + "@@ -0,0 +1,2 @@\n+x = 1\n x = 2\n",
+    "removal line in body": _W + "@@ -0,0 +1,2 @@\n+x = 1\n-x = 2\n",
+    "anchor past line 1": _W + "@@ -0,0 +2,2 @@\n+x = 1\n",
+    "original side not empty": _W + "@@ -1,2 +1,2 @@\n+x = 1\n",
+    "second hunk in one write": _W + "@@ -0,0 +1 @@\n+x = 1\n@@ -0,0 +1 @@\n+y = 2\n",
+    "deletion without mode line": ("diff --git a/n.py b/n.py\n--- a/n.py\n+++ /dev/null\n"),
+    # `path` may not begin with `/`, so `/dev/null` is unrepresentable
+    # wherever a real file belongs. Without these two the rule is unpinned:
+    # a mutant widening `path` to `[^\n]*` passed every other case.
+    "write to /dev/null": (
+        "diff --git a/n.py b/n.py\n--- /dev/null\n+++ /dev/null\n@@ -0,0 +1 @@\n+x\n"
     ),
-    "deletion without mode line": (
-        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x = 1\n"
+    "delete from /dev/null": (
+        "diff --git a/n.py b/n.py\ndeleted file mode 100644\n--- /dev/null\n"
     ),
 }
 
 # Byte offset at which a MUST_REJECT case has to die. Absence of a working
-# diff is not the only way to fail: a case rejected at the wrong byte is
+# write is not the only way to fail: a case rejected at the wrong byte is
 # being refused by the wrong rule.
 REJECT_AT = {
     "hunk without file lines": len("diff --git a/x b/x\n"),
-    # The `/` of `/dev/null`: a modify side may not start with `/`.
-    "creation without mode line": len("diff --git a/n.py b/n.py\n--- "),
-    "deletion without mode line": len("diff --git a/n.py b/n.py\n--- a/n.py\n+++ "),
+    "context line in body": len(_W + "@@ -0,0 +1,2 @@\n+x = 1\n"),
+    "removal line in body": len(_W + "@@ -0,0 +1,2 @@\n+x = 1\n"),
+    # The `2` where the anchor's literal `1` is required.
+    "anchor past line 1": len(_W + "@@ -0,0 +"),
+    # The `1` where the original side's literal `0,0` is required.
+    "original side not empty": len(_W + "@@ -"),
+    # The `@` where only a new `diff --git ` section may begin.
+    "second hunk in one write": len(_W + "@@ -0,0 +1 @@\n+x = 1\n"),
+    # The `a` of `a/n.py`: a write's original side must be `/dev/null`, and
+    # a delete must announce itself with `deleted file mode` first.
+    "deletion without mode line": len("diff --git a/n.py b/n.py\n--- "),
+    "write to /dev/null": len("diff --git a/n.py b/n.py\n--- /dev/null\n+++ "),
+    "delete from /dev/null": len("diff --git a/n.py b/n.py\ndeleted file mode 100644\n--- "),
 }
 
 # Valid prefixes the grammar must refuse to END on.
 MUST_NOT_STOP = {
     "header only": "diff --git a/n.py b/n.py\n",
-    "header no hunk": "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n",
+    "write without anchor": _W,
+    "anchor without body": _W + "@@ -0,0 +1,2 @@\n",
 }
 
 MUST_STOP = {
-    "complete diff": (
-        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    "complete write": _W + "@@ -0,0 +1 @@\n+x = 2\n",
+    "complete delete": (
+        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n"
     ),
 }
 
 SYNTHETIC = {
-    "_rename": (
-        "diff --git a/old.py b/new.py\nsimilarity index 95%\nrename from old.py\n"
-        "rename to new.py\n--- a/old.py\n+++ b/new.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    "_write": _W + "@@ -0,0 +1,2 @@\n+x = 1\n+y = 2\n",
+    # git spells a one-line new side without the comma.
+    "_write_single_line_anchor": _W + "@@ -0,0 +1 @@\n+x = 1\n",
+    "_write_blank_line": _W + "@@ -0,0 +1,3 @@\n+x = 1\n+\n+y = 2\n",
+    "_write_noeol": (_W + "@@ -0,0 +1 @@\n+x = 1\n\\ No newline at end of file\n"),
+    # Metadata git emits on a creation stays legal, and a write may carry
+    # `new file mode` -- it is simply no longer required (T6-62/A1).
+    "_write_with_meta": (
+        "diff --git a/new.py b/new.py\nnew file mode 100644\n"
+        "index 0000000..e69de29\n--- /dev/null\n+++ b/new.py\n"
+        "@@ -0,0 +1,2 @@\n+x = 1\n+y = 2\n"
     ),
-    "_mode": (
-        "diff --git a/s.sh b/s.sh\nold mode 100644\nnew mode 100755\n"
-        "--- a/s.sh\n+++ b/s.sh\n@@ -1 +1 @@\n-echo a\n+echo b\n"
-    ),
-    "_nonewline": (
-        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n"
-        "-x = 1\n\\ No newline at end of file\n+x = 2\n"
+    "_two_files": (
+        _W + "@@ -0,0 +1 @@\n+x = 1\n"
+        "diff --git a/m.py b/m.py\n--- /dev/null\n+++ b/m.py\n"
+        "@@ -0,0 +1 @@\n+y = 2\n"
     ),
     "_delete": (
-        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n"
-        "--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x = 1\n-y = 2\n"
+        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n"
     ),
-    # T6-32: the creation shape git itself emits, mode then index then /dev/null.
-    "_create": (
-        "diff --git a/new.py b/new.py\nnew file mode 100644\nindex 0000000..e69de29\n"
-        "--- /dev/null\n+++ b/new.py\n@@ -0,0 +1,2 @@\n+x = 1\n+y = 2\n"
+    "_rename_as_delete_and_write": (
+        "diff --git a/old.py b/old.py\ndeleted file mode 100644\n"
+        "--- a/old.py\n+++ /dev/null\n"
+        "diff --git a/new.py b/new.py\n--- /dev/null\n+++ b/new.py\n"
+        "@@ -0,0 +1 @@\n+x = 1\n"
     ),
 }
+
+
+def write_section(path: str, content: str) -> str:
+    """*content* as the envelope spells it: one write section, whole file.
+
+    This is the encoder the corpus is built with and the exact inverse of
+    `slice.whole_file_reconstruction`, which is the decoder the run uses.
+    """
+    lines = content.split("\n")
+    tail = ""
+    if lines and lines[-1] == "":
+        lines.pop()
+    else:
+        tail = "\\ No newline at end of file\n"
+    body = "".join(f"+{line}\n" for line in lines)
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- /dev/null\n+++ b/{path}\n"
+        f"@@ -0,0 +1,{len(lines)} @@\n{body}{tail}"
+    )
 
 
 def _repo_grammar() -> str:
@@ -118,31 +173,41 @@ def _repo_grammar() -> str:
     return str(DIFF_GRAMMAR)
 
 
-def build_cases(commits: int = 40) -> dict[str, Any]:
+def build_cases(commits: int = 40, *, max_bytes: int = 1_500_000) -> dict[str, Any]:
     """The corpus plus the grammar it is checked against.
+
+    The admit half is every distinct blob this repo wrote in its last
+    *commits* commits, each rendered as a write section. Real content is
+    the point: `vllm.py` carries the grammar's own backslashes, `slice.py`
+    carries regexes, and the docs carry unicode. If the envelope can spell
+    those it can spell what a worker emits.
 
     The grammar travels inside the cases file so that `--run` compiles
     exactly the text this checkout has, with no import of `saddle` in the
     container.
     """
-    shas = subprocess.run(
-        ["git", "log", "--format=%H", f"-{commits}"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
+
+    def git(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(args, cwd=REPO, capture_output=True, text=True, check=False)
+
+    shas = git(["git", "log", "--format=%H", f"-{commits}"]).stdout.split()
     cases = dict(SYNTHETIC)
+    seen: set[str] = set()
+    total = 0
     for sha in shas:
-        diff = subprocess.run(
-            ["git", "show", sha, "--format=", "--no-color"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        if diff.strip():
-            cases[sha[:8]] = diff
+        names = git(["git", "show", "--name-only", "--format=", sha]).stdout.split("\n")
+        for name in (n for n in names if n.strip()):
+            blob = git(["git", "rev-parse", f"{sha}:{name}"])
+            if blob.returncode != 0 or blob.stdout.strip() in seen:
+                continue
+            seen.add(blob.stdout.strip())
+            shown = git(["git", "show", f"{sha}:{name}"])
+            if shown.returncode != 0 or not shown.stdout:
+                continue
+            if total + len(shown.stdout) > max_bytes:
+                continue
+            total += len(shown.stdout)
+            cases[f"{sha[:8]}:{name}"] = write_section(name, shown.stdout)
     return {
         "grammar": _repo_grammar(),
         "admit": cases,
@@ -154,7 +219,7 @@ def build_cases(commits: int = 40) -> dict[str, Any]:
 
 
 def emit(commits: int = 40) -> None:
-    """Write the corpus: this repo's own diffs plus the awkward constructs."""
+    """Write the corpus: this repo's own files plus the awkward constructs."""
     print(json.dumps(build_cases(commits)))
 
 
