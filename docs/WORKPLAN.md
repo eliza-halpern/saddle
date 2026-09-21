@@ -195,6 +195,7 @@ So:
 T6-62 (emission: 53% of live failures; round 3i's deciding node spent
        two of three attempts on envelope shape while carrying
        oracle-correct code) ──► the next seed
+       A1a landed `e7d3039`; A1b and A2 wait on a run that reads it
 T6-61 (stride; decided) ──► any seed read as evidence about the 85% threshold
 T6-63 (detail wording; independent, small) ──► nothing
 T6-64 (the unappealable test spec) ──► closes only on a completed run,
@@ -7238,7 +7239,7 @@ reports the true failing one. Contract mutants: revert to the prefix;
 force the step to 1; take the tail. Cap value stays `Literal[100]`; this
 changes *which* mutants, never how many.
 
-### T6-62 — A whole-file diff the ladder rejects is recoverable (decided: A1 + A2, with C first)
+### T6-62 — A whole-file diff the ladder rejects is recoverable (decided: A1 + A2, with C first; A1a landed `e7d3039`)
 
 Files: `src/saddle/slice.py` (`_apply_diff`, `_APPLY_MODES`),
 `tests/test_slice.py` (`test_apply_diff_that_does_not_match_the_tree_raises`).
@@ -7366,6 +7367,42 @@ rather than avoiding it.
 **T6-62/A1 — the whole-file envelope.** The worker grammar,
 `vllm.propose_diff`, `_apply_diff`'s callers, the brief, and the
 diff-shaped fixtures. Not the gates.
+
+**A1a LANDED `e7d3039`** — the grammar, `_payload_sections`,
+`_resolved_target`, `_write_files`, the brief and the repair prompt, the
+checker corpus, and the fixtures. Directions and mutant verdicts are in
+the commit. Three hazards the block above had not priced were found and
+closed with a known-bad each: a **repeated path** (`root ::= section+`
+admits the same file twice — b-s1 emitted nine `fees.py` sections, which
+a diff caught for free and a write would not), a **path outside the
+tree** (`git apply` refused an absolute or climbing path for nothing),
+and a **section with no contents** (a header with no anchor writes an
+EMPTY file — a silent deletion of everything it held). A fourth, a
+context or removal line in a body, is refused rather than skipped: the
+`+` lines alone are the additions without the rest of the file.
+
+The grammar cannot constrain the path that matters: `header ::= "diff
+--git " line` leaves it unconstrained and the path that reaches the
+filesystem comes from that header, so every check on the path itself has
+to live in `_write_files`. A grammar mutant that let `path` start with
+`/` first **SURVIVED**, and the survival was the finding — under the new
+grammar `path` appears only on decorative lines. Two known-bads (a write
+to `/dev/null`, a delete from `/dev/null`) made the corpus able to see
+it; it then died, 40/40 → 42/42.
+
+**A1a owes the container grammar check.** `DIFF_GRAMMAR`'s own comment
+says any edit here must re-run it, and it runs through `docker cp` and
+`docker exec` against the protected vLLM container — which the handoff
+rules reserve to the user. The local pre-check is 42/42 on **xgrammar
+0.2.7**, and that instrument was validated first by reproducing the old
+grammar's known-good result (56/56); the container's version is unknown,
+so the local run is evidence and not the check.
+
+**A1b — the dead ladder, deferred until a run confirms A1a.**
+`_apply_diff` is now defined but uncalled from `src`. It goes, with the
+five-rung ladder, `_APPLY_MODES`, `_reanchor_blank_lines` and their
+~20 tests. The `_APPLY_MODES` correction below is moot if A1b lands
+first; it is not moot if A1a is reverted.
 
 **T6-62/A2 — a write may not silently revert this node's earlier work.**
 Retries are cumulative by design: "Attempts 2..N keep the ref: a
