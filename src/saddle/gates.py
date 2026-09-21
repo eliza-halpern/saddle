@@ -324,7 +324,14 @@ def check_changed_line_coverage(
     covered: set[tuple[str, int]],
     minimum: float,
 ) -> GateCheck:
-    """Every changed line must be executed; `minimum` is the node threshold."""
+    """Every changed line must be executed; `minimum` is the node threshold.
+
+    `detail` is routed to the worker by `format_attempt_failure`, so it
+    names the lines no test runs and carries no ratio (T6-44). A
+    percentage is satisfiable by a call that runs the line and asserts
+    nothing; the lines themselves are the evidence. The counts stay in
+    `basis`, which is sealed rather than worker-facing.
+    """
     if not changed:
         return GateCheck(
             name="coverage", passed=True, detail="no changed lines", basis="changed-lines=0"
@@ -336,13 +343,13 @@ def check_changed_line_coverage(
         return GateCheck(
             name="coverage",
             passed=False,
-            detail=f"{percent:.1f}% < {minimum:.1f}%: uncovered {gaps}",
+            detail=f"no test runs {gaps}",
             basis=f"changed-lines={len(changed)}",
         )
     return GateCheck(
         name="coverage",
         passed=True,
-        detail=f"{percent:.1f}% >= {minimum:.1f}%",
+        detail="every changed line runs",
         basis=f"changed-lines={len(changed)}",
     )
 
@@ -458,8 +465,11 @@ def check_dead_additions(
     repetition is an emission phenomenon -- the reasoning ends coherently
     and the duplication begins in the content tokens after it. The
     worker's prompt states the requirement behaviourally already ("every
-    changed line must be executed by the new tests") and that phrasing did
-    not help, because execution is a proxy under any wording.
+    changed line must be executed by the new tests" -- the rule as it then
+    stood; T6-44 has since replaced it with the mutation form) and that
+    phrasing did not help, because execution is a proxy under any wording.
+    The emitted docstrings paraphrase that very line, which is why it
+    changed and why this check does not rely on the change.
 
     So this check does not read intent and does not count lines: it asks
     whether anything depends on what the node added, in `keep_candidate`'s

@@ -446,7 +446,8 @@ Rules:
 - Keep new code ruff-clean: double quotes, 4-space indent,
   two blank lines between top-level definitions, final newline, no unused imports,
   sorted import blocks with stdlib, third-party, and local groups separated by blank lines.
-- Every changed line must be executed by the new tests.
+- Every behaviour you add or change needs a test that fails if that
+  behaviour changes. A test that only runs a line proves nothing about it.
 
 Output ONLY the diff, no commentary.
 """

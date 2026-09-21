@@ -208,7 +208,7 @@ def test_coverage_killer_fixture_uncovered_line_fails() -> None:
     check = check_changed_line_coverage({("node.py", 3), ("node.py", 4)}, set(), 100.0)
     assert check.passed is False
     assert check.name == "coverage"
-    assert check.detail == "0.0% < 100.0%: uncovered node.py:3, node.py:4"
+    assert check.detail == "no test runs node.py:3, node.py:4"
     assert check.basis == "changed-lines=2"
 
 
@@ -216,7 +216,7 @@ def test_coverage_full_cover_and_empty_diff_pass() -> None:
     full = check_changed_line_coverage({("node.py", 3)}, {("node.py", 3)}, 100.0)
     assert full.passed is True
     assert full.name == "coverage"
-    assert full.detail == "100.0% >= 100.0%"
+    assert full.detail == "every changed line runs"
     assert full.basis == "changed-lines=1"
     empty = check_changed_line_coverage(set(), set(), 100.0)
     assert empty.passed is True
@@ -227,15 +227,69 @@ def test_coverage_full_cover_and_empty_diff_pass() -> None:
     assert check_syntax({"n.py": "x = 1\n"}).basis is None
 
 
-def test_coverage_partial_percent_compared_to_minimum() -> None:
-    changed = {("n.py", 1), ("n.py", 2), ("n.py", 3)}
-    check = check_changed_line_coverage(changed, {("n.py", 1), ("n.py", 2)}, 67.0)
+def test_coverage_detail_names_the_lines_and_carries_no_ratio() -> None:
+    """T6-44: `detail` is routed to the worker, so it states behaviour.
+
+    Known-bad: `0.0% < 100.0%: uncovered node.py:3` reaching the worker.
+    A percentage is satisfiable by a call that runs the line and asserts
+    nothing, which is what round 3e's n2 attempt 1 wrote sixty times.
+    The lines are the evidence; the ratio is a number to optimise. The
+    ratio stays in `basis`, which is sealed and not worker-facing.
+    """
+    check = check_changed_line_coverage({("node.py", 3), ("node.py", 4)}, set(), 100.0)
     assert check.passed is False
-    assert check.detail.startswith("66.7% < 67.0%")
+    assert "%" not in check.detail
+    assert check.detail == "no test runs node.py:3, node.py:4"
+    assert check.basis == "changed-lines=2"
+
+    partial = check_changed_line_coverage(
+        {("n.py", 1), ("n.py", 2), ("n.py", 3)}, {("n.py", 1), ("n.py", 2)}, 67.0
+    )
+    assert partial.passed is False
+    assert partial.detail == "no test runs n.py:3"
+
+    full = check_changed_line_coverage({("node.py", 3)}, {("node.py", 3)}, 100.0)
+    assert full.passed is True
+    assert "%" not in full.detail
+
+
+def test_mutation_detail_keeps_its_ratio_on_purpose() -> None:
+    """T6-44 scope: the known-bad this item deliberately still admits.
+
+    Coverage is satisfiable by a no-op and its ratio is removed. Mutation
+    is not -- a `pass` body admits no mutant -- and round 3d's n2 went
+    75.3% -> 78.3% by writing real tests against this very string. If a
+    draw is ever seen inflating mutation score with mutable-but-
+    meaningless lines, this assertion is the one that must change.
+    """
+    outcome = MutationOutcome(killed=1, total=7, generated=7, survivors=("s1", "s2"))
+    check = check_mutation(outcome, 85.0)
+    assert check.passed is False
+    assert "%" in check.detail
+    assert "survived 2: s1, s2" in check.detail
+
+
+def test_coverage_partial_percent_compared_to_minimum() -> None:
+    """The ratio still decides the verdict; T6-44 only took it out of `detail`.
+
+    This used to assert the prefix `66.7% < 67.0%`, which pinned the
+    wording rather than the comparison. Two thirds covered now has to
+    fail at a minimum of 67.0 and pass at 66.0, so a mutation of the
+    comparison is visible where a mutation of the message is not.
+    """
+    changed = {("n.py", 1), ("n.py", 2), ("n.py", 3)}
+    covered = {("n.py", 1), ("n.py", 2)}
+    check = check_changed_line_coverage(changed, covered, 67.0)
+    assert check.passed is False
+    assert check.detail == "no test runs n.py:3"
+    assert check.basis == "changed-lines=3"
+    just_under = check_changed_line_coverage(changed, covered, 66.0)
+    assert just_under.passed is True
+    assert just_under.detail == "every changed line runs"
 
 
 _STRONG = MutationOutcome(killed=10, total=10, generated=10, survivors=())
-_PASSING_COVERAGE = GateCheck(name="coverage", passed=True, detail="100.0% >= 100.0%")
+_PASSING_COVERAGE = GateCheck(name="coverage", passed=True, detail="every changed line runs")
 
 
 def _red(
@@ -455,7 +509,7 @@ def test_run_tier1_all_green_passes() -> None:
         "mutation",
     ]
     by_name = {check.name: check for check in result.checks}
-    assert by_name["coverage"].detail == "100.0% >= 100.0%"
+    assert by_name["coverage"].detail == "every changed line runs"
     assert by_name["red-phase"].detail == "fail pre-change, pass post-change"
     assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
 
@@ -530,7 +584,7 @@ def test_red_phase_behaviour_preserving_node_leans_on_coverage_and_mutation() ->
 
 
 def test_red_phase_behaviour_preserving_needs_coverage() -> None:
-    failed = GateCheck(name="coverage", passed=False, detail="50.0% < 100.0%")
+    failed = GateCheck(name="coverage", passed=False, detail="no test runs n.py:2")
     check = _red(0, 0, tests_changed=False, coverage=failed)
     assert check.passed is False
     assert check.detail == "tests unchanged and coverage failed; nothing proves the change"

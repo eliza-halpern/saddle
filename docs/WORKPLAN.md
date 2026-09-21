@@ -131,8 +131,12 @@ unreachable; the sidecar scrub broke T6-27's check) → T6-36 done (the
 scrub) → T6-37 done, option (a) (pinned isolated rule set, `ruff=` and
 `ruff_rules=` sealed) → T6-38 done (`blank-lines` rung) → T6-41 done
 (the `dead-code` gate; Goal G1) → T6-42 (a repair may not delete what
-the metric measured — round 3d's repair reasoning) → T6-34 (attempt
-refs, stale comment) → round 3f, one T5
+the metric measured — round 3d's repair reasoning) → T6-44 (behaviour,
+not a ratio, in every string the worker reads; owed before round 3f) →
+T6-45 (the sealed server version is one saddle asked for) → T6-47 (an
+attempt records its reasoning effort; blocks every replay cell) → T6-46
+(the refusal path, once its discriminator is decided) → T6-34
+(attempt refs, stale comment) → round 3f, one T5
 seed (first run where the survivor round is reachable and every test
 node carries rejects; its first plan is also the `minItems` decoder
 check T6-4 owes) → T6-1 (with the reasoning read, over rounds 3-3f; row
@@ -4438,7 +4442,56 @@ Status 2026-09-20: DONE by session 35 (bench 00ac5ee; F21.11). Result:
 unanswered. Neither arm repeated anything (0 repeated bodies in all six
 responses), so the registered discriminator ("(d) has fewer than half of
 (a)'s repeated bodies") could not fire; recorded as a test that could
-not run, not a result. Side findings: 2 of 3 unconstrained outputs were
+not run, not a result. **Re-asked 2026-09-21** on the node T6-16 said it needed
+-- round 3e's n2 attempt 1, which repeats with no penalty set -- by
+replaying that attempt's retained prompt at its own three seeds and
+temperature, once with `DIFF_GRAMMAR` and once without, the two payloads
+differing in exactly one key. **Read the verdict as F21.17 in
+`../saddle-bench/runs/FINDINGS.md` before round 3f**, with the
+reproducer and raw per-draw records under
+`../saddle-bench/runs/round3e-probe/`. A grammar-implicated degeneration
+changes what T6-43 should fix (the grammar, not only the sampler) and
+what T6-38 and T6-39 should measure.
+
+**Raw result read by the main session 2026-09-21, before F21.17 is
+written.** The discriminator could not fire, for the second time and a
+new reason: **neither arm degenerated**. All six draws are clean, with
+most-repeated-line counts of 3 to 6 and 2 to 5 distinct blocks, against
+an original that repeated a 21-line block 60 times.
+
+| arm | reasoning tokens | completion | content chars | top line |
+| --- | --- | --- | --- | --- |
+| original s1 | 14 100 | 22 491 | 23 201 (diff) | x60 |
+| grammar-on s0/s1/s2 | 38 030 / 75 854 / 45 467 | 40 814 / 79 036 / 48 273 | 9 899 / 11 320 / 9 996 | x5 / x4 / x4 |
+| grammar-off s0/s1/s2 | 78 864 / 58 400 / 68 641 | 82 095 / 61 180 / 71 602 | 11 485 / 9 883 / 10 389 | x6 / x3 / x3 |
+
+So this cell says nothing about the grammar. It is not a null result for
+`DIFF_GRAMMAR`; it is a replay that did not reproduce its own baseline.
+The likely reason is on the record: the replay billed **10 627 prompt
+tokens against the original's 10 615**, so the retained prompt is not
+byte-identical to what was sent, and at temperature 0.7 over 40 000+
+reasoning tokens a 12-token prefix difference diverges completely.
+Reasoning ran three to five times the original in **both** arms, which
+tracks a different request rather than a manipulated variable.
+
+**Cause identified, and it is not the grammar.** The sidecar does not
+record `reasoning_effort`, so the probe had to guess it and chose
+`xhigh`. Resending the retained prompt at each effort against the live
+server bills 10 615 at `low`, 10 585 at `medium` and 10 627 at `xhigh`,
+so the original attempt ran at **`low`** and the replay ran at `xhigh`.
+The retained prompt is byte-exact; the effort was the uncontrolled
+variable, and it accounts for both the twelve tokens and the three-to-
+fivefold reasoning. That is T6-47.
+
+Two consequences. First, no cell built on replay is interpretable until
+T6-47 lands. Second, for T6-43: a repetition penalty
+cannot be measured against a phenomenon that appeared in 2 of 3 draws
+once and 0 of 6 on a near-replay. The base rate has to be established
+over many draws first, or the penalty's effect is unfalsifiable. This
+does not weaken Goal G1's three-seed floor -- G1 asks for agreement
+between gates and oracle per run, not for a reproducible draw -- but it
+does say a degenerate emission is a probabilistic event, which is the
+spread the floor exists to cover. Side findings: 2 of 3 unconstrained outputs were
 markdown-fenced and unappliable (the grammar earns its keep on form);
 the grammar permits unbounded repetition at `section+` and `hline+`, and
 the only degeneration seen used both, but always under the penalty, so
@@ -5451,6 +5504,197 @@ duplicate. Note the interaction with T6-39: the 186 264-char draw also
 dominates the attempt's wall.
 Owner: main session. Measure first -- the penalty is a decode change and
 one seed cannot separate it from the 3x wall spread (goal clause 3).
+The measurement is T6-16's re-ask, reported as F21.17; read it before
+choosing a lever, because if the grammar is implicated then a sampler
+penalty is the wrong fix and `DIFF_GRAMMAR`'s unbounded `section+` and
+`hline+` are the right one.
+
+### T6-44 — A requirement states a behaviour, and a gate detail names no ratio (tightened)
+
+Files: `src/saddle/cli.py` (the worker rules block, ~449),
+`src/saddle/gates.py` (`check_coverage`, `check_mutation` details),
+`tests/test_cli.py`, `tests/test_gates.py`.
+
+Goal G1: "State the behaviour, never the number." Two strings carry
+numbers to the worker. The standing rule is `- Every changed line must
+be executed by the new tests.` (cli.py:449, the prompt's only use of
+"executed"), and the coverage verdict is
+`f"{percent:.1f}% < {minimum:.1f}%: uncovered {gaps}"` (gates.py:339),
+routed to the worker since T6-31.
+
+Round 3e n2 attempt 1 is the evidence, and it is narrower than it first
+looked. That attempt carried no failure brief, so the worker never saw a
+percentage; the 47,586 characters of reasoning name no gate, no metric
+and none of the emitted helpers, and end `Let me finalize and write the
+diff.` The implementation is correct and terminates properly on its
+`__all__` line. What follows it is a docstring that paraphrases the
+standing rule -- "Placeholder to satisfy the requirement that every
+changed line is executed by tests" -- and then a second, `Ensure all
+code paths in this module are reachable from tests`. So the rule, not
+the verdict, is what the emission read literally. Both are in scope: the
+verdict is what a *retry* reads, and T6-31 now delivers it.
+
+The rewrite is not a rewording of execution. Execution is a proxy under
+any phrasing and `_noop()` satisfies it; the non-gameable form is
+mutation -- a line is exercised when a test fails if its behaviour
+changes, and `pass` admits no mutant. So the rule states that, and the
+coverage detail names the statement it is about and drops the ratio.
+
+Contract: the coverage gate's `detail` -- the field
+`format_attempt_failure` routes to the worker -- names the lines no test
+runs and carries no ratio, and the standing rule states the mutation
+form. `basis` is sealed evidence rather than worker-facing text and
+keeps its counts. Direction: tightened. Known-good: a coverage failure
+whose detail names `node.py:3, node.py:4` and no percentage. Known-bad:
+a detail carrying `0.0% < 100.0%` reaches the worker, and the standing
+rule asking for lines to be executed. Mutant: restore the percentage
+into the detail -> the known-bad red.
+
+**Scope narrowed on evidence, 2026-09-21, and here is what that admits.**
+The first draft of this item said *no* worker-facing string carries a
+ratio, which would also strip `14.3% < 85.0%: survived 6: ...` from the
+mutation gate. That is now deliberately left in place, and the admitted
+known-bad is exactly that string still reaching the worker. The reason
+is the goal's own test -- "only the second is satisfiable by a no-op".
+Coverage is: `_noop()` raises it. Mutation is not: a `pass` body admits
+no mutant, so filler cannot move the number. And round 3d is measured
+evidence that the mutation number produces the right behaviour, where
+n2's two attempts went 75.3% -> 78.3% by writing real tests, while the
+coverage percentage in round 3e produced the 1334-line file. Strip the
+one that rewards filler; keep the one the worker has been seen using
+honestly. If a later round shows a draw inflating mutation score by
+adding mutable-but-meaningless lines, this narrowing is wrong and the
+item reopens. Owner: main session;
+owed before round 3f, because the brief reaches the worker on every
+retry. Pairs with T6-46 (the refusal path), which is the other half of
+Goal G1's instruction on wording: a rule the worker cannot satisfy
+honestly needs somewhere to go that is not a fabricated satisfaction.
+
+---
+
+### T6-45 — The sealed server version is one saddle actually asked for (tightened)
+
+Files: `src/saddle/vllm.py` (`server_version`), `tests/test_vllm.py`.
+
+Found 2026-09-21 against the live server. `DEFAULT_BASE_URL` is
+`http://127.0.0.1:18020/v1`, and `server_version` issues
+`self._client.get("/version")` against it, which resolves to
+`/v1/version`. vLLM serves its version at the **root**, not under `/v1`:
+
+| request | authenticated | keyless |
+| --- | --- | --- |
+| `/version` | 200 `{"version":"0.28.0"}` | 200 |
+| `/v1/version` | 404 `{"detail":"Not Found"}` | 401 |
+
+`served_version` then catches `VllmRequestError` and returns `"unknown"`
+(cli.py:624), whose docstring reads "`unknown` when it will not say".
+The server says. Saddle asks the wrong URL and records the answer as a
+refusal, so T6-27's sealed version can never be anything but `unknown`
+with the default base URL, and the swallow makes that look deliberate.
+This is the T6-37 failure shape exactly: a setting sealed as a value
+nobody obtained.
+
+Contract: the version request is made against the server root, and a
+version the server does supply is sealed verbatim. Direction: tightened.
+Known-good: a client whose base URL ends `/v1` seals `0.28.0`.
+Known-bad: the same client seals `unknown` while the server answers 200
+at its root. Mutant: restore the `/v1`-relative path -> the known-good
+red. Also worth deciding, not assumed: whether `served_version` should
+keep swallowing at all, since a 404 and a server that has no version
+endpoint are different facts and only one is `unknown`. Owner: main
+session; small, and independent of round 3f.
+
+---
+
+### T6-46 — A node may refuse a requirement instead of faking it (loosening, with evidence)
+
+Files: `src/saddle/cli.py` (the worker rules block and the node brief),
+`src/saddle/slice.py` (attempt outcome), `tests/test_slice.py`.
+
+Goal G1, verbatim: "Give an honest way out, and say it is not penalised:
+if a requirement cannot be satisfied without code that exists only to
+satisfy a gate, say so and stop. A recorded refusal naming the
+requirement beats a passing artifact that does not implement it, and is
+not a failed attempt. Much gaming comes from failure being unavailable:
+in round 3e the worker's options were produce something, or burn the
+attempt."
+
+That reading is supported by the round-3e draw. The attempt had no
+failure brief and its reasoning names no gate, so nothing in it was
+aiming at a metric; what it did was satisfy a rule it could not satisfy
+honestly, in the only currency it had. The worker had no way to say
+"this rule asks for something that is not an implementation".
+
+Contract: an attempt may end in a third outcome beside sealed and
+failed -- `refused`, carrying the requirement id and the worker's
+sentence -- and a refusal is not counted as a failed attempt against
+the retry budget. Direction: loosening of "an attempt either seals or
+fails", and it needs the loosening rule's proof before it lands: a
+recorded case where refusing was the correct move. Round 3e's n2 attempt
+1 is a candidate and not yet proof, because the honest move there was to
+write the implementation and stop at `__all__`, which is what the first
+part of the emission actually did.
+
+Open question to settle before implementing, not after: a refusal the
+harness cannot verify is a cheaper exit than the work, and T6-45's
+mechanism-vacuity rule applies -- what stops every hard node from
+refusing? Candidate answer: a refusal is only admissible when the node's
+own tests are red and the worker names a requirement id the plan
+assigned to it, so it is a claim about the spec that a human reads, not
+a way to pass. Owner: main session, after T6-44. Do not implement the
+outcome before the discriminator is decided.
+
+---
+
+### T6-47 — An attempt records the reasoning effort it ran at (tightened)
+
+Files: `src/saddle/vllm.py` (`propose_diff`'s retained record),
+`src/saddle/slice.py` (the sidecar), `tests/test_slice.py`.
+
+The sidecar retains prompt, seed, temperature and `max_tokens`. It does
+not retain `reasoning_effort`, and that field changes both the request
+and the emission, so no attempt can be replayed from its own record.
+
+Found by refutation, which is worth keeping in the item. The grammar
+cell's replay billed 10 627 prompt tokens against the attempt's 10 615,
+and the first reading here was that the retained prompt was not the sent
+bytes. Measured against the live server, resending that exact retained
+string at each effort:
+
+| `reasoning_effort` | `prompt_tokens` |
+| --- | --- |
+| low | **10 615** -- the original attempt |
+| medium | 10 585 |
+| xhigh | 10 627 -- the replay |
+
+(`zero` and `high` are rejected by this server; the accepted set is
+`low`, `medium`, `xhigh`.) So the retained prompt is byte-exact and the
+earlier reading was wrong. The effort is the uncontrolled variable: the
+cell replayed a `low` attempt at `xhigh`, which is why reasoning ran
+14 100 tokens originally and 38 030 to 78 864 on replay.
+
+Contract: an attempt's sidecar records the `reasoning_effort` of the
+request, and a replay built from the sidecar bills the attempt's own
+`prompt_tokens`. Direction: tightened. Known-good: a recorded attempt
+resent from its own sidecar bills its own `prompt_tokens`. Known-bad:
+the current sidecar, from which the only way to pick an effort is to
+guess. Mutant: drop the field from the retained record -> the known-good
+red. Owner: main session; blocks T6-16 and any re-ask of T6-43, because
+neither is interpretable while the replay cannot reproduce its baseline.
+
+**Second finding, a hypothesis and not a result.** That node ran at
+`low`. The planner's own instruction (cli.py, `reasoning_budget`) is to
+"reserve medium/xhigh for complex algorithmic nodes", and this node
+wrote three modules with per-currency rounding. At `low` it degenerated
+in 2 of 3 draws; at `xhigh` it did not degenerate in 6. That is
+uncontrolled -- different n, one prompt, no repetition -- and it is not
+evidence that effort causes the degeneration. It is enough to say the
+next cell should vary effort rather than the grammar, and that T6-43
+should not buy a sampler penalty before that is run. Note also that the
+planner chose `low` for this node, so if effort matters the lever may be
+the planner's budget assignment, not the sampler.
+
+---
 
 ### T6-39 — `_best_of_samples` scores candidates as they arrive (wall)
 Files: `src/saddle/slice.py`. `list(pool.map(...))` blocks on the

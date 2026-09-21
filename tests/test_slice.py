@@ -365,7 +365,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # node's own baseline (T2-2a), so it is not in ruff's changed-file scope.
     assert "- Gate ruff: PASS (1 file(s) clean)\n" in result.transcript
     assert "- Gate tests: PASS ('pytest test_n.py' exited 0)\n" in result.transcript
-    assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
+    assert "- Gate coverage: PASS (every changed line runs)\n" in result.transcript
     assert "- Gate red-phase: PASS (fail pre-change, pass post-change)\n" in result.transcript
     assert "- Gate requirement-binding: PASS (1 requirement(s) bound)\n" in result.transcript
     assert "- Gate mutation: PASS (100.0% >= 85.0% over 5 mutant(s))\n" in result.transcript
@@ -3062,7 +3062,7 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     when `n2` runs, `n1`'s proven edit to `n.py` is still staged. Gated
     against `HEAD` -- the default every caller took before this -- `n2`
     failed `target-scope` ("touched file(s) outside target_files: n.py"),
-    `coverage` (0.0%, uncovered `n.py:2`) and `red-phase` on work that was
+    `coverage` (no test runs `n.py:2`) and `red-phase` on work that was
     already proven. Gated against a snapshot of the tree `n2` started
     from, its diff is `m.py` and nothing else.
     """
@@ -3097,7 +3097,7 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     # Against `HEAD` the first sample would score `target-scope` red.
     assert calls == ["n1"] * PROPOSAL_SAMPLES + ["n2"] * PROPOSAL_SAMPLES
     assert "- Gate target-scope: PASS (1 touched file(s) within 1 target(s))\n" in result.transcript
-    assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
+    assert "- Gate coverage: PASS (every changed line runs)\n" in result.transcript
     spans = read_spans(journal)
     run = [span for span in spans if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
@@ -3834,7 +3834,7 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path:
         "- Gate tests: PASS ('pytest test_n.py test_REQ-001_r1_s0.py' exited 0)\n"
         in result.transcript
     )
-    assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
+    assert "- Gate coverage: PASS (every changed line runs)\n" in result.transcript
     assert verify_journal(journal) == []
 
 
