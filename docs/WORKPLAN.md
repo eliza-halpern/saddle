@@ -7040,6 +7040,48 @@ The gate is right about those and `n1`'s tests are thin. This item does
 not touch them, and must not be closed by a threshold move: after it, a
 node whose tests miss those fifteen still fails.
 
+**Status: LANDED `796ce4b`, but NOT as written above — the evidence
+redirected it.** Keep the reasoning above as the record of what was
+proposed; the premise it rests on is false.
+
+`text_only_mutant` is a *shape* test and cannot be more. Whether a
+string's contents are constrained is a property of the task, not of the
+code: t5's rule 1 requires the `ValueError` message to name all three
+currencies, and a string literal can equally be a currency code or a
+`Decimal` exponent. Round 3h classified `currency == "XXJPYXX"` and
+`Decimal("XX1XX")` as text-only and the suite killed both; nineteen
+mutants the suite killed were being dropped for being unkillable
+(F21.32). Dropping a kill removes it from *both* sides of the ratio, so
+the node was penalised for having a suite that works.
+
+Widening the rule by spelling would have made this worse:
+`TypeError("msg")` → `None` and `_quantize(value, currency)` → `None` are
+the **same mutmut operator**, and the second is a real behaviour change
+that survived in this very draw.
+
+What landed instead: `mutation_sample` consults `text_only_mutant` **only
+for survivors**. A killed mutant of any shape is evidence the suite
+discriminates and stays in the population. T6-33's purpose is unchanged —
+round 3d's 34 message survivors stay excluded. It costs no wall time:
+`mutmut run` has already decided every mutant when the exclusion is
+applied.
+
+Direction: **loosening**, with the proof the contract was wrong that
+CLAUDE.md requires. Known-bad it now admits, per §0.6: a test pinning
+exact message wording can earn kill credit, which T6-33 declined to give.
+Bounded by the string literals on changed lines; behavioural survivors
+still decide the ratio.
+
+Contract mutants: dropping the `verdict == "survived" and` guard → DIED
+(known-good red); `==` → `!=` → DIED (both halves red, plus the
+pre-existing population test).
+
+Measured on round 3h's `n2`, same tree and node: **83.5% < 85.0% FAIL →
+85.0% >= 85.0% PASS**, 85 killed of 100 against 76 of 91 (F21.33
+confirmation). The "not in scope" paragraph above still holds — the
+fifteen real gaps are untouched, and a node whose tests miss them still
+fails.
+
 ### T6-60 — The dead-code gate's known-bad half covers both degeneration shapes (no contract change)
 
 Files: `tests/test_gates.py`, `tests/fixtures/`.
@@ -7080,6 +7122,42 @@ degenerate draws on record, only the frozen fixture ever reached a gate;
 the other three died at patch application with corrupt diffs. The gate's
 behaviour on the all-distinct shape has never been exercised by a real
 artifact and would not be noticed if it regressed.
+
+**Status: LANDED `8d23465`** (tests only, no production change). Built
+around the suite's verdict rather than the name's shape, which is the
+gate's real discriminator: `run_without → 0` rejects
+(`dead-definitions=50`), `run_without → 1` accepts
+(`dead-candidates=50`). A first draft keyed on whether the helpers were
+*called* and was wrong — `elsewhere` skips the editing file, so same-file
+mentions do not exempt a private name.
+
+---
+
+### T6-61 — The mutation sample's cap decides the verdict once the population exceeds it (open)
+
+Files: `src/saddle/evidence.py` (`mutation_sample`), `tests/test_evidence.py`.
+
+`mutation_sample` takes `sample = scoped[:max_mutants]` — the first
+`max_mutants` mutants in mutmut's name order. Before T6-59, round 3h's
+`n2` scoped to 91 mutants against a cap of 100 and the cap never bound.
+After T6-59 the population is at least 100, the cap binds, and **the
+verdict depends on which 100 the name-sort keeps**. Name order tracks
+file and function order, so the slice is not a random sample of the
+node's behaviour: a node whose alphabetically-early functions are well
+tested and whose late ones are not scores higher than the reverse.
+
+This is a pre-existing property of the design, documented in the
+docstring ("sampled to `max_mutants` by name"). T6-59 did not create it;
+it made it bind. No test shows the verdict is capable of varying with the
+slice, which is exactly the vacuity rule's concern — a mechanism must be
+able to do what it reports.
+
+Not a threshold move and must not be closed as one. Before more seeds are
+read as evidence about the 85% threshold, this needs either a sampling
+rule that is defensible when the cap binds, or a recorded demonstration
+that the cap does not change the verdict on the draws in hand. Round 3h's
+`n2` passes at **exactly** 85.0%, so the margin is zero and the slice is
+load-bearing today, not hypothetically.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 

@@ -1713,7 +1713,7 @@ def _fixture_tree(name: str) -> tuple[dict[str, str], dict[str, set[int]]]:
 def test_dead_additions_rejects_the_round3e_repeated_block() -> None:
     """The real artifact: nine of eleven gates passed it (F21.16 §1).
 
-    `fees.py` grew from 41 lines to 1334 by repeating one 21-line block,
+    `fees.py` grew from 41 lines to 1337 by repeating one 21-line block,
     and mutation still read 88.8% over 80 mutants because a `pass` body
     admits no mutant while importing the module executes it. Nothing in
     the tree mentions any of those names, and the suite does not notice

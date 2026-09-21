@@ -655,7 +655,7 @@ def check_dead_additions(
     """Code nothing depends on is not an implementation (T6-41).
 
     Round 3e's n2 attempt 1 emitted a 21-line block sixty times, taking
-    `fees.py` from 41 lines to 1334, and nine of eleven gates passed it --
+    `fees.py` from 41 lines to 1337, and nine of eleven gates passed it --
     mutation included, at 88.8% over 80 mutants, because a `pass` body
     admits no mutant and so never enters the population, while importing
     the module executes it and satisfies coverage.
