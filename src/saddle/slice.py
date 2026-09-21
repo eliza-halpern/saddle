@@ -9,8 +9,11 @@ graphs ride the same path.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
+import json
+import re
 import shlex
 import shutil
 import tempfile
@@ -27,14 +30,23 @@ from typing import Any, Final
 from saddle.dag import Dag, ExecutionConstraints, Node, planned_requirement_ids
 from saddle.evidence import (
     CapturedRun,
+    changed_lines,
+    covered_lines,
+    drop_test_caches,
     git_changed_files,
+    git_diff,
+    mutation_sample,
     proven_ref,
+    pytest_scope,
     restore_baseline,
     run_argv,
     run_shell,
+    run_shell_capture,
     run_stdin_capture,
     snapshot_baseline,
     snapshot_tree,
+    statement_lines,
+    under_coverage,
 )
 from saddle.gates import SHELL_TIMEOUT, GateCheck, Tier1Result
 from saddle.journal import (
@@ -44,6 +56,7 @@ from saddle.journal import (
     append_plan,
     append_record,
     append_span,
+    attempt_sidecar_path,
     build_from_gate,
     build_plan,
     build_span,
@@ -56,20 +69,45 @@ from saddle.journal import (
     verify_journal,
     write_attempt_sidecar,
 )
-from saddle.runner import run_node_gate
+from saddle.runner import read_sources, run_node_gate
 from saddle.scheduler import Proof, schedule
+from saddle.survivors import (
+    CandidateRun,
+    CandidateRunner,
+    build_survivor_brief,
+    candidate_test_path,
+    enclosing_functions,
+    keep_candidate,
+    stubbed_sandbox,
+)
 from saddle.transcript import NodeTranscript, RunTranscript, render_transcript
 from saddle.vllm import DiffProposal, VllmResponseError
 
 
 class NodeGateFailedError(Exception):
-    """A node worker failed its Tier-1 gate; carries the verdict."""
+    """A node worker failed its Tier-1 gate; carries the verdict.
 
-    def __init__(self, result: Tier1Result, attempts: int = 1, failure: str | None = None) -> None:
+    `applied` is every diff the node's attempts applied, in order, and
+    `baseline` the ref they applied onto (T6-29c): the tree the gate
+    judged is restored before this leaves `_run_node`, and a survivor
+    round has to rebuild it to judge candidate tests against it.
+    """
+
+    def __init__(
+        self,
+        result: Tier1Result,
+        attempts: int = 1,
+        failure: str | None = None,
+        *,
+        applied: Sequence[str] = (),
+        baseline: str | None = None,
+    ) -> None:
         super().__init__(f"node {result.node_id!r} failed its Tier-1 gate")
         self.result = result
         self.attempts = attempts
         self.failure = failure
+        self.applied = tuple(applied)
+        self.baseline = baseline
 
 
 class NodeUnappliableError(RuntimeError):
@@ -811,7 +849,9 @@ async def _run_node(
             if exc.result is None:
                 detail = f"identical diff re-proposed after {exc.attempts} non-applying attempt(s)"
                 raise NodeUnappliableError(node.id, detail, exc.attempts, exc.failure) from exc
-            raise NodeGateFailedError(exc.result, exc.attempts, exc.failure) from exc
+            raise NodeGateFailedError(
+                exc.result, exc.attempts, exc.failure, applied=applied, baseline=baseline
+            ) from exc
         except BaseException as exc:
             ctx.prompt_hash = ctx.prompt_hash or _prompt_hash(
                 str(_call_evidence(exc).get("prompt", ""))
@@ -839,7 +879,7 @@ async def _run_node(
     if last_result is None:
         detail = f"no proposed diff applied in {attempt} attempts"
         raise NodeUnappliableError(node.id, detail, attempt, failure)
-    raise NodeGateFailedError(last_result, attempt, failure)
+    raise NodeGateFailedError(last_result, attempt, failure, applied=applied, baseline=baseline)
 
 
 def splice_replan(
@@ -1030,6 +1070,372 @@ def _seed_proofs(
     return proofs, "; ".join(decided) if candidates else None, reused
 
 
+# --- T6-29c: survivor-driven test node ---------------------------------------
+
+TestDrawer = Callable[[Node, str, int], DiffProposal]
+"""Draw one candidate test file for a node from a brief, at a seed (T6-29c)."""
+
+SURVIVOR_SAMPLES: Final = 10
+"""Candidate draws per survivor round (T6-29a's k); `run_slice` takes it as a parameter."""
+
+SURVIVOR_ROUNDS: Final = 2
+"""Survivor rounds per failed node's lineage: a third is never started."""
+
+SURVIVOR_GATES: Final = frozenset({"coverage", "mutation"})
+"""The gates a new test can answer; a node failing any other gate retries as before."""
+
+_TOP_LEVEL_START = re.compile(r"^(?:async def |def |class |@)")
+
+
+def _created_file(diff: str) -> tuple[str, str] | None:
+    """(path, text) of a diff that creates exactly one file; None otherwise.
+
+    The cardinality bound the brief states (one section, one hunk): a
+    draw that modifies a file, creates two, or carries context lines is
+    not one new test file, and only the created text is kept -- the path
+    the worker chose is replaced by the round's own (`_candidate_path`).
+    """
+    lines = diff.splitlines()
+    if sum(line.startswith("diff --git ") for line in lines) != 1 or not lines[0].startswith(
+        "diff --git "
+    ):
+        return None
+    hunk = next((i for i, line in enumerate(lines) if line.startswith("@@ ")), None)
+    if hunk is None:
+        return None
+    head = lines[1:hunk]
+    target = next((line.removeprefix("+++ b/") for line in head if line.startswith("+++ b/")), None)
+    if (
+        target is None
+        or "--- /dev/null" not in head
+        or not any(line.startswith("new file mode ") for line in head)
+    ):
+        return None
+    body = lines[hunk + 1 :]
+    if any(not line.startswith(("+", "\\")) for line in body):
+        return None
+    return target, "".join(f"{line[1:]}\n" for line in body if line.startswith("+"))
+
+
+def _cut_to_last_test(source: str) -> str | None:
+    """`source` cut back to its last complete top-level definition.
+
+    F21.14: a capped draw stops mid-function, and a syntax error must not
+    score as "fails against the stub". The longest prefix ending at a
+    top-level `def`, `class` or decorator that parses is kept, provided
+    it still holds a test function; a file that never parses, or parses
+    without one, yields None and the draw is dropped as unparseable.
+    """
+    lines = source.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if _TOP_LEVEL_START.match(line)]
+    for cut in (len(lines), *reversed(starts)):
+        text = "".join(lines[:cut]).rstrip("\n") + "\n"
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        has_test = any(
+            isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef)
+            and statement.name.startswith("test_")
+            for statement in tree.body
+        )
+        return text if has_test else None
+    return None
+
+
+def _create_diff(path: str, source: str) -> str:
+    """A creation diff for `source` at `path`, in the shape the grammar admits (T6-32)."""
+    lines = source.splitlines()
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        f"+++ b/{path}\n"
+        f"@@ -0,0 +1,{len(lines)} @@\n" + "".join(f"+{line}\n" for line in lines)
+    )
+
+
+def _candidate_path(node: Node, round_no: int, seed: int) -> str:
+    """Where a round's candidate lands: beside the node's declared tests.
+
+    T6-29b names candidates `tests/test_<req>_s<seed>.py`; the directory
+    follows the first test file the node's gate command runs, so a flat
+    suite's candidate imports what that suite imports. The round is part
+    of the name: a second round's files never collide with the first's.
+    """
+    scope = [
+        arg for arg in pytest_scope(node.deterministic_gate.test_command) if arg.endswith(".py")
+    ]
+    directory = PurePosixPath(scope[0]).parent if scope else PurePosixPath("tests")
+    name = PurePosixPath(candidate_test_path(f"{node.requirement_ids[0]}_r{round_no}", seed)).name
+    return (directory / name).as_posix()
+
+
+def _sealed_test_names(
+    journal_path: Path,
+    dag: Dag,
+    proofs: Mapping[str, str],
+    workdir: Path,
+    *,
+    exclude: Collection[str] = (),
+) -> set[str]:
+    """Every identifier the test files sealed test nodes of this run wrote.
+
+    The sidecars of a proven test node's attempts retain its diffs
+    (T6-27); the files those diffs created or changed, as they stand in
+    the worktree, are the run's own specification. A gap inside a
+    function one of them names is that specification's miss, not a hole
+    no test was ever asked to fill, and the node retries as before.
+    `exclude` names the test nodes survivor rounds themselves spliced:
+    a second round is judged against the retry's own gap, not barred by
+    the first round's file naming the same function.
+    """
+    test_nodes = {
+        node.id
+        for node in dag.nodes
+        if node.kind == "test" and node.id in proofs and node.id not in exclude
+    }
+    paths: set[str] = set()
+    for span in read_spans(journal_path):
+        if span.kind != "agent" or span.node_id not in test_nodes:
+            continue
+        sidecar = json.loads(attempt_sidecar_path(journal_path, span.span_id).read_text())
+        for line in str(sidecar.get("diff", "")).splitlines():
+            if line.startswith("+++ b/"):
+                paths.add(line.removeprefix("+++ b/"))
+    names: set[str] = set()
+    for rel in sorted(paths):
+        target = workdir / rel
+        if target.is_file():
+            names.update(re.findall(r"[A-Za-z_]\w*", target.read_text()))
+    return names
+
+
+def _survivor_gap(node: Node, exc: BaseException) -> bool:
+    """Whether `exc` is a coverage or mutation miss a new test could answer."""
+    if node.kind != "impl" or not isinstance(exc, NodeGateFailedError):
+        return False
+    failed = {check.name for check in exc.result.checks if not check.passed}
+    return bool(failed) and failed <= SURVIVOR_GATES and bool(exc.result.gaps)
+
+
+def _recovered_tree(workdir: Path, applied: Sequence[str], baseline: str, dest: Path) -> None:
+    """Rebuild the tree the gate judged: the node's diffs on its baseline, autofixed."""
+    shutil.copytree(workdir, dest, symlinks=True)
+    run_argv(["git", "update-index", "--refresh"], dest)
+    for diff in applied:
+        _apply_diff(dest, diff)
+    autofix(dest, baseline=baseline)
+
+
+def _candidate_runner(real_tree: Path, baseline: str, node: Node) -> CandidateRunner:
+    """T6-29b's injected runner: pytest on either tree, the sample on the real one.
+
+    The candidate file alone runs under coverage; against `real_tree` a
+    green run also re-runs `mutation_sample` over the node's changed
+    lines with pytest scoped to that file, under the node's own ceiling,
+    so the survivors it still reports are the ones the candidate failed
+    to kill. The stub tree contributes its exit code and nothing else.
+    """
+    sources = read_sources(real_tree, "*.py")
+    statements = {
+        (str(real_tree / rel), number)
+        for rel, source in sources.items()
+        for number in statement_lines(source)
+    }
+    changed = {
+        (str(real_tree / path), line) for path, line in changed_lines(git_diff(real_tree, baseline))
+    } & statements
+    changed_files = sorted({path for path, _ in changed})
+    ceiling = node.deterministic_gate.mutation_sample.max_mutants
+
+    def run(tree: Path, candidate: str) -> CandidateRun:
+        drop_test_caches(tree)
+        data_file = str(tree / ".coverage.candidate")
+        ran = run_shell_capture(under_coverage(f"pytest {candidate}", data_file), tree)
+        if ran.exit_code != 0 or tree != real_tree:
+            return CandidateRun(exit_code=ran.exit_code)
+        covered = covered_lines(data_file, changed_files)
+        tests = read_sources(tree, "test_*.py") | read_sources(tree, "*_test.py")
+        outcome = mutation_sample(tree, changed, ceiling, test_files=tests, run_tests=(candidate,))
+        return CandidateRun(
+            exit_code=0, survivors=outcome.survivors, covered=tuple(sorted(covered))
+        )
+
+    return run
+
+
+def _survivor_round(
+    node: Node,
+    exc: NodeGateFailedError,
+    *,
+    workdir: Path,
+    journal_path: Path,
+    run_span_id: str,
+    draw: TestDrawer,
+    samples: int,
+    round_no: int,
+    requirements_text: Mapping[str, str],
+    sealed_names: Collection[str],
+) -> tuple[Dag, DiffProposal] | None:
+    """One survivor round: brief, draw k, filter, and plan the splice.
+
+    The tree the gate judged is rebuilt in a scratch copy and stubbed
+    (T6-29b); the brief names the untested functions and the modules'
+    signatures, never their bodies. k draws go out together, each with
+    its own seed, and are judged in seed order: a draw that is not one
+    created file, does not parse (cut back to its last complete test
+    first), cites no requirement, or repeats an earlier draw is dropped
+    before anything runs; the rest pass through `keep_candidate`. A
+    candidate red on the real tree is dropped and recorded, never handed
+    to the impl node as a brief (F21.14: three of ten such draws were
+    simply wrong). Every verdict is journaled as one `survivor-tests`
+    tool span under the failed node.
+
+    Returns the replacement subgraph -- a `test` node scoped to the kept
+    files, then the impl node again with those files in its gate's
+    scope -- and the union diff the test node applies, or None when
+    nothing was kept or the gap sits in a function a sealed test of
+    this run already names.
+    """
+    baseline = exc.baseline
+    assert baseline is not None  # `_survivor_gap` admits gate failures only
+    start = perf_counter()
+    with tempfile.TemporaryDirectory(prefix="saddle-survivor-") as tmp:
+        real = Path(tmp) / "real"
+        _recovered_tree(workdir, exc.applied, baseline, real)
+        gaps_rel = [
+            (Path(path).relative_to(workdir).as_posix(), line) for path, line in exc.result.gaps
+        ]
+        functions = enclosing_functions(real, (), gaps_rel, baseline=baseline)
+        if any(
+            name.rpartition(".")[2] in sealed_names
+            for names in functions.values()
+            for name in names
+        ):
+            return None
+        stub = stubbed_sandbox(real, sorted(functions))
+        try:
+            stubs = {rel: (stub / rel).read_text() for rel in sorted(functions)}
+            conventions = read_sources(real, "test_*.py") | read_sources(real, "*_test.py")
+            named = _candidate_path(node, round_no, 0)
+            brief = build_survivor_brief(node, requirements_text, stubs, functions, conventions) + (
+                f"\nCardinality: one section, one hunk: a single diff creating {named}.\n"
+            )
+
+            def one(seed: int) -> DiffProposal | VllmResponseError:
+                try:
+                    return draw(node, brief, seed)
+                except VllmResponseError as error:
+                    return error
+
+            with ThreadPoolExecutor(max_workers=samples) as pool:
+                draws = list(pool.map(one, range(samples)))
+            gaps_real = tuple((str(real / rel), line) for rel, line in gaps_rel)
+            runner = _candidate_runner(real, baseline, node)
+            kept: list[tuple[str, str]] = []
+            seen: dict[str, int] = {}
+            verdicts: list[str] = []
+            for seed, outcome in enumerate(draws):
+                path = _candidate_path(node, round_no, seed)
+                verdict = _judge_candidate(
+                    outcome, path, seen, seed, node, stub, real, exc, gaps_real, runner
+                )
+                if verdict[0] == "kept":
+                    kept.append((path, verdict[2]))
+                verdicts.append(f"s{seed}: {verdict[0]}: {verdict[1]}")
+        finally:
+            shutil.rmtree(stub, ignore_errors=True)
+    SpanRecorder(path=journal_path, node_id=node.id, parent_id=run_span_id).record(
+        argv=[
+            "survivor-tests",
+            node.id,
+            f"round={round_no}",
+            f"drawn={samples}",
+            f"kept={len(kept)}",
+            f"dropped={samples - len(kept)}",
+        ],
+        duration_ms=_elapsed_ms(start),
+        exit_code=0 if kept else 1,
+        detail="; ".join(verdicts),
+        name="survivor-tests",
+    )
+    if not kept:
+        return None
+    paths = [path for path, _ in kept]
+    gate = node.deterministic_gate
+    constraints = node.execution_constraints
+    tests_node = node.model_copy(
+        update={
+            "id": "tests",
+            "kind": "test",
+            "dependencies": [],
+            "task_prompt": brief,
+            "target_files": paths,
+            "deterministic_gate": gate.model_copy(
+                update={"test_command": "pytest " + " ".join(paths)}
+            ),
+            "execution_constraints": constraints.model_copy(
+                update={"allowed_tools": sorted({*constraints.allowed_tools, "write_file"})}
+            ),
+        }
+    )
+    impl_node = node.model_copy(
+        update={
+            "id": "impl",
+            "dependencies": ["tests"],
+            "deterministic_gate": gate.model_copy(
+                update={"test_command": f"{gate.test_command} {' '.join(paths)}"}
+            ),
+        }
+    )
+    union = "".join(_create_diff(path, source) for path, source in kept)
+    return Dag(nodes=[tests_node, impl_node]), DiffProposal(union, "")
+
+
+def _judge_candidate(
+    outcome: DiffProposal | VllmResponseError,
+    path: str,
+    seen: dict[str, int],
+    seed: int,
+    node: Node,
+    stub: Path,
+    real: Path,
+    exc: NodeGateFailedError,
+    gaps_real: tuple[tuple[str, int], ...],
+    runner: CandidateRunner,
+) -> tuple[str, str, str]:
+    """(decision, detail, source) for one draw; parse-first, then T6-29b's filters."""
+    if isinstance(outcome, VllmResponseError):
+        return "dropped", f"worker call failed: {outcome}", ""
+    created = _created_file(outcome.diff)
+    if created is None:
+        return "dropped", "not one created file", ""
+    source = _cut_to_last_test(created[1])
+    if source is None:
+        return "dropped", "does not parse", ""
+    if not any(rid in source for rid in node.requirement_ids):
+        return "dropped", "cites no requirement id", ""
+    earlier = seen.get(source)
+    if earlier is not None:
+        return "dropped", f"identical to sample {earlier}", ""
+    seen[source] = seed
+    for tree in (stub, real):
+        (tree / path).parent.mkdir(parents=True, exist_ok=True)
+        (tree / path).write_text(source)
+    verdict = keep_candidate(stub, real, path, exc.result.survivors, gaps_real, run=runner)
+    for tree in (stub, real):
+        (tree / path).unlink()
+    if verdict.decision == "kept":
+        return "kept", verdict.detail, source
+    return "dropped", verdict.detail, ""
+
+
+def _prepared(proposal: DiffProposal) -> Proposer:
+    """A proposer that answers every draw with the diff a survivor round kept."""
+    return lambda _node, _failure, _seed: proposal
+
+
 def _schedule_until_done(
     dag: Dag,
     *,
@@ -1041,6 +1447,8 @@ def _schedule_until_done(
     run_span_id: str,
     task_hash: str,
     deadline: _Deadline | None = None,
+    survivor_draw: TestDrawer | None = None,
+    survivor_samples: int = SURVIVOR_SAMPLES,
 ) -> tuple[Dag, dict[str, BaseException], set[str], bool]:
     """Run the schedule/replan loop until no node can progress further.
 
@@ -1056,6 +1464,17 @@ def _schedule_until_done(
     generated: set[str] = set()
     ever_failed: dict[str, BaseException] = {}
     deadline_hit = False
+    # Survivor rounds (T6-29c): the diff each spliced test node applies,
+    # which original node a retried impl node descends from, and how many
+    # rounds that lineage has had.
+    prepared: dict[str, DiffProposal] = {}
+    roots: dict[str, str] = {}
+    rounds: dict[str, int] = {}
+    requirements_text = {
+        requirement.id: requirement.statement
+        for node in dag.nodes
+        for requirement in node.requirements
+    }
 
     async def worker(node: Node, _constraints: ExecutionConstraints) -> Proof:
         if deadline is not None and not deadline.room_for_node():
@@ -1072,7 +1491,7 @@ def _schedule_until_done(
                 original,
                 workdir,
                 journal_path,
-                propose,
+                _prepared(prepared[node.id]) if node.id in prepared else propose,
                 proofs,
                 run_span_id,
                 planned,
@@ -1097,20 +1516,71 @@ def _schedule_until_done(
         if deadline_hit or (deadline is not None and deadline.expired()):
             deadline_hit = True
             break
+        by_id = {node.id: node for node in remaining.nodes}
+        progressed = False  # Observed only via `not`; falsy-init mutants are equivalent.
+        recovered: set[str] = set()
+        if survivor_draw is not None:
+            sealed_names = _sealed_test_names(
+                journal_path, remaining, proofs, workdir, exclude=prepared
+            )
+            for node_id, exc in outcome.failures.items():
+                root = roots.get(node_id, node_id)
+                if (
+                    node_id in skipped
+                    or rounds.get(root, 0) >= SURVIVOR_ROUNDS
+                    or not isinstance(exc, NodeGateFailedError)
+                    or not _survivor_gap(by_id[node_id], exc)
+                ):
+                    continue
+                spliced = _survivor_round(
+                    by_id[node_id],
+                    exc,
+                    workdir=workdir,
+                    journal_path=journal_path,
+                    run_span_id=run_span_id,
+                    draw=survivor_draw,
+                    samples=survivor_samples,
+                    round_no=rounds.get(root, 0) + 1,
+                    requirements_text=requirements_text,
+                    sealed_names=sealed_names,
+                )
+                if spliced is None:
+                    continue
+                new, proposal = spliced
+                taken = {record.node_id for record in read_records(journal_path)}
+                remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
+                by_new = {node.id: node for node in remaining.nodes}
+                append_plan(
+                    journal_path,
+                    build_plan(
+                        [by_new[gen] for gen in gen_ids], task_hash=task_hash, replaces=node_id
+                    ),
+                )
+                tests_id, impl_id = gen_ids
+                prepared[tests_id] = proposal
+                roots[impl_id] = root
+                rounds[root] = rounds.get(root, 0) + 1
+                # Replaced, like a replanned node: its failure is excused
+                # and the verdict rests on the nodes that stand in for it.
+                recovered.add(node_id)
+                replanned_from.add(node_id)
+                generated.update(gen_ids)
+                progressed = True
         if replan is None:
-            break
+            if not progressed:
+                break
+            continue
         eligible: dict[str, NodeGateFailedError | NodeUnappliableError] = {}
         for node_id, exc in outcome.failures.items():
             if (
                 isinstance(exc, (NodeGateFailedError, NodeUnappliableError))
                 and node_id not in replanned_from
                 and node_id not in generated
+                and node_id not in recovered
             ):
                 eligible[node_id] = exc
-        if not eligible:
+        if not eligible and not progressed:
             break
-        by_id = {node.id: node for node in remaining.nodes}
-        progressed = False  # Observed only via `not`; falsy-init mutants are equivalent.
         for node_id, exc in eligible.items():
             try:
                 new = replan(by_id[node_id], format_replan_history(node_id, exc))
@@ -1265,6 +1735,8 @@ def run_slice(
     deadline_s: float | None = None,
     clock: Callable[[], float] = perf_counter,
     settings: Mapping[str, str] | None = None,
+    survivor_draw: TestDrawer | None = None,
+    survivor_samples: int = SURVIVOR_SAMPLES,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
@@ -1283,6 +1755,15 @@ def run_slice(
 
     When `replan` is given, each exhausted node recompiles once into a
     replacement subgraph; replanned nodes that fail again stay failed.
+
+    With `survivor_draw` (T6-29c), an impl node that fails only coverage
+    or mutation is first answered with tests rather than a retry: k =
+    `survivor_samples` candidate test files are drawn from a brief that
+    names the untested functions and the modules' signatures, filtered
+    (`saddle.survivors`), and the kept ones become a `test` node the
+    impl node then retries behind, at most SURVIVOR_ROUNDS times per
+    node. A gap inside a function a sealed test node of this run already
+    names, or a failure on any other gate, retries and replans as before.
 
     Every node is gated by its own scoped `test_command`; nothing checks
     the union of their diffs until `merge_command` runs, once, unscoped,
@@ -1354,6 +1835,8 @@ def run_slice(
         run_span_id=run_span_id,
         task_hash=task_hash,
         deadline=deadline,
+        survivor_draw=survivor_draw,
+        survivor_samples=survivor_samples,
     )
     merge_exit, merge_ran = _merge_gate(
         merge_command,

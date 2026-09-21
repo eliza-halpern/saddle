@@ -557,6 +557,10 @@ class MutationOutcome:
     # derived from a requirement can kill one without pinning wording, so
     # they leave the population and are counted here instead.
     text_only: int = 0
+    # Where each survivor sits (T6-29c): the changed lines its removed hunk
+    # lines matched, spelled as the caller spelled `changed`, so a recovery
+    # can name the enclosing function without re-running the engine.
+    survivor_lines: tuple[tuple[str, int], ...] = ()
 
 
 def _is_given(decorator: ast.expr) -> bool:
@@ -759,9 +763,11 @@ def mutation_sample(
         return MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut not on PATH",))
     root = os.path.realpath(workdir)
     by_line: dict[str, set[int]] = {}
+    spelled: dict[str, str] = {}
     for path, line in changed:
         key = os.path.relpath(os.path.realpath(path), root)
         by_line.setdefault(key, set()).add(line)
+        spelled.setdefault(key, path)
     tests = set(test_files)
     with tempfile.TemporaryDirectory(prefix="saddle-mutation-") as tmp:
         scratch = Path(tmp)
@@ -796,7 +802,7 @@ def mutation_sample(
             )
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)
-        scoped: list[tuple[str, str]] = []
+        scoped: list[tuple[str, str, str, set[int]]] = []
         undecided = 0
         text_only = 0
         for name in sorted(verdicts):
@@ -818,21 +824,31 @@ def mutation_sample(
             target = scratch / rel
             if not target.is_file():
                 continue
-            if not _mutant_lines(shown.stdout, target.read_text()) & lines:
+            hit = _mutant_lines(shown.stdout, target.read_text()) & lines
+            if not hit:
                 continue
             if text_only_mutant(shown.stdout):
                 text_only += 1
                 continue
-            scoped.append((name, verdict))
+            scoped.append((name, verdict, key, hit))
     sample = scoped[:max_mutants]
-    killed = sum(1 for _, verdict in sample if verdict in ("killed", "timeout"))
-    survivors = tuple(name for name, verdict in sample if verdict == "survived")
+    killed = sum(1 for _, verdict, _, _ in sample if verdict in ("killed", "timeout"))
+    survivors = tuple(name for name, verdict, _, _ in sample if verdict == "survived")
+    survivor_lines = sorted(
+        {
+            (spelled[key], line)
+            for _, verdict, key, hit in sample
+            if verdict == "survived"
+            for line in hit
+        }
+    )
     return MutationOutcome(
         killed=killed,
         total=len(sample),
         generated=len(scoped) + undecided,
         survivors=survivors,
         text_only=text_only,
+        survivor_lines=tuple(survivor_lines),
     )
 
 

@@ -45,6 +45,7 @@ from saddle.cli import (
     run_verify,
     served_version,
     server_context_window,
+    survivor_drawer,
     worker_max_tokens,
 )
 from saddle.dag import DIFF_OVERHEAD_TOKENS, TOKENS_PER_LINE, Dag, Node
@@ -63,7 +64,7 @@ from saddle.journal import (
     read_spans,
     write_attempt_sidecar,
 )
-from saddle.slice import PROPOSAL_SAMPLES, format_attempt_failure
+from saddle.slice import PROPOSAL_SAMPLES, SURVIVOR_SAMPLES, format_attempt_failure
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -1401,6 +1402,8 @@ def test_run_parser_defaults_and_overrides() -> None:
         "deadline": None,
         "reasoning_effort": "medium",
         "worker_effort": None,
+        "survivor_effort": "low",
+        "survivor_samples": SURVIVOR_SAMPLES,
         "yes": False,
     }
     full = parser.parse_args(
@@ -1443,6 +1446,8 @@ def test_run_parser_defaults_and_overrides() -> None:
         "deadline": None,
         "reasoning_effort": "low",
         "worker_effort": "xhigh",
+        "survivor_effort": "low",
+        "survivor_samples": SURVIVOR_SAMPLES,
         "yes": True,
     }
 
@@ -1464,7 +1469,9 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--recovery-temperature RECOVERY_TEMPERATURE]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  [--worker-effort {none,low,medium,xhigh}]\n"
-        "                  [--deadline DEADLINE] [--yes]\n"
+        "                  [--deadline DEADLINE]\n"
+        "                  [--survivor-effort {none,low,medium,xhigh}]\n"
+        "                  [--survivor-samples SURVIVOR_SAMPLES] [--yes]\n"
         "                  task\n"
         "\n"
         "positional arguments:\n"
@@ -1495,6 +1502,10 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                        Worker effort override (default: per-node budget).\n"
         "  --deadline DEADLINE   Seconds after which no node or attempt starts; the run\n"
         "                        seals what it has (exit 3).\n"
+        "  --survivor-effort {none,low,medium,xhigh}\n"
+        "                        Effort for survivor-round test draws.\n"
+        "  --survivor-samples SURVIVOR_SAMPLES\n"
+        "                        Candidate test draws per survivor round.\n"
         "  --yes                 Skip the plan confirmation.\n"
     )
 
@@ -2832,6 +2843,8 @@ def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> Non
         "recovery_temperature=0.7",
         "sample_temperature=0.7",
         "server=0.28.0",
+        "survivor_effort=low",
+        "survivor_samples=10",
         "temperature=0.0",
         "worker_effort=node budget",
     ]
@@ -2961,3 +2974,40 @@ def test_run_explain_handles_spans_without_sidecars_and_bare_sidecars(tmp_path: 
     out = io.StringIO()
     assert run_explain(journal, attempt=None, stdout=out) == 1
     assert out.getvalue().startswith("error: journal ")
+
+
+# --- T6-29c: the survivor-test drawer -----------------------------------------
+
+
+def test_survivor_drawer_runs_at_low_effort_under_the_token_cap(tmp_path: Path) -> None:
+    """Known-good (T6-29c, F21.14): a candidate test draw is one diff call
+    at the survivor effort (`low` by default), capped at the survivor token
+    budget, at the sample temperature, with its own seed."""
+    seen: list[dict[str, Any]] = []
+    client = _scripted_client([_diff_response(), _diff_response()], seen)
+    options = _options(tmp_path)
+    draw = survivor_drawer(client, options)
+    node = Node.model_validate(_node_dict())
+    proposal = draw(node, "Write ONE new test file.", 7)
+    assert proposal.diff.startswith("diff --git ")
+    (call,) = seen
+    assert call["reasoning_effort"] == "low"
+    assert call["max_tokens"] == options.survivor_max_tokens
+    assert call["temperature"] == options.sample_temperature
+    assert call["seed"] == 7
+    assert call["messages"][-1]["content"] == "Write ONE new test file."
+    # Known-bad for the defaults: both knobs are options, not constants.
+    other = survivor_drawer(
+        client, _options(tmp_path, survivor_effort="none", survivor_max_tokens=99)
+    )
+    other(node, "Write ONE new test file.", 0)
+    assert (seen[1]["reasoning_effort"], seen[1]["max_tokens"]) == ("none", 99)
+
+
+def test_run_parses_the_survivor_knobs() -> None:
+    args = build_parser().parse_args(
+        ["run", "--survivor-effort", "none", "--survivor-samples", "4", "task"]
+    )
+    assert (args.survivor_effort, args.survivor_samples) == ("none", 4)
+    defaults = build_parser().parse_args(["run", "task"])
+    assert (defaults.survivor_effort, defaults.survivor_samples) == ("low", SURVIVOR_SAMPLES)

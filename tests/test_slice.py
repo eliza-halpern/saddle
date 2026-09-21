@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import os
@@ -3416,3 +3417,387 @@ def test_failed_worker_call_sidecar_keeps_the_call_the_client_attached(tmp_path:
         1800.0,
     )
     assert workers[-1].argv[3] == "prompt_sha256=" + hashlib.sha256(b"p1").hexdigest()
+
+
+# --- T6-29c: survivor-driven test node, the splice ---------------------------
+
+BRANCH_DIFF = (
+    "diff --git a/n.py b/n.py\n"
+    "--- a/n.py\n"
+    "+++ b/n.py\n"
+    "@@ -1,2 +1,4 @@\n"
+    "-def f():\n"
+    "-    return 1\n"
+    "+def f(flag=0):\n"
+    "+    if flag == 1:\n"
+    "+        return 5\n"
+    "+    return 2\n"
+)
+"""`f` grows a branch no test reaches: `test_n.py` covers lines 1, 2 and 4."""
+
+THREE_BRANCH_DIFF = (
+    "diff --git a/n.py b/n.py\n"
+    "--- a/n.py\n"
+    "+++ b/n.py\n"
+    "@@ -1,2 +1,8 @@\n"
+    "-def f():\n"
+    "-    return 1\n"
+    "+def f(flag=0):\n"
+    "+    if flag == 1:\n"
+    "+        return 5\n"
+    "+    if flag == 2:\n"
+    "+        return 7\n"
+    "+    if flag == 3:\n"
+    "+        return 9\n"
+    "+    return 2\n"
+)
+
+
+def _candidate_diff(source: str, path: str = "tests/test_REQ-001_s0.py") -> str:
+    """A creation diff the way the grammar shapes one (T6-32)."""
+    body = "".join(f"+{line}\n" for line in source.splitlines())
+    count = source.count("\n")
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        f"+++ b/{path}\n"
+        f"@@ -0,0 +1,{count} @@\n"
+        f"{body}"
+    )
+
+
+def _flag_test(flag: int, expect: int) -> str:
+    """A candidate pinning one branch, with the property a test node must state (T3-3)."""
+    return (
+        "from hypothesis import given\n"
+        "from hypothesis import strategies as st\n"
+        "\n"
+        "from n import f\n"
+        "\n"
+        "\n"
+        f"def test_f_flag_{flag}():  # REQ-001\n"
+        f"    assert f(flag={flag}) == {expect}\n"
+        "\n"
+        "\n"
+        "@given(st.integers(min_value=4))\n"
+        "def test_f_other_flags_return_two(flag):  # REQ-001\n"
+        "    assert f(flag=flag) == 2\n"
+    )
+
+
+def _survivor_span(journal: Path, node_id: str) -> SpanRecord:
+    (span,) = [
+        span
+        for span in read_spans(journal)
+        if span.name == "survivor-tests" and span.node_id == node_id
+    ]
+    return span
+
+
+def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path: Path) -> None:
+    """Known-good (T6-29c): an impl node fails coverage on a branch nothing
+    reaches; the recovery draws k test candidates from a brief that names
+    the untested function and never the code, keeps the one that is red on
+    stubs, green on the real tree and covers the gap, drops the rest with
+    a reason each, and the run seals the test node then the retried impl
+    node with the kept test in its gate's scope."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    briefs: list[tuple[str, str, int]] = []
+    candidates = {
+        0: _candidate_diff(_flag_test(1, 5)),
+        1: _candidate_diff("def test_broken(:  # REQ-001\n    pass\n"),
+        2: _candidate_diff(_flag_test(1, 6)),
+        3: _candidate_diff(_flag_test(1, 5)),
+        4: TRUNCATED,
+        5: GOOD_DIFF,
+        6: _candidate_diff(_flag_test(1, 5).replace("  # REQ-001", "")),
+    }
+
+    def draw(node: Node, brief: str, seed: int) -> DiffProposal:
+        briefs.append((node.id, brief, seed))
+        if seed == 4:
+            raise VllmResponseError(TRUNCATED)
+        return DiffProposal(candidates[seed], "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure, seed: DiffProposal(BRANCH_DIFF, ""),
+        survivor_draw=draw,
+        survivor_samples=7,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert list(result.proofs) == ["n1.r1", "n1.r2"]
+    assert sorted(seed for _, _, seed in briefs) == list(range(7))
+    assert {node_id for node_id, _, _ in briefs} == {"n1"}
+    brief = briefs[0][1]
+    assert all(other == brief for _, other, _ in briefs)
+    assert "  n.py: f\n" in brief
+    assert "  REQ-001: REQ-001 holds.\n" in brief
+    assert "one section, one hunk" in brief
+    assert "test_REQ-001_r1_s0.py" in brief
+    # The implementation's bodies never reach the brief: a worker shown
+    # `return 5` writes the test of the code (T6-29b).
+    assert "return 5" not in brief
+    assert "flag == 1" not in brief
+    span = _survivor_span(journal, "n1")
+    assert span.argv == ["survivor-tests", "n1", "round=1", "drawn=7", "kept=1", "dropped=6"]
+    assert span.exit_code == 0
+    assert "s0: kept: test_REQ-001_r1_s0.py killed 0, covered 1 line(s)" in span.detail
+    assert "s1: dropped: does not parse" in span.detail
+    assert "s2: dropped: test_REQ-001_r1_s2.py exited 1 against the real tree" in span.detail
+    assert "s3: dropped: identical to sample 0" in span.detail
+    assert f"s4: dropped: worker call failed: {TRUNCATED}" in span.detail
+    assert "s5: dropped: not one created file" in span.detail
+    assert "s6: dropped: cites no requirement id" in span.detail
+    kept = tmp_path / "test_REQ-001_r1_s0.py"
+    assert kept.read_text() == _flag_test(1, 5)
+    assert not (tmp_path / "test_REQ-001_r1_s2.py").exists()
+    plans = read_plans(journal)
+    assert [(p.replaces, [n.id for n in p.nodes]) for p in plans] == [
+        ("", ["n1"]),
+        ("n1", ["n1.r1", "n1.r2"]),
+    ]
+    assert [(n.kind, n.target_files) for n in plans[1].nodes] == [
+        ("test", ["test_REQ-001_r1_s0.py"]),
+        ("impl", []),
+    ]
+    assert "- Gate tests: PASS (red specification: 2 failing test(s))\n" in result.transcript
+    assert (
+        "- Gate tests: PASS ('pytest test_n.py test_REQ-001_r1_s0.py' exited 0)\n"
+        in result.transcript
+    )
+    assert "- Gate coverage: PASS (100.0% >= 100.0%)\n" in result.transcript
+    assert verify_journal(journal) == []
+
+
+def test_run_slice_survivor_recovery_starts_no_third_round(tmp_path: Path) -> None:
+    """Known-bad (T6-29c): two rounds per requirement. Each round's kept
+    test covers one more branch and the retried impl node still fails;
+    after the second retry nothing is drawn and the node stays failed."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    draws: list[int] = []
+    k = 3
+
+    def draw(node: Node, brief: str, seed: int) -> DiffProposal:
+        draws.append(seed)
+        branch = 1 + (len(draws) - 1) // k
+        return DiffProposal(_candidate_diff(_flag_test(branch, {1: 5, 2: 7, 3: 9}[branch])), "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure, seed: DiffProposal(THREE_BRANCH_DIFF, ""),
+        survivor_draw=draw,
+        survivor_samples=k,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False
+    assert len(draws) == 2 * k
+    # Round 2 replaces the retried node, so its ids nest under it (T3-11).
+    assert list(result.proofs) == ["n1.r1", "n1.r2.r1"]
+    assert "## Node n1.r2.r2\n" in result.transcript
+    assert "## Node n1.r2.r2.r1\n" not in result.transcript
+    assert _survivor_span(journal, "n1").argv[2] == "round=1"
+    assert _survivor_span(journal, "n1.r2").argv[2] == "round=2"
+    assert (tmp_path / "test_REQ-001_r1_s0.py").exists()
+    assert (tmp_path / "test_REQ-001_r2_s0.py").exists()
+    assert verify_journal(journal) == []
+
+
+def test_run_slice_gap_cited_by_a_sealed_test_retries_as_today(tmp_path: Path) -> None:
+    """Known-bad (T6-29c): the sealed test node `t1` wrote `test_n.py`,
+    which names `f`; `n1`'s gap is inside `f`, so nothing is drawn and the
+    node replans exactly as before."""
+    _spec_slice_repo(tmp_path)
+    spec = _node_dict("t1", [])
+    spec["kind"] = "test"
+    dag = Dag.model_validate({"nodes": [spec, _node_dict("n1", ["t1"])]})
+    journal = tmp_path / "proofs.jsonl"
+    draws: list[int] = []
+    replans: list[str] = []
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        if node.id == "t1":
+            # Attempt 1 writes an examples-only spec that fails
+            # property-coverage; attempt 2 deletes it and seals SPEC_DIFF,
+            # so a sealed sidecar names a file the worktree no longer holds.
+            return DiffProposal(DELETE_GONE + SPEC_DIFF if failure else EXAMPLES_ONLY_SPEC, "")
+        return DiffProposal(BRANCH_DIFF if node.id == "n1" else GOOD_DIFF, "")
+
+    def draw(node: Node, brief: str, seed: int) -> DiffProposal:
+        draws.append(seed)
+        return DiffProposal(_candidate_diff(_flag_test(1, 5)), "")
+
+    def replan(node: Node, history: str) -> Dag:
+        replans.append(node.id)
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    result = run_slice(
+        "Specify f, then fix it.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        replan=replan,
+        survivor_draw=draw,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert draws == []
+    assert replans == ["n1"]
+    assert list(result.proofs) == ["t1", "n1.r1"]
+    assert not (tmp_path / "test_gone.py").exists()
+
+
+EXAMPLES_ONLY_SPEC = (
+    "diff --git a/test_gone.py b/test_gone.py\n"
+    "new file mode 100644\n"
+    "--- /dev/null\n"
+    "+++ b/test_gone.py\n"
+    "@@ -0,0 +1,5 @@\n"
+    "+from n import f\n"
+    "+\n"
+    "+\n"
+    "+def test_f():  # REQ-001\n"
+    "+    assert f() == 2\n"
+)
+
+DELETE_GONE = (
+    "diff --git a/test_gone.py b/test_gone.py\n"
+    "deleted file mode 100644\n"
+    "--- a/test_gone.py\n"
+    "+++ /dev/null\n"
+    "@@ -1,5 +0,0 @@\n"
+    "-from n import f\n"
+    "-\n"
+    "-\n"
+    "-def test_f():  # REQ-001\n"
+    "-    assert f() == 2\n"
+)
+
+
+def test_run_slice_survivor_round_that_keeps_nothing_leaves_the_node_failed(
+    tmp_path: Path,
+) -> None:
+    """Known-bad (T6-29c): every draw is a plausible test that is wrong on
+    the real tree (F21.14); nothing is kept, the round is journaled with
+    exit 1, nothing is spliced and the node stays failed."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure, seed: DiffProposal(BRANCH_DIFF, ""),
+        survivor_draw=lambda node, brief, seed: DiffProposal(_candidate_diff(_flag_test(1, 6)), ""),
+        survivor_samples=2,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False
+    assert result.proofs == {}
+    span = _survivor_span(journal, "n1")
+    assert (span.exit_code, span.argv[4]) == (1, "kept=0")
+    assert [p.replaces for p in read_plans(journal)] == [""]
+    assert "## Node n1.r1\n" not in result.transcript
+
+
+def test_survivor_gap_admits_impl_gate_failures_on_coverage_or_mutation_only() -> None:
+    impl = Node.model_validate(_node_dict("n1", []))
+    spec = Node.model_validate({**_node_dict("t1", []), "kind": "test"})
+    gap = Tier1Result(
+        node_id="n1",
+        passed=False,
+        checks=(GateCheck(name="coverage", passed=False, detail="75%"),),
+        gaps=(("n.py", 3),),
+    )
+    assert slice_module._survivor_gap(impl, NodeGateFailedError(gap)) is True
+    assert slice_module._survivor_gap(spec, NodeGateFailedError(gap)) is False
+    assert slice_module._survivor_gap(impl, NodeUnappliableError("n1", "garbage")) is False
+    other = dataclasses.replace(
+        gap, checks=(*gap.checks, GateCheck(name="tests", passed=False, detail="exit 1"))
+    )
+    assert slice_module._survivor_gap(impl, NodeGateFailedError(other)) is False
+    assert (
+        slice_module._survivor_gap(impl, NodeGateFailedError(dataclasses.replace(gap, gaps=())))
+        is False
+    )
+
+
+def test_run_slice_survivor_recovery_leaves_other_gate_failures_alone(tmp_path: Path) -> None:
+    """Known-bad (T6-29c): a node that fails its tests gate is not a
+    coverage or mutation gap; nothing is drawn and it replans as today."""
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    draws: list[int] = []
+    replans: list[str] = []
+
+    def draw(node: Node, brief: str, seed: int) -> DiffProposal:
+        draws.append(seed)
+        return DiffProposal(_candidate_diff(_flag_test(1, 5)), "")
+
+    def replan(node: Node, history: str) -> Dag:
+        replans.append(node.id)
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        # `return 3` fails the tests gate and still leaves line 3 uncovered:
+        # a gap exists, and only the gate rule keeps the round from starting.
+        propose=lambda node, failure, seed: DiffProposal(
+            BRANCH_DIFF.replace("+    return 2\n", "+    return 3\n")
+            if node.id == "n1"
+            else GOOD_DIFF,
+            "",
+        ),
+        replan=replan,
+        survivor_draw=draw,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert draws == []
+    assert replans == ["n1"]
+    assert result.passed is True
+
+
+def test_created_file_reads_one_creation_and_nothing_else() -> None:
+    """Known-good: a single creation yields its path and text. Known-bad:
+    a modification, or two sections, is not one created test file."""
+    source = _flag_test(1, 5)
+    assert slice_module._created_file(_candidate_diff(source)) == (
+        "tests/test_REQ-001_s0.py",
+        source,
+    )
+    assert slice_module._created_file(GOOD_DIFF) is None
+    assert slice_module._created_file(JUNK1_DIFF + JUNK2_DIFF) is None
+    assert slice_module._created_file("") is None
+    assert slice_module._created_file("diff --git a/t.py b/t.py\nnew file mode 100644\n") is None
+    assert slice_module._created_file(JUNK1_DIFF.replace("+X = 1\n", "+X = 1\n Y = 2\n")) is None
+
+
+def test_cut_to_last_test_keeps_what_parses() -> None:
+    """Known-good: a whole file passes through; a file whose tail was cut
+    mid-function keeps every complete test before the cut. Known-bad: a
+    file with no complete test function, or one the cut leaves without
+    any, yields nothing."""
+    whole = _flag_test(1, 5)
+    assert slice_module._cut_to_last_test(whole) == whole
+    truncated = whole + "\n\ndef test_f_flag_two():  # REQ-001\n    assert f(flag=2) =="
+    assert slice_module._cut_to_last_test(truncated) == whole
+    assert slice_module._cut_to_last_test("def test_broken(:\n    pass\n") is None
+    assert slice_module._cut_to_last_test("from n import f\n\nx = (\n") is None
+    assert slice_module._cut_to_last_test("from n import f\n\n\ndef helper():\n    pass\n") is None

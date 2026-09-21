@@ -33,7 +33,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
-from saddle.slice import DEADLINE_EXIT, ReplanFailedError, run_slice
+from saddle.slice import DEADLINE_EXIT, SURVIVOR_SAMPLES, ReplanFailedError, TestDrawer, run_slice
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
 from saddle.vllm import (
@@ -146,6 +146,10 @@ class RunError(Exception):
     """Operational `run` failure with a message fit to print."""
 
 
+SURVIVOR_MAX_TOKENS: Final = 6000
+"""Token cap for one candidate test draw: one test file and its reasoning at effort `low`."""
+
+
 @dataclass(frozen=True)
 class RunOptions:
     """Resolved `run` inputs: task, repo, journal, and sampling knobs."""
@@ -166,6 +170,37 @@ class RunOptions:
     # assumption the model never moved, and nothing could have said if it had.
     model: str = DEFAULT_MODEL
     server_version: str = "unknown"
+    # Survivor rounds (T6-29c): candidate tests are drawn at their own
+    # effort and token cap, k at a time. F21.14: `none` yielded two usable
+    # drafts in ten and no kills; numeric length instructions in the brief
+    # do not land, so the cap is the harness's, not the prompt's.
+    survivor_effort: str = "low"
+    survivor_samples: int = SURVIVOR_SAMPLES
+    survivor_max_tokens: int = SURVIVOR_MAX_TOKENS
+
+
+def survivor_drawer(client: VllmClient, options: RunOptions) -> TestDrawer:
+    """The test-candidate draw a survivor round makes (T6-29c).
+
+    One grammar-constrained diff call per seed at `survivor_effort`,
+    capped at `survivor_max_tokens` (and by the window left after the
+    brief), at the sample temperature: the brief is the whole prompt,
+    and the harness cuts what the cap truncates back to the last
+    complete test before judging it.
+    """
+
+    def draw(_node: Node, brief: str, seed: int) -> DiffProposal:
+        return client.propose_diff(
+            brief,
+            max_tokens=min(
+                options.survivor_max_tokens, worker_max_tokens(brief, options.context_window)
+            ),
+            temperature=options.sample_temperature,
+            reasoning_effort=options.survivor_effort,
+            seed=seed,
+        )
+
+    return draw
 
 
 def worker_temperature(options: RunOptions, failure: str | None) -> float:
@@ -685,6 +720,8 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         "recovery_temperature": str(worker_temperature(options, "retry")),
         "reasoning_effort": options.reasoning_effort,
         "worker_effort": options.worker_effort or "node budget",
+        "survivor_effort": options.survivor_effort,
+        "survivor_samples": str(options.survivor_samples),
     }
     try:
         result = run_slice(
@@ -696,6 +733,8 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             replan=replan,
             deadline_s=options.deadline_s,
             settings=settings,
+            survivor_draw=survivor_drawer(client, options),
+            survivor_samples=options.survivor_samples,
         )
     except (ValueError, RuntimeError) as exc:
         stdout.write(f"error: {exc}\n")
@@ -1011,6 +1050,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Seconds after which no node or attempt starts; the run seals what it has (exit 3).",
     )
+    run.add_argument(
+        "--survivor-effort",
+        choices=list(REASONING_EFFORTS),
+        default="low",
+        help="Effort for survivor-round test draws.",
+    )
+    run.add_argument(
+        "--survivor-samples",
+        type=int,
+        default=SURVIVOR_SAMPLES,
+        help="Candidate test draws per survivor round.",
+    )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
@@ -1115,6 +1166,8 @@ def main(
             deadline_s=args.deadline,
             model=args.model,
             server_version=served_version(client),
+            survivor_effort=args.survivor_effort,
+            survivor_samples=args.survivor_samples,
         )
         return run_task(
             options,

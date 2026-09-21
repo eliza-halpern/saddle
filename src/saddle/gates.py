@@ -826,6 +826,12 @@ class Tier1Result:
     node_id: str
     passed: bool
     checks: tuple[GateCheck, ...]
+    # What the verdict left unpinned (T6-29c): every surviving mutant by
+    # name, and every changed line no test executed or a survivor sits on,
+    # in the runner's own spelling. A recovery briefs a test node from
+    # these without re-running the gate that found them.
+    survivors: tuple[str, ...] = ()
+    gaps: tuple[tuple[str, int], ...] = ()
 
 
 def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
@@ -968,4 +974,11 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         if is_spec
         else check_mutation(inputs.mutation, sample.kill_threshold),
     )
-    return Tier1Result(node_id=node.id, passed=all(check.passed for check in checks), checks=checks)
+    gaps = (inputs.changed - inputs.covered) | set(inputs.mutation.survivor_lines)
+    return Tier1Result(
+        node_id=node.id,
+        passed=all(check.passed for check in checks),
+        checks=checks,
+        survivors=tuple(inputs.mutation.survivors),
+        gaps=tuple(sorted(gaps)),
+    )

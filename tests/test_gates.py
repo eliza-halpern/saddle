@@ -1273,3 +1273,32 @@ def test_mutation_detail_reports_the_text_only_mutants_left_out() -> None:
             MutationOutcome(killed=9, total=10, generated=10, survivors=("s1",)), 85.0
         ).detail
     )
+
+
+# --- T6-29c: the verdict carries the gap it found ---------------------------
+
+
+def test_run_tier1_result_names_the_survivors_and_the_uncovered_lines() -> None:
+    """Known-good (T6-29c): the result names every surviving mutant and
+    every changed line the tests or the mutants left unpinned, so the
+    recovery can brief a test node without re-running a gate."""
+    inputs = _passing_inputs()
+    inputs = replace(
+        inputs,
+        changed={("n1.py", 1), ("n1.py", 2)},
+        covered={("n1.py", 1)},
+        mutation=MutationOutcome(
+            killed=9, total=10, generated=10, survivors=("m1",), survivor_lines=(("n1.py", 1),)
+        ),
+    )
+    result = run_tier1(_node(kind="impl"), inputs)
+    assert result.survivors == ("m1",)
+    assert result.gaps == (("n1.py", 1), ("n1.py", 2))
+
+
+def test_run_tier1_result_reports_no_gap_when_everything_is_pinned() -> None:
+    """Known-bad for the gap: full coverage and no survivor leave nothing
+    to brief."""
+    inputs = replace(_passing_inputs(), mutation=_STRONG)
+    result = run_tier1(_node(kind="impl"), inputs)
+    assert (result.survivors, result.gaps) == ((), ())

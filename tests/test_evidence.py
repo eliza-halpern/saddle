@@ -662,9 +662,22 @@ def test_mutation_sample_filters_scopes_and_counts(
         (str(workdir / "ghost.py"), 1),
     }
     outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
-    assert outcome == MutationOutcome(killed=3, total=4, generated=6, survivors=("m_hit2",))
+    assert outcome == MutationOutcome(
+        killed=3,
+        total=4,
+        generated=6,
+        survivors=("m_hit2",),
+        # T6-29c: the survivor is located in the caller's own spelling.
+        survivor_lines=((str(workdir / "a.py"), 1),),
+    )
     sampled = mutation_sample(workdir, changed, 2, test_files={"tests/test_a.py"})
-    assert sampled == MutationOutcome(killed=1, total=2, generated=6, survivors=("m_hit2",))
+    assert sampled == MutationOutcome(
+        killed=1,
+        total=2,
+        generated=6,
+        survivors=("m_hit2",),
+        survivor_lines=((str(workdir / "a.py"), 1),),
+    )
 
 
 def test_mutmut_scratch_config_exact() -> None:
@@ -729,7 +742,13 @@ def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
     example = mutation_sample(workdir, changed, 5, test_files=tests, run_tests={"test_ex.py"})
     assert example == MutationOutcome(killed=1, total=1, generated=1, survivors=())
     prop = mutation_sample(workdir, changed, 5, test_files=tests, run_tests={"test_prop.py"})
-    assert prop == MutationOutcome(killed=0, total=1, generated=1, survivors=("n.x_f__mutmut_1",))
+    assert prop == MutationOutcome(
+        killed=0,
+        total=1,
+        generated=1,
+        survivors=("n.x_f__mutmut_1",),
+        survivor_lines=((str(workdir / "n.py"), 2),),
+    )
 
 
 def test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification(
@@ -1183,5 +1202,10 @@ def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
     changed = {(str(workdir / "a.py"), 1), (str(workdir / "a.py"), 2)}
     outcome = mutation_sample(workdir, changed, 10, test_files=set())
     assert outcome == MutationOutcome(
-        killed=1, total=2, generated=2, survivors=("m_value",), text_only=1
+        killed=1,
+        total=2,
+        generated=2,
+        survivors=("m_value",),
+        text_only=1,
+        survivor_lines=((str(workdir / "a.py"), 1),),
     )
