@@ -11,7 +11,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Final
@@ -29,7 +29,11 @@ from saddle.evidence import (
     ruff_version,
     run_argv,
 )
-from saddle.gates import plan_prescribes_deletion, plan_restates_the_gate
+from saddle.gates import (
+    plan_prescribes_deletion,
+    plan_restates_the_gate,
+    plan_retargets_reserved_files,
+)
 from saddle.journal import (
     JournalIssue,
     SpanRecord,
@@ -607,6 +611,7 @@ def _emit_valid_dag(
     temperature: float,
     reasoning_effort: str,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
+    reserved: Collection[str] = (),
 ) -> Dag:
     """Emit a DAG, feeding validation errors back (bounded recompile).
 
@@ -614,6 +619,10 @@ def _emit_valid_dag(
     impl/refactor node must declare its files and its estimated diff must
     fit the room the window leaves it (T6-8, `diff_budget`). Both come
     back to the planner as validation errors, like every other issue.
+
+    `reserved` is empty for the first plan and carries the pending nodes'
+    files for a replan (T6-65): the replan prompt states the whole task,
+    so nothing else stops a subplan re-planning a sibling's work.
     """
     prompt = build_emit_prompt(task, files)
     errors: list[str] = []
@@ -657,6 +666,15 @@ def _emit_valid_dag(
             round_errors.append(
                 "plan-restates-gate: a node description or requirement statement restates "
                 f"the coverage gate: {restated!r}. State behaviour a test can falsify."
+            )
+        # T6-65: the same redraw, for a subplan that would do a pending
+        # node's work. Naming the files is what tells the planner a
+        # sibling exists at all -- the replan prompt does not.
+        retargeted = plan_retargets_reserved_files(dag.nodes, reserved)
+        if retargeted is not None:
+            round_errors.append(
+                "plan-retargets-reserved: a replacement node takes a file another pending "
+                f"node is already to change: {retargeted}. Scope the subplan to the failed node."
             )
         if not round_errors:
             return dag
@@ -763,7 +781,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             seed=seed,
         )
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         try:
             files = git_ls_files(options.repo)
             return _emit_valid_dag(
@@ -775,6 +793,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 temperature=options.temperature,
                 reasoning_effort=options.reasoning_effort,
                 context_window=options.context_window,
+                reserved=reserved,
             )
         except RunError as exc:
             # Message unobserved: the scheduler swallows it with a bare continue.

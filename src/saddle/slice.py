@@ -33,6 +33,7 @@ from saddle.dag import (
     Node,
     pending_test_nodes,
     planned_requirement_ids,
+    reserved_target_files,
 )
 from saddle.evidence import (
     CapturedRun,
@@ -137,7 +138,10 @@ class ReplanFailedError(Exception):
 Proposer = Callable[[Node, str | None, int], DiffProposal]
 """Propose a diff for a node; `failure` carries prior-attempt evidence."""
 
-Replanner = Callable[[Node, str], Dag]
+# T6-65: the third argument is the files pending siblings still owe. The
+# replan prompt states the whole task, so without it a subplan re-plans
+# work another node already owns -- round 3i, F21.40.
+Replanner = Callable[[Node, str, Sequence[str]], Dag]
 """Re-emit a failed node's scope; history carries the failure evidence."""
 
 MAX_RECOVERY_RETRIES: Final = 2
@@ -1995,7 +1999,11 @@ def _schedule_until_done(
             break
         for node_id, exc in eligible.items():
             try:
-                new = replan(by_id[node_id], format_replan_history(node_id, exc))
+                new = replan(
+                    by_id[node_id],
+                    format_replan_history(node_id, exc),
+                    reserved_target_files(remaining, proofs, replacing=node_id),
+                )
                 taken = {record.node_id for record in read_records(journal_path)}
                 remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
             except ReplanFailedError:

@@ -247,6 +247,35 @@ def pending_test_nodes(dag: Dag, proven: Collection[str]) -> tuple[str, ...]:
     )
 
 
+def reserved_target_files(dag: Dag, proven: Collection[str], *, replacing: str) -> tuple[str, ...]:
+    """Files a still-pending node other than `replacing` declares, sorted (T6-65).
+
+    A recovery subplan replaces one failed node, and `build_replan_task`
+    hands the planner the *whole* original task: it never sees the
+    siblings. Round 3i is what that costs. `n1` was a `test` node; its
+    replacement carried `n1.r2`, an `impl` node declaring `accounts.py`
+    and `fees.py` -- `n2`'s files, byte for byte. `n1.r2` sealed, and
+    `n2` then ran against a tree where its work was already done. It
+    emitted a docstring change and failed `red-phase` and `mutation`,
+    both correctly: there was nothing left to prove (F21.40).
+
+    Two exclusions, and both are the point. The node being replaced is
+    excluded, because its own files are exactly what a replacement is
+    supposed to take over. A proven node is excluded because it will not
+    run again, so nothing it declared is still owed.
+    """
+    return tuple(
+        sorted(
+            {
+                path
+                for node in dag.nodes
+                if node.id != replacing and node.id not in proven
+                for path in node.target_files
+            }
+        )
+    )
+
+
 @dataclass(frozen=True)
 class DagIssue:
     """One machine-readable validation finding (`[]` from validate_dag is valid)."""

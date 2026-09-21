@@ -38,6 +38,7 @@ from saddle.gates import (
     introduced_findings,
     plan_prescribes_deletion,
     plan_restates_the_gate,
+    plan_retargets_reserved_files,
     run_tier1,
 )
 
@@ -2187,6 +2188,79 @@ def test_plan_prescribes_deletion_reads_only_what_the_verb_governs() -> None:
     baseline = {"m.py": "def _helper():\n    return 1\n\n\ndef api():\n    return _helper()\n"}
     plan = "1. Keep `api` but remove `_helper`.\n"
     assert plan_prescribes_deletion(plan, baseline) is None
+
+
+# --- T6-65: a subplan may not take a pending node's files --------------------
+
+
+def _targeting(node_id: str, paths: list[str]) -> Node:
+    """A node declaring `paths`, for the reserved-files predicate."""
+    return _node().model_copy(update={"id": node_id, "kind": "impl", "target_files": paths})
+
+
+def test_plan_retargets_reserved_files_catches_the_round3i_subplan() -> None:
+    """Known-bad, verbatim: `n1.r2` declared `n2`'s files while `n2` was pending.
+
+    `n1` was a `test` node; its replacement carried this `impl` node.
+    Both sealed, and `n2` then had nothing left to prove (F21.40).
+    """
+    subplan = [
+        _targeting("n1.r1", ["tests/test_accounts.py"]),
+        _targeting("n1.r2", ["accounts.py", "fees.py"]),
+    ]
+    offence = plan_retargets_reserved_files(subplan, ["accounts.py", "fees.py"])
+    assert offence == "node 'n1.r2' declares accounts.py, fees.py"
+
+
+def test_plan_retargets_reserved_files_routes_a_subplan_that_stays_clear() -> None:
+    """Known-good: the subplan `n1` should have produced -- test files only."""
+    subplan = [
+        _targeting("n1.r1", ["tests/test_accounts.py"]),
+        _targeting("n1.r2", ["tests/test_fees.py"]),
+    ]
+    assert plan_retargets_reserved_files(subplan, ["accounts.py", "fees.py"]) is None
+
+
+def test_plan_retargets_reserved_files_routes_everything_when_nothing_is_reserved() -> None:
+    """The first plan reserves nothing, so no subplan can offend against it.
+
+    `_emit_valid_dag` passes `()` on the initial emission; if this
+    returned an offence there, no run could ever start.
+    """
+    subplan = [_targeting("n1", ["accounts.py", "fees.py"])]
+    assert plan_retargets_reserved_files(subplan, ()) is None
+
+
+def test_plan_retargets_reserved_files_names_only_the_overlap() -> None:
+    """The message carries the clash, not the node's whole scope.
+
+    A subplan legitimately declares files of its own beside the one it
+    must not take, and naming those would send the planner after the
+    wrong thing.
+    """
+    subplan = [_targeting("n1.r2", ["accounts.py", "money.py"])]
+    offence = plan_retargets_reserved_files(subplan, ["accounts.py", "fees.py"])
+    assert offence == "node 'n1.r2' declares accounts.py"
+
+
+def test_plan_retargets_reserved_files_reports_the_first_offending_node() -> None:
+    """A subplan whose second node offends is still caught.
+
+    Scanning must not stop at a clean node: round 3i's offender was the
+    second of two.
+    """
+    subplan = [
+        _targeting("n1.r1", ["tests/test_accounts.py"]),
+        _targeting("n1.r2", ["fees.py"]),
+    ]
+    offence = plan_retargets_reserved_files(subplan, ["fees.py"])
+    assert offence == "node 'n1.r2' declares fees.py"
+
+
+def test_plan_retargets_reserved_files_routes_a_node_declaring_nothing() -> None:
+    """A `test` node need not declare target files, and an empty scope clashes with nothing."""
+    subplan = [_targeting("n1.r1", [])]
+    assert plan_retargets_reserved_files(subplan, ["accounts.py"]) is None
 
 
 # --- T6-58: a requirement may not restate the gate ---------------------------

@@ -18,6 +18,7 @@ import pytest
 from saddle.cli import (
     CONTENTS_WITHHELD,
     DEFAULT_CONTEXT_WINDOW,
+    EMIT_ROUNDS,
     MAX_FILES_IN_PROMPT,
     OUTPUT_MARGIN,
     PROMPT_CHARS_PER_TOKEN,
@@ -26,6 +27,7 @@ from saddle.cli import (
     DagOptions,
     RunError,
     RunOptions,
+    _emit_valid_dag,
     _ensure_repo,
     _file_lines,
     build_emit_prompt,
@@ -722,6 +724,63 @@ def test_run_task_redraws_a_plan_whose_requirement_restates_the_gate(tmp_path: P
     assert "every changed line executed by" in redraw
 
 
+def test_emit_valid_dag_redraws_a_subplan_that_takes_a_pending_node_s_file(
+    tmp_path: Path,
+) -> None:
+    """T6-65, the wiring. A predicate nothing calls protects nothing.
+
+    Round 3i's shape: the subplan replacing `n1` declares `accounts.py`,
+    which pending `n2` still owes. The first emission is refused, the
+    reason reaches the planner as a validation error naming the file,
+    and the redraw is what comes back (F21.40).
+    """
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    takes = {**_node_dict("n1.r2"), "target_files": ["accounts.py"]}
+    clear = {**_node_dict("n1.r2"), "target_files": ["n.py"]}
+    client = _scripted_client(
+        [_emit_response({"nodes": [takes]}), _emit_response({"nodes": [clear]})],
+        seen,
+    )
+    dag = _emit_valid_dag(
+        client,
+        "Replan n1.",
+        files=["n.py", "accounts.py"],
+        file_lines={"n.py": 4, "accounts.py": 4},
+        max_tokens=2048,
+        temperature=0.0,
+        reasoning_effort="low",
+        reserved=["accounts.py", "fees.py"],
+    )
+    assert [node.target_files for node in dag.nodes] == [["n.py"]]
+    redraw = _prompt(seen[1])
+    assert "plan-retargets-reserved: a replacement node takes a file another pending" in redraw
+    assert "node 'n1.r2' declares accounts.py" in redraw
+    assert "Scope the subplan to the failed node." in redraw
+    # Only the clash is named: `fees.py` is reserved but untouched here,
+    # and naming it would send the planner after the wrong file.
+    assert "fees.py" not in redraw.split("plan-retargets-reserved")[1]
+
+
+def test_emit_valid_dag_reserves_nothing_for_the_first_plan(tmp_path: Path) -> None:
+    """Known-good: the initial emission passes `()`, so a plan may declare
+    any file. If the check fired here no run could ever start."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    client = _scripted_client([_emit_response({"nodes": [_node_dict()]})], seen)
+    dag = _emit_valid_dag(
+        client,
+        "Plan it.",
+        files=["n.py"],
+        file_lines={"n.py": 4},
+        max_tokens=2048,
+        temperature=0.0,
+        reasoning_effort="low",
+    )
+    assert [node.id for node in dag.nodes] == ["n1"]
+    assert len(seen) == 1
+
+
 def test_emit_prompt_states_the_coverage_field_without_restating_it() -> None:
     """T6-58's instruction half. The bullet that taught the proxy said
     "every line you change must be executed by a test"; the planner wrote
@@ -1012,6 +1071,41 @@ def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
     assert "## Node n1\n" in out
     assert "## Node n1.r1\n" in out
     assert out.count("- Attempts: 2\n") == 1
+
+
+def test_run_task_replan_is_refused_for_taking_a_pending_node_s_file(tmp_path: Path) -> None:
+    """T6-65 end to end: the reserved set the scheduler computes reaches the planner.
+
+    The two predicates and the scheduler's call are each tested alone;
+    this pins the one link between them -- `replan` forwarding `reserved`
+    into `_emit_valid_dag`. Without it that argument is inert and round
+    3i repeats: `n2` is pending and owes `README.md`, and every replan of
+    `n1` here declares it, so each round is refused and the reason names
+    the file.
+    """
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    bad = DIFF.replace("+    return 2\n", "+    return 3\n")
+    pending = {**_node_dict("n2"), "dependencies": ["n1"], "target_files": ["README.md"]}
+    takes = {**_node_dict("n1.r1"), "target_files": ["README.md"]}
+    script = [
+        _emit_response({"nodes": [_node_dict(), pending]}),
+        _diff_response(bad),
+        _text_response("1. Change the return value.\n"),
+        _diff_response(bad),
+        # One spare: the scripted client holds a recovery diff back for the
+        # sampling fan-out, and the first replan round consumes it.
+        *[_emit_response({"nodes": [takes]}) for _ in range(EMIT_ROUNDS + 1)],
+    ]
+    client = _scripted_client(script, seen)
+    code, _out = _run(_options(tmp_path), client)
+    assert code == 1
+    replans = [_prompt(call) for call in seen if "must be re-planned" in _prompt(call)]
+    assert len(replans) == EMIT_ROUNDS
+    refusals = [text for text in replans if "plan-retargets-reserved" in text]
+    assert refusals, "the reserved set never reached the planner"
+    assert "node 'n1.r1' declares README.md" in refusals[-1]
+    assert "Scope the subplan to the failed node." in refusals[-1]
 
 
 def test_run_task_replan_emission_failure_keeps_verdict_fail(tmp_path: Path) -> None:

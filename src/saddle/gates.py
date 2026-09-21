@@ -668,6 +668,31 @@ _EXECUTED_RE: Final = re.compile(
 _RATIO_RE: Final = re.compile(r"\b\d{1,3}(?:\.\d+)?\s*%")
 
 
+def plan_retargets_reserved_files(nodes: Sequence[Node], reserved: Collection[str]) -> str | None:
+    """A subplan node declaring a file a still-pending node owns (T6-65).
+
+    Returns the offence, or `None` when the subplan stays out of the way.
+    `reserved` comes from `reserved_target_files`, which already excludes
+    the node being replaced and anything proven, so every path here is
+    work some other node is still expected to do.
+
+    This is refused at emission and REDRAWN rather than spliced and
+    reconciled later, for the reason round 3i demonstrates: by the time
+    the duplicate has sealed, the original node's work is gone and there
+    is nothing left for it to prove. Its gates then fire correctly on an
+    empty change (`tests pass pre-change; prove nothing`) and the run
+    dies of a plan nobody can see. Refusing costs one redraw; the message
+    names the files, and `_emit_valid_dag` feeds it back to the planner,
+    which is also the only way the planner ever learns a sibling exists.
+    """
+    owned = set(reserved)
+    for node in nodes:
+        clash = sorted(set(node.target_files) & owned)
+        if clash:
+            return f"node {node.id!r} declares {', '.join(clash)}"
+    return None
+
+
 def plan_restates_the_gate(nodes: Sequence[Node]) -> str | None:
     """A node description or requirement statement that restates a gate (T6-58).
 

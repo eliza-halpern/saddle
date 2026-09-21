@@ -1300,7 +1300,7 @@ def test_run_slice_replacement_starts_from_the_failed_nodes_baseline(tmp_path: P
     def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(GOOD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         assert "touched file(s) outside target_files: n.py" in history
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 
@@ -1337,7 +1337,7 @@ def test_run_slice_propose_error_seals_worker_span(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         calls.append(node.id)
         return dag
 
@@ -2195,7 +2195,7 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
         # whole fix, not a repair of `return 3`.
         return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         replans.append((node.id, history))
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 
@@ -2220,6 +2220,53 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
     assert result.transcript.count("- Attempts: 2\n") == 1
     (record,) = read_records(journal)
     assert (record.node_id, record.attempts) == ("n1.r1", 1)
+
+
+def test_run_slice_replan_is_told_which_files_a_pending_node_still_owes(
+    tmp_path: Path,
+) -> None:
+    """T6-65: the scheduler computes the reserved set and hands it to the replanner.
+
+    Round 3i's shape exactly -- `n2` depends on `n1`, `n1` fails, and
+    `n2` has therefore not run. Without this argument the replanner is
+    given the whole task and no way to know `n2` exists, and it plans
+    `n2`'s work a second time (F21.40).
+
+    The assertion is on the value, not on the call: threading a constant
+    through would satisfy a test that only checked the replanner was
+    called with three arguments.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate(
+        {
+            "nodes": [
+                {**_node_dict("n1", []), "kind": "test", "target_files": ["tests/test_f.py"]},
+                {**_node_dict("n2", ["n1"]), "target_files": ["f.py", "g.py"]},
+            ]
+        }
+    )
+    seen: list[Sequence[str]] = []
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
+
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
+        seen.append(reserved)
+        msg = "no subplan"
+        raise ReplanFailedError(msg)
+
+    run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=tmp_path / "proofs.jsonl",
+        propose=propose,
+        replan=replan,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    # `n2` is pending and owes both files; `n1` is the node being
+    # replaced, so its own file is not reserved against its replacement.
+    assert seen == [("f.py", "g.py")]
 
 
 def test_run_slice_replan_across_resume_numbers_past_sealed_ids(tmp_path: Path) -> None:
@@ -2252,7 +2299,7 @@ def test_run_slice_replan_across_resume_numbers_past_sealed_ids(tmp_path: Path) 
     def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 
     result = run_slice(
@@ -2282,7 +2329,7 @@ def test_run_slice_replanned_node_failure_stays_failed(tmp_path: Path) -> None:
         calls.append(node.id)
         return DiffProposal(BAD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         calls.append(f"replan:{node.id}")
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 
@@ -2311,7 +2358,7 @@ def test_run_slice_replan_failure_keeps_node_failed(tmp_path: Path) -> None:
     def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         msg = "emission exhausted"
         raise ReplanFailedError(msg)
 
@@ -2342,7 +2389,7 @@ def test_run_slice_replan_continues_past_failed_emission(tmp_path: Path) -> None
         # `b.r1` starts from `b`'s baseline, not from `return 3` (T3-23).
         return DiffProposal(GOOD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         calls.append(node.id)
         if node.id == "a":
             msg = "emission exhausted"
@@ -2368,7 +2415,7 @@ def test_run_slice_pass_with_replan_callback_unused(tmp_path: Path) -> None:
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     calls: list[str] = []
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         calls.append(node.id)
         return dag
 
@@ -3885,7 +3932,7 @@ def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path
     def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 
     result = run_slice(
@@ -4400,7 +4447,7 @@ def test_run_slice_gap_cited_by_a_sealed_test_retries_as_today(tmp_path: Path) -
         draws.append(seed)
         return DiffProposal(_candidate_diff(_flag_test(1, 5)), "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         replans.append(node.id)
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 
@@ -4505,7 +4552,7 @@ def test_run_slice_survivor_recovery_leaves_other_gate_failures_alone(tmp_path: 
         draws.append(seed)
         return DiffProposal(_candidate_diff(_flag_test(1, 5)), "")
 
-    def replan(node: Node, history: str) -> Dag:
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
         replans.append(node.id)
         return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
 

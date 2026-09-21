@@ -20,6 +20,7 @@ from saddle.dag import (
     emission_estimate,
     pending_test_nodes,
     planned_requirement_ids,
+    reserved_target_files,
     validate_dag,
 )
 
@@ -742,3 +743,68 @@ def test_pending_test_nodes_names_only_what_can_still_write_tests() -> None:
     assert pending_test_nodes(dag, set()) == ("n1", "n3", "n4")
     assert pending_test_nodes(dag, {"n1"}) == ("n3", "n4")
     assert pending_test_nodes(dag, {"n1", "n3", "n4"}) == ()
+
+
+def _round3i_dag() -> Dag:
+    """Round 3i's plan, with the two kinds and target files that matter."""
+    return Dag.model_validate(
+        {
+            "nodes": [
+                {
+                    **_node("n1"),
+                    "kind": "test",
+                    "target_files": ["tests/test_accounts.py", "tests/test_fees.py"],
+                },
+                {**_node("n2"), "kind": "impl", "target_files": ["accounts.py", "fees.py"]},
+                {
+                    **_node("n3"),
+                    "kind": "test",
+                    "target_files": ["tests/test_store.py"],
+                },
+                {**_node("n4"), "kind": "impl", "target_files": ["report.py", "store.py"]},
+            ]
+        }
+    )
+
+
+def test_reserved_target_files_names_what_a_pending_sibling_still_owes() -> None:
+    """T6-65, the round 3i instance. Replacing `n1` reserves `n2`'s files.
+
+    This is the fact the replanner never had: `n1.r2` declared
+    `accounts.py` and `fees.py` while `n2` was still pending, so `n2`
+    ran against a tree where its work was done (F21.40).
+    """
+    dag = _round3i_dag()
+    assert reserved_target_files(dag, set(), replacing="n1") == (
+        "accounts.py",
+        "fees.py",
+        "report.py",
+        "store.py",
+        "tests/test_store.py",
+    )
+
+
+def test_reserved_target_files_excludes_the_node_being_replaced() -> None:
+    """A replacement takes over the failed node's own files; that is its job.
+
+    Without this exclusion every replan of an `impl` node would be
+    refused for declaring the files it exists to change.
+    """
+    dag = _round3i_dag()
+    assert "accounts.py" not in reserved_target_files(dag, set(), replacing="n2")
+    assert "fees.py" not in reserved_target_files(dag, set(), replacing="n2")
+
+
+def test_reserved_target_files_excludes_proven_nodes() -> None:
+    """A proven node will not run again, so nothing it declared is still owed."""
+    dag = _round3i_dag()
+    assert reserved_target_files(dag, {"n2", "n3"}, replacing="n1") == (
+        "report.py",
+        "store.py",
+    )
+
+
+def test_reserved_target_files_is_empty_when_nothing_else_is_pending() -> None:
+    """Known-good: the last node standing reserves nothing, so any subplan passes."""
+    dag = _round3i_dag()
+    assert reserved_target_files(dag, {"n1", "n2", "n3"}, replacing="n4") == ()
