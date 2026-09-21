@@ -120,11 +120,12 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 to T6-29b, T6-3, T6-31, T6-32, T6-33 done, T6-30 withdrawn →
-T6-29c (main session) → the T6-32 corpus run in the container (user or
-executor) → round 3e, one T5 seed (first question: does n2 clear 85% over
-the behavioural population with the tests it already wrote?) → T6-1
-(with the reasoning read)
+T6-22 to T6-29c, T6-3, T6-31, T6-32, T6-33, T6-33a done, T6-30
+withdrawn (T6-33a answered round 3e's first question: n2 does not clear
+85% over the behavioural population, 82.0%, so 3e is not a rerun) →
+round 3e, one T5 seed, with `--survivor-effort low` (does a survivor
+round kill anything on a real gap; is T6-29a's 0/10 an effort effect?)
+→ T6-34 (attempt refs, ruff version) → T6-1 (with the reasoning read)
 → T6-2 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -5019,6 +5020,26 @@ that the probe showed the model honours; (e) T6-33 lands first, so the
 survivors this node is asked to kill are ones a specification can pin.
 k and effort stay parameters and round 3e measures them.
 
+**Status (2026-09-20):** DONE, `85ef057`, main session. As amended: (a) a candidate red on the real tree is
+dropped and journaled, (b) parse-first with a cut to the last complete
+test function, (c) `--survivor-effort` (default `low`) under
+`SURVIVOR_MAX_TOKENS` (6000), (d) the brief ends with the cardinality
+bound, (e) T6-33 landed first. Deviations from the original text: the
+kept files are not `tests/test_<req>_s<seed>.py` but land beside the
+first test file the node's gate command runs, as
+`test_<req>_r<round>_s<seed>.py` (a flat suite's candidate must import
+what that suite imports; the round keeps two rounds apart); `k` defaults
+to 10 as `SURVIVOR_SAMPLES` and `--survivor-samples`; the "sealed test's
+citations" rule reads a sealed test node's own files (from its attempt
+sidecars' diffs, as they stand in the worktree) for the gap function's
+name, and the recovery's own test nodes do not count. The verdict now
+carries what it left unpinned (`Tier1Result.survivors`/`gaps`,
+`MutationOutcome.survivor_lines`), so no gate is re-run to brief. Every
+round is one `survivor-tests` tool span under the failed node with one
+verdict per seed. Round 3e measures whether a `low`-effort draw kills
+anything on a real gap; T6-29a's reasoning-off result (0/10 kills)
+stands until then.
+
 ### T6-32 — A creation carries its mode line: the diff grammar's create and delete forms (tightened)
 
 Files: `src/saddle/vllm.py` (`DIFF_GRAMMAR`), `tools/diff_grammar_check.py`
@@ -5083,6 +5104,52 @@ survivors list contains no message-only mutant; known-bad: a mutant the
 probe classed behavioural is still in the population. Owner: executor.
 Before round 3e: if n2 clears the bar on its existing tests, round 3e is
 a rerun; if not, the gap is real and T6-29c closes it.
+
+**Status (2026-09-20):** DONE, bench `6773087`, session 41 (F21.15).
+Over the behavioural population n2's attempt 2 goes 78.3% -> 82.0%
+(41/50, 10 text-only mutants excluded, 9 survivors) and attempt 1 75.3%
+-> 79.5% (58/73, 12 excluded, 15 survivors); both still fail at 85%
+(attempt 2 is two kills short). Known-good and known-bad both held
+(every excluded mutant was one the probe classed text-only; every kept
+survivor was one it classed behavioural). Reconstruction reproduced
+round 3d's coverage detail, first five survivors and percentage on all
+three trees. So round 3e is not a rerun: the gap is real and T6-29c is
+what closes it. Correction to F21.14 recorded as F21.15: "66" was the
+whole-tree survivor count, not the gate's denominator (13 on attempt 2).
+The `check_mutation` comment in `src/saddle/gates.py` still says "a
+66-survivor gap"; T6-34 fixes the wording.
+
+### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
+
+Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
+`src/saddle/evidence.py` (a `refs/saddle/attempt/<node>/<n>` snapshot
+beside `proven_ref`), `src/saddle/cli.py` (`ruff --version` in the run
+settings), `src/saddle/gates.py` (the "66-survivor" comment),
+`tests/test_slice.py`, `tests/test_cli.py`.
+
+Session 41 (F21.15) had to reconstruct round 3d's attempt-1 trees from
+dangling blobs in `lost-found`, because a failed attempt leaves no ref:
+`refs/saddle/baseline/<node>` is the pre-node tree and
+`refs/saddle/proven/<slug>` exists only for a pass, so any `git gc`
+prunes what a failed attempt was graded on. And the sidecar's diff
+(T6-27) is the pre-autofix text; the tree the gates saw is that diff
+plus `ruff check --fix` and `ruff format` at a version recorded
+nowhere (two of round 3d's blobs differ only by autofix). Contract: (1)
+every attempt that reaches a gate run is snapshotted as
+`refs/saddle/attempt/<node-slug>/<n>` after autofix and before the
+gate, through `snapshot_tree`, journaled as the other snapshots are;
+(2) the run span's settings carry `ruff=<version>` from `ruff
+--version`; (3) the `check_mutation` comment says "13 survivors on the
+gate's population, 66 on the tree". Direction: tightened (more is
+retained; nothing is loosened). Known-good: a failed attempt's ref
+resolves to a tree holding the autofixed diff; the run span's argv has
+the ruff version. Known-bad: a run under the current code has no
+attempt ref for a failed node (round 3d's worktree: four refs, no
+`proven/n2`). Mutants: (1) the snapshot taken before autofix (the ref
+then differs from the gated tree); (2) the ruff version dropped from the
+settings. What this is not: committing the worktree into the bench
+(machine-local by design; the refs make the blobs durable where they
+are). Owner: main session; small; after round 3e unless 3e needs it.
 
 ### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
 
