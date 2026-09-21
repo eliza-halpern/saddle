@@ -130,18 +130,18 @@ round kill anything on a real gap; is T6-29a's 0/10 an effort effect?)
 unreachable; the sidecar scrub broke T6-27's check) → T6-36 done (the
 scrub) → T6-37 done, option (a) (pinned isolated rule set, `ruff=` and
 `ruff_rules=` sealed) → T6-38 done (`blank-lines` rung) → T6-41 done
-(the `dead-code` gate; Goal G1) → T6-42 (a repair may not delete what
-the metric measured — round 3d's repair reasoning) → T6-44 (behaviour,
-not a ratio, in every string the worker reads; owed before round 3f) →
-T6-45 (the sealed server version is one saddle asked for) → T6-47 (an
-attempt records its reasoning effort; blocks every replay cell) → T6-46
-(the refusal path, once its discriminator is decided) → T6-48 (the
-apply ladder forgives packaging; a loosening with proof, and the
-precondition for T6-43 touching the grammar) → T6-34
-(attempt refs, stale comment) → round 3f, one T5
+(the `dead-code` gate; Goal G1) → T6-42 done (a repair may not delete
+what the metric measured — round 3d's repair reasoning) → T6-44 done
+(behaviour, not a ratio, in every string the worker reads) → T6-45 done
+(the sealed server version is one saddle asked for) → T6-47 done (an
+attempt records its reasoning effort; blocks every replay cell) → T6-48
+done (the apply ladder forgives packaging; a loosening with proof, and
+the precondition for T6-43 touching the grammar) → T6-34 done (attempt
+refs, stale comment) → round 3f, one T5
 seed (first run where the survivor round is reachable and every test
 node carries rejects; its first plan is also the `minItems` decoder
-check T6-4 owes) → T6-1 (with the reasoning read, over rounds 3-3f; row
+check T6-4 owes) → T6-46 (the refusal path, once its discriminator is
+decided; not a round 3f precondition) → T6-1 (with the reasoning read, over rounds 3-3f; row
 B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39, T6-40 →
 T6-2 → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
@@ -6110,6 +6110,72 @@ then differs from the gated tree); (2) the ruff version dropped from the
 settings. What this is not: committing the worktree into the bench
 (machine-local by design; the refs make the blobs durable where they
 are). Owner: main session; small; after round 3e unless 3e needs it.
+
+**Status (2026-09-21): DONE.** All three clauses.
+
+Clause 1. `attempt_ref(node_id, attempt)` beside `proven_ref` in
+`evidence.py`, over `ATTEMPT_REF_PREFIX = "refs/saddle/attempt/"` and
+the same `_ref_slug` rule, and one `snapshot_tree` call in `_run_node`
+placed after `autofix` and before `run_node_gate`. Its tree id goes into
+the sidecar as `"tree"` on both post-gate seals -- the pass and the
+gate-failure -- so the record names the tree and the ref keeps the
+blobs. The snapshot is journaled like the other two: four more `git`
+spans (`add -u`, `write-tree`, `commit-tree`, `update-ref`) per attempt.
+
+Clause 2 was already in the tree: T6-37 landed `"ruff": ruff_version()`
+in `run_task`'s settings (`cli.py:750`), and
+`test_run_task_seals_the_runs_settings_on_the_run_span` pins it with
+`ruff_version() != "unavailable"` as the vacuity guard. Verified by
+running this item's own second mutant against it rather than taking the
+earlier commit's word: deleting the line turns the run span's argv into
+a 12-element list and the test dies on the missing `ruff=0.16.7`.
+
+Clause 3: the `check_mutation` survivor comment now carries F21.15's
+re-measurement (13 on the gate's population, 66 on the tree) and says
+why the two populations differ, instead of F21.14's order-of-magnitude
+reading of a five-name prefix.
+
+Red first. With `slice.py` reverted to HEAD and the new `evidence.py`
+helper kept (so the import resolves and the red is the contract, not a
+collection error), both new slice tests fail on `fatal: invalid object
+name 'refs/saddle/attempt/n1/1'`. Restoring `slice.py` makes them pass.
+
+Tests (3 new):
+`test_attempt_ref_names_the_node_and_the_attempt_separately`
+(`tests/test_evidence.py`) -- the attempt number is its own component,
+plus the digest fallback for an id `check-ref-format` rejects;
+`test_a_gated_attempt_leaves_a_ref_for_the_autofixed_tree_the_gate_saw`
+-- `SLOPPY_DIFF` is the one fixture whose applied text and graded text
+differ, so `git show <ref>:n.py` carrying the single space is what pins
+"after autofix", and the sidecar's `"tree"` is asserted to be that same
+tree; `test_each_attempt_of_a_node_keeps_its_own_graded_tree` -- attempt
+1 fails its gate (`return 3`), attempt 2 repairs it in place (`return
+2`), both refs resolve to different trees and each sidecar names its
+own. That last one is the vacuity guard the item's known-bad asks for:
+a ref per node rather than per attempt reports two attempts as one.
+
+Mutants, all KILLED:
+(1) the snapshot moved before `autofix` -- the ref holds `return  2`
+    and the autofix test dies on the double space;
+(2) `attempt_ref` drops the `/{attempt}` component -- the evidence test
+    dies on `refs/saddle/attempt/n2` and the per-attempt test dies
+    because `/1` no longer resolves;
+(3) the pass-path sidecar drops `"tree"` -- both slice tests die,
+    one on the key, one on `KeyError`;
+(4) the item's second mutant, `"ruff": ruff_version()` deleted from the
+    settings -- `test_run_task_seals_the_runs_settings_on_the_run_span`
+    dies (above).
+
+Two existing enumerations were extended, and neither is a flip: both
+still assert the same closed property, over a set the contract enlarges
+by exactly the item's snapshot. `test_run_slice_pass_end_to_end` pins
+the whole tool-span sequence, which is what proves the snapshot is
+journaled at all -- an unjournaled `git` call would now fail it in the
+other direction. `test_run_slice_two_nodes_are_gated_against_their_own_baselines`
+pins `for-each-ref refs/saddle/`, which is what proves no stray ref is
+written outside the three namespaces.
+
+`./check.sh`: 832 passed, 3 skipped, 100% line+branch, exit 0.
 
 ### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
 

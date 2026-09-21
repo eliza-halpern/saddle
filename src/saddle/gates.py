@@ -1272,8 +1272,14 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     required = 100.0 if small else threshold
     excluded = f"; {outcome.text_only} text-only mutant(s) excluded" if outcome.text_only else ""
     if percent < required:
-        # The count, then the first five names (F21.14 read five names as
-        # the whole set and understated a 66-survivor gap by an order).
+        # The count, then the first five names. F21.14 read five names as
+        # the whole set and called the gap an order of magnitude; F21.15
+        # re-measured it: 13 survivors on the gate's own population
+        # against 66 on the tree, so the prefix showed 5 of 13, not 5 of
+        # 66. The count is here because five names is not the set, and
+        # the two numbers are different populations -- `mutation_sample`
+        # keeps only mutants on a changed line, then slices to
+        # `max_mutants`, while the probe scored every production file.
         names = sorted(outcome.survivors)
         shown = ", ".join(names[:5]) + (", ..." if len(names) > 5 else "")
         note = f" (small sample: {outcome.total} mutant(s), all must die)" if small else ""

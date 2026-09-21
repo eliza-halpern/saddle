@@ -20,7 +20,7 @@ import pytest
 
 import saddle.slice as slice_module
 from saddle.dag import Dag, Node
-from saddle.evidence import CapturedRun, run_argv, run_capture
+from saddle.evidence import CapturedRun, attempt_ref, run_argv, run_capture
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, GateCheck, Tier1Result
 from saddle.journal import (
     GateOutput,
@@ -469,6 +469,10 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "ruff",
         "git",
         "git",
+        # T6-34: the tree the gate is about to judge -- `add -u`,
+        # `write-tree`, `commit-tree`, `update-ref` -- taken after autofix
+        # and before the gate, journaled like the other two snapshots.
+        *["git"] * 4,
         # T2-2: the staged-adds probe behind node-scope's file-creation rule.
         "git",
         # T3-2: changed-files list for target-scope.
@@ -1316,6 +1320,64 @@ def test_sampler_scores_a_candidate_the_way_the_gate_will_see_it(tmp_path: Path)
     assert [x["outcome"] for x in sealed["samples"]] == [
         "0 gate(s) failed",
         *["not evaluated: an earlier sample passed"] * (PROPOSAL_SAMPLES - 1),
+    ]
+
+
+def _tree_at(root: Path, ref: str) -> str:
+    return run_capture(["git", "rev-parse", f"{ref}^{{tree}}"], root).stdout.strip()
+
+
+def test_a_gated_attempt_leaves_a_ref_for_the_autofixed_tree_the_gate_saw(
+    tmp_path: Path,
+) -> None:
+    """T6-34 known-good. `SLOPPY_DIFF` is the one case where the applied
+    text and the graded text differ: `autofix` reformats it before the
+    gate runs. The ref holds what the gate was given, so it carries the
+    single space, and the sidecar's recorded tree is that same tree --
+    the sidecar's `diff` is the pre-autofix bytes and cannot stand in
+    for it.
+    """
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(SLOPPY_DIFF, "")
+
+    asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run", (), task_hash=""))
+    ref = attempt_ref("n1", 1)
+    shown = run_capture(["git", "show", f"{ref}:n.py"], tmp_path)
+    assert shown.exit_code == 0, shown.stderr
+    assert shown.stdout == "def f():\n    return 2\n"
+    sealed = _sidecar(journal, next(s for s in read_spans(journal) if s.name == "worker:n1"))
+    assert sealed["tree"] == _tree_at(tmp_path, ref)
+
+
+def test_each_attempt_of_a_node_keeps_its_own_graded_tree(tmp_path: Path) -> None:
+    """T6-34 known-good and vacuity guard. Attempt 1 fails its gate and
+    attempt 2 repairs it in place, so the two trees differ by the one
+    line the gate disagreed about. Both are named, both sidecars point
+    at their own, and `/1` still resolves after `/2` is written -- a ref
+    per node rather than per attempt reports the same two refs as one,
+    which is how round 3d's attempt-1 trees became `lost-found` blobs
+    (F21.15).
+    """
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(BAD_DIFF if failure is None else FIX_DIFF, "")
+
+    asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run", (), task_hash=""))
+    first, second = attempt_ref("n1", 1), attempt_ref("n1", 2)
+    assert run_capture(["git", "show", f"{first}:n.py"], tmp_path).stdout.endswith("return 3\n")
+    assert run_capture(["git", "show", f"{second}:n.py"], tmp_path).stdout.endswith("return 2\n")
+    assert _tree_at(tmp_path, first) != _tree_at(tmp_path, second)
+    workers = [s for s in read_spans(journal) if s.name == "worker:n1"]
+    assert [_sidecar(journal, span)["tree"] for span in workers] == [
+        _tree_at(tmp_path, first),
+        _tree_at(tmp_path, second),
     ]
 
 
@@ -3182,6 +3244,10 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     assert not any("HEAD" in span.argv for span in name_only)
     refs = run_capture(["git", "for-each-ref", "--format=%(refname)", "refs/saddle/"], tmp_path)
     assert refs.stdout.split() == [
+        # T6-34: the tree each attempt was graded on, numbered by attempt.
+        # Both nodes passed on attempt 1, so there is one apiece.
+        "refs/saddle/attempt/n1/1",
+        "refs/saddle/attempt/n2/1",
         "refs/saddle/baseline/n1",
         "refs/saddle/baseline/n2",
         # T3-10: one proven tree per sealed node, beside its baseline.

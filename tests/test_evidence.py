@@ -20,6 +20,7 @@ from saddle.evidence import (
     CapturedRun,
     MutationOutcome,
     _mutmut_scratch_config,
+    attempt_ref,
     changed_lines,
     covered_lines,
     drop_test_caches,
@@ -362,6 +363,20 @@ def test_snapshot_baseline_names_an_illegal_node_id_by_digest(tmp_path: Path) ->
     assert ref == f"refs/saddle/baseline/{hashlib.sha256(b'a b').hexdigest()[:16]}"
     assert run_argv(["git", "rev-parse", "--verify", ref], tmp_path) == 0
     assert git_changed_files(tmp_path, ref) == []
+
+
+def test_attempt_ref_names_the_node_and_the_attempt_separately() -> None:
+    """T6-34 known-good: the attempt number is its own ref component, so N
+    attempts of one node are N refs. Known-bad: a ref without it is one ref
+    the last attempt overwrites, which is the failure this item exists to
+    fix -- round 3d's attempt-1 trees were recoverable only from
+    `lost-found` (F21.15). The digest fallback is `proven_ref`'s, because
+    `check-ref-format` decides a component at a time.
+    """
+    assert attempt_ref("n2", 1) == "refs/saddle/attempt/n2/1"
+    assert attempt_ref("n2", 2) == "refs/saddle/attempt/n2/2"
+    digest = hashlib.sha256(b"a b").hexdigest()[:16]
+    assert attempt_ref("a b", 3) == f"refs/saddle/attempt/{digest}/3"
 
 
 def test_snapshot_baseline_outside_a_repo_raises(tmp_path: Path) -> None:

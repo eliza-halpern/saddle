@@ -30,6 +30,7 @@ from typing import Any, Final
 from saddle.dag import Dag, ExecutionConstraints, Node, planned_requirement_ids
 from saddle.evidence import (
     CapturedRun,
+    attempt_ref,
     changed_lines,
     covered_lines,
     drop_test_caches,
@@ -918,6 +919,11 @@ async def _run_node(
                 continue
             applied.append(proposal.diff)
             autofix(workdir, baseline=baseline, recorder=recorder)
+            # T6-34: the tree the gate is about to judge, named before it
+            # runs. A failed attempt otherwise leaves nothing a `git gc`
+            # cannot prune, and the sidecar's diff is the pre-autofix text,
+            # so the graded tree was recoverable only from dangling blobs.
+            gated_tree = snapshot_tree(workdir, attempt_ref(node.id, attempt), recorder=recorder)
             captured: list[CapturedRun] = []
             result = run_node_gate(
                 node,
@@ -955,7 +961,7 @@ async def _run_node(
                     ctx,
                     0,
                     detail,
-                    {**_proposal_evidence(proposal), "samples": samples},
+                    {**_proposal_evidence(proposal), "samples": samples, "tree": gated_tree},
                 )
                 return Proof(node_id=node.id)
             last_result = result
@@ -982,6 +988,7 @@ async def _run_node(
                 {
                     **_proposal_evidence(proposal),
                     "samples": samples,
+                    "tree": gated_tree,
                     "gates": [
                         {"name": check.name, "passed": check.passed, "detail": check.detail}
                         for check in result.checks

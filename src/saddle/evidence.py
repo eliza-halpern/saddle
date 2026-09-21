@@ -400,6 +400,12 @@ properties as `BASELINE_REF_PREFIX`: writing one moves no branch, no tag
 and not `HEAD`."""
 
 
+ATTEMPT_REF_PREFIX: Final = "refs/saddle/attempt/"
+"""Namespace for the tree each attempt was graded on (T6-34). Same
+properties as `BASELINE_REF_PREFIX`: writing one moves no branch, no tag
+and not `HEAD`."""
+
+
 def _ref_slug(node_id: str) -> str:
     """`node_id` as a git-legal ref component, else its sha256 prefix.
 
@@ -428,6 +434,25 @@ def proven_ref(node_id: str) -> str:
     `refs/saddle/<word>/` prefix it accepts under the other.
     """
     return f"{PROVEN_REF_PREFIX}{_ref_slug(node_id)}"
+
+
+def attempt_ref(node_id: str, attempt: int) -> str:
+    """The ref holding the tree attempt `attempt` of `node_id` was graded on.
+
+    A failed attempt used to leave no ref at all: the baseline ref is the
+    pre-node tree and a proven ref exists only for a pass, so `git gc`
+    pruned the only copy of what the gates actually judged. Session 41
+    had to rebuild round 3d's attempt trees out of `lost-found` dangling
+    blobs to re-score them (F21.15), and two of those blobs differed from
+    each other only by autofix.
+
+    The attempt number is its own ref component, so attempts 1..N of one
+    node are N refs and not one that the last attempt overwrites. The
+    slug rule is `proven_ref`'s: `check-ref-format` decides a ref
+    component at a time, and a decimal attempt number is legal in every
+    component position.
+    """
+    return f"{ATTEMPT_REF_PREFIX}{_ref_slug(node_id)}/{attempt}"
 
 
 def snapshot_tree(cwd: Path, ref: str | None, *, recorder: SpanRecorder | None = None) -> str:
