@@ -7477,6 +7477,18 @@ demonstrably misreadable: F21.34 records five of six unharnessed
 base-rate seeds misreading rule 4 identically. And the test node runs
 first, with the largest output and the most freedom.
 
+**Half of that evidence expired on 2026-09-21** (bench `ca10676`, the
+F21.25 (a) tightening). The prompt now states when a currency key
+exists, so the one *demonstrated* ambiguity in the task is gone and the
+five seeds that misread it were reading a text that no longer exists.
+What survives is the structural argument: the test node still runs
+first, still writes an unappealable answer key, and nothing in the
+harness checks that key against the task. A misreading no longer has a
+known instance — it has no known counter-instance either, because no
+run has reached the state that would show one. Treat the item as live
+on structure alone and do not cite the base-rate seeds for it again
+without re-measuring them against the current prompt.
+
 **It has never been observed, and its absence is not evidence.**
 Detecting it requires a run in which every node seals — no run has
 reached that state (impl nodes seal 1 in 27 attempts, F21.36). Every
@@ -7492,9 +7504,14 @@ test node to assert on every one (T6-4/T6-5, T6-50). That makes the
 example set a partial oracle that is already inside the harness. The
 mitigation is to widen it until it pins the behaviour a wrong spec would
 get wrong: F21.34's rule-4 misreading — the untouched-currency seeding
-that defeats five of six base-rate seeds — is exactly a behaviour one
+that defeated five of six base-rate seeds — is exactly a behaviour one
 `accepts` example would nail down, and no test node could then write the
-wrong key and still bind.
+wrong key and still bind. That particular example is now redundant,
+since the prompt states the rule outright; it is kept here as the
+worked shape the widening should copy, not as an outstanding gap. The
+general point is unaffected and is the reason the mitigation is worth
+building: the planner's examples are the only statement of truth in the
+run that the test node does not author.
 
 This does not close the item. It narrows the surface on which a wrong
 spec can hide; it cannot prove none remains. **Nothing closes this but a
