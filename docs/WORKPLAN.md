@@ -5961,6 +5961,38 @@ assigned to it, so it is a claim about the spec that a human reads, not
 a way to pass. Owner: main session, after T6-44. Do not implement the
 outcome before the discriminator is decided.
 
+Status 2026-09-21: **still blocked, and the candidate discriminator is
+now falsified, not merely unproven.** The complete impl-node record for
+rounds 3c-3g is assembled in `../saddle-bench/runs/IMPL-NODE-TABLE.md`
+(six nodes reached a gate; F21.26). Taken one at a time, refusing would
+have been the correct move in **none** of them:
+
+| node | failure | would refusing have been right? |
+|---|---|---|
+| 3c n2 | `coverage` 88.9%/89.7%, `mutation` tool death | no — its own tests pass and the artifact largely works |
+| 3c n2.r2 | pre-T6-3 `ruff`, `mutation` tool death | no — `coverage: 100.0%`; both failures are the harness's, not the spec's |
+| 3d n2 | `coverage` 98.5% (one line), `mutation` 78.3% | no — one uncovered line is not an unsatisfiable requirement |
+| 3e n2 | `ruff` UP031 ×4, `coverage` 71.4% | not yet — the honest move was to implement and stop, which the emission's first part did (unchanged from the paragraph above) |
+| 3g n2 | own tests fail, `red-phase`, `property-coverage`, `mutation` death | no — the tests are red because the implementation is wrong |
+| 3g n2.r1 | `coverage` only, on lines only a later test node can cover | no — the gate was wrong (F21.21) and the remedy was T6-53's deferral; a refusal would have recorded a false claim about the spec and hidden the defect |
+
+Now apply the candidate discriminator — admissible only when the node's
+own tests are red and the worker names a requirement id the plan
+assigned to it. Of the six, exactly one has red tests at its gate: **3g
+n2**, the one node whose artifact was genuinely broken. The
+discriminator therefore admits precisely the case where refusing is
+wrong and excludes all five where the node had a real grievance. It is
+not a filter on honesty; it is a filter on brokenness, and it points the
+wrong way.
+
+So T6-46 needs either (a) a different discriminator, or (b) closure. Do
+not implement it on the current one. A case that would qualify has a
+recognisable shape and has not occurred: a node whose gate demands
+something the task prompt does not require and no later node can supply,
+where the worker says so and stops. 3g n2.r1 is the nearest miss and
+fails it on the last clause — a later node could supply it, which is why
+T6-53 was the right answer there.
+
 ---
 
 ### T6-47 — An attempt records the reasoning effort it ran at (tightened)
