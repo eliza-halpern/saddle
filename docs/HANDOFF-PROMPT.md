@@ -11,7 +11,8 @@ are not, and on removing the loudest distractions first.
 ## 1. Human pre-flight (once)
 
 1. **Commit `docs/AUDIT-2026-09-18.md`, `docs/WORKPLAN.md` and this file** on
-   `fix/gate-integrity`. The mutant procedure in every item reverts with
+   the checkout's working branch -- whichever it is; never `main`. The mutant
+   procedure in every item reverts with
    `git checkout -- src/`, which deletes uncommitted work (CLAUDE.md, "Commit
    first"). An executor working on an uncommitted tree will lose its own change
    and then report every mutant as killed.
@@ -25,8 +26,10 @@ are not, and on removing the loudest distractions first.
    `.claude/settings.local.json` for Tier 0–3 sessions. Those tiers never need
    the key, and an allow rule is an invitation.
 4. **Decide git rights and state them in the prompt.** Recommended: commit on
-   `fix/gate-integrity`, one commit per item, no push, no amend, no new
-   branch, no tag, no issue closing.
+   the branch the checkout is already on, one commit per item, no push, no
+   amend, no new branch, no tag, no issue closing. The working branch moves
+   between tiers, so name it by where the checkout is rather than by a hash
+   or a fixed name.
 5. **Tier 1 before Tier 0 docs items.** `./check.sh` is red at HEAD; until it
    is green the executor has no pass/fail signal and will "fix" unrelated
    things. Order: T0-1, then T1-1..T1-4, then Tier 0 docs, then Tier 2.
@@ -87,7 +90,8 @@ SCOPE. Edit only the files named in the current item. Do not fix, tidy, rename, 
 "improve" anything outside the item, including things that are obviously
 wrong. Write those down under "Noticed, not touched" in the report.
 
-GIT. You may commit on branch fix/gate-integrity, one commit per item,
+GIT. You may commit on the branch the checkout is already on -- never
+`main`, and never a branch you create -- one commit per item,
 with the mutant verdicts in the message and the attribution trailer your own
 harness names ("Co-Authored-By: <model> <noreply@anthropic.com>"; the model
 that did the work, not a name copied from an item). An item whose Files: all
