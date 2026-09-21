@@ -763,6 +763,126 @@ def test_requirement_binding_needs_every_example_asserted_on() -> None:
     ).passed
 
 
+def test_requirement_binding_binds_a_call_example_to_the_test_that_performs_it() -> None:
+    """T6-50, from round 3f (F21.20): the planner writes examples as calls
+    -- `deposit('10.00', 'USD')` -- and `_asserted_literals` collects
+    constants, so under the literal rule alone no behavioural test could
+    ever satisfy one. Round 3f died on exactly this: both `n1` and its
+    replacement failed all three attempts on `requirement-binding` and
+    nothing else, and the tree of `refs/saddle/attempt/n1/3` calls
+    `deposit`, asserts `10.00`, `USD` and `USX`, and was rejected anyway.
+
+    Known-good: the test that performs the operation and asserts on the
+    values it was handed binds it -- through a receiver, under `raises`
+    for the reject, and in either quote style, because constants compare
+    by value and `autofix` runs `ruff format` before the gate."""
+    examples = [
+        ("REQ-001", "accepts", "deposit('10.00', 'USD')"),
+        ("REQ-001", "rejects", "deposit('10.00', 'USX')"),
+        ("REQ-001", "accepts", "total_fees(5, 'USD')"),
+    ]
+    behavioural = {
+        "test_a.py": (
+            "import pytest\n\n\n"
+            "def test_deposit_usd():  # REQ-001\n"
+            '    assert Account("ann").deposit("10.00", "USD") == Decimal("10.00")\n\n\n'
+            "def test_unknown_currency():\n"
+            "    with pytest.raises(ValueError):\n"
+            '        Account("ann").deposit("10.00", "USX")\n\n\n'
+            "def test_fees():\n"
+            '    assert total_fees(5, "USD") == Decimal("1.25")\n'
+        )
+    }
+    check = check_requirement_binding(["REQ-001"], behavioural, examples=examples)
+    assert check.passed is True
+    assert check.detail == "1 requirement(s) bound, 3 example(s) asserted"
+
+    keyword = {
+        "test_a.py": (
+            "def test_deposit():  # REQ-001\n    assert acc.deposit(amount, currency='USD') == 1\n"
+        )
+    }
+    assert check_requirement_binding(
+        ["REQ-001"], keyword, examples=[("REQ-001", "accepts", "deposit(amount, currency='USD')")]
+    ).passed
+
+    # The planner may name the receiver too; the operation is what binds.
+    assert check_requirement_binding(
+        ["REQ-001"], behavioural, examples=[("REQ-001", "accepts", "acc.deposit('10.00', 'USD')")]
+    ).passed
+
+
+def test_requirement_binding_refuses_a_call_example_that_is_quoted_not_performed() -> None:
+    """The tightening half of T6-50. The literal rule's one satisfying
+    source was a test that quotes the example and asserts nothing about
+    the behaviour -- the shape the whole project exists to reject -- so
+    closing it is the point, not a side effect.
+
+    Known-bad, three ways, each naming the half that is missing: the
+    example quoted as a string; the values asserted with the operation
+    never performed; the operation performed with neither value
+    asserted."""
+    examples = [("REQ-001", "accepts", "deposit('10.00', 'USD')")]
+    quoted = {
+        "test_a.py": (
+            "def test_cites():  # REQ-001\n"
+            "    assert \"deposit('10.00', 'USD')\" == \"deposit('10.00', 'USD')\"\n"
+        )
+    }
+    check = check_requirement_binding(["REQ-001"], quoted, examples=examples)
+    assert check.passed is False
+    assert check.detail == (
+        "examples no test asserts on: REQ-001 accepts \"deposit('10.00', 'USD')\" "
+        "(no test calls deposit)"
+    )
+    values_only = {"test_a.py": 'def test_v():  # REQ-001\n    assert "10.00" in ledger("USD")\n'}
+    check = check_requirement_binding(["REQ-001"], values_only, examples=examples)
+    assert check.passed is False
+    assert check.detail.endswith("(no test calls deposit)")
+    call_only = {
+        "test_a.py": (
+            'def test_c():  # REQ-001\n    acc.deposit("10.00", "USD")\n    assert acc.balance\n'
+        )
+    }
+    check = check_requirement_binding(["REQ-001"], call_only, examples=examples)
+    assert check.passed is False
+    assert check.detail.endswith("(no test asserts on '10.00', 'USD')")
+
+
+def test_requirement_binding_keeps_the_literal_rule_for_what_is_not_a_call() -> None:
+    """The call rule applies to examples that parse as a call and to
+    nothing else, so T6-4's literal examples are untouched. A call the
+    gate cannot name -- the callee is itself an expression -- falls back
+    with them, and a call in a function that is not a test does not count
+    as performing anything."""
+    literal_ish = {"test_a.py": 'def test_a():  # REQ-001\n    assert f() == "10.00 USD"\n'}
+    assert check_requirement_binding(
+        ["REQ-001"], literal_ish, examples=[("REQ-001", "accepts", "10.00 USD")]
+    ).passed
+    assert not check_requirement_binding(
+        ["REQ-001"], literal_ish, examples=[("REQ-001", "accepts", "10.00 EUR")]
+    ).passed
+    computed = {"test_a.py": 'def test_a():  # REQ-001\n    assert handler()("x")\n'}
+    check = check_requirement_binding(
+        ["REQ-001"], computed, examples=[("REQ-001", "accepts", 'handler()("x")')]
+    )
+    assert check.passed is False
+    assert check.detail.endswith("REQ-001 accepts 'handler()(\"x\")'")
+    helper_only = {
+        "test_a.py": (
+            "def helper():\n"
+            '    acc.deposit("10.00", "USD")\n\n\n'
+            "def test_a():  # REQ-001\n"
+            '    assert "10.00" and "USD"\n'
+        )
+    }
+    check = check_requirement_binding(
+        ["REQ-001"], helper_only, examples=[("REQ-001", "accepts", "deposit('10.00', 'USD')")]
+    )
+    assert check.passed is False
+    assert check.detail.endswith("(no test calls deposit)")
+
+
 def test_requirement_binding_reads_examples_from_the_suite_it_is_given() -> None:
     """The literal may sit in a test the node did not write (a sealed spec
     node's, when a survivor round adds a file beside it): `suite` is what

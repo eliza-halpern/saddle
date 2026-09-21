@@ -1096,6 +1096,85 @@ def _asserted_literals(source: str) -> set[str]:
     return found
 
 
+def _called_names(source: str) -> set[str]:
+    """Every operation a `test*` function calls, spelled as the final name.
+
+    `deposit('10.00', 'USD')` is bound by `acc.deposit(...)` as much as by
+    a bare `deposit(...)`: the planner names the operation, not whatever
+    receiver it happens to hang off.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if not node.name.startswith("test"):
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            if isinstance(call.func, ast.Name):
+                found.add(call.func.id)
+            elif isinstance(call.func, ast.Attribute):
+                found.add(call.func.attr)
+    return found
+
+
+def _example_call(text: str) -> tuple[str, frozenset[str]] | None:
+    """An example spelled as a call, as `(operation, constant arguments)`.
+
+    `None` for anything else -- a bare literal, prose, an expression that
+    is not a call -- which leaves the literal rule in charge. Arguments
+    are spelled the way `_asserted_literals` spells what it finds, so the
+    two sets are comparable, and by *value* for strings: `autofix` runs
+    `ruff format` before the gate, and it rewrites `'10.00'` to `"10.00"`.
+    """
+    try:
+        parsed = ast.parse(text.strip(), mode="eval")
+    except SyntaxError:
+        return None
+    if not isinstance(call := parsed.body, ast.Call):
+        return None
+    if isinstance(call.func, ast.Name):
+        name = call.func.id
+    elif isinstance(call.func, ast.Attribute):
+        name = call.func.attr
+    else:
+        return None
+    constants: set[str] = set()
+    for argument in [*call.args, *(keyword.value for keyword in call.keywords)]:
+        if isinstance(argument, ast.Constant):
+            value = argument.value
+            constants.add(value if isinstance(value, str) else ast.unparse(argument))
+    return name, frozenset(constants)
+
+
+def _example_unbound(text: str, literals: set[str], called: set[str]) -> str | None:
+    """Why no test binds `text`, as a detail suffix, or `None` when one does.
+
+    T6-50, from round 3f (F21.20). The literal rule alone could not be
+    satisfied by any real test: planners write examples as calls,
+    `_asserted_literals` collects constants, and a call expression is
+    never a constant. Its one satisfying source was a test that quoted
+    the example as a string and asserted nothing about the behaviour --
+    and even that depended on the planner's quote style surviving
+    `autofix`, which it does not. So a call-shaped example is bound by
+    the test that performs that operation and asserts on the values it
+    was given, and the quoting escape closes with it.
+    """
+    if (call := _example_call(text)) is None:
+        return None if text in literals else ""
+    name, constants = call
+    if name not in called:
+        return f" (no test calls {name})"
+    if unasserted := sorted(constants - literals):
+        return f" (no test asserts on {', '.join(repr(value) for value in unasserted)})"
+    return None
+
+
 def check_requirement_binding(
     requirement_ids: Collection[str],
     flipped_tests: Mapping[str, str],
@@ -1121,11 +1200,18 @@ def check_requirement_binding(
     id the node itself declares must be cited, whatever the plan holds.
 
     `examples` (T6-4) are the `(id, "accepts"|"rejects", text)` triples the
-    node's requirements cite; each must be asserted on, literally, by some
-    test in `suite` (the tests as the node leaves them; `flipped_tests`
-    when the caller passes none). A statement can be cited without being
-    tested -- T1's tests probed no reject at all -- and a literal the
-    planner chose is the one thing the party being graded did not.
+    node's requirements cite; each must be bound by some test in `suite`
+    (the tests as the node leaves them; `flipped_tests` when the caller
+    passes none). A statement can be cited without being tested -- T1's
+    tests probed no reject at all -- and an example the planner chose is
+    the one thing the party being graded did not.
+
+    An example spelled as a literal is bound by a test that asserts on
+    it. An example spelled as a **call** is bound by a test that performs
+    that operation and asserts on the constants it was handed (T6-50):
+    binding it to the literal rule made it unsatisfiable by any test that
+    asserts behaviour, and satisfiable only by one that quotes the
+    example and asserts nothing (F21.20).
     """
     unbound = sorted(
         req
@@ -1150,10 +1236,14 @@ def check_requirement_binding(
             detail=f"undeclared requirements cited: {', '.join(orphans)}",
         )
     literals: set[str] = set()
+    called: set[str] = set()
     for source in (suite if suite is not None else flipped_tests).values():
         literals |= _asserted_literals(source)
+        called |= _called_names(source)
     unasserted = [
-        f"{rid} {polarity} {text!r}" for rid, polarity, text in examples if text not in literals
+        f"{rid} {polarity} {text!r}{why}"
+        for rid, polarity, text in examples
+        if (why := _example_unbound(text, literals, called)) is not None
     ]
     if unasserted:
         return GateCheck(
