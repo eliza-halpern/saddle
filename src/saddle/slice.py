@@ -379,6 +379,103 @@ def _unwrapped(diff: str) -> str:
     return text if text.endswith("\n") else text + "\n"
 
 
+# `diff --git a/<old> b/<new>`, and the hunk header's NEW-side start. The
+# new path is the one the reconstruction is filed under: a rename writes
+# the content at its destination.
+_DIFF_GIT_PATHS: Final = re.compile(r"^diff --git a/(?P<old>.+?) b/(?P<new>.+)$")
+_HUNK_NEW_START: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
+
+
+def whole_file_reconstruction(diff: str) -> dict[str, str]:
+    """The files a whole-file diff describes, read off its new side.
+
+    A worker that emits the file it wants, rather than an edit to the
+    file it was shown, writes one hunk per file anchored at line 1 whose
+    context lines already carry the new content. That is not a guess
+    about the model: every apply-failure in rounds 3h and 3i has this
+    shape, and reconstructing from it produced implementations the hidden
+    oracle passed 16 of 16 (F21.38, F21.38a). The ladder still refuses
+    those diffs -- `--recount` fixes counts and `--ignore-whitespace`
+    fixes whitespace, but neither reaches context that is a rewrite --
+    so the candidate is discarded with the envelope.
+
+    This assembles; it does not judge. The result is evidence attached to
+    a failed attempt, never a tree to gate: a reconstruction that lost
+    content would fail `tests` like any other, which is exactly why the
+    decision belongs downstream and not here.
+
+    A file qualifies only when its section holds exactly one hunk whose
+    header parses and whose new side starts at line 1. Two hunks, an
+    anchor past line 1, or a header carrying no ranges at all (round 3i
+    emitted a bare `@@ `) is omitted rather than guessed at: a partial
+    file assembled as though it were whole reads as a candidate tree and
+    is not one.
+    """
+    sections: dict[str, list[str]] = {}
+    body: list[str] | None = None
+    for line in diff.splitlines():
+        header = _DIFF_GIT_PATHS.match(line)
+        if header is not None:
+            body = sections.setdefault(header["new"], [])
+            continue
+        if body is not None:
+            body.append(line)
+    out: dict[str, str] = {}
+    for name, lines in sections.items():
+        hunks = [index for index, line in enumerate(lines) if line.startswith("@@")]
+        if len(hunks) != 1:
+            continue
+        start = _HUNK_NEW_START.match(lines[hunks[0]])
+        if start is None or int(start["start"]) != 1:
+            continue
+        kept: list[str] = []
+        for line in lines[hunks[0] + 1 :]:
+            kind = line[:1]
+            if kind in (" ", "+"):
+                kept.append(line[1:])
+            elif kind == "":
+                # A context line for a blank line, with its leading space
+                # stripped in transit -- `_HUNK_KINDS` admits the same.
+                kept.append("")
+            elif kind not in ("-", "\\"):
+                break
+        out[name] = "".join(f"{line}\n" for line in kept)
+    return out
+
+
+def _reconstruction_evidence(diff: str) -> dict[str, Any]:
+    """What a refused diff still proves, assembled once at failure time.
+
+    Recommendation 36 already landed in both halves -- the last rung's
+    stderr rides in the failure message (T6-27) and the draw itself is
+    `samples[i].diff` -- so the evidence is not lost, it is unassembled.
+    Recovering what a rejected draw proposed still meant reading the
+    diff, reconstructing the file its context lines describe and staging
+    it by hand, five times across F21.38 and F21.38a. This does that
+    once, and says whether the result is a tree at all, so a reader can
+    tell a recoverable candidate from junk without staging anything.
+
+    Nothing recovered is recorded as nothing rather than as an empty
+    candidate, so a reader cannot mistake "declined to reconstruct" for
+    "reconstructed an empty file".
+    """
+    files = whole_file_reconstruction(diff)
+    if not files:
+        return {}
+    recovered: dict[str, Any] = {}
+    for name, text in sorted(files.items()):
+        entry: dict[str, Any] = {"content": text}
+        if name.endswith(".py"):
+            try:
+                ast.parse(text)
+            except SyntaxError:
+                entry["parses"] = False
+            else:
+                entry["parses"] = True
+        recovered[name] = entry
+    return {"reconstruction": recovered}
+
+
 def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> str:
     """Apply a proposed diff from stdin and stage it; gates diff tracked content.
 
@@ -780,6 +877,9 @@ def _best_of_samples(
         )
         if unappliable is not None or result is None:
             summary["outcome"] = f"did not apply: {unappliable}"
+            # What the refused draw still proves, assembled here rather
+            # than by hand five rounds later (T6-62 C).
+            summary.update(_reconstruction_evidence(proposal.diff))
             continue
         failures = sum(1 for check in result.checks if not check.passed)
         summary["outcome"] = f"{failures} gate(s) failed"
@@ -937,6 +1037,11 @@ async def _run_node(
                 _apply_diff(workdir, proposal.diff, recorder=recorder)
             except RuntimeError as exc:
                 failure = f"Attempt {attempt} of {max_attempts}: diff did not apply: {exc}"
+                # A retry's apply-failure is recorded HERE, in the
+                # attempt, while its own sample reads "retry draw, gated
+                # in place" -- a filter on sample outcome misses it
+                # (F21.38a). The reconstruction rides with the failure so
+                # both paths carry it.
                 _seal_attempt(
                     journal_path,
                     node.id,
@@ -944,7 +1049,11 @@ async def _run_node(
                     ctx,
                     1,
                     failure,
-                    {**_proposal_evidence(proposal), "samples": samples},
+                    {
+                        **_proposal_evidence(proposal),
+                        **_reconstruction_evidence(proposal.diff),
+                        "samples": samples,
+                    },
                 )
                 continue
             applied.append(proposal.diff)

@@ -50,6 +50,7 @@ from saddle.slice import (
     SliceResult,
     _apply_diff,
     _HaltRecoveryError,
+    _reconstruction_evidence,
     _run_node,
     _schedulable_nodes,
     _unwrapped,
@@ -59,6 +60,7 @@ from saddle.slice import (
     format_replan_history,
     run_slice,
     splice_replan,
+    whole_file_reconstruction,
 )
 from saddle.transcript import is_run_end
 from saddle.vllm import DiffProposal, VllmRequestError, VllmResponseError
@@ -350,6 +352,102 @@ def test_a_fenced_round3e_draw_unwraps_to_the_bytes_inside_its_fence() -> None:
     assert unwrapped == inside + "\n"
     assert unwrapped.startswith("diff --git ")
     assert "```" not in unwrapped
+
+
+def test_whole_file_reconstruction_reads_the_new_side_of_a_line_1_hunk() -> None:
+    """T6-62 (C). Every apply-failure in rounds 3h and 3i is one hunk per
+    file anchored at line 1 whose context lines carry the model's intended
+    output (F21.38), so the candidate is recoverable from the diff the
+    ladder refused.
+
+    Known-good: round 3i n1.r2 attempt 1 draw 0, frozen byte for byte --
+    two files, both reconstruct, both parse. Known-bad: the same round's
+    rangeless `@@` header yields nothing rather than a guess.
+    """
+    good = (Path(__file__).parent / "fixtures" / "whole_file_round3i.diff").read_text()
+    files = whole_file_reconstruction(good)
+    assert sorted(files) == ["accounts.py", "fees.py"]
+    recovered = _reconstruction_evidence(good)["reconstruction"]
+    assert [recovered[name]["parses"] for name in sorted(recovered)] == [True, True]
+    # The NEW side, and read off the body rather than the header. The
+    # header declares `@@ -1,95 +1,113 @@` and the body holds 136 lines
+    # (F21.38 measured the same 136): the declared count is the model's
+    # own miscount, which is why `--recount` exists and why nothing here
+    # trusts the arithmetic. What comes back is the rewrite, not the
+    # 73-line accounts.py the model was shown -- no whitespace flag
+    # reaches that, which is why the ladder refused it.
+    assert "+1,113 @@" in good
+    assert len(files["accounts.py"].splitlines()) == 136
+    assert "def _usd" not in files["accounts.py"]
+
+    bad = (Path(__file__).parent / "fixtures" / "rangeless_hunk_round3i.diff").read_text()
+    assert whole_file_reconstruction(bad) == {}
+
+    # A context line for a blank line arrives with its leading space
+    # stripped, and is a blank line in the file rather than a dropped
+    # one -- `_HUNK_KINDS` admits the same shape. Anything that is not a
+    # hunk line ends the hunk, so trailing prose from a worker that did
+    # not stop at the diff is not swallowed into the reconstruction.
+    with_blank = (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n"
+        "@@ -1,3 +1,3 @@\n x = 1\n\n+y = 2\n"
+        "That was the diff.\n"
+    )
+    assert whole_file_reconstruction(with_blank) == {"n.py": "x = 1\n\ny = 2\n"}
+
+
+def test_whole_file_reconstruction_declines_what_it_cannot_read_off() -> None:
+    """Known-bad, each alone: two hunks in one file, a hunk anchored past
+    line 1, and a section with no hunk at all. A partial file reconstructed
+    as if it were whole is worse than no reconstruction, because it reads
+    as a candidate tree and is not one.
+    """
+    two_hunks = (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n"
+        "@@ -1,2 +1,2 @@\n x = 1\n-y = 2\n+y = 3\n"
+        "@@ -8,1 +8,1 @@\n-z = 4\n+z = 5\n"
+    )
+    assert whole_file_reconstruction(two_hunks) == {}
+    not_at_one = (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -4,1 +4,1 @@\n-z = 4\n+z = 5\n"
+    )
+    assert whole_file_reconstruction(not_at_one) == {}
+    no_hunk = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n"
+    assert whole_file_reconstruction(no_hunk) == {}
+    # Known-good beside them, so the three known-bads are not vacuous.
+    whole = (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n"
+        "@@ -1,1 +1,2 @@\n-x = 1\n+x = 2\n+y = 3\n"
+    )
+    assert whole_file_reconstruction(whole) == {"n.py": "x = 2\ny = 3\n"}
+
+
+def test_reconstruction_evidence_records_whether_the_candidate_parses() -> None:
+    """The sidecar says whether what it recovered is a tree at all, so a
+    reader can tell a recoverable candidate from junk without staging it.
+    Known-good: parsing content. Known-bad: content that does not parse.
+    """
+    whole = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,1 +1,1 @@\n-x = 1\n+x = 2\n"
+    assert _reconstruction_evidence(whole) == {
+        "reconstruction": {"n.py": {"content": "x = 2\n", "parses": True}}
+    }
+    broken = (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n"
+        "@@ -1,1 +1,1 @@\n-x = 1\n+def broken( :\n"
+    )
+    assert _reconstruction_evidence(broken)["reconstruction"]["n.py"]["parses"] is False
+    # A file the harness cannot parse carries no parse verdict rather
+    # than an invented one: "parses": True on a README would read as a
+    # check that ran.
+    prose = (
+        "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"
+        "@@ -1,1 +1,1 @@\n-old\n+new\n"
+    )
+    assert _reconstruction_evidence(prose) == {
+        "reconstruction": {"README.md": {"content": "new\n"}}
+    }
+    # Nothing to record is recorded as nothing, not as an empty candidate.
+    assert _reconstruction_evidence("diff --git a/n.py b/n.py\n") == {}
 
 
 def test_autofix_fixes_what_ruff_can_fix(tmp_path: Path) -> None:
@@ -1101,6 +1199,73 @@ def test_run_node_identical_after_nonapply_reports_unappliable(tmp_path: Path) -
     assert error.failure is not None
     assert error.failure.startswith("Attempt 1 of 3: diff did not apply: ")
     assert str(error) == "node 'n1': identical diff re-proposed after 2 non-applying attempt(s)"
+
+
+def test_run_node_attaches_the_reconstruction_when_a_diff_will_not_apply(
+    tmp_path: Path,
+) -> None:
+    """T6-62 (C) end-to-end: a refused whole-file draw leaves its candidate
+    in the sidecar, on BOTH paths that record an apply failure.
+
+    Attempt 1's failure is recorded on the sample. A retry's is recorded
+    on the ATTEMPT, while its own sample still reads "retry draw, gated in
+    place" (F21.38a) -- a reader filtering on sample outcome misses it
+    entirely, which is how five rounds of candidates went unexamined.
+
+    Known-good: a whole-file draw the ladder refuses leaves a parsing
+    candidate on both. Known-bad is in the unit tests beside this: a draw
+    the reconstruction declines leaves no key at all, so "declined" can
+    never be read as "reconstructed nothing".
+    """
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    # One hunk from line 1, whose OLD side names content the tree does not
+    # have: no rung applies it, and the new side is the candidate.
+    stale = (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n"
+        "@@ -1,2 +1,2 @@\n-def g():\n-    return 99\n+def f():\n+    return 2\n"
+    )
+    later = stale.replace("+    return 2", "+    return 3")
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(stale if failure is None else later, "")
+
+    with pytest.raises(NodeUnappliableError):
+        asyncio.run(
+            _run_node(
+                node, tmp_path, tmp_path / "proofs.jsonl", propose, {}, "run", (), task_hash=""
+            )
+        )
+    # Sidecars are named by span id, so order them by the attempt they
+    # record rather than by filename.
+    sidecars = sorted(
+        (json.loads(path.read_text()) for path in (tmp_path / "attempts").iterdir()),
+        key=lambda card: card["attempt"],
+    )
+    assert sidecars, "every attempt leaves a sidecar"
+    on_sample = [
+        sample
+        for card in sidecars
+        for sample in card.get("samples") or []
+        if "reconstruction" in sample
+    ]
+    assert on_sample, "attempt 1's refused sample carries its candidate"
+    assert on_sample[0]["outcome"].startswith("did not apply: ")
+    assert on_sample[0]["reconstruction"] == {
+        "n.py": {"content": "def f():\n    return 2\n", "parses": True}
+    }
+    # The apply site is shared, so attempt 1 records on both; the retry
+    # records ONLY here, which is the half that was being missed.
+    on_attempt = [card for card in sidecars if "reconstruction" in card]
+    assert [card["attempt"] for card in on_attempt] == [1, 2]
+    retry = on_attempt[1]
+    assert retry["reconstruction"] == {
+        "n.py": {"content": "def f():\n    return 3\n", "parses": True}
+    }
+    # The trap itself, pinned: the retry's own sample says nothing about
+    # the apply failure, so a filter on sample outcome finds none of it.
+    assert [sample["outcome"] for sample in retry["samples"]] == ["retry draw, gated in place"]
+    assert not any("reconstruction" in sample for sample in retry["samples"])
 
 
 def test_run_node_exhausted_nonapply_reports_unappliable(tmp_path: Path) -> None:

@@ -1,0 +1,17 @@
+diff --git a/accounts.py b/accounts.py
+--- a/accounts.py
++++ b/accounts.py
+@@ 
+     def __repr__(self):
+         return "Account(owner=%r, balances=%r)" % (self.owner, self._balances)
++
++# REQ-001: per-currency Decimal balances with ROUND_HALF_UP
+diff --git a/fees.py b/fees.py
+--- a/fees.py
++++ b/fees.py
+@@ 
+     if count < 0:
+         raise ValueError("count must be >= 0")
+     return _quantize(FEES[currency] * count, currency)
++
++# REQ-002: per-currency fee table with quantized Decimal nets
