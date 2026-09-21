@@ -1,0 +1,1 @@
+In accounts.py and fees.py, the system shall implement the shared Decimal/USD-EUR-JPY money rules, with fee_for returning the fee for a positive amount below the fee, apply_fee rejecting a below-fee amount, unsupported currencies raising a ValueError naming USD, EUR, and JPY, and every changed line executed by tests/test_accounts.py and tests/test_fees.py.

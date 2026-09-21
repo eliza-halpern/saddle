@@ -645,6 +645,66 @@ def plan_prescribes_deletion(plan: str, baseline_sources: Mapping[str, str]) -> 
     return None
 
 
+# A requirement may not restate the gate (T6-58). An offending clause
+# pairs a change-word with a line-word under an execution or coverage
+# verb -- "every changed line executed by tests/test_accounts.py" -- or
+# names a coverage ratio. Three word classes rather than one phrase,
+# because the two frozen known-bads spell it differently ("all changed
+# lines covered by", "every changed line executed by") and the planner
+# bullet that taught it spells it a third way ("every line you change
+# must be executed by a test").
+_SENTENCE_RE: Final = re.compile(r"(?<=[.;])\s+")
+_CHANGED_RE: Final = re.compile(
+    r"\b(?:changed|added|new|modified|touched|you\s+change|we\s+change)\b", re.IGNORECASE
+)
+_LINE_RE: Final = re.compile(
+    r"\b(?:line|lines|statement|statements|branch|branches)\b", re.IGNORECASE
+)
+_EXECUTED_RE: Final = re.compile(
+    r"\b(?:cover|covers|covered|covering|coverage|execut\w*|exercis\w*|hit|reached"
+    r"|run\s+by|tested\s+by)\b",
+    re.IGNORECASE,
+)
+_RATIO_RE: Final = re.compile(r"\b\d{1,3}(?:\.\d+)?\s*%")
+
+
+def plan_restates_the_gate(nodes: Sequence[Node]) -> str | None:
+    """A node description or requirement statement that restates a gate (T6-58).
+
+    Returns the offending clause, or `None` when every node states
+    behaviour. Goal G1 names the shape: a requirement satisfiable by a
+    no-op. "Every changed line executed by tests/test_accounts.py" is
+    satisfied by calling a function whose body is `pass`; "fee_for
+    returns the fee for a positive amount below the fee" is not.
+
+    T6-44 removed the execution proxy from saddle's own worker rule but
+    not from the instruction that regenerates it, so it still reached the
+    worker laundered through the plan. Round 3g's `n2.r1` prompt, whose
+    run has `e52912b` (T6-44) as an ancestor, carries it twice -- in the
+    node description and inside REQ-002, under the heading "each test
+    must fail if its statement is violated". Both are frozen beside this
+    as fixtures.
+
+    The judgement is textual and keys on the CLAIM, never on the gate's
+    test-file names: a test node's requirement legitimately says "when
+    the accounts and fees tests run, the suite shall assert ...", and
+    that is a statement about behaviour. Checked against every statement
+    and description rounds 3e-3i retained: 29 pass, and the two frozen
+    known-bads are the only ones caught.
+    """
+    for node in nodes:
+        texts = [node.task_prompt, *(req.statement for req in node.requirements)]
+        for text in texts:
+            for clause in _SENTENCE_RE.split(text):
+                if _EXECUTED_RE.search(clause) is None:
+                    continue
+                if (_CHANGED_RE.search(clause) and _LINE_RE.search(clause)) or _RATIO_RE.search(
+                    clause
+                ):
+                    return clause.strip()
+    return None
+
+
 def check_dead_additions(
     sources: Mapping[str, str],
     added: Mapping[str, Collection[int]],

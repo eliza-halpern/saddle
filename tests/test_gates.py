@@ -37,6 +37,7 @@ from saddle.gates import (
     check_test_command,
     introduced_findings,
     plan_prescribes_deletion,
+    plan_restates_the_gate,
     run_tier1,
 )
 
@@ -2186,6 +2187,111 @@ def test_plan_prescribes_deletion_reads_only_what_the_verb_governs() -> None:
     baseline = {"m.py": "def _helper():\n    return 1\n\n\ndef api():\n    return _helper()\n"}
     plan = "1. Keep `api` but remove `_helper`.\n"
     assert plan_prescribes_deletion(plan, baseline) is None
+
+
+# --- T6-58: a requirement may not restate the gate ---------------------------
+
+
+def _restating(task_prompt: str = "Do n1.", statement: str = "REQ-001 holds.") -> list[Node]:
+    node = _node(kind="impl")
+    return [
+        node.model_copy(update={"task_prompt": task_prompt}).model_copy(
+            update={
+                "requirements": [node.requirements[0].model_copy(update={"statement": statement})]
+            }
+        )
+    ]
+
+
+def test_plan_restates_the_gate_rejects_the_round3g_requirement() -> None:
+    """Known-bad, frozen from round 3g's retained `n2.r1` prompt: REQ-002
+    ends "and every changed line executed by tests/test_accounts.py and
+    tests/test_fees.py", inside the block headed "each test must fail if
+    its statement is violated". A `pass` body satisfies it."""
+    statement = (FIXTURES / "requirement_restates_gate_round3g.txt").read_text().strip()
+    offending = plan_restates_the_gate(_restating(statement=statement))
+    assert offending is not None
+    assert "every changed line executed by" in offending
+
+
+def test_plan_restates_the_gate_rejects_the_round3g_node_description() -> None:
+    """Known-bad, the same prompt's other half: the node description ends
+    "Keep all changed lines covered by the gate command". Two separate
+    model-authored strings carried the proxy, so checking only the
+    requirement would have caught one of them."""
+    task_prompt = (FIXTURES / "node_restates_gate_round3g.txt").read_text().strip()
+    assert plan_restates_the_gate(_restating(task_prompt=task_prompt)) == (
+        "Keep all changed lines covered by the gate command."
+    )
+
+
+def test_plan_restates_the_gate_routes_the_same_requirement_without_the_clause() -> None:
+    """Known-good, and the discriminating one: the SAME statement minus its
+    trailing coverage clause states falsifiable behaviour and routes. What
+    is rejected is the clause, not the requirement it rode on."""
+    statement = (FIXTURES / "requirement_restates_gate_round3g.txt").read_text().strip()
+    trimmed = statement.replace(
+        ", and every changed line executed by tests/test_accounts.py and tests/test_fees.py", ""
+    )
+    assert trimmed != statement
+    assert plan_restates_the_gate(_restating(statement=trimmed)) is None
+
+
+def test_plan_restates_the_gate_keys_on_the_claim_not_the_test_file_names() -> None:
+    """Known-good. A test node's requirement legitimately names the gate's
+    own test files and the suite that runs them; it is a statement about
+    behaviour. Keying on the file names would catch it -- this is round
+    3f/3h/3i's REQ-001, as written, which every one of those runs used."""
+    statement = (
+        "When the accounts and fees tests run, the suite shall assert that deposit, "
+        "withdraw, transfer, apply_fee, fee_for, and total_fees accept USD, EUR, and "
+        "JPY and reject any other currency."
+    )
+    assert plan_restates_the_gate(_restating(statement=statement)) is None
+
+
+def test_plan_restates_the_gate_rejects_a_coverage_ratio() -> None:
+    """Known-bad for the other half of the rule. Naming the number is the
+    shape G1 forbids: it is satisfiable by a no-op, and it makes the
+    metric salient in a string the worker reads as binding."""
+    statement = "The node shall reach 100% coverage on the changed files."
+    assert plan_restates_the_gate(_restating(statement=statement)) == statement
+
+
+def test_plan_restates_the_gate_routes_a_percentage_that_is_not_coverage() -> None:
+    """Known-good beside it, so the ratio half is not vacuous: money tasks
+    carry percentages of their own, and a fee is behaviour."""
+    statement = "apply_fee shall deduct a 3% fee and return the quantized Decimal."
+    assert plan_restates_the_gate(_restating(statement=statement)) is None
+
+
+def test_plan_restates_the_gate_routes_a_statement_that_merely_names_lines() -> None:
+    """Known-good. The offence is the claim that lines are EXECUTED, not the
+    word "line": a fee table with one line per currency is behaviour."""
+    statement = "In fees.py, the fee table shall list one line per supported currency."
+    assert plan_restates_the_gate(_restating(statement=statement)) is None
+
+
+def test_plan_restates_the_gate_keeps_reading_past_an_innocent_execution_word() -> None:
+    """The scan does not stop at the first clause carrying an execution
+    word. Round 3g's offence was the last sentence of a 698-character
+    description, so a statement that uses one of these verbs innocently
+    and restates the gate afterwards has to be caught on the second
+    clause, not cleared by the first."""
+    statement = (
+        "apply_fee shall be exercised for USD, EUR, and JPY. "
+        "Every changed line shall be covered by the gate command."
+    )
+    assert plan_restates_the_gate(_restating(statement=statement)) == (
+        "Every changed line shall be covered by the gate command."
+    )
+
+
+def test_plan_restates_the_gate_routes_a_plan_with_no_offending_node() -> None:
+    """Known-good for the whole-plan walk: every node is read, and a plan
+    whose nodes all state behaviour returns None rather than the first
+    clause that merely mentions a test."""
+    assert plan_restates_the_gate([_node(kind="test"), _node(kind="impl")]) is None
 
 
 # The eleven lines round 3g's coverage gate named on `n2.r1` attempt 1 --

@@ -29,7 +29,7 @@ from saddle.evidence import (
     ruff_version,
     run_argv,
 )
-from saddle.gates import plan_prescribes_deletion
+from saddle.gates import plan_prescribes_deletion, plan_restates_the_gate
 from saddle.journal import (
     JournalIssue,
     SpanRecord,
@@ -303,6 +303,11 @@ Rules:
   so a test can fail when it is violated: "Rejects a local part ending in
   a dot", not "Validates email correctly". A statement no test can
   contradict states nothing.
+- A statement describes behaviour a test can falsify, never how the gate
+  measures. "quantize is never called with a JPY amount" is a
+  requirement; "every changed line is executed by tests/test_fees.py" is
+  the coverage gate restated, and a function whose body is `pass`
+  satisfies it without implementing anything.
 - Requirement IDs are REQ- followed by exactly three digits.
 - Each requirement also carries "accepts" and "rejects": at least one
   literal input the system shall accept and at least one it shall reject.
@@ -344,8 +349,10 @@ Rules:
 - red_phase_required is always true.
 - test_command is a pytest invocation over test files only,
   e.g. "pytest tests/test_login.py" (never a source file).
-- changed_line_coverage_min is always 100.0: every line you change must
-  be executed by a test.
+- changed_line_coverage_min is always 100.0. That is how the gate
+  measures the node; it is not a requirement, and no node description or
+  requirement statement may restate it. A plan that asks for lines to be
+  executed or covered is rejected and redrawn.
 - kill_threshold is one of 85.0, 90.0, 95.0, 100.0. There is no lower
   setting; a node you consider mechanical still clears 85.
 - mutation_sample.scope is always "changed-lines"; max_mutants is always 100.
@@ -640,9 +647,20 @@ def _emit_valid_dag(
             file_lines=file_lines,
             emission_budget=lambda node: diff_budget(node, context_window),
         )
-        if not issues:
+        round_errors = [f"{issue.code}: {issue.message}" for issue in issues]
+        # T6-58: a plan that restates the gate is refused and REDRAWN, never
+        # rewritten here -- editing the statement would leave the node held
+        # to a requirement no model ever wrote, and the worker reads the
+        # requirement block as binding.
+        restated = plan_restates_the_gate(dag.nodes)
+        if restated is not None:
+            round_errors.append(
+                "plan-restates-gate: a node description or requirement statement restates "
+                f"the coverage gate: {restated!r}. State behaviour a test can falsify."
+            )
+        if not round_errors:
             return dag
-        errors.extend(f"{issue.code}: {issue.message}" for issue in issues)
+        errors.extend(round_errors)
     msg = f"could not emit a valid DAG in {EMIT_ROUNDS} rounds: {'; '.join(errors)}"
     raise RunError(msg)
 

@@ -690,6 +690,52 @@ def test_run_task_retries_invalid_emissions(tmp_path: Path) -> None:
     assert "(char 0)\n1 validation error for Dag" in _prompt(seen[2])
 
 
+def test_run_task_redraws_a_plan_whose_requirement_restates_the_gate(tmp_path: Path) -> None:
+    """T6-58, the wiring. A predicate nothing calls protects nothing (the
+    T6-53/T6-54 lesson), so this pins the call site rather than the rule:
+    the offending plan is refused, the reason reaches the planner as a
+    validation error, and the redraw is what runs. The statement is round
+    3g's `n2.r1` REQ-002, frozen."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    statement = (
+        (Path(__file__).parent / "fixtures" / "requirement_restates_gate_round3g.txt")
+        .read_text()
+        .strip()
+    )
+    bad = _node_dict()
+    bad["requirements"] = [
+        {"id": "REQ-001", "statement": statement, "accepts": ["2"], "rejects": ["3"]}
+    ]
+    client = _scripted_client(
+        [
+            _emit_response({"nodes": [bad]}),
+            _emit_response({"nodes": [_node_dict()]}),
+            _diff_response(),
+        ],
+        seen,
+    )
+    code, out = _run(_options(tmp_path), client)
+    assert code == 0, out
+    redraw = _prompt(seen[1])
+    assert "plan-restates-gate: a node description or requirement statement" in redraw
+    assert "every changed line executed by" in redraw
+
+
+def test_emit_prompt_states_the_coverage_field_without_restating_it() -> None:
+    """T6-58's instruction half. The bullet that taught the proxy said
+    "every line you change must be executed by a test"; the planner wrote
+    that back into two strings the worker reads as binding (round 3g).
+    A prompt change alone would be decorative, so this is the half the
+    check above enforces -- but the sentence must still be gone."""
+    prompt = build_emit_prompt(TASK, ("n.py",))
+    assert "every line you change must be executed" not in prompt
+    assert "changed_line_coverage_min is always 100.0" in prompt
+    assert "requirement statement may restate it" in prompt
+    assert "rejected and redrawn" in prompt
+    assert "describes behaviour a test can falsify" in prompt
+
+
 def test_run_task_exhausted_emission_fails(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
