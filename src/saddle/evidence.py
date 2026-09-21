@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tokenize
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
@@ -551,6 +553,10 @@ class MutationOutcome:
     total: int
     generated: int
     survivors: tuple[str, ...]
+    # Mutants whose only change is inside string literals (T6-33): no test
+    # derived from a requirement can kill one without pinning wording, so
+    # they leave the population and are counted here instead.
+    text_only: int = 0
 
 
 def _is_given(decorator: ast.expr) -> bool:
@@ -630,6 +636,65 @@ def _mutant_path(show_output: str) -> str | None:
         if line.startswith("+++ "):
             return line[4:].strip().removeprefix("b/")
     return None
+
+
+_FSTRING_TEXT: Final = frozenset(
+    getattr(tokenize, n) for n in ("FSTRING_MIDDLE",) if hasattr(tokenize, n)
+)
+
+
+def _tokens_modulo_strings(line: str) -> list[tuple[int, str]] | None:
+    """A line's tokens with every string literal's text blanked, or None when
+    the line does not tokenize on its own (a multi-line construct)."""
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line + "\n").readline))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    out: list[tuple[int, str]] = []
+    for tok in tokens:
+        if tok.type in (tokenize.NL, tokenize.NEWLINE, tokenize.ENDMARKER, tokenize.COMMENT):
+            continue
+        if tok.type in _FSTRING_TEXT:
+            # An f-string's literal text arrives as a variable number of
+            # middle tokens (3.12+); it is string content, so it is dropped
+            # rather than blanked, and the expressions between stay.
+            continue
+        out.append((tok.type, "" if tok.type == tokenize.STRING else tok.string))
+    return out
+
+
+def text_only_mutant(show_output: str) -> bool:
+    """Whether a `mutmut show` diff changes nothing but string-literal text (T6-33).
+
+    Round 3d's n2 was asked to kill 66 survivors of which 34 edited only a
+    message (`"cannot convert"` to `"XXcannot convertXX"`, F21.14): no
+    requirement constrains those words, so a spec-derived test cannot kill
+    them and one that does pins the implementation's wording. Pairwise: the
+    removed and added lines must tokenize identically once string contents
+    are blanked, and at least one string must differ. Anything that does
+    not tokenize line by line stays in the population (fail closed).
+    """
+    removed = [
+        line[1:]
+        for line in show_output.splitlines()
+        if line.startswith("-") and not line.startswith("--- ")
+    ]
+    added = [
+        line[1:]
+        for line in show_output.splitlines()
+        if line.startswith("+") and not line.startswith("+++ ")
+    ]
+    if not removed or len(removed) != len(added):
+        return False
+    differs = False
+    for old, new in zip(removed, added, strict=True):
+        if old == new:
+            continue
+        a, b = _tokens_modulo_strings(old), _tokens_modulo_strings(new)
+        if a is None or b is None or a != b:
+            return False
+        differs = True
+    return differs
 
 
 def _mutant_lines(show_output: str, source: str) -> set[int]:
@@ -733,6 +798,7 @@ def mutation_sample(
         verdicts = _parse_mutant_verdicts(results.stdout)
         scoped: list[tuple[str, str]] = []
         undecided = 0
+        text_only = 0
         for name in sorted(verdicts):
             verdict = verdicts[name]
             if verdict == "not checked":
@@ -754,12 +820,19 @@ def mutation_sample(
                 continue
             if not _mutant_lines(shown.stdout, target.read_text()) & lines:
                 continue
+            if text_only_mutant(shown.stdout):
+                text_only += 1
+                continue
             scoped.append((name, verdict))
     sample = scoped[:max_mutants]
     killed = sum(1 for _, verdict in sample if verdict in ("killed", "timeout"))
     survivors = tuple(name for name, verdict in sample if verdict == "survived")
     return MutationOutcome(
-        killed=killed, total=len(sample), generated=len(scoped) + undecided, survivors=survivors
+        killed=killed,
+        total=len(sample),
+        generated=len(scoped) + undecided,
+        survivors=survivors,
+        text_only=text_only,
     )
 
 

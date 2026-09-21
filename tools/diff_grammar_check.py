@@ -54,6 +54,13 @@ MUST_REJECT = {
     "wrong header": "diff -u a/n.py b/n.py\n@@ -1 +1 @@\n-x\n+y\n",
     "hunk before header": "@@ -1 +1 @@\n-x = 1\n+x = 2\n",
     "hunk without file lines": "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n",
+    # T6-32: a creation without `new file mode` applied as `dev/null` (F21.14).
+    "creation without mode line": (
+        "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n@@ -0,0 +1 @@\n+x = 1\n"
+    ),
+    "deletion without mode line": (
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x = 1\n"
+    ),
 }
 
 # Byte offset at which a MUST_REJECT case has to die. Absence of a working
@@ -61,6 +68,9 @@ MUST_REJECT = {
 # being refused by the wrong rule.
 REJECT_AT = {
     "hunk without file lines": len("diff --git a/x b/x\n"),
+    # The `/` of `/dev/null`: a modify side may not start with `/`.
+    "creation without mode line": len("diff --git a/n.py b/n.py\n--- "),
+    "deletion without mode line": len("diff --git a/n.py b/n.py\n--- a/n.py\n+++ "),
 }
 
 # Valid prefixes the grammar must refuse to END on.
@@ -91,6 +101,11 @@ SYNTHETIC = {
     "_delete": (
         "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n"
         "--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x = 1\n-y = 2\n"
+    ),
+    # T6-32: the creation shape git itself emits, mode then index then /dev/null.
+    "_create": (
+        "diff --git a/new.py b/new.py\nnew file mode 100644\nindex 0000000..e69de29\n"
+        "--- /dev/null\n+++ b/new.py\n@@ -0,0 +1,2 @@\n+x = 1\n+y = 2\n"
     ),
 }
 

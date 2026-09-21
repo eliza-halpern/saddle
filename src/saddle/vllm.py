@@ -65,16 +65,26 @@ REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
 # that class, not the count half. Re-run in the container for this
 # tightening on 2026-09-19: 53/53 (44 admit, 6 reject with the headerless
 # section refused at its `@@`, 2 must-not-stop, 1 must-stop).
+# A section is a creation, a deletion or a modification (T6-32). A creation
+# must carry `new file mode` and a deletion `deleted file mode`: with the
+# mode line optional metadata, `--- /dev/null` with no mode was
+# representable and `git apply` then read `/dev/null` as a path (round 3d
+# probe, F21.14: `error: dev/null: No such file or directory`). `path`
+# never starts with `/`, so `/dev/null` is unrepresentable on a modify
+# side and only the structured forms can name it.
 DIFF_GRAMMAR: Final = r"""root ::= section+
-section    ::= header meta* from to hunk+
+section    ::= header (create | delete | modify)
+create     ::= meta* "new file mode " line "\n" meta* "--- /dev/null\n" to hunk+
+delete     ::= meta* "deleted file mode " line "\n" meta* from "+++ /dev/null\n" hunk+
+modify     ::= meta* from to hunk+
 header     ::= "diff --git " line "\n"
 meta       ::= meta_pfx line "\n"
-meta_pfx   ::= "index " | "new file mode " | "deleted file mode "
-             | "old mode " | "new mode " | "similarity index "
+meta_pfx   ::= "index " | "old mode " | "new mode " | "similarity index "
              | "dissimilarity index " | "rename from " | "rename to "
              | "copy from " | "copy to " | "Binary files "
-from       ::= "--- " line "\n"
-to         ::= "+++ " line "\n"
+from       ::= "--- " path "\n"
+to         ::= "+++ " path "\n"
+path       ::= [^/\n] [^\n]*
 hunk       ::= "@@ " line "\n" hline+
 hline      ::= (" " | "+" | "-" | "\\") line "\n"
 line       ::= [^\n]*

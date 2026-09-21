@@ -39,6 +39,7 @@ from saddle.evidence import (
     run_stdin,
     snapshot_baseline,
     statement_lines,
+    text_only_mutant,
     under_coverage,
 )
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
@@ -1134,3 +1135,53 @@ def test_ruff_findings_tolerates_bad_json_and_unreadable_sources(
         ("E999", "gone.py", 3, "", 0)
     ]
     assert run.stdout == "gone.py:3:0: E999 m"
+
+
+def test_text_only_mutant_classifies_string_edits_and_nothing_else() -> None:
+    """T6-33 known-good: a mutant that changes only the text inside a string
+    literal (a message, an f-string body) is text-only. Known-bad: a value
+    change, an operator change, a string that gains an operand, a line that
+    does not tokenize on its own, an empty or unbalanced diff."""
+
+    def show(old: str, new: str) -> str:
+        return f"--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-{old}\n+{new}\n"
+
+    assert text_only_mutant(
+        show('raise ValueError("cannot convert")', 'raise ValueError("XXcannot convertXX")')
+    )
+    assert text_only_mutant(show('x = "a"', "x = 'b'"))
+    assert text_only_mutant(show('msg = f"bad {value}"', 'msg = f"XXbad {value}XX"'))
+    assert not text_only_mutant(show("x = 1", "x = 2"))
+    assert not text_only_mutant(show("return a + b", "return a - b"))
+    assert not text_only_mutant(show('x = "a"', 'x = "a" + y'))
+    assert not text_only_mutant(show('x = "a"', "x = None"))
+    assert not text_only_mutant(show('s = """start', 's = """other'))
+    assert not text_only_mutant("--- a/m.py\n+++ b/m.py\n@@ -1 +1 @@\n-x = 1\n")
+    assert not text_only_mutant(show("x = 1", "x = 1"))
+
+
+def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6-33 end to end on the stub engine: two survivors, one a message edit,
+    one a value change. The text-only one leaves the population (total
+    and survivors exclude it) and is counted; the behavioural one stays."""
+    workdir = _mutation_workdir(tmp_path)
+    (workdir / "a.py").write_text('x = 1\nmsg = "bad"\n')
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(
+        stub_dir,
+        "\n".join(["", "  m_text: survived", "  m_value: survived", "  m_kill: killed", ""]),
+        {
+            "m_text": _show_diff("a.py", 'msg = "bad"', 'msg = "XXbadXX"'),
+            "m_value": _show_diff("a.py", "x = 1", "x = 2"),
+            "m_kill": _show_diff("a.py", "x = 1", "x = 3"),
+        },
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), 1), (str(workdir / "a.py"), 2)}
+    outcome = mutation_sample(workdir, changed, 10, test_files=set())
+    assert outcome == MutationOutcome(
+        killed=1, total=2, generated=2, survivors=("m_value",), text_only=1
+    )

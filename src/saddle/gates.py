@@ -868,19 +868,25 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     percent = 100.0 * outcome.killed / outcome.total
     small = outcome.total < MIN_SIGNIFICANT_MUTANTS
     required = 100.0 if small else threshold
+    excluded = f"; {outcome.text_only} text-only mutant(s) excluded" if outcome.text_only else ""
     if percent < required:
-        shown = ", ".join(sorted(outcome.survivors)[:5])
+        # The count, then the first five names (F21.14 read five names as
+        # the whole set and understated a 66-survivor gap by an order).
+        names = sorted(outcome.survivors)
+        shown = ", ".join(names[:5]) + (", ..." if len(names) > 5 else "")
         note = f" (small sample: {outcome.total} mutant(s), all must die)" if small else ""
         return GateCheck(
             name="mutation",
             passed=False,
-            detail=f"{percent:.1f}% < {required:.1f}%{note}: survived {shown}",
+            detail=(
+                f"{percent:.1f}% < {required:.1f}%{note}: survived {len(names)}: {shown}{excluded}"
+            ),
             basis=f"sampled n={outcome.total}",
         )
     return GateCheck(
         name="mutation",
         passed=True,
-        detail=f"{percent:.1f}% >= {required:.1f}% over {outcome.total} mutant(s)",
+        detail=f"{percent:.1f}% >= {required:.1f}% over {outcome.total} mutant(s){excluded}",
         basis=f"sampled n={outcome.total}",
     )
 

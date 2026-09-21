@@ -467,7 +467,7 @@ def test_mutation_below_threshold_fails_with_survivors() -> None:
     check = check_mutation(outcome, 85.0)
     assert check.name == "mutation"
     assert check.passed is False
-    assert check.detail == "14.3% < 85.0%: survived s1, s2, s3, s4, s5"
+    assert check.detail == "14.3% < 85.0%: survived 6: s1, s2, s3, s4, s5, ..."
     assert check.basis == "sampled n=7"
 
 
@@ -1251,3 +1251,25 @@ def test_mutation_failed_tool_is_named_not_undecided() -> None:
     assert check.basis == "sampled n=0"
     undecided = MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut not on PATH",))
     assert check_mutation(undecided, 85.0).detail == "no mutants decided: mutmut not on PATH"
+
+
+def test_mutation_detail_reports_the_text_only_mutants_left_out() -> None:
+    """T6-33: the verdict says how many mutants were excluded as text-only,
+    on a pass and on a fail, and the survivor count precedes the names."""
+    passing = MutationOutcome(killed=9, total=10, generated=10, survivors=("s1",), text_only=4)
+    check = check_mutation(passing, 85.0)
+    assert check.passed is True
+    assert check.detail == "90.0% >= 85.0% over 10 mutant(s); 4 text-only mutant(s) excluded"
+    failing = MutationOutcome(
+        killed=1, total=7, generated=7, survivors=tuple(f"s{i}" for i in range(6)), text_only=2
+    )
+    check = check_mutation(failing, 85.0)
+    assert check.detail == (
+        "14.3% < 85.0%: survived 6: s0, s1, s2, s3, s4, ...; 2 text-only mutant(s) excluded"
+    )
+    assert (
+        "excluded"
+        not in check_mutation(
+            MutationOutcome(killed=9, total=10, generated=10, survivors=("s1",)), 85.0
+        ).detail
+    )

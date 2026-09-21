@@ -782,9 +782,10 @@ def test_diff_grammar_requires_the_file_lines_before_a_hunk() -> None:
     had swallowed the header.
     """
     rules = _grammar_rules(DIFF_GRAMMAR)
-    assert rules["section"].split() == ["header", "meta*", "from", "to", "hunk+"]
-    assert rules["from"] == r'"--- " line "\n"'
-    assert rules["to"] == r'"+++ " line "\n"'
+    assert rules["section"].split() == ["header", "(create", "|", "delete", "|", "modify)"]
+    assert rules["modify"].split() == ["meta*", "from", "to", "hunk+"]
+    assert rules["from"] == r'"--- " path "\n"'
+    assert rules["to"] == r'"+++ " path "\n"'
     # ... and they are no longer reachable as optional metadata instead.
     assert '"--- "' not in rules["meta_pfx"]
     assert '"+++ "' not in rules["meta_pfx"]
@@ -798,6 +799,32 @@ def test_diff_grammar_requires_the_file_lines_before_a_hunk() -> None:
     named = [name for name, case in MUST_REJECT.items() if case == headerless]
     assert named, "the check tool no longer carries the headerless diff"
     assert REJECT_AT[named[0]] == headerless.index("@@")
+
+
+def test_diff_grammar_makes_a_creation_carry_its_mode_line() -> None:
+    """T6-32 structural pin (xgrammar decides acceptance in the container;
+    the corpus below carries the known-good and known-bad). A creation is
+    its own form, `new file mode` mandatory before `--- /dev/null`; a
+    deletion likewise with `deleted file mode`; and a modify side's path
+    may not begin with `/`, so `/dev/null` cannot slip in as a plain path.
+    Round 3d's probe drew a creation with no mode line and git applied it
+    as `dev/null` (F21.14).
+    """
+    rules = _grammar_rules(DIFF_GRAMMAR)
+    assert rules["create"].split()[:4] == ["meta*", '"new', "file", "mode"] or rules[
+        "create"
+    ].startswith('meta* "new file mode " line')
+    assert '"--- /dev/null\\n"' in rules["create"]
+    assert rules["delete"].startswith('meta* "deleted file mode " line')
+    assert '"+++ /dev/null\\n"' in rules["delete"]
+    assert rules["path"] == r"[^/\n] [^\n]*"
+    assert '"new file mode "' not in rules["meta_pfx"]
+    assert '"deleted file mode "' not in rules["meta_pfx"]
+    from tools.diff_grammar_check import MUST_REJECT, REJECT_AT, SYNTHETIC
+
+    bad = MUST_REJECT["creation without mode line"]
+    assert REJECT_AT["creation without mode line"] == bad.index("/dev/null")
+    assert SYNTHETIC["_create"].startswith("diff --git a/new.py b/new.py\nnew file mode 100644\n")
 
 
 def test_grammar_check_corpus_carries_the_grammar_it_checks() -> None:
