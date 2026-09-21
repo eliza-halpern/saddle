@@ -1759,6 +1759,72 @@ def test_dead_additions_accepts_the_same_draw_without_the_repeated_block() -> No
     assert check.detail == "every private definition added is mentioned elsewhere in the tree"
 
 
+def _padded_tree(count: int = 50) -> tuple[dict[str, str], dict[str, set[int]]]:
+    """Round 3h's shape: many helpers named once each, beside real work.
+
+    The frozen round-3e draw repeats twenty names; this one repeats none.
+    """
+    real = (
+        "def fee_for(amount):\n    return _coerce(amount)\n\n\n"
+        "def _coerce(amount):\n    return amount\n"
+    )
+    pad = "\n\n".join(
+        f'def _legacy_usd_round_half_up_{n}dp(a):\n    """Legacy rounding helper."""\n    return a'
+        for n in range(1, count + 1)
+    )
+    source = real + "\n\n" + pad + "\n"
+    sources = {"fees.py": source, "tests/test_fees.py": "from fees import fee_for\n"}
+    added = {"fees.py": set(range(len(real.splitlines()) + 1, len(source.splitlines()) + 1))}
+    return sources, added
+
+
+def test_dead_additions_rejects_many_distinct_names_used_once() -> None:
+    """The other degeneration shape: no name repeats and all are dead.
+
+    Round 3e's frozen draw emits twenty names, three of them sixty times,
+    so a check counting repeats would reject it. Round 3h's `n2` attempt 1
+    draw 2 emits 192 definitions with 192 distinct names, 187 mentioned
+    nowhere but their own `def` line (F21.30), and a repeat count would
+    read it as clean. This gate asks whether anything depends on the
+    definition, so both shapes land the same way; that is what this pins.
+    The basis counts every dead name, so an implementation that
+    special-cased repetition fails here rather than merely scoring lower.
+
+    The bytes are built, not restored: 3h draw 2's patch is malformed
+    (`corrupt patch at line 182`) and no post-image tree exists.
+    """
+    sources, added = _padded_tree()
+    seen: dict[str, str] = {}
+
+    def run_without(edited: Mapping[str, str]) -> int:
+        seen.update(edited)
+        return 0
+
+    check = check_dead_additions(sources, added, suite_passed=True, run_without=run_without)
+    assert not check.passed
+    assert check.name == "dead-code"
+    assert check.basis == "dead-definitions=50"
+    assert "implement no requirement" in check.detail
+    assert "copies)" not in check.detail
+    assert "_legacy_usd_round_half_up_1dp" not in seen["fees.py"]
+    assert "def fee_for(amount):" in seen["fees.py"]
+
+
+def test_dead_additions_accepts_many_distinct_names_the_suite_misses() -> None:
+    """The discriminating half: the identical fifty names, suite red.
+
+    Same tree, same count, same spelling; only the suite's answer to
+    their removal differs. So the rejection above is about nothing
+    depending on them, not about how much the node added -- the property
+    that keeps this gate from being a line count under another name.
+    """
+    sources, added = _padded_tree()
+    check = check_dead_additions(sources, added, suite_passed=True, run_without=lambda edited: 1)
+    assert check.passed
+    assert check.basis == "dead-candidates=50"
+    assert "the suite fails without them, so they carry the work" in check.detail
+
+
 def test_dead_additions_keeps_a_private_helper_the_suite_depends_on() -> None:
     """A private helper nothing names is a candidate, not a verdict.
 
