@@ -161,7 +161,9 @@ spelling of a message-only mutation and not the other; F21.29 — two such
 mutants are the whole margin between round 3h's `n2` sealing and failing)
 → **T6-60** (the dead-code gate's known-bad half is closed for the
 repeated-name shape only; F21.30 — the all-distinct shape recurred at 3h)
-→ T6-46 (still no admissible example; round 3g checked and does
+→ T6-46 (round 3i supplies the shape at last, and it argues for
+  closure — three-for-three, every candidate dissolved into an upstream
+  fix; recommendation is to close. Formerly: no admissible example; 3g does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
@@ -198,6 +200,8 @@ T6-62 (emission: 53% of live failures; round 3i's deciding node spent
        A1a landed `e7d3039`; A1b and A2 wait on a run that reads it
 T6-61 (stride; decided) ──► any seed read as evidence about the 85% threshold
 T6-63 (detail wording; independent, small) ──► nothing
+T6-65 (replan may not re-target a pending node's files; live instance
+  on disk, needs no run) ──► nothing
 T6-64 (the unappealable test spec) ──► closes only on a completed run,
        so it cannot precede one; its mitigation rides with T6-4/T6-5
 ```
@@ -6033,6 +6037,67 @@ where the worker says so and stops. 3g n2.r1 is the nearest miss and
 fails it on the last clause — a later node could supply it, which is why
 T6-53 was the right answer there.
 
+**Status 2026-09-21, round 3i: the shape has now occurred, and it argues
+for (b).** 3i `n2` fits every clause but the last. Its two gated draws
+changed only module docstrings, because `n1.r2` had already implemented
+both of its target files (T6-65, F21.40). Read whole, the draw's 39 487
+characters of reasoning show the worker diagnosing it exactly and then
+gaming it because it had no alternative:
+
+> "Already has multi-currency support implemented!" … "\"Exactly that\"
+> refers to the implementation described in the node description. **If
+> the files already implement it, then the diff is empty. But the rules
+> say every file section needs at least one hunk.**" … "Final answer:
+> I'll make a small docstring change to each file to produce a valid
+> diff that satisfies all constraints."
+
+That is G1's "produce something, or burn the attempt", recorded in the
+worker's own words, with the honest answer named and rejected as
+unrepresentable. It also falsifies the candidate discriminator a second
+and independent time: `n2` gates with `tests: PASS`, so "admissible only
+when the node's own tests are red" **excludes** it. The discriminator is
+wrong in both directions now — it admits the one broken artifact (3g
+n2) and excludes the one node that had nothing to do.
+
+**But refusing was still not the right remedy, and that is the pattern.**
+The right remedy for 3i `n2` is upstream: do not plan the node twice
+(T6-65). That makes three:
+
+| node | looked like it needed a refusal | actual remedy |
+|---|---|---|
+| 3g n2.r1 | `coverage` on lines only a later test node reaches | **T6-53**, deferral |
+| 3h n2/n2.r1 | `mutation` below threshold on a correct artifact | **T6-59**, the exclusion fix |
+| 3i n2 | nothing left to implement | **T6-65**, do not duplicate a pending node |
+
+Every candidate this item has ever had dissolved into a deterministic
+upstream fix, and in each case the refusal would have recorded a false
+claim about the spec while hiding the real defect. That is now a
+three-for-three record against the item's premise, not an absence of
+evidence. **Recommendation: close T6-46**, and treat "the worker had no
+honest way out" as a diagnostic that an upstream item is missing —
+which is how all three were actually found. Do not implement the
+refusal outcome. Left open pending the user's call, because closing an
+item is not a defect fix.
+
+**One piece of the original complaint is real and survives closure.**
+The envelope still cannot express "nothing to do". T6-62/A1a removed the
+hunk rule the 3i worker quoted, and the prompt now says "A file you do
+not name is left exactly as it is" — but against the current tree
+(`e7d3039`), `_write_files` refuses all three honest forms identically:
+
+```
+""                                          -> RuntimeError: worker content is not a file payload
+"   \n\n"                                   -> RuntimeError: worker content is not a file payload
+"Nothing to do: accounts.py already …"      -> RuntimeError: worker content is not a file payload
+```
+
+Reproduced on a restored copy with saddle's own `_write_files`, not by
+reading the code. A1a narrowed the trap from *forced fabrication* to
+*no way to say it*; it did not remove it. Whether that gap needs its own
+item depends on whether T6-65 makes the state unreachable — it does not
+in general, since a node can also be made redundant by an earlier node
+overreaching within its own scope.
+
 ---
 
 ### T6-47 — An attempt records the reasoning effort it ran at (tightened)
@@ -7554,6 +7619,71 @@ This does not close the item. It narrows the surface on which a wrong
 spec can hide; it cannot prove none remains. **Nothing closes this but a
 completed run compared against the oracle.** Recorded so it is not
 mistaken for refuted, and so the mitigation is not mistaken for a close.
+
+### T6-65 — A replacement subplan may not re-target a pending node's files (open; live instance on disk)
+
+Files: `src/saddle/dag.py` (beside `pending_test_nodes`),
+`src/saddle/slice.py` (`splice_replan`'s caller), `src/saddle/cli.py`
+(`build_replan_task`).
+
+Round 3i failed this way and F21.40 records it in full. `n1` was a
+**test** node. Its recovery subplan contained `n1.r2`, an **impl** node
+whose `target_files` are `['accounts.py', 'fees.py']` — byte-identical
+to the still-pending `n2`'s. `n1.r1` and `n1.r2` both sealed; `n1.r2`
+is the first impl proof the benchmark has ever recorded. `n2` then ran
+against a tree where its work was already done, emitted a
+docstring-only diff, and failed.
+
+**No gate was wrong.** Every gate that could see the condition named it
+verbatim: `red-phase: tests pass pre-change; prove nothing`,
+`mutation: no mutants on changed lines: mutation provided no evidence`,
+and on the replan `tests: 'pytest …' exited 0: tests already pass,
+nothing specified`. The gates refused to certify a no-op, which is what
+they are for. The defect is entirely upstream of them.
+
+**Mechanism, read from the source rather than inferred.**
+`build_replan_task` takes `task`, `node`, `history` and renders
+`Original task: {task}` — the whole job — plus the one failed node. It
+never receives the sibling nodes. A replanner handed the entire task
+and no knowledge that an impl node is already pending re-plans the
+entire task: a test node, then an impl node. `grep` finds no check
+anywhere in `src/` comparing a subplan's `target_files` against pending
+nodes, and no prior workplan item.
+
+**Two candidate repairs, and they are not exclusive.**
+
+1. *Tell the replanner what is pending.* `build_replan_task` carries the
+   pending nodes and their target files, so the model can scope its
+   subplan to the failed slice. Cheap, and it addresses the cause.
+2. *Refuse the overlap.* A pure predicate beside `pending_test_nodes`
+   in `dag.py` — the same layer, the same shape, `(dag, proven)` in and
+   offending ids out — consulted where `splice_replan` is called. This
+   is the enforcing half; (1) alone leaves the model free to ignore the
+   hint.
+
+Prefer building (2) first: it is deterministic, it is testable without
+a model, and it is the half that can be closed by a known-good and a
+known-bad. (1) without (2) is a prompt change with no gate behind it.
+
+**Known-good:** a subplan whose `target_files` are disjoint from every
+pending node's splices unchanged — today's behaviour, and the common
+case in 3c–3h, none of which exhibits this shape.
+**Known-bad:** 3i's `n1.r2` against pending `n2`, identical targets.
+Spliced today; must be refused after the fix. The plan records are on
+disk at `../saddle-bench/runs/round3i/t5-s1/t5-saddle/.saddle/proofs.jsonl`,
+so the fixture needs no new run.
+
+**Open question the fix must answer, not dodge:** when the overlap is
+detected, what happens to the pending node? Retiring `n2` because
+`n1.r2` did its work is the outcome the run actually wanted, and it is
+a larger change than refusing the subplan. Refusing the subplan is
+smaller and keeps one node responsible for one piece of work. Decide it
+with the run in front of you; do not widen the item to both.
+
+Distinct from **T6-54** ("a recovery plan may not prescribe what a gate
+rejects"): that forbids a subplan from specifying something the gates
+will refuse. This forbids it from duplicating work another node already
+owns. A subplan can violate either without the other.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
