@@ -1463,9 +1463,20 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
             # A tool that never ran is named as such (T3-20); "no mutants
             # decided" describes a run that happened.
             failed_tool = any(s.startswith("mutmut run exited") for s in outcome.survivors)
-            detail = (
-                f"mutation tool failed: {cause}" if failed_tool else f"no mutants decided: {cause}"
-            )
+            # mutmut baselines by running the suite, so a red tree fails
+            # collection with the same exit a broken engine gives. Round
+            # 3c's three impl attempts all died on "failed to collect
+            # stats" and were reported as a tool failure the worker could
+            # do nothing about (T6-63); evidence marks the suite's case.
+            red_suite = any(s.startswith("suite is red") for s in outcome.survivors)
+            if red_suite:
+                detail = f"mutation not measured: {cause}"
+            else:
+                detail = (
+                    f"mutation tool failed: {cause}"
+                    if failed_tool
+                    else f"no mutants decided: {cause}"
+                )
             return GateCheck(name="mutation", passed=False, detail=detail, basis="sampled n=0")
         if outcome.generated == 0:
             return GateCheck(

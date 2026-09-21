@@ -831,6 +831,7 @@ def mutation_sample(
     *,
     test_files: Collection[str],
     run_tests: Collection[str] = (),
+    suite_passed: bool = True,
     timeout_s: int = _MUTATION_TIMEOUT_S,
     recorder: SpanRecorder | None = None,
 ) -> MutationOutcome:
@@ -884,11 +885,17 @@ def mutation_sample(
         if ran.exit_code not in (0, SHELL_TIMEOUT):
             output = (ran.stderr.strip() or ran.stdout.strip()).splitlines()
             last = output[-1].strip() if output else "no output"
+            # The same exit covers two causes and only the caller can tell
+            # them apart (T6-63): mutmut baselines by running the suite, so
+            # a red suite fails collection exactly as a broken engine does.
+            # `suite_passed` is the tests gate's own verdict on this tree;
+            # when it is False the suite is the cause and the engine is not.
+            cause = f"mutmut run exited {ran.exit_code}: {last}"
             return MutationOutcome(
                 killed=0,
                 total=0,
                 generated=0,
-                survivors=(f"mutmut run exited {ran.exit_code}: {last}",),
+                survivors=(cause if suite_passed else f"suite is red: {cause}",),
             )
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)

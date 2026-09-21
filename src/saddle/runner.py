@@ -259,6 +259,7 @@ def run_node_gate(
             sample.max_mutants,
             test_files=test_sources,
             run_tests=pytest_scope(gate.test_command),
+            suite_passed=current_exit == 0,
             recorder=recorder,
         )
     )
@@ -275,6 +276,7 @@ def run_node_gate(
             sample.max_mutants,
             test_files=test_sources,
             run_tests=property_targets,
+            suite_passed=current_exit == 0,
             recorder=recorder,
         )
         if node.kind == "impl" and property_targets

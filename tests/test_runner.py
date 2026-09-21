@@ -116,6 +116,58 @@ def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:
     assert (tmp_path / ".coverage.tier1").is_file()
 
 
+def _mutmut_that_cannot_baseline(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutmut whose `run` fails exactly as the real one does on a red tree.
+
+    mutmut 3.8 baselines by running the suite and calls `exit(1)` when the
+    collection runner returns non-zero (`run_stats_collection`), so a
+    broken engine and a red suite are the same exit and the same words.
+    """
+    stub_dir = root / "broken-mutmut"
+    stub_dir.mkdir()
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  run) echo 'failed to collect stats. runner returned 1' >&2; exit 1;;\n"
+        "esac\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_run_node_gate_mutation_names_a_red_suite_not_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6-63: the runner hands the collector the tests gate's own verdict.
+
+    Known-bad: the node's suite is red, the engine fails for that reason,
+    and the detail names the suite -- something the worker can act on.
+    Known-good: the same engine failure over a suite that passed still
+    names the engine, so T3-20 survives. Round 3c died here: three impl
+    attempts all read "mutation tool failed" and the engine was fine.
+    """
+    body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == %s\n"
+    red = tmp_path / "red"
+    red.mkdir()
+    _worktree(red, body % "3", baseline_test=body % "3")
+    _mutmut_that_cannot_baseline(tmp_path, monkeypatch)
+    checks = {c.name: c for c in run_node_gate(_node(), red).checks}
+    assert checks["tests"].passed is False
+    assert checks["mutation"].detail == (
+        "mutation not measured: suite is red: mutmut run exited 1: "
+        "failed to collect stats. runner returned 1"
+    )
+    green = tmp_path / "green"
+    green.mkdir()
+    _worktree(green, body % "2", baseline_test=body % "2")
+    checks = {c.name: c for c in run_node_gate(_node(), green).checks}
+    assert checks["tests"].passed is True
+    assert checks["mutation"].detail == (
+        "mutation tool failed: mutmut run exited 1: failed to collect stats. runner returned 1"
+    )
+
+
 def test_run_node_gate_full_sample_catches_what_a_small_cap_hid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

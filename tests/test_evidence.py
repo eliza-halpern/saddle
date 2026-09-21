@@ -885,6 +885,35 @@ def test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification(
     assert scoped == MutationOutcome(killed=1, total=1, generated=1, survivors=())
 
 
+def test_mutation_sample_names_a_red_suite_instead_of_blaming_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T6-63. mutmut exits 1 both when the engine is broken and when the
+    node's own suite is red, and every red suite was read as a broken
+    engine: round 3c's three impl attempts all died on "failed to collect
+    stats" (runner.py says so at the call site) and the brief handed the
+    worker a tool failure it could not act on.
+
+    Known-bad: the suite the tests gate just ran was red, so the outcome
+    names the suite and not the engine. Known-good: the same mutmut exit
+    with a suite that passed still names the engine -- T3-20's contract,
+    which the red-sibling test above exercises unchanged.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "w"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f():\n    return 2\n")
+    (workdir / "test_n.py").write_text("from n import f\n\n\ndef test_f():\n    assert f() == 3\n")
+    changed = {(str(workdir / "n.py"), 2)}
+    tests = {"test_n.py"}
+    tool = "mutmut run exited 1: failed to collect stats. runner returned 1"
+    red = mutation_sample(workdir, changed, 5, test_files=tests, suite_passed=False)
+    assert red.total == 0
+    assert red.survivors == (f"suite is red: {tool}",)
+    blamed = mutation_sample(workdir, changed, 5, test_files=tests, suite_passed=True)
+    assert blamed.survivors == (tool,)
+
+
 def test_property_modules_selects_property_bearing_modules_that_import_a_change() -> None:
     """Known-good: a `@given` module importing the changed module, by stem,
     by dotted path, or by package `__init__`. Known-bad: a property over

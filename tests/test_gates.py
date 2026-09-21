@@ -1602,6 +1602,22 @@ def test_mutation_failed_tool_is_named_not_undecided() -> None:
     assert check_mutation(undecided, 85.0).detail == "no mutants decided: mutmut not on PATH"
 
 
+def test_mutation_red_suite_is_named_not_blamed_on_the_tool() -> None:
+    """T6-63. Known-bad: mutmut exited non-zero because the node's own
+    suite is red, so the detail names the suite -- the worker can act on
+    that and cannot act on "the tool failed". Known-good: a genuine tool
+    failure keeps T3-20's wording, and an undecided run keeps its own.
+    """
+    tool = "mutmut run exited 1: failed to collect stats. runner returned 1"
+    red = MutationOutcome(killed=0, total=0, generated=0, survivors=(f"suite is red: {tool}",))
+    check = check_mutation(red, 85.0)
+    assert check.passed is False
+    assert check.basis == "sampled n=0"
+    assert check.detail == f"mutation not measured: suite is red: {tool}"
+    broken = MutationOutcome(killed=0, total=0, generated=0, survivors=(f"{tool}",))
+    assert check_mutation(broken, 85.0).detail == f"mutation tool failed: {tool}"
+
+
 def test_mutation_detail_reports_the_text_only_mutants_left_out() -> None:
     """T6-33: the verdict says how many mutants were excluded as text-only,
     on a pass and on a fail, and the survivor count precedes the names."""
