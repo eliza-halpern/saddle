@@ -26,6 +26,7 @@ from saddle.cli import (
     DagOptions,
     RunError,
     RunOptions,
+    _ensure_repo,
     _file_lines,
     build_emit_prompt,
     build_parser,
@@ -3118,3 +3119,21 @@ def test_run_task_withholds_a_recovery_plan_that_prescribes_a_deletion(
     assert "Attempt 1 of 3" in repair
     assert ("Recovery plan:" in repair) is routed
     assert (plan in repair) is routed
+
+
+def test_ensure_repo_baselines_where_git_will_not_guess_an_identity(tmp_path: Path) -> None:
+    """Known-bad (T6-56): an initialised repo with no HEAD, on a host that
+    supplies no identity and will not invent one. `saddle run` creates the
+    baseline commit itself, so if it has no identity of its own the command
+    fails before a plan is ever drawn."""
+    assert run_argv(["git", "init"], tmp_path) == 0
+    assert run_argv(["git", "config", "user.useConfigOnly", "true"], tmp_path) == 0
+    assert _ensure_repo(tmp_path) is True
+    author = subprocess.run(
+        ["git", "log", "-1", "--format=%an <%ae>"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert author == "saddle <saddle@local>"

@@ -17,6 +17,7 @@ import pytest
 import saddle.evidence as evidence_module
 from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
+    SADDLE_COMMIT_IDENTITY,
     CapturedRun,
     MutationOutcome,
     _mutmut_scratch_config,
@@ -48,6 +49,24 @@ from saddle.evidence import (
 )
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
 from saddle.journal import SpanRecorder, read_spans
+
+
+def _git_subcommand(argv: Sequence[str]) -> str:
+    """The subcommand in a `git -C <dir> [-c k=v ...] <sub> ...` argv.
+
+    Position stopped naming it when T6-56 put saddle's identity on the
+    commit: two `-c` pairs now sit between `-C <dir>` and the subcommand.
+    Reading it by shape rather than by index keeps the assertion pinned to
+    which git runs, which is what it was ever about.
+    """
+    rest = iter(argv[3:])
+    for token in rest:
+        if token == "-c":
+            next(rest)
+            continue
+        return token
+    msg = f"no git subcommand in {list(argv)}"
+    raise AssertionError(msg)
 
 
 def _git_repo(root: Path) -> None:
@@ -399,7 +418,21 @@ def test_snapshot_baseline_records_one_span_per_git_run(tmp_path: Path) -> None:
     assert [span.name for span in spans] == ["git"] * 4
     assert [span.exit_code for span in spans] == [0, 0, 0, 0]
     assert all(span.node_id == "n1" for span in spans)
-    assert [span.argv[3] for span in spans] == ["add", "write-tree", "commit-tree", "update-ref"]
+    assert [_git_subcommand(span.argv) for span in spans] == [
+        "add",
+        "write-tree",
+        "commit-tree",
+        "update-ref",
+    ]
+    # And the identity rides on the commit alone (T6-56): a snapshot that
+    # only stages and hashes needs none, and a run that carried it
+    # everywhere would still read as four named git runs here.
+    assert [tuple(span.argv[3:7]) == SADDLE_COMMIT_IDENTITY for span in spans] == [
+        False,
+        False,
+        True,
+        False,
+    ]
 
 
 def test_restore_baseline_drops_a_staged_edit_and_a_staged_add(tmp_path: Path) -> None:
@@ -1285,3 +1318,61 @@ def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
         text_only=1,
         survivor_lines=((str(workdir / "a.py"), 1),),
     )
+
+
+def _git_repo_that_refuses_to_guess(root: Path) -> None:
+    """A repo git will not invent an author identity for.
+
+    Round 3h died here 16 ms into its slice: the host's DNS domain had gone
+    away, so git's guess was `eliza@pop-os.(none)`, which is not an address,
+    and it refused. `user.useConfigOnly` makes git refuse the guess
+    everywhere instead of only on a host that happens to be misconfigured.
+    The seed commit carries its own identity so the refusal is the
+    snapshot's alone.
+    """
+    setup = (
+        ["git", "init"],
+        ["git", "config", "user.useConfigOnly", "true"],
+        [
+            "git",
+            "-c",
+            "user.name=seed",
+            "-c",
+            "user.email=seed@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    )
+    for argv in setup:
+        assert run_argv(argv, root) == 0
+
+
+def _author_of(root: Path, ref: str) -> str:
+    return run_capture(["git", "log", "-1", "--format=%an <%ae>", ref], root).stdout.strip()
+
+
+def test_snapshot_baseline_commits_where_git_will_not_guess_an_identity(tmp_path: Path) -> None:
+    """Known-bad (T6-56): the host supplies no identity and will not invent
+    one. `commit-tree` takes no `--author`, so without an identity of its own
+    the snapshot exits 128 -- and it is the first thing a node does, so the
+    run dies before any gate can name what went wrong."""
+    _git_repo_that_refuses_to_guess(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    ref = snapshot_baseline(tmp_path, "n1")
+    assert _author_of(tmp_path, ref) == "saddle <saddle@local>"
+
+
+def test_snapshot_baseline_does_not_borrow_the_operators_identity(tmp_path: Path) -> None:
+    """Known-good (T6-56): the host does supply an identity, and the snapshot
+    still is not signed with it. A saddle ref is saddle's own bookkeeping; the
+    operator did not author it, and a run that reads the same either way does
+    not depend on git config it never set."""
+    _git_repo(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run_argv(["git", "add", "a.py"], tmp_path) == 0
+    ref = snapshot_baseline(tmp_path, "n1")
+    assert _author_of(tmp_path, "HEAD") == "test <test@example.com>"
+    assert _author_of(tmp_path, ref) == "saddle <saddle@local>"

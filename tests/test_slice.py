@@ -12,6 +12,7 @@ import stat
 import subprocess
 import threading
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -61,6 +62,24 @@ from saddle.slice import (
 )
 from saddle.transcript import is_run_end
 from saddle.vllm import DiffProposal, VllmRequestError, VllmResponseError
+
+
+def _git_subcommand(argv: Sequence[str]) -> str:
+    """The subcommand in a `git -C <dir> [-c k=v ...] <sub> ...` argv.
+
+    Position stopped naming it when T6-56 put saddle's identity on the
+    commit: two `-c` pairs now sit between `-C <dir>` and the subcommand.
+    Reading it by shape rather than by index keeps the assertion pinned to
+    which git runs, which is what it was ever about.
+    """
+    rest = iter(argv[3:])
+    for token in rest:
+        if token == "-c":
+            next(rest)
+            continue
+        return token
+    msg = f"no git subcommand in {list(argv)}"
+    raise AssertionError(msg)
 
 
 def _git_repo(root: Path) -> None:
@@ -731,7 +750,12 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
     # the first proposal is drawn (T3-8): four runs, named rather than
     # counted, so a fifth git run could not hide behind the total.
     git_runs = [span for span in spans if span.name == "git"]
-    assert [span.argv[3] for span in git_runs] == ["add", "write-tree", "commit-tree", "update-ref"]
+    assert [_git_subcommand(span.argv) for span in git_runs] == [
+        "add",
+        "write-tree",
+        "commit-tree",
+        "update-ref",
+    ]
     assert len([span for span in spans if span.kind == "agent"]) == 3
     assert "- Attempts: 2\n" in result.transcript
 
@@ -777,7 +801,12 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     # Prose short-circuits before the ladder, so the only git spans parented
     # to a worker attempt are the baseline snapshot's, taken once on attempt
     # 1 and reused by attempts 2..N (T3-8).
-    assert [span.argv[3] for span in git_runs] == ["add", "write-tree", "commit-tree", "update-ref"]
+    assert [_git_subcommand(span.argv) for span in git_runs] == [
+        "add",
+        "write-tree",
+        "commit-tree",
+        "update-ref",
+    ]
     assert {span.parent_id for span in git_runs} == {workers[0].span_id}
 
 

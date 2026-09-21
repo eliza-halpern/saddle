@@ -22,7 +22,13 @@ from rich.console import Console
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
-from saddle.evidence import RUFF_RULES, git_ls_files, ruff_version, run_argv
+from saddle.evidence import (
+    RUFF_RULES,
+    SADDLE_COMMIT_IDENTITY,
+    git_ls_files,
+    ruff_version,
+    run_argv,
+)
 from saddle.gates import plan_prescribes_deletion
 from saddle.journal import (
     JournalIssue,
@@ -537,10 +543,7 @@ def _ensure_repo(repo: Path) -> bool:
     _git_ok(
         [
             "git",
-            "-c",
-            "user.name=saddle",
-            "-c",
-            "user.email=saddle@local",
+            *SADDLE_COMMIT_IDENTITY,
             "commit",
             "--quiet",
             "--allow-empty",

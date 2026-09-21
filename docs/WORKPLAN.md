@@ -147,7 +147,9 @@ an artifact ground truth accepts) →
 **T6-54** (a recovery plan may not prescribe what a gate rejects; small,
 known-bad in hand) → **T6-53** (coverage may not demand what the graded
 node cannot supply; option (c) as the user chose, premise re-verified
-against the task prompt's §7) → round 3h, the next
+against the task prompt's §7) → **T6-56** (round 3h died at node 1 on
+`commit-tree` exit 128: saddle's snapshots borrowed an identity from the
+host's git config and the host stopped supplying one) → round 3h, the next
 G1 seed → T6-46 (still no admissible example; round 3g checked and does
 not qualify) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
@@ -6696,6 +6698,78 @@ does not become dead weight. `./check.sh` green, 852 passed, 100%.
 
 Owner: main session. Independent of T6-53 and much smaller; it can land
 first.
+
+### T6-56 — Every commit saddle creates carries saddle's identity (tightened) — DONE 2026-09-21
+
+Files: `src/saddle/evidence.py` (`SADDLE_COMMIT_IDENTITY`,
+`snapshot_tree`), `src/saddle/cli.py` (`_ensure_repo`),
+`tests/test_evidence.py`, `tests/test_cli.py`.
+
+**Round 3h did not fail a gate. It never reached one.** The run ended
+`EXIT=1 WALL=733` with nothing sealed, and the transcript's first node
+read:
+
+```
+## Node n1
+- Requirements: REQ-001
+- Proof: none
+- Timeline:
+  - tool git: exit 0 in 1ms: git -C .../t5-saddle add -u
+  - tool git: exit 0 in 1ms: git -C .../t5-saddle write-tree
+  - tool git: exit 128 in 6ms: git -C .../t5-saddle commit-tree 008ada01... -p HEAD -m saddle snapshot refs/saddle/baseline/n1
+```
+
+Reproduced by hand: `fatal: unable to auto-detect email address (got
+'eliza@pop-os.(none)')`. The host's DNS domain had gone away since round
+3g, whose commits in the same kind of worktree are authored `Eliza H
+<eliza@pop-os.mynetworksettings.com>` — an identity git *derived*, not
+one anybody set. There is no identity in the worktree, none global, and
+none in the bench's `run_arm.sh`. Sixteen milliseconds into the slice,
+733 seconds of wall clock spent, no gate verdict, no oracle comparison,
+no G1 seed.
+
+`_ensure_repo` has passed `-c user.name=saddle -c user.email=saddle@local`
+for its baseline commit since the command existed. The snapshot commits
+T6-34 added did not — so from T6-34 onward a run's survival depended on
+git config saddle never set and on the machine's DNS, and the failure
+surfaces as a node with no proof rather than as anything a gate can say.
+
+Contract: **every commit saddle creates is authored `saddle
+<saddle@local>`, whatever the operator's git config says or fails to
+say.** One constant in `evidence.py`, used by both call sites.
+
+Known-bad, red before the change and green after:
+
+- a repo carrying `user.useConfigOnly=true` and no identity, so git
+  refuses the guess deliberately the way this host refused it by
+  accident. `snapshot_baseline` raised `RuntimeError`; `_ensure_repo`
+  raised `RunError` before a plan could be drawn.
+- a repo that *does* carry an operator identity: the snapshot came back
+  signed `test <test@example.com>`. Saddle's own bookkeeping ref, the
+  operator's name on it.
+
+Mutants against `tests/test_evidence.py tests/test_cli.py`, all KILLED:
+M1 drop the identity from `snapshot_tree` (2 failed); M2 drop it from
+`_ensure_repo`'s call site (5 failed); M3 the email is the operator's (5
+failed); M4 the name is the operator's (5 failed); M5 the identity moved
+onto the `add -u` call, where it is accepted and does nothing (3 failed).
+
+Direction: **tightened** — saddle now supplies what it previously
+borrowed. Nothing a gate accepts or rejects changes.
+
+Three existing assertions read the git subcommand as `span.argv[3]`,
+which the two `-c` pairs displaced. Repaired by reading it by shape
+(`_git_subcommand`) rather than by index: the expected list of four named
+git runs is unchanged, so a fifth run or a different subcommand still
+fails, and the evidence one now also pins the identity to the commit
+alone — a run that passed it to every git call reads identically by
+subcommand and is caught here. Not a flip: no expectation changed
+direction.
+
+`./check.sh` green, 861 passed, 3 skipped, 100% line and branch.
+
+Owner: main session. Blocks round 3h: with this unfixed every run on
+this host dies at node 1.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 

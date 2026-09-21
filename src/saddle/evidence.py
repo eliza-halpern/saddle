@@ -455,6 +455,24 @@ def attempt_ref(node_id: str, attempt: int) -> str:
     return f"{ATTEMPT_REF_PREFIX}{_ref_slug(node_id)}/{attempt}"
 
 
+# The identity every commit saddle creates is authored under (T6-56).
+# `commit-tree` takes no identity of its own, so it falls back to git's
+# auto-derived `user@host` -- which is not a fallback at all when the host
+# has no domain: `unable to auto-detect email address (got
+# 'eliza@pop-os.(none)')`, exit 128. Round 3h died on that at its first
+# node, 16 ms into the slice, and the transcript reported a node with no
+# proof and no gate naming it, because no gate ran. `_ensure_repo` already
+# committed the baseline under this name; the snapshots T6-34 added did
+# not, so a run's survival depended on the operator's git config and on
+# DNS. Nothing here is a user identity: a run's refs are saddle's own.
+SADDLE_COMMIT_IDENTITY: Final = (
+    "-c",
+    "user.name=saddle",
+    "-c",
+    "user.email=saddle@local",
+)
+
+
 def snapshot_tree(cwd: Path, ref: str | None, *, recorder: SpanRecorder | None = None) -> str:
     """Stage the tracked files at `cwd`; return their `git write-tree` id.
 
@@ -490,7 +508,15 @@ def snapshot_tree(cwd: Path, ref: str | None, *, recorder: SpanRecorder | None =
     git("add", "-u")
     tree = git("write-tree")
     if ref is not None:
-        commit = git("commit-tree", tree, "-p", "HEAD", "-m", f"saddle snapshot {ref}")
+        commit = git(
+            *SADDLE_COMMIT_IDENTITY,
+            "commit-tree",
+            tree,
+            "-p",
+            "HEAD",
+            "-m",
+            f"saddle snapshot {ref}",
+        )
         git("update-ref", ref, commit)
     return tree
 
