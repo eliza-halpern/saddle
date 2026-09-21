@@ -139,10 +139,11 @@ done (the apply ladder forgives packaging; a loosening with proof, and
 the precondition for T6-43 touching the grammar) → T6-34 done (attempt
 refs, stale comment) → T6-49 done (round 3f; F21.20: P1-P5 held, P9 is a
 disagreement, G1's count stays at zero, and both plans died on the same
-gate) → **T6-50** (the binding gate's examples clause is unsatisfiable
-by a real test -- the blocker) → **T6-51** (the sidecar keeps its
-reasoning whole; G1's own verification needs it) → round 3g, the next
-G1 seed → T6-46 (the refusal path, once its discriminator is decided) → T6-1 (with the reasoning read, over rounds
+gate) → T6-50 done (a call-shaped example binds to the test that
+performs it; the blocker, with the rejected tree now passing) → T6-51
+done (the sidecar keeps its reasoning whole) → **T6-52 = round 3g**, the
+next G1 seed and the first that can reach an impl node → T6-46 (the
+refusal path, once its discriminator is decided) → T6-1 (with the reasoning read, over rounds
 3-3f; row B tunes `REQ_NEAR_MISS_K`, row C reads T6-5's cost) → T6-39,
 T6-40 →
 T6-2 → T6-6 if T6-1 says
@@ -6223,7 +6224,7 @@ T6-50 (the blocker) and T6-51 (the evidence the next round needs). No
 third: the one thing left uncovered, duplicated test bodies under
 distinct names, has no instance in this run and so has no known-bad.
 
-### T6-50 — A requirement example is satisfiable by the test that asserts the behaviour (loosened for calls, tightened against quoting; with proof)
+### T6-50 — A requirement example is satisfiable by the test that asserts the behaviour (loosened for calls, tightened against quoting; with proof) — DONE 2026-09-21
 
 Files: `src/saddle/gates.py` (`_asserted_literals`,
 `check_requirement_binding`), `tests/test_gates.py`, a fixture cut from
@@ -6275,7 +6276,17 @@ Owner: main session. Precondition for round 3g: no T5 seed can reach an
 impl node until this lands, because both plans die on their first test
 node.
 
-### T6-51 — An attempt's reasoning is in its sidecar, whole (loosening, with proof)
+**DONE 2026-09-21 (`b5a0e04`).** Implemented as written, plus one thing
+the item did not anticipate: the operation is matched on its final name,
+so an example naming a receiver binds to the same test. Discrimination
+on live data rather than a fixture -- the tree of
+`refs/saddle/attempt/n1/3`, the one round 3f rejected, now passes both
+requirements' example clauses, and its only remaining failure is the
+citation clause, because the tests never mention REQ-002. That is a
+different and correct verdict the worker can act on. Four contract
+mutants, all killed. ./check.sh 836 passed, 100%, exit 0.
+
+### T6-51 — An attempt's reasoning is in its sidecar, whole (loosening, with proof) — DONE 2026-09-21
 
 Files: `src/saddle/journal.py` (`_RETAINED_WHOLE`),
 `tests/test_journal.py`.
@@ -6315,6 +6326,74 @@ from "nothing was long enough".
 
 Owner: main session, before round 3g -- the next run is the one whose
 reasoning has to be readable.
+
+**DONE 2026-09-21 (`04a2503`).** One line of contract, three contract
+mutants, all killed. The flip is labelled in the commit and what the old
+assertion was protecting -- that the scrub descends and redacts -- is
+carried in the same test by a nested non-retained string of the same
+length, still truncated. ./check.sh 833 passed, 100%, exit 0.
+
+### T6-52 — Round 3g: the first seed that can reach an impl node, and Goal G1 seed 1 of 3 (measurement; no code)
+
+Same procedure as T6-49 (`RUN_DIR=runs/round3g/t5-s1 SAMPLE_TEMP=0.7
+DEADLINE=7200 ./run_arm.sh t5 saddle`, PREDICTION.md committed before
+the run), with saddle at the T6-50 commit or later. `--worker-effort`
+stays unset for the same reason as in T6-49: the node budget is the
+baseline the effort cell will be compared against, and changing two
+things at once forfeits both answers.
+
+Round 3f never reached an impl node -- both plans died on their first
+test node, on a clause no test could satisfy -- so P6, P7 and P8 are
+still unanswered and this is the first run that can answer them.
+
+Predictions, in the order they would be falsified:
+
+Q1. Every worker call ends `finish_reason=stop` (held in 3e and 3f).
+
+Q2. The journal verifies and `saddle explain` renders every attempt.
+
+Q3. T6-51's first live use: no nested `samples[i].thinking` carries a
+`[truncated` marker, and the reasoning is readable whole. If this fails,
+every reasoning-dependent verdict in the finding is void and says so.
+
+Q4. T6-50's first live use: no node fails `requirement-binding` on a
+call-shaped example whose operation its tests perform and whose values
+they assert. A binding failure, if one happens, names which half is
+missing, and that half is true of the tree.
+
+Q5. T6-34's refs again: one ref per gated attempt, each sidecar `tree`
+equal to `<ref>^{tree}`, and `tree=None` with no ref for an attempt that
+never applied (held exactly in 3f).
+
+Q6. An impl node is dispatched. This is the weakest prediction in the
+set -- it is the thing two rounds have failed to do -- and it is stated
+so that failing it is visible rather than absorbed.
+
+Q7. The survivor round runs at least once, so T6-29a's 0/10 gets its
+second reading.
+
+Q8. Goal G1: the run's gate verdicts and `oracles/oracle_t5.py` agree --
+either every node seals and the oracle passes, or a named node fails and
+the oracle fails for a reason that node's gate detail already gave. This
+is seed 1 of the three consecutive seeds; a disagreement resets to zero
+and is recorded as a gate defect, not as partial progress.
+
+Observations, pre-registered but not predictions: (a) `saddle explain`
+on every failed attempt, quoted; (b) whether any draw repeats a
+definition and what named it -- round 3f's answer was ruff's `F811`, not
+`dead-code`, which does not run on test nodes; (c) wall per draw and the
+prefix-cache hit rate at the node budget, against 3f's 59-739 s and
+0.45-0.78; (d) whether a node seals every requirement but one, which is
+the trigger T6-46 is waiting for.
+
+Do not `git gc` the run worktree. No verdict from a summary line: a
+per-sample `outcome` in a sidecar is a **count** of failed gates with no
+names, and reading one as though it named them is what produced the
+wrong first reading of round 3f (F21.20's correction). Reproduce the
+gate with saddle's own functions on the tree its ref names, and say
+which steps were done and which were not. Owner: main session or
+executor (needs the key and the container up). Not in this item: any
+fix. A falsified Q3-Q7, or a Q8 disagreement, is a main-session item.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
