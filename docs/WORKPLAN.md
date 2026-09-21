@@ -7310,7 +7310,16 @@ F21.38a as its evidence, per the flip rule. Smaller change than (A) and
 recovers the same four draws; it leaves the model still emitting a form
 it cannot spell, so the class returns whenever a diff is not whole-file.
 
-**(C) Record the reconstruction even when the apply fails.** Independent
+**(C) Record the reconstruction even when the apply fails.** LANDED
+`317f2ff`. `whole_file_reconstruction` reads the new side of a
+one-hunk-from-line-1 diff; `_reconstruction_evidence` records it with a
+parse verdict, on both paths that log an apply failure. Known-good is
+round 3i `n1.r2` a1 d0 frozen at `tests/fixtures/whole_file_round3i.diff`
+(its header declares `+1,113`, its body holds 136 lines — the
+reconstruction reads the body, never the arithmetic); known-bads are the
+same round's rangeless `@@` header, two hunks, an anchor past line 1, and
+a section with no hunk. Six contract mutants, all died. **Original text
+follows.** Independent
 of (A) and (B) and worth doing regardless: on a failed apply, attach the
 reconstruction and whether it parses to the attempt's sidecar. It
 recovers no attempt, but it ends the evidence loss — this item exists

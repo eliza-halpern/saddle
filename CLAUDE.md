@@ -67,6 +67,60 @@ reproduces it. "Now it's completely to spec, no more facades" is the
 sentence that started this project's rewrite; it was false and nothing in
 the repo could have caught it.
 
+## Six checks, each under a minute, each paid for
+
+Audited 2026-09-21: of eight claims stated confidently and wrong that
+day, **seven were checkable before stating them** — not by running
+anything, by a grep, a `git log`, or reading the consumer. Five were the
+same error in different clothes: *a subset read as the whole*. Run these
+before writing a claim down, not after.
+
+1. **Check the denominator.** Before "here are all of them", ask how many
+   there should be and compare. `glob.glob("**/*.json", recursive=True)`
+   **silently skips dotted directories** — a census of `.saddle/attempts/`
+   read 37 draws instead of 90, with no error. Use `os.walk`, and check
+   the count against `find | wc -l`.
+
+2. **Date a count against the code it describes.** A failure count is
+   meaningful only against a fixed tree. `src/saddle/{gates,evidence,
+   runner}.py` changed **19 times** between rounds 3c and 3i, so a census
+   pooled over them measures history, not the present, and reads repaired
+   defects as open ones (F21.36 → F21.37; the correction cost a session).
+   Restrict to rounds sharing a gate-code revision, or carry the revision
+   as a column.
+
+3. **Grep before proposing anything as new.** `../saddle-bench/runs/FINDINGS.md`
+   and the repo, docstrings included. F21.29 was re-derived six times.
+   "Attach the reconstruction on a failed apply" was proposed as
+   unrecorded when it was recommendation row 36 — *and already
+   implemented* (F21.39).
+
+4. **Re-read the source before correcting yourself.** A correction is a
+   claim and carries the same burden. "18 attempts died on
+   `finish_reason=length`" was a misreading of "18 recorded
+   `finish_reason`, **all `stop`**" — a true statement corrected into a
+   false one, which then drove a design argument. The real number is 123
+   `stop` to 1 `length` across every sidecar in every round.
+
+5. **Read the consumer before claiming a dependency.** "A whole-file
+   envelope needs the gates re-plumbed" was false: `changed_lines` comes
+   from `git_diff(workdir, baseline)`, so the gates read the tree and
+   never see the envelope. Likewise a surviving mutant may be
+   *equivalent* — `_check_property_oracle` branches only on `total` and
+   `killed`, so nothing it is handed in `survivors` can change its
+   output. Prove equivalence by reading the consumer; never assume it.
+
+6. **Run the mutant even when the change looks obviously covered.** T6-63
+   threaded a value from the runner into the mutation collector and the
+   whole suite passed with the threading removed (867 tests), because the
+   conftest `mutmut` stub always exits 0 and the branch was unreachable
+   end-to-end. The fix would have shipped inert. This is the one check
+   with a good record — it catches wrong assumptions *before* they become
+   claims.
+
+Cite symbols, not line numbers: `slice.py:239` drifted to a different
+sentence of the same comment within days.
+
 ## A constraint is verified by a known-good instance, never by its existence
 
 Asserting that a constraint is *present* proves nothing about what it
