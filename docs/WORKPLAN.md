@@ -5850,6 +5850,55 @@ keep swallowing at all, since a 404 and a server that has no version
 endpoint are different facts and only one is `unknown`. Owner: main
 session; small, and independent of round 3f.
 
+**Discriminator settled (2026-09-21). T6-46 stays unimplemented, now
+for a reason rather than a deferral.**
+
+The item's own candidate answer does not survive its own vacuity rule.
+"A refusal is admissible when the node's own tests are red" is true of
+every impl node at attempt 1 *by construction* -- a red suite before the
+change is the red-phase gate's premise, not evidence about the
+requirement. That condition admits every node on its first attempt, so
+it makes refusal the cheapest move available, which is the failure the
+open question was asking about.
+
+The discriminator that does have teeth: **a refusal is only admissible
+alongside the work.** It carves out one named requirement; it is never a
+way out of the node. Concretely, in `keep_candidate`'s image
+(`survivors.py:308`), which drops a candidate that passes against a
+counterfactual tree: re-run the node's gates with the refused
+requirement removed from the binding gate's population, and admit the
+refusal only if **every other gate passes unchanged** and the requirement
+the worker named is one the plan assigned to this node. If the rest of
+the node cannot seal, there is no refusal -- it is an ordinary failed
+attempt, recorded as one.
+
+Three things follow. First, refusing is now strictly *more* expensive
+than implementing whenever implementation is possible, and cheaper only
+when the requirement genuinely cannot be implemented -- which is the
+case the goal wants admitted. Second, it is not a third attempt outcome
+at all: the node seals, with the refusal attached to its record, so "a
+refusal is not counted as a failed attempt" falls out rather than being
+granted -- there is nothing left to retry. Third, it composes with Goal
+G1 instead of fighting it: a refused requirement predicts that the
+oracle fails on exactly that requirement, for the reason the gate detail
+already gave, which is G1's definition of **agreement**, not a
+disagreement to be explained away.
+
+And the decision immediately disqualifies the only case offered for the
+loosening. Round 3e's n2 attempt 1 could not have refused: it failed
+`ruff` and `coverage`, so it did not seal the rest of the node, and
+under this discriminator no refusal would have been recorded. F21.19
+sharpens the same point from the other side -- that draw was not aiming
+at a gate at all, so a refusal channel is not what it needed.
+
+So T6-46 has a settled discriminator and **still has no admissible
+example**, which is exactly what the loosening rule asks for before it
+lands: proof that the contract rejects a legitimate input. Until a run
+produces a node that seals every requirement but one and names that one,
+implementing the outcome would be buying a mechanism with no case. Owner
+unchanged; the trigger is now specific -- the first run in which a node
+seals every requirement but one.
+
 ---
 
 ### T6-46 — A node may refuse a requirement instead of faking it (loosening, with evidence)
