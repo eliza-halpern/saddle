@@ -88,8 +88,10 @@ SCOPE. Edit only the files named in the current item. Do not fix, tidy, rename, 
 wrong. Write those down under "Noticed, not touched" in the report.
 
 GIT. You may commit on branch fix/gate-integrity, one commit per item,
-with the mutant verdicts in the message and the trailer
-"Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>". Write the
+with the mutant verdicts in the message and the attribution trailer your own
+harness names ("Co-Authored-By: <model> <noreply@anthropic.com>"; the model
+that did the work, not a name copied from an item). An item whose Files: all
+live under ../saddle-bench commits on that repo's master instead. Write the
 commit message AFTER every mutant has run, copying each verdict from the
 output you actually saw. Never draft the mutant table first and run
 afterwards; two earlier sessions did that and one recorded the wrong verdict. You may not push,
@@ -98,7 +100,10 @@ commit .venv/, mutants/, coverage files, or anything under .proofs/.
 
 SECRETS AND INFRA. Do not run anything that prints, reads, or searches for an
 API key. Do not start, stop, restart, or exec into any docker container. If a
-command needs the vLLM server, stop and report: this item should not need it.
+command needs the vLLM server's completion API, stop and report: this item
+should not need it. A read-only HTTP GET on the server's unauthenticated
+endpoints (/metrics, /v1/models, /version) is allowed when the item names it;
+it needs no key and touches no container.
 
 MEASUREMENT. Do not edit any file while pytest, coverage, or mutmut is
 running. Run the suite as CLAUDE.md says:

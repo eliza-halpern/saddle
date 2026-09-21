@@ -120,10 +120,10 @@ T5-7, T5-8 ──► nothing (decisions, not work)
 ```
 
 Order of sessions from here (T6-17, T6-15, T6-18, T6-9, T6-19 done):
-T6-22 to T6-27 done, T6-30 withdrawn → session 38 = T6-28 (executor,
-metrics sampler) and session 39 = T6-29a (executor, probe), either order
-→ T6-3 with T6-31 (main session) → T6-29 (main session) → round 3e, one
-T5 seed → T6-1 (with the reasoning read)
+T6-22 to T6-27, T6-3, T6-31 done, T6-30 withdrawn → sessions 38 (T6-28),
+39 (T6-29a) and 40 (T6-29b, saddle checkout: the main session stays out
+of the tree until it reports) → T6-29c (main session) → round 3e, one T5
+seed → T6-1 (with the reasoning read)
 → T6-2 → T6-4 with T6-5 (main session) → T6-6 if T6-1 says
 → T6-10, T6-0 as filler → T3-26 → Tier 5 (T5-0, T5-7, T5-9, then the rest) → T4-1, T4-5,
 T4-2, T4-3 → T6-7 → T4-6b. T6-11 is recorded as not an item.
@@ -3829,6 +3829,14 @@ three lines still passes.
 Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
 1. compare against `set()` instead of the baseline findings -> the known-good red (inherited counted as introduced).
 2. `if introduced:` -> `if False:` -> the known-bad red (introduced BLE001 no longer fails).
+
+**Status (2026-09-20):** DONE, `b192535`, main session, with T6-31.
+`RuffFinding` and `introduced_findings` in gates (pure), `ruff_findings`
+in evidence (the JSON run; stdout rendered as `path:row:col: CODE
+message` for briefs), two legs in the runner (baseline snapshot before
+red-phase writes into it). The detail names up to five introduced
+findings and the inherited count. Mutants three (with T6-31's), all
+killed; `./check.sh` green.
 Done when: mutants red; `./check.sh` green. Owner: main session.
 
 ### T6-4 — Requirements carry accepts and rejects, and rejects must be near-misses (Proposal B; tightened)
@@ -4904,6 +4912,77 @@ mutants it kills (mutmut over the same `source_paths`, seeded). Report
 the 10x4 table and the pass count. Ten draws at a few seconds each: one
 short session. Owner: executor (needs the key). After T6-27.
 
+### T6-29b — Survivor-driven test node, the machinery: locate, stub, brief, filter (tightened in effect; new module; executor)
+
+Files: `src/saddle/survivors.py` (new), `tests/test_survivors.py` (new).
+Nothing under `src/saddle/slice.py`, `runner.py`, `cli.py`, `gates.py`
+or `evidence.py` is edited; the module may import from them.
+
+The pure half of T6-29, so the splice into the recovery loop (T6-29c,
+main session) is the only part that touches the node loop. Contracts,
+each with a known-good and a known-bad and one mutant:
+1. `enclosing_functions(workdir, survivors, uncovered) -> dict[str, set[str]]`:
+   for each changed module, the names of the functions (by `ast`, nested
+   functions reported by their outermost def) that contain a surviving
+   mutant's line (from `MutationOutcome.survivors` names via `mutmut
+   show`-style `path:row`, as `mutation_sample` already resolves them)
+   or an uncovered line. A line outside any def maps to the module's
+   top level, named `<module>`. Known-bad: a line in an unchanged module
+   is not reported.
+2. `stubbed_sandbox(workdir, changed_modules) -> Path`: a throwaway copy
+   of the tree (as `_evaluate_candidate` copies it, with the index
+   refreshed) in which every changed module is replaced by its
+   signature-preserving stub (`saddle.runner._stub_module`). Known-good:
+   the stub imports and exposes every def; known-bad: the sandbox
+   contains none of the implementation's bodies (grep for a body line).
+3. `build_survivor_brief(node, requirements_text, stubs, functions,
+   test_conventions) -> str`: the prompt for one draw, carrying the
+   node's requirement ids and text, the stub source of each changed
+   module, the function names from (1), and the names and one sample of
+   the existing test files. Known-bad: the brief contains no line of the
+   real implementation and no mutant name (assert on both).
+4. `candidate_test_path(requirement_id, seed) -> str`:
+   `tests/test_<req>_s<seed>.py`, distinct per seed, so k diffs never
+   collide.
+5. `keep_candidate(stub_tree, real_tree, candidate_file, survivors_before,
+   uncovered_before, *, run) -> Verdict`: the three filters as one
+   deterministic decision: the file's tests must fail against the stub
+   tree, pass against the real tree, and either kill at least one
+   mutant in `survivors_before` (re-run `mutation_sample` scoped to that
+   file with the same seeded sample) or execute at least one line in
+   `uncovered_before`. Returns which mutants it killed and which lines
+   it covered. Known-good: a spec-derived test that kills a survivor is
+   kept; known-bad: a test that passes on both trees is dropped (it
+   pins nothing), a test that fails on the real tree is returned as
+   `failing` (T6-29c hands it to the impl node), a test that passes both
+   filters and kills nothing is dropped.
+Mutants: (1) filter one inverted (a candidate green on the stub is
+kept); (2) filter three removed (a candidate that kills nothing is
+kept); (3) the stub replaced by the real module in the sandbox. Owner:
+executor. Measure-first result from T6-29a goes into the docstring of
+(5) when it lands.
+
+### T6-29c — Survivor-driven test node, the splice (tightened in effect; main session)
+
+Files: `src/saddle/slice.py` (recovery path, `_best_of_samples` union
+combiner), `src/saddle/cli.py` (the test node's proposer at effort
+`none`; `replan` insertion), `tests/test_slice.py`, `tests/test_cli.py`.
+
+Uses T6-29b's module. When an impl node fails coverage or mutation and
+the gap's enclosing functions (T6-29b.1) are in no sealed test's
+citations, the recovery path does not retry the impl node: it inserts a
+test node scoped to those requirements, briefed by T6-29b.3, drawing k
+samples concurrently through T6-25's sampler with each sample written
+to T6-29b.4's file and judged by T6-29b.5; kept samples are spliced by
+the ordinary apply, at most two rounds per requirement, then the impl
+node retries with the kept tests in scope. A kept candidate that fails
+on the real tree becomes the impl node's brief. k from T6-29a's result
+(default 10 at effort `none`). Known-good: end to end on the runner
+fixture with an uncovered branch, the run seals a test node then the
+impl node. Known-bad: a third round is not started; a node whose gap is
+already cited by a sealed test retries as today. Owner: main session,
+after T6-29b reports.
+
 ### T6-30 — A worker request has a total deadline, not only an inter-chunk one (tightened)
 
 Files: `src/saddle/vllm.py` (`DEFAULT_TIMEOUT` and its comment, the
@@ -4958,6 +5037,11 @@ of T3-4's withholding, evidenced by F21.13d. Known-good: a node without
 same node with ruff passing sees no ruff output. Mutant: the
 failed-gate exception removed -> the known-good red. Owner: main session;
 lands with T6-3 (which names the rule in the gate detail).
+
+**Status (2026-09-20):** DONE, `b192535`, with T6-3. `GATE_TOOL` maps a
+failed gate to the tool whose output it is; a passed gate's run stays
+under T3-4. One labelled flip (the T3-4 withholding test's fixture has
+a failed tests gate); its passed-gate half is now its own known-bad.
 
 ---
 
