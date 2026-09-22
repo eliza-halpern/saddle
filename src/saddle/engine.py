@@ -193,6 +193,28 @@ def _seal(
     return record.record_hash
 
 
+def _last_user_index(messages: list[dict[str, Any]]) -> int:
+    """Where the question this turn answers sits, or -1 if there is none."""
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index
+    return -1
+
+
+def _last_asked(messages: list[dict[str, Any]]) -> str:
+    """The question a retry is answering again, for the turn's own record."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            return next(
+                (p.get("text", "") for p in content if p.get("type") == "text"), ""
+            )
+        return str(content or "")
+    return ""
+
+
 def _user_message(text: str, images: Sequence[Path]) -> dict[str, Any]:
     """A user turn, as text or as text plus images.
 
@@ -223,7 +245,7 @@ def _user_message(text: str, images: Sequence[Path]) -> dict[str, Any]:
 def run_turn(
     client: VllmClient,
     messages: list[dict[str, Any]],
-    text: str,
+    text: str | None,
     options: TurnOptions,
     *,
     turn: int,
@@ -236,13 +258,24 @@ def run_turn(
 
     `messages` is mutated in place so the caller keeps the conversation; the
     final `TurnEnd.proof` chains the next turn.
+
+    `text` of None means "answer what is already there" -- a retry. Sampling
+    at CHAT_TEMPERATURE makes that worth having: the same question asked
+    again gives a different answer, which is the point of the button.
     """
     ctx = context or ToolContext(workdir=options.workdir)
     stop = cancel or (lambda: False)
-    yield TurnStart(turn=turn, prompt=text)
+    yield TurnStart(turn=turn, prompt=text if text is not None else _last_asked(messages))
     if options.system_prompt and not any(m.get("role") == "system" for m in messages):
         messages.insert(0, {"role": "system", "content": options.system_prompt})
-    messages.append(_user_message(text, images))
+    if text is not None:
+        messages.append(_user_message(text, images))
+    if ctx.undo is not None:
+        # Keyed to the question this turn answers, not to len(messages)
+        # before it was added -- the system prompt is inserted at 0 on the
+        # first turn, so the two differ and a rewind to the question found
+        # no turn to undo.
+        ctx.undo.begin(turn, _last_user_index(messages))
 
     dropped, summary = compact(messages, limit_tokens=options.compaction_limit())
     if dropped:

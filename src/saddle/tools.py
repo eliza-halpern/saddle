@@ -27,6 +27,7 @@ from typing import Any, Final
 
 from saddle.edits import loose_spans
 from saddle.sandbox import DEFAULT_TIMEOUT, OutsideRootError, Sandbox, resolve_within
+from saddle.undo import UndoLog
 from saddle.vllm import ToolCall
 
 PREVIEWABLE: Final = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"})
@@ -148,6 +149,14 @@ class ToolContext:
     on_output: Callable[[str, str], None] | None = None
     """Called with (terminal_id, chunk) as a command produces output, so a
     UI can show a build scrolling rather than a spinner."""
+    undo: UndoLog | None = None
+    """Snapshots a file before this turn first changes it, so retrying or
+    editing a message can put the workdir back. Only the file tools are
+    recorded -- `run_command` can do anything and is not reversible."""
+
+    def snapshot(self, path: Path) -> None:
+        if self.undo is not None:
+            self.undo.before_write(path)
 
     def box(self) -> Sandbox:
         if self.sandbox is None:
@@ -188,6 +197,7 @@ def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     path = resolve_within(ctx.workdir, name)
     content = _text(args, "content", "write_file")
     before = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    ctx.snapshot(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -261,6 +271,7 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         after = "\n".join(lines[:start] + new_text.splitlines() + lines[end:])
     else:
         after = before.replace(old_text, new_text, 1)
+    ctx.snapshot(path)
     try:
         path.write_text(after, encoding="utf-8")
     except OSError:

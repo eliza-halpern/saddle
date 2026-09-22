@@ -18,7 +18,7 @@ import queue
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from starlette.testclient import TestClient
@@ -1689,3 +1689,219 @@ def test_the_chat_temperature_has_one_definition(
         made = client.post("/api/sessions", json={}).json()
         assert made["temperature"] == CHAT_TEMPERATURE
         assert client.get("/api/settings").json()["temperature"] == CHAT_TEMPERATURE
+
+
+# -- retry and edit, with the workdir put back --------------------------------
+
+# These drive the *real* engine against a scripted client, not a stubbed
+# run_turn. The undo log is opened by the engine, so a fake turn that skips
+# that records nothing and the test passes having proved nothing -- which is
+# exactly what the first version of this did.
+
+class ScriptedClient:
+    """Replays rounds of (reasoning, content, tool calls) like the server would."""
+
+    rounds: ClassVar[list[list[Any]]] = []
+
+    def __init__(self) -> None:
+        self.remaining = [list(r) for r in ScriptedClient.rounds]
+
+    def stream_chat(self, _messages: Any, **_kw: Any) -> Any:
+        return iter(self.remaining.pop(0) if self.remaining else ())
+
+    def count_tokens(self, _messages: Any, **_kw: Any) -> int:
+        return 50
+
+    def max_model_len(self) -> int:
+        return 175_000
+
+    def __enter__(self) -> ScriptedClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+
+def _writes(path: str, body: str) -> list[list[Any]]:
+    """A round that writes a file through the tool, then one that answers."""
+    from saddle.vllm import StreamToken, ToolCall
+
+    return [
+        [ToolCall(id="w", name="write_file",
+                  arguments=json.dumps({"path": path, "content": body}))],
+        [StreamToken(stream="content", text=f"wrote {path}")],
+    ]
+
+
+@contextmanager
+def engine_app(store: SessionStore, tmp_path: Path, rounds: list[list[Any]]) -> Any:
+    ScriptedClient.rounds = rounds
+    app = build_app(store, ScriptedClient, default_workdir=tmp_path)
+    with TestClient(app) as client:
+        yield client, app
+
+
+def test_a_retry_puts_back_the_file_the_first_attempt_wrote(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    target = work / "out.txt"
+    target.write_text("what was there before\n")
+
+    with engine_app(store, tmp_path, _writes("out.txt", "first attempt")) as (
+        client, app
+    ):
+        sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        _server_of(app)._run(sid, "change the file")
+        assert target.read_text() == "first attempt"
+
+        asked = next(
+            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
+        )
+
+        # The page is told what will change, before anything changes.
+        preview = client.get(
+            f"/api/sessions/{sid}/rewind", params={"index": asked}
+        ).json()
+        assert preview["reverted"] == [str(target)]
+        assert preview["text"] == "change the file"
+        assert target.read_text() == "first attempt"      # preview touched nothing
+
+        ScriptedClient.rounds = _writes("out.txt", "second attempt")
+        done = client.post(f"/api/sessions/{sid}/rewind", json={"index": asked}).json()
+        assert done["reverted"] == [str(target)]
+        _settle(lambda: target.read_text() == "second attempt")
+
+    # Not both attempts layered, and not the first left behind.
+    assert target.read_text() == "second attempt"
+    assert [m["role"] for m in store.load_messages(sid)].count("user") == 1
+
+
+def test_a_retry_deletes_a_file_the_first_attempt_invented(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    invented = work / "invented.txt"
+
+    with engine_app(store, tmp_path, _writes("invented.txt", "x")) as (client, app):
+        sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        _server_of(app)._run(sid, "make something")
+        assert invented.exists()
+
+        asked = next(
+            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
+        )
+        ScriptedClient.rounds = []
+        done = client.post(f"/api/sessions/{sid}/rewind", json={"index": asked}).json()
+        assert done["deleted"] == [str(invented)]
+        _settle(lambda: not invented.exists())
+
+
+def test_an_edit_replaces_the_question_and_still_cleans_up(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    target = work / "out.txt"
+
+    with engine_app(store, tmp_path, _writes("out.txt", "from the first wording")) as (
+        client, app
+    ):
+        sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        _server_of(app)._run(sid, "the first wording")
+        asked = next(
+            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
+        )
+
+        ScriptedClient.rounds = _writes("out.txt", "from the second wording")
+        client.post(
+            f"/api/sessions/{sid}/rewind",
+            json={"index": asked, "text": "the second wording"},
+        )
+        _settle(
+            lambda: target.is_file() and target.read_text() == "from the second wording"
+        )
+
+    users = [m["content"] for m in store.load_messages(sid) if m["role"] == "user"]
+    assert users == ["the second wording"]     # the old wording is gone, not kept
+
+
+def test_a_retry_re_answers_rather_than_re_asking(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    from saddle.vllm import StreamToken
+
+    with engine_app(
+        store, tmp_path, [[StreamToken(stream="content", text="first")]]
+    ) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        _server_of(app)._run(sid, "ask once")
+        asked = next(
+            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
+        )
+
+        ScriptedClient.rounds = [[StreamToken(stream="content", text="second")]]
+        client.post(f"/api/sessions/{sid}/rewind", json={"index": asked})
+        _settle(lambda: any(
+            m["role"] == "assistant" and m.get("content") == "second"
+            for m in store.load_messages(sid)
+        ))
+
+    stored = store.load_messages(sid)
+    assert [m["content"] for m in stored if m["role"] == "user"] == ["ask once"]
+    assert [m["content"] for m in stored if m["role"] == "assistant"] == ["second"]
+
+
+def test_rewinding_to_something_that_is_not_a_question_is_refused(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    from saddle.vllm import StreamToken
+
+    with engine_app(
+        store, tmp_path, [[StreamToken(stream="content", text="hi")]]
+    ) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        _server_of(app)._run(sid, "hello")
+        stored = store.load_messages(sid)
+        assistant = next(i for i, m in enumerate(stored) if m["role"] == "assistant")
+
+        for index in (assistant, len(stored), -1, 999):
+            assert client.post(
+                f"/api/sessions/{sid}/rewind", json={"index": index}
+            ).status_code == 404, index
+        assert client.post(
+            f"/api/sessions/{sid}/rewind", json={"index": "second"}
+        ).status_code == 400
+        # A refused rewind must not leave the session wedged as busy.
+        assert client.post(f"/api/sessions/{sid}/stop").json() == {"stopping": False}
+
+
+def test_a_rewind_is_refused_while_a_turn_is_running(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    from saddle.vllm import StreamToken
+
+    with engine_app(
+        store, tmp_path, [[StreamToken(stream="content", text="hi")]]
+    ) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        _server_of(app)._run(sid, "hello")
+        _server_of(app)._live(sid).busy = True
+        assert client.post(
+            f"/api/sessions/{sid}/rewind", json={"index": 1}
+        ).status_code == 409
+
+
+def test_history_carries_the_index_each_message_can_be_rewound_to(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    from saddle.web.app import history_for_display
+
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "ask"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    assert [m["index"] for m in history_for_display(messages, tmp_path)] == [0, 1, 2]

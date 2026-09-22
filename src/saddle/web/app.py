@@ -49,6 +49,7 @@ from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import BUILTIN_PERSONAS, SessionStore
 from saddle.titles import title_for
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for
+from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -71,7 +72,10 @@ def history_for_display(messages: list[dict[str, Any]], workdir: Path) -> list[d
         if message.get("role") == "tool"
     }
     shown: list[dict[str, Any]] = []
-    for message in messages:
+    for index, message in enumerate(messages):
+        # The index travels with the message so the page can name one to
+        # rewind to; it is re-checked server-side, since compaction moves them.
+        message = {**message, "index": index}
         calls = message.get("tool_calls")
         if not calls:
             shown.append(message)
@@ -178,7 +182,9 @@ class ChatServer:
 
     # -- turn ------------------------------------------------------------
 
-    def _run(self, session_id: str, text: str, images: list[str] | None = None) -> None:
+    def _run(
+        self, session_id: str, text: str | None, images: list[str] | None = None
+    ) -> None:
         live = self._live(session_id)
         live.cancelled = False
         try:
@@ -192,6 +198,7 @@ class ChatServer:
                 live.context = ToolContext(
                     workdir=workdir,
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
+                    undo=UndoLog(self.store.undo_dir(session_id)),
                 )
             live.turn += 1
             with self.client_factory() as client:
@@ -418,6 +425,89 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         threading.Thread(target=server._run, args=(sid, text, images), daemon=True).start()
         return JSONResponse({"ok": True})
 
+    def _rewind_target(sid: str, index: int) -> tuple[list[dict[str, Any]], str] | None:
+        """The stored messages and the question at `index`, if one is there.
+
+        The index arrives from the page and may be stale -- compaction moves
+        messages -- so it is checked against the store rather than trusted.
+        """
+        messages = store.load_messages(sid)
+        if not 0 <= index < len(messages) or messages[index].get("role") != "user":
+            return None
+        content = messages[index].get("content")
+        if isinstance(content, list):
+            asked = next(
+                (p.get("text", "") for p in content if p.get("type") == "text"), ""
+            )
+        else:
+            asked = str(content or "")
+        return messages, asked
+
+    async def rewind_preview(request: Request) -> JSONResponse:
+        """What rewinding here would change on disk, without changing it.
+
+        A rewind edits the user's working directory. Doing that silently is
+        not acceptable, so the page asks first -- and to ask it has to be
+        able to name the files.
+        """
+        sid = request.path_params["sid"]
+        try:
+            index = int(request.query_params.get("index", ""))
+        except ValueError:
+            return JSONResponse({"error": "index must be a number"}, status_code=400)
+        target = _rewind_target(sid, index)
+        if target is None:
+            return JSONResponse({"error": "no question there"}, status_code=404)
+        pending = UndoLog(store.undo_dir(sid)).pending(index)
+        return JSONResponse(
+            {"text": target[1], "reverted": pending.reverted, "deleted": pending.deleted}
+        )
+
+    async def rewind(request: Request) -> JSONResponse:
+        """Answer a question again: optionally reworded, always from a clean tree."""
+        sid = request.path_params["sid"]
+        body = await request.json()
+        try:
+            index = int(body.get("index"))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "index must be a number"}, status_code=400)
+        live = server._live(sid)
+        with live.lock:
+            if live.busy:
+                # While a turn is running the answer is 409 whatever the
+                # index says, so this is checked before the index is.
+                return JSONResponse(
+                    {"error": "a turn is already running"}, status_code=409
+                )
+            live.busy = True
+
+        target = _rewind_target(sid, index)
+        if target is None:
+            with live.lock:
+                live.busy = False        # nothing was started, so nothing holds it
+            return JSONResponse({"error": "no question there"}, status_code=404)
+        messages, _asked = target
+
+        restored = UndoLog(store.undo_dir(sid)).restore_to(index)
+        text = body.get("text")
+        edited = isinstance(text, str) and text.strip() != ""
+        # An edit replaces the question, so the question goes too; a retry
+        # keeps it and answers it again.
+        store.save_messages(sid, messages[: index if edited else index + 1])
+        threading.Thread(
+            target=server._run,
+            args=(sid, text.strip() if edited else None),
+            daemon=True,
+        ).start()
+        return JSONResponse(
+            {
+                "ok": True,
+                "reverted": restored.reverted,
+                "deleted": restored.deleted,
+                "failed": restored.failed,
+            }
+        )
+
     async def stop_turn(request: Request) -> JSONResponse:
         """Ask the running turn to stop at its next safe point.
 
@@ -493,6 +583,8 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             Route("/api/sessions/{sid}/file", workdir_file),
             Route("/api/sessions/{sid}/upload", upload, methods=["POST"]),
             Route("/api/sessions/{sid}/message", post_message, methods=["POST"]),
+            Route("/api/sessions/{sid}/rewind", rewind_preview),
+            Route("/api/sessions/{sid}/rewind", rewind, methods=["POST"]),
             Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
             Route("/api/sessions/{sid}/events", events),
             Mount("/static", StaticFiles(directory=str(STATIC)), name="static"),

@@ -373,5 +373,9 @@ class SessionStore:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def undo_dir(self, session_id: str) -> Path:
+        """Where a session's file snapshots live, beside its transcript."""
+        return self._dir(session_id) / "undo"
+
     def journal_path(self, session_id: str) -> Path:
         return self._dir(session_id) / "chat.jsonl"

@@ -103,5 +103,20 @@
   </div>
   <div class="dialog-actions"><button id="settings-close" type="button">Close</button></div>
 </dialog>
+<dialog id="rewind-dialog">
+  <h3 id="rewind-title">Try this again</h3>
+  <p class="hint" id="rewind-hint"></p>
+  <textarea id="rewind-text" rows="4" spellcheck="false"></textarea>
+  <div id="rewind-warning" hidden>
+    <p class="warn-head">This will change files on disk</p>
+    <ul id="rewind-files"></ul>
+    <p class="hint">Anything a shell command did is not undone -- only writes
+       made with the file tools are tracked.</p>
+  </div>
+  <div class="dialog-actions">
+    <button id="rewind-cancel" type="button">Cancel</button>
+    <button id="rewind-go" type="button" class="primary">Run again</button>
+  </div>
+</dialog>
 <script src="/static/markdown.js"></script>
 <script src="/static/app.js"></script>

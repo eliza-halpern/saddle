@@ -251,6 +251,7 @@ function handle(event) {
       break;
     case "idle":
       flushPaint();
+      restampTurns();
       setStatus("idle");
       state.busy = false;
       break;
@@ -287,6 +288,8 @@ function renderHistory(info) {
   for (const message of shown) {
     const turn = el("div", "turn");
     if (message.role === "user") {
+      turn.dataset.index = String(message.index);
+      turn.appendChild(turnTools(message.index));
       // Content is a string, or a list of parts when images were attached.
       // Rendering the list with `|| ""` printed "[object Object]".
       const box = el("div", "user");
@@ -360,6 +363,127 @@ function pastToolRows(turn, calls) {
     if (call.preview) showPreview(row, call.preview);
   }
 }
+
+/* ---------- retry and edit ---------- */
+
+async function restampTurns() {
+  // A live turn does not know its own index -- that only exists once the
+  // message is stored -- so after a turn settles the transcript is matched
+  // against the store, in order, and the retry/edit buttons appear on the
+  // turn that just finished as well as on the older ones.
+  let stored;
+  try {
+    stored = await api(`/api/sessions/${state.sessionId}/messages`);
+  } catch {
+    return;                       // the buttons are a convenience, not the turn
+  }
+  const asked = stored
+    .map((message, index) => (message.role === "user" ? index : -1))
+    .filter((index) => index >= 0);
+  // Only the turns that carry a question: an assistant reply gets its own
+  // .turn node, so counting all of them never matched and the restamp
+  // silently never ran for a live turn.
+  const turns = [...$("#transcript").querySelectorAll(".turn")].filter(
+    (turn) => turn.querySelector(".user"));
+  if (turns.length !== asked.length) return;   // mid-stream; try again next idle
+  turns.forEach((turn, position) => {
+    turn.dataset.index = String(asked[position]);
+    if (!turn.querySelector(".turn-tools")) {
+      turn.insertBefore(turnTools(asked[position]), turn.firstChild);
+    }
+  });
+}
+
+function turnTools(index) {
+  const tools = el("div", "turn-tools");
+  for (const [glyph, title, edit] of [
+    ["↻", "Run this again", false],
+    ["✎", "Edit and run again", true],
+  ]) {
+    const button = el("button", null, glyph);
+    button.type = "button";
+    button.title = title;
+    button.onclick = (event) => { event.preventDefault(); openRewind(index, edit); };
+    tools.appendChild(button);
+  }
+  return tools;
+}
+
+async function openRewind(index, editing) {
+  // Ask the server what this would change *before* offering the button, so
+  // the warning is the real list of files rather than a guess.
+  let preview;
+  try {
+    preview = await api(`/api/sessions/${state.sessionId}/rewind?index=${index}`);
+  } catch (error) {
+    notice(String(error.message || error), "error");
+    return;
+  }
+  state.rewind = { index, editing };
+  $("#rewind-title").textContent = editing ? "Edit and run again" : "Run this again";
+  $("#rewind-hint").textContent = editing
+    ? "The answer below is replaced by a new one."
+    : "The same question, answered again. Sampling makes it come out differently.";
+  const box = $("#rewind-text");
+  box.hidden = !editing;
+  box.value = preview.text || "";
+
+  const files = [...(preview.reverted || []), ...(preview.deleted || [])];
+  const warning = $("#rewind-warning");
+  warning.hidden = files.length === 0;
+  const list = $("#rewind-files");
+  list.textContent = "";
+  for (const path of preview.reverted || []) {
+    list.appendChild(el("li", null, `${path} — put back`));
+  }
+  for (const path of preview.deleted || []) {
+    list.appendChild(el("li", null, `${path} — deleted (it did not exist before)`));
+  }
+  $("#rewind-dialog").showModal();
+  if (editing) box.focus();
+}
+
+$("#rewind-cancel").onclick = (event) => {
+  event.preventDefault();
+  $("#rewind-dialog").close();
+};
+$("#rewind-go").onclick = async (event) => {
+  event.preventDefault();
+  const { index, editing } = state.rewind || {};
+  if (index === undefined) return;
+  const body = { index };
+  if (editing) body.text = $("#rewind-text").value;
+  $("#rewind-dialog").close();
+
+  // Drop the turns being replaced before the new one streams in, so the
+  // transcript never shows both attempts at once.
+  for (const node of [...$("#transcript").children]) {
+    const at = Number(node.dataset.index);
+    if (!Number.isNaN(at) && at >= index) node.remove();
+  }
+  state.assistantNode = null;
+  state.reasoningNode = null;
+
+  let result;
+  try {
+    result = await api(`/api/sessions/${state.sessionId}/rewind`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    notice(String(error.message || error), "error");
+    return;
+  }
+  state.busy = true;
+  setStatus("working");
+  const changed = [...(result.reverted || []), ...(result.deleted || [])];
+  if (changed.length) {
+    notice(`Put back ${changed.length} file(s): ${changed.join(", ")}`, "warn");
+  }
+  for (const path of result.failed || []) {
+    notice(`Could not restore ${path}`, "error");
+  }
+};
 
 function connect(sessionId) {
   if (state.stream) state.stream.close();

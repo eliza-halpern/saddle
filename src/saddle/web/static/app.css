@@ -341,3 +341,38 @@ input[type="range"]::-moz-range-thumb { width: 15px; height: 15px; border-radius
   border: none; background: var(--rose); }
 input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
   background: var(--line); }
+
+/* ---- retry and edit ---- */
+.turn { position: relative; }
+.turn-tools { position: absolute; top: -6px; right: 0; display: flex; gap: 4px;
+  opacity: 0; transition: opacity .14s; }
+.turn:hover .turn-tools, .turn-tools:focus-within { opacity: 1; }
+.turn-tools button { background: var(--bg-raise); border: 1px solid var(--line);
+  color: var(--ink-faint); border-radius: 9px; width: 26px; height: 26px;
+  cursor: pointer; font-size: 12px; line-height: 1;
+  transition: color .14s, border-color .14s; }
+.turn-tools button:hover { color: var(--rose); border-color: var(--rose); }
+
+#rewind-dialog { width: min(560px, 92vw); border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--bg-raise); color: var(--ink);
+  padding: 20px 22px; font: inherit; }
+#rewind-dialog::backdrop { background: #0c0a0daa; }
+#rewind-dialog h3 { margin: 0 0 4px; font-size: 14px; color: var(--rose); }
+#rewind-dialog .hint { margin: 0 0 12px; font-size: 12.5px; color: var(--ink-faint); }
+#rewind-text { width: 100%; background: var(--bg-sunk); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 11px; padding: 9px 11px;
+  font: 13px/1.5 var(--sans); resize: vertical; }
+#rewind-warning { margin-top: 14px; border: 1px solid var(--bad); border-radius: 12px;
+  padding: 11px 13px; background: #2a1e22; }
+.warn-head { margin: 0 0 7px; font-size: 12.5px; font-weight: 600; color: var(--bad); }
+.warn-head::before { content: "⚠ "; }
+#rewind-files { margin: 0 0 9px; padding-left: 20px; font: 12px var(--mono);
+  color: var(--ink-dim); max-height: 150px; overflow: auto; }
+#rewind-files li::marker { color: var(--bad); }
+#rewind-dialog button { background: var(--bg-sunk); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 11px; padding: 7px 14px;
+  font: inherit; font-size: 13px; cursor: pointer; }
+#rewind-dialog button.primary { background: linear-gradient(94deg, var(--peach), var(--rose));
+  color: #241c26; border-color: transparent; font-weight: 600; }
+.notice.warn { color: var(--peach); border-color: var(--peach); }
+.notice.warn::before { content: "⚠ "; }
