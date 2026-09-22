@@ -21,12 +21,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from saddle.engine import CHAT_TEMPERATURE
+
 DEFAULT_ROOT: Final = Path.home() / ".saddle" / "sessions"
 SETTINGS_FILE: Final = "settings.json"
 PERSONA_FILE: Final = "personas.json"
 DEFAULT_PERSONA: Final = "engineer"
 DEFAULT_EFFORT: Final = "xhigh"
-DEFAULT_TEMPERATURE: Final = 1.0
+DEFAULT_TEMPERATURE: Final = CHAT_TEMPERATURE
+"""One definition, imported. Holding the number in two places meant the
+session's value always won and the engine's was decorative: changing
+CHAT_TEMPERATURE alone moved nothing, which is a divergence no test could
+see because both happened to read 1.0."""
 MIN_TEMPERATURE: Final = 0.0
 MAX_TEMPERATURE: Final = 2.0
 MAX_PERSONA_NAME: Final = 40

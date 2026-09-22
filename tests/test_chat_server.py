@@ -1670,3 +1670,22 @@ def test_the_stream_reports_the_temperature_so_the_knob_shows_it(
         sid = client.post("/api/sessions", json={}).json()["id"]
         client.patch(f"/api/sessions/{sid}", json={"temperature": 1.6})
         assert _frames(client, sid, 1)[0]["temperature"] == 1.6
+
+
+def test_the_chat_temperature_has_one_definition(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """A new session's temperature *is* the engine's chat default.
+
+    It was held in two places. The session's value always wins in the chat
+    path, so the engine constant was decorative -- changing it alone moved
+    nothing, and no test could see the divergence because both happened to
+    read 1.0. Asserting they are the same value is what makes the engine
+    constant load-bearing again.
+    """
+    from saddle.engine import CHAT_TEMPERATURE
+
+    with app_for(store, tmp_path) as (client, _app):
+        made = client.post("/api/sessions", json={}).json()
+        assert made["temperature"] == CHAT_TEMPERATURE
+        assert client.get("/api/settings").json()["temperature"] == CHAT_TEMPERATURE
