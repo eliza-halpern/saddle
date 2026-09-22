@@ -205,6 +205,17 @@ def survivor_drawer(client: VllmClient, options: RunOptions) -> TestDrawer:
     brief), at the sample temperature: the brief is the whole prompt,
     and the harness cuts what the cap truncates back to the last
     complete test before judging it.
+
+    This stays on `DIFF_GRAMMAR` whatever `options.emission` says, and
+    that is deliberate rather than an omission. A survivor draw creates
+    ONE NEW FILE -- `build_survivor_brief` asks for "ONLY the diff" and
+    slice appends "one section, one hunk: a single diff creating
+    <path>" -- which is exactly what the whole-file envelope expresses
+    and the only shape it expresses well. There is nothing for an edit
+    to name in a file that does not exist yet, so switching would mean
+    writing a second set of rules into the brief for no gain. The
+    prompt and the grammar agree here as they must; they simply agree
+    on the other envelope.
     """
 
     def draw(_node: Node, brief: str, seed: int) -> DiffProposal:
