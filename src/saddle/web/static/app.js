@@ -15,12 +15,6 @@
      server so the terminal and the browser say the same words. */
 
 const $ = (sel) => document.querySelector(sel);
-const el = (tag, cls, text) => {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 
 const state = {
   sessionId: null, stream: null, busy: false,
@@ -28,122 +22,31 @@ const state = {
   tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null,
 };
 
-/* ---------- content rendering ---------- */
 
-/* A small markdown renderer. Everything is inserted as text nodes and
-   built elements -- never innerHTML -- so model output cannot inject
-   markup. It covers what a coding assistant actually emits: fenced code,
-   headings, bullet and numbered lists, blockquotes, bold, italic, inline
-   code and links. Anything it does not know stays as literal text, which
-   is the safe failure: an unrendered asterisk is ugly, a swallowed line is
-   a lie about what was said. */
 
-const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\([^)\s]+\))/g;
+const painting = new Set();
+let paintFrame = 0;
 
-function inlineInto(parent, text) {
-  for (const bit of text.split(INLINE)) {
-    if (!bit) continue;
-    if (bit.startsWith("`") && bit.endsWith("`") && bit.length > 2) {
-      parent.appendChild(el("code", null, bit.slice(1, -1)));
-    } else if ((bit.startsWith("**") && bit.endsWith("**") && bit.length > 4) ||
-               (bit.startsWith("__") && bit.endsWith("__") && bit.length > 4)) {
-      parent.appendChild(el("strong", null, bit.slice(2, -2)));
-    } else if ((bit.startsWith("*") && bit.endsWith("*") && bit.length > 2) ||
-               (bit.startsWith("_") && bit.endsWith("_") && bit.length > 2)) {
-      parent.appendChild(el("em", null, bit.slice(1, -1)));
-    } else if (bit.startsWith("[") && bit.includes("](")) {
-      const cut = bit.indexOf("](");
-      const link = el("a", null, bit.slice(1, cut));
-      const href = bit.slice(cut + 2, -1);
-      link.href = /^https?:|^\//.test(href) ? href : "#";  // no javascript: hrefs
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      parent.appendChild(link);
+function flushPaint() {
+  if (paintFrame) { cancelAnimationFrame(paintFrame); paintFrame = 0; }
+  if (!painting.size) return;
+  const was = atBottom();
+  for (const node of painting) {
+    if (node.dataset.reasoning) {
+      node.appendChild(document.createTextNode(node.dataset.pending || ""));
+      node.dataset.pending = "";
     } else {
-      parent.appendChild(document.createTextNode(bit));
+      paintStream(node);
     }
   }
+  painting.clear();
+  stickToBottom(was);
 }
 
-function renderMarkdown(target, text) {
-  target.textContent = "";
-  const lines = text.split("\n");
-  let index = 0;
-  let list = null;
-
-  const closeList = () => { list = null; };
-
-  while (index < lines.length) {
-    const line = lines[index];
-
-    const fence = line.match(/^\s*```(\w*)\s*$/);
-    if (fence) {                                   // fenced code
-      closeList();
-      const body = [];
-      index += 1;
-      while (index < lines.length && !/^\s*```/.test(lines[index])) body.push(lines[index++]);
-      index += 1;
-      const pre = el("pre");
-      pre.appendChild(el("code", fence[1] ? `lang-${fence[1]}` : null, body.join("\n")));
-      target.appendChild(pre);
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.*)$/);
-    if (heading) {
-      closeList();
-      const node = el(`h${Math.min(heading[1].length + 2, 6)}`);
-      inlineInto(node, heading[2]);
-      target.appendChild(node);
-      index += 1;
-      continue;
-    }
-
-    const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
-    const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (bullet || numbered) {
-      const wanted = bullet ? "ul" : "ol";
-      if (!list || list.tagName.toLowerCase() !== wanted) {
-        list = el(wanted);
-        target.appendChild(list);
-      }
-      const item = el("li");
-      inlineInto(item, (bullet || numbered)[1]);
-      list.appendChild(item);
-      index += 1;
-      continue;
-    }
-
-    const quote = line.match(/^\s*>\s?(.*)$/);
-    if (quote) {
-      closeList();
-      const node = el("blockquote");
-      inlineInto(node, quote[1]);
-      target.appendChild(node);
-      index += 1;
-      continue;
-    }
-
-    if (!line.trim()) { closeList(); index += 1; continue; }
-
-    closeList();                                    // paragraph: gather until blank
-    const para = [];
-    while (index < lines.length && lines[index].trim() &&
-           !/^\s*```|^#{1,4}\s|^\s*[-*+]\s|^\s*\d+[.)]\s|^\s*>/.test(lines[index])) {
-      para.push(lines[index++]);
-    }
-    const node = el("p");
-    inlineInto(node, para.join(" "));
-    target.appendChild(node);
-  }
-}
-
-function atBottom() {
-  const t = $("#transcript");
-  return t.scrollHeight - t.scrollTop - t.clientHeight < 120;
-}
-function stickToBottom(was) {
-  if (was) $("#transcript").scrollTop = $("#transcript").scrollHeight;
+function schedulePaint(node) {
+  painting.add(node);
+  if (paintFrame) return;
+  paintFrame = requestAnimationFrame(() => { paintFrame = 0; flushPaint(); });
 }
 
 /* ---------- transcript pieces ---------- */
@@ -228,7 +131,12 @@ function finishTool(event) {
     event.duration_ms >= 1000
       ? `${(event.duration_ms / 1000).toFixed(1)}s`
       : `${event.duration_ms}ms`;
-  row.detail.textContent = event.detail || "(no output)";
+  if (isDiff(event.detail)) {
+    renderDiff(row.detail, event.detail);
+    row.details.classList.add("has-diff");
+  } else {
+    row.detail.textContent = event.detail || "(no output)";
+  }
   if (!event.ok) row.details.open = true;             // a failure should not need a click
 }
 
@@ -251,6 +159,25 @@ function terminalBlock(id) {
   return body;
 }
 
+function isDiff(text) {
+  return typeof text === "string" && text.startsWith("--- a/");
+}
+
+/* A diff is the point of a write: "wrote 'x.py'" says nothing about what
+   changed. Colour the sides so the eye finds the change without reading. */
+function renderDiff(target, text) {
+  target.textContent = "";
+  for (const line of text.split("\n")) {
+    const cls =
+      line.startsWith("+++") || line.startsWith("---") ? "d-file"
+      : line.startsWith("@@") ? "d-hunk"
+      : line.startsWith("+") ? "d-add"
+      : line.startsWith("-") ? "d-del"
+      : "d-ctx";
+    target.appendChild(el("div", cls, line || " "));
+  }
+}
+
 function notice(text, kind) {
   const node = el("div", `notice ${kind || ""}`, text);
   ($("#transcript").lastElementChild || $("#transcript")).appendChild(node);
@@ -269,17 +196,23 @@ function handle(event) {
       break;
     case "reasoning.delta":
       reasoningBlock();
-      state.reasoningBody.textContent += event.text;   // never truncated
+      // Appending a text node per frame, not `textContent +=`, which
+      // re-reads and rewrites the whole transcript of the thought.
+      state.reasoningBody.dataset.reasoning = "1";
+      state.reasoningBody.dataset.pending =
+        (state.reasoningBody.dataset.pending || "") + event.text;   // never truncated
+      schedulePaint(state.reasoningBody);
       break;
     case "content.delta": {
       const node = assistantBlock();
       node.dataset.raw += event.text;
-      renderMarkdown(node, node.dataset.raw);
+      schedulePaint(node);
       break;
     }
     case "tool.start":
       if (!state.turnNode) newTurn(null);
       toolRow(event);
+      setStatus("working", event.present.toLowerCase());
       break;
     case "tool.end":
       finishTool(event);
@@ -287,6 +220,15 @@ function handle(event) {
     case "terminal.output":
       terminalBlock(event.id).textContent += event.chunk;
       break;
+    case "context": {
+      const pct = Math.min(100, Math.round((event.used / event.limit) * 100));
+      const meter = $("#meter");
+      meter.querySelector("i").style.width = `${pct}%`;
+      meter.querySelector("b").textContent =
+        `${Math.round(event.used / 1000)}k / ${Math.round(event.limit / 1000)}k`;
+      meter.classList.toggle("full", pct > 80);
+      break;
+    }
     case "compaction":
       notice(`Context compacted — ${event.summary}`);
       break;
@@ -295,11 +237,13 @@ function handle(event) {
       setStatus("error");
       break;
     case "turn.end":
+      flushPaint();
       foldReasoning();                       // a turn with no answer text still folds
       setStatus("idle");
       state.busy = false;
       break;
     case "idle":
+      flushPaint();
       setStatus("idle");
       state.busy = false;
       break;
@@ -313,6 +257,10 @@ function renderHistory(info) {
   state.folder = info.workdir;
   $("#persona").value = info.persona;
   if (info.reasoning_effort) $("#effort").value = info.reasoning_effort;
+  // Show the meter on load, not only after the next turn ends.
+  if (info.context_limit) {
+    handle({ kind: "context", used: info.context_used || 0, limit: info.context_limit });
+  }
   const t = $("#transcript");
   t.textContent = "";
   const shown = (info.messages || []).filter((m) => m.role === "user" || m.role === "assistant");
@@ -359,10 +307,17 @@ function connect(sessionId) {
   state.stream.onerror = () => setStatus("error");
 }
 
-function setStatus(kind) {
+function setStatus(kind, detail) {
   const node = $("#status");
   node.className = `status ${kind === "idle" ? "idle" : kind}`;
-  node.textContent = kind === "working" ? "working" : kind;
+  node.textContent = detail || kind;
+  // While a turn runs the send button stops it: one control, two jobs, so
+  // the thing you reach for is always under the cursor you just used.
+  const send = $("#send");
+  const working = kind === "working";
+  send.textContent = working ? "■" : "↑";
+  send.title = working ? "Stop" : "Send";
+  send.classList.toggle("stopping", working);
 }
 
 /* ---------- sessions ---------- */
@@ -498,7 +453,15 @@ async function openFolders(path) {
 
 /* ---------- wiring ---------- */
 
-$("#composer").addEventListener("submit", (event) => { event.preventDefault(); send(); });
+$("#composer").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (state.busy) {
+    fetch(`/api/sessions/${state.sessionId}/stop`, { method: "POST" });
+    setStatus("working", "stopping…");
+    return;
+  }
+  send();
+});
 $("#input").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
 });

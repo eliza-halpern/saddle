@@ -18,6 +18,7 @@ rather than the turn dying.
 
 from __future__ import annotations
 
+import difflib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from saddle.vllm import ToolCall
 
 MAX_READ: Final = 200_000
 MAX_MATCHES: Final = 60
+MAX_DIFF: Final = 20_000
 
 
 def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict:
@@ -53,6 +55,11 @@ TOOLS: Final[list[dict[str, Any]]] = [
     _tool("write_file", "Write a UTF-8 text file under the working directory, "
           "creating parent directories.",
           {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
+    _tool("edit_file", "Replace one exact snippet in a file under the working "
+          "directory. `old` must appear exactly once; prefer this over "
+          "write_file for existing files, which must otherwise be rewritten whole.",
+          {"path": {"type": "string"}, "old": {"type": "string"},
+           "new": {"type": "string"}}, ["path", "old", "new"]),
     _tool("list_dir", "List entries of a directory under the working directory.",
           {"path": {"type": "string"}}, []),
     _tool("search", "Search file contents under the working directory for a "
@@ -121,12 +128,63 @@ def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     name = _text(args, "path", "write_file")
     path = resolve_within(ctx.workdir, name)
     content = _text(args, "content", "write_file")
+    before = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     except OSError:
         return f"error: cannot write {name!r}"
-    return f"wrote {name!r}"
+    if not before:
+        return f"created {name!r} ({len(content)} bytes)"
+    return _diff(before, content, name)
+
+
+def _diff(before: str, after: str, name: str) -> str:
+    """A unified diff of a change, for the caller and for the UI to render.
+
+    "wrote 'x.py'" says nothing about what changed. A diff is what a reader
+    needs to decide whether to keep it, and it is small even when the file
+    is not.
+    """
+    lines = list(difflib.unified_diff(
+        before.splitlines(keepends=True), after.splitlines(keepends=True),
+        fromfile=f"a/{name}", tofile=f"b/{name}", n=2,
+    ))
+    if not lines:
+        return f"{name} unchanged"
+    body = "".join(lines)
+    if len(body) > MAX_DIFF:
+        body = body[:MAX_DIFF] + f"\n[... diff truncated at {MAX_DIFF} characters ...]"
+    return body
+
+
+def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    """Replace one exact occurrence. Ambiguity is refused, never guessed at.
+
+    Rewriting a whole file to change three lines is expensive and, on a long
+    file, is the generation shape this model degenerates on (F21.17). An
+    `old` that matches twice is refused rather than applied to the first
+    hit: the caller meant one of them and the tool cannot know which.
+    """
+    name = _text(args, "path", "edit_file")
+    old_text = _text(args, "old", "edit_file")
+    new_text = _text(args, "new", "edit_file")
+    path = resolve_within(ctx.workdir, name)
+    if not path.is_file():
+        return f"error: cannot read {name!r}"
+    before = path.read_text(encoding="utf-8", errors="replace")
+    found = before.count(old_text)
+    if found == 0:
+        return f"error: that snippet does not appear in {name!r}"
+    if found > 1:
+        return (f"error: that snippet appears {found} times in {name!r}; "
+                "include more surrounding context so it matches exactly once")
+    after = before.replace(old_text, new_text, 1)
+    try:
+        path.write_text(after, encoding="utf-8")
+    except OSError:
+        return f"error: cannot write {name!r}"
+    return _diff(before, after, name)
 
 
 def _list_dir(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -206,6 +264,7 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
 _HANDLERS: Final[dict[str, Any]] = {
     "read_file": _read_file,
     "write_file": _write_file,
+    "edit_file": _edit_file,
     "list_dir": _list_dir,
     "search": _search,
     "run_command": _run_command,

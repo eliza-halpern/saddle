@@ -20,6 +20,7 @@ from typing import Any, Final
 _TENSES: Final[dict[str, tuple[str, str]]] = {
     "read_file": ("Reading", "Read"),
     "write_file": ("Writing", "Wrote"),
+    "edit_file": ("Editing", "Edited"),
     "run_command": ("Running", "Ran"),
     "list_dir": ("Listing", "Listed"),
     "search": ("Searching for", "Searched for"),
@@ -74,7 +75,7 @@ def describe(name: str, arguments: str) -> tuple[str, str, str]:
     past = f"{past_verb} {obj}"
     # "Reading" -> "read" but "Writing" -> "writ" under string surgery, so
     # the stems are a table rather than a rule.
-    stems = {"Reading": "read", "Writing": "write", "Running": "run",
+    stems = {"Reading": "read", "Writing": "write", "Editing": "edit", "Running": "run",
              "Listing": "list", "Searching for": "search for", "Viewing": "view",
              "Waiting for": "wait for"}
     stem = stems.get(present_verb, present_verb.lower())

@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -23,6 +23,7 @@ from typing import Any, Final
 from saddle.events import (
     Compaction,
     ContentDelta,
+    Context,
     ErrorEvent,
     Event,
     ReasoningDelta,
@@ -147,6 +148,7 @@ def run_turn(
     parent: str | None = None,
     context: ToolContext | None = None,
     images: Sequence[Path] = (),
+    cancel: Callable[[], bool] | None = None,
 ) -> Iterator[Event]:
     """Run one user turn, yielding events as they happen.
 
@@ -154,6 +156,7 @@ def run_turn(
     final `TurnEnd.proof` chains the next turn.
     """
     ctx = context or ToolContext(workdir=options.workdir)
+    stop = cancel or (lambda: False)
     yield TurnStart(turn=turn, prompt=text)
     if options.system_prompt and not any(m.get("role") == "system" for m in messages):
         messages.insert(0, {"role": "system", "content": options.system_prompt})
@@ -173,6 +176,8 @@ def run_turn(
             thoughts: list[str] = []
             calls: list[ToolCall] = []
             for stream, item in _stream(client, messages, options):
+                if stop():
+                    break
                 if stream == "call":
                     calls.append(item)
                 elif stream == "reasoning":
@@ -199,6 +204,8 @@ def run_turn(
             })
             tools: list[dict[str, Any]] = []
             for call in calls:
+                if stop():
+                    break
                 yield ToolStart(
                     id=call.id, name=call.name, arguments=call.arguments,
                     present=label_for(call.name, call.arguments, ok=None),
@@ -219,11 +226,18 @@ def run_turn(
                 tools.append({"name": call.name, "arguments": call.arguments, "result": result})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             rounds.append({"reply": reply, "tools": tools})
+            if stop():
+                break
         else:
             yield ErrorEvent(message=f"stopped after {MAX_TOOL_ROUNDS} tool rounds")
     except VllmError as exc:
         yield ErrorEvent(message=str(exc))
+    if stop():
+        # The turn is still sealed: what it did before being stopped is real
+        # work and belongs in the record.
+        yield ErrorEvent(message="stopped by you")
 
+    yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
     proof = _seal(
         options.journal, turn=turn, prompt=text, rounds=rounds,
         reasoning="".join(thinking), parent=parent,

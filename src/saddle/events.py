@@ -89,6 +89,16 @@ class TerminalOutput(Event):
 
 
 @dataclass(frozen=True)
+class Context(Event):
+    """How full the window is. Sent each turn so filling up is visible
+    before compaction evicts anything, rather than announced after."""
+
+    used: int
+    limit: int
+    kind: str = "context"
+
+
+@dataclass(frozen=True)
 class TurnEnd(Event):
     turn: int
     proof: str
@@ -120,5 +130,7 @@ class SessionInfo(Event):
     workdir: str
     persona: str
     reasoning_effort: str = "xhigh"
+    context_used: int = 0
+    context_limit: int = 175_000
     messages: list[dict[str, Any]] = field(default_factory=list)
     kind: str = "session.info"

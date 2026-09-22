@@ -28,6 +28,7 @@ from starlette.staticfiles import StaticFiles
 
 from saddle.engine import TurnOptions, run_turn
 from saddle.events import ErrorEvent, Event, SessionInfo, TerminalOutput
+from saddle.memory import estimate_tokens
 from saddle.sessions import SessionStore, personas
 from saddle.tools import ToolContext
 from saddle.vllm import VllmClient
@@ -51,6 +52,7 @@ class Live:
     turn: int = 0
     parent: str | None = None
     busy: bool = False
+    cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def subscribe(self) -> queue.Queue[Event | None]:
@@ -95,6 +97,7 @@ class ChatServer:
 
     def _run(self, session_id: str, text: str, images: list[str] | None = None) -> None:
         live = self._live(session_id)
+        live.cancelled = False
         try:
             session = self.store.get(session_id)
             messages = self.store.load_messages(session_id)
@@ -127,6 +130,7 @@ class ChatServer:
                     parent=live.parent,
                     context=live.context,
                     images=[Path(raw) for raw in (images or [])],
+                    cancel=lambda: live.cancelled,
                 ):
                     live.publish(event)
                     if event.kind == "turn.end":
@@ -232,6 +236,17 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         ).start()
         return JSONResponse({"ok": True})
 
+    async def stop_turn(request: Request) -> JSONResponse:
+        """Ask the running turn to stop at its next safe point.
+
+        Not a kill: the engine finishes the chunk or tool call it is in,
+        then seals what it did. Work already done is real and stays in the
+        record rather than being thrown away.
+        """
+        live = server._live(request.path_params["sid"])
+        live.cancelled = True
+        return JSONResponse({"stopping": live.busy})
+
     async def events(request: Request) -> StreamingResponse:
         sid = request.path_params["sid"]
         live = server._live(sid)
@@ -246,6 +261,9 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
                     title=session.title,
                     workdir=session.workdir,
                     persona=session.persona,
+                    reasoning_effort=session.reasoning_effort,
+                    context_used=estimate_tokens(store.load_messages(sid)),
+                    context_limit=server.window or 175_000,
                     messages=store.load_messages(sid),
                 )
                 yield f"data: {json.dumps(info.payload())}\n\n"
@@ -287,6 +305,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/upload", upload, methods=["POST"]),
             Route("/api/sessions/{sid}/message", post_message, methods=["POST"]),
+        Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
             Route("/api/sessions/{sid}/events", events),
             Mount("/static", StaticFiles(directory=str(STATIC)), name="static"),
         ]

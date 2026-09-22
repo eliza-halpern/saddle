@@ -8,6 +8,8 @@ against an escape is a boundary nobody has checked.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -257,3 +259,89 @@ def test_a_broken_listener_does_not_stop_the_command(tmp_path: Path) -> None:
     terminal = box.wait(box.start("echo still ran").id, timeout=20)
     assert terminal.exit_code == 0
     assert "still ran" in terminal.output()
+
+
+# -- edit_file ----------------------------------------------------------------
+
+def test_edit_file_replaces_one_snippet_and_returns_a_diff(tmp_path: Path) -> None:
+    target = tmp_path / "m.py"
+    target.write_text("def hello():\n    return 1\n")
+    result = execute_tool(
+        ToolCall(id="t", name="edit_file", arguments=json.dumps(
+            {"path": "m.py", "old": "return 1", "new": "return 42"})),
+        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+    )
+    assert target.read_text() == "def hello():\n    return 42\n"
+    assert result.startswith("--- a/m.py")
+    assert "+    return 42" in result
+    assert "-    return 1" in result
+
+
+def test_an_ambiguous_edit_is_refused_rather_than_applied_to_the_first_hit(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "m.py"
+    target.write_text("x = 1\ny = 1\n")
+    before = target.read_text()
+    result = execute_tool(
+        ToolCall(id="t", name="edit_file", arguments=json.dumps(
+            {"path": "m.py", "old": "= 1", "new": "= 2"})),
+        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+    )
+    assert "appears 2 times" in result
+    assert target.read_text() == before
+
+
+def test_an_edit_whose_snippet_is_absent_is_an_error(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("x = 1\n")
+    result = execute_tool(
+        ToolCall(id="t", name="edit_file", arguments=json.dumps(
+            {"path": "m.py", "old": "nope", "new": "x"})),
+        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+    )
+    assert "does not appear" in result
+
+
+def test_overwriting_an_existing_file_reports_a_diff_not_just_a_filename(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "m.py").write_text("a\nb\n")
+    result = execute_tool(
+        ToolCall(id="t", name="write_file", arguments=json.dumps(
+            {"path": "m.py", "content": "a\nc\n"})),
+        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+    )
+    assert result.startswith("--- a/m.py")
+    assert "+c" in result
+
+
+def test_a_brand_new_file_reports_creation_rather_than_a_diff_against_nothing(
+    tmp_path: Path,
+) -> None:
+    result = execute_tool(
+        ToolCall(id="t", name="write_file", arguments=json.dumps(
+            {"path": "new.py", "content": "x = 1\n"})),
+        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+    )
+    assert result.startswith("created 'new.py'")
+
+
+def test_markdown_renderer_suite_passes() -> None:
+    """The browser-side renderer has its own tests; run them with the rest.
+
+    A test suite that needs a separate command is one nobody runs. Node
+    carries the runner, so this costs a subprocess and keeps the transcript
+    renderer covered by `pytest -q` like everything else.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    suite = Path(__file__).parent / "markdown.test.js"
+    result = subprocess.run(
+        [node, "--test", str(suite)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

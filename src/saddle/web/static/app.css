@@ -37,6 +37,7 @@ body {
 .side-head { display: flex; align-items: center; justify-content: space-between;
              padding: 15px 14px 11px; }
 .brand { font-weight: 700; letter-spacing: .01em; font-size: 15.5px;
+  line-height: 1.5; padding: 2px 0;
   background: linear-gradient(92deg, var(--rose), var(--peach));
   -webkit-background-clip: text; background-clip: text; color: transparent; }
 .brand::after { content: " ੭"; -webkit-text-fill-color: var(--rose); color: var(--rose); }
@@ -115,7 +116,7 @@ details.reasoning[open] > summary::before { transform: rotate(180deg) scale(1.15
 @keyframes spin { to { transform: rotate(360deg) } }
 
 /* ---- tool calls ---- */
-details.tool { margin: 0 0 9px; border: 1px solid var(--line); border-radius: 13px;
+details.tool { animation: rise .2s cubic-bezier(.34,1.3,.64,1); margin: 0 0 9px; border: 1px solid var(--line); border-radius: 13px;
                background: var(--bg-raise); overflow: hidden; transition: border-color .16s; }
 details.tool:hover { border-color: var(--ink-faint); }
 details.tool > summary { cursor: pointer; list-style: none; padding: 9px 13px;
@@ -192,7 +193,6 @@ dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--r
                  animation: sway 3.4s ease-in-out infinite; }
 @keyframes sway { 0%,100% { transform: translateY(0) rotate(-2deg) }
                   50% { transform: translateY(-5px) rotate(2deg) } }
-@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important } }
 
 /* markdown */
 .assistant h3, .assistant h4, .assistant h5, .assistant h6 {
@@ -211,3 +211,48 @@ dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--r
 .user .shots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 9px; }
 .user .shot { max-width: 230px; max-height: 170px; border-radius: 11px;
               border: 1px solid var(--line); }
+
+/* diffs: the change should be findable without reading */
+.tool-detail .d-add { color: #b7e6b7; background: #2c3a2c; }
+.tool-detail .d-del { color: #f0b3b3; background: #3a2c2e; }
+.tool-detail .d-hunk { color: var(--lilac); }
+.tool-detail .d-file { color: var(--ink-faint); }
+.tool-detail .d-ctx { color: var(--ink-dim); }
+.tool.has-diff > summary::after { content: "±"; color: var(--ink-faint); }
+
+#send.stopping { color: var(--bad); }
+
+/* context meter: filling up should be visible before it bites */
+#meter { display: flex; align-items: center; gap: 8px; font-size: 11px;
+         color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+#meter i { display: block; width: 0; height: 100%; border-radius: 99px;
+           background: linear-gradient(90deg, var(--mint), var(--peach));
+           transition: width .4s ease; }
+#meter { --track: 54px; }
+#meter i { position: relative; }
+#meter > i { min-width: 2px; }
+#meter::before { content: ""; width: var(--track); height: 4px; border-radius: 99px;
+                 background: var(--line); position: absolute; left: 0; }
+#meter > i { width: 0; max-width: var(--track); z-index: 1; }
+#meter b { margin-left: calc(var(--track) + 4px); }
+#meter.full i { background: linear-gradient(90deg, var(--peach), var(--bad)); }
+#meter b { font-weight: 400; }
+
+/* ---- smooth disclosure ----
+   Native <details> snaps open. Chrome/Edge 131+ can transition to an
+   intrinsic height; everywhere else this block is inert and the panel
+   opens instantly, exactly as it did before. */
+@supports (interpolate-size: allow-keywords) and selector(details::details-content) {
+  :root { interpolate-size: allow-keywords; }
+  details.tool::details-content, details.reasoning::details-content {
+    height: 0; overflow: hidden; content-visibility: hidden;
+    transition: height .2s cubic-bezier(.34,1.3,.64,1),
+                content-visibility .2s allow-discrete; }
+  details.tool[open]::details-content,
+  details.reasoning[open]::details-content { height: auto; content-visibility: visible; }
+}
+
+/* Last, so it outranks every animation above it. */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important }
+}
