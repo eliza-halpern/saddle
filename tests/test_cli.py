@@ -1481,13 +1481,21 @@ def test_main_run_preflight_failure_uses_explicit_stderr(
     )
 
 
+def _no_key_message() -> str:
+    """What `main` prints with no key anywhere, built from the module's own
+    KEY_FILE so the conftest guard's path is not duplicated in five places."""
+    from saddle import cli
+
+    return f"error: no API key. Export SADDLE_VLLM_API_KEY, or put it in {cli.KEY_FILE}\n"
+
+
 def test_main_run_missing_key_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["run", "--repo", str(tmp_path), "Do it."]) == 1
-    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+    assert capsys.readouterr().err == _no_key_message()
 
 
 def test_main_run_missing_key_uses_explicit_stderr(
@@ -1497,7 +1505,7 @@ def test_main_run_missing_key_uses_explicit_stderr(
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     err = io.StringIO()
     assert main(["run", "--repo", str(tmp_path), "Do it."], stderr=err) == 1
-    assert err.getvalue() == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+    assert err.getvalue() == _no_key_message()
 
 
 def test_main_run_wires_options_and_defaults(
@@ -1809,7 +1817,7 @@ def test_main_doctor_missing_key_reports(
     monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["doctor"]) == 1
-    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+    assert capsys.readouterr().err == _no_key_message()
 
 
 def test_main_doctor_passes_flags_through(
@@ -1861,7 +1869,7 @@ def test_main_dag_missing_key_reports(
     monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["dag", "Do it."]) == 1
-    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+    assert capsys.readouterr().err == _no_key_message()
 
 
 def test_main_dag_passes_flags_through(
@@ -2419,7 +2427,7 @@ def test_main_up_missing_key_reports(
     monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["up"]) == 1
-    assert capsys.readouterr().err == "error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)\n"
+    assert capsys.readouterr().err == _no_key_message()
 
 
 def test_main_up_preflight_failure_reports(
@@ -3473,3 +3481,93 @@ def test_web_defaults_sessions_root_to_none_so_the_store_picks_its_own(
     monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
     main(["web", "--no-open", "--workdir", str(tmp_path)], stdout=io.StringIO())
     assert served["sessions_root"] is None
+
+
+def test_chat_and_web_are_the_same_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`saddle chat` reads like `saddle up` and `saddle run`; `web` still works."""
+    from saddle.web import app as web_app
+
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(web_app, "serve", lambda **kw: calls.append(kw))
+
+    for name in ("chat", "web"):
+        assert main([name, "--no-open", "--workdir", str(tmp_path)], stdout=io.StringIO()) == 0
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+
+
+def test_the_key_is_read_from_the_env_file_when_it_is_not_exported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without this every command needs `set -a; . ~/.config/saddle/env; set +a`
+    # in front of it, which is the friction that ends with a key pasted
+    # somewhere it should not be.
+    from saddle import cli
+
+    env_file = tmp_path / "env"
+    env_file.write_text(
+        '# a comment\nUNRELATED=leave-me-alone\nexport SADDLE_VLLM_API_KEY="from-the-file"\n'
+    )
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "KEY_FILE", str(env_file))
+
+    assert cli._api_key() == "from-the-file"
+    # Only the key is taken; this is not a dotenv loader.
+    import os as _os
+
+    assert "UNRELATED" not in _os.environ
+
+
+def test_an_exported_key_beats_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from saddle import cli
+
+    env_file = tmp_path / "env"
+    env_file.write_text("SADDLE_VLLM_API_KEY=from-the-file\n")
+    monkeypatch.setattr(cli, "KEY_FILE", str(env_file))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "exported")
+    assert cli._api_key() == "exported"
+
+
+@pytest.mark.parametrize(
+    ("line", "want"),
+    [
+        ("SADDLE_VLLM_API_KEY=plain", "plain"),
+        ('SADDLE_VLLM_API_KEY="double"', "double"),
+        ("SADDLE_VLLM_API_KEY='single'", "single"),
+        ("export  SADDLE_VLLM_API_KEY=exported", "exported"),
+        ("  SADDLE_VLLM_API_KEY = spaced  ", "spaced"),
+        ("VLLM_API_KEY=fallback-name", "fallback-name"),
+        ("SADDLE_VLLM_API_KEY=", None),  # present but empty is no key
+        ("NOT_THE_KEY=value", None),
+        ("SADDLE_VLLM_API_KEY_SUFFIXED=value", None),
+        ("no equals sign here", None),
+    ],
+)
+def test_the_env_file_is_parsed_the_way_a_shell_would(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line: str, want: str | None
+) -> None:
+    from saddle import cli
+
+    env_file = tmp_path / "env"
+    env_file.write_text(line + "\n")
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "KEY_FILE", str(env_file))
+    assert cli._api_key() == want
+
+
+def test_a_missing_env_file_is_not_an_error_just_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from saddle import cli
+
+    monkeypatch.delenv("SADDLE_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("VLLM_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "KEY_FILE", str(tmp_path / "absent"))
+    assert cli._api_key() is None
+
+    err = io.StringIO()
+    assert main(["chat", "--no-open"], stderr=err) == 1
+    assert str(tmp_path / "absent") in err.getvalue()

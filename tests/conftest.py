@@ -23,6 +23,27 @@ def _empty_cwd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mon
 
 
 @pytest.fixture(autouse=True)
+def _no_real_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite away from the operator's actual key.
+
+    `_api_key` falls back to ~/.config/saddle/env when nothing is exported,
+    which is what makes `saddle chat` work without sourcing anything. It also
+    means a test that deletes the environment variables still finds a live
+    credential on a developer's machine. That is not hypothetical: the five
+    "missing key" tests began passing a real key to `main`, and
+    test_main_doctor_missing_key_reports reached an actual vLLM server and
+    returned 0 instead of 1.
+
+    So every test reads the key from a path that cannot exist, unless it
+    points KEY_FILE somewhere itself. Tests must never depend on -- or
+    spend -- a real credential.
+    """
+    from saddle import cli
+
+    monkeypatch.setattr(cli, "KEY_FILE", "/nonexistent/saddle-test-env")
+
+
+@pytest.fixture(autouse=True)
 def _stub_mutmut(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Hermetic mutmut: e2e tests exercise the collector without real runs.
 

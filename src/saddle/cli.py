@@ -1279,7 +1279,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Candidate test draws per survivor round.",
     )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
-    web = sub.add_parser("web", help="Open the chat UI in a browser.")
+    web = sub.add_parser("chat", aliases=["web"], help="Open the chat UI in a browser.")
     web.add_argument("--workdir", default=".", help="Default folder for new sessions.")
     web.add_argument("--host", default="127.0.0.1", help="Bind address (default: loopback).")
     web.add_argument("--port", type=int, default=8777)
@@ -1311,8 +1311,44 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+KEY_NAMES: Final = ("SADDLE_VLLM_API_KEY", "VLLM_API_KEY")
+KEY_FILE: Final = "~/.config/saddle/env"
+"""Where the key lives when it is not already exported. Read only as a
+fallback, and only for these two names -- this is not a general dotenv
+loader, and nothing else in the file is put into the environment."""
+
+
+def _key_from_file(path: Path) -> str | None:
+    """Read SADDLE_VLLM_API_KEY out of a shell-style env file.
+
+    Without this, every command needs `set -a; . ~/.config/saddle/env; set +a`
+    in front of it, which is the kind of friction that ends with a key pasted
+    somewhere it should not be.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].lstrip()
+        name, sep, value = stripped.partition("=")
+        if not sep or name.strip() not in KEY_NAMES:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if value:
+            return value
+    return None
+
+
 def _api_key() -> str | None:
-    return os.environ.get("SADDLE_VLLM_API_KEY") or os.environ.get("VLLM_API_KEY")
+    for name in KEY_NAMES:
+        if os.environ.get(name):
+            return os.environ[name]
+    return _key_from_file(Path(KEY_FILE).expanduser())
 
 
 def main(
@@ -1323,7 +1359,17 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor", "dag", "verify", "tail", "up", "explain", "web"):
+    if args.command not in (
+        "run",
+        "doctor",
+        "dag",
+        "verify",
+        "tail",
+        "up",
+        "explain",
+        "chat",
+        "web",
+    ):
         return 0
     if args.command == "verify":
         return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
@@ -1333,7 +1379,10 @@ def main(
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     key = _api_key()
     if not key:
-        print("error: set SADDLE_VLLM_API_KEY (or VLLM_API_KEY)", file=stderr or sys.stderr)
+        print(
+            f"error: no API key. Export SADDLE_VLLM_API_KEY, or put it in {KEY_FILE}",
+            file=stderr or sys.stderr,
+        )
         return 1
     if args.command == "doctor":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
@@ -1351,7 +1400,7 @@ def main(
                 context_window=server_context_window(client, args.context_window),
             )
             return run_dag(dag_options, client, stdout=stdout or sys.stdout)
-    if args.command == "web":
+    if args.command in ("chat", "web"):
         from saddle.web.app import serve
 
         url = f"http://{args.host}:{args.port}/"

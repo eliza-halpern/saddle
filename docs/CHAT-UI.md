@@ -1,9 +1,14 @@
-# The chat UI (`saddle web`)
+# The chat UI (`saddle chat`)
 
 ```bash
-saddle web                      # opens http://127.0.0.1:8777/
-saddle web --workdir ~/code/x --port 9000 --no-open
+saddle chat                     # opens http://127.0.0.1:8777/
+saddle chat --workdir ~/code/x --port 9000 --no-open
 ```
+
+`saddle web` is kept as an alias. The key does not need to be exported
+first: when neither `SADDLE_VLLM_API_KEY` nor `VLLM_API_KEY` is set, it is
+read from `~/.config/saddle/env`. Only those two names are read from that
+file, and an exported value always wins.
 
 Sessions live in `~/.saddle/sessions/<id>/` — one directory each, holding
 `session.json`, `messages.jsonl`, `chat.jsonl` (the proof journal) and
@@ -22,7 +27,7 @@ disagree about what happened.
 
 ```
 engine.run_turn()  ──yields──>  events.Event  ──┬──>  Timeline   (saddle up)
-                                                └──>  SSE → app.js (saddle web)
+                                                └──>  SSE → app.js (saddle chat)
 ```
 
 `chat.py` used to call `Timeline` methods directly, which welded the loop to
