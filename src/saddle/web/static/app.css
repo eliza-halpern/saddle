@@ -218,8 +218,14 @@ dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--r
               border: 1px solid var(--line); }
 
 /* diffs: the change should be findable without reading */
-.tool-detail .d-add { color: #b7e6b7; background: #2c3a2c; }
-.tool-detail .d-del { color: #f0b3b3; background: #3a2c2e; }
+/* Green added, red removed. These were pastel to match the rest of the
+   theme, which cost the one thing a diff is for: telling the two sides
+   apart at a glance. The accent bar carries the meaning even when the
+   colours themselves are hard to separate. */
+.tool-detail .d-add { color: #7ee787; background: rgba(63, 185, 80, .16);
+                      box-shadow: inset 2px 0 0 #3fb950; }
+.tool-detail .d-del { color: #ff9c92; background: rgba(248, 81, 73, .16);
+                      box-shadow: inset 2px 0 0 #f85149; }
 .tool-detail .d-hunk { color: var(--lilac); }
 .tool-detail .d-file { color: var(--ink-faint); }
 .tool-detail .d-ctx { color: var(--ink-dim); }
@@ -376,3 +382,58 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
   color: #241c26; border-color: transparent; font-weight: 600; }
 .notice.warn { color: var(--peach); border-color: var(--peach); }
 .notice.warn::before { content: "⚠ "; }
+
+/* ---- syntax highlighting ----
+   Muted enough to read a whole block, separated enough to find a string or
+   a comment without reading it. Comments recede; everything else is a hue
+   from the existing palette rather than a new one. */
+.assistant pre code .c-comment   { color: #7a7086; font-style: italic; }
+.assistant pre code .c-string    { color: var(--mint); }
+.assistant pre code .c-keyword   { color: var(--rose); }
+.assistant pre code .c-builtin   { color: var(--sky); }
+.assistant pre code .c-number    { color: var(--peach); }
+.assistant pre code .c-decorator { color: var(--lilac); }
+.assistant pre code .c-tag       { color: var(--rose); }
+.assistant pre code .c-attr      { color: var(--sky); }
+.assistant pre code .c-property  { color: var(--sky); }
+.assistant pre code .c-variable  { color: var(--peach); }
+
+/* ---- narrow screens ----
+   A 252px sidebar beside a 1fr transcript is two thirds of a phone spent on
+   navigation: the reply became a column about one word wide. Below this the
+   sidebar becomes a drawer over the conversation, and everything else gets
+   the whole width. */
+#menu { display: none; background: var(--bg-raise); border: 1px solid var(--line);
+  color: var(--ink-dim); width: 30px; height: 30px; border-radius: 10px;
+  cursor: pointer; font-size: 14px; flex: none; }
+#menu:hover { color: var(--rose); }
+#scrim { display: none; }
+
+@media (max-width: 760px) {
+  #app { grid-template-columns: 1fr; }
+  #menu { display: block; }
+
+  #sidebar { position: fixed; inset: 0 auto 0 0; width: min(82vw, 300px);
+    z-index: 20; transform: translateX(-100%);
+    transition: transform .2s cubic-bezier(.34,1.2,.64,1);
+    box-shadow: 0 0 40px #0009; }
+  #sidebar.open { transform: none; }
+  #scrim.open { display: block; position: fixed; inset: 0; z-index: 10;
+                background: #0c0a0d99; }
+
+  /* Touch targets, and room for the text to actually be text. */
+  #transcript { padding: 16px 12px 28px; }
+  .turn { max-width: none; }
+  #topbar { padding: 10px 12px; gap: 8px; }
+  #title { font-size: 15px; min-width: 0; }
+  #meter { display: none; }          /* the number is not worth the width */
+  form#composer { padding: 10px 12px 14px; }
+  .session { padding: 12px 11px; }
+  .turn-tools { opacity: 1; }        /* no hover on a touch screen */
+  .assistant pre { font-size: 12px; }
+  figure.preview img { max-height: 55vh; object-fit: contain; }
+}
+
+@media (max-width: 420px) {
+  .status { display: none; }         /* the send button already says busy */
+}

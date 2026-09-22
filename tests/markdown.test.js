@@ -201,3 +201,184 @@ for (const [name, href] of [
     assert.ok(para.textContent.includes(href), para.textContent);
   });
 }
+
+
+/* ---------- tool output ---------- */
+
+const { isDiff, renderDiff, fillToolDetail } = md;
+
+test("a unified diff is recognised, other output is not", () => {
+  assert.ok(isDiff("--- a/frog.svg\n+++ b/frog.svg\n@@ -1 +1 @@\n-a\n+b"));
+  assert.ok(!isDiff("created 'frog.svg' (1692 bytes)"));
+  assert.ok(!isDiff("frog.svg unchanged"));
+  assert.ok(!isDiff(""));
+  assert.ok(!isDiff(undefined));
+  assert.ok(!isDiff("error: cannot read 'x'"));
+});
+
+test("added lines are marked added and removed lines removed", () => {
+  const node = el("div");
+  renderDiff(node,
+    "--- a/frog.svg\n+++ b/frog.svg\n@@ -39,5 +39,5 @@\n" +
+    " <!-- Blushing cheeks -->\n" +
+    '-  <ellipse rx="10" fill="#F48FB1"/>\n' +
+    '+  <ellipse rx="13" fill="#F06292"/>');
+  const classes = node.children.map((c) => c.className);
+  assert.deepStrictEqual(classes,
+    ["d-file", "d-file", "d-hunk", "d-ctx", "d-del", "d-add"]);
+  // The +++ header must not be mistaken for an added line, nor --- for a
+  // removed one: they are three characters of the same prefix.
+  assert.strictEqual(node.children[1].textContent, "+++ b/frog.svg");
+});
+
+test("a blank context line keeps its row", () => {
+  // Collapsing it would silently shift every line after it.
+  const node = el("div");
+  renderDiff(node, "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n\n+added");
+  assert.strictEqual(node.children.length, 5);
+  assert.strictEqual(node.children[3].className, "d-ctx");
+});
+
+test("the live row and a reloaded row fill identically", () => {
+  // They had separate code and disagreed: the live one coloured a diff and
+  // the stored one printed it flat, so a diff lost its colours on reload.
+  const diff = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new";
+  const liveRow = el("div"), liveDetail = el("div");
+  const pastRow = el("div"), pastDetail = el("div");
+  fillToolDetail(liveRow, liveDetail, diff);
+  fillToolDetail(pastRow, pastDetail, diff);
+
+  assert.strictEqual(pastDetail.html, liveDetail.html);
+  assert.ok(pastRow.classList.contains("has-diff"));
+  assert.strictEqual(pastDetail.children.filter((c) => c.className === "d-add").length, 1);
+  assert.strictEqual(pastDetail.children.filter((c) => c.className === "d-del").length, 1);
+});
+
+test("output that is not a diff is left alone", () => {
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail, "created 'frog.svg' (1692 bytes)");
+  assert.strictEqual(detail.textContent, "created 'frog.svg' (1692 bytes)");
+  assert.ok(!row.classList.contains("has-diff"));
+});
+
+test("an empty result says so rather than showing nothing", () => {
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail, "");
+  assert.strictEqual(detail.textContent, "(no output)");
+});
+
+
+/* ---------- syntax highlighting ---------- */
+
+const { highlight, grammarFor } = md;
+
+function tokens(code, language) {
+  const node = el("code");
+  highlight(node, code, language);
+  return node.children.map((c) => [c.className, c.textContent]);
+}
+
+test("python gets its comments, strings, keywords and numbers", () => {
+  const got = tokens('def f(x):\n    # note\n    return "hi" + 42', "python");
+  assert.deepStrictEqual(got, [
+    ["c-keyword", "def"],
+    ["c-comment", "# note"],
+    ["c-keyword", "return"],
+    ["c-string", '"hi"'],
+    ["c-number", "42"],
+  ]);
+});
+
+test("a keyword inside a string stays a string", () => {
+  // Order inside a grammar is the whole trick: strings and comments are
+  // matched before keywords, or every quoted word gets recoloured.
+  assert.deepStrictEqual(tokens('x = "return if for"', "python"),
+                         [["c-string", '"return if for"']]);
+  assert.deepStrictEqual(tokens('# return if for', "python"),
+                         [["c-comment", "# return if for"]]);
+});
+
+test("a triple-quoted docstring is one string, not three", () => {
+  const got = tokens('"""\nreturn\n"""', "python");
+  assert.strictEqual(got.length, 1);
+  assert.strictEqual(got[0][0], "c-string");
+});
+
+test("svg and html are highlighted as markup", () => {
+  assert.deepStrictEqual(tokens('<circle cx="120"/>', "svg"), [
+    ["c-tag", "<circle"],
+    ["c-attr", "cx"],
+    ["c-string", '"120"'],
+    ["c-tag", "/>"],
+  ]);
+  assert.ok(grammarFor("html") === grammarFor("svg"));
+});
+
+test("json tells a key from a string value", () => {
+  assert.deepStrictEqual(tokens('{"name": "ada", "age": 36}', "json"), [
+    ["c-property", '"name"'],
+    ["c-string", '"ada"'],
+    ["c-property", '"age"'],
+    ["c-number", "36"],
+  ]);
+});
+
+test("the aliases people actually type all resolve", () => {
+  for (const [alias, real] of [
+    ["py", "python"], ["js", "javascript"], ["ts", "javascript"],
+    ["tsx", "javascript"], ["sh", "bash"], ["zsh", "bash"],
+    ["svg", "xml"], ["html", "xml"], ["yml", "yaml"],
+    ["cpp", "c"], ["rs", "rust"], ["golang", "go"], ["patch", "diff"],
+    ["scss", "css"], ["psql", "sql"],
+  ]) {
+    assert.ok(grammarFor(alias), `${alias} has no grammar`);
+    assert.strictEqual(grammarFor(alias), grammarFor(real), alias);
+  }
+});
+
+test("the language name is matched case-insensitively", () => {
+  assert.strictEqual(grammarFor("Python"), grammarFor("python"));
+  assert.strictEqual(grammarFor("SQL"), grammarFor("sql"));
+});
+
+test("an unknown or absent language is plain text, not mangled", () => {
+  // Uncoloured code is readable; code a half-matching grammar chewed up is
+  // not. So no grammar means no spans at all.
+  for (const language of ["brainfuck", "", undefined, null, "lang-python"]) {
+    const node = el("code");
+    highlight(node, 'def f(): return "x"', language);
+    assert.strictEqual(node.children.length, 0, String(language));
+    assert.strictEqual(node.textContent, 'def f(): return "x"');
+  }
+});
+
+test("highlighting never loses a character", () => {
+  // Tokens are spans and the gaps between them are text nodes; if the two
+  // do not tile the input, code silently goes missing.
+  const samples = [
+    ['def f(x):\n    return x  # done', "python"],
+    ['<svg><rect fill="#fff"/></svg>', "svg"],
+    ['{"a": [1, 2, null], "b": true}', "json"],
+    ['for f in *.py; do echo "$f"; done', "bash"],
+    ['const x = `a ${b} c`; // note', "js"],
+    ['SELECT * FROM t WHERE a = 1', "sql"],
+    ['fn main() { println!("hi"); }', "rust"],
+    ['body { color: #fff; margin: 0 }', "css"],
+    ['key: value  # comment', "yaml"],
+  ];
+  for (const [code, language] of samples) {
+    const node = el("code");
+    highlight(node, code, language);
+    assert.strictEqual(node.textContent, code, language);
+  }
+});
+
+test("highlighted code is still built from text nodes, never markup", () => {
+  // The renderer's safety property has to survive into the highlighter:
+  // model output cannot inject elements.
+  const node = el("code");
+  highlight(node, 'x = "<img src=x onerror=alert(1)>"', "python");
+  assert.ok(!node.html.includes("<img"));
+  assert.ok(node.html.includes("&lt;img"));
+  assert.strictEqual(node.textContent, 'x = "<img src=x onerror=alert(1)>"');
+});

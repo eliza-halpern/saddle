@@ -131,12 +131,7 @@ function finishTool(event) {
     event.duration_ms >= 1000
       ? `${(event.duration_ms / 1000).toFixed(1)}s`
       : `${event.duration_ms}ms`;
-  if (isDiff(event.detail)) {
-    renderDiff(row.detail, event.detail);
-    row.details.classList.add("has-diff");
-  } else {
-    row.detail.textContent = event.detail || "(no output)";
-  }
+  fillToolDetail(row.details, row.detail, event.detail);
   if (event.preview) showPreview(row.details, event.preview);
   if (!event.ok) row.details.open = true;             // a failure should not need a click
 }
@@ -158,25 +153,6 @@ function terminalBlock(id) {
   (state.turnNode || $("#transcript")).appendChild(details);
   state.terminals.set(id, body);
   return body;
-}
-
-function isDiff(text) {
-  return typeof text === "string" && text.startsWith("--- a/");
-}
-
-/* A diff is the point of a write: "wrote 'x.py'" says nothing about what
-   changed. Colour the sides so the eye finds the change without reading. */
-function renderDiff(target, text) {
-  target.textContent = "";
-  for (const line of text.split("\n")) {
-    const cls =
-      line.startsWith("+++") || line.startsWith("---") ? "d-file"
-      : line.startsWith("@@") ? "d-hunk"
-      : line.startsWith("+") ? "d-add"
-      : line.startsWith("-") ? "d-del"
-      : "d-ctx";
-    target.appendChild(el("div", cls, line || " "));
-  }
 }
 
 function notice(text, kind) {
@@ -351,7 +327,10 @@ function pastToolRow(call) {
   details.appendChild(summary);
   const detail = el("div", "tool-detail");
   if (call.name === "run_command") detail.classList.add("terminal");
-  detail.textContent = call.detail || "";
+  // The same filling the live row gets: a diff was coloured while you
+  // watched it and turned back into flat text on reload, because history
+  // set textContent directly.
+  fillToolDetail(details, detail, call.detail);
   details.appendChild(detail);
   return details;
 }
@@ -536,6 +515,7 @@ async function loadSessions() {
 }
 
 function select(sessionId) {
+  drawer(false);
   state.sessionId = sessionId;
   state.historyFor = null;          // a different transcript: rebuild it
   state.tools.clear();
@@ -737,6 +717,19 @@ async function saveDefaults() {
     }),
   });
 }
+
+/* The sidebar is a drawer on a narrow screen. Picking a session closes it,
+   because on a phone the thing you just chose is behind it. */
+function drawer(open) {
+  $("#sidebar").classList.toggle("open", open);
+  $("#scrim").classList.toggle("open", open);
+  $("#scrim").hidden = !open;
+}
+$("#menu").onclick = (event) => {
+  event.preventDefault();
+  drawer(!$("#sidebar").classList.contains("open"));
+};
+$("#scrim").onclick = () => drawer(false);
 
 $("#settings").onclick = (event) => { event.preventDefault(); openSettings(); };
 $("#settings-close").onclick = (event) => {

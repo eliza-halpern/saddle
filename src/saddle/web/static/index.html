@@ -4,6 +4,7 @@
 <title>saddle</title>
 <link rel="stylesheet" href="/static/app.css">
 <div id="app">
+  <div id="scrim" hidden></div>
   <aside id="sidebar">
     <div class="side-head">
       <span class="brand">saddle</span>
@@ -34,6 +35,7 @@
 
   <main>
     <header id="topbar">
+      <button id="menu" type="button" title="Sessions" aria-label="Sessions">☰</button>
       <input id="title" spellcheck="false" aria-label="Session title">
       <span id="meter" title="context used"><i></i><b></b></span>
       <span id="status" class="status idle">idle</span>
