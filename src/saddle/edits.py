@@ -21,6 +21,18 @@ a leading `-` or `+`, which is what makes "where does this block end?"
 decidable from the next line's first character, and lets a file line that
 itself begins with `-`, `+`, `=` or `>` round-trip unambiguously. The
 applier strips exactly one leading character.
+
+A block's first and last content lines must carry something, and at most
+two blank lines may sit between two that do. The first shape of this
+grammar had `oline ::= "-" line "\n"` over `line ::= [^\n]*`, so `-\n` was
+legal and `oline+` admitted an unbounded run of them. A live draw against
+a two-line file emitted `edit accounts.py`, then `-RATE = 0.05`, then
+11 900 characters of `-` and nothing else, because no rule ever required
+it to reach `=======` and an empty line is the cheapest token to repeat.
+The bound is two rather than one because PEP 8 puts two blank lines
+between top-level definitions, and a search block spanning two of them is
+ordinary. Leading and trailing blanks are refused outright: `loose_spans`
+strips blank lines before matching, so they never named the site anyway.
 """
 
 from __future__ import annotations
@@ -29,14 +41,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 EDIT_GRAMMAR = r"""root ::= op+
-op      ::= edit | create | delete
-edit    ::= "edit " path "\n" oline+ "=======\n" nline* ">>>>>>>\n"
-create  ::= "create " path "\n" nline* ">>>>>>>\n"
-delete  ::= "delete " path "\n"
-oline   ::= "-" line "\n"
-nline   ::= "+" line "\n"
-path    ::= [^/\n] [^\n]*
-line    ::= [^\n]*
+op       ::= edit | create | delete
+edit     ::= "edit " path "\n" obody "=======\n" nbody ">>>>>>>\n"
+create   ::= "create " path "\n" nbody ">>>>>>>\n"
+delete   ::= "delete " path "\n"
+obody    ::= ofull (ogap ofull)*
+nbody    ::= (nfull (ngap nfull)*)?
+ogap     ::= oblank? oblank?
+ngap     ::= nblank? nblank?
+ofull    ::= "-" nonblank "\n"
+oblank   ::= "-" blank "\n"
+nfull    ::= "+" nonblank "\n"
+nblank   ::= "+" blank "\n"
+path     ::= [^/\n] [^\n]*
+nonblank ::= blank [^ \t\n] [^\n]*
+blank    ::= [ \t]*
 """
 
 SEPARATOR = "======="

@@ -224,7 +224,11 @@ def emit(commits: int = 40) -> None:
 
 
 def run() -> int:
-    """Compile the emitted grammar with the real xgrammar and check both halves."""
+    """Compile the emitted grammar with the real xgrammar and check both halves.
+
+    Shared by `edit_grammar_check.py`: everything it needs travels in the
+    cases file, so the same harness checks either grammar.
+    """
     # Only present in the serving container; mypy follows this file now that
     # tests/test_vllm.py imports the reject list from it.
     import xgrammar as xgr  # type: ignore[import-not-found]
@@ -257,7 +261,13 @@ def run() -> int:
 
     bad = []
     for name, text in sorted(cases["not_stop"].items()):
-        if may_stop(text):
+        # A case the grammar refuses outright cannot say anything about
+        # stopping: `may_stop` is False for it either way, so crediting it
+        # would be measuring nothing. It has to be a legal prefix first.
+        at = first_reject(text)
+        if at is not None:
+            bad.append(f"MUST NOT STOP is not even a legal prefix, rejected at byte {at}: {name}")
+        elif may_stop(text):
             bad.append(f"MUST NOT STOP but grammar allows ending: {name}")
     for name, text in sorted(cases["stop"].items()):
         if not may_stop(text):

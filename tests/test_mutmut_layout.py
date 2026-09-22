@@ -41,6 +41,12 @@ OUTSIDE_READERS: tuple[tuple[str, ...], ...] = (
     ("tests/test_docs.py",),
     # imports tools.diff_grammar_check inside the test body
     ("tests/test_vllm.py::test_diff_grammar_requires_the_file_lines_before_a_hunk",),
+    # imports tools.edit_grammar_check inside the test body
+    (
+        "tests/test_edits.py::test_the_grammar_bounds_a_run_of_blank_content_lines",
+        "tests/test_edits.py::test_the_parser_accepts_every_payload_the_grammar_calls_complete",
+        "tests/test_edits.py::test_nothing_the_grammar_refuses_reaches_the_tree",
+    ),
 )
 
 

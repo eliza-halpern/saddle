@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from saddle.edits import Edit, EditError, apply_edits, parse_edits
+from saddle.edits import EDIT_GRAMMAR, Edit, EditError, apply_edits, parse_edits
 
 EDIT = "edit fees.py\n-FLAT_FEE = 0.30\n=======\n+FEES = {}\n>>>>>>>\n"
 
@@ -243,3 +243,104 @@ def test_an_edit_that_only_deletes_lines_leaves_no_blank_behind(tmp_path: Path) 
     (tmp_path / "m.py").write_text("keep = 1\ndrop = 2\n\ndrop = 3\nkeep = 4\n")
     apply_edits(tmp_path, "edit m.py\n-drop = 2\n-drop = 3\n=======\n>>>>>>>\n")
     assert (tmp_path / "m.py").read_text() == "keep = 1\nkeep = 4\n"
+
+
+def _grammar_rules(grammar: str) -> dict[str, str]:
+    """Split an EBNF text into {rule name: body}, joining continuation lines."""
+    rules: dict[str, str] = {}
+    name = ""
+    for raw in grammar.splitlines():
+        if "::=" in raw:
+            head, _, body = raw.partition("::=")
+            name = head.strip()
+            rules[name] = body.strip()
+        elif raw.strip() and name:
+            rules[name] += " " + raw.strip()
+    return rules
+
+
+def test_the_grammar_bounds_a_run_of_blank_content_lines() -> None:
+    """A block may not begin, end, or run on blank lines.
+
+    Structural pin, and deliberately the weaker half: xgrammar enforces
+    the grammar and is not installed in this venv, so nothing here can
+    show a payload admitted or refused. `tools/edit_grammar_check.py`
+    carries the corpus that can, and the last two assertions keep the
+    instance in its reject list and pin where it has to die -- a
+    rejection anywhere else would mean a different rule swallowed it.
+
+    The instance is a live draw: against a two-line file the model
+    emitted the header, one correct search line, and then 11 900
+    characters of "-". `oline+` over `line ::= [^\\n]*` made that legal
+    forever, so no rule ever required it to reach the separator.
+    """
+    rules = _grammar_rules(EDIT_GRAMMAR)
+    # A body is non-blank lines with bounded gaps, never a bare repetition.
+    assert rules["obody"] == "ofull (ogap ofull)*"
+    assert rules["ogap"] == "oblank? oblank?"
+    assert rules["nbody"] == "(nfull (ngap nfull)*)?"
+    assert rules["ngap"] == "nblank? nblank?"
+    # ... and "non-blank" is spelled so that a line of spaces is not one.
+    assert rules["nonblank"] == "blank [^ \\t\\n] [^\\n]*"
+    assert rules["blank"] == "[ \\t]*"
+
+    # Imported in-function: tools/ reaches the mutmut work copy only
+    # through also_copy (pyproject), and test_mutmut_layout runs this test
+    # there to prove it; a module-level import would fail at collection.
+    from tools.edit_grammar_check import MUST_REJECT, REJECT_AT
+
+    runaway = "edit n.py\n-RATE = 0.05\n" + "-\n" * 8
+    named = [name for name, case in MUST_REJECT.items() if case == runaway]
+    assert named, "the check tool no longer carries the live runaway"
+    # The third consecutive blank line's own newline: two are legal.
+    assert REJECT_AT[named[0]] == len("edit n.py\n-RATE = 0.05\n-\n-\n-")
+
+
+def test_the_parser_accepts_every_payload_the_grammar_calls_complete() -> None:
+    """The two enforcers have to agree about what a finished payload is.
+
+    The grammar decides what the decoder may emit; the parser decides
+    what the applier will act on. A payload the grammar calls complete
+    and the parser refuses is a draw spent for nothing, and nothing else
+    in the suite compares them -- the grammar's corpus runs outside this
+    venv and never calls `parse_edits`.
+    """
+    from tools.edit_grammar_check import MUST_STOP, SYNTHETIC
+
+    for name, payload in sorted({**SYNTHETIC, **MUST_STOP}.items()):
+        assert parse_edits(payload), f"{name}: parsed to no operations"
+
+
+def test_nothing_the_grammar_refuses_reaches_the_tree(tmp_path: Path) -> None:
+    """Known-bad half of the pairing above, over the same corpus.
+
+    The refusal is the pipeline's, not any one function's: `parse_edits`
+    judges shape and `apply_edits` judges where a path lands, so an
+    absolute path parses and is then refused on resolution. What must
+    hold is that no such payload changes a file, and that is asserted
+    directly rather than inferred from which layer raised.
+
+    The blank-line bound is excluded by name, not skipped silently: the
+    parser deliberately does not re-implement it -- a file's blank lines
+    are its own business once a payload has arrived -- so those cases are
+    the grammar's alone to refuse.
+    """
+    from tools.edit_grammar_check import MUST_REJECT
+
+    bound_only = {
+        "three blank search lines",
+        "three blank replace lines",
+        "search block starts blank",
+        "search block ends blank",
+        "replace block starts blank",
+        "replace block ends blank",
+        "the live runaway",
+    }
+    judged = {k: v for k, v in MUST_REJECT.items() if k not in bound_only}
+    assert len(judged) == len(MUST_REJECT) - len(bound_only), "a named exclusion is stale"
+    target = tmp_path / "n.py"
+    for name, payload in sorted(judged.items()):
+        target.write_text("a\n")
+        with pytest.raises(EditError):
+            apply_edits(tmp_path, payload)
+        assert target.read_text() == "a\n", f"{name}: refused and still changed the file"
