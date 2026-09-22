@@ -9133,3 +9133,102 @@ Not in scope: recommendation 70's wider form (every gate input that is a
 set of `(path, line)` pairs constructed in one place — T6-86's
 recommendation 68) and the question of whether an impl node should be
 able to declare a wider scope than its target files imply.
+
+### T6-89 — `requirement-binding` is a pure function of the tests, so it is vacuous on a node that may not write one (scope narrowed; LANDED `b90d1ec` + `0d1b32a`; F21.66)
+
+Every clause of `check_requirement_binding` reads `flipped_tests` and the
+plan's declared ids: the declared-but-uncited half, the cited-but-
+undeclared half, and the examples half. `check_node_scope` fails an
+`impl` node for any changed test file. So on an impl node the gate's
+answer is fixed before the node starts, and failing it bills this node
+for the test node's output.
+
+The precedent was already in `run_tier1`: `examples=node.requirement_
+examples if is_spec else ()`, with the comment "an impl node cannot edit
+tests and a refactor preserves them, so neither is asked". This extends
+that argument one clause over — the exemption was already accepted for
+the third clause and not for the other two.
+
+`writable` is threaded from `may_write_tests = node.kind != "impl"`. When
+false the check returns a pass whose `detail` says "not judged: every
+clause reads tests this node may not write" and whose `basis` carries
+`unbound=<ids>` when there were any, so the gap is recorded rather than
+lost.
+
+Evidence: `g1-afe4ca1` node-2 attempt 1 drew `unbound requirements:
+REQ-002` over a tree whose 21 citations were all written by node-1 and
+all say `REQ-001`. That tree, extracted from
+`refs/saddle/attempt/node-2/1`, passes 16 of 16 hidden matched-scope
+tests.
+
+Known-good, through `run_node_gate`:
+`test_run_node_gate_impl_node_is_not_judged_on_a_citation_it_cannot_write`.
+Known-bad, unchanged, on the kinds that may write a test:
+`test_run_node_gate_unbound_requirement_fails` (now `refactor`).
+Mutants B1 (`if not writable:` → `if False:`) and W1/W2 (the wiring both
+ways) all died.
+
+### T6-90 — `coverage` asks whether the SCHEDULE can cover a line; the other half is whether THIS node can (scope narrowed; LANDED `b90d1ec` + `0d1b32a`; F21.66)
+
+T6-53 deferred an uncovered changed line when `owed` was non-empty — when
+the plan still expected tests from some node. It never asked whether the
+node being graded could write one, and an `impl` node never can. With no
+test node owed the two answers diverge, and that is the commonest plan
+the planner draws: a two-node test-then-impl plan where the impl node is
+last.
+
+What the node can do about it is the point. Its only route to green is
+deleting the branch the task requires — a pass the oracle then fails,
+which is Goal G1's own definition of a gate defect, and the move
+`g1-79cd848` node-2 actually made (F21.62).
+
+When `writable` is false and the percentage is short, the check returns a
+pass whose `detail` still names the lines and whose `basis` records
+`unreachable-lines=`. The node is told what is unreached; it is not
+failed for it.
+
+Interaction, stated plainly: T6-86's `compelled_lines` exemption is now
+inert for `impl` nodes, because coverage no longer fails them. It still
+binds `refactor` nodes and still shapes the `unreachable-lines` count.
+
+Known-good, through `run_node_gate`:
+`test_run_node_gate_impl_node_defers_a_line_no_remaining_node_can_reach`.
+It asserts the `(path, line)` spelling as an equality rather than a
+substring, and caught on its first run that `runner.py` builds `changed`
+absolute — the same side T6-86 found T6-75's exemption on the wrong side
+of. Known-bad, unchanged, on `refactor`:
+`test_run_node_gate_uncovered_line_fails`. Mutant C1 died.
+
+### T6-91 — A declined survivor round says which guard declined it (open; F21.67)
+
+The survivor-driven test node — T6-29, T6-29a, T6-29b, T6-29c — has run
+**zero times** across all 49 journals in the bench, while 8 of the 46
+attempts carrying a failing gate had a failed set inside
+`_survivor_gap`'s own `{coverage, mutation}`. The mechanism is wired
+(`cli.py` passes `survivor_draw` unconditionally, `survivor_samples` is
+10, `SURVIVOR_ROUNDS` is 2) and journals every verdict it reaches, so it
+is not merely refusing candidates: it is not being entered.
+
+Five conditions share one `continue` in `run_slice`, and nothing
+distinguishes them. A `survivor-skipped` journal record naming the guard
+that declined — `skipped`, rounds exhausted, not a `NodeGateFailedError`,
+`_survivor_gap` false, or the `deadline_hit` break above the block —
+turns the next run into data instead of another census.
+
+Suspected but NOT CONFIRMED: for a mutation-only failure,
+`gaps = (changed - covered) | set(mutation.survivor_lines)` reduces
+entirely to `survivor_lines`, which is not serialized to the sidecar. If
+that is empty the guard is false and the round never starts. Confirm by
+record, not by reasoning.
+
+This matters on the next seed specifically. T6-88, T6-89 and T6-90 remove
+`property-coverage`, `requirement-binding` and `coverage` from an impl
+node's failure set, so node-2 either seals outright or fails on
+`mutation` alone — the one failure set that makes this mechanism the
+deciding one. Its silence stops being harmless there.
+
+Second clause (recommendation 75): close `_survivor_gap` with a
+known-good and a known-bad built through a real `NodeGateFailedError` off
+`run_node_gate`, not a hand-made `GateResult`, and assert the spelling of
+`survivor_lines` against the absolute spelling `runner.py` gives
+`changed`.
