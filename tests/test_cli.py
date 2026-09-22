@@ -1564,6 +1564,10 @@ def test_the_edit_rules_worked_example_is_itself_a_payload_that_applies() -> Non
     not have, so the apply is what refuses it, exactly as the live draw
     was refused.
     """
+    # The prose half, pinned only by presence: it is an instruction to a
+    # model, so nothing here can test what it achieves. The example below
+    # is the half with a semantic check behind it.
+    assert '"-def fee(amount):", never "- def fee(amount):"' in EDIT_RULES
     assert "Worked example." in EDIT_RULES, "the rules no longer show the worker an example"
     shown = dedent(EDIT_RULES.split("containing:\n\n")[1].split("\n\nto change")[0]) + "\n"
     start = EDIT_RULES.index("edit fees.py")
