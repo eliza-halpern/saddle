@@ -1375,7 +1375,17 @@ def test_property_oracle_binds_the_impl_node(monkeypatch: pytest.MonkeyPatch) ->
     untargeted = check_property_coverage("impl", {}, targets=())
     assert untargeted.passed is True
     assert untargeted.detail == "not required: no property targets this change"
-    assert untargeted.basis is None
+    # A pass that judged nothing says so (F21.64 recommendation 69): the
+    # basis was None here, and a reader could not tell this apart from a
+    # pass an oracle actually earned.
+    assert untargeted.basis == "oracle: not run, no property module names a changed file"
+
+    excluded = check_property_coverage("impl", {}, targets=(), out_of_scope=("test_store.py",))
+    assert excluded.passed is True
+    assert excluded.detail == (
+        "not required: no property module in this node's test scope (test_store.py outside it)"
+    )
+    assert excluded.basis == "oracle: not run, 0 of 1 property module(s) in scope"
 
     none = MutationOutcome(killed=0, total=5, generated=5, survivors=("m1", "m2", "m3", "m4", "m5"))
     check = check_property_coverage("impl", {}, oracle=none, targets=("test_n.py", "test_m.py"))

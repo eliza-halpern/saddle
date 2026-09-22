@@ -974,6 +974,129 @@ def test_run_node_gate_mutation_runs_the_declared_scope_not_the_red_suite(
     assert [(c.name, c.detail) for c in result.checks if not c.passed] == []
 
 
+# A later node's specification: property-bearing, importing the module
+# this node changes, and red until the node that implements it lands.
+LATER_SPEC: Final = (
+    "from hypothesis import given\n"
+    "from hypothesis import strategies as st\n\n"
+    "from n import f\n\n\n"
+    "@given(st.integers())\n"
+    "def test_f_is_the_later_value(_value):  # REQ-001\n"
+    "    assert f() == 99\n"
+)
+
+
+def _red_sibling_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutmut stub that answers by the selection it is handed (F21.65).
+
+    `mutmut run` baselines by running its selection, so a selection
+    naming `test_store.py` -- red until the node implementing it lands --
+    fails exactly as the real tool did on every `g1-79cd848` node-2
+    attempt: exit 1, "failed to collect stats. runner returned 1". A
+    selection without it reports kills. `_scope_checking_mutmut` above
+    cannot tell these two apart: the oracle's unscoped selection names
+    `test_n.py` too, so its grep passes either way.
+    """
+    stub_dir.mkdir(exist_ok=True)
+    show = "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    return 2\n+    return 3\n"
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  run) grep -q 'test_store.py' pyproject.toml &&"
+        ' { echo "failed to collect stats. runner returned 1" >&2; exit 1; }; exit 0;;\n'
+        '  results) for i in 1 2 3 4 5; do echo "  m$i: killed"; done;;\n'
+        f"  show) printf '%s' '{show}';;\n"
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_run_node_gate_property_oracle_runs_the_declared_scope_not_a_later_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F21.65 known-good, end to end: the oracle collects the node's scope.
+
+    F21.12a scoped the mutation gate to the node's declared tests; the
+    oracle, added later, kept passing `property_modules(...)` whole. On a
+    TDD plan the test node writes every module's specification up front,
+    so a property-bearing module the node does not implement is red by
+    construction, and the oracle's `mutmut run` -- which baselines by
+    running its selection -- cannot start. It reported "no mutants
+    sampled", which reads as a missing property and is unfixable by any
+    diff the node can write: `g1-79cd848`'s node-2 failed this way on all
+    three attempts. Red on the unscoped tree, where the selection is
+    `test_n.py, test_store.py`.
+    """
+    (tmp_path / "test_store.py").write_text(LATER_SPEC)
+    _worktree(tmp_path, SPEC_TEST, baseline_test=SPEC_TEST)
+    _red_sibling_mutmut(tmp_path / "stub", monkeypatch)
+    result = run_node_gate(_node(test_command="pytest test_n.py"), tmp_path)
+    by_name = {check.name: check for check in result.checks}
+    oracle = by_name["property-coverage"]
+    assert oracle.passed is True, oracle.detail
+    assert oracle.basis == "oracle: killed 5 of 5 mutant(s) by test_n.py"
+    assert [(c.name, c.detail) for c in result.checks if not c.passed] == []
+
+
+def test_run_node_gate_property_oracle_names_a_tool_failure_apart_from_an_empty_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F21.65's second half: "no mutants sampled" was one sentence for two
+    facts. `mutation_sample` records `mutmut run exited ...` in
+    `survivors` when the engine never started, and `_check_property_oracle`
+    branched on `total` alone and dropped it -- so a broken tool and a
+    property with nothing to bite on read identically, and the run that
+    reset the count to zero looked like the second when it was the first.
+    The mutation gate has named its tool failures since T3-20 (above).
+    """
+    _worktree(tmp_path, SPEC_TEST, baseline_test=SPEC_TEST)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  run) echo "failed to collect stats. runner returned 1" >&2; exit 1;;\n'
+        "  results) exit 0;;\n"
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    result = run_node_gate(_node(), tmp_path)
+    oracle = next(check for check in result.checks if check.name == "property-coverage")
+    assert oracle.passed is False
+    assert oracle.detail == (
+        "no mutants sampled for the property oracle (test_n.py): "
+        "mutmut run exited 1: failed to collect stats. runner returned 1"
+    )
+
+
+def test_run_node_gate_property_oracle_is_vacuous_when_every_property_is_out_of_scope(
+    tmp_path: Path,
+) -> None:
+    """What F21.65's narrowing now admits, exhibited (WORKPLAN 0.6).
+
+    The node's own tests carry no property, and the only module that does
+    is outside its declared scope, so the oracle does not run and the
+    check passes having judged nothing. That is the cost of scoping, and
+    it is the same cost the mutation gate already pays; what must not
+    happen is paying it silently, so the pass names the module it did not
+    run and the basis records the empty set (F21.64 recommendation 69).
+    """
+    (tmp_path / "test_store.py").write_text(LATER_SPEC)
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    result = run_node_gate(_node(test_command="pytest test_n.py"), tmp_path)
+    oracle = next(check for check in result.checks if check.name == "property-coverage")
+    assert oracle.passed is True
+    assert oracle.detail == (
+        "not required: no property module in this node's test scope (test_store.py outside it)"
+    )
+    assert oracle.basis == "oracle: not run, 0 of 1 property module(s) in scope"
+
+
 def test_run_node_gate_failed_mutmut_run_is_named_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

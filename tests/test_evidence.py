@@ -42,6 +42,7 @@ from saddle.evidence import (
     run_shell,
     run_shell_capture,
     run_stdin,
+    scoped_targets,
     snapshot_baseline,
     statement_lines,
     text_only_mutant,
@@ -963,6 +964,36 @@ def test_pytest_scope_is_the_arguments_after_pytest() -> None:
     assert pytest_scope("coverage run -m pytest -q 'tests/te st.py'") == ("-q", "tests/te st.py")
     assert pytest_scope("pytest") == ()
     assert pytest_scope("python -m nose tests") == ()
+
+
+def test_scoped_targets_keeps_only_what_the_declared_scope_collects() -> None:
+    """F21.65. Known-good: a target the node's own pytest arguments would
+    collect survives -- by exact path, and by directory prefix, since a
+    directory argument collects everything under it. Known-bad: a target
+    outside every argument is dropped, which is the whole point (the
+    oracle ran a later node's red specification and could never baseline).
+
+    Two shapes that must NOT filter, because neither narrows what pytest
+    collects: no arguments at all (pytest's whole tree, which is what a
+    command not naming pytest yields), and arguments that are only flags.
+    A `path::name` selector scopes by its path -- the module is collected
+    either way, and the oracle's own selection decides the rest.
+    """
+    targets = ("tests/test_accounts.py", "tests/test_fees.py", "tests/test_store.py")
+    assert scoped_targets(targets, ("tests/test_accounts.py", "tests/test_fees.py")) == (
+        "tests/test_accounts.py",
+        "tests/test_fees.py",
+    )
+    assert scoped_targets(targets, ("tests/",)) == targets
+    assert scoped_targets(targets, ("tests",)) == targets
+    assert scoped_targets(targets, ()) == targets
+    assert scoped_targets(targets, ("-q", "--no-cov")) == targets
+    assert scoped_targets(targets, ("tests/test_fees.py::test_apply_fee",)) == (
+        "tests/test_fees.py",
+    )
+    assert scoped_targets(targets, ("tests/test_report.py",)) == ()
+    # A prefix that is not a path boundary is not a parent directory.
+    assert scoped_targets(("tests_extra/test_x.py",), ("tests",)) == ()
 
 
 def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
