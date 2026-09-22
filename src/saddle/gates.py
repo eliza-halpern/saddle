@@ -319,11 +319,72 @@ def check_test_command(
     return GateCheck(name="tests", passed=True, detail=f"{test_command!r} exited 0")
 
 
+def _definition_lines(source: str, wanted: Collection[str]) -> set[int]:
+    """Every line of each definition in `wanted`, decorators included."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    lines: set[int] = set()
+
+    def span(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
+        first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+        lines.update(range(first, (node.end_lineno or node.lineno) + 1))
+
+    for statement in tree.body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            if statement.name in wanted:
+                span(statement)
+        elif isinstance(statement, ast.ClassDef):
+            for child in statement.body:
+                if (
+                    isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
+                    and f"{statement.name}.{child.name}" in wanted
+                ):
+                    span(child)
+    return lines
+
+
+def compelled_lines(
+    baseline_sources: Mapping[str, str], sources: Mapping[str, str]
+) -> set[tuple[str, int]]:
+    """Lines the node had no choice about: definitions `public-deletions` compels.
+
+    `check_public_deletions` refuses to let a node drop a public
+    definition its baseline had. Nothing guarantees a test reaches one.
+    In `g1-cw100k/t5-s1` the t5 baseline carries `Account.to_dict`,
+    `from_dict`, `__eq__` and `__repr__` that **nothing** calls -- not
+    the rest of the baseline, not the four visible test files, not the
+    five hidden ones -- so `impl-money-core` had to rewrite them for
+    multi-currency, and coverage then failed it on exactly those lines.
+    Attempts 1 and 3 kept them and failed coverage; attempt 2 deleted
+    them and failed public-deletions; the node was unprovable and took
+    the run's two remaining nodes with it (T6-75).
+
+    So what one gate compels, another must not punish. The exemption is
+    that narrow on purpose: it covers only definitions the BASELINE
+    already had, never a definition the node invents, and never a line
+    outside one. What it admits, stated plainly: a node may pad the body
+    of a baseline definition with code no test runs. `dead-code` and
+    `mutation` still read those lines, and the node does not choose
+    which members its baseline carries.
+    """
+    compelled: set[tuple[str, int]] = set()
+    for rel, text in baseline_sources.items():
+        before = _public_definitions(text)
+        if not before:
+            continue
+        for line in _definition_lines(sources.get(rel, ""), before):
+            compelled.add((rel, line))
+    return compelled
+
+
 def check_changed_line_coverage(
     changed: set[tuple[str, int]],
     covered: set[tuple[str, int]],
     minimum: float,
     owed: Collection[str] = (),
+    compelled: Collection[tuple[str, int]] = (),
 ) -> GateCheck:
     """Every changed line must be executed; `minimum` is the node threshold.
 
@@ -343,6 +404,11 @@ def check_changed_line_coverage(
     the record shape it had to write is exercised by a test file
     belonging to a node that had not run.
 
+    `compelled` is the lines `public-deletions` will not let the node
+    drop (T6-75). They are removed from the judgement entirely, because
+    failing a node for not covering code it was forbidden to delete asks
+    it for a diff that does not exist -- see `compelled_lines`.
+
     Deferral does not fail the run later. A line still uncovered when
     the DAG drains is uncovered against the arm's own suite, and the
     hidden suite that decides the task is a different one, so failing on
@@ -355,8 +421,23 @@ def check_changed_line_coverage(
         return GateCheck(
             name="coverage", passed=True, detail="no changed lines", basis="changed-lines=0"
         )
-    missing = sorted(changed - covered)
-    percent = (len(changed) - len(missing)) / len(changed) * 100.0
+    # Lines `public-deletions` compels are not judged here at all -- they
+    # leave the denominator, not just the shortfall, or the percentage
+    # sinks the node for code it was required to carry (T6-75).
+    spared = changed & set(compelled)
+    # Only recorded when it happened: a "compelled-lines=0" on every
+    # sealed node would churn every existing record to say nothing.
+    note = f" compelled-lines={len(spared)}" if spared else ""
+    judged = changed - spared
+    if not judged:
+        return GateCheck(
+            name="coverage",
+            passed=True,
+            detail="every changed line is inside a definition the baseline already had",
+            basis=f"changed-lines={len(changed)}{note}",
+        )
+    missing = sorted(judged - covered)
+    percent = (len(judged) - len(missing)) / len(judged) * 100.0
     if percent < minimum:
         gaps = ", ".join(f"{path}:{line}" for path, line in missing)
         if owed:
@@ -365,21 +446,21 @@ def check_changed_line_coverage(
                 passed=True,
                 detail=f"deferred, no test node has run that can reach {gaps}",
                 basis=(
-                    f"changed-lines={len(changed)} deferred-lines={len(missing)} "
-                    f"owed={','.join(sorted(owed))}"
+                    f"changed-lines={len(changed)} deferred-lines={len(missing)}"
+                    f"{note} owed={','.join(sorted(owed))}"
                 ),
             )
         return GateCheck(
             name="coverage",
             passed=False,
             detail=f"no test runs {gaps}",
-            basis=f"changed-lines={len(changed)}",
+            basis=f"changed-lines={len(changed)}{note}",
         )
     return GateCheck(
         name="coverage",
         passed=True,
         detail="every changed line runs",
-        basis=f"changed-lines={len(changed)}",
+        basis=f"changed-lines={len(changed)}{note}",
     )
 
 
@@ -1720,7 +1801,11 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         _not_required("coverage")
         if is_spec
         else check_changed_line_coverage(
-            inputs.changed, inputs.covered, gate.changed_line_coverage_min, inputs.owed_tests
+            inputs.changed,
+            inputs.covered,
+            gate.changed_line_coverage_min,
+            inputs.owed_tests,
+            compelled_lines(inputs.baseline_sources, inputs.sources),
         )
     )
     checks = (

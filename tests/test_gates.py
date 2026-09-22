@@ -35,6 +35,7 @@ from saddle.gates import (
     check_syntax,
     check_target_files,
     check_test_command,
+    compelled_lines,
     introduced_findings,
     plan_prescribes_deletion,
     plan_restates_the_gate,
@@ -2557,3 +2558,148 @@ def test_coverage_is_unchanged_when_every_line_runs_and_a_node_is_owed() -> None
     assert check.passed
     assert check.detail == "every changed line runs"
     assert check.basis == "changed-lines=1"
+
+
+def _g1_sources() -> tuple[dict[str, str], dict[str, str]]:
+    """The real pair from `g1-cw100k/t5-s1`: t5's baseline and what attempt 3 wrote."""
+    fixtures = Path(__file__).parent / "fixtures"
+    baseline = {"accounts.py": (fixtures / "edit_target_accounts.txt").read_text()}
+    after = {"accounts.py": (fixtures / "compelled_accounts_g1.txt").read_text()}
+    return baseline, after
+
+
+def test_compelled_lines_names_the_definitions_public_deletions_will_not_let_go() -> None:
+    """The four members of T6-75, read off the real artifacts."""
+    baseline, after = _g1_sources()
+    compelled = compelled_lines(baseline, after)
+    body = (Path(__file__).parent / "fixtures" / "compelled_accounts_g1.txt").read_text()
+    lines = body.split("\n")
+
+    named = {lines[line - 1].strip() for _, line in compelled if lines[line - 1].strip()}
+    for definition in ("def __eq__(self, other):", "def __repr__(self):", "def to_dict(self):"):
+        assert definition in named, definition
+    # and nothing outside them: the class statement itself is not compelled
+    assert not any(lines[line - 1].startswith("class ") for _, line in compelled)
+
+
+def test_coverage_passes_the_draw_it_failed_when_only_compelled_lines_are_uncovered() -> None:
+    """Known-good: the artifact three attempts could not get past (T6-75).
+
+    Attempt 3 wrote correct multi-currency code -- its own gate command
+    was green at 29 passed and mutation read 92.3% -- and coverage failed
+    it on exactly `__eq__`, `__repr__`, `from_dict` and `to_dict`, which
+    `public-deletions` had refused to let attempt 2 remove. Nothing calls
+    those four: not the rest of the baseline, not the four visible test
+    files, not the five hidden ones.
+    """
+    baseline, after = _g1_sources()
+    compelled = compelled_lines(baseline, after)
+    uncovered = {("accounts.py", line) for _, line in compelled}
+    changed = uncovered | {("accounts.py", 1)}
+    covered = {("accounts.py", 1)}
+
+    before = check_changed_line_coverage(changed, covered, 100.0)
+    after_check = check_changed_line_coverage(changed, covered, 100.0, (), compelled)
+
+    assert not before.passed, "the old behaviour is what this replaces"
+    assert "accounts.py:" in before.detail, "and it failed on these very lines"
+    assert after_check.passed
+    # The spared lines are recorded, or a node seals with 68 lines set
+    # aside and nothing says so.
+    assert after_check.basis == f"changed-lines={len(changed)} compelled-lines={len(uncovered)}"
+
+    # With nothing else changed, the whole judgement is compelled and the
+    # detail says which case this is rather than claiming tests ran.
+    only = check_changed_line_coverage(uncovered, set(), 100.0, (), compelled)
+    assert only.passed
+    assert "definition the baseline already had" in only.detail
+
+
+def test_coverage_still_fails_an_uncovered_definition_the_node_invented() -> None:
+    """The load-bearing half: the exemption covers the baseline's API, not the node's.
+
+    Same file, same uncovered-lines shape -- but the baseline does not
+    define `Account.summary`, so nothing compelled it and nothing excuses
+    it. A node that could evade coverage by adding a public method would
+    have been handed the `max_mutants=1` exploit in a new costume.
+    """
+    baseline, after = _g1_sources()
+    invented = after["accounts.py"].replace(
+        "    def to_dict(self):",
+        "    def summary(self):\n        return len(self._balances)\n\n    def to_dict(self):",
+        1,
+    )
+    compelled = compelled_lines(baseline, {"accounts.py": invented})
+    body = invented.split("\n")
+    summary_line = body.index("    def summary(self):") + 1
+
+    assert ("accounts.py", summary_line) not in compelled
+    check = check_changed_line_coverage(
+        {("accounts.py", summary_line)}, set(), 100.0, (), compelled
+    )
+    assert not check.passed
+    assert f"accounts.py:{summary_line}" in check.detail
+
+
+def test_coverage_still_fails_an_uncovered_line_outside_every_compelled_definition() -> None:
+    """Module-level code the baseline never had is judged as it always was."""
+    baseline, after = _g1_sources()
+    compelled = compelled_lines(baseline, after)
+    check = check_changed_line_coverage({("accounts.py", 2)}, set(), 100.0, (), compelled)
+    assert not check.passed
+    assert "no test runs accounts.py:2" in check.detail
+
+
+def test_compelled_lines_is_empty_when_the_node_broke_the_module() -> None:
+    """An unparseable tree belongs to the syntax gate, not to this one."""
+    baseline, _ = _g1_sources()
+    assert compelled_lines(baseline, {"accounts.py": "class Account(:\n"}) == set()
+    assert compelled_lines({"accounts.py": "x = 1\n"}, {"accounts.py": "x = 2\n"}) == set()
+
+
+def test_run_tier1_spares_a_compelled_definition_the_coverage_gate_would_fail() -> None:
+    """The wiring, not just the function (T6-75).
+
+    `compelled_lines` passing its own unit tests proves nothing about
+    `run_tier1` calling it: removing the argument at the call site left
+    all 949 tests green, which is T6-63's shape exactly -- a threaded
+    value that would have shipped inert. This drives the whole gate:
+    the same inputs fail without the wiring and pass with it, and the
+    only difference is that `public-deletions` forbids dropping `A.keep`.
+    """
+    inputs = replace(
+        _passing_inputs(),
+        baseline_sources={"n1.py": "class A:\n    def keep(self):\n        return 1\n"},
+        sources={"n1.py": "class A:\n    def keep(self):\n        return 2\n"},
+        ruff_files=["n1.py"],
+        changed={("n1.py", 2), ("n1.py", 3)},
+        covered=set(),
+    )
+
+    result = run_tier1(_node(), inputs)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+    deletions = next(check for check in result.checks if check.name == "public-deletions")
+
+    assert coverage.passed, "a line the node may not delete must not fail it"
+    assert coverage.basis == "changed-lines=2 compelled-lines=2"
+    assert deletions.passed, "and the definition is indeed still there"
+
+
+def test_run_tier1_still_fails_coverage_for_a_definition_the_baseline_lacked() -> None:
+    """The other half at the same level: only the baseline's API is spared."""
+    inputs = replace(
+        _passing_inputs(),
+        baseline_sources={"n1.py": "class A:\n    pass\n"},
+        sources={"n1.py": "class A:\n    def added(self):\n        return 2\n"},
+        ruff_files=["n1.py"],
+        changed={("n1.py", 2), ("n1.py", 3)},
+        covered=set(),
+    )
+
+    coverage = next(
+        check for check in run_tier1(_node(), inputs).checks if check.name == "coverage"
+    )
+
+    assert not coverage.passed
+    assert "no test runs n1.py:2, n1.py:3" == coverage.detail
+    assert coverage.basis == "changed-lines=2"
