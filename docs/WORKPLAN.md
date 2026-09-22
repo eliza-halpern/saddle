@@ -8929,6 +8929,85 @@ Owner: main session (contract change). Related: T6-25 (the seed-order
 contract this must preserve), T6-30 (the request deadline), T6-17 (why
 `max_tokens` is the whole window), F21.57, F21.58.
 
+### T6-86 — `coverage` fails an impl node for lines whose reaching test file is outside its declared scope (open; F21.59)
+
+Files: `src/saddle/gates.py` (`check_changed_line_coverage`, the `owed`
+deferral), `src/saddle/evidence.py` (`property_modules`, to be split),
+`src/saddle/runner.py` (what it passes as `owed`), `tests/test_gates.py`,
+`tests/test_evidence.py`.
+
+`g1-79cd848` node-2 is `impl` over `accounts.py` + `fees.py`; its gate ran
+`pytest tests/test_accounts.py tests/test_fees.py`. Four of the functions
+it changed -- `to_dict`, `from_dict`, `__eq__`, `__repr__` -- are
+exercised by `tests/test_store.py`, written and sealed by node-1, and
+excluded by node-2's scope. `coverage` reported "no test runs" on lines
+that the tree does test.
+
+T6-53's deferral asks "has a test node still to run" (`owed`). Node-1 was
+the only test node and had sealed, so `owed` was empty and the deferral
+did not fire. The condition that bites is not "written yet" but "in this
+node's scope".
+
+The worker has no move: `check_node_scope` forbids an impl node from
+editing tests, the scope is the planner's, and deleting the uncovered
+functions breaks node-4 and is what `public-deletions` (T6-75) stops.
+
+**Do not widen the run.** Collecting `test_store.py` for node-2 is
+F21.12a -- `store.py` is unimplemented, the suite is red, and mutmut
+cannot baseline against a red suite. Widen the *judgement*, not the
+command.
+
+Done when, both halves:
+
+1. `property_modules` is split so the import-matching half --
+   "test modules whose AST imports name a changed file" -- is callable
+   without the `@given` filter, and `property_modules` is expressed in
+   terms of it. Known-good: a test module importing a changed file and
+   carrying no property is returned by the new function and still absent
+   from `property_modules`. Known-bad: a module importing nothing changed
+   is returned by neither. Scope narrowed (a refactor with a new caller).
+2. `check_changed_line_coverage` defers a line whose only reaching test
+   module is out of scope, recording it in `basis` the way `owed` does.
+   Known-good, the input the contract is wrong about: node-2's
+   `accounts.py` change, whose `to_dict`/`from_dict` lines are reached by
+   `tests/test_store.py` -- today FAILED, must defer. Known-bad, the half
+   that keeps T6-53's force: a changed line **no** test file in the tree
+   reaches still fails, and a line reached by an in-scope module that
+   simply does not run it still fails. **Loosened**, on the evidence that
+   the contract is wrong -- the lines are tested, by the same test node,
+   in the same tree.
+3. Whether `property-coverage` fails node-2 for the same reason is a
+   hypothesis, not a result: mutants on `to_dict`/`from_dict` cannot be
+   killed by `test_accounts.py`/`test_fees.py`. Reproduce on the restored
+   node-2 tree before deciding whether it needs its own clause. Do not
+   loosen it on this item's evidence.
+
+Related: T6-53 (the deferral this extends), T6-75 (`public-deletions`,
+why deletion is not the way out), T6-85 recommendation 63 (the missing
+line list that made this take reading instead of reading a sidecar),
+F21.12a (why the run stays scoped), F21.59.
+
+### T6-87 — There is no honest way out of an impossible gate (open; F21.59, Goal G1's own clause)
+
+Goal G1 specifies it: "if a requirement cannot be satisfied without code
+that exists only to satisfy a gate, say so and stop. A recorded refusal
+naming the requirement beats a passing artifact that does not implement
+it, and is not a failed attempt." Nothing in the harness offers it.
+`g1-79cd848` node-2 is the live instance -- a correct diff, a gate it
+cannot satisfy, and three attempts to burn producing the same diff.
+
+Done when: a worker can emit a refusal that names the requirement and the
+gate it cannot satisfy; the refusal is recorded as its own outcome, not
+as a failed attempt, and does not consume the attempt ladder. Known-good:
+a refusal naming a requirement is recorded and the node stops without
+counting an attempt. Known-bad, so the escape is not free: a refusal that
+names no requirement, or that is emitted on an attempt whose gates would
+have passed, is not accepted. **Loosened** in the sense that a node may
+now stop without a proof -- which is why the known-bad is the load-
+bearing half; write it first.
+
+Owner: main session. Related: T6-86, T6-46, F21.59.
+
 ---
 
 ## 11. Evidence label legend (as used above)
