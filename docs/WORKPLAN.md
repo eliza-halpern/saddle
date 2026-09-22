@@ -218,6 +218,29 @@ T6-64 (the unappealable test spec) ──► closes only on a completed run,
        so it cannot precede one; its mitigation rides with T6-4/T6-5
 ```
 
+The seed-2 cluster (F21.70 and its addendum), all read off
+`g1-30bde7b/t5-s2`'s attempt sidecars, no run needed to start any of
+them:
+
+```
+T6-93 (survivor round declines on a name) ──► T6-92 (needs a round that can fire)
+T6-93 ──► T6-94 (T6-93 makes n4 eligible; n4.r1 stays ineligible without T6-94)
+T6-91 (say which guard declined) ──► reading the next seed's silence
+T6-61 (sample cap) ──► T6-95 (both redefine the denominator)
+T6-95 (bar must not move with diff size) ──► T6-96 (needs a stable "improved")
+T6-97 (print the denominator) ──► nothing (detail string; independent, small)
+T6-46 (honest way out) ──► nothing, but seed 2 is now its second instance
+```
+
+T6-93 and T6-94 are the blocking pair: seed 2's node failed on test
+adequacy, was forbidden to write tests, and the mechanism authorised to
+write them declined — first on a name (T6-93), and after the replan on
+the scope violations the attempted repair had itself caused (T6-94).
+Either one alone leaves half the run in the same corner. T6-97 is a
+detail string and can ride with anything. T6-95 and T6-96 change what a
+seed means as evidence, so they land together or not at all, and not
+during a measurement.
+
 T6-62 goes first because it is the only item whose absence is *known* to
 have cost a run: F21.38a. T6-64 is last not because it is least
 important — it is the one failure mode that yields a green run and a
@@ -6138,6 +6161,18 @@ overreaching within its own scope.
 
 ---
 
+**Second instance, `g1-30bde7b/t5-s2` (F21.70).** Node `n4.r1` attempt 2
+failed `node-scope` and `target-scope` for editing `tests/test_store.py`
+while failing `mutation` with five survivors inside `load_accounts`. That
+edit was the correct diagnosis: the node was failing on test adequacy and
+the missing test was the repair. With no `refused` outcome available, the
+worker said "this needs a test I may not write" in the only currency it
+had — by writing it — and was failed for the sentence. Attempt 3 then
+re-proposed an identical diff, which is what a cornered worker looks
+like. Round 3e's draw showed the gap producing a *fake* implementation;
+this one shows it producing an *illegal correct* one. Both are the same
+missing outcome. Two of the node's six attempts went to it.
+
 ### T6-47 — An attempt records the reasoning effort it ran at (tightened)
 
 Files: `src/saddle/vllm.py` (`propose_diff`'s retained record),
@@ -9232,3 +9267,271 @@ known-good and a known-bad built through a real `NodeGateFailedError` off
 `run_node_gate`, not a hand-made `GateResult`, and assert the spelling of
 `survivor_lines` against the absolute spelling `runner.py` gives
 `changed`.
+
+### T6-92 — Re-couple the coverage deferral to survivor exhaustion, once the round can be observed to fire (open; blocked on T6-91; F21.66, F21.67)
+
+T6-90 made `check_changed_line_coverage` pass unconditionally for a node
+that may not write tests. That is right on the evidence: the clause reads
+the tests, an `impl` node cannot move them, and billing it for what a
+later node must write is the O7 shape. But the deferral it installed is
+*unconditional*, and that is a second decision smuggled in with the
+first.
+
+The consequence, read off the consumers rather than assumed.
+`gaps` in `run_tier1` is `(changed - covered) | survivor_lines`, computed
+independently of whether the coverage check passed, so T6-90 did not
+empty it. `_survivor_gap` requires `bool(failed)`, `failed <=
+SURVIVOR_GATES` and `bool(gaps)`. So the arithmetic splits in two:
+
+- Node fails `mutation` as well — `failed == {"mutation"}`, gaps still
+  non-empty, the round is eligible exactly as before. **Unchanged.**
+- Node's only failure *was* `coverage` — `failed` is now empty, the node
+  **seals**, and the uncovered changed line is never offered to a
+  survivor-driven test node at all. The line stays uncovered for the rest
+  of the run, and the transcript says the node passed.
+
+The second case is the one to revisit. The honest reading of T6-90 is
+"this node may not be *failed* for it", not "no one should be *asked* to
+cover it" — those are different claims and only the first has evidence
+behind it (F21.66). The deferral detail already says as much: *no node
+that may write a test remains to reach …*. When one does remain, or when
+the harness could create one, the sentence is false in its own terms.
+
+Shape of the fix, to be decided on data and not now: either the coverage
+deferral records the gap for the schedule and the pass carries it forward
+(so a later `test` node inherits it), or `_survivor_gap` widens to admit
+a node that sealed with a non-empty `gaps` — never by re-failing the impl
+node, which is the thing F21.66 proved wrong.
+
+**Blocked on T6-91.** The survivor round has fired zero times in 49
+journals, so there is no observation of it working to re-couple to.
+Re-coupling to a mechanism that has never run once would be a change
+whose effect cannot be measured — the vacuity rule. T6-91's
+`survivor-skipped` record is what makes this item answerable; do it
+after, not before.
+
+### T6-93 — The survivor round declines before it draws, on a name; remove the guard and let `keep_candidate` decide (LANDED pending; F21.68)
+
+`_survivor_round` computes the gap's enclosing functions and then, before
+the draw and before its own `SpanRecorder` call, returns None if any of
+those function names appears in `sealed_names`. That is a fifth exit
+T6-91 did not enumerate, and because it precedes the recorder it writes
+nothing: a census for `survivor-tests` cannot tell it from "never
+entered". F21.67 had to guess the cause for exactly this reason, and
+guessed wrong — it proposed `exc.result.gaps` empty, which
+`evidence.mutation_sample` makes impossible, since a mutant whose hit set
+is empty is dropped (`if not hit: continue`) before it can be scored.
+
+`_sealed_test_names` collects every identifier token in every sealed test
+file — `re.findall(r"[A-Za-z_]\w*", ...)`, not the functions those tests
+exercise. In a plan whose `test` node seals first, which is every
+four-node T5 plan, every function name in the task is a sealed token
+before any impl node runs. So the guard is satisfied by construction for
+every later impl node. Measured on `g1-30bde7b/t5-s2`: `n4`'s survivors
+are `store.x_load_accounts__mutmut_*` and the sealed `tests/test_store.py`
+names `load_accounts` 15 times. Census re-dated against the code that
+describes it — journals whose own `run` span records `survivor_samples`,
+i.e. built at or after `85ef057` — **15 runs, zero rounds**.
+
+The premise is self-defeating. A surviving mutant IS the proof that the
+tests naming that function do not discriminate there, so "a sealed test
+already names it" is true in precisely the cases the mechanism exists to
+answer. Naming is not killing (GOAL-G1's constraint rule).
+
+Done: the guard, its `sealed_names` parameter, the call site and
+`_sealed_test_names` are removed; both docstrings that stated the old
+behaviour are corrected. `keep_candidate`'s third filter — kill a
+survivor or cover a gap — already answers the question the name was a
+proxy for, and answers it behaviourally.
+
+- Direction: **loosened** — the decline condition is narrower, so rounds
+  that were refused now run. Nothing about what is ACCEPTED moved:
+  `keep_candidate` is unchanged and remains the only filter between a
+  draw and a splice, which M3 below pins.
+- `flip: test_run_slice_gap_cited_by_a_sealed_test_retries_as_today`
+  (now `..._still_draws`). The old expectation pinned this defect, not a
+  contract; the evidence is F21.68 and the new red-then-green test, not
+  "it fails now". What the old assertion was accidentally protecting —
+  a sealed sidecar naming a file the worktree no longer holds — is not
+  left unprotected: nothing reads sidecar-named files any more, so the
+  hazard leaves with the code, and that fixture half is kept and still
+  asserted. The same fixture routed `propose` on `node.id == "n1"`, so
+  the spliced retry `n1.r2` silently took `GOOD_DIFF`; that branch was
+  unreachable while the round never fired and is now routed to the
+  lineage.
+
+Known-good: `test_run_slice_survivor_round_fires_when_a_sealed_test_names_the_gap`
+— a sealed `test_n.py` imports and calls `f`, a mutant inside `f`
+survives it anyway, and the round draws, keeps one candidate, and seals
+the impl node behind it. Non-vacuity is asserted first: the test reads
+the sealed file and checks the precondition the old guard keyed on
+really holds. Known-bad: unchanged — no third round; a round that keeps
+nothing leaves the node failed; a tests-gate failure with a gap replans.
+
+Contract mutants (each target count 1 verified by `str.count`, scoped
+tests red, restored byte-identical, `__pycache__` dropped):
+- M1 reinstate the decline (`if functions: return None` at the old
+  site): KILLED — 6 of 8 survivor tests.
+- M2 drop `and bool(exc.result.gaps)` from `_survivor_gap`: KILLED —
+  `test_survivor_gap_admits_impl_gate_failures_on_coverage_or_mutation_only`.
+- M3 `keep_candidate` `if not killed and not covered` -> `if not killed
+  and covered`: KILLED — two `test_survivors` cases. This is the mutant
+  that matters: it shows the filter left standing is load-bearing.
+
+Effect on the neighbours:
+- **T6-91 narrows.** The exit that cost the diagnosis is gone, so the
+  `survivor-skipped` record now covers the four `run_slice` guards and
+  the kept-nothing return, which already journals. Still worth building;
+  no longer the blocking instrument.
+- **T6-92 unblocks.** Its blocker was "the round has never fired, so
+  there is no observation to re-couple to." The round can fire now.
+  Re-couple on the first production run that shows one, not before.
+
+### T6-94 — A scope violation caused by the test-adequacy failure must not disqualify the node from the survivor round (open; blocking, pairs with T6-93; F21.70 addendum)
+
+Files: `src/saddle/slice.py` (`_survivor_gap`), `tests/test_slice.py`.
+
+`_survivor_gap` returns `failed <= SURVIVOR_GATES`, so a node is eligible
+for a survivor-driven test node only if `{coverage, mutation}` is its
+WHOLE failing set. Any additional failing gate disqualifies it.
+
+The live instance is `g1-30bde7b/t5-s2`, node `n4.r1` attempt 2, read off
+`.saddle/attempts/*.json`: failing set `{mutation, node-scope,
+target-scope}`. The scope gates fired because the attempt edited
+`tests/test_store.py` — which is exactly the repair the survivor round
+performs, legally, on the node's behalf. So the two mechanisms compose
+backwards. The worker reaches for the right fix; the scope gates fail it
+for reaching; and the failures they record then disqualify it from the
+mechanism built to do that fix for it. A node is denied the round in
+proportion to how clearly it has demonstrated needing one.
+
+Distinct from T6-93, which removes a guard that mis-reads coverage from a
+function name. This is the eligibility predicate itself reading "failed
+more than one gate" as "not a test-adequacy problem", when one of the
+extra gates fired only as a consequence of the test-adequacy problem.
+Landing T6-93 alone leaves seed 2's replan in the same corner: `n4` att3
+becomes eligible, `n4.r1` att2 does not.
+
+Shape of the fix, either: subtract `node-scope`/`target-scope` from the
+failing set before the subset test **when the violation's touched files
+are test files and `mutation` or `coverage` is also failing**; or have
+the scope gates record the attempted test edit as a survivor gap rather
+than only as a violation. Do not widen the predicate to "any failure set
+containing mutation" — that admits `{mutation, ruff}` and `{mutation,
+tests}`, neither of which the evidence supports.
+
+Close it with both halves, per GOAL-G1:
+
+- known-good: a node failing `{mutation, node-scope, target-scope}` whose
+  scope violation is a test file becomes eligible.
+- known-bad: a node failing `{mutation, ruff}` does **not** become
+  eligible, and neither does one whose scope violation is a source file.
+
+The known-bad is the load-bearing half here; the loose version of this
+fix passes the known-good and is wrong.
+
+### T6-95 — The mutation bar must not tighten as the diff shrinks (open; F21.70)
+
+Files: `src/saddle/gates.py` (`check_mutation`, `MIN_SIGNIFICANT_MUTANTS`),
+`tests/test_gates.py`.
+
+The mutation gate scores kill-rate over **changed-line** mutants, so the
+denominator is a function of diff size and the effective bar moves with
+it. Survivors allowed at the 85% threshold:
+
+    n=5   0      n=14  2      n=29  4      n=74  11
+    n=7   1      n=20  3      n=30  4      n=100 15
+
+A surgical fix is held to a stricter standard than a rewrite of the same
+file. `MIN_SIGNIFICANT_MUTANTS = 5` already states the principle for the
+bottom of the range — "fewer mutants means a stricter bar, not a cheaper
+one" — but that reasoning was written for populations too small to carry
+a percentage at all, and the rule stops at 5. Nothing was decided about
+the band above it.
+
+Measured instance, `g1-30bde7b/t5-s2` node `n4`: as the attempts' diffs
+shrank (n=74 → 29 → 13) the survivor counts also fell (14 → 5 → 3), but
+the tolerance fell faster, so a strictly improving node failed three
+times. At n=13 one survivor costs 7.7 points; at n=74 it costs 1.4. The
+same artefact runs the other way in seed 3, where node-4 sealed at
+"100.0%" over 14 changed-line mutants on a file admitting 100 unscoped
+(F21.69 §4).
+
+**This is not a licence to lower the threshold.** The claim needing proof
+is not "85% is too high" — no evidence here says that. It is narrower:
+*the bar's strictness varies with diff size, and nobody chose that*. The
+fix is to remove the variation, not the height. Any change whose
+justification is "seed 2 would have sealed" is fitting the rule to one
+run and must be refused; pick the floor from the shape of the function,
+then check what it does to seed 2 afterwards, in that order.
+
+Depends on T6-61 (the sample cap decides the verdict once the population
+exceeds `max_mutants`). Both change what the denominator means, and
+landing either without the other makes the next seed unreadable as
+evidence about the threshold. T6-61 first — it bounds the top of the
+range, this item bounds the bottom.
+
+Close it with a known-good (a small correct diff with full discrimination
+seals) and a known-bad (a small under-tested diff does not), and state
+the direction in the commit message. Labelled **loosening** until an
+instance shows otherwise.
+
+### T6-96 — Do not replan a node that is strictly converging while its attempt budget can be spent on it instead (open; F21.70)
+
+Files: `src/saddle/slice.py` (the recovery/replan decision,
+`MAX_RECOVERY_RETRIES`), `tests/test_slice.py`.
+
+`g1-30bde7b/t5-s2` node `n4`, from the sidecars: attempt 2 short 3
+mutants (60 of 74, needed 63), attempt 3 short 1 (24 of 29, needed 25).
+Monotone improvement, one kill from sealing, and it stopped on
+`MAX_RECOVERY_RETRIES = 2` → `max_attempts = 3` — the **attempt cap, not
+the clock**. 1 524 s of the 5 400 s deadline were unspent, roughly two
+more attempts at this surface's ~700 s each. The replan then discarded
+that work: `n4.r1` starts from the baseline tree and never got as close
+(short 2, then an identical re-proposal).
+
+The decision to replan reads only "attempts exhausted". It does not read
+whether the attempts were *going anywhere*.
+
+Contract: when a node's last attempt strictly improved on its
+predecessor against the gate that failed both, and the deadline can
+afford another node-wall, spend the attempt on the node instead of
+replanning it.
+
+Keep it **budget-neutral** so this is a reallocation and not a loosening:
+cap total attempts per node-root across the original and its replan
+replacements, and let the converging node draw from that same pool rather
+than raising it. A node that converges gets the attempts its replacement
+would have got; a node that does not converge is replanned exactly as
+now.
+
+Needs a definition of "strictly improved" that cannot be gamed by the
+shrinking denominator T6-95 describes — compare survivor **counts** at
+comparable scope, or absolute kills needed, not the percentage, since the
+percentage rose (81.1% → 82.8%) while the bar rose faster. Land T6-95
+first or the comparison is against a moving quantity.
+
+Close it with a known-good (a converging node gets its fourth attempt) and
+a known-bad (a node whose attempts do not improve is still replanned at
+the cap).
+
+### T6-97 — The mutation gate's detail states its denominator (open; F21.70, recommendation 78 and 85)
+
+Files: `src/saddle/gates.py` (`check_mutation` detail string),
+`tests/test_gates.py`.
+
+The detail reads `82.8% < 85.0%: survived 5: store.x_load_accounts__…`.
+The population is not stated, so "how far short was it?" requires solving
+for n from the percentage and the survivor count. Reconstructing n=29 by
+arithmetic is what showed node `n4` was **one kill** from sealing, which
+is the whole of T6-96's evidence and most of T6-95's; neither was visible
+from the string the run actually printed.
+
+Say `killed 24 of 29 changed-line mutants (82.8% < 85.0%); survived: …`.
+Cheap, no contract change, and it is the difference between a run report
+that can be read as evidence and one that has to be re-derived from
+sidecars months later.
+
+Note the same string is what the *worker* reads on its next attempt
+(T6-79's concern). Telling it "one more kill" instead of "82.8%" is a
+strictly better failure brief, and costs nothing.
