@@ -475,13 +475,47 @@ def test_run_node_gate_target_files_names_a_staged_new_file(tmp_path: Path) -> N
 
 
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
+    """A node that MAY write the citation is still failed for its absence.
+
+    `refactor`, not `impl`: since T6-89 the gate is not asked of a
+    node that may not edit tests, because every clause of it reads
+    the tests and an `impl` node cannot move one (F21.66). The rule
+    is unchanged for the parties who can answer it, and the impl
+    half is pinned by its own test below.
+    """
     test_body = "from n import f\n\n\ndef test_f_returns_fixed_value():\n    assert f() == 2\n"
     _worktree(tmp_path, test_body, baseline_test=test_body)
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     assert result.passed is False
     binding = next(check for check in result.checks if check.name == "requirement-binding")
     assert binding.passed is False
     assert "REQ-001" in binding.detail
+
+
+def test_run_node_gate_impl_node_is_not_judged_on_a_citation_it_cannot_write(
+    tmp_path: Path,
+) -> None:
+    """T6-89 known-good, built the way the production caller builds it.
+
+    The same tree as the test above -- a declared REQ-001 no test cites --
+    reaches the gate through `run_node_gate` on an `impl` node, and seals.
+    Every clause of `check_requirement_binding` reads the tests and the
+    plan; `check_node_scope` forbids an `impl` node from touching a test
+    file, so the verdict is fixed before the node starts and billing it
+    to this node judges the test node's output (F21.66). `basis` keeps
+    the count the gate would have failed on, so the gap is recorded and
+    not lost -- the detail routed to the worker names no line it cannot
+    act on.
+    """
+    test_body = "from n import f\n\n\ndef test_f_returns_fixed_value():\n    assert f() == 2\n"
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    result = run_node_gate(_node(kind="impl"), tmp_path)
+    binding = next(check for check in result.checks if check.name == "requirement-binding")
+    assert binding.passed is True
+    assert binding.detail == "not judged: every clause reads tests this node may not write"
+    assert binding.basis == (
+        "requirement-binding: not judged, node may not write tests unbound=REQ-001"
+    )
 
 
 def test_run_node_gate_planned_requirements_reach_the_binding_gate(tmp_path: Path) -> None:
@@ -490,24 +524,62 @@ def test_run_node_gate_planned_requirements_reach_the_binding_gate(tmp_path: Pat
     handed in; the node's own REQ-001 is still the one counted as bound."""
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2  # REQ-002\n"
     _worktree(tmp_path, test_body, baseline_test=test_body)
-    alone = run_node_gate(_node(), tmp_path)
+    alone = run_node_gate(_node(kind="refactor"), tmp_path)
     binding = next(check for check in alone.checks if check.name == "requirement-binding")
     assert binding.detail == "undeclared requirements cited: REQ-002"
-    planned = run_node_gate(_node(), tmp_path, planned_requirements=("REQ-001", "REQ-002"))
+    planned = run_node_gate(
+        _node(kind="refactor"), tmp_path, planned_requirements=("REQ-001", "REQ-002")
+    )
     binding = next(check for check in planned.checks if check.name == "requirement-binding")
     assert binding.passed is True
     assert binding.detail == "1 requirement(s) bound"
 
 
 def test_run_node_gate_uncovered_line_fails(tmp_path: Path) -> None:
+    """Coverage keeps full force on a node that may write the test.
+
+    `refactor`, not `impl`: since T6-90 an uncovered changed line is
+    deferred when no node that may write a test remains, because an
+    `impl` node's only route to green is deleting the line (F21.66).
+    A `refactor` may edit both sides, so the question is answerable
+    and the gate still asks it.
+    """
     fixed = "def f():\n    return 2\n\n\ndef unused():\n    return 3\n"
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
     _worktree(tmp_path, test_body, fixed_code=fixed, baseline_test=test_body)
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     assert result.passed is False
     coverage = next(check for check in result.checks if check.name == "coverage")
     assert coverage.passed is False
     assert "n.py:6" in coverage.detail
+
+
+def test_run_node_gate_impl_node_defers_a_line_no_remaining_node_can_reach(
+    tmp_path: Path,
+) -> None:
+    """T6-90 known-good, built the way the production caller builds it.
+
+    The same tree as the test above -- a changed line no test runs, and no
+    test node owed -- reaches the gate through `run_node_gate` on an
+    `impl` node, and seals. T6-53 deferred on whether the SCHEDULE could
+    still cover the line; this is the other half, whether THIS node could,
+    and `check_node_scope` answers no for every `impl` node. The line is
+    still named in `detail` and counted in `basis`: the node is told what
+    is unreached, and is not failed for the one route it had to green,
+    which is deleting the branch the task requires (F21.66).
+    """
+    fixed = "def f():\n    return 2\n\n\ndef unused():\n    return 3\n"
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+    _worktree(tmp_path, test_body, fixed_code=fixed, baseline_test=test_body)
+    result = run_node_gate(_node(kind="impl"), tmp_path)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+    assert coverage.passed is True
+    # Absolute, because `runner.py` builds `changed` as `str(workdir / path)`
+    # -- the spelling T6-86 found T6-75's exemption on the wrong side of.
+    assert coverage.detail == (
+        f"deferred, no node that may write a test remains to reach {tmp_path}/n.py:6"
+    )
+    assert coverage.basis == "changed-lines=3 unreachable-lines=1"
 
 
 def test_run_node_gate_pass_pre_change_fails(
@@ -1179,6 +1251,12 @@ def test_run_node_gate_still_fails_an_uncovered_line_the_baseline_never_had(
     fail. The detail names the file workdir-relative -- while `changed`
     was absolute the worker was handed the bench operator's own
     filesystem paths, which are unreproducible and not in its tree.
+
+    `refactor` since T6-90: an `impl` node's uncovered lines defer, so
+    the exemption's second half is now pinned on a kind that may write
+    the test. What T6-86 decides -- which lines are JUDGED -- is the
+    same for both kinds, and it still decides the `unreachable-lines`
+    an impl node's basis records.
     """
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
     _worktree(
@@ -1188,7 +1266,7 @@ def test_run_node_gate_still_fails_an_uncovered_line_the_baseline_never_had(
         fixed_code=_COMPELLED_BASELINE + "\n\ndef g():\n    return 9\n",
         baseline_test=test_body,
     )
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     coverage = next(check for check in result.checks if check.name == "coverage")
 
     assert not coverage.passed
@@ -1204,6 +1282,12 @@ def test_run_node_gate_judges_a_compelled_definition_a_test_does_reach(tmp_path:
     added, and sparing it would make coverage hollow for the commonest
     node there is. Without the reachability narrowing the whole of `f`
     leaves the denominator and this passes with nothing measured.
+
+    `refactor` since T6-90, which defers an `impl` node's uncovered
+    lines: the denominator is what T6-86 decides and is unchanged by
+    kind, so this still pins it, and on an impl node the same tree
+    reports `unreachable-lines=1` rather than `changed-lines=3`
+    with nothing judged.
     """
     baseline = "def f(flag):\n    return 1\n"
     fixed = "def f(flag):\n    if flag:\n        return 1\n    return 2\n"
@@ -1211,7 +1295,7 @@ def test_run_node_gate_judges_a_compelled_definition_a_test_does_reach(tmp_path:
     _worktree(
         tmp_path, test_body, baseline_code=baseline, fixed_code=fixed, baseline_test=test_body
     )
-    result = run_node_gate(_node(), tmp_path)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
     coverage = next(check for check in result.checks if check.name == "coverage")
 
     assert not coverage.passed, coverage.detail

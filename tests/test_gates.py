@@ -1028,8 +1028,19 @@ def test_requirement_binding_reads_examples_from_the_suite_it_is_given() -> None
 
 def test_run_tier1_asks_a_spec_node_for_its_examples_and_no_other_kind() -> None:
     """Wiring: a test node's binding check carries the node's examples over
-    the suite as it leaves it (baseline and flipped); an impl node cannot
-    edit tests and is not asked."""
+    the suite as it leaves it (baseline and flipped); a refactor node leaves
+    the tests it found, so it is judged on citations with no examples asked.
+
+    flip: the last clause. It read an impl node's detail as
+    "1 requirement(s) bound", which T6-89 replaces with "not judged" --
+    an impl node may not edit tests, so every clause of this gate is
+    decided before it starts. F21.66 is the evidence: node-2 of
+    `g1-afe4ca1` drew `unbound requirements: REQ-002` on a tree whose
+    21 citations were all written by the test node, and that tree passes
+    16 of 16 hidden matched-scope tests. The old expectation pinned no
+    contract the impl node could act on; the rule itself is unchanged
+    for the kinds that can answer it, which the refactor clause holds.
+    """
     inputs = _spec_inputs(PYTEST_TESTS_FAILED, "1 failed in 0.01s")
     result = run_tier1(_node(kind="test"), inputs)
     by_name = {check.name: check for check in result.checks}
@@ -1048,10 +1059,14 @@ def test_run_tier1_asks_a_spec_node_for_its_examples_and_no_other_kind() -> None
     )
     result = run_tier1(_node(kind="test"), in_baseline)
     assert {c.name: c for c in result.checks}["requirement-binding"].passed is True
-    impl = run_tier1(_node(kind="impl"), _passing_inputs())
-    assert {c.name: c for c in impl.checks}[
+    other = run_tier1(_node(kind="refactor"), _passing_inputs())
+    assert {c.name: c for c in other.checks}[
         "requirement-binding"
     ].detail == "1 requirement(s) bound"
+    impl = run_tier1(_node(kind="impl"), _passing_inputs())
+    assert {c.name: c for c in impl.checks}["requirement-binding"].detail == (
+        "not judged: every clause reads tests this node may not write"
+    )
 
 
 def test_requirement_binding_passes_when_every_cited_id_is_declared() -> None:
@@ -1709,13 +1724,25 @@ def test_run_tier1_spec_node_whose_tests_pass_fails_tests_and_red_phase_only() -
 
 
 def test_run_tier1_impl_node_keeps_the_real_coverage_and_mutation_checks() -> None:
-    """The substitution is keyed on kind: an impl node's coverage is still measured."""
+    """The substitution is keyed on kind: an impl node's coverage is still
+    measured, and the measurement is the real one, not the test node's
+    placeholder -- `basis` carries the count of lines it found.
+
+    flip: the `passed is False` assertion. T6-90 changed the verdict on
+    an unreachable line, not the measurement: an impl node may not write
+    the test that would reach it, so the shortfall is recorded in `basis`
+    and the node seals. The rule keeps full force on a kind that may
+    write one, which the refactor clause holds (F21.66).
+    """
     inputs = replace(_passing_inputs(), covered=set())
     result = run_tier1(_node(kind="impl"), inputs)
     by_name = {check.name: check for check in result.checks}
-    assert by_name["coverage"].passed is False
+    assert by_name["coverage"].basis == "changed-lines=1 unreachable-lines=1"
     assert by_name["coverage"].basis != "test node"
     assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
+    writable = {c.name: c for c in run_tier1(_node(kind="refactor"), inputs).checks}
+    assert writable["coverage"].passed is False
+    assert writable["coverage"].detail == "no test runs n1.py:1"
 
 
 def test_mutation_failed_tool_is_named_not_undecided() -> None:
