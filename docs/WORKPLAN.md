@@ -8569,12 +8569,41 @@ The detail also steers toward the vacuous spelling by naming the number,
 which is T6-31's "state the behaviour, never the number" in a second
 place.
 
+**Dated against the later run, 2026-09-22 (F21.52).** The sentence
+above -- "for an accept, the constants end up in an assert and it binds"
+-- is from `g1-0f6b83d`. In `g1-a876595` both requirement-binding
+verdicts refuse the **accept** as well (`no test asserts on 'a',
+'accounts'`, then `no test asserts on 'accounts'`), so polarity is not
+the whole story and a repair that only supplies the polarity
+under-fixes.
+
+Four spellings, run against the gate's own functions with that run's two
+example strings verbatim:
+
+| spelling | accept | reject |
+| --- | --- | --- |
+| payload inline inside the `with` block | REFUSED (`'2'`) | BOUND |
+| payload bound to a name, then exercised | REFUSED (8 constants) | REFUSED (8 constants) |
+| payload as the JSON text the store holds | REFUSED (8 constants) | REFUSED (8 constants) |
+| payload built by the code, round-tripped | BOUND | REFUSED (`'3'`) |
+
+The two ordinary spellings are refused on both polarities, for eight
+constants that include `'version'`, `'accounts'`, `'owner'` and
+`'balances'` -- field names, which no test asserts on because they are
+not claims. The mechanism is the one T6-69 named for the call path and
+did not carry across: `_asserted_literals` collects only from an
+`Assert`, a `With` or a decorator, so a payload in an `Assign` is
+invisible. What survives is the spelling that inlines the blob inside an
+assert, which is the escape T6-50 and T6-66 were written to close.
+
 Done when: either a run shows it costing a node (then: give
-`_example_unbound` the polarity, and bind a reject to a test that
-constructs the data and asserts the operation raises -- with the vacuous
-spelling exhibited as the known-bad it must still reject), or a run
-seals node-1 through it and this closes as a one-attempt tax with the
-evidence recorded.
+`_example_unbound` the polarity **and replace the asserted-literals
+proxy on the data path the way T6-69 replaced it on the call path** --
+the constants may sit anywhere in a `test*` function that asserts
+something, not only inside the assert -- with the vacuous spelling
+exhibited as the known-bad it must still reject), or a run seals node-1
+through it and this closes as a one-attempt tax with the evidence
+recorded.
 
 ---
 
@@ -8700,6 +8729,73 @@ least badly); every line is present but not consecutive (naming one
 would be a lie, so the order is named instead). Blank lines are skipped
 because `loose_spans` never matches on them.
 
+
+---
+
+### T6-82 — A negative number is invisible to `requirement-binding`, so an all-negative example binds to any call (open; latent, not live in t5)
+
+Files: `src/saddle/gates.py` (`_example_call`, `_performed_calls`,
+`_example_values`, `_asserted_literals`), `tests/test_gates.py`.
+
+Found by `hypothesis` in under a second, stating the rule's own
+tightening claim as a property: a test calling `deposit(b)` must not
+bind an example `deposit(a)` when the two differ. Counterexample:
+`deposit(-1)` is bound by a test calling `deposit("10.00", "USD")`
+(F21.53).
+
+`-1` parses as `UnaryOp(USub, Constant(1))`, so the
+`isinstance(argument, ast.Constant)` filter drops it and the example's
+constant set is **empty** -- and an empty set is a subset of every call's
+arguments. `+1` and `~1` are the same. The structured path fails the
+other way: `ast.walk` descends into the `UnaryOp` and keeps the
+magnitude, so `{"amount": -1}` and `{"amount": 1}` are the same string
+`'1'` to the gate.
+
+Direction: a false **accept**, the class Goal G1 exists to catch. Not
+live in t5 -- the prompt holds no signed numeric literals and neither
+example in `g1-a876595` has one -- which is why it is filed rather than
+fixed mid-measurement. Note the plan record stores node metadata only,
+so what a planner wrote as accepts/rejects survives only in the arm
+log's gate detail; there is no census of these across runs.
+
+Done when: a unary `+`/`-`/`~` over a constant folds into the constant on
+both sides, with a known-good (an example `deposit(-1)` bound by a test
+calling `deposit(-1)`) and the known-bad it must now reject (an example
+`deposit(-1)` refused by a test calling `deposit(1)`, which today binds).
+Tightened.
+
+---
+
+### T6-83 — The chat UI refused an edit with the same sentence that cost the worker three attempts (verified in a scratch tree; lands when the arm is clear)
+
+Files: `src/saddle/edits.py` (`first_divergence`), `src/saddle/tools.py`
+(`_edit_file`), `tests/test_chat_ui.py`.
+
+T6-81 made the worker's refusal name the line that diverged. The chat
+UI's `edit_file` -- the surface a person actually types into -- still
+answered `error: that snippet does not appear in 'accounts.py'` and
+stopped, which is the identical unactionable message, in the identical
+situation, one module over.
+
+`_first_divergence` is made public as `first_divergence` and called from
+`_edit_file`'s no-span branch, following the precedent of `bd633bd`,
+which made the matcher public for this same caller "rather than written
+a second time". No behaviour changes: the edit is still refused, and
+refused at exactly the same inputs.
+
+Two tests, red before and green after, both asserting the **whole**
+message: a near miss names the diverged line and the file's nearest; a
+snippet with nothing close says so rather than offering a nearest that
+is not near. The whole message is pinned because source and search are
+the contract -- transposing them still produces a plausible sentence,
+naming the file's line as the miss and the snippet's as the nearest, and
+only quoting both in their own roles tells them apart.
+
+Mutants, all three dead: `first_divergence(before, old_text)` ->
+`first_divergence(old_text, before)` (both new tests); `cutoff=0.6` ->
+`cutoff=0.0` (the known-bad on both surfaces, confirming the new test
+guards `edits.py`'s diagnostic too); dropping the diagnostic from the
+message (both new tests). Diagnostic only.
 
 ---
 
