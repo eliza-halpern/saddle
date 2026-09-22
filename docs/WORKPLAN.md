@@ -8861,6 +8861,74 @@ riding along.
 | `repetition_penalty` / `top_p` / `min_p` on worker calls (F21.9c item 14) | at 1.05 it failed 3/3 where today's shape passed 3/3 (F21.10) | a node that repeats without a penalty on record, then a value sweep with the penalty-on/grammar-off cell (F21.11 items 22, 23) |
 | Repetition oracle over sections and motifs (F21.10 item 19) | nothing to gate on until degeneration recurs without the penalty | the same record |
 
+### T6-85 — One draw's timeout holds the whole attempt, and a maximal draw cannot return inside the timeout (open; F21.58)
+
+Files: `src/saddle/slice.py` (`run_slice`'s `pool.map` over `draw`, and
+the line that reduces `result.checks` to `f"{failures} gate(s) failed"`),
+`src/saddle/vllm.py` (`DEFAULT_TIMEOUT`), `src/saddle/cli.py`
+(`worker_max_tokens`), `tests/test_slice.py`, `tests/test_vllm.py`.
+
+`g1-79cd848` node-1 attempt 1 drew three samples concurrently. Seed 2
+passed every gate at `12:13:05Z`. The attempt did not seal it until
+`12:38:07Z`, because seed 1 was still in flight and only gave up when
+`DEFAULT_TIMEOUT` fired at 1800 s. That is **25 minutes -- a third of the
+5400 s deadline -- spent waiting for a draw whose successor had already
+won.**
+
+Two causes, separable:
+
+**(a) The barrier.** `draws = list(pool.map(draw, range(PROPOSAL_SAMPLES)))`
+materialises every draw before the evaluation loop starts. T6-25's
+"evaluate serially in seed order, seal the first pass" is implemented
+correctly -- the loop short-circuits with `"not evaluated: an earlier
+sample passed"` -- but the *drawing* is a barrier and the short-circuit
+never gets the chance.
+
+**(b) The arithmetic.** `DEFAULT_TIMEOUT` is 1800 s and documents itself
+as the whole-generation deadline; since T6-17 `worker_max_tokens` sends
+the window that is left, 164,826 here. Measured decode on this box is 242
+tok/s with three draws sharing the GPU and 86 tok/s alone, so spending
+the cap takes 2,000-2,800 s. **Neither bound is reachable**: a draw that
+uses its budget is always abandoned, and `--deadline` cannot see it
+coming. Nothing cancels server-side either -- vLLM spent a further 219 s
+finishing a response no client held.
+
+**Tail event, not the common case.** Over all 98 attempt sidecars (181
+draws, 180 with usage): 1 draw lost to the timeout, 2 `finish_reason:
+"length"` against 178 `stop`, completion tokens median 14,532 / p90
+29,439 / max 165,141. A healthy draw costs ~1% of the cap. So this is
+priority **M** -- but (a) is cheap and the loss when it fires is a third
+of a run.
+
+Done when, each half with both halves of the constraint:
+
+1. (a) draws are consumed as they finish, and an attempt stops waiting
+   once a seed lower than every outstanding draw has sealed. Known-good:
+   a slow draw at a **higher** seed than a passing one does not delay the
+   seal (assert on attempt wall, with a fake worker that sleeps).
+   Known-bad, the half that keeps T6-25's contract: a slow draw at a
+   **lower** seed than a passing one still wins if it passes -- seed
+   order decides the winner, not completion order. Scope narrowed.
+2. (b) the cap and the timeout are reconciled in one place, with a test
+   that fails if `worker_max_tokens`' worst case exceeds what
+   `DEFAULT_TIMEOUT` can decode at a stated floor rate. The rate is a
+   constant with the box's measurement cited, not a probe. Direction
+   depends on which moves; label it then. Do **not** budget reasoning --
+   T6-17 settled that, and the user's premise is that tokens are free and
+   only wall time is not.
+3. A losing sample names the gates it failed, not a count (`result.checks`
+   is in scope at that line). Known-good: a sample failing two named
+   gates records both names; known-bad: the count alone no longer
+   satisfies the test. This is what makes `g1-79cd848` seed 0's failure
+   unreadable.
+4. An attempt records its own wall beside the sealing draw's. Today
+   `wall_s: 298.19` sits in a sidecar written 30 minutes after the
+   attempt began, so every timing census over sidecars understates.
+
+Owner: main session (contract change). Related: T6-25 (the seed-order
+contract this must preserve), T6-30 (the request deadline), T6-17 (why
+`max_tokens` is the whole window), F21.57, F21.58.
+
 ---
 
 ## 11. Evidence label legend (as used above)
