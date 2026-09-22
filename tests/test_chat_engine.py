@@ -17,7 +17,14 @@ from typing import Any, cast
 
 import pytest
 
-from saddle.engine import MAX_TOOL_ROUNDS, MIN_OUTPUT, TurnOptions, run_turn
+from saddle.engine import (
+    INPUT_SAFETY,
+    MAX_TOOL_ROUNDS,
+    MIN_OUTPUT,
+    OUTPUT_MARGIN,
+    TurnOptions,
+    run_turn,
+)
 from saddle.events import (
     Compaction,
     ContentDelta,
@@ -528,9 +535,13 @@ def test_a_server_that_cannot_count_falls_back_and_still_leaves_room(
 
     guessed = options.budget(messages, no_count)
     assert guessed == options.budget(messages)        # same as having no counter
-    # The guess must be pessimistic: the real prompt was 1.5x the raw
-    # estimate when this was measured, so the reserve has to exceed it.
-    assert options.input_estimate(messages) > estimate_tokens(messages)
+
+    # The contract, not a proxy for it: the guess must exceed the raw sum by
+    # the safety factor, because the raw sum is what was measured too low --
+    # 2,732 estimated against 4,100 charged, a ratio of 1.5.
+    raw = estimate_tokens(messages) + options.tool_tokens()
+    assert options.input_estimate(messages) >= int(raw * 1.5)
+    assert options.input_estimate(messages) == int(raw * INPUT_SAFETY)
 
 
 def test_the_tool_schemas_are_counted_at_all(options: TurnOptions) -> None:
@@ -550,11 +561,26 @@ def test_an_explicit_max_tokens_still_bypasses_all_of_this(
     assert options.budget([{"role": "user", "content": "x"}], counter) == 4_096
 
 
-def test_compaction_leaves_room_to_answer(options: TurnOptions) -> None:
-    # Compaction used to be handed the whole window, so it was content to
-    # let the conversation fill every token and leave the reply the floor.
-    options.context_tokens = 175_000
-    assert options.compaction_limit() < options.context_tokens - MIN_OUTPUT
+def test_a_conversation_compacted_to_the_limit_still_leaves_room_to_answer(
+    options: TurnOptions
+) -> None:
+    """The invariant, stated as the thing that must hold.
+
+    Compaction used to be handed the whole window as its ceiling, so it was
+    content to let the conversation fill every token of it -- and `budget`
+    would then ask for MIN_OUTPUT on top of a full prompt. Asserting that
+    the limit is merely "smaller than the window" does not catch that; the
+    limit has to be small enough that a conversation sitting exactly on it
+    still fits alongside a minimum reply.
+    """
+    for window in (32_000, 100_000, 175_000, 1_000_000):
+        options.context_tokens = window
+        at_the_limit = options.compaction_limit() + options.tool_tokens()
+        worst_case_prompt = int(at_the_limit * INPUT_SAFETY)
+        assert worst_case_prompt + MIN_OUTPUT + OUTPUT_MARGIN <= window, (
+            f"window {window}: a conversation compacted to the limit "
+            f"leaves no room for a reply"
+        )
 
 
 def test_the_turn_asks_the_client_to_count(options: TurnOptions) -> None:
