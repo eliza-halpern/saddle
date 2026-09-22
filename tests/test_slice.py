@@ -768,7 +768,14 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "- Gate tests: PASS ('pytest test_n.py' exited 0)\n" in result.transcript
     assert "- Gate coverage: PASS (every changed line runs)\n" in result.transcript
     assert "- Gate red-phase: PASS (fail pre-change, pass post-change)\n" in result.transcript
-    assert "- Gate requirement-binding: PASS (1 requirement(s) bound)\n" in result.transcript
+    # flip (T6-89): `n1` is an impl node, and every clause of the binding
+    # gate reads tests it may not write, so the transcript renders the
+    # exemption rather than a count. The judged wording is pinned on the
+    # kinds that can answer it, in test_gates.py and test_runner.py.
+    assert (
+        "- Gate requirement-binding: PASS (not judged: every clause reads tests"
+        " this node may not write)\n"
+    ) in result.transcript
     assert "- Gate mutation: PASS (100.0% >= 85.0% over 5 mutant(s))\n" in result.transcript
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
@@ -976,9 +983,14 @@ def test_run_slice_merge_suite_is_skipped_when_nothing_was_proven(tmp_path: Path
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("a", []), _node_dict("b", ["a"])]})
+    # Private, so `dead-code` reaches it. T6-90 defers the coverage failure
+    # this used to rely on, and `check_dead_additions` skips a public name
+    # by design, so the node keeps a failure it owns rather than one that
+    # belongs to a test it may not write. The public spelling stays in
+    # T6-53's own exhibit below, where the deferral is the subject.
     bad_diff = GOOD_DIFF.replace(
         "+    return 2\n",
-        "+    return 2\n+\n+\n+def unused():\n+    return 3\n",
+        "+    return 2\n+\n+\n+def _unused():\n+    return 3\n",
     ).replace("@@ -1,2 +1,2 @@", "@@ -1,2 +1,6 @@")
     seen: list[str] = []
 
@@ -1007,7 +1019,7 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert "## Node a\n" in result.transcript
     assert "## Node b\n" in result.transcript
     assert "- Attempts: 2\n" in result.transcript
-    assert "- Gate coverage: FAIL" in result.transcript
+    assert "- Gate dead-code: FAIL" in result.transcript
     assert "- Timeline:\n" in result.transcript
     assert "thought:" not in result.transcript
     # T6-62/A1: the worker path writes files and stages them; `git apply`
@@ -1022,7 +1034,7 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     agents = [span for span in spans if span.kind == "agent"]
     assert [span.name for span in agents] == ["worker:a", "worker:a", "run"]
     (first, second, run) = agents
-    assert (first.exit_code, first.detail) == (1, "attempt 1/3: 1 gate(s) failed: coverage")
+    assert (first.exit_code, first.detail) == (1, "attempt 1/3: 1 gate(s) failed: dead-code")
     assert (second.exit_code, second.detail) == (
         1,
         "attempt 2/3: worker re-proposed an identical diff; stopping recovery",
@@ -1265,8 +1277,11 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
     # the one place attempt 1's verdict survives.
     assert [span.detail for span in agents] == [
         "attempt 1/3: 3 gate(s) failed: tests, red-phase, mutation",
-        "attempt 2/3: 4 gate(s) failed: tests, coverage, red-phase, mutation",
-        "attempt 3/3: 4 gate(s) failed: tests, coverage, red-phase, mutation",
+        # flip (T6-90): coverage leaves this list, because it no longer
+        # fails an impl node for a line no node that may write a test
+        # remains to reach. The other three gates are unchanged.
+        "attempt 2/3: 3 gate(s) failed: tests, red-phase, mutation",
+        "attempt 3/3: 3 gate(s) failed: tests, red-phase, mutation",
         "0 proven, 1 failed, 0 undispatched",
     ]
 
@@ -3617,6 +3632,54 @@ def _mutmut_stub(
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
 
 
+SURVIVOR_KEPT_GLOB = "test_REQ-001_r*_s*.py"
+"""What `_survivor_round` names a kept candidate. `_survivor_mutmut` heals
+only once a kept file exercises the branch its survivor sits on, so a
+round whose candidates reach some other branch leaves the node failed."""
+
+
+def _survivor_mutmut(
+    stub_dir: Path, monkeypatch: pytest.MonkeyPatch, *, flag: int = 1, returns: int = 5
+) -> None:
+    """One mutant surviving on the branch `BRANCH_DIFF` leaves unreached.
+
+    T6-90 took `coverage` out of an impl node's failure set and
+    `_survivor_gap` admits only `{coverage, mutation}`, so `mutation` is
+    the one trigger a survivor round still has (F21.67). These fixtures
+    reach the machinery through it; what they assert -- the brief, the
+    candidate filter, the round limit, a transport failure mid-round --
+    is unchanged.
+
+    The survivor disappears once the drafted test file exists, which is
+    what lets the retried impl node seal. A stub whose verdict cannot
+    move would make the repair unrepresentable and the round vacuous:
+    a mechanism must be able to do what it reports.
+    """
+    stub_dir.mkdir(exist_ok=True)
+    killed = {f"k{index}": "    return 2" for index in range(1, 1 + MIN_SIGNIFICANT_MUTANTS)}
+    (stub_dir / "results.txt").write_text("".join(f"  {name}: killed\n" for name in killed))
+    for name, removed in {**killed, "s1": f"        return {returns}"}.items():
+        (stub_dir / f"show_{name}.txt").write_text(
+            f"--- n.py\n+++ n.py\n@@ -2 +2 @@\n-{removed}\n+    return 3  # {name}\n"
+        )
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'STUB_DIR="{stub_dir}"\n'
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        "  results)\n"
+        '    cat "$STUB_DIR/results.txt"\n'
+        f"    grep -q 'f(flag={flag})' {SURVIVOR_KEPT_GLOB} 2>/dev/null"
+        f" || printf '  s1: survived\\n'\n"
+        "    ;;\n"
+        '  show) cat "$STUB_DIR/show_$2.txt";;\n'
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
 def _two_module_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Killed mutants on *both* modules' changed lines.
 
@@ -3929,7 +3992,18 @@ def test_run_slice_distinct_ids_first_node_sees_the_second_nodes_citation(
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["n1", "n2"]
     bound = "- Gate requirement-binding: PASS (1 requirement(s) bound)\n"
-    assert result.transcript.count(bound) == 2
+    # flip (T6-89): both nodes of this plan are impl nodes, and every
+    # clause of the binding gate reads tests neither may write, so both
+    # render the exemption and neither is judged. T3-24's subject --
+    # an id the plan declares one node later is planned, not
+    # hallucinated -- is pinned where it can still be observed, in
+    # test_runner.py::test_run_node_gate_planned_requirements_reach_the
+    # _binding_gate, on a `refactor` node. What remains here is the
+    # two-node distinct-ids plan running end to end.
+    assert result.transcript.count(bound) == 0
+    assert (
+        result.transcript.count("not judged: every clause reads tests this node may not write") == 2
+    )
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
 
@@ -3978,7 +4052,14 @@ def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["t1", "n1"]
     bound = "- Gate requirement-binding: PASS (1 requirement(s) bound"
-    assert result.transcript.count(bound) == 2
+    # flip (T6-89): only the spec node is judged. Every clause of the
+    # binding gate reads the tests, and the impl node may not write one,
+    # so its line renders the exemption instead of a count. The subject
+    # here -- T3-24's plan-wide ids -- lives on the spec node's line.
+    assert result.transcript.count(bound) == 1
+    assert (
+        result.transcript.count("not judged: every clause reads tests this node may not write") == 1
+    )
     # The spec node's line also counts the examples it asserted on (T6-4).
     assert result.transcript.count(bound + ", 2 example(s) asserted)\n") == 1
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
@@ -4378,7 +4459,9 @@ def _survivor_span(journal: Path, node_id: str) -> SpanRecord:
     return span
 
 
-def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path: Path) -> None:
+def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Known-good (T6-29c): an impl node fails coverage on a branch nothing
     reaches; the recovery draws k test candidates from a brief that names
     the untested function and never the code, keeps the one that is red on
@@ -4386,6 +4469,7 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path:
     a reason each, and the run seals the test node then the retried impl
     node with the kept test in its gate's scope."""
     _slice_repo(tmp_path)
+    _survivor_mutmut(tmp_path / "stub", monkeypatch)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
     briefs: list[tuple[str, str, int]] = []
@@ -4432,7 +4516,11 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path:
     span = _survivor_span(journal, "n1")
     assert span.argv == ["survivor-tests", "n1", "round=1", "drawn=7", "kept=1", "dropped=6"]
     assert span.exit_code == 0
-    assert "s0: kept: test_REQ-001_r1_s0.py killed 0, covered 1 line(s)" in span.detail
+    # flip (T6-90): the trigger is now a surviving mutant rather than an
+    # uncovered line, so the kept candidate kills one. That it CAN kill
+    # is the point -- a candidate that closed nothing would leave the
+    # retried node exactly as it was.
+    assert "s0: kept: test_REQ-001_r1_s0.py killed 1, covered 1 line(s)" in span.detail
     assert "s1: dropped: does not parse" in span.detail
     assert "s2: dropped: test_REQ-001_r1_s2.py exited 1 against the real tree" in span.detail
     assert "s3: dropped: identical to sample 0" in span.detail
@@ -4462,11 +4550,17 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path:
     assert verify_journal(journal) == []
 
 
-def test_run_slice_survivor_recovery_starts_no_third_round(tmp_path: Path) -> None:
+def test_run_slice_survivor_recovery_starts_no_third_round(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Known-bad (T6-29c): two rounds per requirement. Each round's kept
     test covers one more branch and the retried impl node still fails;
     after the second retry nothing is drawn and the node stays failed."""
     _slice_repo(tmp_path)
+    # The survivor sits on the third branch, which neither round's
+    # candidates reach, so the node is still failed when the second
+    # round ends and no third is started.
+    _survivor_mutmut(tmp_path / "stub", monkeypatch, flag=3, returns=9)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
     draws: list[int] = []
@@ -4500,11 +4594,14 @@ def test_run_slice_survivor_recovery_starts_no_third_round(tmp_path: Path) -> No
     assert verify_journal(journal) == []
 
 
-def test_run_slice_gap_cited_by_a_sealed_test_retries_as_today(tmp_path: Path) -> None:
+def test_run_slice_gap_cited_by_a_sealed_test_retries_as_today(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Known-bad (T6-29c): the sealed test node `t1` wrote `test_n.py`,
     which names `f`; `n1`'s gap is inside `f`, so nothing is drawn and the
     node replans exactly as before."""
     _spec_slice_repo(tmp_path)
+    _survivor_mutmut(tmp_path / "stub", monkeypatch)
     spec = _node_dict("t1", [])
     spec["kind"] = "test"
     dag = Dag.model_validate({"nodes": [spec, _node_dict("n1", ["t1"])]})
@@ -4568,12 +4665,13 @@ DELETE_GONE = (
 
 
 def test_run_slice_survivor_round_that_keeps_nothing_leaves_the_node_failed(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Known-bad (T6-29c): every draw is a plausible test that is wrong on
     the real tree (F21.14); nothing is kept, the round is journaled with
     exit 1, nothing is spliced and the node stays failed."""
     _slice_repo(tmp_path)
+    _survivor_mutmut(tmp_path / "stub", monkeypatch)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
     result = run_slice(
@@ -4863,7 +4961,7 @@ def test_a_rejected_api_key_fails_the_node_rather_than_becoming_a_sample(
 
 
 def test_a_survivor_draws_transport_failure_does_not_discard_its_siblings(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """T6-73 known-good, the survivor drawer's copy of the same defect.
 
@@ -4874,6 +4972,7 @@ def test_a_survivor_draws_transport_failure_does_not_discard_its_siblings(
     the T6-29c known-good).
     """
     _slice_repo(tmp_path)
+    _survivor_mutmut(tmp_path / "stub", monkeypatch)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
 
