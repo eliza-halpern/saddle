@@ -317,11 +317,11 @@ figure.preview figcaption { margin-top: 8px; font: 12px var(--mono); color: var(
 #settings-dialog button.primary { background: linear-gradient(94deg, var(--peach), var(--rose));
   color: #241c26; border-color: transparent; font-weight: 600; }
 .dialog-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
-#settings { background: var(--bg-raise); border: 1px solid var(--line);
-  color: var(--ink-dim); width: 28px; height: 28px; border-radius: 10px;
-  cursor: pointer; font-size: 13px;
-  transition: transform .16s cubic-bezier(.34,1.56,.64,1), color .16s; }
-/* A quarter turn, the same as the + beside it. It was 45deg, which parked
-   the cog between its own teeth and read as a diamond. */
-#settings:hover { color: var(--rose); transform: rotate(90deg); }
+/* The gear is a `.side-head button` like the +, so it already gets that
+   rule's hover: a quarter turn with a small scale, in rose. It had its own
+   copy at 45deg, which both parked the cog between its own teeth and lost
+   the scale -- two buttons side by side behaving differently because one of
+   them had been given a second, worse definition. Only the glyph size
+   differs, because a cog reads smaller than a plus at the same size. */
+#settings { font-size: 13px; }
 .side-head { gap: 8px; }
