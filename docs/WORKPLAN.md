@@ -8952,10 +8952,30 @@ The worker has no move: `check_node_scope` forbids an impl node from
 editing tests, the scope is the planner's, and deleting the uncovered
 functions breaks node-4 and is what `public-deletions` (T6-75) stops.
 
-**Do not widen the run.** Collecting `test_store.py` for node-2 is
-F21.12a -- `store.py` is unimplemented, the suite is red, and mutmut
-cannot baseline against a red suite. Widen the *judgement*, not the
-command.
+**Do not widen the gating run.** Collecting `test_store.py` into node-2's
+`test_command` is F21.12a -- `store.py` is unimplemented, the suite is
+red, and mutmut cannot baseline against a red suite. Widen the
+*judgement*, not the command.
+
+**How the judgement learns what an unrun test would cover**, which "widen
+the judgement" leaves open: it runs it, separately and tolerantly.
+`coverage` records the lines a test executes whether or not it then
+fails, and the out-of-scope modules here fail on assertions, not on
+import -- `test_store.py` does `from store import append_account,
+load_accounts, save_accounts` against the baseline `store.py`, which has
+all three. So a second coverage run over the out-of-scope modules that
+import a changed file, with its exit code **ignored and never gated**,
+yields the extra covered set. Nothing about it reaches `mutation`, the
+`tests` gate, or the red-phase leg; it only enlarges `covered` for
+`check_changed_line_coverage`.
+
+That is a real widening of what "covered" means -- a line executed by a
+failing test counts as executed -- so say so: the contract becomes "some
+test in the tree runs this line", not "some passing test runs this line".
+The in-scope suite still has to pass, under the `tests` gate, which is
+where that question belongs. An impl node cannot write tests
+(`check_node_scope`), so the worker cannot manufacture the extra
+coverage.
 
 Done when, both halves:
 
