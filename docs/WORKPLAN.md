@@ -8328,10 +8328,28 @@ of `runs/g1-bd633bd` from its own recorded prompt, with `EDIT_RULES` and
 and applied, all four compile, nothing outside them touched; payload
 13 994 chars against the whole-file arm's 15 577 on the same node.
 
+**Measured, `runs/g1-0f6b83d` (F21.49).** node-1 attempt 1 drew three
+payloads and **every one applied and was gated** -- the format reaches
+the tree. Thirteen of fourteen gates passed on each; the fourteenth is
+T6-78 below. Then attempt 2 exposed a third site that has to agree about
+the envelope and did not: `build_repair_prompt` ends with "write the
+files above as they should now be", which is correct under the
+whole-file envelope and exactly backwards under this one. The worker
+followed it, said so three times in its reasoning ("I'll use full-file
+replacement via edit"), and spent 84 493 output tokens emitting a
+zero-character payload -- a whole file in a search block costs that file
+twice. The sentence is now envelope-aware; the whole-file arm is
+byte-identical and regression-pinned.
+
+**Measured, and it lowers the expected return.** The edit payloads were
+13 695 / 15 380 / 15 336 characters against the whole-file arm's 15 577
+on the same node: a **1.5% median saving**, not the ~23% ceiling. node-1
+is a *test* node, and new tests are new content with nothing to
+not-restate. The format's value is on an impl node editing a large
+existing file -- the F21.43 case -- which t5 never reaches.
+
 Done when: a full t5 run with `--emission edit` seals a node. Still
-open -- the one run attempted died on the dispatch above, before any
-node was gated, so it measured nothing about the format. The
-remaining risk is not the format — it is that the t5
+open. The remaining risk is not the format — it is that the t5
 baseline is 7 170 bytes across four modules, so the edit format's
 ceiling there is about a 23% cut in per-draw emission (the reasoning is
 ~77% of emitted characters; F21.46). The format's value on t5 is
@@ -8496,6 +8514,61 @@ lands with T6-3 (which names the rule in the gate detail).
 failed gate to the tool whose output it is; a passed gate's run stays
 under T3-4. One labelled flip (the T3-4 withholding test's fixture has
 a failed tests gate); its passed-gate half is now its own known-bad.
+
+---
+
+### T6-78 — `requirement-binding` refuses the idiomatic spelling of a *reject* example and admits a vacuous one (open; measured, not acted on)
+
+Files: `src/saddle/gates.py` (`_example_unbound`, `check_requirement_binding`),
+`tests/test_gates.py`.
+
+T6-50 repaired this for an example spelled as a **call** and T6-69
+repaired the accept/reject asymmetry within that repair. A **data**
+example got T6-66's widening -- it binds by the constants inside it --
+and that widening carries the same asymmetry nobody has repaired:
+`_example_unbound` is never passed the example's polarity, so it asks
+the same question of an accept and a reject.
+
+For an accept, the constants end up in an assert and it binds. For a
+reject they cannot: the value that identifies the rejected input is
+written in the *input construction*, and the test asserts that the
+operation raises.
+
+`runs/g1-0f6b83d` node-1, all three draws (F21.49). The example is
+REQ-001 rejects `{"version": 3, "accounts": [...]}`. Reproduced with the
+gate's own functions on a restored copy of the applied tree: seven of
+the eight constants are asserted somewhere in the suite, and the eighth
+is `3`. The worker had written the test, correctly:
+
+```python
+content = {"version": 3, "accounts": [{"owner": "a", ...}]}
+...
+with pytest.raises(ValueError):
+    load_accounts(path)
+```
+
+Five spellings against the gate: `pytest.raises(ValueError)` alone is
+**refused**; `pytest.raises(ValueError, match="3")`, `assert "3" in
+str(exc.value)`, an `assert content["version"] == 3` before the call,
+and a test that asserts the literal while exercising nothing all bind.
+
+So, unlike T6-66's original, it is **satisfiable** -- the gate refuses
+the idiomatic spelling rather than every spelling, and the detail names
+the missing literal, so a repair attempt can find its way. That is why
+this is filed and not fixed: no run has yet shown it costing more than
+one attempt (attempt 2 died of T6-77's repair prompt before it could
+try), and moving a gate costs the measurement its fixed point.
+
+The detail also steers toward the vacuous spelling by naming the number,
+which is T6-31's "state the behaviour, never the number" in a second
+place.
+
+Done when: either a run shows it costing a node (then: give
+`_example_unbound` the polarity, and bind a reject to a test that
+constructs the data and asserts the operation raises -- with the vacuous
+spelling exhibited as the known-bad it must still reject), or a run
+seals node-1 through it and this closes as a one-attempt tax with the
+evidence recorded.
 
 ---
 

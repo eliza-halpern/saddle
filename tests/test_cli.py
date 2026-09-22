@@ -495,6 +495,53 @@ def test_build_repair_prompt_adds_failure_evidence() -> None:
     assert "--- n.py ---\ndef f():\n    return 3\n" in prompt
 
 
+def test_the_repair_prompt_does_not_tell_an_edit_worker_to_restate_the_files() -> None:
+    """Known-good and known-bad on one function, from `runs/g1-0f6b83d`.
+
+    The initial worker prompt there drew three edit payloads that applied
+    and were gated. The repair prompt carried the same `EDIT_RULES` and,
+    after them, "write the files above as they should now be" -- and that
+    worker spent 84 493 output tokens emitting no payload at all, its
+    reasoning saying three times over that it would restate each file in
+    full inside a search block. A whole file there costs that file twice.
+
+    The whole-file arm still says the sentence, because under that
+    envelope it is the correct instruction and the economy would be
+    wrong; that half is the known-good.
+    """
+    node = Node.model_validate(_node_dict())
+    contents = {"n.py": "def f():\n    return 3\n"}
+    failure = "Attempt 1 of 3 failed 1 gate(s):\n- tests: exited 1\n"
+    whole = build_repair_prompt(
+        task=TASK,
+        node=node,
+        files=["n.py"],
+        contents=contents,
+        failure=failure,
+        plan=None,
+        emission="whole-file",
+    )
+    edit = build_repair_prompt(
+        task=TASK,
+        node=node,
+        files=["n.py"],
+        contents=contents,
+        failure=failure,
+        plan=None,
+        emission="edit",
+    )
+    assert "write the files above as they should now be" in whole
+    assert "write the files above as they should now be" not in edit
+    assert "Do not restate a whole file" in edit
+    assert "costs that file TWICE" in edit
+    # Both still say what "fix forward" means, and both still carry the
+    # failure they are repairing -- only the economy differs.
+    assert "Fix forward" in whole
+    assert "Fix forward" in edit
+    assert failure in whole
+    assert failure in edit
+
+
 def test_build_replan_task_names_scope_and_history() -> None:
     node = Node.model_validate(_node_dict())
     text = build_replan_task(task=TASK, node=node, history="Node 'n1' failed.\n")

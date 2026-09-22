@@ -609,9 +609,22 @@ def build_repair_prompt(
 
     Under the whole-file envelope "fix forward" is about WHICH TREE to
     write against, not about how much to emit (T6-62/A1). Every write is
-    the complete file either way; the instruction that used to read "do
-    not restate the whole change" was a diff-envelope economy and is now
-    the opposite of what the worker must do.
+    the complete file either way, so the sentence says to write the files
+    as they should now be.
+
+    Under `--emission edit` that same sentence is the opposite of what the
+    worker must do, and saying it costs the whole attempt. In
+    `runs/g1-0f6b83d` the initial worker prompt drew three payloads that
+    applied and were gated; the repair prompt -- the same `EDIT_RULES`
+    plus "write the files above as they should now be" -- produced 84 493
+    output tokens and no payload at all. The reasoning says why, three
+    times over: "I'll use full-file replacement via edit (matching the
+    entire current content)". A whole file in a search block costs that
+    file TWICE, once to name it and once to replace it, so the worker ran
+    out of budget still restating the tree it had been handed. The economy
+    `EDIT_RULES` offers as advice is stated here as the instruction,
+    because a later, more specific-sounding sentence is the one the model
+    followed.
 
     `plan` is `None` when the diagnosis step produced an instruction a
     gate would reject (T6-54); the section is then absent rather than
@@ -622,13 +635,22 @@ def build_repair_prompt(
         task=task, node=node, files=files, contents=contents, emission=emission
     )
     recovery = "" if plan is None else "\n\nRecovery plan:\n" + plan
-    return (
-        base + "\nThe previous attempt failed. Fix forward: write the files above "
+    forward = (
+        "\nThe previous attempt failed. Fix forward: edit the files above into "
+        "the state that repairs the failure below, starting from the CURRENT "
+        "tree state shown. The contents above already include the previous "
+        "attempt's work -- keep what was right and change what was not, naming "
+        "only the lines you are changing. Do not restate a whole file: a search "
+        "block holding an entire file costs that file TWICE, once to name it "
+        "and once to replace it."
+        if emission == "edit"
+        else "\nThe previous attempt failed. Fix forward: write the files above "
         "as they should now be, starting from the CURRENT tree state shown, so "
         "that the failure below is repaired. The contents above already include "
         "the previous attempt's work -- keep what was right and change what was "
-        "not." + recovery + "\n\n" + failure
+        "not."
     )
+    return base + forward + recovery + "\n\n" + failure
 
 
 def _git_ok(argv: Sequence[str], repo: Path, message: str) -> None:
