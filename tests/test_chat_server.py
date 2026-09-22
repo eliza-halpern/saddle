@@ -1197,6 +1197,62 @@ def test_asking_for_a_new_session_twice_gives_the_same_unwritten_one(
         assert len(client.get("/api/sessions").json()) == 1
 
 
+def test_choosing_a_new_persona_is_not_swallowed_by_a_leftover_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """The regression that made a new persona look broken.
+
+    Reuse handed back any unwritten session, so with one left over at the
+    old persona, asking for a new session returned that -- and the persona
+    just chosen was silently ignored. It looked like a new session and
+    answered as the old one, which is exactly what "the tsundere persona
+    doesn't work, the built-in ones do" is: the leftover was already on the
+    built-in.
+    """
+    with app_for(store, tmp_path) as (client, _app):
+        client.put("/api/personas/tsundere", json={"prompt": "Hmph."})
+        stale = client.post(
+            "/api/sessions", json={"reuse_unstarted": False, "persona": "engineer"}
+        ).json()
+
+        client.patch("/api/settings", json={"persona": "tsundere"})
+        made = client.post("/api/sessions", json={}).json()
+
+        assert made["persona"] == "tsundere"
+        assert made["id"] != stale["id"]
+
+
+def test_a_session_you_have_configured_is_not_handed_back_as_a_new_one(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Setting a persona on an empty session is setting it up, not leaving it
+    # lying around. Asking for a new one must not return your setup.
+    with app_for(store, tmp_path) as (client, _app):
+        mine = client.post("/api/sessions", json={}).json()
+        client.patch(f"/api/sessions/{mine['id']}", json={"persona": "reviewer"})
+        assert client.post("/api/sessions", json={}).json()["id"] != mine["id"]
+
+
+def test_an_explicit_persona_is_honoured_even_when_one_is_lying_around(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        lying_around = client.post("/api/sessions", json={}).json()
+        asked = client.post("/api/sessions", json={"persona": "explainer"}).json()
+        assert asked["persona"] == "explainer"
+        assert asked["id"] != lying_around["id"]
+
+
+def test_two_untouched_sessions_are_still_one_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # The original complaint must stay fixed: repeated clicks on a pristine
+    # session still return it.
+    with app_for(store, tmp_path) as (client, _app):
+        ids = {client.post("/api/sessions", json={}).json()["id"] for _ in range(5)}
+        assert len(ids) == 1
+
+
 def test_a_session_that_has_been_written_in_is_not_reused(
     store: SessionStore, tmp_path: Path
 ) -> None:

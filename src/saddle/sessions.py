@@ -180,16 +180,30 @@ class SessionStore:
             raise ValueError(msg)
         return self.root / safe
 
-    def unstarted(self) -> Session | None:
-        """A session nobody has written in yet, if one is lying around.
+    def unstarted(self, *, persona: str, reasoning_effort: str) -> Session | None:
+        """An *untouched* session: unwritten, and set up the way a new one would be.
 
         Clicking "new session" five times should not leave five identical
-        empty sessions in the sidebar. One unwritten session is the same
-        unwritten session.
+        empty sessions, so an unwritten session is handed back rather than
+        another being made. But "unwritten" is not enough on its own, and
+        assuming it was is what broke picking a new persona: with a leftover
+        session sitting at the old persona, asking for a new one returned
+        that, silently ignoring the persona just chosen. The session looked
+        new and answered as the old one.
+
+        So a session is only the same session while it still matches what a
+        fresh one would be. Configure it -- a persona, a thinking level, a
+        system prompt -- and it is yours; asking for a new session then
+        gives a new session rather than handing back your setup.
         """
         for session in self.list():
-            if not self.load_messages(session.id):
-                return session
+            if self.load_messages(session.id):
+                continue
+            if session.persona != persona or session.reasoning_effort != reasoning_effort:
+                continue
+            if session.system_prompt.strip():
+                continue
+            return session
         return None
 
     def create(
@@ -202,9 +216,13 @@ class SessionStore:
         reuse_unstarted: bool = False,
     ) -> Session:
         defaults = self.settings()
+        want_persona = persona or defaults["persona"]
+        want_effort = reasoning_effort or defaults["reasoning_effort"]
         with self._create_lock:
             if reuse_unstarted:
-                existing = self.unstarted()
+                existing = self.unstarted(
+                    persona=want_persona, reasoning_effort=want_effort
+                )
                 if existing is not None:
                     # Honour a folder the caller asked for; leave the rest,
                     # since the session may already have been set up by hand.
@@ -215,8 +233,8 @@ class SessionStore:
             return self._create(
                 title=title,
                 workdir=workdir,
-                persona=persona or defaults["persona"],
-                reasoning_effort=reasoning_effort or defaults["reasoning_effort"],
+                persona=want_persona,
+                reasoning_effort=want_effort,
             )
 
     def _create(self, *, title: str, workdir: str, persona: str, reasoning_effort: str) -> Session:
