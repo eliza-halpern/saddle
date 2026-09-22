@@ -8260,6 +8260,54 @@ a known-bad (the current record, which invites a replay that silently
 produces different text). Not closed by deleting the field alone — that
 loses the temperature/`finish_reason` context it sits in.
 
+### T6-77 — A worker could only emit whole files, so an edit cost the file's size and not the change's (fixed, unmeasured)
+
+Files: `src/saddle/edits.py` (new), `src/saddle/vllm.py`
+(`_build_diff_payload`, `propose_diff`), `src/saddle/cli.py`
+(`WHOLE_FILE_RULES`, `EDIT_RULES`, `build_worker_prompt`,
+`build_recovery_plan_prompt`, `build_repair_prompt`, `RunOptions`,
+`--emission`), `src/saddle/slice.py` (`_EDIT_HEAD`, `_apply_diff`),
+`tests/test_edits.py`, `tests/test_{vllm,cli,slice}.py`.
+
+`DIFF_GRAMMAR` admits exactly two shapes: a whole-file write
+(`--- /dev/null`, `@@ -0,0 +1,N @@`, an all-`+` body) and a delete. There
+is no modify-in-place hunk form, so changing one line of a 2 300-line
+module means re-emitting all 2 300 exactly. Two costs follow and both
+scale with file size rather than with the change: at the measured
+~80 tok/s the emission alone is minutes per draw, and every untouched
+line is a line the model can corrupt. Round 3e is the instance — all
+three draws of `n2` attempt 1 lost to whole-file emission, two "did not
+apply cleanly" and one degenerating into 60 copies of a block
+(F21.43).
+
+Landed in three commits:
+
+- `b1ec640` added `edits.py` alone, deliberately unwired: a grammar, a
+  parser and an applier, with uniqueness as the safety property
+  (0 matches and >1 matches both refused, never guessed) and worktree
+  traversal refused.
+- `02e0b00` loosened the match to ignore blank lines and trailing spaces
+  after a live draw reproduced a 73-line block correctly but for one
+  blank line and was refused; the known-bad (a block that loosely matches
+  two sites) is exhibited and still refused.
+- `be3b094` wired the three sites that have to agree about the envelope:
+  the grammar the decoder enforces, the rules the prompt states, and the
+  applier that reads the payload. `--emission` defaults to `whole-file`
+  and that path is byte-identical.
+
+**Correction carried here:** `edits.py`'s module docstring and
+`be3b094`'s subject both cite **T6-75**, which is a different item (the
+unsatisfiable `coverage`/`public-deletions` conjunction). No workplan
+item existed for the edit format when those were written; this is it.
+
+Done when: a t5 run with `--emission edit` produces an attempt whose
+payload parses, applies and is staged, and whose emission is materially
+smaller than the 7 k–41 k chars of diff the whole-file arm recorded on
+the same node. Not yet measured — the grammar is verified against the
+real decoder offline (21/21, saddle-bench F21.45) but nothing has drawn
+against it on a GPU, and a container xgrammar older than the host's
+would surface as a compile failure on the first draw.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
