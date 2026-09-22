@@ -458,9 +458,13 @@ Rules:
 - A file you do not name is left exactly as it is. Only name the files
   you are changing.
 - Mention each requirement ID in the new or changed test source.
-{scope}- A "test" node asserts on every listed accept and reject, each spelled
-  exactly as listed: the gate fails a test node whose tests assert on
-  none of them.
+{scope}- A "test" node binds every listed accept and reject, and the gate
+  fails one whose tests bind none of them. An example written as a call
+  is bound by a test that PERFORMS that operation and asserts on the
+  constant values it was handed; an example written as data is bound by
+  a test that asserts on the values inside it. Quoting an example as
+  text binds nothing, and quote style never matters -- write the call
+  the way you would write any other test.
 - A "test" node must include at least one hypothesis property, not only
   examples: `@given(...)` over generated inputs. Examples probe the cases
   you already thought of; a property probes the ones you did not. For a

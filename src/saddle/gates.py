@@ -1354,6 +1354,27 @@ def _example_call(text: str) -> tuple[str, frozenset[str]] | None:
     return name, frozenset(constants)
 
 
+def _example_values(text: str) -> frozenset[str] | None:
+    """The constants inside an example written as structured data, or `None`.
+
+    `None` for anything that is not a dict, list, tuple or set display --
+    prose, a bare literal, a call -- which leaves those to the rules that
+    already own them. Constants are spelled the way `_asserted_literals`
+    spells what it finds, so the two sets are comparable.
+    """
+    try:
+        parsed = ast.parse(text.strip(), mode="eval")
+    except SyntaxError:
+        return None
+    if not isinstance(parsed.body, ast.Dict | ast.List | ast.Tuple | ast.Set):
+        return None
+    return frozenset(
+        node.value if isinstance(node.value, str) else ast.unparse(node)
+        for node in ast.walk(parsed.body)
+        if isinstance(node, ast.Constant)
+    )
+
+
 def _example_unbound(text: str, literals: set[str], called: set[str]) -> str | None:
     """Why no test binds `text`, as a detail suffix, or `None` when one does.
 
@@ -1366,9 +1387,28 @@ def _example_unbound(text: str, literals: set[str], called: set[str]) -> str | N
     `autofix`, which it does not. So a call-shaped example is bound by
     the test that performs that operation and asserts on the values it
     was given, and the quoting escape closes with it.
+
+    T6-66, from round 3j (F21.41): a STRUCTURED example -- the planner's
+    version-2 store record -- is not a call, so it fell to the literal
+    rule and inherited exactly the defect T6-50 repaired next door. That
+    rule bound it only to a test quoting the whole blob as one string,
+    which inverted the gate: the suite that saved a ledger and asserted
+    the written JSON equals the record was refused, while a test that
+    quoted the text and asserted nothing passed. Four attempts across two
+    nodes died on it and no suite could have passed. A data example now
+    binds by the constants inside it, the same standard as a call's
+    arguments. Widened: it admits a test that asserts the values without
+    exercising the behaviour -- which the flat-literal rule admitted too,
+    so the latitude is inherited, not created.
     """
     if (call := _example_call(text)) is None:
-        return None if text in literals else ""
+        if text in literals:
+            return None
+        if (values := _example_values(text)) is None:
+            return ""
+        if unasserted := sorted(values - literals):
+            return f" (no test asserts on {', '.join(repr(value) for value in unasserted)})"
+        return None
     name, constants = call
     if name not in called:
         return f" (no test calls {name})"

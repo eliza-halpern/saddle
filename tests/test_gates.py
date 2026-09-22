@@ -886,6 +886,58 @@ def test_requirement_binding_keeps_the_literal_rule_for_what_is_not_a_call() -> 
     assert check.detail.endswith("(no test calls deposit)")
 
 
+def test_requirement_binding_binds_a_data_example_to_the_values_inside_it() -> None:
+    """Round 3j (F21.41): an example written as structured data -- the
+    planner's version-2 store record -- fell to the literal rule, which
+    binds only a test quoting the whole blob as one string. That inverted
+    the gate: the suite that saved a ledger and asserted the written JSON
+    equals the record was REFUSED, and a test that quoted the text and
+    asserted nothing about behaviour PASSED. Four attempts across two
+    nodes died on it with a byte-identical detail and no suite could have
+    passed, because the shape T6-50 repaired was the call branch only.
+
+    So a data example binds the way a call example does: by the constants
+    inside it, spelled as `_asserted_literals` spells them. The accept and
+    the reject differ by one constant (`2` against `3`), so one test does
+    not bind both -- the property that makes the check worth running.
+    """
+    v2 = '{"version": 2, "accounts": [{"owner": "a", "balances": {"USD": "10.00"}}]}'
+    v3 = '{"version": 3, "accounts": [{"owner": "a", "balances": {"USD": "10.00"}}]}'
+    behavioural = {
+        "test_store.py": (
+            "import json\n\n\n"
+            "def test_saved_schema(tmp_path):  # REQ-001\n"
+            "    save_accounts([acc], path)\n"
+            "    assert json.loads(path.read_text()) == {\n"
+            '        "version": 2,\n'
+            '        "accounts": [{"owner": "a", "balances": {"USD": "10.00"}}],\n'
+            "    }\n"
+        )
+    }
+    assert check_requirement_binding(
+        ["REQ-001"], behavioural, examples=[("REQ-001", "accepts", v2)]
+    ).passed
+    check = check_requirement_binding(
+        ["REQ-001"], behavioural, examples=[("REQ-001", "rejects", v3)]
+    )
+    assert check.passed is False
+    assert check.detail.endswith("(no test asserts on '3')")
+    # The known-bad this admits, exhibited (WORKPLAN 0.6): the values may
+    # be asserted without the behaviour being exercised. The flat-literal
+    # rule already admitted the same shape -- quoting the blob verbatim --
+    # so this widens what counts as bound, never what counts as tested.
+    values_only = {
+        "test_store.py": (
+            "def test_values():  # REQ-001\n"
+            '    assert "version" and 2 and "accounts" and "owner"\n'
+            '    assert "a" and "balances" and "USD" and "10.00"\n'
+        )
+    }
+    assert check_requirement_binding(
+        ["REQ-001"], values_only, examples=[("REQ-001", "accepts", v2)]
+    ).passed
+
+
 def test_requirement_binding_reads_examples_from_the_suite_it_is_given() -> None:
     """The literal may sit in a test the node did not write (a sealed spec
     node's, when a survivor round adds a file beside it): `suite` is what

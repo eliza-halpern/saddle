@@ -397,7 +397,8 @@ def test_build_worker_prompt_joins_requirements_and_context() -> None:
     assert "--- a.py ---\n1\n\n\n--- b.py ---\n2\n" in prompt
     # The worker hears both T6-4 (assert on each example) and T6-5 (one
     # property rejects an input), as rules it can follow.
-    assert "asserts on every listed accept and reject, each spelled\n  exactly as listed" in prompt
+    assert "binds every listed accept and reject, and the gate\n  fails one" in prompt
+    assert "PERFORMS that operation and asserts on the\n  constant values" in prompt
     assert "At least one property must reject an\n  input" in prompt
     assert "(`assert not ...`, `is False`, or `pytest.raises`)" in prompt
 
