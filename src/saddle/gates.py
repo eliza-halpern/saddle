@@ -319,34 +319,50 @@ def check_test_command(
     return GateCheck(name="tests", passed=True, detail=f"{test_command!r} exited 0")
 
 
-def _definition_lines(source: str, wanted: Collection[str]) -> set[int]:
-    """Every line of each definition in `wanted`, decorators included."""
+def _definition_lines(source: str, wanted: Collection[str]) -> dict[str, tuple[set[int], set[int]]]:
+    """Each definition in `wanted` to (its whole lines, its body lines).
+
+    Per definition, not one flat set, because the exemption is decided a
+    whole definition at a time: a definition some test reaches is not
+    exempt at all, and that question cannot be asked of a loose line.
+
+    The two sets differ where it matters. The `def` line and decorators
+    execute at import, so coverage records them for every definition in
+    a module anything imports -- asking "did a test reach this" of the
+    whole span answers yes always, and the exemption would never apply.
+    Reachability is a question about the BODY.
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return set()
-    lines: set[int] = set()
+        return {}
+    lines: dict[str, tuple[set[int], set[int]]] = {}
 
-    def span(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
+    def span(name: str, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
         first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
-        lines.update(range(first, (node.end_lineno or node.lineno) + 1))
+        last = node.end_lineno or node.lineno
+        body = node.body[0].lineno if node.body else last + 1
+        lines[name] = (set(range(first, last + 1)), set(range(body, last + 1)))
 
     for statement in tree.body:
         if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
             if statement.name in wanted:
-                span(statement)
+                span(statement.name, statement)
         elif isinstance(statement, ast.ClassDef):
             for child in statement.body:
-                if (
-                    isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
-                    and f"{statement.name}.{child.name}" in wanted
-                ):
-                    span(child)
+                if not isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                qualified = f"{statement.name}.{child.name}"
+                if qualified in wanted:
+                    span(qualified, child)
     return lines
 
 
 def compelled_lines(
-    baseline_sources: Mapping[str, str], sources: Mapping[str, str]
+    baseline_sources: Mapping[str, str],
+    sources: Mapping[str, str],
+    prefix: str = "",
+    covered: Collection[tuple[str, int]] = (),
 ) -> set[tuple[str, int]]:
     """Lines the node had no choice about: definitions `public-deletions` compels.
 
@@ -368,14 +384,41 @@ def compelled_lines(
     of a baseline definition with code no test runs. `dead-code` and
     `mutation` still read those lines, and the node does not choose
     which members its baseline carries.
+
+    `covered` narrows it further, and must (T6-86). A definition whose
+    BODY any test reaches is not exempt at all: it is judged line by
+    line, exactly as before T6-75. Without that, the exemption swallows
+    the gate for the commonest node shape there is -- an impl node
+    editing a public function its baseline already had -- because every
+    changed line then leaves the denominator, `judged` empties, and
+    coverage returns pass having measured nothing. Eleven `run_slice`
+    tests flipped from "every changed line runs" to that pass the moment
+    the exemption began to fire, which is what a hollow gate looks like
+    from the outside. The exemption is for the case T6-75 actually
+    described -- a public definition NOTHING calls, which the node may
+    not delete and cannot cover -- and reachability is what separates
+    the two.
+
+    `prefix` is the workdir the caller's `changed` set is keyed against.
+    `baseline_sources` is `read_sources`, which is workdir-RELATIVE,
+    while `runner.py` builds `changed` as `(str(workdir / path), line)`
+    -- absolute, because `mutation_sample` and `covered_lines` need it
+    that way. `check_changed_line_coverage` intersects the two, so
+    without the prefix the intersection is empty and this exemption
+    fires for nothing: it fired zero times in 48 runs, and `g1-79cd848`
+    reproduced T6-75's own trap on a tree carrying T6-75's fix (T6-86).
     """
+    reached = set(covered)
     compelled: set[tuple[str, int]] = set()
     for rel, text in baseline_sources.items():
         before = _public_definitions(text)
         if not before:
             continue
-        for line in _definition_lines(sources.get(rel, ""), before):
-            compelled.add((rel, line))
+        key = str(PurePath(prefix) / rel) if prefix else rel
+        for whole, body in _definition_lines(sources.get(rel, ""), before).values():
+            if {(key, line) for line in body} & reached:
+                continue
+            compelled |= {(key, line) for line in whole}
     return compelled
 
 
@@ -1646,6 +1689,10 @@ class Tier1Inputs:
     added_lines: Mapping[str, tuple[int, ...]]
     dead_code_runner: Callable[[Mapping[str, str]], int]
     baseline_sources: Mapping[str, str]
+    # The workdir `changed` and `covered` are keyed against, so
+    # `compelled_lines` can speak the same spelling (T6-86). Empty means
+    # those sets are already workdir-relative.
+    workdir: str = ""
     # T6-53: nodes the plan still owes tests from. Non-empty defers an
     # uncovered changed line instead of failing the node for it.
     owed_tests: tuple[str, ...] = ()
@@ -1805,7 +1852,9 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             inputs.covered,
             gate.changed_line_coverage_min,
             inputs.owed_tests,
-            compelled_lines(inputs.baseline_sources, inputs.sources),
+            compelled_lines(
+                inputs.baseline_sources, inputs.sources, inputs.workdir, inputs.covered
+            ),
         )
     )
     checks = (

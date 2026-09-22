@@ -322,6 +322,7 @@ def run_node_gate(
         added_lines={rel: tuple(sorted(lines)) for rel, lines in sorted(added_lines.items())},
         dead_code_runner=suite_without,
         baseline_sources=baseline_modules,
+        workdir=str(workdir),
         owed_tests=owed_tests,
         added_files=[str(workdir / p) for p in added],
         touched_files=touched,

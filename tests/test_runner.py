@@ -1002,3 +1002,96 @@ def test_run_node_gate_failed_mutmut_run_is_named_end_to_end(
         "mutation tool failed: mutmut run exited 1: "
         "Failed trampoline hit. Module name starts with src."
     )
+
+
+_COMPELLED_BASELINE = (
+    "def f():\n"
+    "    return 1\n"
+    "\n"
+    "\n"
+    "class A:\n"
+    "    def keep(self):\n"
+    "        value = 1\n"
+    "        return value\n"
+)
+
+
+def test_run_node_gate_spares_a_compelled_line_the_suite_never_reaches(tmp_path: Path) -> None:
+    """T6-75's exemption, exercised through the runner's own key spelling (T6-86).
+
+    `tests/test_gates.py` already proves `run_tier1` passes `compelled`
+    to the coverage gate, but it hand-builds `changed={("n1.py", 2)}`.
+    `run_node_gate` builds `changed` from `git_diff` and `workdir`, and
+    while those keys were absolute and `compelled_lines`' were relative,
+    `changed & compelled` was empty in every real run and the exemption
+    fired zero times across 48 of them. This test is red on that tree.
+
+    `A.keep` is public, is in the baseline, and no test reaches it, so
+    `public-deletions` forbids dropping it and coverage may not judge it.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
+    _worktree(
+        tmp_path,
+        test_body,
+        baseline_code=_COMPELLED_BASELINE,
+        fixed_code=_COMPELLED_BASELINE.replace("value = 1", "value = 2"),
+        baseline_test=test_body,
+    )
+    result = run_node_gate(_node(), tmp_path)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+    deletions = next(check for check in result.checks if check.name == "public-deletions")
+
+    assert coverage.passed, f"a line the node may not delete must not fail it: {coverage.detail}"
+    assert coverage.detail == "every changed line is inside a definition the baseline already had"
+    assert coverage.basis == "changed-lines=1 compelled-lines=1"
+    assert deletions.passed, "and the definition is indeed still there"
+
+
+def test_run_node_gate_still_fails_an_uncovered_line_the_baseline_never_had(
+    tmp_path: Path,
+) -> None:
+    """The other half, and it pins the spelling the worker is shown (T6-86).
+
+    `g` is new, so nothing compels it; an uncovered new line must still
+    fail. The detail names the file workdir-relative -- while `changed`
+    was absolute the worker was handed the bench operator's own
+    filesystem paths, which are unreproducible and not in its tree.
+    """
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 1\n"
+    _worktree(
+        tmp_path,
+        test_body,
+        baseline_code=_COMPELLED_BASELINE,
+        fixed_code=_COMPELLED_BASELINE + "\n\ndef g():\n    return 9\n",
+        baseline_test=test_body,
+    )
+    result = run_node_gate(_node(), tmp_path)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+
+    assert not coverage.passed
+    assert coverage.detail.endswith("n.py:12"), coverage.detail
+
+
+def test_run_node_gate_judges_a_compelled_definition_a_test_does_reach(tmp_path: Path) -> None:
+    """The exemption's known-bad: reachable code stays judged (T6-86).
+
+    `f` is public and in the baseline, so `public-deletions` forbids
+    dropping it and `compelled_lines` would spare every line of it. But a
+    test does call it, so nothing stops this node covering the branch it
+    added, and sparing it would make coverage hollow for the commonest
+    node there is. Without the reachability narrowing the whole of `f`
+    leaves the denominator and this passes with nothing measured.
+    """
+    baseline = "def f(flag):\n    return 1\n"
+    fixed = "def f(flag):\n    if flag:\n        return 1\n    return 2\n"
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f(True) == 1\n"
+    _worktree(
+        tmp_path, test_body, baseline_code=baseline, fixed_code=fixed, baseline_test=test_body
+    )
+    result = run_node_gate(_node(), tmp_path)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+
+    assert not coverage.passed, coverage.detail
+    assert coverage.detail.endswith("n.py:4"), coverage.detail
+    assert coverage.basis is not None
+    assert "compelled-lines=" not in coverage.basis
