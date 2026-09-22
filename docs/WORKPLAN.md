@@ -9002,6 +9002,19 @@ Done when, both halves:
    node-2 tree before deciding whether it needs its own clause. Do not
    loosen it on this item's evidence.
 
+**Plumbing, so the implementation is mechanical.** `runner.py` already
+holds everything the second pass needs at the point it computes
+`covered = covered_lines(data_file, changed_files)` and `test_sources =
+read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")`:
+take `importing_modules(test_sources, changed_files)`, drop the ones
+already named by `pytest_scope(gate.test_command)`, and if any remain run
+them under `under_coverage` into a second data file whose exit code is
+discarded. Carry the result as a new `Tier1Inputs` field beside
+`covered`, and hand it to `check_changed_line_coverage` at its single
+call site in `gates.py`, which today passes `inputs.changed`,
+`inputs.covered`, `gate.changed_line_coverage_min`, `inputs.owed_tests`
+and `compelled_lines(...)`.
+
 **Reproduced (F21.59b).** `public-deletions` has fired twice in the
 project's history and both were the attempt after a `coverage` failure on
 the same node -- `g1-79cd848` node-2 and `g1-cw100k` `impl-money-core` --
