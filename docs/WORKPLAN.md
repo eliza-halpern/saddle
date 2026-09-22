@@ -8121,6 +8121,77 @@ Owner: main session. Related: T6-30 (withdrawn -- it asked whether
 authorised under it), T6-73 (the same instance; that one loses the
 siblings, this one creates the failure).
 
+### T6-75 — `coverage` and `public-deletions` are jointly unsatisfiable on a node whose public API a later node consumes (open; instance on disk, reproduced)
+
+Files: `src/saddle/gates.py` (`check_changed_line_coverage`,
+`check_public_deletions`), `src/saddle/runner.py` (`baseline_modules`,
+`changed_lines`), `tests/test_gates.py`.
+
+Instance: `../saddle-bench/runs/g1-cw100k/t5-s1`, node `impl-money-core`,
+all three attempts, sidecars `edfb38d8`, `442e7655`, `31b81c7a`. The run
+burned 1 447 s on the node, abandoned it, and hit `--deadline 2400` with
+`impl-report` and `impl-store` never dispatched.
+
+The oscillation, from the node's own journal (`saddle explain`):
+
+    attempt 1/3: 1 gate(s) failed: coverage
+    attempt 2/3: 1 gate(s) failed: public-deletions
+    attempt 3/3: 1 gate(s) failed: coverage
+
+`coverage` requires every changed line to be run by the node's own test
+command, here `pytest tests/test_accounts.py tests/test_fees.py`.
+`public-deletions` requires every public definition the baseline had to
+still be defined. The t5 baseline `accounts.py` defines `Account.to_dict`,
+`Account.from_dict`, `Account.__eq__` and `Account.__repr__`; their
+consumers are `store.py` and the hidden suite -- that is, **later
+nodes**, whose tests are not in this node's command. So the four members
+are simultaneously mandatory (public-deletions) and forbidden (coverage),
+and **no diff satisfies both**. Attempts 1 and 3 keep them and fail
+coverage on exactly their lines; attempt 2 deletes them and fails
+public-deletions by name on exactly those four.
+
+This is not a threshold that wants lowering. It is an unsatisfiable
+conjunction, and it bites any node that must touch a public API consumed
+downstream -- most ordinary refactoring.
+
+Known-good the gate pair rejects (the loosening evidence CLAUDE.md
+requires): attempt 3's `accounts.py`, reconstructed from the sidecar
+diff onto a restored copy of the run tree, is correct multi-currency
+code -- the node's own command is green (`29 passed`) and the mutation
+gate reads `92.3% >= 85.0% over 91 mutant(s)`. Independent reproduction
+with saddle's own basis gives `accounts.py 76%, missing 30-32, 35-36,
+41-49, 53`, which is precisely `__eq__`, `__repr__`, `from_dict`,
+`to_dict` and nothing else.
+
+Ruled out while diagnosing, so nobody re-derives it: this is **not** an
+artifact of "gated in place" leaving attempt 1's rejected work in the
+tree. `check_public_deletions` reads `inputs.baseline_sources`, built
+from `baseline_modules` at `runner.py`, and the four members are present
+in `../saddle-bench/baselines/t5/accounts.py` itself.
+
+Corroborating signal, and the mechanism T6-42's own docstring predicted:
+attempt 2 is the only draw of the five whose reasoning names `coverage`
+at all -- 36 times, against zero for every other draw. The repair brief
+taught the model to optimise the gate, and what it produced was the
+deletion T6-42 exists to catch. The gate chain worked exactly as
+designed; the design has no third option.
+
+Fix direction (not yet chosen, and the choice is a contract change):
+either (a) changed-line coverage is evaluated against the plan's whole
+declared test surface rather than the node's own command, or (b) a
+public definition the baseline had is exempt from changed-line coverage
+-- with the exemption itself gated, so it applies only to a member that
+is in the baseline's public API, never to newly added code. (b) is the
+narrower change and keeps the gate load-bearing on new code; (a) is
+closer to what the node is actually being asked to prove. Whichever
+lands, the direction is **loosened**, it must say so, and it needs a
+known-bad: a draw that adds an uncovered public member must still fail.
+
+Related: T6-66 (a gate that refuses correct work -- this is the first
+reproduced instance with a known-good in hand), T6-42 (public-deletions'
+origin; its docstring names these same four members), and the O7 row of
+the shape census.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
