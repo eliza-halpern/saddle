@@ -1451,3 +1451,36 @@ def test_a_corrupt_persona_file_falls_back_to_the_builtins(
     (store.root / "personas.json").write_text("{not json")
     assert "engineer" in store.personas()
     assert store.custom_personas() == {}
+
+
+def test_a_thinking_level_you_set_also_protects_an_empty_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Persona is not the only way a session stops being pristine: setting it
+    # to think harder is setting it up too, and handing it back as "new"
+    # would quietly drop that choice the same way the persona one was.
+    with app_for(store, tmp_path) as (client, _app):
+        mine = client.post("/api/sessions", json={}).json()
+        client.patch(f"/api/sessions/{mine['id']}", json={"reasoning_effort": "low"})
+        assert client.post("/api/sessions", json={}).json()["id"] != mine["id"]
+
+
+def test_a_system_prompt_override_also_protects_an_empty_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # An override beats the persona entirely (Session.prompt_text), so a
+    # session carrying one is the most configured a session can be.
+    with app_for(store, tmp_path) as (client, _app):
+        mine = client.post("/api/sessions", json={}).json()
+        client.patch(f"/api/sessions/{mine['id']}", json={"system_prompt": "Be brief."})
+        assert client.post("/api/sessions", json={}).json()["id"] != mine["id"]
+
+
+def test_asking_for_a_different_thinking_level_makes_a_new_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        lying_around = client.post("/api/sessions", json={}).json()
+        asked = client.post("/api/sessions", json={"reasoning_effort": "low"}).json()
+        assert asked["reasoning_effort"] == "low"
+        assert asked["id"] != lying_around["id"]
