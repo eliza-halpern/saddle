@@ -3283,3 +3283,65 @@ def test_ensure_repo_baselines_where_git_will_not_guess_an_identity(tmp_path: Pa
         check=True,
     ).stdout.strip()
     assert author == "saddle <saddle@local>"
+
+
+def test_web_starts_the_chat_ui_and_prints_where_it_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`saddle web` wires argv to serve(); nothing here may reach the network."""
+    import webbrowser
+
+    from saddle.web import app as web_app
+
+    served: dict[str, object] = {}
+    opened: list[str] = []
+    monkeypatch.setattr(web_app, "serve", lambda **kw: served.update(kw))
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+
+    out = io.StringIO()
+    code = main(
+        ["web", "--host", "127.0.0.1", "--port", "8123",
+         "--workdir", str(tmp_path), "--sessions", str(tmp_path / "s")],
+        stdout=out,
+    )
+
+    assert code == 0
+    assert out.getvalue() == "saddle chat UI on http://127.0.0.1:8123/\n"
+    assert opened == ["http://127.0.0.1:8123/"]
+    assert served["host"] == "127.0.0.1"
+    assert served["port"] == 8123
+    assert served["workdir"] == tmp_path.resolve()
+    assert served["sessions_root"] == tmp_path / "s"
+
+
+def test_web_no_open_does_not_launch_a_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Over ssh or in a container there is no browser to open, and opening one
+    # on the wrong machine is worse than not opening one at all.
+    import webbrowser
+
+    from saddle.web import app as web_app
+
+    opened: list[str] = []
+    monkeypatch.setattr(web_app, "serve", lambda **kw: None)
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+
+    out = io.StringIO()
+    assert main(["web", "--no-open", "--workdir", str(tmp_path)], stdout=out) == 0
+    assert opened == []
+    assert "saddle chat UI on" in out.getvalue()
+
+
+def test_web_defaults_sessions_root_to_none_so_the_store_picks_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from saddle.web import app as web_app
+
+    served: dict[str, object] = {}
+    monkeypatch.setattr(web_app, "serve", lambda **kw: served.update(kw))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    main(["web", "--no-open", "--workdir", str(tmp_path)], stdout=io.StringIO())
+    assert served["sessions_root"] is None

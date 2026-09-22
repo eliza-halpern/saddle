@@ -430,10 +430,27 @@ def test_a_recent_tool_result_is_not_elided_however_large() -> None:
 
 
 def test_a_dropped_message_with_no_text_contributes_no_topic() -> None:
-    messages = [{"role": "user", "content": "   "} for _ in range(40)]
+    # Whitespace-only content still costs tokens, so it can force compaction
+    # while having no first line to name. An earlier version of this test used
+    # short blank messages, which never reached the limit at all: compact
+    # returned (0, "") and the assertion passed having tested nothing.
+    messages = [{"role": "user", "content": " " * 8_000} for _ in range(10)]
     messages += [{"role": "user", "content": "recent"} for _ in range(KEEP_RECENT)]
-    _dropped, summary = compact(messages, limit_tokens=10)
-    assert summary.startswith("earlier message") or ":" not in summary
+    dropped, summary = compact(messages, limit_tokens=100)
+    assert dropped > 0
+    assert summary == f"{dropped} earlier message(s) compacted"
+    assert ":" not in summary                       # no topics to list
+
+
+def test_a_short_tool_result_is_left_alone_while_a_huge_one_is_elided() -> None:
+    # Stage 1 walks every old tool result; only the oversized ones are cut.
+    messages: list[dict[str, object]] = [{"role": "system", "content": "s"}]
+    messages.append({"role": "tool", "tool_call_id": "small", "content": "brief"})
+    messages.append({"role": "tool", "tool_call_id": "big", "content": "Z" * 40_000})
+    messages += [{"role": "user", "content": f"recent {i}"} for i in range(KEEP_RECENT)]
+    compact(messages, limit_tokens=2_000)
+    assert messages[1]["content"] == "brief"
+    assert "elided by compaction" in str(messages[2]["content"])
 
 
 # -- sessions -----------------------------------------------------------------
@@ -539,6 +556,30 @@ def test_a_handler_that_raises_an_os_error_becomes_an_error_string(
     monkeypatch.setitem(tools_module._HANDLERS, "read_file", explode)
     out = execute_tool(call("read_file", path="x"), workdir=tmp_path)
     assert out == "error: OSError: disk went away"
+
+
+def test_an_unknown_field_cannot_be_patched_onto_a_session(tmp_path: Path) -> None:
+    # PATCH bodies come from the browser; a client may not attach arbitrary
+    # attributes to a session, and a null may not blank a real one.
+    store = SessionStore(tmp_path)
+    session = store.create(title="Kept")
+    updated = store.update(session.id, nonsense="x", title=None, persona="reviewer")
+    assert not hasattr(updated, "nonsense")
+    assert updated.title == "Kept"
+    assert updated.persona == "reviewer"
+
+
+def test_waiting_on_a_terminal_with_no_process_times_out_rather_than_hanging(
+    tmp_path: Path,
+) -> None:
+    from saddle.sandbox import Terminal
+
+    box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
+    orphan = Terminal(id="orphan", command="never started", started=0.0)
+    box.terminals["orphan"] = orphan
+    assert orphan.running is True                   # no process, no exit code
+    assert box.wait("orphan", timeout=0.3) is orphan
+    assert orphan.running is True                   # and the wait gave up, not the terminal
 
 
 def test_a_transcript_with_no_file_yet_is_empty_not_an_error(tmp_path: Path) -> None:

@@ -998,3 +998,28 @@ def test_a_session_is_offered_a_name_once_not_on_every_later_turn(
 
     assert asked == []
     assert store.get(sid).title == "New session"
+
+
+def test_a_store_that_cannot_write_the_name_still_lets_the_turn_finish(
+    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # title_for swallows the model's failures; this is the other half -- the
+    # model answered but the name could not be saved. A read-only disk may
+    # not turn a working answer into a failed turn.
+    def refuse(*_a: Any, **_k: Any) -> None:
+        message = "read-only file system"
+        raise OSError(message)
+
+    with naming_app(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        channel = _server_of(app)._live(sid).subscribe()
+        monkeypatch.setattr(store, "update", refuse)
+        _server_of(app)._run(sid, "why is my rust build slow")
+
+        published = [channel.get_nowait() for _ in range(channel.qsize())]
+        assert any(e is not None and e.kind == "content.delta" for e in published)
+        assert not any(e is not None and e.kind == "error" for e in published)
+        # No name was published, because no name was stored: the event and
+        # the record may not disagree.
+        assert not any(e is not None and e.kind == "session.title" for e in published)
+        assert published[-1] is None                # and the turn still ended
