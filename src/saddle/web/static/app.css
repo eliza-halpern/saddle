@@ -227,21 +227,27 @@ dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--r
 
 #send.stopping { color: var(--bad); }
 
-/* context meter: filling up should be visible before it bites */
-#meter { display: flex; align-items: center; gap: 8px; font-size: 11px;
+/* Context meter: filling up should be visible before it bites.
+   `position: relative` is load-bearing, not tidiness. The track is an
+   ::before with `position: absolute; left: 0`, so without a positioned
+   parent it resolves against the initial containing block and paints its
+   54x4 capsule across the top-left corner of the *page* -- over the
+   wordmark, which is what the "line through saddle" was. It survived being
+   blamed on background-clip and on a missing glyph because it scales with
+   neither, and it sits nowhere near the element that owns it. */
+#meter { position: relative; --track: 54px;
+         display: flex; align-items: center; gap: 8px; font-size: 11px;
          color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-#meter i { display: block; width: 0; height: 100%; border-radius: 99px;
-           background: linear-gradient(90deg, var(--mint), var(--peach));
-           transition: width .4s ease; }
-#meter { --track: 54px; }
-#meter i { position: relative; }
-#meter > i { min-width: 2px; }
-#meter::before { content: ""; width: var(--track); height: 4px; border-radius: 99px;
-                 background: var(--line); position: absolute; left: 0; }
-#meter > i { width: 0; max-width: var(--track); z-index: 1; }
-#meter b { margin-left: calc(var(--track) + 4px); }
-#meter.full i { background: linear-gradient(90deg, var(--peach), var(--bad)); }
-#meter b { font-weight: 400; }
+#meter::before { content: ""; position: absolute; left: 0;
+                 width: var(--track); height: 4px; border-radius: 99px;
+                 background: var(--line); }
+#meter > i { position: relative; z-index: 1; display: block;
+             width: 0; min-width: 2px; max-width: var(--track); height: 4px;
+             border-radius: 99px;
+             background: linear-gradient(90deg, var(--mint), var(--peach));
+             transition: width .4s ease; }
+#meter.full > i { background: linear-gradient(90deg, var(--peach), var(--bad)); }
+#meter b { margin-left: calc(var(--track) + 4px); font-weight: 400; }
 
 /* ---- smooth disclosure ----
    Native <details> snaps open. Chrome/Edge 131+ can transition to an

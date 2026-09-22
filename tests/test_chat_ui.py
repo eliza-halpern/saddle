@@ -715,3 +715,86 @@ def test_a_transcript_with_no_file_yet_is_empty_not_an_error(tmp_path: Path) -> 
     session = store.create()
     store.messages_path(session.id).unlink(missing_ok=True)
     assert store.load_messages(session.id) == []
+
+
+# -- stylesheet invariants ----------------------------------------------------
+
+def _css_rules() -> list[tuple[str, str]]:
+    """(selector, declarations) for every rule in the stylesheet."""
+    import re
+
+    # Every test runs from a disposable cwd (conftest), so this is anchored
+    # to the test file rather than to wherever pytest was started.
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "src/saddle/web/static/app.css").read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    return [
+        (selector.strip(), body)
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+        if not selector.strip().startswith("@")
+    ]
+
+
+def test_an_absolutely_positioned_pseudo_has_a_positioned_parent() -> None:
+    """Otherwise it escapes to the corner of the page.
+
+    `#meter::before` -- the context meter's track -- was `position: absolute;
+    left: 0` under a statically positioned `#meter`, so it resolved against
+    the initial containing block and painted its 54x4 capsule across the
+    top-left of the *page*, straight through the wordmark. It survived being
+    blamed on background-clip and then on a missing glyph, because it scales
+    with neither and sits nowhere near the element that owns it.
+    """
+    positioned = {"relative", "absolute", "fixed", "sticky"}
+    rules = _css_rules()
+
+    def is_positioned(base: str) -> bool:
+        for selector, body in rules:
+            if base not in [s.strip() for s in selector.split(",")]:
+                continue
+            for declaration in body.split(";"):
+                name, _, value = declaration.partition(":")
+                if name.strip() == "position" and value.strip() in positioned:
+                    return True
+        return False
+
+    escapees = []
+    for selector, body in rules:
+        for one in (s.strip() for s in selector.split(",")):
+            if "::before" not in one and "::after" not in one:
+                continue
+            decls = {
+                d.split(":", 1)[0].strip(): d.split(":", 1)[1].strip()
+                for d in body.split(";")
+                if ":" in d
+            }
+            if decls.get("position") != "absolute":
+                continue
+            base = one.split("::")[0].strip()
+            if base and not is_positioned(base):
+                escapees.append(one)
+
+    assert escapees == [], (
+        f"absolutely positioned pseudo-elements with no positioned parent: {escapees}"
+    )
+
+
+def test_the_invariant_can_see_a_violation() -> None:
+    # The rule above is only worth having if it fails on the shape it exists
+    # to catch, so prove it does rather than trusting an empty list.
+    import re
+
+    broken = "#thing { color: red }\n#thing::before { position: absolute; left: 0 }\n"
+    rules = [
+        (sel.strip(), body)
+        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", broken)
+    ]
+    base_positions = {
+        sel: {
+            d.split(":", 1)[0].strip(): d.split(":", 1)[1].strip()
+            for d in body.split(";") if ":" in d
+        }.get("position")
+        for sel, body in rules
+    }
+    assert base_positions["#thing"] is None
+    assert base_positions["#thing::before"] == "absolute"
