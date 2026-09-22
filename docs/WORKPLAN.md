@@ -8216,6 +8216,50 @@ reproduced instance with a known-good in hand), T6-42 (public-deletions'
 origin; its docstring names these same four members), and the O7 row of
 the shape census.
 
+### T6-76 — Every draw records a `seed` the server will not honour, and no seed can be chosen (open; measured)
+
+Both draw fan-outs ask for seeds `0..k-1` and nothing can change that:
+`slice.py` maps impl draws over `range(PROPOSAL_SAMPLES)` and survivor
+draws over `range(samples)`, there is no `--seed` among `cli.py`'s 24
+options, and no module under `src/saddle/` reads a seed from the
+environment (`os.environ` appears twice: the API key and the sandbox's
+`TERM`/`NO_COLOR`). Every attempt then records the seed it used —
+`_proposal_evidence` collects `("seed", "temperature", "wall_s",
+"finish_reason")` — which reads as a handle for re-issuing that request.
+
+Measured 2026-09-22 against the live server (F21.44), one prompt, digests
+over `reasoning_content + content`:
+
+- `temperature=0.0`, seeded and unseeded, twice each: **one digest for all
+  four**. Greedy decoding is deterministic to the byte, so the model, the
+  quantisation and the kernels are stable.
+- `temperature=0.7, seed=0`, twice: **different text** (386 vs 367 chars).
+
+So the recorded seed cannot do the one thing a recorded seed is for. This
+is not thermal noise — the temperature-0 pairs rule that out — it is that
+seeded sampling above 0 is not reproducible on this deployment.
+
+Two separable consequences, and only the first is a defect in saddle:
+
+1. **The evidence overclaims.** A sidecar says `seed: 0` and a reader
+   takes it to mean the draw can be re-issued. It cannot. Either the
+   field carries what it can honour, or the sidecar says plainly that the
+   server does not reproduce and the artifact is the only copy.
+2. **A seed cannot be chosen.** This is a missing capability rather than
+   a false claim, and G1 does not need it: re-running a round is a
+   genuinely independent sample, so the three-seed floor is reachable by
+   re-running. It would matter for bisecting a specific draw.
+
+Do not "fix" this by pinning the server's sampler. That would be a change
+to the measurement apparatus mid-measurement, which is exactly what the
+standing rule against moving the oracle exists to prevent.
+
+Done when: a sidecar no longer implies a replay it cannot deliver, closed
+by a known-good (a run whose evidence a reader can act on correctly) and
+a known-bad (the current record, which invites a replay that silently
+produces different text). Not closed by deleting the field alone — that
+loses the temperature/`finish_reason` context it sits in.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
