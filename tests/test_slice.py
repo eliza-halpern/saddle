@@ -3952,13 +3952,17 @@ def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path
     assert first.nodes[0].node_hash == hash_node(dag.nodes[0])
     assert first.task_hash == hashlib.sha256(b"Fix f.").hexdigest()
     plans = read_plans(journal)
+    # A replan record carries the whole post-replan plan, not just the
+    # replacement: the failed node stays put and every rewired dependent
+    # has a new hash to plan (T6-72).
     assert [(p.replaces, [n.id for n in p.nodes]) for p in plans] == [
         ("", ["n1"]),
-        ("n1", ["n1.r1"]),
+        ("n1", ["n1", "n1.r1"]),
     ]
     assert verify_journal(journal) == []
     (record,) = read_records(journal)
-    assert record.node_hash == plans[1].nodes[0].node_hash
+    replacement = {node.id: node for node in plans[1].nodes}["n1.r1"]
+    assert record.node_hash == replacement.node_hash
 
 
 def test_run_slice_every_attempt_leaves_a_sidecar_with_its_evidence(tmp_path: Path) -> None:
@@ -4368,11 +4372,13 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(tmp_path:
     assert kept.read_text() == _flag_test(1, 5)
     assert not (tmp_path / "test_REQ-001_r1_s2.py").exists()
     plans = read_plans(journal)
+    # The whole post-replan plan, failed node included (T6-72).
     assert [(p.replaces, [n.id for n in p.nodes]) for p in plans] == [
         ("", ["n1"]),
-        ("n1", ["n1.r1", "n1.r2"]),
+        ("n1", ["n1", "n1.r1", "n1.r2"]),
     ]
-    assert [(n.kind, n.target_files) for n in plans[1].nodes] == [
+    generated = [node for node in plans[1].nodes if node.id != "n1"]
+    assert [(n.kind, n.target_files) for n in generated] == [
         ("test", ["test_REQ-001_r1_s0.py"]),
         ("impl", []),
     ]
@@ -4651,3 +4657,55 @@ def test_run_slice_defers_an_uncovered_line_while_a_test_node_is_owed(tmp_path: 
         "- Gate coverage: PASS (deferred, no test node has run that can reach " in result.transcript
     )
     assert "a" in result.proofs
+
+
+def test_replan_record_carries_every_node_of_the_post_replan_plan(tmp_path: Path) -> None:
+    """T6-72. `splice_replan` rewires a failed node's dependents onto the
+    new leaves, which changes those dependents' `node_hash`. The replan
+    record journaled only the generated nodes, so a rewired survivor's
+    proof sealed against a hash that appeared in no plan record and
+    `verify` failed `unplanned-proof`.
+
+    Known-bad on disk: `regress-99e3986/t2/t2-saddle` at `99e3986`. Plan
+    at line 1 holds `test-retries` and `impl-retries`; the replan at line
+    63 holds only `test-retries.r1`; the proof at line 135 seals
+    `impl-retries` under `01c1cb70` where the plan said `afe0c878`, with
+    the replacement's record as its parent. Both nodes sealed with zero
+    gate failures and `oracle_t2.py` returned PASS -- an agreement
+    reported as a failure.
+
+    The record is the whole post-replan plan, not the delta. `verify`
+    already accumulates across plan records, so the reading side is
+    unchanged and the rewired hash is present by construction.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", []), _node_dict("n2", ["n1"])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
+
+    def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
+        return Dag.model_validate({"nodes": [_node_dict("m1", [])]})
+
+    run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        replan=replan,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    plans = read_plans(journal)
+    assert [p.replaces for p in plans] == ["", "n1", "n2"]
+    before = {n.id: n.node_hash for n in plans[0].nodes}
+    after = {n.id: n.node_hash for n in plans[1].nodes}
+    # The survivor is journaled by the replan that rewired it, under the
+    # hash it was rewired to -- that pair is the whole contract.
+    assert "n2" in after, "the rewired survivor must appear in the replan record"
+    assert after["n2"] != before["n2"], "rewiring n2 onto n1.r1 must move its hash"
+    planned = {node.node_hash for plan in plans for node in plan.nodes}
+    for record in read_records(journal):
+        assert not record.node_hash or record.node_hash in planned
+    assert verify_journal(journal) == []

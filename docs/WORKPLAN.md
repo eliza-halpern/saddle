@@ -7979,6 +7979,50 @@ Done when: mutants red; `./check.sh` green; `saddle explain` on
 `regress-99e3986/t2/t2-saddle/.saddle/proofs.jsonl` reports `verify:
 clean` after a re-run. Owner: main session (journal contract).
 
+**Status (2026-09-21): DONE offline; the on-disk instance still needs a
+re-run to close.** Both replan emitters in `src/saddle/slice.py` -- the
+survivor-round splice and the `replan` callback -- now pass
+`remaining.nodes` to `build_plan` instead of the generated ids alone, so
+the record is the complete post-replan plan. `verify` is unchanged: it
+already accumulated. New red-first test
+`test_replan_record_carries_every_node_of_the_post_replan_plan` runs a
+two-node DAG (`n2` depends on `n1`) where `n1` fails; it asserts the
+replan record names the rewired survivor `n2` under a hash that DIFFERS
+from its hash in the first plan, that every proof's `node_hash` is
+planned, and that `verify_journal` is clean. Before the fix the record
+held `['n1.r1']` alone and `n2` was absent.
+
+Two existing expectations moved with it, both ADDITIVE -- each still
+pins an exact list, so neither was weakened:
+`test_run_slice_seals_the_plan_before_the_first_node_and_each_replan`
+`('n1', ['n1.r1'])` -> `('n1', ['n1', 'n1.r1'])`, and
+`test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node`
+`['n1.r1', 'n1.r2']` -> `['n1', 'n1.r1', 'n1.r2']`. Both are single-node
+DAGs, so what they gained is the failed node restating itself (it stays
+put per `splice_replan`), not a rewired dependent. Not flips: the
+assertion direction is unchanged in both.
+
+Mutants, each target verified to occur exactly once, `__pycache__`
+dropped after each revert -- all three DIED:
+1. replan emitter -> generated nodes only: RED
+   (`...post_replan_plan`, `...seals_the_plan_before...`).
+2. survivor emitter -> generated nodes only: RED
+   (`...survivor_round_seals_a_test_node...`).
+3. `planned_hashes.update` -> `planned_hashes =`: RED
+   (`test_run_slice_resume_reschedules_a_node_changed_since_its_proof`).
+   Note the shape: `test_journal.py` and `test_cli.py` BOTH pass under
+   this mutant (201 passed). Accumulation is now redundant within a
+   single run -- every replan record is a superset -- and only a RESUMED
+   journal, which starts mid-stream, still needs it. The one test that
+   covers that case is in `test_slice.py`.
+
+`./check.sh` exit 0: 915 passed, 3 skipped, 100% line+branch.
+
+NOT yet met: the done-when clause requiring `saddle explain` on the t2
+journal to report `verify: clean` **after a re-run**. The journal on
+disk is a record of a run made by the old emitter and the fix does not
+rewrite it; closing that clause needs GPU time for one t2 re-run.
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),

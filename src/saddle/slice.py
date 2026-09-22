@@ -1965,12 +1965,17 @@ def _schedule_until_done(
                 new, proposal = spliced
                 taken = {record.node_id for record in read_records(journal_path)}
                 remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
-                by_new = {node.id: node for node in remaining.nodes}
+                # The whole post-replan plan, not just the generated nodes:
+                # `splice_replan` rewires every dependent of the failed node
+                # onto the new leaves, which changes their `hash_node` too. A
+                # record holding only `gen_ids` leaves those rewired survivors
+                # unplanned, and T6-27's check then reads their proofs as
+                # `unplanned-proof` (T6-72). `verify` accumulates planned
+                # hashes across records, so restating the unchanged nodes is
+                # free.
                 append_plan(
                     journal_path,
-                    build_plan(
-                        [by_new[gen] for gen in gen_ids], task_hash=task_hash, replaces=node_id
-                    ),
+                    build_plan(remaining.nodes, task_hash=task_hash, replaces=node_id),
                 )
                 tests_id, impl_id = gen_ids
                 prepared[tests_id] = proposal
@@ -2008,10 +2013,12 @@ def _schedule_until_done(
                 remaining, gen_ids = splice_replan(remaining, node_id, new, taken=taken)
             except ReplanFailedError:
                 continue
-            by_new = {node.id: node for node in remaining.nodes}
+            # The whole post-replan plan: a rewired dependent's hash moved
+            # too, and a record naming only `gen_ids` leaves it unplanned
+            # (T6-72).
             append_plan(
                 journal_path,
-                build_plan([by_new[gen] for gen in gen_ids], task_hash=task_hash, replaces=node_id),
+                build_plan(remaining.nodes, task_hash=task_hash, replaces=node_id),
             )
             replanned_from.add(node_id)
             generated.update(gen_ids)
