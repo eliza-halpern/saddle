@@ -33,6 +33,7 @@ from saddle.evidence import (
     ruff_findings,
     run_capture,
     run_shell_capture,
+    scoped_targets,
     statement_lines,
     under_coverage,
 )
@@ -268,7 +269,14 @@ def run_node_gate(
     # changed-line mutants, with the same exclusion set; `run_tests` narrows
     # what pytest collects, which `test_files` never did. `None` when no
     # module qualifies, so the check can tell "no targets" from "not run".
-    property_targets = tuple(property_modules(test_sources, changed_files))
+    # Scoped to the node's own tests, exactly as the mutation gate above
+    # is (F21.65). Unscoped, g1-79cd848's node-2 drew test_store.py --
+    # node-4's specification, red because node-4 had not run -- and the
+    # oracle reported "no mutants sampled" on all three attempts. The
+    # same tree scoped: killed 85 of 100.
+    property_candidates = tuple(property_modules(test_sources, changed_files))
+    property_targets = scoped_targets(property_candidates, pytest_scope(gate.test_command))
+    property_out_of_scope = tuple(p for p in property_candidates if p not in property_targets)
     property_oracle = (
         mutation_sample(
             workdir,
@@ -331,5 +339,6 @@ def run_node_gate(
         planned_requirements=planned_requirements,
         property_oracle=property_oracle,
         property_targets=property_targets,
+        property_out_of_scope=property_out_of_scope,
     )
     return run_tier1(node, inputs)

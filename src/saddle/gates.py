@@ -1187,6 +1187,7 @@ def check_property_coverage(
     *,
     oracle: MutationOutcome | None = None,
     targets: Collection[str] = (),
+    out_of_scope: Collection[str] = (),
 ) -> GateCheck:
     """A test node must state a property; the impl node must show it bites.
 
@@ -1218,7 +1219,7 @@ def check_property_coverage(
     mutation (T6-6) is the real defence.
     """
     if kind == "impl":
-        return _check_property_oracle(oracle, tuple(targets))
+        return _check_property_oracle(oracle, tuple(targets), tuple(out_of_scope))
     if kind != "test":
         return GateCheck(name="property-coverage", passed=True, detail=f"{kind} node: not required")
     with_property = sorted(path for path, src in test_sources.items() if _has_property(src))
@@ -1244,18 +1245,48 @@ def check_property_coverage(
     )
 
 
-def _check_property_oracle(oracle: MutationOutcome | None, targets: tuple[str, ...]) -> GateCheck:
+def _check_property_oracle(
+    oracle: MutationOutcome | None,
+    targets: tuple[str, ...],
+    out_of_scope: tuple[str, ...] = (),
+) -> GateCheck:
     name = "property-coverage"
     if not targets:
+        # A pass over an empty judgement set records that it judged
+        # nothing, and which empty it is: no property claims this change
+        # at all, or the node's own scope excludes the ones that do --
+        # what F21.65's narrowing now admits, said out loud rather than
+        # left as a silent pass.
+        if out_of_scope:
+            outside = ", ".join(out_of_scope)
+            return GateCheck(
+                name=name,
+                passed=True,
+                detail=(
+                    "not required: no property module in this node's test scope "
+                    f"({outside} outside it)"
+                ),
+                basis=f"oracle: not run, 0 of {len(out_of_scope)} property module(s) in scope",
+            )
         return GateCheck(
-            name=name, passed=True, detail="not required: no property targets this change"
+            name=name,
+            passed=True,
+            detail="not required: no property targets this change",
+            basis="oracle: not run, no property module names a changed file",
         )
     by = ", ".join(targets)
     if oracle is None:
         return GateCheck(name=name, passed=False, detail=f"property oracle did not run for {by}")
     if oracle.total == 0:
+        # The engine failing and the engine finding nothing are different
+        # facts, and `survivors` carried the first one all along while
+        # this check reported only the second (F21.65). The mutation gate
+        # names its tool failures; so does this one now.
+        cause = f": {oracle.survivors[0]}" if oracle.survivors else ""
         return GateCheck(
-            name=name, passed=False, detail=f"no mutants sampled for the property oracle ({by})"
+            name=name,
+            passed=False,
+            detail=f"no mutants sampled for the property oracle ({by}){cause}",
         )
     if oracle.killed == 0:
         return GateCheck(
@@ -1714,6 +1745,9 @@ class Tier1Inputs:
     # did not run it. Read only for `impl` nodes.
     property_oracle: MutationOutcome | None = None
     property_targets: tuple[str, ...] = ()
+    # Property modules the change qualifies that the node's declared
+    # pytest scope excludes, so a pass by vacuity names them (F21.65).
+    property_out_of_scope: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1896,6 +1930,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             inputs.flipped_tests,
             oracle=inputs.property_oracle,
             targets=inputs.property_targets,
+            out_of_scope=inputs.property_out_of_scope,
         ),
         check_assertion_preservation(node.kind, inputs.baseline_tests, inputs.flipped_tests),
         check_requirement_binding(

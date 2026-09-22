@@ -1056,3 +1056,69 @@ def test_server_version_asks_beside_the_api_root_not_under_it(base_url: str, exp
     )
     assert client.server_version() == "0.28.0"
     assert seen[0].url.path == expected
+
+
+# -- counting a prompt exactly ------------------------------------------------
+
+def test_count_tokens_asks_the_server_beside_the_api_root() -> None:
+    """/tokenize is at the server root, not under /v1.
+
+    A URL built relative to the API root asks for /v1/tokenize and is
+    answered 404, which would silently demote every budget to a guess.
+    """
+    client, seen = _json_client({"count": 948, "max_model_len": 175_000})
+    messages = [{"role": "user", "content": "hi"}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    assert client.count_tokens(messages, tools=tools) == 948
+    assert seen[0].url.path == "/tokenize"
+    body = json.loads(seen[0].content)
+    assert body["messages"] == messages
+    # The schemas are most of a small request's prompt, so they have to be
+    # in the thing being counted.
+    assert body["tools"] == tools
+
+
+def test_count_tokens_omits_tools_when_there_are_none() -> None:
+    client, seen = _json_client({"count": 74})
+    assert client.count_tokens([{"role": "user", "content": "hi"}]) == 74
+    assert "tools" not in json.loads(seen[0].content)
+
+
+def test_count_tokens_keeps_a_deployment_prefix() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"count": 5})
+
+    client = VllmClient(
+        api_key="k",
+        base_url="http://server/inference/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    client.count_tokens([{"role": "user", "content": "hi"}])
+    assert seen[0].url.path == "/inference/tokenize"
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (404, {"detail": "Not Found"}),      # an older vLLM with no endpoint
+        (200, {"count": "many"}),            # a count that is not a number
+        (200, {}),                           # no count at all
+        (500, {"error": "boom"}),
+    ],
+)
+def test_a_server_that_will_not_count_returns_none_rather_than_raising(
+    status: int, payload: Any
+) -> None:
+    # The caller falls back to an estimate. Raising here would turn a missing
+    # convenience into a failed turn.
+    client, _ = _json_client(payload, status=status)
+    assert client.count_tokens([{"role": "user", "content": "hi"}]) is None
+
+
+def test_a_transport_failure_while_counting_returns_none() -> None:
+    client = _failing_client(httpx.ConnectError("refused"))
+    assert client.count_tokens([{"role": "user", "content": "hi"}]) is None

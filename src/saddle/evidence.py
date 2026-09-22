@@ -626,6 +626,39 @@ def pytest_scope(test_command: str) -> tuple[str, ...]:
     return tuple(argv[argv.index("pytest") + 1 :])
 
 
+def scoped_targets(targets: Collection[str], scope: Collection[str]) -> tuple[str, ...]:
+    """`targets` the declared pytest `scope` would itself collect (F21.65).
+
+    The property oracle runs its targets ALONE against the node's
+    mutants, and mutmut baselines by running that selection, so one
+    module the node's scope excludes decides the whole oracle. In a TDD
+    plan such a module is red by construction -- the test node writes
+    every module's specification up front and the impl node that greens
+    it has not landed -- and the oracle then reports "no mutants
+    sampled", which no diff the node can write will change.
+
+    An empty `scope` is pytest's whole tree, so nothing is filtered.
+    Flags are not selectors and are ignored; a `path::name` selector
+    scopes by its path. What this admits, stated plainly: a node whose
+    only property-bearing module lies outside its scope gets no oracle
+    at all, the same way the mutation gate already runs only the node's
+    declared tests.
+    """
+    roots = tuple(
+        PurePath(item.split("::", 1)[0]).as_posix().rstrip("/")
+        for item in scope
+        if not item.startswith("-")
+    )
+    if not roots:
+        return tuple(targets)
+    kept = []
+    for target in targets:
+        path = PurePath(target).as_posix()
+        if any(path == root or path.startswith(root + "/") for root in roots):
+            kept.append(target)
+    return tuple(kept)
+
+
 @dataclass(frozen=True)
 class MutationOutcome:
     """Sampled kill-rate evidence over changed-line mutants."""

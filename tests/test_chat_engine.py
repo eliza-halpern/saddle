@@ -17,7 +17,7 @@ from typing import Any, cast
 
 import pytest
 
-from saddle.engine import MAX_TOOL_ROUNDS, TurnOptions, run_turn
+from saddle.engine import MAX_TOOL_ROUNDS, MIN_OUTPUT, TurnOptions, run_turn
 from saddle.events import (
     Compaction,
     ContentDelta,
@@ -29,6 +29,7 @@ from saddle.events import (
     TurnEnd,
     TurnStart,
 )
+from saddle.memory import estimate_tokens
 from saddle.vllm import StreamToken, ToolCall, VllmClient, VllmRequestError
 
 
@@ -470,3 +471,109 @@ def test_each_tool_call_leaves_a_span_with_its_outcome(options: TurnOptions) -> 
     spans = [line for line in lines if "argv" in line]
     assert [s["exit_code"] for s in spans] == [0, 1]
     assert all(s["node_id"] == "chat#1" for s in spans)
+
+
+# -- sizing the reply ---------------------------------------------------------
+
+# The bug these pin: `budget` sized the reply from `estimate_tokens`, which
+# counts characters over four and does not count the tool schemas at all.
+# On a fresh session -- which asks for nearly the whole window -- the request
+# overshot by a single token and the server refused it outright:
+#
+#   HTTP 400: maximum context length is 175000 tokens. However, you
+#   requested 170901 output tokens and your prompt contains at least 4100
+#   input tokens, for a total of at least 175001
+#
+# The user saw an empty reply and a persona that "did not work".
+
+def test_the_budget_uses_the_servers_own_count_when_it_has_one(
+    options: TurnOptions
+) -> None:
+    options.context_tokens = 100_000
+    asked: list[dict[str, Any]] = []
+
+    def counter(messages: list[dict[str, Any]], *, tools: Any = None) -> int:
+        asked.append({"messages": messages, "tools": tools})
+        return 4_100
+
+    assert options.budget([{"role": "user", "content": "hi"}], counter) == (
+        100_000 - 4_100 - 2048
+    )
+    # The schemas are part of the prompt, so they are part of what is counted.
+    assert asked[0]["tools"] == options.tools
+
+
+def test_a_counted_request_fits_the_window(options: TurnOptions) -> None:
+    # The property that was violated: prompt + reply must fit, with the
+    # prompt measured the way the server measures it.
+    options.context_tokens = 175_000
+    for real in (74, 948, 4_100, 90_000, 174_000):
+        def counter(_m: Any, *, tools: Any = None, n: int = real) -> int:
+            return n
+
+        total = real + options.budget([{"role": "user", "content": "x"}], counter)
+        assert total <= options.context_tokens or total == real + MIN_OUTPUT, (
+            f"{real} + budget overflows the window"
+        )
+
+
+def test_a_server_that_cannot_count_falls_back_and_still_leaves_room(
+    options: TurnOptions
+) -> None:
+    options.context_tokens = 175_000
+    messages = [{"role": "user", "content": "Hello, can you help me?" * 30}]
+
+    def no_count(_m: Any, *, tools: Any = None) -> None:
+        return None
+
+    guessed = options.budget(messages, no_count)
+    assert guessed == options.budget(messages)        # same as having no counter
+    # The guess must be pessimistic: the real prompt was 1.5x the raw
+    # estimate when this was measured, so the reserve has to exceed it.
+    assert options.input_estimate(messages) > estimate_tokens(messages)
+
+
+def test_the_tool_schemas_are_counted_at_all(options: TurnOptions) -> None:
+    # They were not, and they are sent with every single request.
+    assert options.tool_tokens() > 0
+    assert options.input_estimate([]) >= options.tool_tokens()
+
+
+def test_an_explicit_max_tokens_still_bypasses_all_of_this(
+    options: TurnOptions
+) -> None:
+    options.max_tokens = 4_096
+
+    def counter(_m: Any, *, tools: Any = None) -> int:
+        return 999_999
+
+    assert options.budget([{"role": "user", "content": "x"}], counter) == 4_096
+
+
+def test_compaction_leaves_room_to_answer(options: TurnOptions) -> None:
+    # Compaction used to be handed the whole window, so it was content to
+    # let the conversation fill every token and leave the reply the floor.
+    options.context_tokens = 175_000
+    assert options.compaction_limit() < options.context_tokens - MIN_OUTPUT
+
+
+def test_the_turn_asks_the_client_to_count(options: TurnOptions) -> None:
+    class Counting(FakeClient):
+        def __init__(self) -> None:
+            super().__init__([[content("ok")]])
+            self.counted = 0
+
+        def count_tokens(self, _messages: Any, *, tools: Any = None) -> int:
+            self.counted += 1
+            return 1_234
+
+    client = Counting()
+    run(client, options)
+    assert client.counted == 1
+    assert client.asked[0]["max_tokens"] == options.context_tokens - 1_234 - 2048
+
+
+def test_a_client_with_no_counter_still_runs(options: TurnOptions) -> None:
+    # FakeClient has no count_tokens, which is the older-server case.
+    events = run(FakeClient([[content("ok")]]), options)
+    assert events[-1].kind == "turn.end"

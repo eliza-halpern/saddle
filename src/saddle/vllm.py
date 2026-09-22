@@ -559,6 +559,21 @@ def _checked_json(response: httpx.Response) -> Any:
 API_ROOT_SEGMENT: Final = "v1"
 
 
+def _sibling_url(base_url: httpx.URL, endpoint: str) -> httpx.URL:
+    """An endpoint beside the API root rather than under it.
+
+    vLLM mounts the OpenAI-compatible API at `/v1` but serves `/tokenize`
+    and `/version` at the server root, so a URL built relative to the API
+    root asks for `/v1/tokenize` and is answered 404. A deployment behind a
+    prefix keeps it: `/inference/v1` -> `/inference/tokenize`.
+    """
+    segments = [part for part in base_url.path.split("/") if part]
+    if segments and segments[-1] == API_ROOT_SEGMENT:
+        segments.pop()
+    segments.append(endpoint)
+    return base_url.copy_with(path="/" + "/".join(segments), query=None, fragment=None)
+
+
 def _version_url(base_url: httpx.URL) -> httpx.URL:
     """The version endpoint beside the API root, not under it (T6-45).
 
@@ -798,6 +813,44 @@ class VllmClient:
     def max_model_len(self) -> int | None:
         """The served model's context length as vLLM reports it, or None (T6-17)."""
         return _model_context(self._models(), self._model)
+
+    def count_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int | None:
+        """Exactly how many tokens this request's prompt will cost.
+
+        The server owns the tokeniser and the chat template, so it is the
+        only thing that can answer this. Counting characters over four is a
+        guess that is wrong in both directions and wrong by a lot: measured
+        here, 2,732 estimated against 4,100 charged, which is the difference
+        between a reply and an HTTP 400.
+
+        `tools` matters: the schemas are rendered into the prompt by the chat
+        template, and on this server they are 874 of the 948 tokens a small
+        request costs. Returns None if the server does not serve /tokenize,
+        so the caller can fall back rather than fail.
+        """
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [dict(message) for message in messages],
+        }
+        if tools:
+            payload["tools"] = [dict(tool) for tool in tools]
+        try:
+            response = self._client.post(
+                _sibling_url(self._client.base_url, "tokenize"),
+                json=payload,
+                timeout=PREFLIGHT_TIMEOUT,
+            )
+            if response.status_code != httpx.codes.OK:
+                return None
+            count = response.json().get("count")
+        except (httpx.HTTPError, ValueError):
+            return None
+        return count if isinstance(count, int) else None
 
     def close(self) -> None:
         self._client.close()
