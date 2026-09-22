@@ -90,7 +90,7 @@ from saddle.survivors import (
     stubbed_sandbox,
 )
 from saddle.transcript import NodeTranscript, RunTranscript, render_transcript
-from saddle.vllm import DiffProposal, VllmResponseError
+from saddle.vllm import DiffProposal, VllmError, VllmRequestError, VllmResponseError
 
 
 class NodeGateFailedError(Exception):
@@ -959,13 +959,19 @@ def _best_of_samples(
     gates or did not apply used to vanish with its reasoning.
     """
 
-    def draw(seed: int) -> DiffProposal | VllmResponseError:
-        # A truncated or malformed completion loses this draw, not the
-        # others: the samples are independent, so one bad packet is not
-        # evidence about the rest.
+    def draw(seed: int) -> DiffProposal | VllmError:
+        # A failed call loses this draw, not the others: the samples are
+        # independent, so one bad packet is not evidence about the rest.
+        # A transport failure is per-draw too, and catching only the
+        # response error let one draw's timeout discard its COMPLETED
+        # siblings (T6-73): `VllmRequestError` is a sibling class, not a
+        # subclass, so it escaped `pool.map` and took them with it.
+        # `VllmAuthError` stays uncaught on purpose -- a rejected key is
+        # not a per-draw condition, and letting a sibling seal the node
+        # would report a broken key as a pass.
         try:
             return propose(node, None, seed)
-        except VllmResponseError as exc:
+        except (VllmResponseError, VllmRequestError) as exc:
             return exc
 
     with ThreadPoolExecutor(max_workers=PROPOSAL_SAMPLES) as pool:
@@ -976,7 +982,7 @@ def _best_of_samples(
     samples: list[dict[str, Any]] = []
     passed = False
     for index, outcome in enumerate(draws):
-        if isinstance(outcome, VllmResponseError):
+        if isinstance(outcome, VllmError):
             samples.append(
                 {**_error_evidence(outcome), "outcome": f"worker call failed: {outcome}"}
             )
@@ -1734,10 +1740,13 @@ def _survivor_round(
                 f"\nCardinality: one section, one hunk: a single diff creating {named}.\n"
             )
 
-            def one(seed: int) -> DiffProposal | VllmResponseError:
+            def one(seed: int) -> DiffProposal | VllmError:
+                # Per-draw, transport failures included (T6-73): the
+                # siblings are independent candidates and a timeout in
+                # one is not evidence about the rest.
                 try:
                     return draw(node, brief, seed)
-                except VllmResponseError as error:
+                except (VllmResponseError, VllmRequestError) as error:
                     return error
 
             with ThreadPoolExecutor(max_workers=samples) as pool:
@@ -1805,7 +1814,7 @@ def _survivor_round(
 
 
 def _judge_candidate(
-    outcome: DiffProposal | VllmResponseError,
+    outcome: DiffProposal | VllmError,
     path: str,
     seen: dict[str, int],
     seed: int,
@@ -1817,7 +1826,7 @@ def _judge_candidate(
     runner: CandidateRunner,
 ) -> tuple[str, str, str]:
     """(decision, detail, source) for one draw; parse-first, then T6-29b's filters."""
-    if isinstance(outcome, VllmResponseError):
+    if isinstance(outcome, VllmError):
         return "dropped", f"worker call failed: {outcome}", ""
     created = _created_file(outcome.diff)
     if created is None:

@@ -65,7 +65,7 @@ from saddle.slice import (
     whole_file_reconstruction,
 )
 from saddle.transcript import is_run_end
-from saddle.vllm import DiffProposal, VllmRequestError, VllmResponseError
+from saddle.vllm import DiffProposal, VllmAuthError, VllmRequestError, VllmResponseError
 
 
 def _git_subcommand(argv: Sequence[str]) -> str:
@@ -190,6 +190,8 @@ JUNK1_DIFF = (
 JUNK2_DIFF = JUNK1_DIFF.replace("junk1.py", "junk2.py")
 
 TRUNCATED = "completion truncated (finish_reason=length)"
+TIMED_OUT = "request failed: timed out"
+KEY_REJECTED = "server rejected the API key (HTTP 401)"
 
 
 def test_utcnow_returns_timezone_aware_iso() -> None:
@@ -4709,3 +4711,119 @@ def test_replan_record_carries_every_node_of_the_post_replan_plan(tmp_path: Path
     for record in read_records(journal):
         assert not record.node_hash or record.node_hash in planned
     assert verify_journal(journal) == []
+
+
+def test_a_draws_transport_failure_does_not_discard_its_completed_siblings(
+    tmp_path: Path,
+) -> None:
+    """T6-73 known-good. One draw's timeout loses that draw, not the others.
+
+    `draw` caught only `VllmResponseError`, and `VllmRequestError` is a
+    sibling class rather than a subclass, so a transport failure escaped
+    `pool.map` and took every finished draw with it. In
+    `g1-0217c79/t5-s1` that sealed `samples: []` after 1800 s: the run's
+    metrics sampler shows three draws in flight from t=411 s falling to
+    two at t=693 s and one at t=863 s, so two draws had COMPLETED and
+    neither was recorded. `_best_of_samples`'s own docstring states the
+    contract it broke -- one bad packet "loses this draw, not the
+    others".
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    seeds: list[int] = []
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        seeds.append(seed)
+        if seed == 1:
+            raise VllmRequestError(TIMED_OUT)
+        return DiffProposal(GOOD_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    assert sorted(seeds) == list(range(PROPOSAL_SAMPLES)), "every seed is still drawn"
+    agent = next(s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1")
+    samples = _sidecar(journal, agent)["samples"]
+    assert len(samples) == PROPOSAL_SAMPLES, "the failed draw is a sample, not the end of sampling"
+    failed = [s for s in samples if s.get("error_type") == "VllmRequestError"]
+    assert len(failed) == 1
+    assert "timed out" in failed[0]["outcome"]
+    survivors = [s for s in samples if s.get("error_type") is None]
+    assert len(survivors) == PROPOSAL_SAMPLES - 1, "the completed siblings survive the failure"
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
+
+
+def test_a_rejected_api_key_fails_the_node_rather_than_becoming_a_sample(
+    tmp_path: Path,
+) -> None:
+    """T6-73 known-bad. Widening `draw`'s except must not swallow auth.
+
+    A rejected key is not a per-draw condition -- every sibling and every
+    retry fails the same way -- so it must keep failing the node through
+    `_run_node`'s give-up path rather than being recorded as one sample
+    among three. If `VllmAuthError` joined the caught tuple, seed 0's
+    good diff would seal the node and a broken key would read as a pass.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        if seed == 1:
+            raise VllmAuthError(KEY_REJECTED)
+        return DiffProposal(GOOD_DIFF, "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is False, "a rejected key must not let a sibling seal the node"
+    agent = next(s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1")
+    assert _sidecar(journal, agent)["error_type"] == "VllmAuthError"
+
+
+def test_a_survivor_draws_transport_failure_does_not_discard_its_siblings(
+    tmp_path: Path,
+) -> None:
+    """T6-73 known-good, the survivor drawer's copy of the same defect.
+
+    `one` catches what `_best_of_samples`'s `draw` catches, so it carried
+    the same gap: a transport failure in one candidate discarded every
+    candidate drawn beside it and failed the recovery, where a truncation
+    in the same position is already recorded per draw (`s4: dropped` in
+    the T6-29c known-good).
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+
+    def draw(node: Node, brief: str, seed: int) -> DiffProposal:
+        if seed == 1:
+            raise VllmRequestError(TIMED_OUT)
+        return DiffProposal(_candidate_diff(_flag_test(1, 5)), "")
+
+    result = run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=lambda node, failure, seed: DiffProposal(BRANCH_DIFF, ""),
+        survivor_draw=draw,
+        survivor_samples=2,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    assert result.passed is True, result.transcript
+    span = _survivor_span(journal, "n1")
+    assert "s0: kept:" in span.detail
+    assert f"s1: dropped: worker call failed: {TIMED_OUT}" in span.detail
