@@ -22,6 +22,7 @@ from rich.console import Console
 from saddle import __version__
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
+from saddle.edits import EDIT_GRAMMAR
 from saddle.evidence import (
     RUFF_RULES,
     SADDLE_COMMIT_IDENTITY,
@@ -50,6 +51,7 @@ from saddle.ux import ask_confirm
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
+    DIFF_GRAMMAR,
     REASONING_EFFORTS,
     DiffProposal,
     VllmAuthError,
@@ -188,6 +190,11 @@ class RunOptions:
     survivor_effort: str = "low"
     survivor_samples: int = SURVIVOR_SAMPLES
     survivor_max_tokens: int = SURVIVOR_MAX_TOKENS
+    # Which envelope the worker emits in. "whole-file" restates every file
+    # it touches; "edit" names the sites it changes, so a one-line change
+    # costs one line. The prompt and the grammar have to agree, so both are
+    # chosen from this single field rather than set independently.
+    emission: str = "whole-file"
 
 
 def survivor_drawer(client: VllmClient, options: RunOptions) -> TestDrawer:
@@ -370,8 +377,58 @@ Rules:
 """
 
 
+WHOLE_FILE_RULES: Final = """\
+Produce the COMPLETE NEW CONTENTS of every file you change, implementing
+exactly that. You are not writing a patch: there is no original side to
+reproduce and no context to match.
+Rules:
+- Start each file section with a "diff --git a/<file> b/<file>" header line.
+- Follow it with exactly these two lines, verbatim:
+  "--- /dev/null" and "+++ b/<file>".
+- Then one "@@ -0,0 +1,<n> @@" line, where <n> is however many lines the
+  file now has. It is not checked -- do not spend effort counting.
+- Then EVERY line of the finished file, each prefixed with "+".
+  Unchanged lines get a "+" too. A line starting with " " or "-" is
+  rejected: those belong to a patch, and this is not one.
+- Write each file at most once. Emitting a file twice is refused, not
+  merged.
+- To delete a file, emit its header, then "deleted file mode 100644",
+  "--- a/<file>", "+++ /dev/null", and no body.
+- A file you do not name is left exactly as it is. Only name the files
+  you are changing.
+"""
+
+# The same instruction in the envelope that costs the change's size
+# rather than the file's. Blank-line fidelity is deliberately not
+# demanded: a live draw dropped one and was correct anyway, and the
+# matcher now tolerates that (see edits.loose_spans).
+EDIT_RULES: Final = """\
+Produce EDITS to the files you change, implementing exactly that.
+Rules:
+- To change part of a file: "edit <file>", then the exact lines you are
+  replacing each prefixed with "-", then a "=======" line, then the lines
+  that replace them each prefixed with "+", then ">>>>>>>".
+- The "-" lines must reproduce the file exactly and must name ONE place in
+  it. If they match twice they name no single site and the edit is
+  refused, so include enough surrounding lines to be unique.
+- Emit only the lines you are changing plus the few needed to locate
+  them. Do not reproduce parts of the file you are not touching.
+- To create a new file: "create <file>", then every line prefixed with
+  "+", then ">>>>>>>".
+- To delete a file: "delete <file>" on its own line, nothing after it.
+- Make as many edits as you need, in any order, to any files in scope.
+- A file you do not name is left exactly as it is. Only name the files
+  you are changing.
+"""
+
+
 def build_worker_prompt(
-    *, task: str, node: Node, files: Sequence[str], contents: Mapping[str, str]
+    *,
+    task: str,
+    node: Node,
+    files: Sequence[str],
+    contents: Mapping[str, str],
+    emission: str = "whole-file",
 ) -> str:
     """Node work prompt: task, requirements, repo files, diff format rules.
 
@@ -413,6 +470,7 @@ def build_worker_prompt(
         f"    rejects: {', '.join(repr(text) for text in req.rejects)}"
         for req in node.requirements
     )
+    rules = EDIT_RULES if emission == "edit" else WHOLE_FILE_RULES
     scope = ""
     if node.target_files:
         # The planner's list reaches the gate; the worker has to hear it
@@ -439,25 +497,7 @@ Requirements (each test must fail if its statement is violated):
 {reqs}
 Gate command: {node.deterministic_gate.test_command}
 
-Produce the COMPLETE NEW CONTENTS of every file you change, implementing
-exactly that. You are not writing a patch: there is no original side to
-reproduce and no context to match.
-Rules:
-- Start each file section with a "diff --git a/<file> b/<file>" header line.
-- Follow it with exactly these two lines, verbatim:
-  "--- /dev/null" and "+++ b/<file>".
-- Then one "@@ -0,0 +1,<n> @@" line, where <n> is however many lines the
-  file now has. It is not checked -- do not spend effort counting.
-- Then EVERY line of the finished file, each prefixed with "+".
-  Unchanged lines get a "+" too. A line starting with " " or "-" is
-  rejected: those belong to a patch, and this is not one.
-- Write each file at most once. Emitting a file twice is refused, not
-  merged.
-- To delete a file, emit its header, then "deleted file mode 100644",
-  "--- a/<file>", "+++ /dev/null", and no body.
-- A file you do not name is left exactly as it is. Only name the files
-  you are changing.
-- Mention each requirement ID in the new or changed test source.
+{rules}- Mention each requirement ID in the new or changed test source.
 {scope}- A "test" node binds every listed accept and reject, and the gate
   fails one whose tests bind none of them. An example written as a call
   is bound by a test that PERFORMS that operation and asserts on the
@@ -503,9 +543,12 @@ def build_recovery_plan_prompt(
     files: Sequence[str],
     contents: Mapping[str, str],
     failure: str,
+    emission: str = "whole-file",
 ) -> str:
     """Diagnosis prompt: root-cause the failure and outline the minimal fix."""
-    base = build_worker_prompt(task=task, node=node, files=files, contents=contents)
+    base = build_worker_prompt(
+        task=task, node=node, files=files, contents=contents, emission=emission
+    )
     return (
         base + "\nThe previous attempt failed as described below. Diagnose the "
         "root cause against the CURRENT tree state above, then outline the "
@@ -522,6 +565,7 @@ def build_repair_prompt(
     contents: Mapping[str, str],
     failure: str,
     plan: str | None,
+    emission: str = "whole-file",
 ) -> str:
     """Repair prompt: the worker brief plus evidence and the recovery plan.
 
@@ -540,7 +584,9 @@ def build_repair_prompt(
     replaced, so the worker fixes forward on the failure alone and the
     harness does not hand it a plan it cannot legally follow.
     """
-    base = build_worker_prompt(task=task, node=node, files=files, contents=contents)
+    base = build_worker_prompt(
+        task=task, node=node, files=files, contents=contents, emission=emission
+    )
     recovery = "" if plan is None else "\n\nRecovery plan:\n" + plan
     return (
         base + "\nThe previous attempt failed. Fix forward: write the files above "
@@ -752,7 +798,11 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         }
         if failure is None:
             prompt = build_worker_prompt(
-                task=options.task, node=node, files=files, contents=contents
+                task=options.task,
+                node=node,
+                files=files,
+                contents=contents,
+                emission=options.emission,
             )
         else:
             plan_prompt = build_recovery_plan_prompt(
@@ -761,6 +811,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 files=files,
                 contents=contents,
                 failure=failure,
+                emission=options.emission,
             )
             plan = client.complete(
                 plan_prompt,
@@ -776,6 +827,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
                 contents=contents,
                 failure=failure,
                 plan=None if prescribed is not None else plan,
+                emission=options.emission,
             )
         return client.propose_diff(
             prompt,
@@ -783,6 +835,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             temperature=worker_temperature(options, failure),
             reasoning_effort=effort,
             seed=seed,
+            grammar=EDIT_GRAMMAR if options.emission == "edit" else DIFF_GRAMMAR,
         )
 
     def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
@@ -809,6 +862,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         "context_window": str(options.context_window),
         "temperature": str(options.temperature),
         "sample_temperature": str(options.sample_temperature),
+        "emission": options.emission,
         "recovery_temperature": str(worker_temperature(options, "retry")),
         "reasoning_effort": options.reasoning_effort,
         "worker_effort": options.worker_effort or "node budget",
@@ -1132,6 +1186,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Temperature for retry diff samples (default: --sample-temperature).",
     )
     run.add_argument(
+        "--emission",
+        choices=("whole-file", "edit"),
+        default="whole-file",
+        help=(
+            "What the worker emits: 'whole-file' restates every file it touches; "
+            "'edit' names the sites it changes, so a change costs its own size."
+        ),
+    )
+    run.add_argument(
         "--reasoning-effort",
         choices=list(REASONING_EFFORTS),
         default="medium",
@@ -1286,6 +1349,7 @@ def main(
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             sample_temperature=args.sample_temperature,
+            emission=args.emission,
             reasoning_effort=args.reasoning_effort,
             worker_effort=args.worker_effort,
             yes=args.yes,

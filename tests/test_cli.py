@@ -1546,6 +1546,30 @@ def test_main_run_rejects_bad_effort() -> None:
     assert exc_info.value.code == 2
 
 
+def test_the_worker_prompt_states_the_envelope_it_will_be_graded_in() -> None:
+    """The prompt and the grammar have to agree or the draw is wasted.
+
+    Known-good: asking for edits puts the edit rules in front of the model
+    and leaves the whole-file rules out. Known-bad: the default still says
+    "COMPLETE NEW CONTENTS", so a run that does not ask for edits is not
+    quietly switched.
+    """
+    node = Node.model_validate(_node_dict())
+    files = ["a.py"]
+    contents = {"a.py": "x = 1\n"}
+
+    edits = build_worker_prompt(
+        task=TASK, node=node, files=files, contents=contents, emission="edit"
+    )
+    assert "Produce EDITS to the files you change" in edits
+    assert "COMPLETE NEW CONTENTS" not in edits
+    assert '"edit <file>"' in edits
+
+    whole = build_worker_prompt(task=TASK, node=node, files=files, contents=contents)
+    assert "COMPLETE NEW CONTENTS" in whole
+    assert "Produce EDITS to the files you change" not in whole
+
+
 def test_run_parser_defaults_and_overrides() -> None:
     parser = build_parser()
     defaults = parser.parse_args(["run", "Do it."])
@@ -1566,6 +1590,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "worker_effort": None,
         "survivor_effort": "low",
         "survivor_samples": SURVIVOR_SAMPLES,
+        "emission": "whole-file",
         "yes": False,
     }
     full = parser.parse_args(
@@ -1589,6 +1614,8 @@ def test_run_parser_defaults_and_overrides() -> None:
             "low",
             "--worker-effort",
             "xhigh",
+            "--emission",
+            "edit",
             "--yes",
             "Do it.",
         ]
@@ -1610,6 +1637,7 @@ def test_run_parser_defaults_and_overrides() -> None:
         "worker_effort": "xhigh",
         "survivor_effort": "low",
         "survivor_samples": SURVIVOR_SAMPLES,
+        "emission": "edit",
         "yes": True,
     }
 
@@ -1629,6 +1657,7 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--temperature TEMPERATURE]\n"
         "                  [--sample-temperature SAMPLE_TEMPERATURE]\n"
         "                  [--recovery-temperature RECOVERY_TEMPERATURE]\n"
+        "                  [--emission {whole-file,edit}]\n"
         "                  [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                  [--worker-effort {none,low,medium,xhigh}]\n"
         "                  [--deadline DEADLINE]\n"
@@ -1658,6 +1687,10 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --recovery-temperature RECOVERY_TEMPERATURE\n"
         "                        Temperature for retry diff samples (default: --sample-\n"
         "                        temperature).\n"
+        "  --emission {whole-file,edit}\n"
+        "                        What the worker emits: 'whole-file' restates every\n"
+        "                        file it touches; 'edit' names the sites it changes, so\n"
+        "                        a change costs its own size.\n"
         "  --reasoning-effort {none,low,medium,xhigh}\n"
         "                        Emission reasoning effort.\n"
         "  --worker-effort {none,low,medium,xhigh}\n"
@@ -3019,6 +3052,7 @@ def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> Non
     assert run.argv == [
         "run",
         f"context_window={DEFAULT_CONTEXT_WINDOW}",
+        "emission=whole-file",
         "model=m",
         "reasoning_effort=medium",
         "recovery_temperature=0.7",

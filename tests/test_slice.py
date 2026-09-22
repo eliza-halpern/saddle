@@ -244,6 +244,40 @@ def test_apply_diff_applies_and_stages(tmp_path: Path) -> None:
     assert staged.stdout.split() == ["n.py"]
 
 
+def test_apply_diff_applies_an_edit_payload_and_stages_it(tmp_path: Path) -> None:
+    """One apply path carries either envelope, told apart by the first word.
+
+    Known-good: an edit block reaches `apply_edits`, changes the file and
+    is staged the way a diff would be, and the caller is told which
+    envelope it was. A dispatch that fell through to `git apply` would
+    raise "not a unified diff" instead.
+    """
+    _git_repo(tmp_path)
+    payload = "edit n.py\n-x = 1\n=======\n+x = 2\n>>>>>>>\n"
+    assert _apply_diff(tmp_path, payload) == "edits"
+    assert (tmp_path / "n.py").read_text() == "x = 2\n"
+    staged = subprocess.run(
+        ["git", "-C", str(tmp_path), "diff", "--cached", "--name-only"],
+        capture_output=True,
+        text=True,
+    )
+    assert staged.stdout.split() == ["n.py"]
+
+
+def test_apply_diff_names_the_worktree_when_an_edit_does_not_apply(tmp_path: Path) -> None:
+    """Known-bad half: an edit naming no site is a spent attempt, reported
+    like any other failed apply -- not an EditError escaping the layer."""
+    _git_repo(tmp_path)
+    payload = "edit n.py\n-y = 9\n=======\n+y = 8\n>>>>>>>\n"
+    expected = (
+        f"worker edits did not apply in {str(tmp_path)!r}: "
+        "n.py: the search block does not appear in the file"
+    )
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _apply_diff(tmp_path, payload)
+    assert (tmp_path / "n.py").read_text() == "x = 1\n"
+
+
 def test_apply_diff_recounts_wrong_hunk_headers(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     diff = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,3 +1,3 @@\n-x = 1\n+x = 2\n"

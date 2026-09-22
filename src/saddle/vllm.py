@@ -304,6 +304,7 @@ def _build_diff_payload(
     temperature: float,
     reasoning_effort: str,
     seed: int | None = None,
+    grammar: str = DIFF_GRAMMAR,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -312,7 +313,7 @@ def _build_diff_payload(
         "max_tokens": max_tokens,
         "reasoning_effort": reasoning_effort,
         "include_reasoning": True,
-        "structured_outputs": {"grammar": DIFF_GRAMMAR},
+        "structured_outputs": {"grammar": grammar},
     }
     # Concurrent draws of one prompt are told apart by seed (T6-25); a
     # call without one leaves the key out and the server picks, as before.
@@ -643,8 +644,15 @@ class VllmClient:
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
         seed: int | None = None,
+        grammar: str = DIFF_GRAMMAR,
     ) -> DiffProposal:
-        """Propose a unified diff for *prompt*, guided by the EBNF diff grammar (DIFF_GRAMMAR)."""
+        """Propose an edit payload for *prompt*, guided by an EBNF grammar.
+
+        The default is DIFF_GRAMMAR, which admits whole-file writes and
+        deletes only. A caller that wants the smaller emission passes
+        `edits.EDIT_GRAMMAR` instead; the transport is identical, so the
+        choice lives with the caller that also writes the prompt.
+        """
         if not prompt.strip():
             msg = "prompt must not be empty"
             raise ValueError(msg)
@@ -656,6 +664,7 @@ class VllmClient:
             temperature=temperature,
             reasoning_effort=reasoning_effort,
             seed=seed,
+            grammar=grammar,
         )
         started_at = datetime.now(UTC).isoformat()
         start = perf_counter()

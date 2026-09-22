@@ -35,6 +35,7 @@ from saddle.dag import (
     planned_requirement_ids,
     reserved_target_files,
 )
+from saddle.edits import EditError, apply_edits
 from saddle.evidence import (
     CapturedRun,
     attempt_ref,
@@ -49,6 +50,7 @@ from saddle.evidence import (
     restore_baseline,
     ruff_argv,
     run_argv,
+    run_capture,
     run_shell,
     run_shell_capture,
     run_stdin_capture,
@@ -480,6 +482,12 @@ def _reconstruction_evidence(diff: str) -> dict[str, Any]:
     return {"reconstruction": recovered}
 
 
+# An edit payload opens with its operation and a path; a unified diff opens
+# with "diff --git". The two are told apart by that first word alone, so a
+# run can carry either without a flag reaching this far down.
+_EDIT_HEAD: Final = re.compile(r"^(?:edit|create|delete) [^/\n]")
+
+
 def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> str:
     """Apply a proposed diff from stdin and stage it; gates diff tracked content.
 
@@ -500,6 +508,21 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     # T6-48: the packaging comes off before anything judges the content,
     # so the precheck and every rung see the same bytes.
     diff = _unwrapped(diff)
+    if _EDIT_HEAD.match(diff.lstrip()):
+        # A second envelope, not a second tree. The edit format names the
+        # site it changes instead of restating the whole file, so the
+        # emission costs the change's size rather than the file's -- the
+        # reason round 3e lost all three of an attempt's draws to
+        # whole-file emission (F21.43). What lands is staged the same way
+        # and every gate downstream still reads the worktree, so nothing
+        # below this point can tell which envelope arrived.
+        try:
+            apply_edits(workdir, diff)
+        except EditError as exc:
+            msg = f"worker edits did not apply in {str(workdir)!r}: {exc}"
+            raise RuntimeError(msg) from exc
+        run_capture(["git", "add", "-A"], workdir, recorder=recorder)
+        return "edits"
     if not diff.lstrip().startswith("diff --git "):
         msg = f"worker content is not a unified diff (no 'diff --git' header) in {str(workdir)!r}"
         raise RuntimeError(msg)

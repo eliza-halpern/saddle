@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from saddle.dag import dag_json_schema
+from saddle.edits import EDIT_GRAMMAR
 from saddle.vllm import (
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
@@ -284,6 +285,22 @@ def test_diff_posts_guided_payload() -> None:
         "include_reasoning": True,
         "structured_outputs": {"grammar": DIFF_GRAMMAR},
     }
+
+
+def test_diff_payload_carries_the_grammar_the_caller_chose() -> None:
+    """The envelope the worker emits in is the caller's choice, not vllm's.
+
+    Known-good and known-bad in one: EDIT_GRAMMAR reaches the wire when it
+    is asked for, and DIFF_GRAMMAR still does when it is not. A default
+    that ignored the argument would pass the second half alone.
+    """
+    client, seen = _json_client(_ok_body(content=REAL_DIFF))
+    client.propose_diff("Do x.", grammar=EDIT_GRAMMAR)
+    assert json.loads(seen[0].content)["structured_outputs"] == {"grammar": EDIT_GRAMMAR}
+
+    client, seen = _json_client(_ok_body(content=REAL_DIFF))
+    client.propose_diff("Do x.")
+    assert json.loads(seen[0].content)["structured_outputs"] == {"grammar": DIFF_GRAMMAR}
 
 
 def test_diff_payload_carries_the_seed_when_given() -> None:
