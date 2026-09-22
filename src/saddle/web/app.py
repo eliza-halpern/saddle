@@ -55,7 +55,9 @@ from saddle.vllm import VllmClient
 STATIC = Path(__file__).resolve().parent / "static"
 
 
-def history_for_display(messages: list[dict[str, Any]], workdir: Path) -> list[dict[str, Any]]:
+def history_for_display(
+    messages: list[dict[str, Any]], workdir: Path, undo_root: Path | None = None
+) -> list[dict[str, Any]]:
     """Stored messages, with each tool call carrying what the row showed.
 
     The transcript is rebuilt from this on every connect, and it used to keep
@@ -71,6 +73,9 @@ def history_for_display(messages: list[dict[str, Any]], workdir: Path) -> list[d
         for message in messages
         if message.get("role") == "tool"
     }
+    # Which stored version of a file each call produced, so an older
+    # message keeps showing the picture it made rather than the newest one.
+    versions = UndoLog(undo_root).versions() if undo_root is not None else {}
     shown: list[dict[str, Any]] = []
     for index, message in enumerate(messages):
         # The index travels with the message so the page can name one to
@@ -97,6 +102,7 @@ def history_for_display(messages: list[dict[str, Any]], workdir: Path) -> list[d
                     "ok": ok,
                     "detail": detail,
                     "preview": preview_for(name, arguments, workdir),
+                "version": versions.get(call.get("id")),
                 }
             )
         shown.append({**message, "tools": rows})
@@ -369,15 +375,30 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         as attachments-in-place -- this is how a diagram the model just drew
         becomes visible without the reader leaving the conversation.
         """
-        session = store.get(request.path_params["sid"])
+        sid = request.path_params["sid"]
+        session = store.get(sid)
         raw = request.query_params.get("path") or ""
         try:
             target = resolve_within(Path(session.workdir), raw)
         except OutsideRootError:
             return JSONResponse({"error": "outside the working folder"}, status_code=403)
-        if target.suffix.lower() not in PREVIEWABLE or not target.is_file():
+        if target.suffix.lower() not in PREVIEWABLE:
             return JSONResponse({"error": f"no image at {raw}"}, status_code=404)
-        media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        # A message shows the version *it* produced. Without this an image
+        # edited later in the conversation appeared, identically, in every
+        # message that ever touched it.
+        version = request.query_params.get("v")
+        if version:
+            if not version.isalnum():
+                return JSONResponse({"error": "bad version"}, status_code=400)
+            stored = UndoLog(store.undo_dir(sid)).blob_path(version)
+            if stored.is_file():
+                target = stored
+        if not target.is_file():
+            return JSONResponse({"error": f"no image at {raw}"}, status_code=404)
+        # From the requested path: a stored version is a content-addressed
+        # blob with no extension of its own.
+        media = mimetypes.guess_type(raw)[0] or "application/octet-stream"
         return FileResponse(
             target,
             media_type=media,
@@ -537,7 +558,11 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
                     temperature=session.temperature,
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
-                    messages=history_for_display(store.load_messages(sid), Path(session.workdir)),
+                    messages=history_for_display(
+                        store.load_messages(sid),
+                        Path(session.workdir),
+                        store.undo_dir(sid),
+                    ),
                 )
                 yield f"data: {json.dumps(info.payload())}\n\n"
                 while True:

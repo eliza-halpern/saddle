@@ -106,6 +106,48 @@ class UndoLog:
              "existed": existed, "blob": blob}
         )
 
+    def after_write(self, path: Path, call: str | None = None) -> str | None:
+        """Keep the file as this turn left it, and return its version id.
+
+        A preview in an older message should show what that message
+        produced, not whatever the file happens to say now. Serving by path
+        alone meant a frog drawn in turn one and edited in turn three showed
+        the turn-three frog twice, and the conversation stopped making sense.
+
+        Unlike `before_write` this runs on every write: the last one is the
+        version the turn actually left behind.
+        """
+        if self.turn is None:
+            return None
+        try:
+            blob = uuid.uuid4().hex
+            target = self.root / BLOBS / blob
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+        except OSError:
+            return None
+        self._append({
+            "kind": "version", "turn": self.turn, "call": call,
+            "path": str(path), "blob": blob,
+        })
+        return blob
+
+    def versions(self) -> dict[str, str]:
+        """Blob per tool call, latest write of each wins.
+
+        Keyed by the call rather than the turn because that is what a stored
+        transcript has: a reloaded message can find the picture it made
+        without knowing which turn it belonged to.
+        """
+        out: dict[str, str] = {}
+        for record in self._read():
+            if record.get("kind") == "version" and record.get("call"):
+                out[str(record["call"])] = str(record["blob"])
+        return out
+
+    def blob_path(self, blob: str) -> Path:
+        return self.root / BLOBS / blob
+
     # -- rewinding ---------------------------------------------------------
 
     def _plan(self, index: int) -> tuple[list[dict[str, Any]], set[int]]:

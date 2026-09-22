@@ -382,12 +382,49 @@ function fillToolDetail(row, detail, text) {
   }
 }
 
+/* Following the bottom is an intent, not a measurement.
+ *
+ * It used to be re-derived every frame as "within 120px of the bottom", so
+ * scrolling up during a long reasoning stream put you back within that band
+ * and the next frame yanked you down again -- you could not read what had
+ * already streamed while more was arriving. Now scrolling away turns
+ * following off and it stays off until you come back to the bottom
+ * yourself.
+ *
+ * Our own scrolls have to be told apart from the reader's, or setting
+ * scrollTop would immediately look like a scroll away. `lastSet` is what we
+ * last wrote; a scroll event at that position is ours. */
+
+let following = true;
+let lastSet = -1;
+
 function atBottom() {
   const t = $("#transcript");
-  return t.scrollHeight - t.scrollTop - t.clientHeight < 120;
+  return t.scrollHeight - t.scrollTop - t.clientHeight < 24;
 }
-function stickToBottom(was) {
-  if (was) $("#transcript").scrollTop = $("#transcript").scrollHeight;
+
+function watchScrolling() {
+  const t = $("#transcript");
+  t.addEventListener("scroll", () => {
+    if (Math.abs(t.scrollTop - lastSet) < 2) return;   // our own
+    following = atBottom();
+    const jump = $("#jump");
+    if (jump) jump.hidden = following;
+  }, { passive: true });
+}
+
+function stickToBottom(_was) {
+  if (!following) return;
+  const t = $("#transcript");
+  t.scrollTop = t.scrollHeight;
+  lastSet = t.scrollTop;
+}
+
+function followBottom() {
+  following = true;
+  const jump = $("#jump");
+  if (jump) jump.hidden = true;
+  stickToBottom(true);
 }
 
 /* ---------- streaming paint ----------

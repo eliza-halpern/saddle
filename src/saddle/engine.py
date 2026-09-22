@@ -337,13 +337,23 @@ def run_turn(
                 result = execute_tool(call, workdir=options.workdir, context=ctx)
                 duration_ms = int((perf_counter() - start) * 1000)
                 ok = not result.startswith("error: ")
+                # An image this call wrote, and which stored version of it:
+                # an older message must keep showing what it produced, not
+                # whatever the file says by the end of the conversation.
+                preview = preview_for(call.name, call.arguments, options.workdir)
+                version = (
+                    ctx.undo.versions().get(call.id)
+                    if preview and ctx.undo is not None
+                    else None
+                )
                 yield ToolEnd(
                     id=call.id,
                     ok=ok,
                     label=label_for(call.name, call.arguments, ok=ok),
                     detail=result,
                     duration_ms=duration_ms,
-                    preview=preview_for(call.name, call.arguments, options.workdir),
+                    preview=preview,
+                    version=version,
                 )
                 append_span(
                     options.journal,

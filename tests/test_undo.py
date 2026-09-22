@@ -260,3 +260,69 @@ def test_a_file_edited_repeatedly_in_one_turn_is_copied_once(tmp_path: Path) -> 
     log.begin(turn=2, start_index=4)
     log.before_write(target)
     assert len(list((log.root / "blobs").iterdir())) == 2
+
+
+# -- versions, so an old message keeps its own picture ------------------------
+
+def test_each_call_keeps_the_version_it_produced(tmp_path: Path) -> None:
+    """A frog drawn once and edited later showed the edited frog in both.
+
+    Previews were served by path, and a path only ever has one current
+    content. The message that drew it has to keep showing what it drew.
+    """
+    log, work = _log(tmp_path)
+    target = work / "frog.svg"
+
+    log.begin(turn=1, start_index=0)
+    target.write_text("<svg>plain frog</svg>")
+    first = log.after_write(target, call="call-1")
+
+    log.begin(turn=2, start_index=4)
+    target.write_text("<svg>frog with blush</svg>")
+    second = log.after_write(target, call="call-2")
+
+    assert first != second
+    assert log.blob_path(first).read_text() == "<svg>plain frog</svg>"
+    assert log.blob_path(second).read_text() == "<svg>frog with blush</svg>"
+    assert log.versions() == {"call-1": first, "call-2": second}
+
+
+def test_the_last_write_of_a_call_is_the_version_it_left(tmp_path: Path) -> None:
+    # A call that writes twice is remembered by what it ended with.
+    log, work = _log(tmp_path)
+    target = work / "a.svg"
+    log.begin(turn=1, start_index=0)
+    target.write_text("draft")
+    log.after_write(target, call="c")
+    target.write_text("final")
+    kept = log.after_write(target, call="c")
+    assert log.versions()["c"] == kept
+    assert log.blob_path(kept).read_text() == "final"
+
+
+def test_a_version_outside_a_turn_is_not_kept(tmp_path: Path) -> None:
+    log, work = _log(tmp_path)
+    target = work / "a.svg"
+    target.write_text("x")
+    assert log.after_write(target, call="c") is None
+    assert log.versions() == {}
+
+
+def test_rewinding_does_not_take_the_pictures_with_it(tmp_path: Path) -> None:
+    # A rewind forgets the turns it undid, but a message still on screen
+    # above the rewind point must keep rendering.
+    log, work = _log(tmp_path)
+    target = work / "a.svg"
+
+    log.begin(turn=1, start_index=0)
+    target.write_text("first")
+    kept = log.after_write(target, call="c1")
+
+    log.begin(turn=2, start_index=4)
+    log.before_write(target)
+    target.write_text("second")
+    log.after_write(target, call="c2")
+
+    log.restore_to(4)
+    assert log.blob_path(kept).read_text() == "first"
+    assert "c1" in log.versions()

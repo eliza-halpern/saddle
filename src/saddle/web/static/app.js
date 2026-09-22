@@ -132,7 +132,7 @@ function finishTool(event) {
       ? `${(event.duration_ms / 1000).toFixed(1)}s`
       : `${event.duration_ms}ms`;
   fillToolDetail(row.details, row.detail, event.detail);
-  if (event.preview) showPreview(row.details, event.preview);
+  if (event.preview) showPreview(row.details, event.preview, event.version);
   if (!event.ok) row.details.open = true;             // a failure should not need a click
 }
 
@@ -303,15 +303,19 @@ function renderHistory(info) {
     }
     t.appendChild(turn);
   }
-  t.scrollTop = t.scrollHeight;
+  followBottom();          // a freshly opened session starts at the end
 }
 
-function showPreview(after, path) {
+function showPreview(after, path, version) {
   // A picture the model just drew belongs in the transcript, not behind a
   // filename the reader has to go and open somewhere else.
   const figure = el("figure", "preview");
   const img = el("img");
-  img.src = `/api/sessions/${state.sessionId}/file?path=${encodeURIComponent(path)}`;
+  // The version this message produced, not whatever the file says now: a
+  // frog drawn in one message and edited in a later one showed the edited
+  // frog in both, and the conversation stopped making sense.
+  const base = `/api/sessions/${state.sessionId}/file?path=${encodeURIComponent(path)}`;
+  img.src = version ? `${base}&v=${encodeURIComponent(version)}` : base;
   img.alt = path;
   img.loading = "lazy";
   // A file that will not load says so, rather than leaving a broken icon.
@@ -347,7 +351,7 @@ function pastToolRows(turn, calls) {
   for (const call of calls) {
     const row = pastToolRow(call);
     turn.appendChild(row);
-    if (call.preview) showPreview(row, call.preview);
+    if (call.preview) showPreview(row, call.preview, call.version);
   }
 }
 
@@ -559,7 +563,7 @@ async function send() {
     ? `${text}\n\n[also attached in uploads/: ${others.join(", ")}]`
     : text;
   const turn = newTurn(input.value.trim());
-  turn.scrollIntoView({ block: "end" });
+  followBottom();          // sending is an intent to watch the reply
   input.value = "";
   input.style.height = "auto";
   state.attachments = [];
@@ -733,6 +737,9 @@ function drawer(open) {
   $("#scrim").classList.toggle("open", open);
   $("#scrim").hidden = !open;
 }
+watchScrolling();
+$("#jump").onclick = (event) => { event.preventDefault(); followBottom(); };
+
 $("#menu").onclick = (event) => {
   event.preventDefault();
   drawer(!$("#sidebar").classList.contains("open"));

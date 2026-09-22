@@ -82,6 +82,9 @@ class ToolEnd(Event):
     duration_ms: int
     preview: str | None = None
     """Workdir-relative path of an image this call wrote, if it wrote one."""
+    version: str | None = None
+    """Which stored version of it, so an older message keeps showing what it
+    produced rather than whatever the file says now."""
     kind: str = "tool.end"
 
 

@@ -163,6 +163,15 @@ class ToolContext:
         if self.undo is not None:
             self.undo.before_write(path)
 
+    call_id: str | None = None
+    """Which tool call is running, so a kept version can be found again from
+    a stored transcript."""
+
+    def keep_version(self, path: Path) -> None:
+        """Record the file as this call left it, for the transcript to show."""
+        if self.undo is not None:
+            self.undo.after_write(path, self.call_id)
+
     def box(self) -> Sandbox:
         if self.sandbox is None:
             self.sandbox = Sandbox.for_workdir(self.workdir, on_output=self.on_output)
@@ -208,6 +217,7 @@ def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         path.write_text(content, encoding="utf-8")
     except OSError:
         return f"error: cannot write {name!r}"
+    ctx.keep_version(path)
     if not before:
         # The file itself, not just how big it is. A byte count says nothing
         # about what was written, and a new file is exactly when there is no
@@ -289,6 +299,7 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         path.write_text(after, encoding="utf-8")
     except OSError:
         return f"error: cannot write {name!r}"
+    ctx.keep_version(path)
     return _diff(before, after, name)
 
 
@@ -400,6 +411,7 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
             return "error: arguments must be a JSON object"
     except ValueError as exc:
         return f"error: arguments are not valid JSON: {exc}"
+    ctx.call_id = call.id
     try:
         return handler(ctx, args)
     except (OutsideRootError, _BadArgumentError) as exc:

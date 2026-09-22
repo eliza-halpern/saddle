@@ -32,7 +32,12 @@ from saddle.events import (
     TurnEnd,
 )
 from saddle.sessions import SessionStore
-from saddle.web.app import ChatServer, Live, build_app
+from saddle.web.app import (
+    ChatServer,
+    Live,
+    build_app,
+    history_for_display,
+)
 
 
 def one[E: Event](event: object, cls: type[E]) -> E:
@@ -1905,3 +1910,68 @@ def test_history_carries_the_index_each_message_can_be_rewound_to(
         {"role": "assistant", "content": "answer"},
     ]
     assert [m["index"] for m in history_for_display(messages, tmp_path)] == [0, 1, 2]
+
+
+def test_an_edited_image_keeps_each_messages_own_version(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """The reported bug: a frog drawn once and edited later showed the
+    edited frog in both messages, because previews were served by path and a
+    path only has one current content."""
+    from saddle.vllm import StreamToken, ToolCall
+
+    work = tmp_path / "work"
+    work.mkdir()
+
+    def write(body: str, call: str) -> list[list[Any]]:
+        return [
+            [ToolCall(id=call, name="write_file",
+                      arguments=json.dumps({"path": "frog.svg", "content": body}))],
+            [StreamToken(stream="content", text="done")],
+        ]
+
+    with engine_app(store, tmp_path, write("<svg>plain</svg>", "c1")) as (client, app):
+        sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        _server_of(app)._run(sid, "draw a frog")
+
+        ScriptedClient.rounds = write("<svg>blushing</svg>", "c2")
+        _server_of(app)._run(sid, "give it blush")
+
+        shown = [
+            row
+            for message in history_for_display(
+                store.load_messages(sid), work, store.undo_dir(sid)
+            )
+            for row in message.get("tools", [])
+        ]
+        assert [r["preview"] for r in shown] == ["frog.svg", "frog.svg"]
+        first, second = (r["version"] for r in shown)
+        assert first
+        assert second
+        assert first != second
+
+        # Each version is served as it was, while the bare path is current.
+        def fetch(query: dict[str, str]) -> str:
+            return client.get(f"/api/sessions/{sid}/file", params=query).text
+
+        assert fetch({"path": "frog.svg", "v": first}) == "<svg>plain</svg>"
+        assert fetch({"path": "frog.svg", "v": second}) == "<svg>blushing</svg>"
+        assert fetch({"path": "frog.svg"}) == "<svg>blushing</svg>"
+
+
+def test_a_bogus_version_is_refused_or_falls_back(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.svg").write_text("<svg/>")
+    with app_for(store, tmp_path) as (client, _app):
+        sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        # A version id is a blob name, so anything that is not one is refused
+        # rather than joined onto a path.
+        assert client.get(f"/api/sessions/{sid}/file",
+                          params={"path": "a.svg", "v": "../../etc/passwd"}
+                          ).status_code == 400
+        # An unknown but well-formed id falls back to the current file.
+        assert client.get(f"/api/sessions/{sid}/file",
+                          params={"path": "a.svg", "v": "deadbeef"}).text == "<svg/>"
