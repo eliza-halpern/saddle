@@ -8554,10 +8554,16 @@ and a test that asserts the literal while exercising nothing all bind.
 
 So, unlike T6-66's original, it is **satisfiable** -- the gate refuses
 the idiomatic spelling rather than every spelling, and the detail names
-the missing literal, so a repair attempt can find its way. That is why
-this is filed and not fixed: no run has yet shown it costing more than
-one attempt (attempt 2 died of T6-77's repair prompt before it could
-try), and moving a gate costs the measurement its fixed point.
+the missing literal, so a repair attempt can find its way.
+
+It failed twice in that run, attempts 1 and 3, on the identical example,
+and node-1 exhausted its attempts. It was nonetheless only *told* once:
+attempt 2 was lost to T6-77's repair prompt, and under T6-79 that
+truncation overwrote the gate detail, so attempt 3's prompt never named
+`requirement-binding` or `'3'` at all. That is why this is filed and not
+fixed -- the only attempt that had the diagnostic is attempt 1, and
+moving a gate on evidence from attempts that were flying blind costs the
+measurement its fixed point for a tax not yet fairly measured.
 
 The detail also steers toward the vacuous spelling by naming the number,
 which is T6-31's "state the behaviour, never the number" in a second
@@ -8569,6 +8575,46 @@ constructs the data and asserts the operation raises -- with the vacuous
 spelling exhibited as the known-bad it must still reject), or a run
 seals node-1 through it and this closes as a one-attempt tax with the
 evidence recorded.
+
+---
+
+### T6-79 — A truncated worker call or a failed apply overwrites the last gate failure, so the next attempt is told nothing about the code (open; measured)
+
+Files: `src/saddle/slice.py` (`_run_node`, the rolling `failure`),
+`tests/test_slice.py`.
+
+`_run_node` keeps one `failure` string and three places write it: the
+gate failure (`format_attempt_failure`), a worker-call failure, and a
+failed apply. Each overwrites the last, so a non-gate failure erases the
+only description of what is wrong with the tree.
+
+The distinction that makes this a defect rather than a policy: a
+truncation and a failed apply **apply nothing**. The tree the next
+attempt is handed is still the tree the last *gate* judged, and the last
+gate failure is the only thing that describes it.
+
+`runs/g1-0f6b83d` node-1 (F21.49) is the instance:
+
+| attempt | outcome | what the next attempt was told |
+|---|---|---|
+| 1 | gate failed: `requirement-binding` on `'3'` | the gate detail |
+| 2 | worker call truncated at 84 493 tokens | "completion truncated" -- the detail is gone |
+| 3 | gate failed: `requirement-binding` on `'3'` | -- (node exhausted) |
+
+Attempt 3's recorded prompt names neither `requirement-binding` nor
+`'3'`. It carries the truncation and a recovery plan written from it:
+"No edits are needed... Output: (empty -- no file changes required)". The
+worker emitted a partial restatement of the wrong file and failed the
+same gate it had never been shown.
+
+Done when: an attempt whose failure applied nothing carries the last
+gate failure forward alongside its own, and a node that has never been
+gated still reports only what happened. Known-good: a node whose
+attempt 1 fails a gate and whose attempt 2 truncates sees attempt 1's
+gate detail in attempt 3's prompt. Known-bad: a node whose FIRST attempt
+truncates must not fabricate a gate failure it never had. Direction:
+loosened (the prompt carries strictly more), so the known-bad half is
+the one that matters.
 
 ---
 
