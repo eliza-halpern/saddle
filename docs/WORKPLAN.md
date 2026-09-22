@@ -8023,6 +8023,104 @@ journal to report `verify: clean` **after a re-run**. The journal on
 disk is a record of a run made by the old emitter and the fix does not
 rewrite it; closing that clause needs GPU time for one t2 re-run.
 
+### T6-73 — One draw's transport failure discards its completed siblings (open; instance on disk)
+
+Files: `src/saddle/slice.py` (`_best_of_samples`'s `draw`, and the
+`isinstance(outcome, VllmResponseError)` branch that records a sample),
+`tests/test_slice.py`.
+
+Contract, stated in `_best_of_samples`'s own docstring: "A truncated or
+malformed completion loses this draw, not the others: the samples are
+independent, so one bad packet is not evidence about the rest."
+
+`draw` catches `VllmResponseError`. `VllmRequestError` is a SIBLING
+class, not a subclass -- `VllmError` is the common base -- so a
+transport failure (a timeout, a reset, a 5xx) propagates out of
+`pool.map`, out of `_best_of_samples`, and takes every completed draw
+with it.
+
+Instance: `g1-0217c79/t5-s1` (t5, saddle arm, at `0217c79`), sidecar
+`ec7e831cc61344f6ad3f25ade615525c.json`: `node-1`, `attempt 1`,
+`seed 1`, `wall_s 1800.004`, `error_type VllmRequestError`,
+`detail 'request failed: timed out'`, `samples list(0)`. That run's
+metrics sampler shows three draws in flight from t=411 s, falling to two
+at t=693 s and one at t=863 s: two draws COMPLETED, at roughly 288 s and
+458 s, and neither is recorded anywhere. The attempt sealed with no
+samples, the node failed, and with `--deadline 1700` below the request
+bound nothing else was dispatched -- `0 proven, 1 failed, 3 undispatched`.
+
+What makes this worth fixing rather than exempting: the recording
+machinery already exists and is merely unreachable on this path.
+`propose_diff` attaches `evidence` to any `VllmError` (it catches the
+base), and `_error_evidence`'s docstring names this exact case -- "a
+transport timeout arrives with nothing but its message". A per-draw
+failure is already modelled as a sample outcome; only the `except`
+clause is too narrow. The cost of the gap is not one draw but the whole
+attempt, and here the whole run.
+
+Fix direction: `draw` catches `(VllmResponseError, VllmRequestError)`
+and the sample branch widens to match. `VllmAuthError` must keep
+propagating: a rejected key is not a per-draw condition and retrying
+siblings cannot help. Direction: a widening of what is CAUGHT, which
+narrows what is LOST -- no gate moves, no threshold moves, no
+expectation flips. Known-good: three draws where one raises
+`VllmRequestError` and two return -- the two are evaluated in seed order,
+the attempt seals on the first that passes, and the failure is recorded
+as its own sample outcome carrying its evidence. Known-bad: the same
+three draws under current code lose both completed diffs and seal
+`samples: []`. Mutants: (1) `VllmRequestError` dropped from the except
+tuple (known-good goes red); (2) `VllmAuthError` added to the tuple (a
+bad key must still kill the run, not be recorded as a sample).
+Owner: main session; small.
+
+### T6-74 — `worker_max_tokens` can authorise a generation the request bound cannot fit (open; instance on disk)
+
+Files: `src/saddle/cli.py` (`worker_max_tokens`, `DEFAULT_CONTEXT_WINDOW`),
+`src/saddle/vllm.py` (`DEFAULT_TIMEOUT` and its comment),
+`tests/test_cli.py`.
+
+`DEFAULT_TIMEOUT`'s comment states its own contract: "it must exceed the
+slowest budget." On the worker diff path that bound is a whole-request
+one -- T6-30's withdrawal establishes the path is a plain POST, not the
+chat stream -- so the two constants are coupled, and nothing checks the
+coupling. `worker_max_tokens(prompt, context_window)` returns
+`context_window - len(prompt) // 3 - 2048`; at the default 175000 with a
+23 708-char prompt that is 165 050 tokens. Measured decode rate on this
+server is 78.1 tok/s per stream at three-way concurrency, so the
+authorised generation needs ~2 112 s against an 1 800 s bound. A draw
+that uses its budget CANNOT finish, and because the POST is
+non-streaming the timeout leaves no partial to record.
+
+Instance: the same sidecar as T6-73 -- 1 800.004 s for zero recorded
+bytes, 37 GPU-minutes. Rates are from that run's own metrics sampler:
+87.6 tok/s at one concurrent request, 87.3 at two, 78.1 at three
+(aggregate 234.4 tok/s -- vLLM batches, so per-stream barely degrades,
+and concurrency is NOT the cause).
+
+What makes this worth fixing rather than exempting: the failure is
+silent and total. Nothing warns that the budget exceeds what the bound
+can deliver; the run burns the timeout and reports a failed node with no
+reasoning, no diff and no usage. A cap also makes a runaway draw
+self-terminate at `finish_reason=length`, which IS recorded and IS
+retryable, instead of dying at the transport layer, which is neither.
+
+Fix direction: bound the worker budget by what the request bound can
+deliver, not only by what the window leaves --
+`min(window_left, floor(timeout * rate))`, with `rate` a declared FLOOR
+constant rather than a measured value, so the check stays deterministic
+across hardware. Raising `DEFAULT_TIMEOUT` instead moves a bound other
+paths rely on and leaves the coupling unchecked; lowering
+`DEFAULT_CONTEXT_WINDOW` alone fixes one prompt length, not the
+relation. Direction: tightened (the budget can only shrink).
+Known-good: a prompt whose window-left already sits under the
+deliverable cap is returned unchanged. Known-bad: a 175 000 window with
+a 23 708-char prompt returns the cap, not 165 050. Mutants: (1) the
+`min` dropped; (2) the rate constant raised until the cap never binds.
+Owner: main session. Related: T6-30 (withdrawn -- it asked whether
+1 800 s was the RIGHT bound and concluded it was; this asks what may be
+authorised under it), T6-73 (the same instance; that one loses the
+siblings, this one creates the failure).
+
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
 Files: `src/saddle/slice.py` (`_run_node`, after each gate run),
