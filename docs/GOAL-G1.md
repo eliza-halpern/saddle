@@ -4,17 +4,30 @@
 of every turn from a copy held app-side, which no file on disk controls —
 neither `.claude/settings*.json` (neither has a `hooks` key) nor anything
 under `~/.config/Claude`, checked including the binary stores. That copy
-lags: as of 2026-09-21 it still says `fees.py` reached 1334 lines (the
-tree holds 1337), that round 3e's reasoning is unread (read, F21.35), that
-the known-bad needs freezing (frozen and byte-identical at
-`tests/fixtures/degenerate_round3e.diff`), and that T6-31's gate-detail
-routing is where the wording changes (it is not — that draw was attempt 1
-and no gate had run).
+lags: as of 2026-09-22 it still says `fees.py` reached 1334 lines (the
+tree holds 1337), that round 3e's reasoning is unread (read, F21.35 —
+re-derived a second time on 2026-09-22 as F21.60 and retracted, because
+the hook said so again), that the known-bad needs freezing (frozen and
+byte-identical at `tests/fixtures/degenerate_round3e.diff`), and that
+T6-31's gate-detail routing is where the wording changes (it is not —
+that draw was attempt 1 and no gate had run).
 
 When the hook and this file disagree, **this file wins**. Before acting on
 any claim in either that something is unread, unbuilt or unfixed, grep the
 repo — docstrings included — and `../saddle-bench/runs/FINDINGS.md` for the
-correction first.
+correction first. Make that grep the FIRST action of such a turn, not a
+check performed afterwards: on 2026-09-22 the reading was already done
+and written up before the grep happened, twice, and both write-ups had to
+be retracted (F21.57, F21.60).
+
+**A superlative is a census claim.** "First", "never", "every", "always",
+"only" each name a whole population, so none may be written from the runs
+at hand. This file asserted a first that was not one; `find runs -name
+proofs.jsonl` over all 48 journals shows the first test node sealing in
+NINE runs. The population is also wider than the obvious name — the first
+test node is `node-1` in some runs and `n1`, `test-multi-currency` or
+`test-filterlang-spec` in others, so grepping one spelling confirms a
+false claim rather than refuting it.
 
 ---
 
@@ -91,6 +104,29 @@ line must be executed by the new tests", which the first emitted helper
 paraphrases in the word *requirement*; T6-44 removed it, and only the
 planner path (cli.py:347 -> T6-58) still launders the proxy.
 
+LANDED IS NOT BUILT, and this text says "BUILT" in four places. A fix
+that its own suite exercises may still be inert in production, and one
+was: T6-75 added `compelled_lines` so `coverage` would stop failing a
+node for lines `public-deletions` forbids it to delete, and shipped with
+a wiring test written for exactly this hazard -- its docstring says
+"removing the argument at the call site left all 949 tests green, which
+is T6-63's shape exactly -- a threaded value that would have shipped
+inert." The wiring was real. The test hand-built `changed={("n1.py", 2)}`
+-- workdir-relative -- while `runner.py`'s only production caller builds
+`changed = {(str(workdir / path), line) ...}` -- absolute. The exemption
+is applied as `spared = changed & set(compelled)`, so in every real run
+it intersects absolute against relative and spares NOTHING. `g1-79cd848`
+reproduced T6-75's trap in full on a tree carrying T6-75's fix: node-2
+failed `coverage` on `accounts.py:101-122`, deleted those four functions
+next attempt, and drew `public-deletions` naming `Account.__eq__`,
+`__repr__`, `from_dict`, `to_dict` (F21.62).
+
+So a check is closed only when its known-good and known-bad are built
+the way the PRODUCTION CALLER builds them. A fixture whose shape the
+caller never produces tests the fixture. Where a gate input is a set of
+`(path, line)` pairs, name which spelling it is in, and prefer one
+producer over three that each choose independently.
+
 Do not write "do not game the metrics". An instruction the harness cannot
 verify is decorative, and naming a metric makes it salient. State the
 behaviour, never the number: "quantize is never called with a JPY amount",
@@ -132,6 +168,43 @@ top-level `prompt` to 4 024 chars with "[truncated 33168 chars]" while
 prompt does not mean the prompt is lost; take the richer key too.
 Read node kind from the plan record (the first line of proofs.jsonl),
 never from the node id.
+
+A gate's `basis` -- the sealed half, where counts live once T6-44 took
+them out of `detail` -- is NOT in the sidecar: every `gates[]` entry
+there records `basis: null`. It survives only in the journal, under
+`gate_outputs[]` on the sealed-node record -- whose `record_type` is
+**`proof`**, while its `kind` is `test`, so keying on the wrong one of
+those two finds nothing. (`record_type` takes `plan`, `span`, `proof`;
+there is no top-level `checks` key anywhere in proofs.jsonl.) A census
+that reads sidecars, or that guesses either key, finds zero and reports
+the mechanism never fired when it has merely looked in the wrong place. Confirm any such census is
+non-vacuous first: count the records that carry a non-empty basis, and
+check a control mechanism that DID fire (`deferred-lines=`, T6-53)
+appears where expected.
+
+WHERE THE COUNT STANDS (dated 2026-09-22, recount before citing).
+**Zero.** No run has ended in agreement, so none of the three consecutive
+seeds has been banked. Census over all 48 journals, 24 of which carry a
+plan record:
+
+- Seven runs sealed every planned node -- `regress-99e3986` t1/t2/t3/t6
+  and `round3g`/`round3h`/`round3i` t5-s1 -- and every one of them was a
+  ONE- or TWO-node plan. The most nodes any run has ever sealed is two.
+- The seven `g1-*` runs all carry FOUR-node t5 plans (one, `g1-a876595`,
+  grew to eight through replans). Three sealed exactly one node, four
+  sealed none. **No `g1` run has ever sealed a second node.**
+- Nine runs across the whole population sealed their first test node, so
+  the test node is not the barrier and has not been for some time.
+
+Read that shape before choosing what to work on: the binding constraint
+is the FIRST IMPL NODE, which is where `coverage`, `public-deletions`,
+`property-coverage` and `mutation` all land at once, and which no run has
+yet got past. Nodes 3 and 4 in a four-node plan have never been
+dispatched at all, so nothing is known about them -- their silence is
+not evidence that they work. Emission, by contrast, measured SOLVED in
+3j; treating round 3e's shape as the live problem is reading a fixed
+defect as an open one, which is exactly what a census pooled across gate
+revisions does (F21.36 -> F21.37, and it cost a session).
 
 Before acting on any claim in THIS text that something is unread, unbuilt
 or unfixed: grep the repo -- docstrings included -- and the bench's
