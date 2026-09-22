@@ -4055,6 +4055,32 @@ Done when: mutants red; `./check.sh` green; a rerun of T1 alone (one
 seed, container) shows the node not sealing with the ratio in the
 transcript. Owner: main session.
 
+**Status (2026-09-21): PREREQUISITE MEASURED, AND IT FAILS. Do not start.**
+T6-6's own gate is "T6-1 row A shows separation (fires on T1, quiet on
+PASSes); otherwise this item is not started." That separation was
+measured offline, no GPU, against four retained T1 trees at one
+revision -- `behaviour_probe` prototyped exactly as specified here
+(single-edit near-misses of an accept; wrap the entry point to negate
+its answer at that input; run the suite; count unconstrained):
+
+| tree | oracle | constrained |
+| --- | --- | --- |
+| `regress-99e3986/t1/t1-saddle` (known-bad) | 12/18 | 12.5% |
+| `t1-probe-low` (known-good) | 18/18 | 37.5% |
+| `t1-probe-none` (known-good) | 18/18 | 37.5% |
+| `t1-untouched` (known-good) | 18/18 | **0.0%** |
+
+No threshold separates them: a tree that passes the oracle 18/18 scores
+strictly below the known-bad. The cause is exact, not statistical --
+the count of probes the suite detects EQUALS the count of probe
+literals that appear verbatim in the suite (0/6/2 against 0/6/2,
+correlation 1.0, no residual). A probe set derived independently of
+the suite measures whether the suite happened to choose the same
+strings, so T6-6 as specified is `requirement-binding` with extra
+steps and a worse failure mode. The salvageable part is the semantics
+(an assertion that pins the answer, not a literal that merely appears);
+it belongs in T6-71's binding clause, not in a twelfth gate.
+
 ### T6-7 — Baselines stop committing bytecode (bench-side; after the round)
 Files: `../saddle-bench/baselines/t2,t3,t4` (tracked `.pyc`: 2, 4, 6),
 `../saddle-bench/.gitignore`, `runs/round3/BASELINES.txt` (record the
@@ -7795,6 +7821,163 @@ record, on disk) and a known-good (a replan that declares its files and
 is accepted), and it must not break the first plan, where an empty
 declaration may be legitimate. Check `check_target_files`'s
 `unrestricted` branch for who else relies on it before tightening.
+
+### T6-70 — The retained diff is redacted after its hash is taken, so a diff containing `token` fails verification (open; instance on disk)
+Files: `src/saddle/journal.py` (`_RETAINED_WHOLE`, `_scrub_evidence`,
+`redact_secrets` docstring), `tests/test_journal.py`.
+`_proposal_evidence` (slice.py) seals `diff_hash = sha256(proposal.diff)`
+and `"diff": proposal.diff` in one dict, so they agree when written.
+`write_attempt_sidecar` then passes every value through
+`_scrub_evidence`; `_RETAINED_WHOLE` exempts `diff`/`prompt`/`thinking`
+from the length cap but NOT from `redact_secrets`, whose
+`_NAMED_PATTERN` rewrites `(api[_-]?key|password|secret|token)\s*[:=]\s*\S+`
+to `name=***`. A tokenizer's source matches. The stored diff then does
+not hash to its `diff_hash`, T6-27's `_sidecar_diff_mismatch` fires, and
+`verify` fails the journal.
+Direction: the fix is a loosening of what is redacted, and it needs the
+loosening rule's evidence -- given below, both halves, from one run.
+Known-bad (the gate is right to fail this data): round 3 regression at
+`99e3986`, `regress-99e3986/t6/t6-saddle`, sidecar
+`4c7c5ac39c7f4d3687fdee53f2a02146.json`: `+Token=***, ["kind",` (was
+`Token = namedtuple("Token", [...])`) and `"unexpected token=*** %
+tok.kin`. Journal fails `sidecar-diff-hash@line 860`; the run exits 1.
+Known-good, same run, same mechanism, one variable: sidecar
+`ce82ac6cb50b487aba805def4ac06e50.json` (the test node) contains no
+`token`-shaped text, redaction is a no-op, and it verifies.
+Severity is not the exit code. Every gate passed, the node sealed
+(`refs/saddle/proven/impl-filterlang-spec`), merge-suite exited 0 and
+`oracle_t6.py` returns PASS (17/17 hidden, 12/12 shipped, 25 arm tests):
+the run is an AGREEMENT reported as a failure. The retained evidence is
+also unfaithful -- T6-27 exists so an attempt can be replayed verbatim,
+and replaying this one yields `Token=***, ["kind",`, which is not
+Python. `samples[i].diff` carries no hash at all, so nothing detects
+the same corruption there, and G1's protocol requires reading exactly
+that field.
+Census, dated `99e3986`, `os.walk` over `runs/` (denominator stated):
+49 sidecars carry both `diff` and `diff_hash`; 7 mismatch. Six are in
+`round3e` and are the OLD pre-`_RETAINED_WHOLE` capping defect (F21.16,
+already repaired -- they contain no `***`); one is this. G1's frozen
+known-bad `4a9e00b8` is intact where it matters: `samples[1].diff` is
+23 201 chars untruncated and `samples[1].thinking` is 47 586, the
+number G1 cites; only that file's top-level `diff`/`thinking` are
+capped at 4024.
+Preferred fix: do not redact `diff`. A diff is source code, it is
+already written into the worktree and into git by the time the sidecar
+is authored, so scrubbing the sidecar copy protects nothing the tree
+does not already expose while guaranteeing the evidence is unfaithful.
+Keep redaction for `prompt` and `thinking` (prose, and the prompt can
+carry an injected key), and hash those AFTER scrubbing if a hash is
+ever added. Also fix `redact_secrets`'s docstring: it says "length
+untouched" and `\1=***` collapses the separator and the value.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. remove `diff` from the retained-unredacted set -> the T6 known-bad diff round-trips to `Token=***` -> red.
+2. `_sidecar_diff_mismatch`'s `!=` -> `==` -> the known-good sidecar reports a mismatch -> red.
+Done when: mutants red; `./check.sh` green; `saddle explain` on
+`regress-99e3986/t6/t6-saddle/.saddle/proofs.jsonl` reports `verify:
+clean` against the sidecar re-authored from the same proposal. Owner:
+main session (journal contract).
+
+### T6-71 — A requirement's examples are derived from the accept's domain, not floored at one (open; offline proof)
+Files: `src/saddle/dag.py` (`Requirement`: the `min_length=1` floor on
+`accepts`/`rejects` that T6-4 landed), `src/saddle/gates.py`
+(`check_requirement_binding`'s `examples=` clause), `src/saddle/cli.py`
+(planner prompt), `src/saddle/vllm.py` (schema), `tests/test_dag.py`,
+`tests/test_gates.py`, `tests/test_cli.py`.
+The defect is upstream of every gate. T1's task is 90 bytes
+("Implement the email-format validator stub in validators.py and add
+pytest coverage for it") and the stub's docstring is "Return True when
+`address` looks like a valid email address". From that the planner
+emitted two requirements naming three literals -- accept
+`user@example.com`, reject `user@example.com.`, reject
+`user@@example.com` -- which is the minimum `min_length=1` permits. The
+worker then wrote `re.fullmatch(r"[^@]+@\w+\.\w+", address)` and four
+tests. All 13 gates passed, the journal verified, merge exited 0, and
+`oracle_t1.py` returns 12/18. No gate downstream can recover
+information the plan discarded, so no gate is at fault: the
+specification the harness wrote for itself was impoverished, and the
+gates enforced it faithfully.
+Contract: for a requirement whose accepts are strings, saddle GENERATES
+the single-edit near-misses of each accept (the T6-6 edit set: insert
+space, duplicate dot, dot to a boundary, second `@`, hyphen at a label
+edge, delete one char) and the requirement is invalid unless every
+generated near-miss appears in `accepts` or in `rejects` -- the planner
+declares a verdict for each, it does not choose how many. Symmetrically
+the accepts must realise the distinct structural variants of the
+accept's own shape. Neither half is a tunable number; both are
+properties of the accept, which is what keeps this out of G1's "a new
+number to optimise against".
+Direction: tightened. Loosening none.
+Known-bad / known-good, measured offline at `99e3986`, no GPU, with the
+18/18 `t1-untouched` validator as the labelling oracle and saddle's own
+12/18 validator as the subject:
+- reject side: declaring a verdict for all 16 generated near-misses of
+  `user@example.com` catches 5 disagreements, covering 4 of the 6
+  oracle misses (`us er@`, `.u@`, `u.@`, `u..x@`).
+- accept side: structural variants catch the other 2 -- multi-label
+  domain (`user@mail.example.com`) and hyphenated labels
+  (`my-name@my-host.com`) are both rejected by saddle's regex.
+- 6 of 6 oracle misses are caught, and NONE of the examples used is an
+  oracle string: the oracle's own cases are `first.last@mail.example.co`
+  and `a-b@ex-ample.com`. The rule is not taught to the test.
+Open question this does NOT settle, and it must be settled before the
+item lands: `t1-untouched` passes the oracle 18/18 while binding none
+of the 16 generated literals, so a tightened binding clause would
+REFUSE it. That is O7 (a gate that refuses correct work). The
+resolution is that the worker SEES the declared examples (T6-4 status:
+"the worker prompt lists every example under its requirement") and
+`t1-untouched` was never given any, so it is a known-good for the
+oracle and not for binding; the known-good for binding must be built
+under the requirement. Build it and show it passes before tightening.
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the generated-near-miss completeness check -> `True` -> T1's actual two-requirement plan validates -> known-bad red.
+2. the structural-variant clause -> `True` -> a single-accept requirement validates -> known-bad red.
+Done when: mutants red; `./check.sh` green; the constructed known-good
+binds and passes; one T1 run (630 s at `99e3986`, the cheapest task in
+the suite) shows the plan carrying the generated examples and the
+oracle at 18/18. Owner: main session (schema + prompt + validator).
+
+### T6-72 — A replan must journal every node whose hash it changes, not only the replacement (open; instance on disk)
+Files: `src/saddle/journal.py` (`verify`'s `planned_hashes`, which
+`update`s across plan records), the replan emitter in
+`src/saddle/slice.py`/`cli.py` that appends the second plan record,
+`tests/test_journal.py`.
+Instance: round 3 regression at `99e3986`,
+`regress-99e3986/t2/t2-saddle`. The journal holds two plan records --
+line 1 with `test-retries` (`1d1cf3c1`) and `impl-retries`
+(`afe0c878`), line 63 with only the replacement `test-retries.r1`
+(`71fd9a1d`). The proof at line 135 seals `impl-retries` with
+`node_hash` `01c1cb70`, which is in NEITHER record, and its
+`parent_proofs` is the replacement node's record hash `fbec50db`. So
+the impl node was re-hashed after the replan -- consistent with its
+dependency list being rewired onto `test-retries.r1`, though
+`dependencies` is not journaled in the node summary, so the field that
+changed is inferred from the parent, not read. `verify` fails
+`unplanned-proof@line 135` and the run exits 1.
+What makes this worth fixing rather than exempting: the run is
+CORRECT. Both nodes sealed with zero gate failures
+(`test-retries.r1#1`, `impl-retries#1`), and `oracle_t2.py` returns
+PASS on all ten scored checks with the arm's suite green at 7 passed.
+This is an agreement reported as a failure, the same shape as T6-70.
+Two of the three completed runs at `99e3986` fail this way.
+Fix direction: a replan record carries the COMPLETE post-replan plan,
+not the delta. `verify` already accumulates rather than replaces, so a
+complete record needs no change on the reading side and the rewired
+node's hash is present by construction. The alternative -- excluding
+dependencies from `hash_node` -- is wrong: the dependency edge is part
+of what a proof was sealed against, which is the whole point of
+`hash_node` (T6-13).
+Direction: tightened (the journal gains a record it was omitting); no
+threshold moves and nothing is exempted.
+Known-bad: this run's line-63 record, one node where the plan has two.
+Known-good: `regress-99e3986/t1/t1-saddle` and
+`regress-99e3986/t6/t6-saddle`, neither of which replans, both of
+which pass this check (t1 verifies clean end to end).
+Contract mutants (each target occurs once; abort if `grep -c` is not 1; drop `__pycache__` after each revert):
+1. the replan emitter's complete-plan list -> the replacement node alone -> the known-bad reproduces -> red.
+2. `planned_hashes.update` -> `planned_hashes =` (replace not accumulate) -> a resumed run's earlier proofs read as unplanned -> red.
+Done when: mutants red; `./check.sh` green; `saddle explain` on
+`regress-99e3986/t2/t2-saddle/.saddle/proofs.jsonl` reports `verify:
+clean` after a re-run. Owner: main session (journal contract).
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
