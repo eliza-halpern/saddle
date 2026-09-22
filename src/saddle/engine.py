@@ -63,6 +63,21 @@ English prose still fits.
 Erring high costs reply budget in a conversation large enough to be
 compacting anyway. Erring low costs the whole turn: HTTP 400, empty reply."""
 
+CHAT_TEMPERATURE: Final = 1.0
+"""Sampling temperature for a browser chat turn.
+
+Deliberately not the 0.0 the rest of saddle uses, and the difference is a
+contract change rather than a tweak: a run's claims depend on the same
+prompt producing the same bytes, so `saddle run` stays greedy. A
+conversation is not a measurement. Greedy decoding made chat answers
+identical on every retry, pushed long generations toward repetition, and
+flattened persona voices by always taking the single likeliest token.
+
+This applies only here. `TurnOptions` is used by `saddle.web` and nothing
+else -- `saddle up` has its own turn loop and `saddle run` never touches
+this module -- so no measured path is affected. Session titling stays at
+0.0 on purpose: a name should not change each time it is asked for."""
+
 MIN_OUTPUT: Final = 8192
 """Floor for a reply's budget even in a nearly-full window. Below this a
 reply gets cut mid-sentence, which is worse than compacting harder."""
@@ -79,7 +94,7 @@ class TurnOptions:
     turn reasoning at `xhigh` can spend 40,000-80,000 tokens thinking before
     it writes a word. A reply truncated mid-thought is the single most
     annoying failure a chat UI has."""
-    temperature: float = 0.0
+    temperature: float = CHAT_TEMPERATURE
     reasoning_effort: str = "medium"
     system_prompt: str = ""
     context_tokens: int = 175_000

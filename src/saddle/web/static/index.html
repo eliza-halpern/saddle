@@ -15,6 +15,9 @@
       <label>Persona
         <select id="persona"></select>
       </label>
+      <label>Temperature <output id="temp-value">1.0</output>
+        <input id="temp" type="range" min="0" max="2" step="0.1" value="1">
+      </label>
       <label>Thinking
         <select id="effort">
           <option value="none">none</option>
@@ -68,6 +71,9 @@
      persona or thinking level only affects that session.</p>
   <div class="settings-grid">
     <label>Default persona <select id="default-persona"></select></label>
+    <label>Default temperature <output id="default-temp-value">1.0</output>
+      <input id="default-temp" type="range" min="0" max="2" step="0.1" value="1">
+    </label>
     <label>Default thinking
       <select id="default-effort">
         <option value="none">none</option>

@@ -428,6 +428,7 @@ def check_changed_line_coverage(
     minimum: float,
     owed: Collection[str] = (),
     compelled: Collection[tuple[str, int]] = (),
+    writable: bool = True,
 ) -> GateCheck:
     """Every changed line must be executed; `minimum` is the node threshold.
 
@@ -492,6 +493,21 @@ def check_changed_line_coverage(
                     f"changed-lines={len(changed)} deferred-lines={len(missing)}"
                     f"{note} owed={','.join(sorted(owed))}"
                 ),
+            )
+        if not writable:
+            # T6-53 asked whether the SCHEDULE could still cover the
+            # line and deferred when it could. It never asked the
+            # other half: whether THIS node could, and an `impl` node
+            # never can. With no test node owed the two answers
+            # diverge, which is the commonest plan the planner draws,
+            # and the node's only way to green is to delete the branch
+            # the task requires -- a pass the oracle then fails, which
+            # is Goal G1's own definition of a gate defect (F21.66).
+            return GateCheck(
+                name="coverage",
+                passed=True,
+                detail=f"deferred, no node that may write a test remains to reach {gaps}",
+                basis=(f"changed-lines={len(changed)} unreachable-lines={len(missing)}{note}"),
             )
         return GateCheck(
             name="coverage",
@@ -1617,6 +1633,7 @@ def check_requirement_binding(
     planned_ids: Collection[str] = (),
     examples: Collection[tuple[str, str, str]] = (),
     suite: Mapping[str, str] | None = None,
+    writable: bool = True,
 ) -> GateCheck:
     """Every declared requirement is cited, and every citation is planned.
 
@@ -1653,6 +1670,20 @@ def check_requirement_binding(
         for req in requirement_ids
         if not any(req in source for source in flipped_tests.values())
     )
+    if not writable:
+        # Every clause here is a function of the tests and the plan.
+        # A node that may not edit tests cannot move any of them, so
+        # the gate reads the same whatever it writes -- it judges the
+        # test node's output and bills this one for it (F21.66). The
+        # examples clause was already exempted on this argument; the
+        # other two were not. The gap is recorded, not lost.
+        note = f" unbound={','.join(unbound)}" if unbound else ""
+        return GateCheck(
+            name="requirement-binding",
+            passed=True,
+            detail="not judged: every clause reads tests this node may not write",
+            basis=f"requirement-binding: not judged, node may not write tests{note}",
+        )
     if unbound:
         return GateCheck(
             name="requirement-binding",
@@ -1863,6 +1894,9 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
     gate = node.deterministic_gate
     sample = gate.mutation_sample
     is_spec = node.kind == "test"
+    # The `impl`/`test` split (`check_node_scope`): an `impl` node may
+    # not edit tests, so no gate may bill it for what the tests say.
+    may_write_tests = node.kind != "impl"
     syntax = check_syntax(inputs.sources)
     ruff = check_ruff(
         inputs.ruff_files,
@@ -1889,6 +1923,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             compelled_lines(
                 inputs.baseline_sources, inputs.sources, inputs.workdir, inputs.covered
             ),
+            writable=may_write_tests,
         )
     )
     checks = (
@@ -1941,6 +1976,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             # edit tests and a refactor preserves them, so neither is asked.
             examples=node.requirement_examples if is_spec else (),
             suite={**inputs.baseline_tests, **inputs.flipped_tests},
+            writable=may_write_tests,
         ),
         _not_required("mutation")
         if is_spec

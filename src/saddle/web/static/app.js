@@ -264,6 +264,7 @@ function renderHistory(info) {
   state.folder = info.workdir;
   $("#persona").value = info.persona;
   if (info.reasoning_effort) $("#effort").value = info.reasoning_effort;
+  if (info.temperature !== undefined) showTemperature(info.temperature);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
     handle({ kind: "context", used: info.context_used || 0, limit: info.context_limit });
@@ -595,6 +596,8 @@ async function openSettings() {
   await loadPersonas();
   $("#default-persona").value = settings.persona;
   $("#default-effort").value = settings.reasoning_effort;
+  $("#default-temp").value = String(settings.temperature);
+  $("#default-temp-value").textContent = Number(settings.temperature).toFixed(1);
   $("#persona-pick").value = settings.persona;
   showPersona(settings.persona);
   $("#settings-dialog").showModal();
@@ -606,6 +609,7 @@ async function saveDefaults() {
     body: JSON.stringify({
       persona: $("#default-persona").value,
       reasoning_effort: $("#default-effort").value,
+      temperature: Number($("#default-temp").value),
     }),
   });
 }
@@ -664,6 +668,29 @@ $("#effort").onchange = async (event) => {
     body: JSON.stringify({ reasoning_effort: event.target.value }),
   });
 };
+function showTemperature(value) {
+  // The slider and its readout are one control; setting the value without
+  // the label leaves the number lying about what is selected.
+  $("#temp").value = String(value);
+  $("#temp-value").textContent = Number(value).toFixed(1);
+}
+
+// `input` fires per step, which would PATCH on every pixel of a drag, so the
+// session is written on `change` -- when the handle is let go.
+$("#temp").oninput = (event) => {
+  $("#temp-value").textContent = Number(event.target.value).toFixed(1);
+};
+$("#temp").onchange = async (event) => {
+  await api(`/api/sessions/${state.sessionId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ temperature: Number(event.target.value) }),
+  });
+};
+$("#default-temp").oninput = (event) => {
+  $("#default-temp-value").textContent = Number(event.target.value).toFixed(1);
+};
+$("#default-temp").onchange = saveDefaults;
+
 $("#persona").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },

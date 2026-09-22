@@ -1345,7 +1345,7 @@ def test_a_new_session_starts_at_the_stated_defaults_not_a_reset(
 ) -> None:
     with app_for(store, tmp_path) as (client, _app):
         assert client.get("/api/settings").json() == {
-            "persona": "engineer", "reasoning_effort": "xhigh",
+            "persona": "engineer", "reasoning_effort": "xhigh", "temperature": 1.0,
         }
         client.patch("/api/settings", json={"persona": "reviewer",
                                             "reasoning_effort": "low"})
@@ -1380,7 +1380,9 @@ def test_an_unknown_setting_is_ignored_rather_than_stored(
     with app_for(store, tmp_path) as (client, _app):
         body = client.patch("/api/settings", json={"nonsense": "x",
                                                    "persona": "plain"}).json()
-        assert body == {"persona": "plain", "reasoning_effort": "xhigh"}
+        assert body == {
+            "persona": "plain", "reasoning_effort": "xhigh", "temperature": 1.0,
+        }
 
 
 # -- writing and editing personas ---------------------------------------------
@@ -1567,3 +1569,104 @@ def test_a_moved_session_still_gets_a_fresh_tool_context(
         assert after is not before
         assert after is not None
         assert after.workdir == elsewhere
+
+
+# -- the temperature knob -----------------------------------------------------
+
+def test_a_chat_turn_samples_rather_than_being_greedy(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """Chat runs at 1.0, not the 0.0 the measured paths use.
+
+    Greedy decoding gave the same answer to the same question every time,
+    pushed long generations toward repetition, and flattened persona voices
+    by always taking the likeliest token. A conversation is not a
+    measurement; `saddle run` keeps 0.0.
+    """
+    seen: list[float] = []
+
+    def capture(_c: Any, messages: list[dict[str, Any]], text: str, options: Any,
+                **_kw: Any) -> Any:
+        seen.append(options.temperature)
+        messages.append({"role": "user", "content": text})
+        return iter(())
+
+    import saddle.web.app as module
+
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        module.run_turn = capture  # type: ignore[assignment]
+        _server_of(app)._run(sid, "hello")
+
+    assert seen == [1.0]
+
+
+def test_the_knob_reaches_the_turn(store: SessionStore, tmp_path: Path) -> None:
+    seen: list[float] = []
+
+    def capture(_c: Any, messages: list[dict[str, Any]], text: str, options: Any,
+                **_kw: Any) -> Any:
+        seen.append(options.temperature)
+        messages.append({"role": "user", "content": text})
+        return iter(())
+
+    import saddle.web.app as module
+
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"temperature": 0.2})
+        module.run_turn = capture  # type: ignore[assignment]
+        _server_of(app)._run(sid, "hello")
+
+    assert seen == [0.2]
+
+
+def test_zero_is_a_real_temperature_not_an_absent_one(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # 0.0 is the one setting whose most meaningful value is falsy, so a
+    # truthiness check would drop it and silently leave the session at 1.0.
+    with app_for(store, tmp_path) as (client, _app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        assert client.patch(
+            f"/api/sessions/{sid}", json={"temperature": 0.0}
+        ).json()["temperature"] == 0.0
+        assert client.patch(
+            "/api/settings", json={"temperature": 0.0}
+        ).json()["temperature"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("sent", "want"),
+    [(2.5, 2.0), (-1, 0.0), (99, 2.0), ("hot", 1.0), (None, 1.0), (0.7, 0.7)],
+)
+def test_a_temperature_the_server_would_refuse_is_clamped(
+    store: SessionStore, tmp_path: Path, sent: Any, want: float
+) -> None:
+    # vLLM refuses an out-of-range temperature outright rather than clipping,
+    # and the UI shows a refused request as a turn that produced nothing.
+    with app_for(store, tmp_path) as (client, _app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        assert client.patch(
+            f"/api/sessions/{sid}", json={"temperature": sent}
+        ).json()["temperature"] == want
+
+
+def test_a_different_temperature_makes_a_new_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Same rule as persona: setting the knob is setting the session up, so
+    # asking for a new one must not hand back your configured session.
+    with app_for(store, tmp_path) as (client, _app):
+        mine = client.post("/api/sessions", json={}).json()
+        client.patch(f"/api/sessions/{mine['id']}", json={"temperature": 0.3})
+        assert client.post("/api/sessions", json={}).json()["id"] != mine["id"]
+
+
+def test_the_stream_reports_the_temperature_so_the_knob_shows_it(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with live_app(store, tmp_path) as (client, _app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"temperature": 1.6})
+        assert _frames(client, sid, 1)[0]["temperature"] == 1.6

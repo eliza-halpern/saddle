@@ -146,6 +146,7 @@ class SessionInfo(Event):
     workdir: str
     persona: str
     reasoning_effort: str = "xhigh"
+    temperature: float = 1.0
     context_used: int = 0
     context_limit: int = 175_000
     messages: list[dict[str, Any]] = field(default_factory=list)

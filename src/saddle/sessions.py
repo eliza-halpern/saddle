@@ -26,6 +26,9 @@ SETTINGS_FILE: Final = "settings.json"
 PERSONA_FILE: Final = "personas.json"
 DEFAULT_PERSONA: Final = "engineer"
 DEFAULT_EFFORT: Final = "xhigh"
+DEFAULT_TEMPERATURE: Final = 1.0
+MIN_TEMPERATURE: Final = 0.0
+MAX_TEMPERATURE: Final = 2.0
 MAX_PERSONA_NAME: Final = 40
 
 BUILTIN_PERSONAS: Final[dict[str, str]] = {
@@ -62,6 +65,10 @@ class Session:
     persona: str = "engineer"
     system_prompt: str = ""
     reasoning_effort: str = "xhigh"
+    temperature: float = DEFAULT_TEMPERATURE
+    """0 is greedy and reproducible; higher samples more widely. Per session,
+    because one conversation wanting a deterministic answer and the next
+    wanting range is normal."""
     auto_title: bool = True
     """False once someone renames the session by hand: a title the user chose
     is never overwritten by the model."""
@@ -106,6 +113,20 @@ class SessionStore:
             json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
 
+    @staticmethod
+    def clamp_temperature(value: Any) -> float:
+        """A temperature the server will accept, from whatever arrived.
+
+        The knob is a slider, but the API takes anything, and vLLM refuses
+        an out-of-range request outright rather than clipping -- which the
+        UI would show as a turn that produced nothing.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return DEFAULT_TEMPERATURE
+        return max(MIN_TEMPERATURE, min(MAX_TEMPERATURE, number))
+
     def settings(self) -> dict[str, Any]:
         """What a new session starts as, with the shipped values as the floor.
 
@@ -117,12 +138,23 @@ class SessionStore:
         return {
             "persona": str(stored.get("persona") or DEFAULT_PERSONA),
             "reasoning_effort": str(stored.get("reasoning_effort") or DEFAULT_EFFORT),
+            "temperature": (
+                DEFAULT_TEMPERATURE
+                if stored.get("temperature") is None
+                else self.clamp_temperature(stored.get("temperature"))
+            ),
         }
 
     def update_settings(self, **changes: Any) -> dict[str, Any]:
         current = self.settings()
         for key, value in changes.items():
-            if key in current and value:
+            if key not in current or value is None:
+                continue
+            # `if value:` would silently drop a temperature of 0 -- the one
+            # setting whose most meaningful value is falsy.
+            if key == "temperature":
+                current[key] = self.clamp_temperature(value)
+            elif value != "":
                 current[key] = str(value)
         self._write_json(SETTINGS_FILE, current)
         return current
@@ -180,7 +212,9 @@ class SessionStore:
             raise ValueError(msg)
         return self.root / safe
 
-    def unstarted(self, *, persona: str, reasoning_effort: str) -> Session | None:
+    def unstarted(
+        self, *, persona: str, reasoning_effort: str, temperature: float
+    ) -> Session | None:
         """An *untouched* session: unwritten, and set up the way a new one would be.
 
         Clicking "new session" five times should not leave five identical
@@ -201,6 +235,8 @@ class SessionStore:
                 continue
             if session.persona != persona or session.reasoning_effort != reasoning_effort:
                 continue
+            if session.temperature != temperature:
+                continue
             if session.system_prompt.strip():
                 continue
             return session
@@ -213,15 +249,23 @@ class SessionStore:
         workdir: str = ".",
         persona: str | None = None,
         reasoning_effort: str | None = None,
+        temperature: float | None = None,
         reuse_unstarted: bool = False,
     ) -> Session:
         defaults = self.settings()
         want_persona = persona or defaults["persona"]
         want_effort = reasoning_effort or defaults["reasoning_effort"]
+        want_temp = (
+            defaults["temperature"]
+            if temperature is None
+            else self.clamp_temperature(temperature)
+        )
         with self._create_lock:
             if reuse_unstarted:
                 existing = self.unstarted(
-                    persona=want_persona, reasoning_effort=want_effort
+                    persona=want_persona,
+                    reasoning_effort=want_effort,
+                    temperature=want_temp,
                 )
                 if existing is not None:
                     # Honour a folder the caller asked for; leave the rest,
@@ -235,15 +279,25 @@ class SessionStore:
                 workdir=workdir,
                 persona=want_persona,
                 reasoning_effort=want_effort,
+                temperature=want_temp,
             )
 
-    def _create(self, *, title: str, workdir: str, persona: str, reasoning_effort: str) -> Session:
+    def _create(
+        self,
+        *,
+        title: str,
+        workdir: str,
+        persona: str,
+        reasoning_effort: str,
+        temperature: float,
+    ) -> Session:
         session = Session(
             id=uuid.uuid4().hex[:12],
             title=title,
             workdir=str(Path(workdir).expanduser().resolve()),
             persona=persona,
             reasoning_effort=reasoning_effort,
+            temperature=temperature,
         )
         directory = self._dir(session.id)
         (directory / "uploads").mkdir(parents=True, exist_ok=True)

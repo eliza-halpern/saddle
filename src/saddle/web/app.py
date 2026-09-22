@@ -200,6 +200,7 @@ class ChatServer:
                     journal=self.store.journal_path(session_id),
                     system_prompt=session.prompt_text(self.store.personas()),
                     reasoning_effort=session.reasoning_effort,
+                    temperature=session.temperature,
                     context_tokens=self._context_window(client),
                 )
                 for event in run_turn(
@@ -259,6 +260,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             workdir=body.get("workdir") or str(default_workdir),
             persona=body.get("persona"),
             reasoning_effort=body.get("reasoning_effort"),
+            temperature=body.get("temperature"),
             # The sidebar's "+" asks for a session, not necessarily a new
             # one: an unwritten session is the same unwritten session, so
             # five impatient clicks leave one.
@@ -296,6 +298,8 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         # A name the user typed is theirs; the model must not replace it.
         if "title" in body:
             body.setdefault("auto_title", False)
+        if "temperature" in body:
+            body["temperature"] = store.clamp_temperature(body["temperature"])
         session = store.update(request.path_params["sid"], **body)
         # The Live is deliberately kept. It used to be dropped here "because
         # the workdir or persona may have moved", but a Live is not a cache of
@@ -440,6 +444,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
                     workdir=session.workdir,
                     persona=session.persona,
                     reasoning_effort=session.reasoning_effort,
+                    temperature=session.temperature,
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
                     messages=history_for_display(store.load_messages(sid), Path(session.workdir)),
