@@ -9,6 +9,12 @@ dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
     "rich>=13.9",
+    # The chat UI (`saddle web`). Starlette rather than a hand-rolled
+    # http.server: SSE, multipart uploads and routing are all things worth
+    # borrowing rather than reinventing, and uvicorn is its usual server.
+    "starlette>=0.41",
+    "uvicorn>=0.32",
+    "python-multipart>=0.0.12",
 ]
 
 [dependency-groups]

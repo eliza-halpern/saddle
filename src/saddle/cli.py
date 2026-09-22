@@ -1160,6 +1160,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Candidate test draws per survivor round.",
     )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
+    web = sub.add_parser("web", help="Open the chat UI in a browser.")
+    web.add_argument("--workdir", default=".", help="Default folder for new sessions.")
+    web.add_argument("--host", default="127.0.0.1", help="Bind address (default: loopback).")
+    web.add_argument("--port", type=int, default=8777)
+    web.add_argument(
+        "--sessions", default=None,
+        help="Session store (default: ~/.saddle/sessions).",
+    )
+    web.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
+    web.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    web.add_argument("--no-open", action="store_true", help="Do not open a browser.")
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
     up.add_argument(
@@ -1192,7 +1203,7 @@ def main(
     stderr: IO[str] | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
-    if args.command not in ("run", "doctor", "dag", "verify", "tail", "up", "explain"):
+    if args.command not in ("run", "doctor", "dag", "verify", "tail", "up", "explain", "web"):
         return 0
     if args.command == "verify":
         return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
@@ -1220,6 +1231,22 @@ def main(
                 context_window=server_context_window(client, args.context_window),
             )
             return run_dag(dag_options, client, stdout=stdout or sys.stdout)
+    if args.command == "web":
+        from saddle.web.app import serve
+
+        url = f"http://{args.host}:{args.port}/"
+        print(f"saddle chat UI on {url}", file=stdout or sys.stdout)
+        if not args.no_open:
+            import webbrowser
+
+            webbrowser.open(url)
+        serve(
+            host=args.host, port=args.port, api_key=key,
+            base_url=args.base_url, model=args.model,
+            workdir=Path(args.workdir).resolve(),
+            sessions_root=Path(args.sessions) if args.sessions else None,
+        )
+        return 0
     if args.command == "up":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             try:

@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>saddle</title>
+<link rel="stylesheet" href="/static/app.css">
+<div id="app">
+  <aside id="sidebar">
+    <div class="side-head">
+      <span class="brand">saddle</span>
+      <button id="new-session" title="New session">+</button>
+    </div>
+    <div id="session-list"></div>
+    <div class="side-foot">
+      <label>Persona
+        <select id="persona"></select>
+      </label>
+      <label>Thinking
+        <select id="effort">
+          <option value="none">none</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="xhigh">xhigh</option>
+        </select>
+      </label>
+      <label>Folder
+        <button id="pick-folder" class="folder"><span id="folder-name">—</span></button>
+      </label>
+    </div>
+  </aside>
+
+  <main>
+    <header id="topbar">
+      <input id="title" spellcheck="false" aria-label="Session title">
+      <span id="status" class="status idle">idle</span>
+    </header>
+
+    <div id="transcript"></div>
+
+    <form id="composer" autocomplete="off">
+      <div id="attachments"></div>
+      <div class="composer-row">
+        <button type="button" id="attach" title="Attach files or images">＋</button>
+        <textarea id="input" rows="1" placeholder="what are we making today?"
+                  spellcheck="false"></textarea>
+        <button type="submit" id="send" title="Send">↑</button>
+      </div>
+      <input type="file" id="file-input" multiple hidden>
+    </form>
+  </main>
+</div>
+
+<dialog id="folder-dialog">
+  <h3>Working folder</h3>
+  <div id="folder-path" class="mono"></div>
+  <div id="folder-entries"></div>
+  <menu>
+    <button id="folder-up">Up</button>
+    <button id="folder-cancel">Cancel</button>
+    <button id="folder-use" class="primary">Use this folder</button>
+  </menu>
+</dialog>
+
+<script src="/static/app.js"></script>
