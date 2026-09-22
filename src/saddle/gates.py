@@ -1298,30 +1298,51 @@ def _asserted_literals(source: str) -> set[str]:
     return found
 
 
-def _called_names(source: str) -> set[str]:
-    """Every operation a `test*` function calls, spelled as the final name.
+def _performed_calls(source: str) -> set[tuple[str, frozenset[str]]]:
+    """Every call a `test*` function performs, as `(operation, constants)`.
 
-    `deposit('10.00', 'USD')` is bound by `acc.deposit(...)` as much as by
-    a bare `deposit(...)`: the planner names the operation, not whatever
-    receiver it happens to hang off.
+    `deposit('10.00', 'USD')` is performed by `acc.deposit(...)` as much
+    as by a bare `deposit(...)`: the planner names the operation, not
+    whatever receiver it happens to hang off. Constants are spelled the
+    way `_asserted_literals` spells what it finds, so an example's
+    arguments and a call's arguments are comparable.
+
+    Only a test that asserts something counts (T6-69). Requiring an
+    `Assert` or a `With` somewhere in the function is what keeps the
+    tightening half of T6-50: a function that performs the operation and
+    makes no claim about it binds nothing.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return set()
-    found: set[str] = set()
+    found: set[tuple[str, frozenset[str]]] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         if not node.name.startswith("test"):
             continue
+        if not any(isinstance(s, ast.Assert | ast.With) for s in ast.walk(node)):
+            continue
         for call in ast.walk(node):
             if not isinstance(call, ast.Call):
                 continue
             if isinstance(call.func, ast.Name):
-                found.add(call.func.id)
+                name = call.func.id
             elif isinstance(call.func, ast.Attribute):
-                found.add(call.func.attr)
+                name = call.func.attr
+            else:
+                continue
+            found.add(
+                (
+                    name,
+                    frozenset(
+                        argument.value if isinstance(argument.value, str) else ast.unparse(argument)
+                        for argument in [*call.args, *(k.value for k in call.keywords)]
+                        if isinstance(argument, ast.Constant)
+                    ),
+                )
+            )
     return found
 
 
@@ -1375,7 +1396,9 @@ def _example_values(text: str) -> frozenset[str] | None:
     )
 
 
-def _example_unbound(text: str, literals: set[str], called: set[str]) -> str | None:
+def _example_unbound(
+    text: str, literals: set[str], performed: set[tuple[str, frozenset[str]]]
+) -> str | None:
     """Why no test binds `text`, as a detail suffix, or `None` when one does.
 
     T6-50, from round 3f (F21.20). The literal rule alone could not be
@@ -1387,6 +1410,19 @@ def _example_unbound(text: str, literals: set[str], called: set[str]) -> str | N
     `autofix`, which it does not. So a call-shaped example is bound by
     the test that performs that operation and asserts on the values it
     was given, and the quoting escape closes with it.
+
+    T6-69, from round 3j (F21.41): "asserts on the values" was read as
+    "the constants appear inside an `assert`", which is not where Python
+    puts the arguments of the call a test exercises. A reject is spelled
+    `with pytest.raises(...): deposit("0.001", "USD")` -- a `With`, which
+    `_asserted_literals` collects -- and an accept is spelled
+    `result = deposit("1.001", "USD")` then `assert result == ...`, an
+    `Assign`, which nothing collects. The gate bound every reject and
+    missed every accept, six attempts running. The proxy is replaced by
+    what it stood for: the test must CALL the operation with those
+    arguments. Looser for the accept it always missed, TIGHTER against a
+    test that calls with different values while the example's constants
+    sit in an unrelated assert, which the proxy bound.
 
     T6-66, from round 3j (F21.41): a STRUCTURED example -- the planner's
     version-2 store record -- is not a call, so it fell to the literal
@@ -1410,11 +1446,13 @@ def _example_unbound(text: str, literals: set[str], called: set[str]) -> str | N
             return f" (no test asserts on {', '.join(repr(value) for value in unasserted)})"
         return None
     name, constants = call
-    if name not in called:
+    if not any(performed_name == name for performed_name, _ in performed):
         return f" (no test calls {name})"
-    if unasserted := sorted(constants - literals):
-        return f" (no test asserts on {', '.join(repr(value) for value in unasserted)})"
-    return None
+    if any(
+        performed_name == name and constants <= arguments for performed_name, arguments in performed
+    ):
+        return None
+    return f" (no test calls {name} with {', '.join(repr(v) for v in sorted(constants))})"
 
 
 def check_requirement_binding(
@@ -1478,14 +1516,14 @@ def check_requirement_binding(
             detail=f"undeclared requirements cited: {', '.join(orphans)}",
         )
     literals: set[str] = set()
-    called: set[str] = set()
+    performed: set[tuple[str, frozenset[str]]] = set()
     for source in (suite if suite is not None else flipped_tests).values():
         literals |= _asserted_literals(source)
-        called |= _called_names(source)
+        performed |= _performed_calls(source)
     unasserted = [
         f"{rid} {polarity} {text!r}{why}"
         for rid, polarity, text in examples
-        if (why := _example_unbound(text, literals, called)) is not None
+        if (why := _example_unbound(text, literals, performed)) is not None
     ]
     if unasserted:
         return GateCheck(

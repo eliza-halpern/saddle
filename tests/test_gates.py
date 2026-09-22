@@ -842,14 +842,79 @@ def test_requirement_binding_refuses_a_call_example_that_is_quoted_not_performed
     check = check_requirement_binding(["REQ-001"], values_only, examples=examples)
     assert check.passed is False
     assert check.detail.endswith("(no test calls deposit)")
-    call_only = {
+    wrong_values = {
         "test_a.py": (
-            'def test_c():  # REQ-001\n    acc.deposit("10.00", "USD")\n    assert acc.balance\n'
+            'def test_c():  # REQ-001\n    acc.deposit("5.00", "USD")\n'
+            '    assert "10.00" and "USD"\n'
         )
     }
-    check = check_requirement_binding(["REQ-001"], call_only, examples=examples)
+    check = check_requirement_binding(["REQ-001"], wrong_values, examples=examples)
     assert check.passed is False
-    assert check.detail.endswith("(no test asserts on '10.00', 'USD')")
+    assert check.detail.endswith("(no test calls deposit with '10.00', 'USD')")
+    asserts_nothing = {"test_a.py": 'def test_c():  # REQ-001\n    acc.deposit("10.00", "USD")\n'}
+    check = check_requirement_binding(["REQ-001"], asserts_nothing, examples=examples)
+    assert check.passed is False
+    assert check.detail.endswith("(no test calls deposit)")
+
+
+def test_requirement_binding_binds_a_call_the_test_assigns_before_asserting() -> None:
+    """Round 3j (F21.41): the binding proxy asked whether the example's
+    constants appear inside an `assert`, which is not where a Python test
+    puts the arguments of the call it is exercising. A reject is written
+    `with pytest.raises(...): deposit("0.001", "USD")` -- a `With`, which
+    `_asserted_literals` collects -- and an accept is written
+    `result = deposit("1.001", "USD")` then `assert result == ...`, an
+    `Assign`, which nothing collects. So the gate bound every reject and
+    missed every accept: six attempts of round 3j, accepts 3 unbound and
+    rejects 1 unbound, every time, with no variance at all.
+
+    The proxy is replaced by the thing it stood for: a test must CALL the
+    operation with the example's constant arguments. That is looser in
+    one direction and tighter in the other -- the decoy below calls with
+    different values while the example's constants sit in an assert
+    elsewhere, and the proxy bound it.
+    """
+    example = [("REQ-001", "accepts", "deposit('1.001', 'USD')")]
+    assign_then_assert = {
+        "test_a.py": (
+            "def test_sub_cent_rounds():  # REQ-001\n"
+            '    result = acc.deposit("1.001", "USD")\n'
+            '    assert result == Decimal("1.00")\n'
+        )
+    }
+    assert check_requirement_binding(["REQ-001"], assign_then_assert, examples=example).passed
+    decoy = {
+        "test_a.py": (
+            "def test_decoy():  # REQ-001\n"
+            '    result = acc.deposit("5.00", "USD")\n'
+            '    assert "1.001" not in str(result) and "USD"\n'
+        )
+    }
+    check = check_requirement_binding(["REQ-001"], decoy, examples=example)
+    assert check.passed is False
+    assert check.detail.endswith("(no test calls deposit with '1.001', 'USD')")
+    # The example names the salient arguments, not necessarily all of them,
+    # so a call supplying MORE binds and a call supplying FEWER does not.
+    # Nothing else pins the direction of the comparison: every other case
+    # here has the two sets exactly equal, and a mutant reversing it lived.
+    extra_arguments = {
+        "test_a.py": (
+            "def test_extra():  # REQ-001\n"
+            '    result = acc.deposit("1.001", "USD", strict=True)\n'
+            '    assert result == Decimal("1.00")\n'
+        )
+    }
+    assert check_requirement_binding(["REQ-001"], extra_arguments, examples=example).passed
+    missing_argument = {
+        "test_a.py": (
+            "def test_missing():  # REQ-001\n"
+            '    result = acc.deposit("1.001")\n'
+            '    assert result == Decimal("1.00")\n'
+        )
+    }
+    check = check_requirement_binding(["REQ-001"], missing_argument, examples=example)
+    assert check.passed is False
+    assert check.detail.endswith("(no test calls deposit with '1.001', 'USD')")
 
 
 def test_requirement_binding_keeps_the_literal_rule_for_what_is_not_a_call() -> None:
