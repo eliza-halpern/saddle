@@ -10,6 +10,8 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from textwrap import dedent
 from typing import Any, ClassVar, cast
 
 import httpx
@@ -18,6 +20,7 @@ import pytest
 from saddle.cli import (
     CONTENTS_WITHHELD,
     DEFAULT_CONTEXT_WINDOW,
+    EDIT_RULES,
     EMIT_ROUNDS,
     MAX_FILES_IN_PROMPT,
     OUTPUT_MARGIN,
@@ -52,6 +55,7 @@ from saddle.cli import (
     worker_max_tokens,
 )
 from saddle.dag import DIFF_OVERHEAD_TOKENS, REQ_NEAR_MISS_K, TOKENS_PER_LINE, Dag, Node
+from saddle.edits import apply_edits, parse_edits
 from saddle.evidence import CapturedRun, git_ls_files, ruff_version, run_argv
 from saddle.gates import GateCheck, Tier1Result, check_node_scope
 from saddle.journal import (
@@ -1544,6 +1548,36 @@ def test_main_run_rejects_bad_effort() -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["run", "--reasoning-effort", "bogus", "Do it."])
     assert exc_info.value.code == 2
+
+
+def test_the_edit_rules_worked_example_is_itself_a_payload_that_applies() -> None:
+    """The example shown to the worker must be one saddle would accept.
+
+    A real node emitted 194 search lines, every one prefixed "- " rather
+    than "-", and nothing matched: the rules said "prefixed with -" and
+    never showed it. The example is the fix, so the example is now the
+    contract -- it is extracted from the rules, parsed by the real
+    parser, and applied to the file the rules display right above it.
+
+    That last step is what pins the defect. A prefix of "- " still
+    parses; it simply yields a search block with a space the file does
+    not have, so the apply is what refuses it, exactly as the live draw
+    was refused.
+    """
+    assert "Worked example." in EDIT_RULES, "the rules no longer show the worker an example"
+    shown = dedent(EDIT_RULES.split("containing:\n\n")[1].split("\n\nto change")[0]) + "\n"
+    start = EDIT_RULES.index("edit fees.py")
+    example = EDIT_RULES[start : EDIT_RULES.index(">>>>>>>\n", start) + len(">>>>>>>\n")]
+
+    (edit,) = parse_edits(example)
+    assert edit.search == "    return amount * 0.03\n"
+    assert edit.replace == "    return amount * RATE\n"
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "fees.py").write_text(shown)
+        apply_edits(root, example)
+        assert (root / "fees.py").read_text() == shown.replace("0.03", "RATE")
 
 
 def test_the_worker_prompt_states_the_envelope_it_will_be_graded_in() -> None:

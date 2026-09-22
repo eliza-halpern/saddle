@@ -408,17 +408,40 @@ Rules:
 - To change part of a file: "edit <file>", then the exact lines you are
   replacing each prefixed with "-", then a "=======" line, then the lines
   that replace them each prefixed with "+", then ">>>>>>>".
+- The prefix is a single character and NOTHING follows it before the
+  line's own text. Write "-def fee(amount):", never "- def fee(amount):".
+  A line's own indentation is part of the line and is kept exactly.
 - The "-" lines must reproduce the file exactly and must name ONE place in
   it. If they match twice they name no single site and the edit is
   refused, so include enough surrounding lines to be unique.
 - Emit only the lines you are changing plus the few needed to locate
-  them. Do not reproduce parts of the file you are not touching.
+  them. Do not reproduce parts of the file you are not touching: a long
+  block is slower and more likely to differ from the file somewhere.
 - To create a new file: "create <file>", then every line prefixed with
   "+", then ">>>>>>>".
 - To delete a file: "delete <file>" on its own line, nothing after it.
 - Make as many edits as you need, in any order, to any files in scope.
 - A file you do not name is left exactly as it is. Only name the files
   you are changing.
+
+Worked example. Given fees.py containing:
+
+    FLAT = 0.30
+
+    def fee(amount):
+        return amount * 0.03
+
+to change only the rate, emit exactly this and nothing else:
+
+edit fees.py
+-    return amount * 0.03
+=======
++    return amount * RATE
+>>>>>>>
+
+One line named, one line replacing it, its four spaces of indentation
+carried through, and FLAT and the "def" line left alone because they are
+not changing.
 """
 
 
