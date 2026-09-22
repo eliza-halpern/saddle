@@ -7822,7 +7822,7 @@ is accepted), and it must not break the first plan, where an empty
 declaration may be legitimate. Check `check_target_files`'s
 `unrestricted` branch for who else relies on it before tightening.
 
-### T6-70 — The retained diff is redacted after its hash is taken, so a diff containing `token` fails verification (open; instance on disk)
+### T6-70 — The retained diff is redacted after its hash is taken, so a diff containing `token` fails verification (fixed, `4aace01`)
 Files: `src/saddle/journal.py` (`_RETAINED_WHOLE`, `_scrub_evidence`,
 `redact_secrets` docstring), `tests/test_journal.py`.
 `_proposal_evidence` (slice.py) seals `diff_hash = sha256(proposal.diff)`
@@ -7936,7 +7936,7 @@ binds and passes; one T1 run (630 s at `99e3986`, the cheapest task in
 the suite) shows the plan carrying the generated examples and the
 oracle at 18/18. Owner: main session (schema + prompt + validator).
 
-### T6-72 — A replan must journal every node whose hash it changes, not only the replacement (open; instance on disk)
+### T6-72 — A replan must journal every node whose hash it changes, not only the replacement (fixed, `0217c79`)
 Files: `src/saddle/journal.py` (`verify`'s `planned_hashes`, which
 `update`s across plan records), the replan emitter in
 `src/saddle/slice.py`/`cli.py` that appends the second plan record,
@@ -8023,7 +8023,7 @@ journal to report `verify: clean` **after a re-run**. The journal on
 disk is a record of a run made by the old emitter and the fix does not
 rewrite it; closing that clause needs GPU time for one t2 re-run.
 
-### T6-73 — One draw's transport failure discards its completed siblings (open; instance on disk)
+### T6-73 — One draw's transport failure discards its completed siblings (fixed, `1b90c20`)
 
 Files: `src/saddle/slice.py` (`_best_of_samples`'s `draw`, and the
 `isinstance(outcome, VllmResponseError)` branch that records a sample),
@@ -8615,6 +8615,91 @@ gate detail in attempt 3's prompt. Known-bad: a node whose FIRST attempt
 truncates must not fabricate a gate failure it never had. Direction:
 loosened (the prompt carries strictly more), so the known-bad half is
 the one that matters.
+
+### T6-80 — The edit applier counted substrings where its contract says lines: one known-good refused, four ways to write the wrong bytes (landed)
+
+Files: `src/saddle/edits.py` (`_line_starts`, `_replace_once`),
+`tests/test_edits.py`.
+
+Found by property-based testing against `saddle.edits`, not by a run
+(F21.50). `_replace_once` counted with `source.count(search)` and applied
+with `source.replace(search, replace, 1)` -- substring semantics -- while
+every block line is a whole line and `loose_spans`, the fallback, is
+line-aligned. The fast path shadows the fallback whenever the count is
+non-zero, so the looser semantics won wherever both applied.
+
+The contract is the function's own docstring: "a search block that
+matches twice names no particular site, and guessing one is how an edit
+silently lands in the wrong place."
+
+| | input | before | after |
+|---|---|---|---|
+| A | file has `    return None` and `        return None`; block names the first | refused, "appears 2 times" | applies |
+| B | file has only `        return None`; block names `    return None` | applied at the deeper line | refused |
+| C | same, two-line replacement | applied, second line at column 0 -- will not parse | refused |
+| D | file has `    return 10`; block names `    return 1` | applied inside the number, `    return 20` | refused |
+| G | block is a single empty `-` line | ate the newline, `a = 1\n` to `a = 1x = 2\n` | refused |
+
+A is the T6-66 shape, an applier refusing work that was right. B, C, D
+and G are the shape the docstring forbids. Only A writes anything to a
+log, so the silent four leave no trace but a gate failure the detail
+cannot explain -- D least of all, since it produces a plausible wrong
+*value* and no gate distinguishes "the worker asked for 2" from "the
+applier wrote 20".
+
+Direction: **scope narrowed**. The match relation narrows from substring
+to line-aligned substring, which rejects B/C/D/G and, by no longer
+counting non-sites, admits A. The final-line accommodation narrows from
+"the trimmed block occurs once anywhere" to "the trimmed block ends the
+file", which is what it always meant and is unique by construction. The
+splice moves to the offset that was counted: `str.replace` takes the
+first substring occurrence, which can sit mid-line ahead of the only
+line-aligned one, counting one site and editing another.
+`loose_spans` is unchanged; it was already line-aligned.
+
+Done: six tests, one per row above plus the splice-site clause, each red
+against the shipped module and green against the fix.
+
+
+### T6-81 — A refused search block would not say which line diverged, so a worker one character off could not repair it (landed)
+
+Files: `src/saddle/edits.py` (`_first_divergence`, `_replace_once`),
+`tests/test_edits.py`.
+
+`runs/g1-a876595` lost **three of its six attempts** to
+`the search block does not appear in the file`, and none of the three is
+an applier defect (F21.51). node-1 attempt 3's block was thirteen lines;
+twelve were in the tree verbatim and the thirteenth was
+`"accounts": [{"owner": "a", "balances": {"USD": "10.00"}},` against the
+tree's `...}}],` -- one missing `]`. Reproduced with `parse_edits` and
+`loose_spans` against `git show
+refs/saddle/attempt/node-1/1:tests/test_store.py`.
+
+The refusal is correct. What it could not do is say *which* of thirteen
+lines was wrong, or what the file held instead, so the next attempt was
+guessing; it failed the same way.
+
+Direction: **neither**. Nothing about what is accepted moves -- the
+block is refused before and after. Only the message changes. The
+information was already in hand at the point of refusal: `loose_spans`
+had returned no span, and the first search line absent from the source
+is one set lookup away.
+
+Replayed against the real tree, the message the run should have given:
+
+```
+tests/test_store.py: the search block does not appear in the file. Its
+line 6 reads '        "accounts": [{"owner": "a", "balances": {"USD":
+"10.00"}},'; the file's closest line is '        "accounts": [{"owner":
+"a", "balances": {"USD": "10.00"}}],'
+```
+
+Three cases, three tests, each red before and green after: a near line
+exists; no line is close (say so rather than point at whichever scored
+least badly); every line is present but not consecutive (naming one
+would be a lie, so the order is named instead). Blank lines are skipped
+because `loose_spans` never matches on them.
+
 
 ---
 
