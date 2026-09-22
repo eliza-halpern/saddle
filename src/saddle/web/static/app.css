@@ -321,12 +321,7 @@ figure.preview figcaption { margin-top: 8px; font: 12px var(--mono); color: var(
   color: var(--ink-dim); width: 28px; height: 28px; border-radius: 10px;
   cursor: pointer; font-size: 13px;
   transition: transform .16s cubic-bezier(.34,1.56,.64,1), color .16s; }
-/* The + rotates a quarter turn because that lands it on a meaningful shape:
-   + becomes x. A cog has no second shape to become -- 45deg just parks it
-   between its own teeth, which is what read as a diamond. So the gear turns
-   continuously instead: every cycle is a whole revolution, so it cannot come
-   to rest askew whatever the glyph's tooth count. The reduced-motion rule at
-   the end of this file switches it off. */
-#settings:hover { color: var(--rose); animation: gear 2.2s linear infinite; }
-@keyframes gear { to { transform: rotate(360deg) } }
+/* A quarter turn, the same as the + beside it. It was 45deg, which parked
+   the cog between its own teeth and read as a diamond. */
+#settings:hover { color: var(--rose); transform: rotate(90deg); }
 .side-head { gap: 8px; }

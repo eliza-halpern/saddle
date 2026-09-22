@@ -286,7 +286,9 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             table = store.delete_persona(request.path_params["name"])
         except KeyError as exc:
             # A builtin cannot be deleted, only shadowed and then restored.
-            return JSONResponse({"error": str(exc).strip("'")}, status_code=404)
+            # `str(KeyError)` is the repr of its argument, quotes and all, so
+            # the message is taken from args rather than stringified.
+            return JSONResponse({"error": exc.args[0]}, status_code=404)
         return JSONResponse(table)
 
     async def patch_session(request: Request) -> JSONResponse:

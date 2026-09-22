@@ -1231,26 +1231,38 @@ def test_reusing_an_unstarted_session_still_honours_a_new_folder(
         assert again["workdir"] == str(elsewhere)
 
 
-def test_concurrent_requests_for_a_new_session_do_not_race(
-    store: SessionStore, tmp_path: Path
-) -> None:
-    # Reuse is read-then-write, so without a lock two clicks arriving
-    # together both read "none" and both create.
+def test_concurrent_creates_do_not_race(store: SessionStore, tmp_path: Path) -> None:
+    """Reuse is a read then a write, so it needs a lock.
+
+    Driven against the store, not through TestClient: TestClient runs every
+    request through one portal, so a "concurrent" test written against it is
+    serialised and cannot see the race at all. The first version of this test
+    was exactly that, and a mutant that deleted the lock survived it.
+
+    `unstarted()` reads a file per session, so the window between "no
+    unstarted session" and "created one" is real rather than theoretical.
+    """
     made: list[str] = []
-    barrier = threading.Barrier(6)
+    failed: list[BaseException] = []
+    threads_count = 8
+    barrier = threading.Barrier(threads_count)
 
-    with app_for(store, tmp_path) as (client, _app):
-        def ask() -> None:
+    def ask() -> None:
+        try:
             barrier.wait(timeout=10)
-            made.append(client.post("/api/sessions", json={}).json()["id"])
+            made.append(store.create(workdir=str(tmp_path), reuse_unstarted=True).id)
+        except BaseException as exc:
+            failed.append(exc)
 
-        threads = [threading.Thread(target=ask) for _ in range(6)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=15)
+    threads = [threading.Thread(target=ask) for _ in range(threads_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
 
-    assert len(set(made)) == 1, made
+    assert failed == []
+    assert len(made) == threads_count
+    assert len(set(made)) == 1, f"{len(set(made))} distinct sessions from one burst"
     assert len(store.list()) == 1
 
 
@@ -1344,7 +1356,9 @@ def test_a_builtin_that_was_never_edited_cannot_be_deleted(
     with app_for(store, tmp_path) as (client, _app):
         reply = client.delete("/api/personas/engineer")
         assert reply.status_code == 404
-        assert "engineer" in reply.json()["error"]
+        # The message is the contract: it has to say *why* -- that there is
+        # nothing of yours under that name -- not just fail.
+        assert reply.json()["error"] == "no editable persona named 'engineer'"
 
 
 def test_a_persona_needs_a_name(store: SessionStore, tmp_path: Path) -> None:
