@@ -8266,7 +8266,7 @@ Files: `src/saddle/edits.py` (new), `src/saddle/vllm.py`
 (`_build_diff_payload`, `propose_diff`), `src/saddle/cli.py`
 (`WHOLE_FILE_RULES`, `EDIT_RULES`, `build_worker_prompt`,
 `build_recovery_plan_prompt`, `build_repair_prompt`, `RunOptions`,
-`--emission`), `src/saddle/slice.py` (`_EDIT_HEAD`, `_apply_diff`),
+`--emission`), `src/saddle/slice.py` (`_EDIT_HEAD`, `_write_files`),
 `tests/test_edits.py`, `tests/test_{vllm,cli,slice}.py`.
 
 `DIFF_GRAMMAR` admits exactly two shapes: a whole-file write
@@ -8310,6 +8310,17 @@ Two more commits followed, both measured rather than reasoned:
 - `e15ee29` gave `EDIT_RULES` a worked example after a draw on a real
   recorded node prompt emitted 194 search lines prefixed `"- "` and
   matched nothing.
+- The dispatch then had to move. `be3b094` put it in `_apply_diff`,
+  which **nothing in `src` calls** -- this file already recorded that,
+  and the fix is the reason it matters. A worker proposal reaches
+  `_write_files`, both in place and on the throwaway copy a draw is
+  scored against (`_evaluate_candidate`), and `_write_files` refused
+  anything without a `diff --git` header. The first `--emission edit`
+  run is the evidence: `runs/g1-1df1d58/t5-s1`, four draws, every one
+  refused with "worker content is not a file payload", while
+  `_apply_diff`'s own edit tests stayed green throughout. The
+  replacement known-good drives `_run_node` rather than an apply
+  function, so a test pointed at the wrong door cannot pass it.
 
 **Status: the payload half is measured and works.** Redrawing `node-1`
 of `runs/g1-bd633bd` from its own recorded prompt, with `EDIT_RULES` and
@@ -8318,7 +8329,9 @@ and applied, all four compile, nothing outside them touched; payload
 13 994 chars against the whole-file arm's 15 577 on the same node.
 
 Done when: a full t5 run with `--emission edit` seals a node. Still
-open, and the remaining risk is not the format — it is that the t5
+open -- the one run attempted died on the dispatch above, before any
+node was gated, so it measured nothing about the format. The
+remaining risk is not the format — it is that the t5
 baseline is 7 170 bytes across four modules, so the edit format's
 ceiling there is about a 23% cut in per-draw emission (the reasoning is
 ~77% of emitted characters; F21.46). The format's value on t5 is

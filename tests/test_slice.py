@@ -244,40 +244,6 @@ def test_apply_diff_applies_and_stages(tmp_path: Path) -> None:
     assert staged.stdout.split() == ["n.py"]
 
 
-def test_apply_diff_applies_an_edit_payload_and_stages_it(tmp_path: Path) -> None:
-    """One apply path carries either envelope, told apart by the first word.
-
-    Known-good: an edit block reaches `apply_edits`, changes the file and
-    is staged the way a diff would be, and the caller is told which
-    envelope it was. A dispatch that fell through to `git apply` would
-    raise "not a unified diff" instead.
-    """
-    _git_repo(tmp_path)
-    payload = "edit n.py\n-x = 1\n=======\n+x = 2\n>>>>>>>\n"
-    assert _apply_diff(tmp_path, payload) == "edits"
-    assert (tmp_path / "n.py").read_text() == "x = 2\n"
-    staged = subprocess.run(
-        ["git", "-C", str(tmp_path), "diff", "--cached", "--name-only"],
-        capture_output=True,
-        text=True,
-    )
-    assert staged.stdout.split() == ["n.py"]
-
-
-def test_apply_diff_names_the_worktree_when_an_edit_does_not_apply(tmp_path: Path) -> None:
-    """Known-bad half: an edit naming no site is a spent attempt, reported
-    like any other failed apply -- not an EditError escaping the layer."""
-    _git_repo(tmp_path)
-    payload = "edit n.py\n-y = 9\n=======\n+y = 8\n>>>>>>>\n"
-    expected = (
-        f"worker edits did not apply in {str(tmp_path)!r}: "
-        "n.py: the search block does not appear in the file"
-    )
-    with pytest.raises(RuntimeError, match=re.escape(expected)):
-        _apply_diff(tmp_path, payload)
-    assert (tmp_path / "n.py").read_text() == "x = 1\n"
-
-
 def test_apply_diff_recounts_wrong_hunk_headers(tmp_path: Path) -> None:
     _git_repo(tmp_path)
     diff = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,3 +1,3 @@\n-x = 1\n+x = 2\n"
@@ -348,6 +314,46 @@ def test_write_files_replaces_the_whole_file_and_stages_it(tmp_path: Path) -> No
     (tmp_path / "n.py").write_text("x = 1\ny = 2\nz = 3\n")
     _write_files(tmp_path, whole_file("n.py", "x = 9"))
     assert (tmp_path / "n.py").read_text() == "x = 9\n"
+    assert _staged(tmp_path) == ["n.py"]
+
+
+def test_write_files_applies_an_edit_payload_and_stages_it(tmp_path: Path) -> None:
+    """One apply path carries either envelope, told apart by the first word.
+
+    Known-good: an edit block reaches `apply_edits`, changes the file and
+    is staged the way a whole-file section is. Falling through to the
+    envelope check below would raise "not a file payload" instead.
+    """
+    _git_repo(tmp_path)
+    _write_files(tmp_path, "edit n.py\n-x = 1\n=======\n+x = 2\n>>>>>>>\n")
+    assert (tmp_path / "n.py").read_text() == "x = 2\n"
+    assert _staged(tmp_path) == ["n.py"]
+
+
+def test_write_files_names_the_worktree_when_an_edit_does_not_apply(tmp_path: Path) -> None:
+    """Known-bad half: an edit naming no site is a spent attempt, reported
+    like any other failed apply -- not an EditError escaping the layer."""
+    _git_repo(tmp_path)
+    payload = "edit n.py\n-y = 9\n=======\n+y = 8\n>>>>>>>\n"
+    expected = (
+        f"worker edits did not apply in {str(tmp_path)!r}: "
+        "n.py: the search block does not appear in the file"
+    )
+    with pytest.raises(RuntimeError, match=re.escape(expected)):
+        _write_files(tmp_path, payload)
+    assert (tmp_path / "n.py").read_text() == "x = 1\n"
+
+
+def test_write_files_stages_only_the_paths_an_edit_payload_named(tmp_path: Path) -> None:
+    """Known-bad for the pathspec. A draw is scored on a `copytree` of a
+    live worktree, so a bare `git add -A` would stage whatever else was
+    lying in it and the gate would read a tree the payload never wrote.
+    The whole-file arm names its paths; this one names the same list
+    `apply_edits` reports back.
+    """
+    _git_repo(tmp_path)
+    (tmp_path / "stray.py").write_text("junk = 1\n")
+    _write_files(tmp_path, "edit n.py\n-x = 1\n=======\n+x = 2\n>>>>>>>\n")
     assert _staged(tmp_path) == ["n.py"]
 
 
@@ -1790,6 +1796,35 @@ def test_each_attempt_of_a_node_keeps_its_own_graded_tree(tmp_path: Path) -> Non
         _tree_at(tmp_path, first),
         _tree_at(tmp_path, second),
     ]
+
+
+GOOD_EDITS = "edit n.py\n-    return 1\n=======\n+    return 2\n>>>>>>>\n"
+
+
+def test_a_node_seals_on_an_edit_payload_the_way_it_does_on_a_file_payload(
+    tmp_path: Path,
+) -> None:
+    """T6-77 known-good, driven from the caller rather than the function.
+
+    The dispatch's first home was `_apply_diff`, which nothing in `src`
+    calls; its own tests were green while every draw of the first
+    `--emission edit` run was refused for a missing `diff --git` header.
+    A unit test on an apply function cannot tell those two stories apart,
+    so this one goes through `_run_node` -- the path a worker proposal
+    actually takes, scoring copy included -- and stays red unless the
+    dispatch sits where the proposal lands.
+    """
+    _slice_repo(tmp_path)
+    node = Node.model_validate(_node_dict("n1", []))
+    journal = tmp_path / "proofs.jsonl"
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        return DiffProposal(GOOD_EDITS, "")
+
+    asyncio.run(_run_node(node, tmp_path, journal, propose, {}, "run", (), task_hash=""))
+    assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
+    ref = attempt_ref("n1", 1)
+    assert run_capture(["git", "show", f"{ref}:n.py"], tmp_path).stdout.endswith("return 2\n")
 
 
 def test_run_node_transport_failure_restores_the_tree_and_names_itself(tmp_path: Path) -> None:

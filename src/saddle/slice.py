@@ -50,7 +50,6 @@ from saddle.evidence import (
     restore_baseline,
     ruff_argv,
     run_argv,
-    run_capture,
     run_shell,
     run_shell_capture,
     run_stdin_capture,
@@ -482,12 +481,6 @@ def _reconstruction_evidence(diff: str) -> dict[str, Any]:
     return {"reconstruction": recovered}
 
 
-# An edit payload opens with its operation and a path; a unified diff opens
-# with "diff --git". The two are told apart by that first word alone, so a
-# run can carry either without a flag reaching this far down.
-_EDIT_HEAD: Final = re.compile(r"^(?:edit|create|delete) [^/\n]")
-
-
 def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = None) -> str:
     """Apply a proposed diff from stdin and stage it; gates diff tracked content.
 
@@ -508,21 +501,6 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     # T6-48: the packaging comes off before anything judges the content,
     # so the precheck and every rung see the same bytes.
     diff = _unwrapped(diff)
-    if _EDIT_HEAD.match(diff.lstrip()):
-        # A second envelope, not a second tree. The edit format names the
-        # site it changes instead of restating the whole file, so the
-        # emission costs the change's size rather than the file's -- the
-        # reason round 3e lost all three of an attempt's draws to
-        # whole-file emission (F21.43). What lands is staged the same way
-        # and every gate downstream still reads the worktree, so nothing
-        # below this point can tell which envelope arrived.
-        try:
-            apply_edits(workdir, diff)
-        except EditError as exc:
-            msg = f"worker edits did not apply in {str(workdir)!r}: {exc}"
-            raise RuntimeError(msg) from exc
-        run_capture(["git", "add", "-A"], workdir, recorder=recorder)
-        return "edits"
     if not diff.lstrip().startswith("diff --git "):
         msg = f"worker content is not a unified diff (no 'diff --git' header) in {str(workdir)!r}"
         raise RuntimeError(msg)
@@ -638,16 +616,49 @@ def _resolved_target(workdir: Path, name: str) -> Path:
     return target
 
 
-def _write_files(workdir: Path, payload: str, *, recorder: SpanRecorder | None = None) -> None:
-    """Write the files a whole-file payload carries, and stage them.
+# An edit payload opens with its operation and a path; a unified diff opens
+# with "diff --git". The two are told apart by that first word alone, so a
+# run can carry either without a flag reaching this far down.
+_EDIT_HEAD: Final = re.compile(r"^(?:edit|create|delete) [^/\n]")
 
-    The envelope replaces `git apply` on the worker path (T6-62/A1): the
-    new side IS the file, so there is no context to match and nothing to
-    reject for arithmetic. What remains is an envelope check, and every
-    refusal here is a retryable `RuntimeError` for the same reason the
-    old one was -- prose is exactly what a fresh attempt can fix.
+
+def _write_files(workdir: Path, payload: str, *, recorder: SpanRecorder | None = None) -> None:
+    """Write what a worker payload carries, and stage it.
+
+    The whole-file envelope replaces `git apply` on the worker path
+    (T6-62/A1): the new side IS the file, so there is no context to match
+    and nothing to reject for arithmetic. What remains is an envelope
+    check, and every refusal here is a retryable `RuntimeError` for the
+    same reason the old one was -- prose is exactly what a fresh attempt
+    can fix.
+
+    Both envelopes are dispatched here because both worker callers arrive
+    here: the tree a node is gated on, and the throwaway copy a draw is
+    scored against. `_apply_diff` is the older door and `src` no longer
+    opens it; a dispatch put there reached neither caller, which is what
+    `--emission edit`'s first run showed -- four draws, every one refused
+    for a header an edit payload does not carry.
     """
     payload = _unwrapped(payload)
+    if _EDIT_HEAD.match(payload.lstrip()):
+        # A second envelope, not a second tree. The edit format names the
+        # site it changes instead of restating the whole file, so the
+        # emission costs the change's size rather than the file's -- the
+        # reason round 3e lost all three of an attempt's draws to
+        # whole-file emission (F21.43). What lands is staged the same way
+        # and every gate downstream still reads the worktree, so nothing
+        # below this point can tell which envelope arrived.
+        try:
+            touched = apply_edits(workdir, payload)
+        except EditError as exc:
+            msg = f"worker edits did not apply in {str(workdir)!r}: {exc}"
+            raise RuntimeError(msg) from exc
+        # The paths it named, the same as the whole-file arm below --
+        # never a bare `git add -A`. `parse_edits` refuses a payload with
+        # no blocks, so `touched` is never empty; an empty pathspec after
+        # `--` is the one case where this would mean the whole tree.
+        run_argv(["git", "add", "-A", "--", *touched], workdir, recorder=recorder)
+        return
     if not payload.lstrip().startswith("diff --git "):
         msg = f"worker content is not a file payload (no 'diff --git' header) in {str(workdir)!r}"
         raise RuntimeError(msg)
