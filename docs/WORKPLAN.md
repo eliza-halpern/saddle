@@ -8300,13 +8300,31 @@ Landed in three commits:
 unsatisfiable `coverage`/`public-deletions` conjunction). No workplan
 item existed for the edit format when those were written; this is it.
 
-Done when: a t5 run with `--emission edit` produces an attempt whose
-payload parses, applies and is staged, and whose emission is materially
-smaller than the 7 k–41 k chars of diff the whole-file arm recorded on
-the same node. Not yet measured — the grammar is verified against the
-real decoder offline (21/21, saddle-bench F21.45) but nothing has drawn
-against it on a GPU, and a container xgrammar older than the host's
-would surface as a compile failure on the first draw.
+Two more commits followed, both measured rather than reasoned:
+
+- `0736bf2` bounded a run of blank lines the grammar admitted without
+  limit, and added `tools/edit_grammar_check.py` (79/79 against real
+  xgrammar). The commit says plainly what it is not: an A/B showed the
+  tightening does **not** stop a runaway, and the prompt does
+  (saddle-bench F21.46).
+- `e15ee29` gave `EDIT_RULES` a worked example after a draw on a real
+  recorded node prompt emitted 194 search lines prefixed `"- "` and
+  matched nothing.
+
+**Status: the payload half is measured and works.** Redrawing `node-1`
+of `runs/g1-bd633bd` from its own recorded prompt, with `EDIT_RULES` and
+`EDIT_GRAMMAR`: 12 targeted edits across the 4 in-scope files, parsed
+and applied, all four compile, nothing outside them touched; payload
+13 994 chars against the whole-file arm's 15 577 on the same node.
+
+Done when: a full t5 run with `--emission edit` seals a node. Still
+open, and the remaining risk is not the format — it is that the t5
+baseline is 7 170 bytes across four modules, so the edit format's
+ceiling there is about a 23% cut in per-draw emission (the reasoning is
+~77% of emitted characters; F21.46). The format's value on t5 is
+correctness, not speed, and the run still has to be sized for ~720 s
+attempts (T6-9's `--deadline` and the bench's `DEADLINE + 600`
+backstop are both under that).
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
