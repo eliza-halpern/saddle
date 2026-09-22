@@ -3571,3 +3571,43 @@ def test_a_missing_env_file_is_not_an_error_just_no_key(
     err = io.StringIO()
     assert main(["chat", "--no-open"], stderr=err) == 1
     assert str(tmp_path / "absent") in err.getvalue()
+
+
+def test_chat_defaults_its_workdir_to_the_ranch_and_makes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not "." -- a session's folder should not depend on where the server
+    happened to be started from, which is not something the person using it
+    can see."""
+    from saddle.web import app as web_app
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    served: dict[str, object] = {}
+    monkeypatch.setattr(web_app, "serve", lambda **kw: served.update(kw))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+
+    import saddle.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "DEFAULT_WORKDIR", home / "saddle-ranch")
+    main(["chat", "--no-open"], stdout=io.StringIO())
+
+    assert served["workdir"] == (home / "saddle-ranch").resolve()
+    assert (home / "saddle-ranch").is_dir()      # made, not just named
+
+
+def test_an_explicit_workdir_still_wins_and_is_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from saddle.web import app as web_app
+
+    served: dict[str, object] = {}
+    monkeypatch.setattr(web_app, "serve", lambda **kw: served.update(kw))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    wanted = tmp_path / "elsewhere" / "deep"
+    main(["chat", "--no-open", "--workdir", str(wanted)], stdout=io.StringIO())
+
+    assert served["workdir"] == wanted.resolve()
+    assert wanted.is_dir()

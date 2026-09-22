@@ -45,6 +45,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
+from saddle.sessions import DEFAULT_WORKDIR
 from saddle.slice import DEADLINE_EXIT, SURVIVOR_SAMPLES, ReplanFailedError, TestDrawer, run_slice
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
@@ -1280,7 +1281,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
     web = sub.add_parser("chat", aliases=["web"], help="Open the chat UI in a browser.")
-    web.add_argument("--workdir", default=".", help="Default folder for new sessions.")
+    web.add_argument(
+        "--workdir",
+        default=None,
+        help="Default folder for new sessions (default: ~/saddle-ranch).",
+    )
     web.add_argument("--host", default="127.0.0.1", help="Bind address (default: loopback).")
     web.add_argument("--port", type=int, default=8777)
     web.add_argument(
@@ -1342,6 +1347,17 @@ def _key_from_file(path: Path) -> str | None:
         if value:
             return value
     return None
+
+
+def _chat_workdir(given: str | None) -> Path:
+    """The folder new chat sessions start in, made if it is not there.
+
+    Defaulting to "." made a session's folder depend on where the server was
+    launched from, which is not something the person using it can see.
+    """
+    path = Path(given).expanduser() if given else DEFAULT_WORKDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
 
 
 def _api_key() -> str | None:
@@ -1415,7 +1431,7 @@ def main(
             api_key=key,
             base_url=args.base_url,
             model=args.model,
-            workdir=Path(args.workdir).resolve(),
+            workdir=_chat_workdir(args.workdir),
             sessions_root=Path(args.sessions) if args.sessions else None,
         )
         return 0

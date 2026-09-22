@@ -621,8 +621,29 @@ async function openFolders(path) {
     button.onclick = (event) => { event.preventDefault(); openFolders(entry.path); };
     list.appendChild(button);
   }
+  $("#folder-error").textContent = "";
   if (!$("#folder-dialog").open) $("#folder-dialog").showModal();
 }
+
+async function makeFolder() {
+  const name = $("#folder-name-new").value.trim();
+  const here = $("#folder-dialog").dataset.path;
+  if (!name) { $("#folder-error").textContent = "give the folder a name"; return; }
+  const reply = await fetch("/api/browse", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: here, name }),
+  });
+  const body = await reply.json();
+  if (!reply.ok) { $("#folder-error").textContent = body.error || "could not create"; return; }
+  $("#folder-name-new").value = "";
+  // Step into it: making a folder here almost always means working in it.
+  await openFolders(body.path);
+}
+
+$("#folder-make").onclick = (event) => { event.preventDefault(); makeFolder(); };
+$("#folder-name-new").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); makeFolder(); }
+});
 
 /* ---------- wiring ---------- */
 

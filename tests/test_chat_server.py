@@ -1975,3 +1975,60 @@ def test_a_bogus_version_is_refused_or_falls_back(
         # An unknown but well-formed id falls back to the current file.
         assert client.get(f"/api/sessions/{sid}/file",
                           params={"path": "a.svg", "v": "deadbeef"}).text == "<svg/>"
+
+
+# -- making a folder from the picker ------------------------------------------
+
+def test_a_folder_can_be_made_where_you_are_browsing(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        made = client.post(
+            "/api/browse", json={"path": str(tmp_path), "name": "new-project"}
+        )
+        assert made.status_code == 200
+        assert made.json()["path"] == str(tmp_path / "new-project")
+        assert (tmp_path / "new-project").is_dir()
+        # ...and it shows up in the listing straight away.
+        listed = client.get("/api/browse", params={"path": str(tmp_path)}).json()
+        assert "new-project" in [e["name"] for e in listed["entries"]]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../escape", "a/b", "..", ".", "", "   ", "/etc", "a\\b"],
+)
+def test_a_name_that_is_really_a_path_is_refused(
+    store: SessionStore, tmp_path: Path, name: str
+) -> None:
+    # The button says "create here". A slash or a `..` would turn that into
+    # "create anywhere", which is not what it offered to do.
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with app_for(store, tmp_path) as (client, _app):
+        reply = client.post("/api/browse", json={"path": str(tmp_path), "name": name})
+        assert reply.status_code == 400, name
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+    assert not (tmp_path.parent / "escape").exists()
+
+
+def test_making_a_folder_that_is_already_there_is_refused(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    (tmp_path / "taken").mkdir()
+    with app_for(store, tmp_path) as (client, _app):
+        reply = client.post("/api/browse", json={"path": str(tmp_path), "name": "taken"})
+        assert reply.status_code == 409
+        assert "already there" in reply.json()["error"]
+
+
+def test_making_a_folder_somewhere_that_is_not_a_folder_is_refused(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    (tmp_path / "a-file").write_text("x")
+    with app_for(store, tmp_path) as (client, _app):
+        assert client.post(
+            "/api/browse", json={"path": str(tmp_path / "a-file"), "name": "x"}
+        ).status_code == 400
+        assert client.post(
+            "/api/browse", json={"path": str(tmp_path / "absent"), "name": "x"}
+        ).status_code == 400

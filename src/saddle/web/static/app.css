@@ -459,3 +459,11 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
   box-shadow: 0 6px 20px #0008; animation: rise .2s cubic-bezier(.34,1.3,.64,1); }
 #jump:hover { color: var(--rose); border-color: var(--rose); }
 main { position: relative; }
+
+/* Making a folder without leaving the picker. */
+.folder-new { display: flex; gap: 8px; margin-top: 12px; }
+.folder-new input { flex: 1; background: var(--bg-sunk); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 11px; padding: 8px 11px;
+  font: inherit; font-size: 13px; }
+.folder-new input:focus { outline: none; border-color: var(--rose); }
+#folder-error { color: var(--bad); min-height: 1.2em; margin: 8px 0 0; }

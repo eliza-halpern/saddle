@@ -411,6 +411,33 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             },
         )
 
+    async def make_folder(request: Request) -> JSONResponse:
+        """Create one folder inside an existing one.
+
+        `name` is a single segment, checked rather than trusted: a slash or
+        a `..` would turn "make a folder here" into "make one anywhere",
+        which is not what the button says it does.
+        """
+        body = await request.json()
+        parent = Path(str(body.get("path") or "")).expanduser()
+        name = str(body.get("name") or "").strip()
+        if not parent.is_dir():
+            return JSONResponse({"error": f"not a directory: {parent}"}, status_code=400)
+        if not name or name in (".", ".."):
+            return JSONResponse({"error": "give the folder a name"}, status_code=400)
+        if name != Path(name).name or any(sep in name for sep in ("/", "\\")):
+            return JSONResponse(
+                {"error": "a name, not a path"}, status_code=400
+            )
+        target = parent / name
+        if target.exists():
+            return JSONResponse({"error": f"{name!r} is already there"}, status_code=409)
+        try:
+            target.mkdir()
+        except OSError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"path": str(target.resolve()), "name": name})
+
     async def upload(request: Request) -> JSONResponse:
         sid = request.path_params["sid"]
         form = await request.form()
@@ -600,6 +627,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             Route("/api/settings", get_settings),
             Route("/api/settings", patch_settings, methods=["PATCH"]),
             Route("/api/browse", browse),
+            Route("/api/browse", make_folder, methods=["POST"]),
             Route("/api/sessions", list_sessions, methods=["GET"]),
             Route("/api/sessions", create_session, methods=["POST"]),
             Route("/api/sessions/{sid}", patch_session, methods=["PATCH"]),

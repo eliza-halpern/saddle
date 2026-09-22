@@ -24,6 +24,14 @@ from typing import Any, Final
 from saddle.engine import CHAT_TEMPERATURE
 
 DEFAULT_ROOT: Final = Path.home() / ".saddle" / "sessions"
+
+DEFAULT_WORKDIR: Final = Path.home() / "saddle-ranch"
+"""Where new sessions work unless told otherwise.
+
+Not the current directory, which meant a session's folder depended on where
+the server happened to be started from -- and not $HOME either, which is a
+lot of blast radius for a default. A named folder is somewhere a session can
+make a mess without it mattering."""
 SETTINGS_FILE: Final = "settings.json"
 PERSONA_FILE: Final = "personas.json"
 DEFAULT_PERSONA: Final = "engineer"
