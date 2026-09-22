@@ -1166,3 +1166,61 @@ def test_sidecar_diff_check_ignores_sidecars_that_are_not_json_objects(tmp_path:
             ),
         )
     assert verify_journal(journal) == []
+
+
+def test_sidecar_retains_a_diff_verbatim_even_when_its_code_looks_like_a_secret(
+    tmp_path: Path,
+) -> None:
+    """T6-70. Known-bad, from `regress-99e3986/t6/t6-saddle` at `99e3986`:
+    a tokenizer's diff contains `Token = namedtuple(...)` and `"unexpected
+    token: %s"`, both of which `_NAMED_PATTERN` rewrites to `name=***`.
+    `_proposal_evidence` hashes the raw diff and `write_attempt_sidecar`
+    stored the redacted one, so the retained diff did not hash to its
+    `diff_hash`, `verify` failed `sidecar-diff-hash`, and the run exited 1
+    while every gate had passed. A diff is source code and is already in
+    the worktree and in git by the time the sidecar is written, so
+    redacting this copy protects nothing and guarantees the evidence is
+    unfaithful. Known-good, same run: the test node's diff has no
+    token-shaped text, so redaction was a no-op and it verified.
+
+    `prompt` and `thinking` stay redacted: they are prose, and a prompt
+    can carry an injected key.
+    """
+    path = tmp_path / "proofs.jsonl"
+    diff = (
+        '+Token = namedtuple("Token", ["kind", "value"])\n'
+        '+    raise SyntaxError("unexpected token: %s" % tok.kind)\n'
+    )
+    sample_diff = "+password = compute()\n"
+    evidence = {
+        "node_id": "n1",
+        "diff": diff,
+        "diff_hash": hashlib.sha256(diff.encode()).hexdigest(),
+        "prompt": "use api_key: sk-livekey12345678 here",
+        "thinking": "the token: value pair and Bearer sk-abcdefgh12",
+        "samples": [{"diff": sample_diff, "outcome": "0 gate(s) failed"}],
+    }
+    digest = write_attempt_sidecar(path, "c" * 32, evidence)
+    stored = json.loads(attempt_sidecar_path(path, "c" * 32).read_bytes())
+
+    assert stored["diff"] == diff
+    assert hashlib.sha256(stored["diff"].encode()).hexdigest() == stored["diff_hash"]
+    assert stored["samples"][0]["diff"] == sample_diff
+    assert "sk-livekey12345678" not in stored["prompt"]
+    assert "sk-abcdefgh12" not in stored["thinking"]
+
+    append_span(
+        path,
+        build_span(
+            node_id="n1",
+            argv=["worker", "n1"],
+            duration_ms=1,
+            exit_code=0,
+            detail="sealed",
+            kind="agent",
+            name="worker:n1",
+            span_id="c" * 32,
+            attempt_hash=digest,
+        ),
+    )
+    assert verify_journal(path) == []

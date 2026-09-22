@@ -153,7 +153,8 @@ def _scrub_bearer(text: str) -> str:
 
 
 def redact_secrets(text: str) -> str:
-    """Redact secret-shaped spans; length untouched."""
+    """Redact secret-shaped spans. Length is NOT preserved: the named-key
+    rule replaces its whole match, separator and value, with `name=***`."""
     scrubbed = _KEY_PATTERN.sub(STAR, text)
     scrubbed = _AWS_PATTERN.sub(STAR, scrubbed)
     scrubbed = _NAMED_PATTERN.sub(r"\1=" + STAR, scrubbed)
@@ -319,15 +320,26 @@ def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[st
     return hashlib.sha256(encoded).hexdigest()
 
 
-# Sidecar text that is retained whole: a `diff` has to hash to its
-# `diff_hash` or T6-27's check fails the journal (T6-36), a prompt is what
-# a replay needs verbatim, and `thinking` is the reasoning every reading of
-# a failed attempt starts from (T6-51). All three are still redacted, and
-# every other string is capped. The journal's own entries are unaffected --
-# they cap thinking through `scrub_thinking`, and this set is read only by
-# `write_attempt_sidecar`, so `proofs.jsonl` and `saddle tail` stay small
-# while the per-attempt file beside them keeps the whole record.
-_RETAINED_WHOLE: Final = frozenset({"diff", "prompt", "thinking"})
+# Sidecar text retained VERBATIM: neither capped nor redacted. A `diff`
+# has to hash to its `diff_hash` or T6-27's check fails the journal
+# (T6-36), and `_proposal_evidence` takes that hash before this module
+# sees the text, so any rewrite here breaks the invariant. Redaction did
+# rewrite it: `_NAMED_PATTERN` matched `Token = namedtuple(...)` in a
+# tokenizer's own source and the journal failed `sidecar-diff-hash` on a
+# run whose every gate had passed (T6-70). A diff is source code, and it
+# is already in the worktree and in git by the time the sidecar is
+# authored, so scrubbing this copy protects nothing the tree does not
+# already expose.
+_RETAINED_VERBATIM: Final = frozenset({"diff"})
+
+# Sidecar text that is retained whole but still redacted: a prompt is what
+# a replay needs verbatim and can carry an injected key, and `thinking` is
+# the reasoning every reading of a failed attempt starts from (T6-51).
+# Every other string is capped. The journal's own entries are unaffected --
+# they cap thinking through `scrub_thinking`, and these sets are read only
+# by `write_attempt_sidecar`, so `proofs.jsonl` and `saddle tail` stay
+# small while the per-attempt file beside them keeps the whole record.
+_RETAINED_WHOLE: Final = frozenset({"prompt", "thinking"})
 
 
 def _scrub_evidence(key: str, value: Any) -> Any:
@@ -349,6 +361,8 @@ def _scrub_evidence(key: str, value: Any) -> Any:
     other string, at every depth.
     """
     if isinstance(value, str):
+        if key in _RETAINED_VERBATIM:
+            return value
         return redact_secrets(value) if key in _RETAINED_WHOLE else scrub_thinking(value)
     if isinstance(value, Mapping):
         return {str(k): _scrub_evidence(str(k), v) for k, v in value.items()}
