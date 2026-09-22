@@ -8799,6 +8799,51 @@ message (both new tests). Diagnostic only.
 
 ---
 
+### T6-84 — `conftest.py` is a source file to `node-scope`, so an `impl` node may rewrite which tests are collected (open; latent, never exercised)
+
+Files: `src/saddle/gates.py` (`_is_test_file`, `TEST_FILE_PATTERNS`,
+`check_node_scope`), `src/saddle/runner.py` (the baseline leg's
+`test_sources`), `tests/test_gates.py`, `tests/test_runner.py`.
+
+`_is_test_file` is basename `fnmatch` against `("test_*.py",
+"*_test.py")`. `conftest.py` matches neither, so `check_node_scope`
+counts it as source and an `impl` node may create or edit it (F21.55) --
+the file that owns `pytest_collection_modifyitems`, `collect_ignore`,
+fixture overrides and `pytest_runtest_setup`. That is F5/#44, the defect
+this gate was written for, through a door beside it.
+
+Red-phase does not catch it: `runner.py` copies only
+`read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")`
+into the pre-change tree, so the baseline runs the new tests against the
+**baseline** conftest and stays red while the current leg goes green.
+`target-scope` binds only when the planner declared `target_files`, which
+is optional. `dead-code` does not reach it: a `pytest_*` hook is public
+and `collect_ignore` is an assignment, and removing either would turn the
+suite red, which that gate passes as the honest answer.
+
+Direction: a false **accept**, the class Goal G1 exists to catch.
+
+**Latent.** Across 97 attempt sidecars naming 30 distinct files,
+`conftest`, `pytest.ini`, `pyproject` and `tox.ini` appear **zero**
+times. Filed as a hole, not as an explanation of any failure -- which is
+also why it is not worth interrupting a measurement for.
+
+Done when: `conftest.py` is test-side, with a known-good (a **test** node
+that adds `tests/conftest.py` passes `node-scope` -- today it FAILS as
+having "changed source file(s)", so the defect is symmetric and nobody
+can legitimately own the file) and the known-bad it must now reject (an
+`impl` node that touches `tests/conftest.py`). Second half: the baseline
+leg carries `conftest.py` with the test sources, or a test node that adds
+a fixture gets a baseline that cannot import it. Tightened.
+
+The pytest **config** files (`pytest.ini`, `tox.ini`, `setup.cfg`,
+`pyproject.toml`) are the same move in one line of `addopts` and want
+their own clause; they are not simply test-side, since a project may hold
+unrelated config there, so that half needs its own known-good rather than
+riding along.
+
+---
+
 ## 10. Deferred and not recommended
 
 | Item | Why not now | Would need |
