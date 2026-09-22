@@ -958,3 +958,43 @@ def test_a_renamed_session_reports_its_own_name_on_reconnect(
         sid = client.post("/api/sessions").json()["id"]
         _server_of(app)._run(sid, "why is my rust build slow")
         assert client.get("/api/sessions").json()[0]["title"] == "Slow Rust Build"
+
+
+def test_a_session_is_offered_a_name_once_not_on_every_later_turn(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Turn 1 has nothing to summarise, so no name sticks and auto_title stays
+    # true. The guard that matters is the turn number: without it, every
+    # later turn would spend a model call retrying a name for a session that
+    # already declined one.
+    asked: list[str] = []
+
+    class Counting(Naming):
+        def complete(self, prompt: str, **_kw: Any) -> str:
+            asked.append(prompt)
+            return "A Late Name"
+
+    import saddle.web.app as module
+
+    original = module.run_turn
+
+    def fake_run_turn(_c: Any, messages: list[dict[str, Any]], text: str,
+                      _o: Any, **_kw: Any) -> Any:
+        messages.append({"role": "user", "content": text})
+        yield ContentDelta(text="answered")
+
+    module.run_turn = fake_run_turn  # type: ignore[assignment]
+    try:
+        app = build_app(store, Counting, default_workdir=tmp_path)
+        with TestClient(app) as client:
+            sid = client.post("/api/sessions").json()["id"]
+            server = _server_of(app)
+            server._run(sid, "   ")                 # nothing to summarise
+            assert store.get(sid).auto_title is True
+            assert asked == []                      # and no call was spent
+            server._run(sid, "a real question this time")
+    finally:
+        module.run_turn = original  # type: ignore[assignment]
+
+    assert asked == []
+    assert store.get(sid).title == "New session"
