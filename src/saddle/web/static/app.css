@@ -206,3 +206,8 @@ dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--r
   border-left: 2px solid var(--lilac); color: var(--ink-dim); }
 .assistant a { color: var(--sky); text-decoration-color: #a8d0f066; }
 .assistant a:hover { text-decoration-color: var(--sky); }
+
+/* attached images, shown in the transcript where they were sent */
+.user .shots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 9px; }
+.user .shot { max-width: 230px; max-height: 170px; border-radius: 11px;
+              border: 1px solid var(--line); }

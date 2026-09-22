@@ -301,7 +301,25 @@ function renderHistory(info) {
   for (const message of shown) {
     const turn = el("div", "turn");
     if (message.role === "user") {
-      turn.appendChild(el("div", "user", message.content || ""));
+      // Content is a string, or a list of parts when images were attached.
+      // Rendering the list with `|| ""` printed "[object Object]".
+      const box = el("div", "user");
+      if (Array.isArray(message.content)) {
+        const shots = el("div", "shots");
+        for (const part of message.content) {
+          if (part.type === "text") {
+            box.appendChild(document.createTextNode(part.text || ""));
+          } else if (part.type === "image_url" && part.image_url?.url) {
+            const img = el("img", "shot");
+            img.src = part.image_url.url;
+            shots.appendChild(img);
+          }
+        }
+        if (shots.childElementCount) box.appendChild(shots);
+      } else {
+        box.textContent = message.content || "";
+      }
+      turn.appendChild(box);
     } else {
       const node = el("div", "assistant");
       renderMarkdown(node, message.content || "");
