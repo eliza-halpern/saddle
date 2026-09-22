@@ -9002,10 +9002,22 @@ Done when, both halves:
    node-2 tree before deciding whether it needs its own clause. Do not
    loosen it on this item's evidence.
 
+**Reproduced (F21.59b).** `public-deletions` has fired twice in the
+project's history and both were the attempt after a `coverage` failure on
+the same node -- `g1-79cd848` node-2 and `g1-cw100k` `impl-money-core` --
+naming *the same four functions in the same order*: `Account.__eq__`,
+`Account.__repr__`, `Account.from_dict`, `Account.to_dict`. `g1-cw100k`
+ran the cycle to the end: coverage -> delete -> `public-deletions` ->
+restore -> coverage again, ladder exhausted, no impl node sealed. Across
+63 attempt sidecars carrying a gates list, `coverage` is the second most
+frequent failure (22, in 8 runs) behind `mutation` (23, in 7) and level
+with `requirement-binding` (22, in 6) -- so this is not a corner.
+
 Related: T6-53 (the deferral this extends), T6-75 (`public-deletions`,
 why deletion is not the way out), T6-85 recommendation 63 (the missing
 line list that made this take reading instead of reading a sidecar),
-F21.12a (why the run stays scoped), F21.59.
+T6-87 (the refusal this node needed and did not have), F21.12a (why the
+run stays scoped), F21.59, F21.59a, F21.59b, F21.61.
 
 ### T6-87 — There is no honest way out of an impossible gate (open; F21.59, Goal G1's own clause)
 
