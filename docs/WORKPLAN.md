@@ -9044,3 +9044,92 @@ Owner: main session. Related: T6-86, T6-46, F21.59.
 - **VERIFIED** — this repo's own tests, run logs or issue records.
 - **SPECULATIVE** — an argument without a number, or a number the workflow
   could not find (audit §9 "unsupported"/"unverified").
+### T6-88 — The property oracle runs test modules outside the node's declared scope, so `property-coverage` is unpassable while any later specification is red (LANDED `fe33dfa` + `18b3eda`; F21.65)
+
+Files: `src/saddle/evidence.py` (`scoped_targets`), `src/saddle/runner.py`
+(the `property_targets` construction), `src/saddle/gates.py`
+(`check_property_coverage`, `_check_property_oracle`, `Tier1Inputs`),
+`tests/test_evidence.py`, `tests/test_runner.py`, `tests/test_gates.py`.
+
+**Direction: scope narrowed** (the oracle's target set), plus one
+*tightened* half (a tool failure is now named) and one purely additive
+half (a pass by vacuity carries a `basis`).
+
+F21.12a scoped the mutation gate to the node's own declared tests:
+`mutation_sample(..., run_tests=pytest_scope(gate.test_command))`. The
+property oracle, added by T3-3, was wired the same way except for its
+target set, which stayed `tuple(property_modules(test_sources,
+changed_files))` — every property-bearing module that imports a changed
+file, whatever the node's scope says.
+
+`mutmut run` baselines by RUNNING its selection. On a TDD plan the test
+node writes every module's specification up front, so a specification
+whose impl node has not landed is red by construction; a selection that
+includes it cannot baseline, and the oracle returns
+`killed=0 total=0` with `survivors=('mutmut run exited 1: failed to
+collect stats. runner returned 1',)`. `_check_property_oracle` branches
+on `total` alone, so the worker was shown "no mutants sampled for the
+property oracle (...)" — a sentence that reads as a missing property and
+that no diff the node can write will change.
+
+Reproduced on `g1-79cd848` node-2's own tree (the sealed node-1 worktree
+with attempt 1 applied via `saddle.edits.apply_edits`): unscoped
+selection `tests/test_accounts.py, tests/test_fees.py,
+tests/test_store.py` → `killed=0 total=0`; the same tree with the
+selection scoped to the node's two files → **killed 85 of 100**, which
+passes. `tests/test_store.py` is node-4's specification.
+
+Census across every sidecar carrying a `gates` key, 57 `property-
+coverage` checks in 16 runs: 12 failures, **11 of them this shape** —
+`g1-79cd848` (3), `regress-99e3986` (5), `round3g` (3), `g1-bd633bd` (1).
+The twelfth is a genuine no-discriminating-power verdict.
+
+Done:
+
+1. `scoped_targets(targets, scope)` in `evidence.py`: the targets the
+   declared pytest `scope` would itself collect. Empty scope is pytest's
+   whole tree, so nothing is filtered; flags are not selectors; a
+   `path::name` selector scopes by its path. `runner.py` applies it to
+   `property_modules(...)` with `pytest_scope(gate.test_command)`.
+2. `_check_property_oracle` appends the tool cause when `total == 0`, the
+   way the mutation gate has named its tool failures since T3-20: "no
+   mutants sampled for the property oracle (test_n.py): mutmut run
+   exited 1: failed to collect stats. runner returned 1". Nothing the
+   check reads changed; `survivors` was already carried and discarded.
+3. What the narrowing admits, said out loud instead of passing in
+   silence (WORKPLAN §0.6; F21.64 recommendation 69): a node whose only
+   property-bearing module is outside its scope gets no oracle, so the
+   check passes having judged nothing. `Tier1Inputs.property_out_of_scope`
+   carries the dropped modules, the detail names them, and both empty-set
+   passes now carry a `basis` — "oracle: not run, 0 of 1 property
+   module(s) in scope" and "oracle: not run, no property module names a
+   changed file". Before this, that pass was `basis=None` and
+   indistinguishable in the journal from one an oracle earned.
+
+Known-good / known-bad, built the way the production caller builds them
+(T6-86's rule): three end-to-end tests through `run_node_gate` with a
+`test_store.py` sibling at baseline, property-bearing over the changed
+module and red, and a mutmut stub that fails exactly as the real tool
+does when handed a red selection. All three are red on the pre-fix tree,
+the first for the verbatim production string.
+
+Contract mutants (target count verified 1 by `str.count`, restored from a
+saved copy, `__pycache__` dropped after each). All four died:
+
+- M1 `property_targets = property_candidates`;
+- M2 `if not roots:` -> `if roots:` in `scoped_targets`;
+- M3 `cause = ""` in `_check_property_oracle`;
+- M4 `if out_of_scope:` -> `if False:`.
+
+**Landed in two commits, and not by design.** The source half
+(`evidence.py`, `gates.py`, `runner.py`) was swept into `fe33dfa`, a
+chat-UI commit from a concurrent session sharing this checkout, whose
+message describes none of it. The tests and the evidence are `18b3eda`.
+Nothing was rewritten. The lesson is operational and belongs here: two
+sessions in one worktree need `git commit --only <paths>`, because
+`commit -a` cannot tell whose uncommitted work it is staging.
+
+Not in scope: recommendation 70's wider form (every gate input that is a
+set of `(path, line)` pairs constructed in one place — T6-86's
+recommendation 68) and the question of whether an impl node should be
+able to declare a wider scope than its target files imply.
