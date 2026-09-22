@@ -421,12 +421,7 @@ function select(sessionId) {
 }
 
 async function boot() {
-  state.personas = await api("/api/personas");
-  const picker = $("#persona");
-  picker.textContent = "";
-  for (const name of Object.keys(state.personas)) {
-    picker.appendChild(el("option", null, name)).value = name;
-  }
+  await loadPersonas();
   let sessions = await loadSessions();
   if (!sessions.length) {
     await api("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -537,12 +532,124 @@ $("#transcript").addEventListener("drop", (event) => {
   event.preventDefault();
   if (event.dataTransfer.files.length) upload(event.dataTransfer.files);
 });
-$("#new-session").onclick = async () => {
-  const session = await api("/api/sessions", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workdir: state.folder || "." }),
+$("#new-session").onclick = async (event) => {
+  // The server returns the unstarted session if one exists, so this is
+  // idempotent; disabling the button also stops a burst of clicks from
+  // queueing requests that each wait on the same lock.
+  const button = event.currentTarget;
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const session = await api("/api/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workdir: state.folder || "." }),
+    });
+    select(session.id);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+/* ---------- settings and personas ---------- */
+
+async function loadPersonas() {
+  const reply = await api("/api/personas");
+  state.personas = reply.personas;
+  state.builtinPersonas = reply.builtin;
+  state.editablePersonas = reply.editable;
+  for (const id of ["#persona", "#default-persona", "#persona-pick"]) {
+    const picker = $(id);
+    if (!picker) continue;
+    const had = picker.value;
+    picker.textContent = "";
+    for (const name of Object.keys(state.personas)) {
+      picker.appendChild(el("option", null, name)).value = name;
+    }
+    if (had) picker.value = had;
+  }
+}
+
+function personaIsBuiltin(name) {
+  return (state.builtinPersonas || []).includes(name);
+}
+
+function showPersona(name) {
+  $("#persona-name").value = name || "";
+  $("#persona-prompt").value = (state.personas || {})[name] || "";
+  const edited = (state.editablePersonas || []).includes(name);
+  const builtin = personaIsBuiltin(name);
+  const remove = $("#persona-delete");
+  remove.disabled = !edited;
+  remove.textContent = builtin ? "Reset to built-in" : "Delete";
+  $("#persona-note").textContent = !name
+    ? "New persona: give it a name and a prompt."
+    : builtin && edited
+      ? "Built-in, edited. Resetting restores the shipped prompt."
+      : builtin
+        ? "Built-in. Saving keeps your version until you reset it."
+        : "Yours.";
+}
+
+async function openSettings() {
+  const settings = await api("/api/settings");
+  await loadPersonas();
+  $("#default-persona").value = settings.persona;
+  $("#default-effort").value = settings.reasoning_effort;
+  $("#persona-pick").value = settings.persona;
+  showPersona(settings.persona);
+  $("#settings-dialog").showModal();
+}
+
+async function saveDefaults() {
+  await api("/api/settings", {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      persona: $("#default-persona").value,
+      reasoning_effort: $("#default-effort").value,
+    }),
   });
-  select(session.id);
+}
+
+$("#settings").onclick = (event) => { event.preventDefault(); openSettings(); };
+$("#settings-close").onclick = (event) => {
+  event.preventDefault();
+  $("#settings-dialog").close();
+};
+$("#default-persona").onchange = saveDefaults;
+$("#default-effort").onchange = saveDefaults;
+$("#persona-pick").onchange = (event) => showPersona(event.target.value);
+$("#persona-new").onclick = (event) => {
+  event.preventDefault();
+  $("#persona-pick").value = "";
+  showPersona("");
+  $("#persona-name").focus();
+};
+$("#persona-save").onclick = async (event) => {
+  event.preventDefault();
+  const name = $("#persona-name").value.trim();
+  if (!name) { $("#persona-note").textContent = "A persona needs a name."; return; }
+  const reply = await fetch(`/api/personas/${encodeURIComponent(name)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: $("#persona-prompt").value }),
+  });
+  if (!reply.ok) {
+    $("#persona-note").textContent = (await reply.json()).error || "could not save";
+    return;
+  }
+  await loadPersonas();
+  $("#persona-pick").value = name;
+  showPersona(name);
+  $("#persona-note").textContent = "Saved.";
+};
+$("#persona-delete").onclick = async (event) => {
+  event.preventDefault();
+  const name = $("#persona-name").value.trim();
+  await fetch(`/api/personas/${encodeURIComponent(name)}`, { method: "DELETE" });
+  await loadPersonas();
+  const next = personaIsBuiltin(name) ? name : Object.keys(state.personas)[0];
+  $("#persona-pick").value = next;
+  showPersona(next);
+  $("#persona-note").textContent = personaIsBuiltin(name) ? "Reset." : "Deleted.";
 };
 $("#title").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {

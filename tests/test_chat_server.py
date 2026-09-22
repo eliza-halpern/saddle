@@ -214,9 +214,22 @@ def test_messages_round_trip_over_http(store: SessionStore, tmp_path: Path) -> N
         assert client.get(f"/api/sessions/{sid}/messages").json()[0]["content"] == "x"
 
 
-def test_the_persona_list_is_served(store: SessionStore, tmp_path: Path) -> None:
+def test_the_persona_list_says_which_ones_may_be_edited(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # The editor has to distinguish "yours, delete it" from "built-in,
+    # reset it", and it cannot infer that from the table alone.
     with app_for(store, tmp_path) as (client, _app):
-        assert "engineer" in client.get("/api/personas").json()
+        body = client.get("/api/personas").json()
+        assert "engineer" in body["personas"]
+        assert "engineer" in body["builtin"]
+        assert body["editable"] == []
+
+        client.put("/api/personas/pirate", json={"prompt": "Arr."})
+        body = client.get("/api/personas").json()
+        assert body["personas"]["pirate"] == "Arr."
+        assert body["editable"] == ["pirate"]
+        assert "pirate" not in body["builtin"]
 
 
 def test_the_index_page_is_served(store: SessionStore, tmp_path: Path) -> None:
@@ -1034,6 +1047,7 @@ def test_a_store_that_cannot_write_the_name_still_lets_the_turn_finish(
 
 # -- history that survives a reconnect ----------------------------------------
 
+
 def test_stored_tool_calls_come_back_labelled_so_a_reconnect_keeps_them(
     store: SessionStore, tmp_path: Path
 ) -> None:
@@ -1046,12 +1060,22 @@ def test_stored_tool_calls_come_back_labelled_so_a_reconnect_keeps_them(
     (tmp_path / "note.txt").write_text("x")
     messages = [
         {"role": "user", "content": "read it"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "a", "type": "function",
-             "function": {"name": "read_file", "arguments": '{"path": "note.txt"}'}},
-            {"id": "b", "type": "function",
-             "function": {"name": "read_file", "arguments": '{"path": "gone.txt"}'}},
-        ]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "a",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "note.txt"}'},
+                },
+                {
+                    "id": "b",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "gone.txt"}'},
+                },
+            ],
+        },
         {"role": "tool", "tool_call_id": "a", "content": "x"},
         {"role": "tool", "tool_call_id": "b", "content": "error: cannot read 'gone.txt'"},
         {"role": "assistant", "content": "done"},
@@ -1074,10 +1098,17 @@ def test_a_call_whose_result_is_missing_is_not_reported_as_a_failure(
     from saddle.web.app import history_for_display
 
     messages = [
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "a", "type": "function",
-             "function": {"name": "read_file", "arguments": '{"path": "n.txt"}'}},
-        ]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "a",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "n.txt"}'},
+                },
+            ],
+        },
     ]
     row = history_for_display(messages, tmp_path)[0]["tools"][0]
     assert row["ok"] is True
@@ -1085,6 +1116,7 @@ def test_a_call_whose_result_is_missing_is_not_reported_as_a_failure(
 
 
 # -- previews -----------------------------------------------------------------
+
 
 def test_an_image_a_tool_wrote_is_offered_for_display(tmp_path: Path) -> None:
     from saddle.tools import preview_for
@@ -1123,17 +1155,19 @@ def test_the_file_route_serves_an_image_and_refuses_everything_else(
         assert "default-src 'none'" in served.headers["content-security-policy"]
 
         for path, status in (
-            ("../outside.png", 403),          # escape by traversal
-            (str(tmp_path / "outside.png"), 403),   # escape by absolute path
-            ("secrets.txt", 404),             # inside, but not an image
+            ("../outside.png", 403),  # escape by traversal
+            (str(tmp_path / "outside.png"), 403),  # escape by absolute path
+            ("secrets.txt", 404),  # inside, but not an image
             ("absent.png", 404),
             ("", 404),
         ):
-            assert client.get(f"/api/sessions/{sid}/file",
-                              params={"path": path}).status_code == status, path
+            assert (
+                client.get(f"/api/sessions/{sid}/file", params={"path": path}).status_code == status
+            ), path
 
 
 # -- the page itself ----------------------------------------------------------
+
 
 def test_the_page_versions_its_assets_and_is_never_stored(
     store: SessionStore, tmp_path: Path
@@ -1148,4 +1182,202 @@ def test_the_page_versions_its_assets_and_is_never_stored(
         body = page.text
         for name in ("app.css", "markdown.js", "app.js"):
             assert f"/static/{name}?v=" in body, name
-        assert 'src="/static/app.js"' not in body       # the unversioned form is gone
+        assert 'src="/static/app.js"' not in body  # the unversioned form is gone
+
+
+# -- one unstarted session ----------------------------------------------------
+
+def test_asking_for_a_new_session_twice_gives_the_same_unwritten_one(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Five impatient clicks should not leave five identical empty sessions.
+    with app_for(store, tmp_path) as (client, _app):
+        ids = {client.post("/api/sessions", json={}).json()["id"] for _ in range(5)}
+        assert len(ids) == 1
+        assert len(client.get("/api/sessions").json()) == 1
+
+
+def test_a_session_that_has_been_written_in_is_not_reused(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        first = client.post("/api/sessions", json={}).json()["id"]
+        store.save_messages(first, [{"role": "user", "content": "started"}])
+        second = client.post("/api/sessions", json={}).json()["id"]
+        assert second != first
+        assert len(client.get("/api/sessions").json()) == 2
+
+
+def test_reuse_can_be_declined_for_a_caller_that_wants_a_fresh_one(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        first = client.post("/api/sessions", json={}).json()["id"]
+        second = client.post(
+            "/api/sessions", json={"reuse_unstarted": False}
+        ).json()["id"]
+        assert second != first
+
+
+def test_reusing_an_unstarted_session_still_honours_a_new_folder(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with app_for(store, tmp_path) as (client, _app):
+        first = client.post("/api/sessions", json={}).json()
+        again = client.post("/api/sessions", json={"workdir": str(elsewhere)}).json()
+        assert again["id"] == first["id"]
+        assert again["workdir"] == str(elsewhere)
+
+
+def test_concurrent_requests_for_a_new_session_do_not_race(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Reuse is read-then-write, so without a lock two clicks arriving
+    # together both read "none" and both create.
+    made: list[str] = []
+    barrier = threading.Barrier(6)
+
+    with app_for(store, tmp_path) as (client, _app):
+        def ask() -> None:
+            barrier.wait(timeout=10)
+            made.append(client.post("/api/sessions", json={}).json()["id"])
+
+        threads = [threading.Thread(target=ask) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+
+    assert len(set(made)) == 1, made
+    assert len(store.list()) == 1
+
+
+# -- defaults for a new session -----------------------------------------------
+
+def test_a_new_session_starts_at_the_stated_defaults_not_a_reset(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        assert client.get("/api/settings").json() == {
+            "persona": "engineer", "reasoning_effort": "xhigh",
+        }
+        client.patch("/api/settings", json={"persona": "reviewer",
+                                            "reasoning_effort": "low"})
+        made = client.post("/api/sessions", json={"reuse_unstarted": False}).json()
+        assert made["persona"] == "reviewer"
+        assert made["reasoning_effort"] == "low"
+
+
+def test_a_sessions_own_persona_does_not_move_the_default(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"persona": "explainer"})
+        assert client.get("/api/settings").json()["persona"] == "engineer"
+
+
+def test_an_explicit_persona_beats_the_default(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        client.patch("/api/settings", json={"persona": "reviewer"})
+        made = client.post(
+            "/api/sessions", json={"persona": "plain", "reuse_unstarted": False}
+        ).json()
+        assert made["persona"] == "plain"
+
+
+def test_an_unknown_setting_is_ignored_rather_than_stored(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        body = client.patch("/api/settings", json={"nonsense": "x",
+                                                   "persona": "plain"}).json()
+        assert body == {"persona": "plain", "reasoning_effort": "xhigh"}
+
+
+# -- writing and editing personas ---------------------------------------------
+
+def test_a_persona_can_be_written_and_reaches_the_model(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    seen: list[str] = []
+
+    def capture(_c: Any, messages: list[dict[str, Any]], text: str, options: Any,
+                **_kw: Any) -> Any:
+        seen.append(options.system_prompt)
+        messages.append({"role": "user", "content": text})
+        return iter(())
+
+    import saddle.web.app as module
+
+    with app_for(store, tmp_path) as (client, app):
+        client.put("/api/personas/pirate", json={"prompt": "Arr. Ye be terse."})
+        sid = client.post("/api/sessions", json={"persona": "pirate"}).json()["id"]
+        module.run_turn = capture  # type: ignore[assignment]
+        _server_of(app)._run(sid, "hello")
+
+    assert seen == ["Arr. Ye be terse."]
+
+
+def test_editing_a_builtin_shadows_it_and_deleting_restores_it(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    from saddle.sessions import BUILTIN_PERSONAS
+
+    with app_for(store, tmp_path) as (client, _app):
+        client.put("/api/personas/engineer", json={"prompt": "Mine now."})
+        assert client.get("/api/personas").json()["personas"]["engineer"] == "Mine now."
+
+        assert client.delete("/api/personas/engineer").status_code == 200
+        table = client.get("/api/personas").json()
+        assert table["personas"]["engineer"] == BUILTIN_PERSONAS["engineer"]
+        assert table["editable"] == []
+
+
+def test_a_builtin_that_was_never_edited_cannot_be_deleted(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        reply = client.delete("/api/personas/engineer")
+        assert reply.status_code == 404
+        assert "engineer" in reply.json()["error"]
+
+
+def test_a_persona_needs_a_name(store: SessionStore, tmp_path: Path) -> None:
+    with app_for(store, tmp_path) as (client, _app):
+        reply = client.put("/api/personas/%20%20", json={"prompt": "x"})
+        assert reply.status_code == 400
+        assert reply.json()["error"] == "a persona needs a name"
+
+
+def test_an_overlong_persona_name_is_refused(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    from saddle.sessions import MAX_PERSONA_NAME
+
+    with app_for(store, tmp_path) as (client, _app):
+        reply = client.put("/api/personas/" + "x" * (MAX_PERSONA_NAME + 1),
+                           json={"prompt": "x"})
+        assert reply.status_code == 400
+        assert str(MAX_PERSONA_NAME) in reply.json()["error"]
+
+
+def test_an_empty_persona_prompt_is_allowed(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # "plain" ships empty; a user may want the same.
+    with app_for(store, tmp_path) as (client, _app):
+        client.put("/api/personas/bare", json={"prompt": ""})
+        assert client.get("/api/personas").json()["personas"]["bare"] == ""
+
+
+def test_a_corrupt_persona_file_falls_back_to_the_builtins(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    (store.root / "personas.json").write_text("{not json")
+    assert "engineer" in store.personas()
+    assert store.custom_personas() == {}

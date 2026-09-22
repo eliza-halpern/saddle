@@ -280,3 +280,53 @@ figure.preview img { display: block; max-width: 100%; height: auto; border-radiu
   background: #fff; }                 /* an SVG with no background of its own */
 figure.preview figcaption { margin-top: 8px; font: 12px var(--mono); color: var(--ink-faint); }
 .preview-failed { font: 12.5px var(--mono); color: var(--bad); }
+
+/* ---- settings ---- */
+#settings-dialog { width: min(680px, 92vw); border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--bg-raise); color: var(--ink);
+  padding: 20px 22px; font: inherit; }
+#settings-dialog::backdrop { background: #0c0a0daa; }
+#settings-dialog h3 { margin: 0 0 4px; font-size: 14px; color: var(--rose); }
+#settings-dialog h3 ~ h3 { margin-top: 22px; }
+#settings-dialog .hint { margin: 0 0 12px; font-size: 12.5px; color: var(--ink-faint); }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.settings-grid label, .persona-body input, .persona-body textarea {
+  display: grid; gap: 5px; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .09em; color: var(--ink-faint); }
+#settings-dialog select, .persona-body input, .persona-body textarea {
+  background: var(--bg-sunk); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 11px; padding: 8px 10px; font: inherit; font-size: 13px;
+  text-transform: none; letter-spacing: 0; }
+.persona-edit { display: grid; grid-template-columns: 170px 1fr; gap: 14px; }
+/* A sized <select> is a listbox, and its options are painted by the UA
+   unless they are styled too -- otherwise it lands as a white panel in the
+   middle of a dark dialog. */
+#persona-pick { padding: 4px; color-scheme: dark; }
+#persona-pick option { padding: 5px 8px; border-radius: 8px;
+                       background: var(--bg-sunk); color: var(--ink-dim); }
+#persona-pick option:checked { background: var(--bg-raise); color: var(--ink); }
+#settings-dialog select { color-scheme: dark; }
+.persona-body { display: grid; gap: 9px; align-content: start; }
+.persona-body textarea { resize: vertical; font: 13px/1.5 var(--mono); }
+.persona-actions { display: flex; gap: 8px; justify-content: flex-end; }
+#settings-dialog button { background: var(--bg-sunk); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 11px; padding: 7px 14px;
+  font: inherit; font-size: 13px; cursor: pointer; transition: border-color .14s, color .14s; }
+#settings-dialog button:hover:not(:disabled) { border-color: var(--rose); color: var(--ink); }
+#settings-dialog button:disabled { opacity: .4; cursor: default; }
+#settings-dialog button.primary { background: linear-gradient(94deg, var(--peach), var(--rose));
+  color: #241c26; border-color: transparent; font-weight: 600; }
+.dialog-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
+#settings { background: var(--bg-raise); border: 1px solid var(--line);
+  color: var(--ink-dim); width: 28px; height: 28px; border-radius: 10px;
+  cursor: pointer; font-size: 13px;
+  transition: transform .16s cubic-bezier(.34,1.56,.64,1), color .16s; }
+/* The + rotates a quarter turn because that lands it on a meaningful shape:
+   + becomes x. A cog has no second shape to become -- 45deg just parks it
+   between its own teeth, which is what read as a diamond. So the gear turns
+   continuously instead: every cycle is a whole revolution, so it cannot come
+   to rest askew whatever the glyph's tooth count. The reduced-motion rule at
+   the end of this file switches it off. */
+#settings:hover { color: var(--rose); animation: gear 2.2s linear infinite; }
+@keyframes gear { to { transform: rotate(360deg) } }
+.side-head { gap: 8px; }

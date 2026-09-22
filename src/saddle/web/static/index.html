@@ -7,6 +7,7 @@
   <aside id="sidebar">
     <div class="side-head">
       <span class="brand">saddle</span>
+      <button id="settings" title="Settings and personas">⚙</button>
       <button id="new-session" title="New session">+</button>
     </div>
     <div id="session-list"></div>
@@ -61,5 +62,40 @@
   </menu>
 </dialog>
 
+<dialog id="settings-dialog">
+  <h3>Settings</h3>
+  <p class="hint">What a new session starts as. Changing a session's own
+     persona or thinking level only affects that session.</p>
+  <div class="settings-grid">
+    <label>Default persona <select id="default-persona"></select></label>
+    <label>Default thinking
+      <select id="default-effort">
+        <option value="none">none</option>
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="xhigh">xhigh</option>
+      </select>
+    </label>
+  </div>
+
+  <h3>Personas</h3>
+  <p class="hint">A persona is the system prompt a session starts with. Edit
+     a built-in one and your version is used until you reset it.</p>
+  <div class="persona-edit">
+    <select id="persona-pick" size="6"></select>
+    <div class="persona-body">
+      <input id="persona-name" placeholder="name" spellcheck="false" maxlength="40">
+      <textarea id="persona-prompt" rows="8" spellcheck="false"
+                placeholder="What this persona tells the model to be."></textarea>
+      <div class="persona-actions">
+        <button id="persona-new" type="button">New</button>
+        <button id="persona-delete" type="button">Delete</button>
+        <button id="persona-save" type="button" class="primary">Save persona</button>
+      </div>
+      <p id="persona-note" class="hint"></p>
+    </div>
+  </div>
+  <div class="dialog-actions"><button id="settings-close" type="button">Close</button></div>
+</dialog>
 <script src="/static/markdown.js"></script>
 <script src="/static/app.js"></script>

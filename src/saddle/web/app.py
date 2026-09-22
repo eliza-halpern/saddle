@@ -46,7 +46,7 @@ from saddle.events import (
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.sandbox import OutsideRootError, resolve_within
-from saddle.sessions import SessionStore, personas
+from saddle.sessions import BUILTIN_PERSONAS, SessionStore
 from saddle.titles import title_for
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for
 from saddle.vllm import VllmClient
@@ -198,7 +198,7 @@ class ChatServer:
                 options = TurnOptions(
                     workdir=workdir,
                     journal=self.store.journal_path(session_id),
-                    system_prompt=session.prompt_text(),
+                    system_prompt=session.prompt_text(self.store.personas()),
                     reasoning_effort=session.reasoning_effort,
                     context_tokens=self._context_window(client),
                 )
@@ -257,9 +257,37 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         session = store.create(
             title=body.get("title") or "New session",
             workdir=body.get("workdir") or str(default_workdir),
-            persona=body.get("persona") or "engineer",
+            persona=body.get("persona"),
+            reasoning_effort=body.get("reasoning_effort"),
+            # The sidebar's "+" asks for a session, not necessarily a new
+            # one: an unwritten session is the same unwritten session, so
+            # five impatient clicks leave one.
+            reuse_unstarted=bool(body.get("reuse_unstarted", True)),
         )
         return JSONResponse(session.__dict__)
+
+    async def get_settings(_: Request) -> JSONResponse:
+        return JSONResponse(store.settings())
+
+    async def patch_settings(request: Request) -> JSONResponse:
+        return JSONResponse(store.update_settings(**await request.json()))
+
+    async def save_persona(request: Request) -> JSONResponse:
+        name = request.path_params["name"]
+        body = await request.json()
+        try:
+            table = store.save_persona(name, str(body.get("prompt") or ""))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(table)
+
+    async def delete_persona(request: Request) -> JSONResponse:
+        try:
+            table = store.delete_persona(request.path_params["name"])
+        except KeyError as exc:
+            # A builtin cannot be deleted, only shadowed and then restored.
+            return JSONResponse({"error": str(exc).strip("'")}, status_code=404)
+        return JSONResponse(table)
 
     async def patch_session(request: Request) -> JSONResponse:
         body = await request.json()
@@ -279,7 +307,15 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         return JSONResponse(store.load_messages(request.path_params["sid"]))
 
     async def list_personas(_: Request) -> JSONResponse:
-        return JSONResponse(personas())
+        # The editor needs to know which names it may delete, so the builtin
+        # set travels with the table rather than being guessed from it.
+        return JSONResponse(
+            {
+                "personas": store.personas(),
+                "builtin": sorted(BUILTIN_PERSONAS),
+                "editable": sorted(store.custom_personas()),
+            }
+        )
 
     async def browse(request: Request) -> JSONResponse:
         """Directory listing for the folder picker."""
@@ -426,6 +462,10 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         routes=[
             Route("/", index),
             Route("/api/personas", list_personas),
+            Route("/api/personas/{name}", save_persona, methods=["PUT"]),
+            Route("/api/personas/{name}", delete_persona, methods=["DELETE"]),
+            Route("/api/settings", get_settings),
+            Route("/api/settings", patch_settings, methods=["PATCH"]),
             Route("/api/browse", browse),
             Route("/api/sessions", list_sessions, methods=["GET"]),
             Route("/api/sessions", create_session, methods=["POST"]),

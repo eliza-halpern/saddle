@@ -13,13 +13,20 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
 DEFAULT_ROOT: Final = Path.home() / ".saddle" / "sessions"
+SETTINGS_FILE: Final = "settings.json"
+PERSONA_FILE: Final = "personas.json"
+DEFAULT_PERSONA: Final = "engineer"
+DEFAULT_EFFORT: Final = "xhigh"
+MAX_PERSONA_NAME: Final = 40
 
 BUILTIN_PERSONAS: Final[dict[str, str]] = {
     "engineer": (
@@ -61,11 +68,17 @@ class Session:
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 
-    def prompt_text(self) -> str:
-        """The system prompt actually sent: an override, else the persona."""
+    def prompt_text(self, personas: Mapping[str, str] | None = None) -> str:
+        """The system prompt actually sent: an override, else the persona.
+
+        `personas` is the store's table when there is one, so an edited or
+        user-written persona is what actually reaches the model rather than
+        the builtin of the same name.
+        """
         if self.system_prompt.strip():
             return self.system_prompt
-        return BUILTIN_PERSONAS.get(self.persona, "")
+        table = BUILTIN_PERSONAS if personas is None else personas
+        return table.get(self.persona, "")
 
 
 class SessionStore:
@@ -74,6 +87,88 @@ class SessionStore:
     def __init__(self, root: Path | None = None) -> None:
         self.root = Path(root or DEFAULT_ROOT)
         self.root.mkdir(parents=True, exist_ok=True)
+        # Creating a session reuses an unstarted one, which is a read
+        # followed by a write: two clicks arriving together would both read
+        # "none" and both create.
+        self._create_lock = threading.Lock()
+
+    # -- settings and personas ---------------------------------------------
+
+    def _read_json(self, name: str) -> dict[str, Any]:
+        try:
+            data = json.loads((self.root / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_json(self, name: str, data: dict[str, Any]) -> None:
+        (self.root / name).write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+    def settings(self) -> dict[str, Any]:
+        """What a new session starts as, with the shipped values as the floor.
+
+        New sessions used to start at "engineer"/"xhigh" whatever the last
+        one was set to, which reads as the app forgetting. Making that a
+        stated default rather than a reset means the behaviour is chosen.
+        """
+        stored = self._read_json(SETTINGS_FILE)
+        return {
+            "persona": str(stored.get("persona") or DEFAULT_PERSONA),
+            "reasoning_effort": str(stored.get("reasoning_effort") or DEFAULT_EFFORT),
+        }
+
+    def update_settings(self, **changes: Any) -> dict[str, Any]:
+        current = self.settings()
+        for key, value in changes.items():
+            if key in current and value:
+                current[key] = str(value)
+        self._write_json(SETTINGS_FILE, current)
+        return current
+
+    def personas(self) -> dict[str, str]:
+        """Builtin personas, overlaid with the user's own.
+
+        A stored entry under a builtin name shadows it, which is what makes
+        "edit engineer" possible; deleting that entry restores the builtin.
+        """
+        table = dict(BUILTIN_PERSONAS)
+        for name, prompt in self._read_json(PERSONA_FILE).items():
+            if isinstance(prompt, str):
+                table[str(name)] = prompt
+        return table
+
+    def custom_personas(self) -> dict[str, str]:
+        """Only the stored ones -- what the editor may delete or reset."""
+        return {
+            str(name): prompt
+            for name, prompt in self._read_json(PERSONA_FILE).items()
+            if isinstance(prompt, str)
+        }
+
+    def save_persona(self, name: str, prompt: str) -> dict[str, str]:
+        clean = name.strip()
+        if not clean:
+            msg = "a persona needs a name"
+            raise ValueError(msg)
+        if len(clean) > MAX_PERSONA_NAME:
+            msg = f"persona name is longer than {MAX_PERSONA_NAME} characters"
+            raise ValueError(msg)
+        stored = self.custom_personas()
+        stored[clean] = prompt
+        self._write_json(PERSONA_FILE, dict(stored))
+        return self.personas()
+
+    def delete_persona(self, name: str) -> dict[str, str]:
+        """Remove a stored persona. A builtin of that name comes back."""
+        stored = self.custom_personas()
+        if name not in stored:
+            msg = f"no editable persona named {name!r}"
+            raise KeyError(msg)
+        del stored[name]
+        self._write_json(PERSONA_FILE, dict(stored))
+        return self.personas()
 
     def _dir(self, session_id: str) -> Path:
         # A session id is generated here and never taken from a client, but
@@ -85,14 +180,52 @@ class SessionStore:
             raise ValueError(msg)
         return self.root / safe
 
+    def unstarted(self) -> Session | None:
+        """A session nobody has written in yet, if one is lying around.
+
+        Clicking "new session" five times should not leave five identical
+        empty sessions in the sidebar. One unwritten session is the same
+        unwritten session.
+        """
+        for session in self.list():
+            if not self.load_messages(session.id):
+                return session
+        return None
+
     def create(
-        self, *, title: str = "New session", workdir: str = ".", persona: str = "engineer"
+        self,
+        *,
+        title: str = "New session",
+        workdir: str = ".",
+        persona: str | None = None,
+        reasoning_effort: str | None = None,
+        reuse_unstarted: bool = False,
     ) -> Session:
+        defaults = self.settings()
+        with self._create_lock:
+            if reuse_unstarted:
+                existing = self.unstarted()
+                if existing is not None:
+                    # Honour a folder the caller asked for; leave the rest,
+                    # since the session may already have been set up by hand.
+                    resolved = str(Path(workdir).expanduser().resolve())
+                    if resolved != existing.workdir:
+                        return self.update(existing.id, workdir=resolved)
+                    return existing
+            return self._create(
+                title=title,
+                workdir=workdir,
+                persona=persona or defaults["persona"],
+                reasoning_effort=reasoning_effort or defaults["reasoning_effort"],
+            )
+
+    def _create(self, *, title: str, workdir: str, persona: str, reasoning_effort: str) -> Session:
         session = Session(
             id=uuid.uuid4().hex[:12],
             title=title,
             workdir=str(Path(workdir).expanduser().resolve()),
             persona=persona,
+            reasoning_effort=reasoning_effort,
         )
         directory = self._dir(session.id)
         (directory / "uploads").mkdir(parents=True, exist_ok=True)
@@ -164,7 +297,3 @@ class SessionStore:
 
     def journal_path(self, session_id: str) -> Path:
         return self._dir(session_id) / "chat.jsonl"
-
-
-def personas() -> dict[str, str]:
-    return dict(BUILTIN_PERSONAS)
