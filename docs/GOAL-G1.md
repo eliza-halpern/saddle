@@ -55,14 +55,43 @@ The objective is AGREEMENT between the run's gate verdicts and
 oracles/oracle_t5.py, which the worker never sees and which is never a
 gate. It is ground truth because it is out of reach.
 
-DONE WHEN three consecutive seeds at temperature 0.7 each end in
-agreement: every node seals and the oracle passes, or a named node fails
+DONE WHEN three seeds at temperature 0.7 end in agreement, drawn from at
+most five seeds on ONE pinned harness surface, with the denominator
+reported: every node seals and the oracle passes, or a named node fails
 and the oracle fails for a reason that node's gate detail already gave.
 
+They need not be consecutive. The earlier wording said so and was wrong
+in a way worth naming: "three in a row" fires with probability 1 for any
+success rate above zero -- keep drawing and it always arrives, sooner if
+the mechanism is good and later if it is bad. It measures patience, not
+reliability, and nothing in this file ever argued for it. The argument
+below is for THREE, and it survives intact. What consecutiveness was
+doing honestly is done better by the two clauses it hid behind: a fixed
+denominator, and one pinned surface.
+
+So state N. Three of five is a 60% floor; three of three is a stronger
+claim than three-in-a-row ever was. If it takes more than five seeds to
+bank three, that IS the finding -- record the rate and repair the
+mechanism rather than extending the draw.
+
+ONE PINNED SURFACE means the harness core -- slice, gates, evidence,
+runner, survivors, dag, journal, scheduler, sandbox -- is byte-identical
+across every seed in the denominator. Verify with `git diff` over those
+paths between each seed's recorded HEAD, and record the result beside the
+count. Landing any change to them empties the denominator and starts a
+new one. That is the real cost of a mid-count fix, and it is worth paying
+when the fix addresses the failure the denominator just recorded.
+
 A run where every gate passes and the oracle fails is not partial
-progress. It is a gate defect, is recorded as one, and resets the count
-to zero. One seed cannot separate a mechanism from the spread that gave
-round 3d attempts of 581 s, 534 s and 2494 s; three is the floor.
+progress, and it is not merely a miss. It is a gate defect -- saddle
+certified work that is wrong -- is recorded as one, and resets the count
+to zero. That reset stays, and it is the one place a reset belongs: a
+false pass disqualifies the instrument, not just the sample. A run where
+a node FAILS and the oracle fails for some other reason is a miss: it
+counts against the denominator and resets nothing.
+
+One seed cannot separate a mechanism from the spread that gave round 3d
+attempts of 581 s, 534 s and 2494 s; three is the floor.
 
 No item closes by narrowing a population, lowering a threshold or
 exempting a rule unless it also exhibits the known-bad it now admits
@@ -183,28 +212,36 @@ check a control mechanism that DID fire (`deferred-lines=`, T6-53)
 appears where expected.
 
 WHERE THE COUNT STANDS (dated 2026-09-22, recount before citing).
-**Zero.** No run has ended in agreement, so none of the three consecutive
-seeds has been banked. Census over all 48 journals, 24 of which carry a
-plan record:
+**Two of three, on surface `g1-30bde7b`.** Seeds s1 and s3 each sealed
+all four planned nodes with the oracle passing all four of its checks.
+s2 sealed three, failed n4 and its replan n4.r1, and the oracle failed --
+a miss, not a gate defect, since nodes failed. No gate defect has been
+recorded on this surface. The core is byte-identical across 30bde7b,
+5a2d2fa and HEAD over the nine harness paths, so the three seeds share
+one pinned surface and the denominator is legitimate.
 
-- Seven runs sealed every planned node -- `regress-99e3986` t1/t2/t3/t6
-  and `round3g`/`round3h`/`round3i` t5-s1 -- and every one of them was a
-  ONE- or TWO-node plan. The most nodes any run has ever sealed is two.
-- The seven `g1-*` runs all carry FOUR-node t5 plans (one, `g1-a876595`,
-  grew to eight through replans). Three sealed exactly one node, four
-  sealed none. **No `g1` run has ever sealed a second node.**
-- Nine runs across the whole population sealed their first test node, so
-  the test node is not the barrier and has not been for some time.
+Census over all 52 journals, 28 of which carry a plan record. Count them
+with `os.walk`, never `glob(recursive=True)`: the latter silently skips
+`.saddle/` and reported 7 of the 52 on 2026-09-22, with no error.
 
-Read that shape before choosing what to work on: the binding constraint
-is the FIRST IMPL NODE, which is where `coverage`, `public-deletions`,
-`property-coverage` and `mutation` all land at once, and which no run has
-yet got past. Nodes 3 and 4 in a four-node plan have never been
-dispatched at all, so nothing is known about them -- their silence is
-not evidence that they work. Emission, by contrast, measured SOLVED in
-3j; treating round 3e's shape as the live problem is reading a fixed
-defect as an open one, which is exactly what a census pooled across gate
-revisions does (F21.36 -> F21.37, and it cost a session).
+- Four runs sealed every planned node: `g1-30bde7b` t5-s1 and t5-s3
+  (four-node plans) and `regress-99e3986` t1 and t6 (two-node plans).
+- Of the eleven `g1-*` runs, the eight on surfaces earlier than 30bde7b
+  sealed **zero impl nodes between them** -- five sealed nothing, three
+  sealed only their test node. On 30bde7b the three seeds sealed eight
+  impl nodes between them (3, 2, 3).
+- So the first-impl-node barrier, which every earlier revision of this
+  paragraph named as the binding constraint, BROKE on surface 30bde7b.
+  Nodes 3 and 4 are no longer undispatched: both sealed in s1 and in s3.
+
+Read that shape before choosing what to work on. Reaching the impl nodes
+is no longer the constraint. On the single failure this surface has
+produced, the constraint was node 4 on `store.py`: its mutation gate
+reported survivors in `load_accounts` while the oracle reported store.py
+still carrying the untouched baseline. Emission, by contrast, measured
+SOLVED in 3j; treating round 3e's shape as the live problem is reading a
+fixed defect as an open one, which is exactly what a census pooled across
+gate revisions does (F21.36 -> F21.37, and it cost a session).
 
 Before acting on any claim in THIS text that something is unread, unbuilt
 or unfixed: grep the repo -- docstrings included -- and the bench's
