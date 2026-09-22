@@ -91,6 +91,15 @@ again, which is what lets the model start work, say what it started, and
 come back to the result. Output is capped head-and-tail per terminal, so a
 runaway `yes` loop cannot take the session down.
 
+Output **streams into the UI as it happens**. A background command keeps
+producing output after the tool call that started it has returned, so it
+cannot be handed back from that call -- the sandbox pushes each chunk to a
+listener, the server publishes it as a `terminal.output` event, and the
+browser fills a terminal block keyed by terminal id. Verified with a
+command printing one number per second: the numbers arrive one per second,
+not all at once at the end. A listener that raises is dropped rather than
+allowed to stop the command.
+
 ## Nothing is stingy
 
 `saddle up` sent a flat `max_tokens: 8192` on every reply. Against a server

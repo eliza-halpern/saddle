@@ -27,7 +27,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from saddle.engine import TurnOptions, run_turn
-from saddle.events import ErrorEvent, Event, SessionInfo
+from saddle.events import ErrorEvent, Event, SessionInfo, TerminalOutput
 from saddle.sessions import SessionStore, personas
 from saddle.tools import ToolContext
 from saddle.vllm import VllmClient
@@ -100,7 +100,15 @@ class ChatServer:
             messages = self.store.load_messages(session_id)
             workdir = Path(session.workdir)
             if live.context is None or live.context.workdir != workdir:
-                live.context = ToolContext(workdir=workdir)
+                # Terminal output arrives on the reader thread, after the tool
+                # call that started it has already returned, so it is pushed
+                # to the session's subscribers rather than yielded by the turn.
+                live.context = ToolContext(
+                    workdir=workdir,
+                    on_output=lambda tid, chunk: live.publish(
+                        TerminalOutput(id=tid, chunk=chunk)
+                    ),
+                )
             live.turn += 1
             with self.client_factory() as client:
                 options = TurnOptions(

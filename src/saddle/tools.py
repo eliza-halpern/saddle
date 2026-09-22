@@ -19,7 +19,7 @@ rather than the turn dying.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -79,10 +79,13 @@ class ToolContext:
     workdir: Path
     sandbox: Sandbox | None = None
     uploads: list[str] = field(default_factory=list)
+    on_output: Callable[[str, str], None] | None = None
+    """Called with (terminal_id, chunk) as a command produces output, so a
+    UI can show a build scrolling rather than a spinner."""
 
     def box(self) -> Sandbox:
         if self.sandbox is None:
-            self.sandbox = Sandbox.for_workdir(self.workdir)
+            self.sandbox = Sandbox.for_workdir(self.workdir, on_output=self.on_output)
         return self.sandbox
 
 

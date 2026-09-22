@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
@@ -94,16 +95,30 @@ class Terminal:
 
 @dataclass
 class Sandbox:
-    """Command execution rooted at `root`."""
+    """Command execution rooted at `root`.
+
+    `on_output(terminal_id, chunk)` is called from the reader thread as
+    output arrives, so a caller can stream it somewhere. A background
+    command outlives the tool call that started it, so its output cannot
+    be returned from that call -- it has to be pushed.
+    """
 
     root: Path
     isolation: Literal["bwrap", "none"] = "none"
     terminals: dict[str, Terminal] = field(default_factory=dict)
+    on_output: Callable[[str, str], None] | None = None
 
     @classmethod
-    def for_workdir(cls, root: Path, *, prefer_bwrap: bool = True) -> Sandbox:
+    def for_workdir(
+        cls, root: Path, *, prefer_bwrap: bool = True,
+        on_output: Callable[[str, str], None] | None = None,
+    ) -> Sandbox:
         available = prefer_bwrap and shutil.which("bwrap") is not None
-        return cls(root=root.resolve(), isolation="bwrap" if available else "none")
+        return cls(
+            root=root.resolve(),
+            isolation="bwrap" if available else "none",
+            on_output=on_output,
+        )
 
     def _argv(self, command: str) -> list[str]:
         """The argv actually executed, wrapped for isolation when available."""
@@ -166,6 +181,11 @@ class Sandbox:
             assert process.stdout is not None
             for line in process.stdout:
                 terminal._append(line)
+                if self.on_output is not None:
+                    try:
+                        self.on_output(terminal.id, line)
+                    except Exception:  # a broken listener must not stop the command
+                        self.on_output = None
             terminal.exit_code = process.wait()
 
         threading.Thread(target=pump, daemon=True).start()

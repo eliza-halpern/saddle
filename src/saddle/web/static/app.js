@@ -25,7 +25,7 @@ const el = (tag, cls, text) => {
 const state = {
   sessionId: null, stream: null, busy: false,
   turnNode: null, assistantNode: null, reasoningNode: null, reasoningBody: null,
-  tools: new Map(), attachments: [], personas: {}, folder: null,
+  tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null,
 };
 
 /* ---------- content rendering ---------- */
@@ -232,6 +232,25 @@ function finishTool(event) {
   if (!event.ok) row.details.open = true;             // a failure should not need a click
 }
 
+/* A background command keeps producing output after the tool call that
+   started it returned, so it gets its own block that fills as it runs
+   rather than appearing all at once when someone reads it. */
+function terminalBlock(id) {
+  if (state.terminals.has(id)) return state.terminals.get(id);
+  const details = el("details", "tool running");
+  const summary = el("summary");
+  summary.appendChild(el("span", "dot"));
+  summary.appendChild(el("span", "label", `Terminal ${id}`));
+  summary.appendChild(el("span", "ms", "live"));
+  details.appendChild(summary);
+  const body = el("div", "tool-detail terminal");
+  details.appendChild(body);
+  details.open = true;
+  (state.turnNode || $("#transcript")).appendChild(details);
+  state.terminals.set(id, body);
+  return body;
+}
+
 function notice(text, kind) {
   const node = el("div", `notice ${kind || ""}`, text);
   ($("#transcript").lastElementChild || $("#transcript")).appendChild(node);
@@ -264,6 +283,9 @@ function handle(event) {
       break;
     case "tool.end":
       finishTool(event);
+      break;
+    case "terminal.output":
+      terminalBlock(event.id).textContent += event.chunk;
       break;
     case "compaction":
       notice(`Context compacted — ${event.summary}`);
@@ -376,6 +398,7 @@ async function loadSessions() {
 function select(sessionId) {
   state.sessionId = sessionId;
   state.tools.clear();
+  state.terminals.clear();
   localStorage.setItem("saddle.session", sessionId);
   loadSessions();
   connect(sessionId);

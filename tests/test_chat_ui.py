@@ -235,3 +235,25 @@ def test_the_budget_never_drops_below_a_usable_floor() -> None:
 
 def test_an_explicit_max_tokens_still_wins() -> None:
     assert TurnOptions(max_tokens=4096).budget([]) == 4096
+
+
+# -- live terminal output -----------------------------------------------------
+
+def test_background_output_is_pushed_to_a_listener_as_it_arrives(tmp_path: Path) -> None:
+    seen: list[tuple[str, str]] = []
+    box = Sandbox.for_workdir(tmp_path, on_output=lambda tid, chunk: seen.append((tid, chunk)))
+    terminal = box.start("echo one; echo two; echo three")
+    box.wait(terminal.id, timeout=20)
+    assert [chunk for _, chunk in seen] == ["one\n", "two\n", "three\n"]
+    assert {tid for tid, _ in seen} == {terminal.id}
+
+
+def test_a_broken_listener_does_not_stop_the_command(tmp_path: Path) -> None:
+    def explode(_tid: str, _chunk: str) -> None:
+        msg = "listener is broken"
+        raise RuntimeError(msg)
+
+    box = Sandbox.for_workdir(tmp_path, on_output=explode)
+    terminal = box.wait(box.start("echo still ran").id, timeout=20)
+    assert terminal.exit_code == 0
+    assert "still ran" in terminal.output()
