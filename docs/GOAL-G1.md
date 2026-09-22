@@ -212,27 +212,40 @@ check a control mechanism that DID fire (`deferred-lines=`, T6-53)
 appears where expected.
 
 WHERE THE COUNT STANDS (dated 2026-09-22, recount before citing).
-**Two of three, on surface `g1-30bde7b`.** Seeds s1 and s3 each sealed
-all four planned nodes with the oracle passing all four of its checks.
-s2 sealed three, failed n4 and its replan n4.r1, and the oracle failed --
-a miss, not a gate defect, since nodes failed. No gate defect has been
-recorded on this surface. The core is byte-identical across 30bde7b,
-5a2d2fa and HEAD over the nine harness paths, so the three seeds share
-one pinned surface and the denominator is legitimate.
+**Three of four, on surface `g1-30bde7b`. The stopping rule is MET.**
+Seeds s1, s3 and s4 each sealed all four planned nodes with the oracle
+passing all four of its checks. s2 sealed three, failed n4 and its replan
+n4.r1, and the oracle failed -- a miss, not a gate defect, since nodes
+failed; it counts against the denominator and resets nothing. No gate
+defect has been recorded on this surface. Three agreements from a
+denominator of four, inside the cap of five.
 
-Census over all 52 journals, 28 of which carry a plan record. Count them
+Surface verified 2026-09-22 by `git diff` over the nine paths this text
+names, between 30bde7b and HEAD: EMPTY. All nine resolve to real modules
+(slice, gates, evidence, runner, survivors, dag, journal, scheduler,
+sandbox). Note what the check does NOT cover, and why that is still
+correct here: `cli.py` DID change mid-count (`5a2d2fa`, 12:32 -- s1 ran
+before it, s2 through s4 after), and `cli.py` is not among the nine. Its
+diff is confined to the `chat` subcommand, which `saddle run` never
+enters. The denominator holds. But a future `cli.py` change touching the
+run path would pass this check while moving the surface, so widen the
+list before leaning on it again.
+
+Census over all 53 journals, 29 of which carry a plan record, recounted
+2026-09-22 after s4 and cross-checked against `find | wc -l`. Count them
 with `os.walk`, never `glob(recursive=True)`: the latter silently skips
 `.saddle/` and reported 7 of the 52 on 2026-09-22, with no error.
 
-- Four runs sealed every planned node: `g1-30bde7b` t5-s1 and t5-s3
-  (four-node plans) and `regress-99e3986` t1 and t6 (two-node plans).
-- Of the eleven `g1-*` runs, the eight on surfaces earlier than 30bde7b
+- Five runs sealed every planned node: `g1-30bde7b` t5-s1, t5-s3 and
+  t5-s4 (four-node plans) and `regress-99e3986` t1 and t6 (two-node
+  plans).
+- Of the twelve `g1-*` runs, the eight on surfaces earlier than 30bde7b
   sealed **zero impl nodes between them** -- five sealed nothing, three
-  sealed only their test node. On 30bde7b the three seeds sealed eight
-  impl nodes between them (3, 2, 3).
+  sealed only their test node. On 30bde7b the four seeds sealed eleven
+  impl nodes between them (3, 2, 3, 3).
 - So the first-impl-node barrier, which every earlier revision of this
   paragraph named as the binding constraint, BROKE on surface 30bde7b.
-  Nodes 3 and 4 are no longer undispatched: both sealed in s1 and in s3.
+  Nodes 3 and 4 are no longer undispatched: both sealed in s1, s3 and s4.
 
 Read that shape before choosing what to work on. Reaching the impl nodes
 is no longer the constraint. On the single failure this surface has
