@@ -127,7 +127,7 @@ def _resolved(workdir: Path, path: str) -> Path:
     return target
 
 
-def _loose_spans(source: str, search: str) -> list[tuple[int, int]]:
+def loose_spans(source: str, search: str) -> list[tuple[int, int]]:
     """Every span of `source` matching `search` up to blank lines and
     trailing spaces, stopping at two -- the caller only needs to tell
     "none" from "one" from "more than one".
@@ -181,7 +181,7 @@ def _replace_once(source: str, search: str, replace: str, path: str) -> str:
             search, replace = trimmed, replace[:-1] if replace.endswith("\n") else replace
             count = 1
     if count == 0:
-        spans = _loose_spans(source, search)
+        spans = loose_spans(source, search)
         if len(spans) == 1:
             start, end = spans[0]
             lines = source.split("\n")

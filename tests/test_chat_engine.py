@@ -11,20 +11,31 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from saddle.engine import MAX_TOOL_ROUNDS, TurnOptions, run_turn
-from saddle.events import Event
-from saddle.vllm import StreamToken, ToolCall, VllmRequestError
+from saddle.events import (
+    Compaction,
+    ContentDelta,
+    Context,
+    ErrorEvent,
+    Event,
+    ToolEnd,
+    ToolStart,
+    TurnEnd,
+    TurnStart,
+)
+from saddle.vllm import StreamToken, ToolCall, VllmClient, VllmRequestError
 
 
 class FakeClient:
     """Replays scripted rounds; records what each round was asked for."""
 
-    def __init__(self, rounds: list[list[Any]]) -> None:
+    def __init__(self, rounds: list[list[Any] | BaseException]) -> None:
         self.rounds = list(rounds)
         self.asked: list[dict[str, Any]] = []
 
@@ -59,6 +70,23 @@ def kinds(events: list[Event]) -> list[str]:
     return [e.kind for e in events]
 
 
+def one[E: Event](event: Event, cls: type[E]) -> E:
+    """Narrow a single event, asserting that is what it is.
+
+    The stream is heterogeneous, so an index into it is an `Event`, and
+    reading a subclass field off that is what `strict` rejects. Narrowing
+    here also turns "this position holds a ToolEnd" from an assumption the
+    test makes silently into one it states.
+    """
+    assert isinstance(event, cls), f"expected {cls.__name__}, got {type(event).__name__}"
+    return event
+
+
+def those[E: Event](events: Iterable[Event], cls: type[E]) -> list[E]:
+    """Every event of one type, in order."""
+    return [event for event in events if isinstance(event, cls)]
+
+
 def run(
     client: FakeClient,
     options: TurnOptions,
@@ -67,7 +95,14 @@ def run(
     **kwargs: Any,
 ) -> list[Event]:
     return list(
-        run_turn(client, messages if messages is not None else [], text, options, turn=1, **kwargs)
+        run_turn(
+            cast(VllmClient, client),
+            messages if messages is not None else [],
+            text,
+            options,
+            turn=1,
+            **kwargs,
+        )
     )
 
 
@@ -84,8 +119,8 @@ def test_a_plain_answer_is_start_reasoning_content_context_end(options: TurnOpti
         "context",
         "turn.end",
     ]
-    assert events[0].prompt == "hi"
-    assert events[-1].proof  # every turn is sealed
+    assert one(events[0], TurnStart).prompt == "hi"
+    assert one(events[-1], TurnEnd).proof  # every turn is sealed
 
 
 def test_a_tool_round_is_announced_before_it_runs_and_labelled_after(options: TurnOptions) -> None:
@@ -105,7 +140,7 @@ def test_a_tool_round_is_announced_before_it_runs_and_labelled_after(options: Tu
         "context",
         "turn.end",
     ]
-    start, end = events[1], events[2]
+    start, end = one(events[1], ToolStart), one(events[2], ToolEnd)
     assert start.present == "Reading note.txt"
     assert end.label == "Read note.txt"
     assert end.ok is True
@@ -121,7 +156,7 @@ def test_a_failing_tool_is_reported_in_the_failed_tense_not_hidden(options: Turn
         ]
     )
     events = run(client, options)
-    end = next(e for e in events if e.kind == "tool.end")
+    end = those(events, ToolEnd)[0]
     assert end.ok is False
     assert end.label == "Failed to read absent.txt"
     assert end.detail.startswith("error: ")
@@ -177,7 +212,7 @@ def test_several_calls_in_one_round_all_run(options: TurnOptions) -> None:
         ]
     )
     events = run(client, options)
-    ends = [e for e in events if e.kind == "tool.end"]
+    ends = those(events, ToolEnd)
     assert [e.id for e in ends] == ["1", "2"]
 
 
@@ -188,7 +223,7 @@ def test_a_tool_loop_is_cut_off_rather_than_run_forever(options: TurnOptions) ->
     (options.workdir / "note.txt").write_text("x")
     client = FakeClient([[tool("read_file", path="note.txt")]] * (MAX_TOOL_ROUNDS + 4))
     events = run(client, options)
-    error = next(e for e in events if e.kind == "error")
+    error = those(events, ErrorEvent)[0]
     assert error.message == f"stopped after {MAX_TOOL_ROUNDS} tool rounds"
     assert len([e for e in events if e.kind == "tool.start"]) == MAX_TOOL_ROUNDS
     assert events[-1].kind == "turn.end"  # still sealed
@@ -198,8 +233,8 @@ def test_a_transport_failure_is_reported_and_the_turn_is_still_sealed(options: T
     client = FakeClient([VllmRequestError("the server hung up")])
     events = run(client, options)
     assert kinds(events) == ["turn.start", "error", "context", "turn.end"]
-    assert events[1].message == "the server hung up"
-    assert events[-1].proof
+    assert one(events[1], ErrorEvent).message == "the server hung up"
+    assert one(events[-1], TurnEnd).proof
 
 
 def test_the_budget_is_what_the_client_is_asked_for(options: TurnOptions) -> None:
@@ -217,7 +252,7 @@ def test_the_context_event_reports_the_conversation_against_its_window(
 ) -> None:
     options.context_tokens = 50_000
     events = run(FakeClient([[content("hello")]]), options)
-    context = next(e for e in events if e.kind == "context")
+    context = those(events, Context)[0]
     assert context.limit == 50_000
     assert 0 < context.used < 50_000
 
@@ -226,7 +261,7 @@ def test_an_overlong_conversation_is_compacted_and_says_so(options: TurnOptions)
     options.context_tokens = 2_000
     messages = [{"role": "user", "content": "x" * 4_000} for _ in range(20)]
     events = run(FakeClient([[content("ok")]]), options, messages=messages)
-    compaction = next(e for e in events if e.kind == "compaction")
+    compaction = those(events, Compaction)[0]
     assert compaction.dropped_messages > 0
     # 20 sent in, plus this turn's own user message, less what was dropped,
     # plus the one in-band note that says so. Counted at compaction time: the
@@ -266,15 +301,15 @@ def test_a_stop_mid_stream_cuts_the_reply_short_and_still_seals(options: TurnOpt
         return stopped["now"]
 
     events = []
-    for event in run_turn(client, [], "hi", options, turn=1, cancel=cancel):
+    for event in run_turn(cast(VllmClient, client), [], "hi", options, turn=1, cancel=cancel):
         events.append(event)
         if event.kind == "content.delta":
             stopped["now"] = True  # stop after the first chunk
 
-    assert [e.text for e in events if e.kind == "content.delta"] == ["one"]
-    assert any(e.kind == "error" and e.message == "stopped by you" for e in events)
+    assert [e.text for e in those(events, ContentDelta)] == ["one"]
+    assert any(e.message == "stopped by you" for e in those(events, ErrorEvent))
     assert events[-1].kind == "turn.end"
-    assert events[-1].proof  # the work done is still recorded
+    assert one(events[-1], TurnEnd).proof  # the work done is still recorded
 
 
 def test_a_stop_between_two_calls_runs_the_first_and_not_the_second(options: TurnOptions) -> None:
@@ -291,12 +326,14 @@ def test_a_stop_between_two_calls_runs_the_first_and_not_the_second(options: Tur
     )
 
     events = []
-    for event in run_turn(client, [], "hi", options, turn=1, cancel=lambda: stopped["now"]):
+    for event in run_turn(
+        cast(VllmClient, client), [], "hi", options, turn=1, cancel=lambda: stopped["now"]
+    ):
         events.append(event)
         if event.kind == "tool.end":
             stopped["now"] = True
 
-    assert [e.id for e in events if e.kind == "tool.start"] == ["1"]
+    assert [e.id for e in those(events, ToolStart)] == ["1"]
     assert events[-1].kind == "turn.end"
 
 
@@ -311,7 +348,9 @@ def test_a_stop_between_rounds_does_not_start_another_one(options: TurnOptions) 
     )
 
     events = []
-    for event in run_turn(client, [], "hi", options, turn=1, cancel=lambda: stopped["now"]):
+    for event in run_turn(
+        cast(VllmClient, client), [], "hi", options, turn=1, cancel=lambda: stopped["now"]
+    ):
         events.append(event)
         if event.kind == "tool.end":
             stopped["now"] = True
@@ -380,7 +419,7 @@ def test_a_turn_is_journalled_with_its_reasoning_and_chains_to_its_parent(
 ) -> None:
     client = FakeClient([[reasoning("deliberating"), content("answer")]])
     events = run(client, options, parent="proof-of-the-previous-turn")
-    sealed = events[-1]
+    sealed = one(events[-1], TurnEnd)
 
     records = [json.loads(line) for line in options.journal.read_text().splitlines()]
     record = next(r for r in records if r.get("record_hash") == sealed.proof)
@@ -411,7 +450,7 @@ def test_a_turn_is_journalled_with_its_reasoning_and_chains_to_its_parent(
 def test_a_first_turn_has_no_parent_rather_than_a_null_one(options: TurnOptions) -> None:
     events = run(FakeClient([[content("answer")]]), options)
     records = [json.loads(line) for line in options.journal.read_text().splitlines()]
-    record = next(r for r in records if r.get("record_hash") == events[-1].proof)
+    record = next(r for r in records if r.get("record_hash") == one(events[-1], TurnEnd).proof)
     assert record["parent_proofs"] == []
 
 

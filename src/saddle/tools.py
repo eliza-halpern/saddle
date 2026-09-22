@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from saddle.edits import loose_spans
 from saddle.sandbox import DEFAULT_TIMEOUT, OutsideRootError, Sandbox, resolve_within
 from saddle.vllm import ToolCall
 
@@ -33,7 +34,9 @@ MAX_MATCHES: Final = 60
 MAX_DIFF: Final = 20_000
 
 
-def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict:
+def _tool(
+    name: str, description: str, properties: dict[str, Any], required: list[str]
+) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
@@ -211,14 +214,29 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return f"error: cannot read {name!r}"
     before = path.read_text(encoding="utf-8", errors="replace")
     found = before.count(old_text)
-    if found == 0:
-        return f"error: that snippet does not appear in {name!r}"
     if found > 1:
         return (
             f"error: that snippet appears {found} times in {name!r}; "
             "include more surrounding context so it matches exactly once"
         )
-    after = before.replace(old_text, new_text, 1)
+    if found == 0:
+        # A live draw reproduced a correct snippet but dropped one blank line,
+        # and an exact count refused it as absent -- which sends the caller
+        # hunting a typo that is not there. Blank lines and trailing spaces are
+        # not what names a site; the significant lines are.
+        spans = loose_spans(before, old_text)
+        if len(spans) > 1:
+            return (
+                f"error: that snippet matches {len(spans)} places in {name!r} once blank "
+                "lines are ignored; include more surrounding context"
+            )
+        if not spans:
+            return f"error: that snippet does not appear in {name!r}"
+        start, end = spans[0]
+        lines = before.split("\n")
+        after = "\n".join(lines[:start] + new_text.splitlines() + lines[end:])
+    else:
+        after = before.replace(old_text, new_text, 1)
     try:
         path.write_text(after, encoding="utf-8")
     except OSError:
@@ -306,7 +324,11 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     return f"exit {terminal.exit_code}\n{terminal.output()}"
 
 
-_HANDLERS: Final[dict[str, Any]] = {
+# Naming the handler signature is what makes `handler(ctx, args)` a str
+# rather than Any at the dispatch site below.
+type _Handler = Callable[[ToolContext, Mapping[str, Any]], str]
+
+_HANDLERS: Final[dict[str, _Handler]] = {
     "read_file": _read_file,
     "write_file": _write_file,
     "edit_file": _edit_file,

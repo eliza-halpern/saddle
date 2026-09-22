@@ -101,10 +101,10 @@ def compact(messages: list[dict[str, Any]], *, limit_tokens: int) -> tuple[int, 
     dropped = 0
     topics: list[str] = []
     while estimate_tokens(messages) > limit_tokens:
-        index = next((i for i in range(len(messages)) if not _protected(messages, i)), None)
-        if index is None:
+        oldest = next((i for i in range(len(messages)) if not _protected(messages, i)), None)
+        if oldest is None:
             break  # nothing left that may be dropped; report what we managed
-        message = messages.pop(index)
+        message = messages.pop(oldest)
         dropped += 1
         if message.get("role") == "user":
             text = (message.get("content") or "").strip().splitlines()

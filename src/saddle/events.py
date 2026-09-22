@@ -22,8 +22,13 @@ class Event:
 
     `kind` is the discriminator the transport and the UI switch on; each
     subclass declares it last, with a default, so its own fields stay
-    positional.
+    positional. It is annotated here, without a value, so a consumer holding
+    an `Event` can read `.kind`: a bare annotation on a non-dataclass base is
+    not collected as a field by `@dataclass`, so subclass argument order is
+    untouched.
     """
+
+    kind: str
 
     def payload(self) -> dict[str, Any]:
         return dict(asdict(self))  # type: ignore[call-overload]

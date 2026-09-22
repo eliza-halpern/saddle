@@ -42,6 +42,11 @@ BUILTIN_PERSONAS: Final[dict[str, str]] = {
 }
 
 
+# `SessionStore.list` shadows the builtin for every annotation after it in
+# the class body, so the message list is named once here instead.
+type Messages = list[dict[str, Any]]
+
+
 @dataclass
 class Session:
     id: str
@@ -131,7 +136,7 @@ class SessionStore:
     def messages_path(self, session_id: str) -> Path:
         return self._dir(session_id) / "messages.jsonl"
 
-    def load_messages(self, session_id: str) -> list[dict[str, Any]]:
+    def load_messages(self, session_id: str) -> Messages:
         path = self.messages_path(session_id)
         if not path.is_file():
             return []
@@ -144,7 +149,7 @@ class SessionStore:
                     continue  # a torn tail loses one message, not the session
         return out
 
-    def save_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+    def save_messages(self, session_id: str, messages: Messages) -> None:
         path = self.messages_path(session_id)
         path.write_text(
             "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages),

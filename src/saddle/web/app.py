@@ -21,12 +21,14 @@ from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
+from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from saddle.engine import TurnOptions, run_turn
+from saddle.engine import TurnOptions
+from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
 from saddle.events import (
     ErrorEvent,
     Event,
@@ -232,7 +234,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         form = await request.form()
         saved = []
         for item in form.getlist("files"):
-            if not hasattr(item, "filename") or not item.filename:
+            if not isinstance(item, UploadFile) or not item.filename:
                 continue
             name = Path(str(item.filename)).name  # never trust a client path
             target = store.uploads_dir(sid) / name

@@ -195,7 +195,7 @@ class Sandbox:
         self.terminals[terminal.id] = terminal
         return terminal
 
-    def wait(self, terminal_id: str, *, timeout: int = DEFAULT_TIMEOUT) -> Terminal:
+    def wait(self, terminal_id: str, *, timeout: float = DEFAULT_TIMEOUT) -> Terminal:
         """Block until the terminal finishes or `timeout` elapses.
 
         A timeout is not a kill: the command keeps running and can be waited

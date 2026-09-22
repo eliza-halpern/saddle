@@ -23,21 +23,41 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from saddle.events import ContentDelta, ErrorEvent, TurnEnd
+from saddle.events import (
+    ContentDelta,
+    ErrorEvent,
+    Event,
+    SessionTitle,
+    TerminalOutput,
+    TurnEnd,
+)
 from saddle.sessions import SessionStore
 from saddle.web.app import ChatServer, Live, build_app
+
+
+def one[E: Event](event: object, cls: type[E]) -> E:
+    """Narrow one published event, asserting that is what it is.
+
+    A channel carries `Event | None` -- None is the end-of-turn signal --
+    so reading a subclass field off what comes out needs the narrowing, and
+    stating the expected type is a stronger assertion than reading `.kind`.
+    """
+    assert isinstance(event, cls), f"expected {cls.__name__}, got {type(event).__name__}"
+    return event
 
 
 class FakeClient:
     """Stands in for VllmClient: records the turn, emits scripted events."""
 
-    def __init__(self, script: list[Any] | None = None, window: int | None = 200_000) -> None:
+    def __init__(
+        self, script: list[Any] | None = None, window: int | BaseException | None = 200_000
+    ) -> None:
         self.script = script if script is not None else [ContentDelta(text="hi")]
         self.window = window
         self.closed = False
 
     def max_model_len(self) -> int | None:
-        if isinstance(self.window, Exception):
+        if isinstance(self.window, BaseException):
             raise self.window
         return self.window
 
@@ -73,7 +93,7 @@ def app_for(store: SessionStore, tmp_path: Path, script: list[Any] | None = None
         with TestClient(app) as client:
             yield client, app
     finally:
-        module.run_turn = original  # type: ignore[assignment]
+        module.run_turn = original
 
 
 # -- Live: the fan-out that was once a single shared queue --------------------
@@ -83,8 +103,8 @@ def test_an_event_reaches_every_subscriber_not_just_the_first() -> None:
     live = Live()
     first, second = live.subscribe(), live.subscribe()
     live.publish(ContentDelta(text="x"))
-    assert first.get_nowait().text == "x"
-    assert second.get_nowait().text == "x"
+    assert one(first.get_nowait(), ContentDelta).text == "x"
+    assert one(second.get_nowait(), ContentDelta).text == "x"
 
 
 def test_an_unsubscribed_client_stops_receiving() -> None:
@@ -563,12 +583,12 @@ def test_a_turn_publishes_its_events_saves_its_messages_and_signals_the_end(
         channel = live.subscribe()
         server._run(sid, "ping")
 
-        assert channel.get_nowait().text == "done"
+        assert one(channel.get_nowait(), ContentDelta).text == "done"
         # The session names itself after the answer is already on screen, and
         # before the end signal. FakeClient cannot be asked, so the name falls
         # back to the user's own words.
-        named = channel.get_nowait()
-        assert (named.kind, named.title) == ("session.title", "ping")
+        named = one(channel.get_nowait(), SessionTitle)
+        assert named.title == "ping"
         assert channel.get_nowait() is None  # the turn is over
         assert live.busy is False
         assert store.load_messages(sid)[-1]["content"] == "ping"
@@ -587,7 +607,7 @@ def test_a_turn_that_raises_reports_the_error_instead_of_killing_the_server(
         sid = client.post("/api/sessions").json()["id"]
         server = _server_of(app)
         channel = server._live(sid).subscribe()
-        module.run_turn = explode  # type: ignore[assignment]
+        module.run_turn = explode
         server._run(sid, "ping")
 
         first = channel.get_nowait()
@@ -665,8 +685,7 @@ def test_terminal_output_reaches_subscribers_after_its_tool_call_returned(
         assert live.context.on_output is not None
         live.context.on_output("term-1", "tick")
 
-        pushed = channel.get_nowait()
-        assert pushed.kind == "terminal.output"
+        pushed = one(channel.get_nowait(), TerminalOutput)
         assert (pushed.id, pushed.chunk) == ("term-1", "tick")
 
 
@@ -817,7 +836,7 @@ def test_the_client_factory_builds_a_real_client_per_turn(tmp_path: Path) -> Non
 
     handed: dict[str, Any] = {}
     original = uvicorn.run
-    uvicorn.run = lambda app, **kw: handed.update(app=app)  # type: ignore[assignment]
+    uvicorn.run = lambda app, **kw: handed.update(app=app)
     try:
         module.serve(
             host="127.0.0.1",
@@ -829,7 +848,7 @@ def test_the_client_factory_builds_a_real_client_per_turn(tmp_path: Path) -> Non
             sessions_root=tmp_path / "sessions",
         )
     finally:
-        uvicorn.run = original  # type: ignore[assignment]
+        uvicorn.run = original
 
     built = _server_of(handed["app"]).client_factory()
     assert isinstance(built, VllmClient)
@@ -843,7 +862,7 @@ class Naming(FakeClient):
 
     answer: Any = "Slow Rust Build"
 
-    def complete(self, _prompt: str, **_kw: Any) -> str:
+    def complete(self, _prompt: str, /, **_kw: Any) -> str:
         if isinstance(Naming.answer, BaseException):
             raise Naming.answer
         return str(Naming.answer)
@@ -869,7 +888,7 @@ def naming_app(store: SessionStore, tmp_path: Path, answer: Any = "Slow Rust Bui
         with TestClient(app) as client:
             yield client, app
     finally:
-        module.run_turn = original  # type: ignore[assignment]
+        module.run_turn = original
         Naming.answer = previous
 
 
@@ -884,7 +903,7 @@ def test_the_first_turn_names_its_session_and_tells_every_tab(
 
         assert store.get(sid).title == "Slow Rust Build"
         published = [channel.get_nowait() for _ in range(channel.qsize())]
-        titled = next(e for e in published if e is not None and e.kind == "session.title")
+        titled = next(e for e in published if isinstance(e, SessionTitle))
         assert titled.title == "Slow Rust Build"
         assert titled.session_id == sid
 
@@ -933,7 +952,7 @@ def test_a_turn_that_raises_is_not_titled(store: SessionStore, tmp_path: Path) -
 
     with naming_app(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
-        module.run_turn = explode  # type: ignore[assignment]
+        module.run_turn = explode
         _server_of(app)._run(sid, "why is my rust build slow")
         assert store.get(sid).title == "New session"
 
@@ -957,7 +976,7 @@ def test_a_session_is_offered_a_name_once_not_on_every_later_turn(
     asked: list[str] = []
 
     class Counting(Naming):
-        def complete(self, prompt: str, **_kw: Any) -> str:
+        def complete(self, prompt: str, /, **_kw: Any) -> str:
             asked.append(prompt)
             return "A Late Name"
 
@@ -982,7 +1001,7 @@ def test_a_session_is_offered_a_name_once_not_on_every_later_turn(
             assert asked == []  # and no call was spent
             server._run(sid, "a real question this time")
     finally:
-        module.run_turn = original  # type: ignore[assignment]
+        module.run_turn = original
 
     assert asked == []
     assert store.get(sid).title == "New session"

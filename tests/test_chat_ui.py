@@ -154,7 +154,10 @@ def workspace(tmp_path: Path) -> tuple[Path, ToolContext]:
 
 def test_tools_read_search_and_list(workspace: tuple[Path, ToolContext]) -> None:
     root, ctx = workspace
-    run = lambda c: execute_tool(c, workdir=root, context=ctx)  # noqa: E731
+
+    def run(c: ToolCall) -> str:
+        return execute_tool(c, workdir=root, context=ctx)
+
     assert "return 42" in run(call("read_file", path="pkg/a.py"))
     assert "pkg/a.py:1:" in run(call("search", query="hello"))
     assert "pkg/" in run(call("list_dir"))
@@ -164,7 +167,10 @@ def test_every_tool_failure_is_an_error_string_not_an_exception(
     workspace: tuple[Path, ToolContext],
 ) -> None:
     root, ctx = workspace
-    run = lambda c: execute_tool(c, workdir=root, context=ctx)  # noqa: E731
+
+    def run(c: ToolCall) -> str:
+        return execute_tool(c, workdir=root, context=ctx)
+
     assert run(call("read_file", path="../../etc/passwd")).startswith("error:")
     assert run(call("write_file", path="/etc/evil", content="x")).startswith("error:")
     assert run(call("read_file")) == "error: read_file needs a string path argument"
@@ -177,7 +183,10 @@ def test_a_background_command_returns_immediately_and_can_be_waited_on(
     workspace: tuple[Path, ToolContext],
 ) -> None:
     root, ctx = workspace
-    run = lambda c: execute_tool(c, workdir=root, context=ctx)  # noqa: E731
+
+    def run(c: ToolCall) -> str:
+        return execute_tool(c, workdir=root, context=ctx)
+
     started = run(call("run_command", command="sleep 1.5; echo late", background=True))
     assert "started terminal" in started
     terminal_id = started.split("terminal ")[1].split()[0]
@@ -320,6 +329,87 @@ def test_an_edit_whose_snippet_is_absent_is_an_error(tmp_path: Path) -> None:
         context=ToolContext(workdir=tmp_path),
     )
     assert "does not appear" in result
+
+
+def _edit(tmp_path: Path, old: str, new: str, name: str = "m.py") -> str:
+    return execute_tool(
+        ToolCall(
+            id="t",
+            name="edit_file",
+            arguments=json.dumps({"path": name, "old": old, "new": new}),
+        ),
+        workdir=tmp_path,
+        context=ToolContext(workdir=tmp_path),
+    )
+
+
+def test_a_snippet_that_drops_a_blank_line_still_names_its_one_site(tmp_path: Path) -> None:
+    """The known-good half: a correct edit an exact count refused.
+
+    This `old` is a live draw from the local model against this exact file.
+    It reproduced every significant line correctly and omitted the blank line
+    before `def deposit`, and `before.count(old)` was therefore 0 -- reported
+    as "does not appear", which sends the caller looking for a typo that is
+    not there. Reproducing blank lines byte for byte was never the contract;
+    naming one site is.
+    """
+    fixtures = Path(__file__).parent / "fixtures"
+    target = tmp_path / "accounts.py"
+    target.write_text((fixtures / "edit_target_accounts.txt").read_text())
+    block = (fixtures / "edit_blank_line_slip.txt").read_text()
+    lines = block.split("\n")
+    old = "\n".join(line[1:] for line in lines if line.startswith("-"))
+    new = "\n".join(line[1:] for line in lines if line.startswith("+"))
+    body = target.read_text()
+    assert body.count(old) == 0  # the exact count that refused it
+    assert "    return self._balance\n\n    def deposit" in body  # the dropped line
+
+    result = _edit(tmp_path, old, new, name="accounts.py")
+
+    assert not result.startswith("error:"), result
+    after = target.read_text()
+    assert "def currencies(self):" in after  # the method the draw was adding
+    assert after.count("def deposit(self, amount):") == 1  # not duplicated
+    assert body.replace(old.replace("    def deposit", "\n    def deposit"), new) == after
+
+
+def test_a_snippet_that_loosely_matches_two_sites_is_still_refused(tmp_path: Path) -> None:
+    """The known-bad half: loosening the match must not loosen uniqueness.
+
+    Neither site matches exactly -- each has a blank line the snippet omits --
+    so both are reachable only through the loose path. The edit must be
+    refused, and refused with its own wording: "does not appear" would send
+    the caller hunting a typo when the real problem is that it appears twice.
+    """
+    target = tmp_path / "m.py"
+    target.write_text(
+        "def a():\n    x = 1\n\n    return x\n\n\ndef b():\n    x = 1\n\n    return x\n"
+    )
+    before = target.read_text()
+
+    result = _edit(tmp_path, "    x = 1\n    return x", "    return 2")
+
+    assert "matches 2 places" in result
+    assert target.read_text() == before
+
+
+def test_an_exact_match_is_used_even_where_a_loose_one_would_be_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """Exactness still wins: the loose path is a fallback, not a re-ranking.
+
+    `old` occurs exactly once, and loosely twice. Falling through to the loose
+    matcher would refuse an edit that names its site precisely.
+    """
+    target = tmp_path / "m.py"
+    target.write_text(
+        "def a():\n    x = 1\n    return x\n\n\ndef b():\n    x = 1\n\n    return x\n"
+    )
+
+    result = _edit(tmp_path, "    x = 1\n    return x", "    return 2")
+
+    assert not result.startswith("error:"), result
+    assert target.read_text() == "def a():\n    return 2\n\n\ndef b():\n    x = 1\n\n    return x\n"
 
 
 def test_overwriting_an_existing_file_reports_a_diff_not_just_a_filename(

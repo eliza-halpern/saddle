@@ -39,19 +39,22 @@ def _object_of(name: str, args: dict[str, Any]) -> str:
     if name in ("read_terminal", "wait_for_terminal") and args.get("id"):
         return f"terminal {args['id']}"
     for key in ("path", "file", "dir", "directory"):
-        if isinstance(args.get(key), str):
-            return args[key]
-    if isinstance(args.get("command"), str):
+        value = args.get(key)
+        if isinstance(value, str):
+            return value
+    command_arg = args.get("command")
+    if isinstance(command_arg, str):
         try:
-            command = " ".join(shlex.split(args["command"])[:6])
+            command = " ".join(shlex.split(command_arg)[:6])
         except ValueError:
             # An apostrophe is enough: shlex.split("echo don't") raises. A
             # label is decoration, so it falls back to the raw command rather
             # than taking the turn down with it.
-            return args["command"][:80]
-        return command or args["command"]
-    if isinstance(args.get("query"), str):
-        return f"{args['query']!r}"
+            return command_arg[:80]
+        return command or command_arg
+    query = args.get("query")
+    if isinstance(query, str):
+        return f"{query!r}"
     return ""
 
 

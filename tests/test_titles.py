@@ -9,6 +9,8 @@ none of them may fail the turn that triggered them.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from saddle.titles import (
@@ -24,7 +26,7 @@ from saddle.titles import (
 class Answering:
     def __init__(self, answer: str | BaseException) -> None:
         self.answer = answer
-        self.asked: list[dict[str, object]] = []
+        self.asked: list[dict[str, Any]] = []
 
     def complete(self, prompt: str, **kwargs: object) -> str:
         self.asked.append({"prompt": prompt, **kwargs})
