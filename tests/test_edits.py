@@ -344,3 +344,110 @@ def test_nothing_the_grammar_refuses_reaches_the_tree(tmp_path: Path) -> None:
         with pytest.raises(EditError):
             apply_edits(tmp_path, payload)
         assert target.read_text() == "a\n", f"{name}: refused and still changed the file"
+
+
+def test_a_block_unique_among_lines_applies_though_its_text_sits_inside_another(
+    tmp_path: Path,
+) -> None:
+    """Known-good: `str.count` saw two, but the file has one line that says it.
+
+    The other occurrence is the tail of a deeper-indented line, which a
+    block of whole lines cannot have meant. Counting it refused a correct
+    edit -- the T6-66 shape, an applier turning down work that was right.
+    """
+    body = "class C:\n    def f(self):\n        return None\n\n\ndef g():\n    return None\n"
+    (tmp_path / "m.py").write_text(body)
+    apply_edits(tmp_path, "edit m.py\n-    return None\n=======\n+    return 0\n>>>>>>>\n")
+    after = (tmp_path / "m.py").read_text()
+    assert after.endswith("def g():\n    return 0\n")
+    assert "        return None\n" in after
+
+
+def test_a_block_matching_only_inside_a_longer_line_is_refused(tmp_path: Path) -> None:
+    """Known-bad: no line of the file says this, so the block names no site."""
+    body = "class C:\n    def f(self):\n        return None\n"
+    (tmp_path / "m.py").write_text(body)
+    with pytest.raises(EditError, match="does not appear in the file"):
+        apply_edits(tmp_path, "edit m.py\n-    return None\n=======\n+    return 0\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == body
+
+
+def test_a_replacement_is_never_grafted_onto_an_indent_the_block_did_not_name(
+    tmp_path: Path,
+) -> None:
+    """Known-bad: landing mid-line put the second replacement line at column
+    0, leaving `def f(x):\\n    print(y)\\nprint(z)\\n` -- code that will not
+    parse, written silently, with nothing in the log to say why."""
+    body = "def f(x):\n    print(x)\n"
+    (tmp_path / "m.py").write_text(body)
+    with pytest.raises(EditError, match="does not appear in the file"):
+        apply_edits(tmp_path, "edit m.py\n-print(x)\n=======\n+print(y)\n+print(z)\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == body
+
+
+def test_the_final_line_fallback_does_not_match_inside_a_longer_token(
+    tmp_path: Path,
+) -> None:
+    """Known-bad: `    return 1` against a file holding `    return 10` was
+    spliced into the number and produced `    return 20` -- a wrong value,
+    silently, of the shape every gate downstream would accept."""
+    body = "def f():\n    return 10\n"
+    (tmp_path / "m.py").write_text(body)
+    with pytest.raises(EditError, match="does not appear in the file"):
+        apply_edits(tmp_path, "edit m.py\n-    return 1\n=======\n+    return 2\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == body
+
+
+def test_a_block_naming_only_a_blank_line_is_refused(tmp_path: Path) -> None:
+    """Known-bad: the grammar admits a single empty `-` line, and counting
+    substrings made that block name the file's newline: `a = 1\\n` became
+    `a = 1x = 2\\n`, joining two lines into one."""
+    (tmp_path / "m.py").write_text("a = 1\n")
+    with pytest.raises(EditError, match="does not appear in the file"):
+        apply_edits(tmp_path, "edit m.py\n-\n=======\n+x = 2\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == "a = 1\n"
+
+
+def test_the_edit_lands_on_the_line_that_was_counted(tmp_path: Path) -> None:
+    """Known-good: the first substring occurrence sits inside line 1, ahead
+    of the only line that matches, so replacing by substring would edit a
+    site the count never saw."""
+    (tmp_path / "m.py").write_text("xreturn 1\nreturn 1\n")
+    apply_edits(tmp_path, "edit m.py\n-return 1\n=======\n+return 2\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == "xreturn 1\nreturn 2\n"
+
+
+def test_a_refused_search_block_names_the_line_that_diverged(tmp_path: Path) -> None:
+    """Known-good diagnostic (F21.51): every line right but one, which is
+    a bracket short. The block is still refused; what the refusal now
+    carries is which line diverged and what the file holds there."""
+    (tmp_path / "m.py").write_text('a = 1\ndata = {"k": [{"x": "1"}]}\nb = 2\n')
+    with pytest.raises(EditError) as exc:
+        apply_edits(
+            tmp_path,
+            'edit m.py\n-a = 1\n-data = {"k": [{"x": "1"}}\n=======\n+z = 9\n>>>>>>>\n',
+        )
+    message = str(exc.value)
+    assert "Its line 2" in message
+    assert 'data = {"k": [{"x": "1"}]}' in message
+    assert (tmp_path / "m.py").read_text() == 'a = 1\ndata = {"k": [{"x": "1"}]}\nb = 2\n'
+
+
+def test_a_refused_search_block_says_when_nothing_in_the_file_is_close(
+    tmp_path: Path,
+) -> None:
+    """Known-good: no near line, so the refusal says that rather than
+    pointing at whichever line scored least badly."""
+    (tmp_path / "m.py").write_text("a = 1\n")
+    with pytest.raises(EditError, match="no line of the file is close to it"):
+        apply_edits(tmp_path, "edit m.py\n-qqqqqqqqqqqqqqqq\n=======\n+z = 9\n>>>>>>>\n")
+
+
+def test_a_refused_search_block_says_when_its_lines_are_not_consecutive(
+    tmp_path: Path,
+) -> None:
+    """Known-good: every line is in the file, so naming one would be a lie.
+    The block's fault is its order, and the refusal says so."""
+    (tmp_path / "m.py").write_text("a = 1\nb = 2\nc = 3\n")
+    with pytest.raises(EditError, match="not consecutively in this order"):
+        apply_edits(tmp_path, "edit m.py\n-a = 1\n-c = 3\n=======\n+z = 9\n>>>>>>>\n")

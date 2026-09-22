@@ -37,6 +37,7 @@ strips blank lines before matching, so they never named the site anyway.
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -185,6 +186,50 @@ def loose_spans(source: str, search: str) -> list[tuple[int, int]]:
     return hits
 
 
+def _first_divergence(source: str, search: str) -> str:
+    """Name the first search line the file does not hold, and its nearest.
+
+    A refusal that says only "does not appear" is unactionable on a long
+    block: `runs/g1-a876595` node-1 attempt 3 held thirteen lines, twelve
+    of them right, and lost the thirteenth's `]`. It could not tell which
+    one, retried, and failed the same way -- three of that run's six
+    attempts went this way (F21.51). The block is still refused; what
+    changes is that the next attempt is told where to look.
+
+    Blank lines are skipped because `loose_spans` does not match on them,
+    so naming one would point at a line that was never the reason.
+    """
+    have = {line.rstrip() for line in source.split("\n") if line.strip()}
+    for index, line in enumerate(search.split("\n"), start=1):
+        stripped = line.rstrip()
+        if not stripped or stripped in have:
+            continue
+        near = difflib.get_close_matches(stripped, sorted(have), n=1, cutoff=0.6)
+        if near:
+            return f" Its line {index} reads {line!r}; the file's closest line is {near[0]!r}"
+        return f" Its line {index} reads {line!r}, and no line of the file is close to it"
+    return " Every line of it is in the file, but not consecutively in this order"
+
+
+def _line_starts(source: str, search: str) -> list[int]:
+    """Every offset where `search` begins a line of `source`.
+
+    `str.count` counts substrings, and a block's lines are whole lines: a
+    match starting mid-line names no site the block could have meant.
+    Both directions of that confusion were live -- `    return None`
+    counted twice against a file holding it once beside one
+    `        return None`, and a block naming a line the file did not
+    have was spliced into the middle of a longer one.
+    """
+    hits: list[int] = []
+    index = source.find(search)
+    while index != -1:
+        if index == 0 or source[index - 1] == "\n":
+            hits.append(index)
+        index = source.find(search, index + 1)
+    return hits
+
+
 def _replace_once(source: str, search: str, replace: str, path: str) -> str:
     """Replace the single occurrence of `search`, or refuse.
 
@@ -192,14 +237,19 @@ def _replace_once(source: str, search: str, replace: str, path: str) -> str:
     search block that matches twice names no particular site, and
     guessing one is how an edit silently lands in the wrong place.
     """
-    count = source.count(search)
-    if count == 0 and search.endswith("\n"):
-        # The block always ends a line; the file's last line may not.
+    hits = _line_starts(source, search)
+    if not hits and search.endswith("\n"):
+        # The block always ends a line; the file's last line may not. The
+        # end of the file is the only place that can be short a newline, so
+        # it is the only place a trimmed block may land -- and there is
+        # exactly one end of file, which is what keeps the match unique.
         trimmed = search[:-1]
-        if source.count(trimmed) == 1:
-            search, replace = trimmed, replace[:-1] if replace.endswith("\n") else replace
-            count = 1
-    if count == 0:
+        start = len(source) - len(trimmed)
+        if trimmed and source.endswith(trimmed) and (start == 0 or source[start - 1] == "\n"):
+            search = trimmed
+            replace = replace[:-1] if replace.endswith("\n") else replace
+            hits = [start]
+    if not hits:
         spans = loose_spans(source, search)
         if len(spans) == 1:
             start, end = spans[0]
@@ -212,12 +262,19 @@ def _replace_once(source: str, search: str, replace: str, path: str) -> str:
         if spans:
             msg = f"{path}: the search block names more than one site, so it names none"
             raise EditError(msg)
-        msg = f"{path}: the search block does not appear in the file"
+        msg = (
+            f"{path}: the search block does not appear in the file."
+            f"{_first_divergence(source, search)}"
+        )
         raise EditError(msg)
-    if count > 1:
-        msg = f"{path}: the search block appears {count} times, so it names no single site"
+    if len(hits) > 1:
+        msg = f"{path}: the search block appears {len(hits)} times, so it names no single site"
         raise EditError(msg)
-    return source.replace(search, replace, 1)
+    # Splice at the offset that was counted. `str.replace` takes the first
+    # substring occurrence, which can sit mid-line and precede the first
+    # line-aligned one -- counting one site and editing another.
+    start = hits[0]
+    return source[:start] + replace + source[start + len(search) :]
 
 
 def apply_edits(workdir: Path, text: str) -> list[str]:
