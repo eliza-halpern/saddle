@@ -161,6 +161,18 @@ spelling of a message-only mutation and not the other; F21.29 — two such
 mutants are the whole margin between round 3h's `n2` sealing and failing)
 → **T6-60** (the dead-code gate's known-bad half is closed for the
 repeated-name shape only; F21.30 — the all-distinct shape recurred at 3h)
+→ **T6-65** (a replacement subplan may not re-target a pending node's
+files; round 3i, F21.40 — the plan itself was the offender, upstream of
+every gate) → round 3j, the next G1 seed → **T6-66** (a requirement
+example written as data binds by the values inside it; F21.41 — the gate
+REFUSED the correct suite and ACCEPTED the degenerate one, so four
+attempts across two nodes could not have passed whatever they wrote.
+Emission cost nothing this round: A1a is measured) → **T6-67** (a
+recovery plan may not assert a false fact about the harness; F21.41 — a
+model-generated "root cause" that T6-54 cannot catch because nothing in
+it is illegal, only wrong) → **T6-68** (a replacement node must declare
+the files it will change; F21.41 — an empty declaration makes both
+`target-scope` and T6-65's own check vacuous)
 → T6-46 (round 3i supplies the shape at last, and it argues for
   closure — three-for-three, every candidate dissolved into an upstream
   fix; recommendation is to close. Formerly: no admissible example; 3g does
@@ -7620,7 +7632,7 @@ spec can hide; it cannot prove none remains. **Nothing closes this but a
 completed run compared against the oracle.** Recorded so it is not
 mistaken for refuted, and so the mitigation is not mistaken for a close.
 
-### T6-65 — A replacement subplan may not re-target a pending node's files (open; live instance on disk)
+### T6-65 — A replacement subplan may not re-target a pending node's files (tightened; with proof) — DONE 2026-09-21 `96dedcf`
 
 Files: `src/saddle/dag.py` (beside `pending_test_nodes`),
 `src/saddle/slice.py` (`splice_replan`'s caller), `src/saddle/cli.py`
@@ -7684,6 +7696,105 @@ Distinct from **T6-54** ("a recovery plan may not prescribe what a gate
 rejects"): that forbids a subplan from specifying something the gates
 will refuse. This forbids it from duplicating work another node already
 owns. A subplan can violate either without the other.
+
+### T6-66 — A requirement example written as data binds by the values inside it (loosened; with proof) — DONE 2026-09-21 `e03b616`
+
+Files: `src/saddle/gates.py` (`_example_values`, `_example_unbound`),
+`src/saddle/cli.py` (the worker brief).
+
+Round 3j died on this and F21.41 records it in full. `_example_unbound`
+routes anything that is not a call to the literal rule, and that rule
+binds an example only to a test asserting on it as one flat string. The
+planner's store example is a dict display, so it fell to the rule T6-50
+was written to repair and inherited its defect. The gate inverted: the
+suite that saved a ledger and asserted the written JSON equals the
+version-2 record was REFUSED; a test that quoted the blob and asserted
+nothing PASSED. Two of the four unbound examples were this shape, so
+**no suite could have passed** — four attempts across two nodes, one
+byte-identical detail.
+
+A data example now binds by the constants inside it, the same standard
+the call branch applies to a call's arguments. Direction **loosened**,
+licensed by the known-good rejection above. The known-bad it admits is
+exhibited in the test: the values may be asserted without the behaviour
+being exercised — latitude inherited from the flat-literal rule, which
+admitted the same shape by quoting, not created here.
+
+The brief was corrected in the same commit: it said a test node "asserts
+on every listed accept and reject, each spelled exactly as listed", and
+the gate wants the operation performed and its constant arguments
+asserted on. Obeying the old text produced UNBOUND; ignoring it and
+writing idiomatic double quotes produced BOUND. It also contradicted the
+brief's own ruff rule two lines below, and 3j's worker spent 16 843
+characters of reasoning caught between the two.
+
+Mutants M1–M5 all died; `check.sh` 912 passed at 100%. **Replayed
+against 3j's real suite the gate still fails** (`no test asserts on 'a',
+'accounts'`): the repair removes an impossibility and makes the detail
+actionable, it does not predict a pass.
+
+### T6-67 — A recovery plan may not assert a false fact about the harness (open; instance on disk)
+
+Files: `src/saddle/cli.py` (`build_diagnosis_prompt`,
+`build_repair_prompt`), and whatever check T6-54's filter grows.
+
+The `Recovery plan:` section spliced into a repair prompt is
+model-generated. In round 3j attempt 3 it read, verbatim:
+
+> 1. **Root cause:** The requirement-binding checker does a literal
+> substring search in the test source for each REQ-001 example.
+
+False — the check is an AST walk over `assert`, `with` and decorator
+nodes of `test*` functions. The worker obeyed it, converted double
+quotes to single against the brief's own ruff rule, and failed
+identically. Two attempts went this way.
+
+**T6-54 structurally cannot catch it.** F21.21 (round 3g) recorded the
+first harmful recovery plan — one that *prescribed the deletion its own
+gate rejects* — and T6-54 suppresses a plan prescribing what a gate
+would reject. Nothing in "the checker does a literal substring search"
+is illegal. It is merely **wrong**, and wrongness is not a property any
+gate evaluates. This is model judgment inside the repair loop, excluded
+from the gates by design and entering by a side door.
+
+Candidate directions, none chosen:
+(a) Drop the diagnosis call entirely and let the worker fix forward on
+    the gate detail alone — the cheapest, and F21.19/F21.38a already
+    record that the strongest draw is attempt 1, which carries no brief.
+(b) Confine the plan to imperatives about the tree ("assert on '1.001'
+    in a test that calls deposit") and refuse any sentence that makes a
+    claim *about the harness* — a grammar-level restriction, checkable.
+(c) Have the gate itself emit the repair instruction, so nothing has to
+    infer the rule. T6-66 already moved the detail this way by naming
+    the missing values.
+
+Closing needs the known-good/known-bad pair, as ever: a plan that should
+survive the filter and a plan that should not. 3j supplies the second.
+
+### T6-68 — A replacement node must declare the files it will change (open; instance on disk)
+
+Files: `src/saddle/gates.py` (`plan_retargets_reserved_files`,
+`check_target_files`), `src/saddle/cli.py` (`_emit_valid_dag`).
+
+Round 3j's `node-1.r1` was emitted with `target_files: []`. Two gates go
+vacuous at once: `check_target_files` reports `unrestricted: no
+target_files declared`, and T6-65's `plan_retargets_reserved_files`
+cannot fire, because a node declaring no files clashes with nothing.
+`reserved_target_files` did its job and returned all four pending
+targets; the intersection was empty.
+
+No harm in 3j — the node stayed inside the tests — but this is a hole in
+code landed the day before, and it is the vacuity shape §0.6 exists to
+catch: a rule that can be satisfied by declaring less. T6-65's check
+asks what a node *declares*, which is the wrong question when declaring
+nothing is permitted.
+
+The fix is likely one line at emission — a replacement node with empty
+`target_files` is redrawn — but it needs the known-bad (3j's replan
+record, on disk) and a known-good (a replan that declares its files and
+is accepted), and it must not break the first plan, where an empty
+declaration may be legitimate. Check `check_target_files`'s
+`unrestricted` branch for who else relies on it before tightening.
 
 ### T6-34 — A gated attempt's tree survives `git gc`, and the run seals the ruff it autofixed with (tightened)
 
