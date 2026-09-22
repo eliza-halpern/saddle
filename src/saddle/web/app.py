@@ -297,7 +297,18 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         if "title" in body:
             body.setdefault("auto_title", False)
         session = store.update(request.path_params["sid"], **body)
-        server.live.pop(session.id, None)  # workdir or persona may have moved
+        # The Live is deliberately kept. It used to be dropped here "because
+        # the workdir or persona may have moved", but a Live is not a cache of
+        # the session -- it holds the *subscriber queues* of every connected
+        # browser. Dropping it orphaned the open EventSource: the next turn
+        # published into a fresh Live that nobody was listening to, so the UI
+        # sat on "working" forever with no reasoning and no reply.
+        #
+        # That is why changing persona looked like the persona was broken.
+        # `engineer` needs no change to select, so it never hit this;
+        # anything else did. The workdir case it was guarding is already
+        # handled in `_run`, which rebuilds the tool context whenever the
+        # session has moved.
         return JSONResponse(session.__dict__)
 
     async def delete_session(request: Request) -> JSONResponse:

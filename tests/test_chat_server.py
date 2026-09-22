@@ -184,17 +184,33 @@ def test_creating_a_session_with_no_body_uses_the_defaults(
         assert made["workdir"] == str(tmp_path)
 
 
-def test_moving_a_session_discards_its_cached_tool_context(
+def test_a_patch_keeps_the_session_live_rather_than_discarding_it(
     store: SessionStore, tmp_path: Path
 ) -> None:
-    # The context holds the workdir and its terminals; keeping it across a
-    # move would run the next command in the old directory.
+    """flip: test_moving_a_session_discards_its_cached_tool_context.
+
+    The old test asserted `sid not in server.live` -- the mechanism, not the
+    contract. The mechanism was the defect: a Live holds every connected
+    browser's subscriber queue, so discarding it on PATCH cut the open
+    EventSource and the next turn published where nobody was listening. That
+    is the reported "a new persona doesn't work"; engineer is the default and
+    needs no patch to select, so it never hit it.
+
+    What the old test was accidentally protecting -- a moved session not
+    running commands in its old folder -- is real, and is now covered
+    directly by test_a_moved_session_still_gets_a_fresh_tool_context, which
+    checks the rebuilt context rather than the discarded object.
+    """
     with app_for(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         server = _server_of(app)
-        server._live(sid).turn = 7
+        live = server._live(sid)
+        live.turn = 7
+
         client.patch(f"/api/sessions/{sid}", json={"workdir": str(tmp_path)})
-        assert sid not in server.live
+
+        assert server._live(sid) is live
+        assert server._live(sid).turn == 7      # and the turn counter survives
 
 
 def test_deleting_a_session_discards_its_live_state(store: SessionStore, tmp_path: Path) -> None:
@@ -1484,3 +1500,70 @@ def test_asking_for_a_different_thinking_level_makes_a_new_session(
         asked = client.post("/api/sessions", json={"reasoning_effort": "low"}).json()
         assert asked["reasoning_effort"] == "low"
         assert asked["id"] != lying_around["id"]
+
+
+def test_changing_a_setting_does_not_disconnect_a_watching_browser(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """The bug behind "a new persona doesn't work, engineer does".
+
+    A Live is not a cache of the session -- it holds the subscriber queue of
+    every connected browser. Dropping it on PATCH orphaned the open
+    EventSource, so the next turn published into a fresh Live nobody was
+    listening to and the UI sat on "working" with no reasoning and no reply.
+
+    `engineer` is the default, so selecting it changes nothing and never hit
+    this. Any other persona had to be chosen, which patched the session,
+    which silently cut the stream.
+    """
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        server = _server_of(app)
+        channel = server._live(sid).subscribe()
+
+        client.patch(f"/api/sessions/{sid}", json={"persona": "reviewer"})
+
+        # The same Live, with the same subscriber still attached.
+        assert server._live(sid).subscribers == [channel]
+        server._live(sid).publish(ContentDelta(text="still listening"))
+        assert channel.get_nowait().text == "still listening"
+
+
+def test_a_turn_after_a_patch_reaches_the_browser_that_was_already_watching(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # The end-to-end shape of it: connect, change persona, send. The events
+    # must arrive on the connection that was open the whole time.
+    with app_for(store, tmp_path, script=[ContentDelta(text="answered")]) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        server = _server_of(app)
+        channel = server._live(sid).subscribe()
+
+        client.patch(f"/api/sessions/{sid}", json={"persona": "explainer"})
+        server._run(sid, "hello")
+
+        delivered = [channel.get_nowait() for _ in range(channel.qsize())]
+        assert any(e is not None and e.kind == "content.delta" for e in delivered)
+
+
+def test_a_moved_session_still_gets_a_fresh_tool_context(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # What the pop was guarding, now shown to be handled where it belongs:
+    # a turn rebuilds the context when the folder has changed, so keeping the
+    # Live does not run the next command in the old directory.
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        server = _server_of(app)
+        server._run(sid, "one")
+        before = server._live(sid).context
+
+        client.patch(f"/api/sessions/{sid}", json={"workdir": str(elsewhere)})
+        server._run(sid, "two")
+
+        after = server._live(sid).context
+        assert after is not before
+        assert after is not None
+        assert after.workdir == elsewhere
