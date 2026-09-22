@@ -8142,17 +8142,27 @@ The oscillation, from the node's own journal (`saddle explain`):
 command, here `pytest tests/test_accounts.py tests/test_fees.py`.
 `public-deletions` requires every public definition the baseline had to
 still be defined. The t5 baseline `accounts.py` defines `Account.to_dict`,
-`Account.from_dict`, `Account.__eq__` and `Account.__repr__`; their
-consumers are `store.py` and the hidden suite -- that is, **later
-nodes**, whose tests are not in this node's command. So the four members
-are simultaneously mandatory (public-deletions) and forbidden (coverage),
-and **no diff satisfies both**. Attempts 1 and 3 keep them and fail
+`Account.from_dict`, `Account.__eq__` and `Account.__repr__`, so all four
+are mandatory. **Nothing calls any of them** -- not the rest of the
+baseline (`store.py` builds an account with `Account(owner, balance)`
+directly), not the four visible test files, and not the five hidden ones
+under `build/t5/hidden_tests/`; all three were grepped. So no test can
+run them, coverage forbids exactly what public-deletions compels, and
+**no diff satisfies both**.
+
+The first filing of this item said their consumers were `store.py` and
+the hidden suite, citing `check_public_deletions`'s own docstring. That
+docstring describes round 3d's baseline; it is not true of this one, and
+the correction matters because it moves the fix: the members are not
+downstream-consumed API, they are **vestigial** baseline API that one
+gate protects unconditionally and another then punishes. Attempts 1 and 3 keep them and fail
 coverage on exactly their lines; attempt 2 deletes them and fails
 public-deletions by name on exactly those four.
 
 This is not a threshold that wants lowering. It is an unsatisfiable
-conjunction, and it bites any node that must touch a public API consumed
-downstream -- most ordinary refactoring.
+conjunction: a node is compelled to carry code, then failed because
+nothing runs the code it was compelled to carry. It bites any node that
+must rewrite a module carrying baseline public API no test reaches.
 
 Known-good the gate pair rejects (the loosening evidence CLAUDE.md
 requires): attempt 3's `accounts.py`, reconstructed from the sidecar
