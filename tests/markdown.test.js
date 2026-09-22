@@ -163,10 +163,41 @@ test("markup in model output stays text", () => {
   assert.ok(html.includes("&lt;img"), html);
 });
 
-test("a javascript: link is defused", () => {
+/* Only an absolute http(s) URL becomes a link. Everything else -- a file
+ * path, a bare fragment, a javascript: URL -- is shown as text.
+ *
+ * The old code gave those href="#" with target="_blank", so clicking one
+ * opened a second tab of the chat itself: the reader clicked a link and got
+ * their own session back. A path the model mentions is information, not a
+ * destination. */
+
+test("an http link is a link", () => {
   const node = el("div");
-  renderMarkdown(node, "[click](javascript:alert(1))");
+  renderMarkdown(node, "see [docs](https://example.test/a) now");
   const link = node.children[0].children[0];
   assert.strictEqual(link.tagName, "A");
-  assert.strictEqual(link.href, "#");
+  assert.strictEqual(link.href, "https://example.test/a");
+  assert.strictEqual(link.target, "_blank");
+  assert.strictEqual(link.rel, "noopener noreferrer");
+  assert.strictEqual(link.textContent, "docs");
 });
+
+for (const [name, href] of [
+  ["a javascript: URL", "javascript:alert(1)"],
+  ["a relative file path", "./out/chart.png"],
+  ["an absolute file path", "/etc/passwd"],
+  ["a bare fragment", "#section"],
+  ["a root-relative app path", "/api/sessions"],
+  ["a data: URL", "data:text/html,<script>x</script>"],
+]) {
+  test(`${name} is shown, not linked`, () => {
+    const node = el("div");
+    renderMarkdown(node, `try [here](${href}) please`);
+    const para = node.children[0];
+    assert.strictEqual(para.children.filter((c) => c.tagName === "A").length, 0,
+                       `${href} became a link`);
+    // ...and it is still legible: the label and the target both survive.
+    assert.ok(para.textContent.includes("here"), para.textContent);
+    assert.ok(para.textContent.includes(href), para.textContent);
+  });
+}

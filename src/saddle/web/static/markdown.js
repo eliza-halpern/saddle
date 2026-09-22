@@ -38,12 +38,27 @@ function inlineInto(parent, text) {
       parent.appendChild(el("em", null, bit.slice(1, -1)));
     } else if (bit.startsWith("[") && bit.includes("](")) {
       const cut = bit.indexOf("](");
-      const link = el("a", null, bit.slice(1, cut));
+      const label = bit.slice(1, cut);
       const href = bit.slice(cut + 2, -1);
-      link.href = /^https?:|^\//.test(href) ? href : "#";  // no javascript: hrefs
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      parent.appendChild(link);
+      if (/^https?:\/\//i.test(href)) {
+        const link = el("a", null, label);
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        parent.appendChild(link);
+      } else {
+        // Anything else -- a file path, a bare fragment, a javascript: URL --
+        // is shown, not linked. The old code gave these href="#" with
+        // target="_blank", which opened a second tab of the chat itself: the
+        // reader clicked a link and got their own session again. A path the
+        // model mentions is information, so keep it legible and inert.
+        const shown = el("span", "ref", label);
+        shown.title = href;
+        parent.appendChild(shown);
+        if (href && href !== label) {
+          parent.appendChild(document.createTextNode(` (${href})`));
+        }
+      }
     } else {
       parent.appendChild(document.createTextNode(bit));
     }

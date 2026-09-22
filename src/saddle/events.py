@@ -80,6 +80,8 @@ class ToolEnd(Event):
     label: str
     detail: str
     duration_ms: int
+    preview: str | None = None
+    """Workdir-relative path of an image this call wrote, if it wrote one."""
     kind: str = "tool.end"
 
 

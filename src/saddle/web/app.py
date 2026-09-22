@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import queue
 import threading
 from dataclasses import dataclass, field
@@ -23,7 +24,13 @@ from typing import Any
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -36,13 +43,60 @@ from saddle.events import (
     SessionTitle,
     TerminalOutput,
 )
+from saddle.labels import label_for
 from saddle.memory import estimate_tokens
+from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import SessionStore, personas
 from saddle.titles import title_for
-from saddle.tools import ToolContext
+from saddle.tools import PREVIEWABLE, ToolContext, preview_for
 from saddle.vllm import VllmClient
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+
+def history_for_display(
+    messages: list[dict[str, Any]], workdir: Path
+) -> list[dict[str, Any]]:
+    """Stored messages, with each tool call carrying what the row showed.
+
+    The transcript is rebuilt from this on every connect, and it used to keep
+    only user and assistant text -- so a reconnect silently deleted every
+    reasoning block and tool row the reader had just watched appear. The
+    calls and their results were in the store the whole time; what was
+    missing was the label and the outcome, which the renderer cannot derive
+    because the tenses live in `labels`. So they are attached here, once,
+    beside the call they belong to.
+    """
+    results = {
+        message.get("tool_call_id"): str(message.get("content") or "")
+        for message in messages
+        if message.get("role") == "tool"
+    }
+    shown: list[dict[str, Any]] = []
+    for message in messages:
+        calls = message.get("tool_calls")
+        if not calls:
+            shown.append(message)
+            continue
+        rows = []
+        for call in calls:
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            arguments = str(function.get("arguments") or "")
+            detail = results.get(call.get("id"), "")
+            # A tool reports failure in its return value, not by raising, so
+            # the outcome is recoverable from the stored result alone.
+            ok = not detail.startswith("error: ")
+            rows.append({
+                "id": call.get("id"),
+                "name": name,
+                "label": label_for(name, arguments, ok=ok),
+                "ok": ok,
+                "detail": detail,
+                "preview": preview_for(name, arguments, workdir),
+            })
+        shown.append({**message, "tools": rows})
+    return shown
 
 
 @dataclass
@@ -175,8 +229,25 @@ class ChatServer:
 def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path) -> Starlette:
     server = ChatServer(store, client_factory, default_workdir=default_workdir)
 
-    async def index(_: Request) -> FileResponse:
-        return FileResponse(STATIC / "index.html")
+    async def index(_: Request) -> Response:
+        """The page, with its asset URLs versioned by file mtime.
+
+        StaticFiles sends an ETag but no Cache-Control, which leaves a
+        browser free to cache app.js heuristically for hours and keep running
+        an old UI against a new server. That is not hypothetical: a page was
+        served by a build that defines `pastToolRows` and the function was
+        undefined in it, so freshly added rows silently did not render and
+        the server looked at fault. A changed file now has a different URL,
+        and the page that names those URLs is never stored.
+        """
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        for name in ("app.css", "markdown.js", "app.js"):
+            try:
+                version = int((STATIC / name).stat().st_mtime)
+            except OSError:
+                continue
+            html = html.replace(f"/static/{name}", f"/static/{name}?v={version}")
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def list_sessions(_: Request) -> JSONResponse:
         return JSONResponse([s.__dict__ for s in store.list()])
@@ -227,6 +298,36 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
                 "parent": str(path.resolve().parent),
                 "entries": entries[:400],
             }
+        )
+
+    async def workdir_file(request: Request) -> Response:
+        """Serve one image out of a session's own working directory.
+
+        The same boundary the tools use, for the same reason: `path` arrives
+        from the page, so it is resolved against the session's workdir and
+        refused if it lands outside. Only image types are served, and only
+        as attachments-in-place -- this is how a diagram the model just drew
+        becomes visible without the reader leaving the conversation.
+        """
+        session = store.get(request.path_params["sid"])
+        raw = request.query_params.get("path") or ""
+        try:
+            target = resolve_within(Path(session.workdir), raw)
+        except OutsideRootError:
+            return JSONResponse({"error": "outside the working folder"}, status_code=403)
+        if target.suffix.lower() not in PREVIEWABLE or not target.is_file():
+            return JSONResponse({"error": f"no image at {raw}"}, status_code=404)
+        media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return FileResponse(
+            target,
+            media_type=media,
+            headers={
+                # An SVG is a document, and a document served inline on this
+                # origin can script against it. It is only ever needed here as
+                # a picture, so say so and let the <img> tag render it.
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     async def upload(request: Request) -> JSONResponse:
@@ -292,7 +393,9 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
                     reasoning_effort=session.reasoning_effort,
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
-                    messages=store.load_messages(sid),
+                    messages=history_for_display(
+                        store.load_messages(sid), Path(session.workdir)
+                    ),
                 )
                 yield f"data: {json.dumps(info.payload())}\n\n"
                 while True:
@@ -331,6 +434,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             Route("/api/sessions/{sid}", patch_session, methods=["PATCH"]),
             Route("/api/sessions/{sid}", delete_session, methods=["DELETE"]),
             Route("/api/sessions/{sid}/messages", get_messages),
+            Route("/api/sessions/{sid}/file", workdir_file),
             Route("/api/sessions/{sid}/upload", upload, methods=["POST"]),
             Route("/api/sessions/{sid}/message", post_message, methods=["POST"]),
             Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),

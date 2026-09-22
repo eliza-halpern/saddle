@@ -137,6 +137,7 @@ function finishTool(event) {
   } else {
     row.detail.textContent = event.detail || "(no output)";
   }
+  if (event.preview) showPreview(row.details, event.preview);
   if (!event.ok) row.details.open = true;             // a failure should not need a click
 }
 
@@ -267,9 +268,17 @@ function renderHistory(info) {
   if (info.context_limit) {
     handle({ kind: "context", used: info.context_used || 0, limit: info.context_limit });
   }
+  // An EventSource reconnects on its own, and every connect re-sends
+  // session.info. Rebuilding on each one deleted the reasoning blocks and
+  // tool rows the reader had just watched stream in -- they are not part of
+  // a reload's history in the same shape, so they simply vanished. Rebuild
+  // only when this session's transcript is not already on screen.
+  if (state.historyFor === info.session_id) return;
+  state.historyFor = info.session_id;
   const t = $("#transcript");
   t.textContent = "";
-  const shown = (info.messages || []).filter((m) => m.role === "user" || m.role === "assistant");
+  const shown = (info.messages || []).filter(
+    (m) => m.role === "user" || m.role === "assistant");
   if (!shown.length) {
     t.appendChild(el("div", "empty", "nothing here yet — what are we making?"));
     return;
@@ -297,13 +306,58 @@ function renderHistory(info) {
       }
       turn.appendChild(box);
     } else {
-      const node = el("div", "assistant");
-      renderMarkdown(node, message.content || "");
-      turn.appendChild(node);
+      pastToolRows(turn, message.tools || []);
+      if (message.content) {
+        const node = el("div", "assistant");
+        renderMarkdown(node, message.content);
+        turn.appendChild(node);
+      }
     }
     t.appendChild(turn);
   }
   t.scrollTop = t.scrollHeight;
+}
+
+function showPreview(after, path) {
+  // A picture the model just drew belongs in the transcript, not behind a
+  // filename the reader has to go and open somewhere else.
+  const figure = el("figure", "preview");
+  const img = el("img");
+  img.src = `/api/sessions/${state.sessionId}/file?path=${encodeURIComponent(path)}`;
+  img.alt = path;
+  img.loading = "lazy";
+  // A file that will not load says so, rather than leaving a broken icon.
+  img.onerror = () => {
+    figure.textContent = "";
+    figure.appendChild(el("div", "preview-failed", `could not display ${path}`));
+  };
+  figure.appendChild(img);
+  figure.appendChild(el("figcaption", null, path));
+  after.insertAdjacentElement("afterend", figure);
+}
+
+function pastToolRow(call) {
+  // The same row the live stream produced, in its settled state: the label
+  // is already in the tense the outcome calls for, because the server wrote
+  // it with the outcome in hand.
+  const details = el("details", `tool ${call.ok ? "ok" : "failed"}`);
+  const summary = el("summary");
+  summary.appendChild(el("span", "dot"));
+  summary.appendChild(el("span", "label", call.label));
+  details.appendChild(summary);
+  const detail = el("div", "tool-detail");
+  if (call.name === "run_command") detail.classList.add("terminal");
+  detail.textContent = call.detail || "";
+  details.appendChild(detail);
+  return details;
+}
+
+function pastToolRows(turn, calls) {
+  for (const call of calls) {
+    const row = pastToolRow(call);
+    turn.appendChild(row);
+    if (call.preview) showPreview(row, call.preview);
+  }
 }
 
 function connect(sessionId) {
@@ -358,6 +412,7 @@ async function loadSessions() {
 
 function select(sessionId) {
   state.sessionId = sessionId;
+  state.historyFor = null;          // a different transcript: rebuild it
   state.tools.clear();
   state.terminals.clear();
   localStorage.setItem("saddle.session", sessionId);

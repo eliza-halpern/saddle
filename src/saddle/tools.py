@@ -29,6 +29,30 @@ from saddle.edits import loose_spans
 from saddle.sandbox import DEFAULT_TIMEOUT, OutsideRootError, Sandbox, resolve_within
 from saddle.vllm import ToolCall
 
+PREVIEWABLE: Final = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"})
+"""Extensions the transcript will show rather than name. A model that draws
+a diagram writes a file and tells you the filename; a filename is not a
+picture, and checking it meant leaving the conversation."""
+
+
+def preview_for(name: str, arguments: str, workdir: Path) -> str | None:
+    """The workdir-relative path of an image this call just wrote, if any."""
+    if name not in ("write_file", "edit_file"):
+        return None
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        return None
+    raw = args.get("path") if isinstance(args, dict) else None
+    if not isinstance(raw, str) or Path(raw).suffix.lower() not in PREVIEWABLE:
+        return None
+    try:
+        target = resolve_within(workdir, raw)
+    except OutsideRootError:
+        return None
+    return str(target.relative_to(workdir)) if target.is_file() else None
+
+
 MAX_READ: Final = 200_000
 MAX_MATCHES: Final = 60
 MAX_DIFF: Final = 20_000

@@ -35,7 +35,7 @@ from saddle.events import (
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.labels import label_for
 from saddle.memory import compact, estimate_tokens
-from saddle.tools import TOOLS, ToolContext, execute_tool
+from saddle.tools import TOOLS, ToolContext, execute_tool, preview_for
 from saddle.vllm import ToolCall, VllmClient, VllmError
 
 MAX_TOOL_ROUNDS: Final = 24
@@ -235,6 +235,7 @@ def run_turn(
                     label=label_for(call.name, call.arguments, ok=ok),
                     detail=result,
                     duration_ms=duration_ms,
+                    preview=preview_for(call.name, call.arguments, options.workdir),
                 )
                 append_span(
                     options.journal,

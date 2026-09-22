@@ -1030,3 +1030,122 @@ def test_a_store_that_cannot_write_the_name_still_lets_the_turn_finish(
         # the record may not disagree.
         assert not any(e is not None and e.kind == "session.title" for e in published)
         assert published[-1] is None  # and the turn still ended
+
+
+# -- history that survives a reconnect ----------------------------------------
+
+def test_stored_tool_calls_come_back_labelled_so_a_reconnect_keeps_them(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # An EventSource reconnects on its own and every connect re-sends
+    # session.info. History used to carry only user and assistant text, so
+    # each reconnect silently deleted the tool rows the reader had just
+    # watched appear. The calls were stored all along; the labels were not.
+    from saddle.web.app import history_for_display
+
+    (tmp_path / "note.txt").write_text("x")
+    messages = [
+        {"role": "user", "content": "read it"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "type": "function",
+             "function": {"name": "read_file", "arguments": '{"path": "note.txt"}'}},
+            {"id": "b", "type": "function",
+             "function": {"name": "read_file", "arguments": '{"path": "gone.txt"}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "a", "content": "x"},
+        {"role": "tool", "tool_call_id": "b", "content": "error: cannot read 'gone.txt'"},
+        {"role": "assistant", "content": "done"},
+    ]
+    shown = history_for_display(messages, tmp_path)
+    rows = shown[1]["tools"]
+
+    assert [r["label"] for r in rows] == ["Read note.txt", "Failed to read gone.txt"]
+    assert [r["ok"] for r in rows] == [True, False]
+    assert rows[0]["detail"] == "x"
+    # Messages with no calls are passed through untouched.
+    assert "tools" not in shown[0]
+    assert shown[-1]["content"] == "done"
+
+
+def test_a_call_whose_result_is_missing_is_not_reported_as_a_failure(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # A turn stopped between the call and its result leaves no tool message.
+    from saddle.web.app import history_for_display
+
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "type": "function",
+             "function": {"name": "read_file", "arguments": '{"path": "n.txt"}'}},
+        ]},
+    ]
+    row = history_for_display(messages, tmp_path)[0]["tools"][0]
+    assert row["ok"] is True
+    assert row["detail"] == ""
+
+
+# -- previews -----------------------------------------------------------------
+
+def test_an_image_a_tool_wrote_is_offered_for_display(tmp_path: Path) -> None:
+    from saddle.tools import preview_for
+
+    (tmp_path / "chart.png").write_bytes(b"\x89PNG")
+    (tmp_path / "notes.txt").write_text("x")
+    assert preview_for("write_file", '{"path": "chart.png"}', tmp_path) == "chart.png"
+    assert preview_for("edit_file", '{"path": "chart.png"}', tmp_path) == "chart.png"
+    # Not an image, not a writing tool, not on disk, not parseable, outside.
+    assert preview_for("write_file", '{"path": "notes.txt"}', tmp_path) is None
+    assert preview_for("read_file", '{"path": "chart.png"}', tmp_path) is None
+    assert preview_for("write_file", '{"path": "absent.png"}', tmp_path) is None
+    assert preview_for("write_file", "{not json", tmp_path) is None
+    assert preview_for("write_file", '{"path": 7}', tmp_path) is None
+    assert preview_for("write_file", '{"path": "../escape.png"}', tmp_path) is None
+
+
+def test_the_file_route_serves_an_image_and_refuses_everything_else(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "logo.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+    (work / "secrets.txt").write_text("not a picture")
+    (tmp_path / "outside.png").write_bytes(b"\x89PNG")
+
+    with app_for(store, tmp_path) as (client, _app):
+        sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+
+        served = client.get(f"/api/sessions/{sid}/file", params={"path": "logo.svg"})
+        assert served.status_code == 200
+        assert served.headers["content-type"].startswith("image/svg+xml")
+        # An SVG is a document; served on this origin it must not be able to
+        # script, so it is locked down and its type is not sniffable.
+        assert served.headers["x-content-type-options"] == "nosniff"
+        assert "default-src 'none'" in served.headers["content-security-policy"]
+
+        for path, status in (
+            ("../outside.png", 403),          # escape by traversal
+            (str(tmp_path / "outside.png"), 403),   # escape by absolute path
+            ("secrets.txt", 404),             # inside, but not an image
+            ("absent.png", 404),
+            ("", 404),
+        ):
+            assert client.get(f"/api/sessions/{sid}/file",
+                              params={"path": path}).status_code == status, path
+
+
+# -- the page itself ----------------------------------------------------------
+
+def test_the_page_versions_its_assets_and_is_never_stored(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # StaticFiles sends an ETag but no Cache-Control, so a browser may cache
+    # app.js heuristically and run an old UI against a new server. That is
+    # what happened: a page served by a build defining pastToolRows had it
+    # undefined, and freshly added rows silently did not render.
+    with app_for(store, tmp_path) as (client, _app):
+        page = client.get("/")
+        assert page.headers["cache-control"] == "no-store"
+        body = page.text
+        for name in ("app.css", "markdown.js", "app.js"):
+            assert f"/static/{name}?v=" in body, name
+        assert 'src="/static/app.js"' not in body       # the unversioned form is gone
