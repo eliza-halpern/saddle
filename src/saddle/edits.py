@@ -127,6 +127,45 @@ def _resolved(workdir: Path, path: str) -> Path:
     return target
 
 
+def _loose_spans(source: str, search: str) -> list[tuple[int, int]]:
+    """Every span of `source` matching `search` up to blank lines and
+    trailing spaces, stopping at two -- the caller only needs to tell
+    "none" from "one" from "more than one".
+
+    A live draw against a 73-line file omitted a single blank line from an
+    otherwise correct search block and was refused, while two sibling
+    draws of the same prompt kept it. The contract is that a block names
+    ONE site; reproducing the file's blank lines byte for byte was never
+    the contract, and enforcing it rejected a known-good edit. So the
+    significant lines must still match in order and the result must still
+    be unique -- an ambiguous loose match is refused exactly as an
+    ambiguous exact one is.
+    """
+    src = source.split("\n")
+    want = [line.rstrip() for line in search.split("\n") if line.strip()]
+    if not want:
+        return []
+    hits: list[tuple[int, int]] = []
+    for start in range(len(src)):
+        if not src[start].strip():
+            continue
+        index, taken = start, 0
+        while index < len(src) and taken < len(want):
+            current = src[index].rstrip()
+            if not current:
+                index += 1
+                continue
+            if current != want[taken]:
+                break
+            index += 1
+            taken += 1
+        if taken == len(want):
+            hits.append((start, index))
+            if len(hits) > 1:
+                return hits
+    return hits
+
+
 def _replace_once(source: str, search: str, replace: str, path: str) -> str:
     """Replace the single occurrence of `search`, or refuse.
 
@@ -142,6 +181,18 @@ def _replace_once(source: str, search: str, replace: str, path: str) -> str:
             search, replace = trimmed, replace[:-1] if replace.endswith("\n") else replace
             count = 1
     if count == 0:
+        spans = _loose_spans(source, search)
+        if len(spans) == 1:
+            start, end = spans[0]
+            lines = source.split("\n")
+            # `_body` terminates every line it collects, so `replace` is
+            # either empty or newline-ended; `splitlines` drops that
+            # terminator without inventing a trailing blank line.
+            body = replace.splitlines()
+            return "\n".join(lines[:start] + body + lines[end:])
+        if spans:
+            msg = f"{path}: the search block names more than one site, so it names none"
+            raise EditError(msg)
         msg = f"{path}: the search block does not appear in the file"
         raise EditError(msg)
     if count > 1:

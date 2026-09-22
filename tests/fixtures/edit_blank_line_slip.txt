@@ -1,0 +1,18 @@
+edit accounts.py
+-    @property
+-    def balance(self):
+-        """Current USD balance as a float."""
+-        return self._balance
+-    def deposit(self, amount):
+=======
++    @property
++    def balance(self):
++        """Current USD balance as a float."""
++        return self._balance
++
++    def currencies(self):
++        """Return a sorted list of currency codes held by this account."""
++        return ["USD"]
++
++    def deposit(self, amount):
+>>>>>>>

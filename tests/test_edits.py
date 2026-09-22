@@ -178,3 +178,68 @@ def test_a_block_whose_last_line_has_no_newline_parses(tmp_path: Path) -> None:
     apply_edits(tmp_path, block)
     assert (tmp_path / "m.py").read_text() == "a = 2\n"
     assert parse_edits(block) == parse_edits(block + "\n")
+
+
+def test_a_search_block_missing_a_blank_line_still_names_its_site(tmp_path: Path) -> None:
+    """Known-good, observed live and frozen (`edit_blank_line_slip.txt`).
+
+    Three draws of one prompt against a 73-line file: two reproduced the
+    blank line between `balance` and `deposit`, one did not, and only the
+    third was refused. The block still names exactly one site, which is
+    the contract; byte-identical blank lines never were.
+    """
+    fixtures = Path(__file__).parent / "fixtures"
+    body = (fixtures / "edit_target_accounts.txt").read_text()
+    (tmp_path / "accounts.py").write_text(body)
+    block = (fixtures / "edit_blank_line_slip.txt").read_text()
+    assert "-        return self._balance\n-    def deposit" in block, "the slip itself"
+
+    apply_edits(tmp_path, block)
+
+    after = (tmp_path / "accounts.py").read_text()
+    assert "def currencies(self):" in after
+    assert "def deposit(self, amount):" in after
+    assert "def balance(self):" in after
+
+
+def test_a_loose_match_that_names_two_sites_is_still_refused(tmp_path: Path) -> None:
+    """The load-bearing half: relaxing whitespace must not relax uniqueness.
+
+    The search block carries a blank line the file has at neither site, so
+    it matches nowhere exactly and at both sites loosely. Ambiguity is
+    refused either way, and the message says which problem it is -- "does
+    not appear" would send the worker hunting a typo when what it needs is
+    more surrounding context.
+    """
+    (tmp_path / "m.py").write_text("a = 1\nb = 2\n\nprint(0)\n\na = 1\nb = 2\n")
+    block = "edit m.py\n-a = 1\n-\n-b = 2\n=======\n+a = 9\n+b = 2\n>>>>>>>\n"
+    assert "a = 1\n\nb = 2\n" not in (tmp_path / "m.py").read_text(), "no exact match"
+    with pytest.raises(EditError, match="more than one site"):
+        apply_edits(tmp_path, block)
+
+
+def test_a_loose_match_still_requires_the_significant_lines_to_agree(tmp_path: Path) -> None:
+    """Blank lines are skippable; real lines are not."""
+    (tmp_path / "m.py").write_text("a = 1\n\nb = 2\n")
+    with pytest.raises(EditError, match="does not appear"):
+        apply_edits(tmp_path, "edit m.py\n-a = 1\n-c = 3\n=======\n+a = 9\n>>>>>>>\n")
+
+
+def test_a_search_block_of_only_blank_lines_names_nothing(tmp_path: Path) -> None:
+    """`-` accepts an empty line, so a block can carry no content at all.
+
+    A file with no newline in it gives that block no exact match either,
+    which is the one route into the loose matcher with nothing to look
+    for. It must refuse rather than match the whole file.
+    """
+    (tmp_path / "m.py").write_text("abc")
+    with pytest.raises(EditError, match="does not appear"):
+        apply_edits(tmp_path, "edit m.py\n-\n=======\n+x = 1\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == "abc"
+
+
+def test_an_edit_that_only_deletes_lines_leaves_no_blank_behind(tmp_path: Path) -> None:
+    """An empty replacement removes the span; it does not blank it out."""
+    (tmp_path / "m.py").write_text("keep = 1\ndrop = 2\n\ndrop = 3\nkeep = 4\n")
+    apply_edits(tmp_path, "edit m.py\n-drop = 2\n-drop = 3\n=======\n>>>>>>>\n")
+    assert (tmp_path / "m.py").read_text() == "keep = 1\nkeep = 4\n"
