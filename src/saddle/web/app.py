@@ -54,9 +54,7 @@ from saddle.vllm import VllmClient
 STATIC = Path(__file__).resolve().parent / "static"
 
 
-def history_for_display(
-    messages: list[dict[str, Any]], workdir: Path
-) -> list[dict[str, Any]]:
+def history_for_display(messages: list[dict[str, Any]], workdir: Path) -> list[dict[str, Any]]:
     """Stored messages, with each tool call carrying what the row showed.
 
     The transcript is rebuilt from this on every connect, and it used to keep
@@ -87,14 +85,16 @@ def history_for_display(
             # A tool reports failure in its return value, not by raising, so
             # the outcome is recoverable from the stored result alone.
             ok = not detail.startswith("error: ")
-            rows.append({
-                "id": call.get("id"),
-                "name": name,
-                "label": label_for(name, arguments, ok=ok),
-                "ok": ok,
-                "detail": detail,
-                "preview": preview_for(name, arguments, workdir),
-            })
+            rows.append(
+                {
+                    "id": call.get("id"),
+                    "name": name,
+                    "label": label_for(name, arguments, ok=ok),
+                    "ok": ok,
+                    "detail": detail,
+                    "preview": preview_for(name, arguments, workdir),
+                }
+            )
         shown.append({**message, "tools": rows})
     return shown
 
@@ -393,9 +393,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
                     reasoning_effort=session.reasoning_effort,
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
-                    messages=history_for_display(
-                        store.load_messages(sid), Path(session.workdir)
-                    ),
+                    messages=history_for_display(store.load_messages(sid), Path(session.workdir)),
                 )
                 yield f"data: {json.dumps(info.payload())}\n\n"
                 while True:
