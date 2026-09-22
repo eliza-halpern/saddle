@@ -1165,7 +1165,8 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--host", default="127.0.0.1", help="Bind address (default: loopback).")
     web.add_argument("--port", type=int, default=8777)
     web.add_argument(
-        "--sessions", default=None,
+        "--sessions",
+        default=None,
         help="Session store (default: ~/.saddle/sessions).",
     )
     web.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
@@ -1241,8 +1242,11 @@ def main(
 
             webbrowser.open(url)
         serve(
-            host=args.host, port=args.port, api_key=key,
-            base_url=args.base_url, model=args.model,
+            host=args.host,
+            port=args.port,
+            api_key=key,
+            base_url=args.base_url,
+            model=args.model,
             workdir=Path(args.workdir).resolve(),
             sessions_root=Path(args.sessions) if args.sessions else None,
         )

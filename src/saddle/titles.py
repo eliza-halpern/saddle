@@ -39,8 +39,8 @@ _PREAMBLE: Final = re.compile(
     # Each branch carries its own separator. A bare "title" may not be
     # stripped without one, or "Title bar rendering bug" loses its first word.
     r"^\s*(?:"
-    r"here(?:'s| is)\b[^:\n]{0,40}:"      # "Here's a title:"
-    r"|(?:session\s+)?title\s*[:\-]"     # "Title:", "Session title -"
+    r"here(?:'s| is)\b[^:\n]{0,40}:"  # "Here's a title:"
+    r"|(?:session\s+)?title\s*[:\-]"  # "Title:", "Session title -"
     r"|summary\s*[:\-]"
     r")\s*",
     re.IGNORECASE,

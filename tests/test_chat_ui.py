@@ -29,6 +29,7 @@ def call(name: str, **kwargs: object) -> ToolCall:
 
 # -- labels -------------------------------------------------------------------
 
+
 def test_a_tool_call_reads_as_english_in_all_three_tenses() -> None:
     present, past, failed = describe("read_file", '{"path": "pyproject.toml"}')
     assert present == "Reading pyproject.toml"
@@ -54,6 +55,7 @@ def test_state_selects_the_tense() -> None:
 
 
 # -- memory -------------------------------------------------------------------
+
 
 def test_a_short_conversation_is_left_alone() -> None:
     messages = [{"role": "user", "content": "hi"}]
@@ -98,6 +100,7 @@ def test_compaction_stops_rather_than_emptying_a_list_of_protected_messages() ->
 
 # -- the sandbox boundary -----------------------------------------------------
 
+
 def test_a_path_inside_the_root_resolves(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("hi")
     assert resolve_within(tmp_path, "a.txt").name == "a.txt"
@@ -140,6 +143,7 @@ def test_runaway_output_is_capped_head_and_tail(tmp_path: Path) -> None:
 
 
 # -- tools --------------------------------------------------------------------
+
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> tuple[Path, ToolContext]:
@@ -187,6 +191,7 @@ def test_a_background_command_returns_immediately_and_can_be_waited_on(
 
 # -- sessions -----------------------------------------------------------------
 
+
 def test_a_session_round_trips_with_its_messages(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     session = store.create(title="First", workdir=str(tmp_path))
@@ -218,6 +223,7 @@ def test_a_traversing_session_id_is_refused(tmp_path: Path) -> None:
 
 # -- the reply budget ---------------------------------------------------------
 
+
 def test_a_fresh_turn_gets_nearly_the_whole_window_not_a_flat_cap() -> None:
     options = TurnOptions(context_tokens=175_000)
     assert options.budget([]) > 150_000
@@ -241,6 +247,7 @@ def test_an_explicit_max_tokens_still_wins() -> None:
 
 # -- live terminal output -----------------------------------------------------
 
+
 def test_background_output_is_pushed_to_a_listener_as_it_arrives(tmp_path: Path) -> None:
     seen: list[tuple[str, str]] = []
     box = Sandbox.for_workdir(tmp_path, on_output=lambda tid, chunk: seen.append((tid, chunk)))
@@ -263,13 +270,18 @@ def test_a_broken_listener_does_not_stop_the_command(tmp_path: Path) -> None:
 
 # -- edit_file ----------------------------------------------------------------
 
+
 def test_edit_file_replaces_one_snippet_and_returns_a_diff(tmp_path: Path) -> None:
     target = tmp_path / "m.py"
     target.write_text("def hello():\n    return 1\n")
     result = execute_tool(
-        ToolCall(id="t", name="edit_file", arguments=json.dumps(
-            {"path": "m.py", "old": "return 1", "new": "return 42"})),
-        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+        ToolCall(
+            id="t",
+            name="edit_file",
+            arguments=json.dumps({"path": "m.py", "old": "return 1", "new": "return 42"}),
+        ),
+        workdir=tmp_path,
+        context=ToolContext(workdir=tmp_path),
     )
     assert target.read_text() == "def hello():\n    return 42\n"
     assert result.startswith("--- a/m.py")
@@ -284,9 +296,13 @@ def test_an_ambiguous_edit_is_refused_rather_than_applied_to_the_first_hit(
     target.write_text("x = 1\ny = 1\n")
     before = target.read_text()
     result = execute_tool(
-        ToolCall(id="t", name="edit_file", arguments=json.dumps(
-            {"path": "m.py", "old": "= 1", "new": "= 2"})),
-        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+        ToolCall(
+            id="t",
+            name="edit_file",
+            arguments=json.dumps({"path": "m.py", "old": "= 1", "new": "= 2"}),
+        ),
+        workdir=tmp_path,
+        context=ToolContext(workdir=tmp_path),
     )
     assert "appears 2 times" in result
     assert target.read_text() == before
@@ -295,9 +311,13 @@ def test_an_ambiguous_edit_is_refused_rather_than_applied_to_the_first_hit(
 def test_an_edit_whose_snippet_is_absent_is_an_error(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text("x = 1\n")
     result = execute_tool(
-        ToolCall(id="t", name="edit_file", arguments=json.dumps(
-            {"path": "m.py", "old": "nope", "new": "x"})),
-        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+        ToolCall(
+            id="t",
+            name="edit_file",
+            arguments=json.dumps({"path": "m.py", "old": "nope", "new": "x"}),
+        ),
+        workdir=tmp_path,
+        context=ToolContext(workdir=tmp_path),
     )
     assert "does not appear" in result
 
@@ -307,9 +327,11 @@ def test_overwriting_an_existing_file_reports_a_diff_not_just_a_filename(
 ) -> None:
     (tmp_path / "m.py").write_text("a\nb\n")
     result = execute_tool(
-        ToolCall(id="t", name="write_file", arguments=json.dumps(
-            {"path": "m.py", "content": "a\nc\n"})),
-        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+        ToolCall(
+            id="t", name="write_file", arguments=json.dumps({"path": "m.py", "content": "a\nc\n"})
+        ),
+        workdir=tmp_path,
+        context=ToolContext(workdir=tmp_path),
     )
     assert result.startswith("--- a/m.py")
     assert "+c" in result
@@ -319,9 +341,13 @@ def test_a_brand_new_file_reports_creation_rather_than_a_diff_against_nothing(
     tmp_path: Path,
 ) -> None:
     result = execute_tool(
-        ToolCall(id="t", name="write_file", arguments=json.dumps(
-            {"path": "new.py", "content": "x = 1\n"})),
-        workdir=tmp_path, context=ToolContext(workdir=tmp_path),
+        ToolCall(
+            id="t",
+            name="write_file",
+            arguments=json.dumps({"path": "new.py", "content": "x = 1\n"}),
+        ),
+        workdir=tmp_path,
+        context=ToolContext(workdir=tmp_path),
     )
     assert result.startswith("created 'new.py'")
 
@@ -349,6 +375,7 @@ def test_markdown_renderer_suite_passes() -> None:
 
 # -- labels: the noun phrase a row points at ----------------------------------
 
+
 def test_listing_the_working_folder_reads_as_a_sentence_not_a_fragment() -> None:
     # "Listed" alone is a fragment; the row has to say what was listed.
     assert describe("list_dir", "{}")[1] == "Listed this folder"
@@ -373,15 +400,11 @@ def test_an_unquotable_command_still_labels_rather_than_raising() -> None:
     assert describe("run_command", json.dumps({"command": "echo don't"}))[0] == (
         "Running echo don't"
     )
-    assert describe("run_command", json.dumps({"command": 'grep "TODO'}))[1] == (
-        'Ran grep "TODO'
-    )
+    assert describe("run_command", json.dumps({"command": 'grep "TODO'}))[1] == ('Ran grep "TODO')
 
 
 def test_a_search_shows_the_query_quoted_so_whitespace_is_visible() -> None:
-    assert describe("search", '{"query": "def  run"}')[0] == (
-        "Searching for 'def  run'"
-    )
+    assert describe("search", '{"query": "def  run"}')[0] == ("Searching for 'def  run'")
 
 
 def test_arguments_that_are_not_an_object_are_treated_as_absent() -> None:
@@ -392,6 +415,7 @@ def test_arguments_that_are_not_an_object_are_treated_as_absent() -> None:
 
 
 # -- memory: the cheap paths --------------------------------------------------
+
 
 def test_a_short_tool_result_is_returned_unchanged() -> None:
     from saddle.memory import _truncate_result
@@ -405,18 +429,29 @@ def test_an_image_is_charged_a_flat_rate_not_its_base64_length() -> None:
     from saddle.memory import IMAGE_TOKENS
 
     huge = "A" * 400_000
-    message = [{"role": "user", "content": [
-        {"type": "text", "text": "look"},
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{huge}"}},
-    ]}]
+    message = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{huge}"}},
+            ],
+        }
+    ]
     assert estimate_tokens(message) == 1 + IMAGE_TOKENS
 
 
 def test_tool_calls_are_counted_against_the_window_too() -> None:
     plain = [{"role": "assistant", "content": "hi"}]
-    with_calls = [{"role": "assistant", "content": "hi", "tool_calls": [
-        {"id": "1", "function": {"name": "read_file", "arguments": '{"path": "x"}'}}
-    ]}]
+    with_calls = [
+        {
+            "role": "assistant",
+            "content": "hi",
+            "tool_calls": [
+                {"id": "1", "function": {"name": "read_file", "arguments": '{"path": "x"}'}}
+            ],
+        }
+    ]
     assert estimate_tokens(with_calls) > estimate_tokens(plain)
 
 
@@ -439,7 +474,7 @@ def test_a_dropped_message_with_no_text_contributes_no_topic() -> None:
     dropped, summary = compact(messages, limit_tokens=100)
     assert dropped > 0
     assert summary == f"{dropped} earlier message(s) compacted"
-    assert ":" not in summary                       # no topics to list
+    assert ":" not in summary  # no topics to list
 
 
 def test_a_short_tool_result_is_left_alone_while_a_huge_one_is_elided() -> None:
@@ -454,6 +489,7 @@ def test_a_short_tool_result_is_left_alone_while_a_huge_one_is_elided() -> None:
 
 
 # -- sessions -----------------------------------------------------------------
+
 
 def test_a_half_written_session_is_skipped_rather_than_breaking_the_list(
     tmp_path: Path,
@@ -490,6 +526,7 @@ def test_a_torn_line_in_the_middle_of_a_transcript_is_skipped(tmp_path: Path) ->
 
 # -- the last corners ---------------------------------------------------------
 
+
 def test_without_bwrap_a_command_still_runs_unwrapped(tmp_path: Path) -> None:
     # Isolation is best-effort: on a box with no bwrap the tool still works,
     # it just is not sandboxed. Silently doing nothing would be worse.
@@ -523,7 +560,7 @@ def test_killing_a_finished_terminal_is_not_an_error(tmp_path: Path) -> None:
     box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
     terminal = box.run("true")
     box.wait(terminal.id, timeout=20)
-    assert box.kill(terminal.id) is terminal          # already done, nothing to do
+    assert box.kill(terminal.id) is terminal  # already done, nothing to do
 
 
 def test_an_unwritable_target_is_an_error_not_a_crash(tmp_path: Path) -> None:
@@ -535,7 +572,8 @@ def test_an_unwritable_target_is_an_error_not_a_crash(tmp_path: Path) -> None:
     try:
         out = execute_tool(
             call("edit_file", path="readonly.py", old="x = 1", new="x = 2"),
-            workdir=tmp_path, context=Ctx(workdir=tmp_path),
+            workdir=tmp_path,
+            context=Ctx(workdir=tmp_path),
         )
     finally:
         target.chmod(0o644)
@@ -577,9 +615,9 @@ def test_waiting_on_a_terminal_with_no_process_times_out_rather_than_hanging(
     box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
     orphan = Terminal(id="orphan", command="never started", started=0.0)
     box.terminals["orphan"] = orphan
-    assert orphan.running is True                   # no process, no exit code
+    assert orphan.running is True  # no process, no exit code
     assert box.wait("orphan", timeout=0.3) is orphan
-    assert orphan.running is True                   # and the wait gave up, not the terminal
+    assert orphan.running is True  # and the wait gave up, not the terminal
 
 
 def test_a_transcript_with_no_file_yet_is_empty_not_an_error(tmp_path: Path) -> None:

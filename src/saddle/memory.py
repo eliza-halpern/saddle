@@ -101,9 +101,7 @@ def compact(messages: list[dict[str, Any]], *, limit_tokens: int) -> tuple[int, 
     dropped = 0
     topics: list[str] = []
     while estimate_tokens(messages) > limit_tokens:
-        index = next(
-            (i for i in range(len(messages)) if not _protected(messages, i)), None
-        )
+        index = next((i for i in range(len(messages)) if not _protected(messages, i)), None)
         if index is None:
             break  # nothing left that may be dropped; report what we managed
         message = messages.pop(index)

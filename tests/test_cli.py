@@ -3301,8 +3301,17 @@ def test_web_starts_the_chat_ui_and_prints_where_it_is(
 
     out = io.StringIO()
     code = main(
-        ["web", "--host", "127.0.0.1", "--port", "8123",
-         "--workdir", str(tmp_path), "--sessions", str(tmp_path / "s")],
+        [
+            "web",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8123",
+            "--workdir",
+            str(tmp_path),
+            "--sessions",
+            str(tmp_path / "s"),
+        ],
         stdout=out,
     )
 

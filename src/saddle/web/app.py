@@ -100,9 +100,7 @@ class ChatServer:
                 self.window = 120_000
         return self.window
 
-    def _name_session(
-        self, session: Any, text: str, client: Any, live: Live
-    ) -> None:
+    def _name_session(self, session: Any, text: str, client: Any, live: Live) -> None:
         """Name a new session after its opening message, once.
 
         Deliberately after the turn, not before it: the answer is already on
@@ -137,9 +135,7 @@ class ChatServer:
                 # to the session's subscribers rather than yielded by the turn.
                 live.context = ToolContext(
                     workdir=workdir,
-                    on_output=lambda tid, chunk: live.publish(
-                        TerminalOutput(id=tid, chunk=chunk)
-                    ),
+                    on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                 )
             live.turn += 1
             with self.client_factory() as client:
@@ -256,17 +252,14 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         images = [
             str(candidate)
             for raw in (body.get("images") or [])
-            if (candidate := Path(str(raw)).resolve()).is_file()
-            and allowed in candidate.parents
+            if (candidate := Path(str(raw)).resolve()).is_file() and allowed in candidate.parents
         ]
         live = server._live(sid)
         with live.lock:
             if live.busy:
                 return JSONResponse({"error": "a turn is already running"}, status_code=409)
             live.busy = True
-        threading.Thread(
-            target=server._run, args=(sid, text, images), daemon=True
-        ).start()
+        threading.Thread(target=server._run, args=(sid, text, images), daemon=True).start()
         return JSONResponse({"ok": True})
 
     async def stop_turn(request: Request) -> JSONResponse:
@@ -338,7 +331,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/upload", upload, methods=["POST"]),
             Route("/api/sessions/{sid}/message", post_message, methods=["POST"]),
-        Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
+            Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
             Route("/api/sessions/{sid}/events", events),
             Mount("/static", StaticFiles(directory=str(STATIC)), name="static"),
         ]

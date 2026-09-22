@@ -50,32 +50,64 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
 
 
 TOOLS: Final[list[dict[str, Any]]] = [
-    _tool("read_file", "Read a UTF-8 text file under the working directory.",
-          {"path": {"type": "string"}}, ["path"]),
-    _tool("write_file", "Write a UTF-8 text file under the working directory, "
-          "creating parent directories.",
-          {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
-    _tool("edit_file", "Replace one exact snippet in a file under the working "
-          "directory. `old` must appear exactly once; prefer this over "
-          "write_file for existing files, which must otherwise be rewritten whole.",
-          {"path": {"type": "string"}, "old": {"type": "string"},
-           "new": {"type": "string"}}, ["path", "old", "new"]),
-    _tool("list_dir", "List entries of a directory under the working directory.",
-          {"path": {"type": "string"}}, []),
-    _tool("search", "Search file contents under the working directory for a "
-          "substring; returns path:line: text for each match.",
-          {"query": {"type": "string"}, "glob": {"type": "string"}}, ["query"]),
-    _tool("run_command", "Run a shell command in the sandboxed working directory. "
-          "Set background=true for long jobs: it returns a terminal id immediately, "
-          "and you can read_terminal or wait_for_terminal afterwards.",
-          {"command": {"type": "string"},
-           "background": {"type": "boolean"},
-           "timeout": {"type": "integer"}}, ["command"]),
-    _tool("read_terminal", "Show the output so far of a background terminal.",
-          {"id": {"type": "string"}}, ["id"]),
-    _tool("wait_for_terminal", "Wait up to `timeout` seconds for a background "
-          "terminal to finish. A timeout does not kill it; you may wait again.",
-          {"id": {"type": "string"}, "timeout": {"type": "integer"}}, ["id"]),
+    _tool(
+        "read_file",
+        "Read a UTF-8 text file under the working directory.",
+        {"path": {"type": "string"}},
+        ["path"],
+    ),
+    _tool(
+        "write_file",
+        "Write a UTF-8 text file under the working directory, creating parent directories.",
+        {"path": {"type": "string"}, "content": {"type": "string"}},
+        ["path", "content"],
+    ),
+    _tool(
+        "edit_file",
+        "Replace one exact snippet in a file under the working "
+        "directory. `old` must appear exactly once; prefer this over "
+        "write_file for existing files, which must otherwise be rewritten whole.",
+        {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
+        ["path", "old", "new"],
+    ),
+    _tool(
+        "list_dir",
+        "List entries of a directory under the working directory.",
+        {"path": {"type": "string"}},
+        [],
+    ),
+    _tool(
+        "search",
+        "Search file contents under the working directory for a "
+        "substring; returns path:line: text for each match.",
+        {"query": {"type": "string"}, "glob": {"type": "string"}},
+        ["query"],
+    ),
+    _tool(
+        "run_command",
+        "Run a shell command in the sandboxed working directory. "
+        "Set background=true for long jobs: it returns a terminal id immediately, "
+        "and you can read_terminal or wait_for_terminal afterwards.",
+        {
+            "command": {"type": "string"},
+            "background": {"type": "boolean"},
+            "timeout": {"type": "integer"},
+        },
+        ["command"],
+    ),
+    _tool(
+        "read_terminal",
+        "Show the output so far of a background terminal.",
+        {"id": {"type": "string"}},
+        ["id"],
+    ),
+    _tool(
+        "wait_for_terminal",
+        "Wait up to `timeout` seconds for a background "
+        "terminal to finish. A timeout does not kill it; you may wait again.",
+        {"id": {"type": "string"}, "timeout": {"type": "integer"}},
+        ["id"],
+    ),
 ]
 
 
@@ -146,10 +178,15 @@ def _diff(before: str, after: str, name: str) -> str:
     needs to decide whether to keep it, and it is small even when the file
     is not.
     """
-    lines = list(difflib.unified_diff(
-        before.splitlines(keepends=True), after.splitlines(keepends=True),
-        fromfile=f"a/{name}", tofile=f"b/{name}", n=2,
-    ))
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"a/{name}",
+            tofile=f"b/{name}",
+            n=2,
+        )
+    )
     if not lines:
         return f"{name} unchanged"
     body = "".join(lines)
@@ -177,8 +214,10 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if found == 0:
         return f"error: that snippet does not appear in {name!r}"
     if found > 1:
-        return (f"error: that snippet appears {found} times in {name!r}; "
-                "include more surrounding context so it matches exactly once")
+        return (
+            f"error: that snippet appears {found} times in {name!r}; "
+            "include more surrounding context so it matches exactly once"
+        )
     after = before.replace(old_text, new_text, 1)
     try:
         path.write_text(after, encoding="utf-8")
@@ -231,13 +270,17 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     box = ctx.box()
     if bool(args.get("background")):
         terminal = box.start(command)
-        return (f"started terminal {terminal.id} (isolation: {box.isolation}). "
-                "Use read_terminal or wait_for_terminal.")
+        return (
+            f"started terminal {terminal.id} (isolation: {box.isolation}). "
+            "Use read_terminal or wait_for_terminal."
+        )
     timeout = int(args.get("timeout") or DEFAULT_TIMEOUT)
     terminal = box.run(command, timeout=timeout)
     if terminal.running:
-        return (f"still running after {timeout}s as terminal {terminal.id}; "
-                f"output so far:\n{terminal.output()}")
+        return (
+            f"still running after {timeout}s as terminal {terminal.id}; "
+            f"output so far:\n{terminal.output()}"
+        )
     return f"exit {terminal.exit_code}\n{terminal.output()}"
 
 
@@ -256,8 +299,10 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     timeout = int(args.get("timeout") or 60)
     terminal = box.wait(str(args["id"]), timeout=timeout)
     if terminal.running:
-        return (f"terminal {terminal.id} still running after {timeout}s "
-                f"(not killed; wait again if you want)\n{terminal.output()}")
+        return (
+            f"terminal {terminal.id} still running after {timeout}s "
+            f"(not killed; wait again if you want)\n{terminal.output()}"
+        )
     return f"exit {terminal.exit_code}\n{terminal.output()}"
 
 

@@ -80,11 +80,15 @@ class SessionStore:
             raise ValueError(msg)
         return self.root / safe
 
-    def create(self, *, title: str = "New session", workdir: str = ".",
-               persona: str = "engineer") -> Session:
-        session = Session(id=uuid.uuid4().hex[:12], title=title,
-                          workdir=str(Path(workdir).expanduser().resolve()),
-                          persona=persona)
+    def create(
+        self, *, title: str = "New session", workdir: str = ".", persona: str = "engineer"
+    ) -> Session:
+        session = Session(
+            id=uuid.uuid4().hex[:12],
+            title=title,
+            workdir=str(Path(workdir).expanduser().resolve()),
+            persona=persona,
+        )
         directory = self._dir(session.id)
         (directory / "uploads").mkdir(parents=True, exist_ok=True)
         self._save_meta(session)

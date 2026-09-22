@@ -58,8 +58,9 @@ def app_for(store: SessionStore, tmp_path: Path, script: list[Any] | None = None
     """A live app whose turns are scripted rather than generated."""
     events = script if script is not None else [ContentDelta(text="hello")]
 
-    def fake_run_turn(_client: Any, messages: list[dict[str, Any]], text: str,
-                      _options: Any, **_kw: Any) -> Any:
+    def fake_run_turn(
+        _client: Any, messages: list[dict[str, Any]], text: str, _options: Any, **_kw: Any
+    ) -> Any:
         messages.append({"role": "user", "content": text})
         yield from events
 
@@ -76,6 +77,7 @@ def app_for(store: SessionStore, tmp_path: Path, script: list[Any] | None = None
 
 
 # -- Live: the fan-out that was once a single shared queue --------------------
+
 
 def test_an_event_reaches_every_subscriber_not_just_the_first() -> None:
     live = Live()
@@ -108,6 +110,7 @@ def test_publishing_to_nobody_is_not_an_error() -> None:
 
 # -- the context window -------------------------------------------------------
 
+
 def test_the_window_is_asked_for_once_and_then_remembered(tmp_path: Path) -> None:
     calls = []
 
@@ -134,6 +137,7 @@ def test_a_zero_window_is_treated_as_no_answer(tmp_path: Path) -> None:
 
 
 # -- sessions -----------------------------------------------------------------
+
 
 def test_a_session_is_created_listed_patched_and_deleted(
     store: SessionStore, tmp_path: Path
@@ -173,9 +177,7 @@ def test_moving_a_session_discards_its_cached_tool_context(
         assert sid not in server.live
 
 
-def test_deleting_a_session_discards_its_live_state(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_deleting_a_session_discards_its_live_state(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         server = _server_of(app)
@@ -217,6 +219,7 @@ def _server_of(app: Any) -> ChatServer:
 
 # -- uploads: a client filename is never a path -------------------------------
 
+
 def test_an_upload_lands_in_the_session_and_reports_its_size(
     store: SessionStore, tmp_path: Path
 ) -> None:
@@ -251,9 +254,7 @@ def test_a_traversing_upload_filename_is_flattened_not_honoured(
         assert marker.read_text() == "original"
 
 
-def test_a_form_field_that_is_not_a_file_is_skipped(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_form_field_that_is_not_a_file_is_skipped(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, _app):
         sid = client.post("/api/sessions").json()["id"]
         reply = client.post(f"/api/sessions/{sid}/upload", data={"files": "not-a-file"})
@@ -261,6 +262,7 @@ def test_a_form_field_that_is_not_a_file_is_skipped(
 
 
 # -- post_message -------------------------------------------------------------
+
 
 def test_an_empty_message_is_refused(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, _app):
@@ -270,9 +272,7 @@ def test_an_empty_message_is_refused(store: SessionStore, tmp_path: Path) -> Non
         assert reply.json() == {"error": "empty message"}
 
 
-def test_a_second_turn_is_refused_while_one_is_running(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_second_turn_is_refused_while_one_is_running(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         live = _server_of(app)._live(sid)
@@ -282,13 +282,10 @@ def test_a_second_turn_is_refused_while_one_is_running(
         assert reply.json() == {"error": "a turn is already running"}
 
 
-def test_an_image_this_session_uploaded_is_attached(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_an_image_this_session_uploaded_is_attached(store: SessionStore, tmp_path: Path) -> None:
     seen: list[list[Path]] = []
 
-    def capture(_c: Any, messages: list[dict[str, Any]], text: str, _o: Any,
-                **kw: Any) -> Any:
+    def capture(_c: Any, messages: list[dict[str, Any]], text: str, _o: Any, **kw: Any) -> Any:
         seen.append(list(kw.get("images") or ()))
         messages.append({"role": "user", "content": text})
         return iter(())
@@ -300,9 +297,7 @@ def test_an_image_this_session_uploaded_is_attached(
         good = store.uploads_dir(sid) / "shot.png"
         good.write_bytes(b"\x89PNG")
         module.run_turn = capture  # type: ignore[assignment]
-        client.post(
-            f"/api/sessions/{sid}/message", json={"text": "look", "images": [str(good)]}
-        )
+        client.post(f"/api/sessions/{sid}/message", json={"text": "look", "images": [str(good)]})
         _settle(lambda: bool(seen))
     assert seen[0] == [good]
 
@@ -315,8 +310,7 @@ def test_a_file_the_session_never_uploaded_is_not_attached(
     secret.write_text("PRIVATE KEY")
     seen: list[list[Path]] = []
 
-    def capture(_c: Any, messages: list[dict[str, Any]], text: str, _o: Any,
-                **kw: Any) -> Any:
+    def capture(_c: Any, messages: list[dict[str, Any]], text: str, _o: Any, **kw: Any) -> Any:
         seen.append(list(kw.get("images") or ()))
         messages.append({"role": "user", "content": text})
         return iter(())
@@ -339,8 +333,7 @@ def test_a_missing_image_path_is_dropped_rather_than_raising(
 ) -> None:
     seen: list[list[Path]] = []
 
-    def capture(_c: Any, messages: list[dict[str, Any]], text: str, _o: Any,
-                **kw: Any) -> Any:
+    def capture(_c: Any, messages: list[dict[str, Any]], text: str, _o: Any, **kw: Any) -> Any:
         seen.append(list(kw.get("images") or ()))
         messages.append({"role": "user", "content": text})
         return iter(())
@@ -359,6 +352,7 @@ def test_a_missing_image_path_is_dropped_rather_than_raising(
 
 
 # -- stop ---------------------------------------------------------------------
+
 
 def test_stopping_an_idle_session_reports_that_nothing_was_running(
     store: SessionStore, tmp_path: Path
@@ -399,6 +393,7 @@ def _settle(done: Any, timeout: float = 5.0) -> None:
 # an ephemeral port and talk to it over real HTTP, which is also the only way
 # `request.is_disconnected()` -- the stream's exit condition -- is exercised
 # at all.
+
 
 @contextmanager
 def serving(app: Any) -> Any:
@@ -472,9 +467,7 @@ def test_the_stream_opens_with_everything_a_reloading_client_needs(
     assert info["messages"][0]["content"] == "earlier"
 
 
-def test_two_clients_see_the_same_stream_not_half_each(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_two_clients_see_the_same_stream_not_half_each(store: SessionStore, tmp_path: Path) -> None:
     # The defect this pins: one shared queue hands each event to exactly one
     # consumer, so a second tab splits the conversation with the first.
     import httpx
@@ -502,9 +495,7 @@ def test_two_clients_see_the_same_stream_not_half_each(
     assert [f["text"] for f in collected[1][1:]] == ["alpha", "beta", "gamma"]
 
 
-def test_the_end_of_a_turn_is_announced_as_idle(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_the_end_of_a_turn_is_announced_as_idle(store: SessionStore, tmp_path: Path) -> None:
     with live_app(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         live = _server_of(app)._live(sid)
@@ -554,14 +545,13 @@ def test_a_turn_streams_to_a_connected_browser_end_to_end(
             client.post(f"/api/sessions/{sid}/message", json={"text": "go"})
 
         frames = _frames(client, sid, 4, prime=prime)
-    assert [f["kind"] for f in frames] == [
-        "session.info", "content.delta", "session.title", "idle"
-    ]
+    assert [f["kind"] for f in frames] == ["session.info", "content.delta", "session.title", "idle"]
     assert frames[1]["text"] == "streamed"
     assert frames[2]["title"] == "go"
 
 
 # -- the turn runner ----------------------------------------------------------
+
 
 def test_a_turn_publishes_its_events_saves_its_messages_and_signals_the_end(
     store: SessionStore, tmp_path: Path
@@ -579,7 +569,7 @@ def test_a_turn_publishes_its_events_saves_its_messages_and_signals_the_end(
         # back to the user's own words.
         named = channel.get_nowait()
         assert (named.kind, named.title) == ("session.title", "ping")
-        assert channel.get_nowait() is None          # the turn is over
+        assert channel.get_nowait() is None  # the turn is over
         assert live.busy is False
         assert store.load_messages(sid)[-1]["content"] == "ping"
 
@@ -603,13 +593,11 @@ def test_a_turn_that_raises_reports_the_error_instead_of_killing_the_server(
         first = channel.get_nowait()
         assert isinstance(first, ErrorEvent)
         assert first.message == "RuntimeError: model went away"
-        assert channel.get_nowait() is None          # and the end is still signalled
+        assert channel.get_nowait() is None  # and the end is still signalled
         assert server._live(sid).busy is False
 
 
-def test_a_sealed_turn_becomes_the_parent_of_the_next(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_sealed_turn_becomes_the_parent_of_the_next(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path, script=[TurnEnd(turn=1, proof="proof-abc")]) as (
         client,
         app,
@@ -620,9 +608,7 @@ def test_a_sealed_turn_becomes_the_parent_of_the_next(
         assert server._live(sid).parent == "proof-abc"
 
 
-def test_the_turn_counter_advances_per_session(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_the_turn_counter_advances_per_session(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         server = _server_of(app)
@@ -637,7 +623,7 @@ def test_a_stale_cancellation_does_not_kill_the_next_turn(
     with app_for(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         server = _server_of(app)
-        server._live(sid).cancelled = True           # a previous turn was stopped
+        server._live(sid).cancelled = True  # a previous turn was stopped
         server._run(sid, "ping")
         assert server._live(sid).cancelled is False
 
@@ -653,7 +639,7 @@ def test_a_tool_context_is_reused_across_turns_but_not_across_a_move(
         server._run(sid, "one")
         first = server._live(sid).context
         server._run(sid, "two")
-        assert server._live(sid).context is first    # terminals survive a turn
+        assert server._live(sid).context is first  # terminals survive a turn
 
         store.update(sid, workdir=str(other))
         server._run(sid, "three")
@@ -685,6 +671,7 @@ def test_terminal_output_reaches_subscribers_after_its_tool_call_returned(
 
 
 # -- the folder picker --------------------------------------------------------
+
 
 def test_browsing_lists_only_subdirectories(store: SessionStore, tmp_path: Path) -> None:
     root = tmp_path / "root"
@@ -739,6 +726,7 @@ def test_a_huge_directory_is_truncated_rather_than_streamed_whole(
 
 # -- the entry point ----------------------------------------------------------
 
+
 def test_serve_builds_an_app_and_hands_it_to_uvicorn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -771,6 +759,7 @@ def test_serve_builds_an_app_and_hands_it_to_uvicorn(
 
 
 # -- disconnect ---------------------------------------------------------------
+
 
 def _endpoint(app: Any, path: str) -> Any:
     for route in app.routes:
@@ -815,9 +804,9 @@ def test_a_disconnected_client_ends_its_stream_and_frees_its_queue(
 
         chunks = asyncio.run(drive())
 
-    assert len(chunks) == 1                       # the opening frame, then it stops
+    assert len(chunks) == 1  # the opening frame, then it stops
     assert json.loads(chunks[0][6:])["kind"] == "session.info"
-    assert live.subscribers == []                 # and nothing is left listening
+    assert live.subscribers == []  # and nothing is left listening
 
 
 def test_the_client_factory_builds_a_real_client_per_turn(tmp_path: Path) -> None:
@@ -848,6 +837,7 @@ def test_the_client_factory_builds_a_real_client_per_turn(tmp_path: Path) -> Non
 
 # -- naming a session ---------------------------------------------------------
 
+
 class Naming(FakeClient):
     """A client that also answers the titling call."""
 
@@ -867,8 +857,9 @@ def naming_app(store: SessionStore, tmp_path: Path, answer: Any = "Slow Rust Bui
 
     original = module.run_turn
 
-    def fake_run_turn(_c: Any, messages: list[dict[str, Any]], text: str,
-                      _o: Any, **_kw: Any) -> Any:
+    def fake_run_turn(
+        _c: Any, messages: list[dict[str, Any]], text: str, _o: Any, **_kw: Any
+    ) -> Any:
         messages.append({"role": "user", "content": text})
         yield ContentDelta(text="answered")
 
@@ -898,9 +889,7 @@ def test_the_first_turn_names_its_session_and_tells_every_tab(
         assert titled.session_id == sid
 
 
-def test_a_later_turn_does_not_rename_the_session(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_later_turn_does_not_rename_the_session(store: SessionStore, tmp_path: Path) -> None:
     with naming_app(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         server = _server_of(app)
@@ -910,9 +899,7 @@ def test_a_later_turn_does_not_rename_the_session(
         assert store.get(sid).title == "Slow Rust Build"
 
 
-def test_a_name_the_user_chose_is_never_overwritten(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_name_the_user_chose_is_never_overwritten(store: SessionStore, tmp_path: Path) -> None:
     with naming_app(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         client.patch(f"/api/sessions/{sid}", json={"title": "My own name"})
@@ -978,8 +965,9 @@ def test_a_session_is_offered_a_name_once_not_on_every_later_turn(
 
     original = module.run_turn
 
-    def fake_run_turn(_c: Any, messages: list[dict[str, Any]], text: str,
-                      _o: Any, **_kw: Any) -> Any:
+    def fake_run_turn(
+        _c: Any, messages: list[dict[str, Any]], text: str, _o: Any, **_kw: Any
+    ) -> Any:
         messages.append({"role": "user", "content": text})
         yield ContentDelta(text="answered")
 
@@ -989,9 +977,9 @@ def test_a_session_is_offered_a_name_once_not_on_every_later_turn(
         with TestClient(app) as client:
             sid = client.post("/api/sessions").json()["id"]
             server = _server_of(app)
-            server._run(sid, "   ")                 # nothing to summarise
+            server._run(sid, "   ")  # nothing to summarise
             assert store.get(sid).auto_title is True
-            assert asked == []                      # and no call was spent
+            assert asked == []  # and no call was spent
             server._run(sid, "a real question this time")
     finally:
         module.run_turn = original  # type: ignore[assignment]
@@ -1022,4 +1010,4 @@ def test_a_store_that_cannot_write_the_name_still_lets_the_turn_finish(
         # No name was published, because no name was stored: the event and
         # the record may not disagree.
         assert not any(e is not None and e.kind == "session.title" for e in published)
-        assert published[-1] is None                # and the turn still ended
+        assert published[-1] is None  # and the turn still ended

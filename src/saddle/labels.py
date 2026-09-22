@@ -81,9 +81,16 @@ def describe(name: str, arguments: str) -> tuple[str, str, str]:
     past = f"{past_verb} {obj}"
     # "Reading" -> "read" but "Writing" -> "writ" under string surgery, so
     # the stems are a table rather than a rule.
-    stems = {"Reading": "read", "Writing": "write", "Editing": "edit", "Running": "run",
-             "Listing": "list", "Searching for": "search for", "Viewing": "view",
-             "Waiting for": "wait for"}
+    stems = {
+        "Reading": "read",
+        "Writing": "write",
+        "Editing": "edit",
+        "Running": "run",
+        "Listing": "list",
+        "Searching for": "search for",
+        "Viewing": "view",
+        "Waiting for": "wait for",
+    }
     stem = stems.get(present_verb, present_verb.lower())
     failed = f"Failed to {stem} {obj}"
     return present, past, failed

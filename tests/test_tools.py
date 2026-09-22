@@ -34,6 +34,7 @@ def run(name: str, workdir: Path, **kwargs: object) -> str:
 
 # -- read_file ----------------------------------------------------------------
 
+
 def test_read_file_returns_content(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("hello\n")
     assert run("read_file", tmp_path, path="note.txt") == "hello\n"
@@ -55,6 +56,7 @@ def test_read_file_directory_is_an_error_string(tmp_path: Path) -> None:
 
 # -- write_file ---------------------------------------------------------------
 
+
 def test_write_file_creates_parents_and_reports(tmp_path: Path) -> None:
     result = run("write_file", tmp_path, path="sub/deep/note.txt", content="hello\n")
     assert (tmp_path / "sub" / "deep" / "note.txt").read_text() == "hello\n"
@@ -75,6 +77,7 @@ def test_write_file_directory_is_an_error_string(tmp_path: Path) -> None:
 
 # -- the workdir is a boundary, not a default ---------------------------------
 
+
 def test_reads_and_writes_outside_the_workdir_are_refused(tmp_path: Path) -> None:
     (tmp_path.parent / "secret_outside.txt").write_text("secret")
     assert run("read_file", tmp_path, path="../secret_outside.txt").startswith("error:")
@@ -82,6 +85,7 @@ def test_reads_and_writes_outside_the_workdir_are_refused(tmp_path: Path) -> Non
 
 
 # -- run_command --------------------------------------------------------------
+
 
 def test_run_command_reports_exit_and_merged_output(tmp_path: Path) -> None:
     result = run("run_command", tmp_path, command="echo hi")
@@ -114,6 +118,7 @@ def test_a_run_command_timeout_reports_the_terminal_rather_than_killing_it(
 
 # -- dispatch -----------------------------------------------------------------
 
+
 def test_execute_tool_dispatches_every_declared_tool(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("hello\n")
     context = ToolContext(workdir=tmp_path)
@@ -121,7 +126,8 @@ def test_execute_tool_dispatches_every_declared_tool(tmp_path: Path) -> None:
     def call(name: str, **kwargs: object) -> str:
         return execute_tool(
             ToolCall(id="t", name=name, arguments=json.dumps(kwargs)),
-            workdir=tmp_path, context=context,
+            workdir=tmp_path,
+            context=context,
         )
 
     assert call("read_file", path="note.txt") == "hello\n"
@@ -149,6 +155,7 @@ def test_execute_tool_rejects_an_unknown_tool(tmp_path: Path) -> None:
 
 # -- limits: what a tool does when the answer is too big ----------------------
 
+
 def test_an_enormous_file_is_truncated_rather_than_flooding_the_window(
     tmp_path: Path,
 ) -> None:
@@ -164,8 +171,12 @@ def test_an_enormous_diff_is_truncated(tmp_path: Path) -> None:
     from saddle.tools import MAX_DIFF
 
     (tmp_path / "big.py").write_text("\n".join(f"old line {i}" for i in range(4_000)))
-    out = run("write_file", tmp_path, path="big.py",
-              content="\n".join(f"new line {i}" for i in range(4_000)))
+    out = run(
+        "write_file",
+        tmp_path,
+        path="big.py",
+        content="\n".join(f"new line {i}" for i in range(4_000)),
+    )
     assert out.endswith(f"\n[... diff truncated at {MAX_DIFF} characters ...]")
 
 
@@ -205,6 +216,7 @@ def test_a_write_that_changes_nothing_says_so_rather_than_showing_an_empty_diff(
 
 # -- refusals -----------------------------------------------------------------
 
+
 def test_editing_a_file_that_is_not_there_is_an_error(tmp_path: Path) -> None:
     assert run("edit_file", tmp_path, path="absent.py", old="a", new="b") == (
         "error: cannot read 'absent.py'"
@@ -231,23 +243,17 @@ def test_list_dir_rejects_a_non_string_path_rather_than_stringifying_it(
 
 
 def test_arguments_that_are_not_an_object_are_an_error(tmp_path: Path) -> None:
-    result = execute_tool(
-        ToolCall(id="t", name="read_file", arguments="[1, 2]"), workdir=tmp_path
-    )
+    result = execute_tool(ToolCall(id="t", name="read_file", arguments="[1, 2]"), workdir=tmp_path)
     assert result == "error: arguments must be a JSON object"
 
 
 def test_empty_arguments_are_an_empty_object_not_a_crash(tmp_path: Path) -> None:
-    result = execute_tool(
-        ToolCall(id="t", name="list_dir", arguments="   "), workdir=tmp_path
-    )
+    result = execute_tool(ToolCall(id="t", name="list_dir", arguments="   "), workdir=tmp_path)
     assert not result.startswith("error: ")
 
 
 def test_a_missing_required_argument_names_it(tmp_path: Path) -> None:
-    result = execute_tool(
-        ToolCall(id="t", name="read_terminal", arguments="{}"), workdir=tmp_path
-    )
+    result = execute_tool(ToolCall(id="t", name="read_terminal", arguments="{}"), workdir=tmp_path)
     assert result.startswith("error: missing argument")
 
 
@@ -266,7 +272,8 @@ def test_waiting_on_a_command_that_is_still_running_reports_it_rather_than_lying
     def call(name: str, **kwargs: object) -> str:
         return execute_tool(
             ToolCall(id="t", name=name, arguments=json.dumps(kwargs)),
-            workdir=tmp_path, context=context,
+            workdir=tmp_path,
+            context=context,
         )
 
     started = call("run_command", command="sleep 30", background=True)

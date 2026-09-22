@@ -35,17 +35,18 @@ class Answering:
 
 # -- cleaning a model's answer ------------------------------------------------
 
+
 @pytest.mark.parametrize(
     ("raw", "want"),
     [
         ("Slow Rust Build", "Slow Rust Build"),
-        ('"Slow Rust Build"', "Slow Rust Build"),                  # quoted
+        ('"Slow Rust Build"', "Slow Rust Build"),  # quoted
         ("'Slow Rust Build'", "Slow Rust Build"),
         ("`Slow Rust Build`", "Slow Rust Build"),
-        ("**Slow Rust Build**", "Slow Rust Build"),                # markdown
+        ("**Slow Rust Build**", "Slow Rust Build"),  # markdown
         ("## Slow Rust Build", "Slow Rust Build"),
-        ("Slow Rust Build.", "Slow Rust Build"),                   # trailing stop
-        ("Title: Slow Rust Build", "Slow Rust Build"),             # preamble
+        ("Slow Rust Build.", "Slow Rust Build"),  # trailing stop
+        ("Title: Slow Rust Build", "Slow Rust Build"),  # preamble
         ("title: Slow Rust Build", "Slow Rust Build"),
         ("Session title - Slow Rust Build", "Slow Rust Build"),
         ("Here's a title: Slow Rust Build", "Slow Rust Build"),
@@ -53,7 +54,7 @@ class Answering:
         # ...but a title that merely starts with one of those words keeps it.
         ("Title bar rendering bug", "Title bar rendering bug"),
         ("Summary view is blank", "Summary view is blank"),
-        ("\n\n  Slow   Rust  Build \n", "Slow Rust Build"),        # stray whitespace
+        ("\n\n  Slow   Rust  Build \n", "Slow Rust Build"),  # stray whitespace
         ("Slow Rust Build\nAnother line entirely", "Slow Rust Build"),
         ("", ""),
         ("   \n  \n ", ""),
@@ -67,10 +68,10 @@ def test_a_models_answer_is_reduced_to_something_that_fits(raw: str, want: str) 
 def test_a_title_that_runs_on_is_clipped_on_a_word_boundary() -> None:
     long = "Investigating why the release build of the rendering crate is slow"
     got = clean_title(long)
-    assert len(got) <= MAX_TITLE + 1                    # the ellipsis
+    assert len(got) <= MAX_TITLE + 1  # the ellipsis
     assert got.endswith("…")
     assert not got.rstrip("…").endswith(" ")
-    assert long.startswith(got.rstrip("…"))             # a prefix, not a paraphrase
+    assert long.startswith(got.rstrip("…"))  # a prefix, not a paraphrase
 
 
 def test_a_single_unbroken_word_is_still_clipped() -> None:
@@ -80,6 +81,7 @@ def test_a_single_unbroken_word_is_still_clipped() -> None:
 
 
 # -- falling back to the user's own words -------------------------------------
+
 
 def test_the_fallback_is_the_first_line_of_the_request() -> None:
     assert fallback_title("fix the stream\n\nit splits between tabs") == "fix the stream"
@@ -91,6 +93,7 @@ def test_a_request_with_only_blank_lines_has_no_fallback() -> None:
 
 
 # -- asking the model ---------------------------------------------------------
+
 
 def test_the_model_names_the_session() -> None:
     client = Answering("Slow Rust Build")
@@ -129,4 +132,4 @@ def test_a_request_with_no_words_is_not_titled_at_all() -> None:
     # rather than inventing one.
     client = Answering("Some Title")
     assert title_for(client, "  \n ") == ""
-    assert client.asked == []                           # and do not spend a call
+    assert client.asked == []  # and do not spend a call

@@ -96,8 +96,13 @@ def _stream(
 
 
 def _seal(
-    journal: Path, *, turn: int, prompt: str, rounds: list[dict[str, Any]],
-    reasoning: str, parent: str | None,
+    journal: Path,
+    *,
+    turn: int,
+    prompt: str,
+    rounds: list[dict[str, Any]],
+    reasoning: str,
+    parent: str | None,
 ) -> str:
     node_id = f"chat#{turn}"
     record = build_record(
@@ -131,10 +136,12 @@ def _user_message(text: str, images: Sequence[Path]) -> dict[str, Any]:
             continue
         mime = mimetypes.guess_type(path.name)[0] or "image/png"
         encoded = base64.b64encode(raw).decode()
-        parts.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{encoded}"},
-        })
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{encoded}"},
+            }
+        )
     return {"role": "user", "content": parts}
 
 
@@ -194,20 +201,28 @@ def run_turn(
                 rounds.append({"reply": reply, "tools": []})
                 break
 
-            messages.append({
-                "role": "assistant", "content": reply,
-                "tool_calls": [
-                    {"id": c.id, "type": "function",
-                     "function": {"name": c.name, "arguments": c.arguments}}
-                    for c in calls
-                ],
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": reply,
+                    "tool_calls": [
+                        {
+                            "id": c.id,
+                            "type": "function",
+                            "function": {"name": c.name, "arguments": c.arguments},
+                        }
+                        for c in calls
+                    ],
+                }
+            )
             tools: list[dict[str, Any]] = []
             for call in calls:
                 if stop():
                     break
                 yield ToolStart(
-                    id=call.id, name=call.name, arguments=call.arguments,
+                    id=call.id,
+                    name=call.name,
+                    arguments=call.arguments,
                     present=label_for(call.name, call.arguments, ok=None),
                 )
                 start = perf_counter()
@@ -215,14 +230,22 @@ def run_turn(
                 duration_ms = int((perf_counter() - start) * 1000)
                 ok = not result.startswith("error: ")
                 yield ToolEnd(
-                    id=call.id, ok=ok,
+                    id=call.id,
+                    ok=ok,
                     label=label_for(call.name, call.arguments, ok=ok),
-                    detail=result, duration_ms=duration_ms,
+                    detail=result,
+                    duration_ms=duration_ms,
                 )
-                append_span(options.journal, build_span(
-                    node_id=node_id, argv=[call.name, call.arguments],
-                    duration_ms=duration_ms, exit_code=0 if ok else 1, detail=result,
-                ))
+                append_span(
+                    options.journal,
+                    build_span(
+                        node_id=node_id,
+                        argv=[call.name, call.arguments],
+                        duration_ms=duration_ms,
+                        exit_code=0 if ok else 1,
+                        detail=result,
+                    ),
+                )
                 tools.append({"name": call.name, "arguments": call.arguments, "result": result})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             rounds.append({"reply": reply, "tools": tools})
@@ -239,7 +262,11 @@ def run_turn(
 
     yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
     proof = _seal(
-        options.journal, turn=turn, prompt=text, rounds=rounds,
-        reasoning="".join(thinking), parent=parent,
+        options.journal,
+        turn=turn,
+        prompt=text,
+        rounds=rounds,
+        reasoning="".join(thinking),
+        parent=parent,
     )
     yield TurnEnd(turn=turn, proof=proof)

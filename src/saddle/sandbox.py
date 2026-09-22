@@ -110,7 +110,10 @@ class Sandbox:
 
     @classmethod
     def for_workdir(
-        cls, root: Path, *, prefer_bwrap: bool = True,
+        cls,
+        root: Path,
+        *,
+        prefer_bwrap: bool = True,
         on_output: Callable[[str, str], None] | None = None,
     ) -> Sandbox:
         available = prefer_bwrap and shutil.which("bwrap") is not None

@@ -59,37 +59,51 @@ def kinds(events: list[Event]) -> list[str]:
     return [e.kind for e in events]
 
 
-def run(client: FakeClient, options: TurnOptions, text: str = "hi",
-        messages: list[dict[str, Any]] | None = None, **kwargs: Any) -> list[Event]:
-    return list(run_turn(client, messages if messages is not None else [], text,
-                         options, turn=1, **kwargs))
+def run(
+    client: FakeClient,
+    options: TurnOptions,
+    text: str = "hi",
+    messages: list[dict[str, Any]] | None = None,
+    **kwargs: Any,
+) -> list[Event]:
+    return list(
+        run_turn(client, messages if messages is not None else [], text, options, turn=1, **kwargs)
+    )
 
 
 # -- the shape of a turn ------------------------------------------------------
 
-def test_a_plain_answer_is_start_reasoning_content_context_end(
-    options: TurnOptions
-) -> None:
+
+def test_a_plain_answer_is_start_reasoning_content_context_end(options: TurnOptions) -> None:
     client = FakeClient([[reasoning("thinking"), content("hello")]])
     events = run(client, options)
     assert kinds(events) == [
-        "turn.start", "reasoning.delta", "content.delta", "context", "turn.end"
+        "turn.start",
+        "reasoning.delta",
+        "content.delta",
+        "context",
+        "turn.end",
     ]
     assert events[0].prompt == "hi"
-    assert events[-1].proof                       # every turn is sealed
+    assert events[-1].proof  # every turn is sealed
 
 
-def test_a_tool_round_is_announced_before_it_runs_and_labelled_after(
-    options: TurnOptions
-) -> None:
+def test_a_tool_round_is_announced_before_it_runs_and_labelled_after(options: TurnOptions) -> None:
     (options.workdir / "note.txt").write_text("contents")
-    client = FakeClient([
-        [tool("read_file", path="note.txt")],
-        [content("it says contents")],
-    ])
+    client = FakeClient(
+        [
+            [tool("read_file", path="note.txt")],
+            [content("it says contents")],
+        ]
+    )
     events = run(client, options)
     assert kinds(events) == [
-        "turn.start", "tool.start", "tool.end", "content.delta", "context", "turn.end"
+        "turn.start",
+        "tool.start",
+        "tool.end",
+        "content.delta",
+        "context",
+        "turn.end",
     ]
     start, end = events[1], events[2]
     assert start.present == "Reading note.txt"
@@ -99,13 +113,13 @@ def test_a_tool_round_is_announced_before_it_runs_and_labelled_after(
     assert end.duration_ms >= 0
 
 
-def test_a_failing_tool_is_reported_in_the_failed_tense_not_hidden(
-    options: TurnOptions
-) -> None:
-    client = FakeClient([
-        [tool("read_file", path="absent.txt")],
-        [content("that file is not there")],
-    ])
+def test_a_failing_tool_is_reported_in_the_failed_tense_not_hidden(options: TurnOptions) -> None:
+    client = FakeClient(
+        [
+            [tool("read_file", path="absent.txt")],
+            [content("that file is not there")],
+        ]
+    )
     events = run(client, options)
     end = next(e for e in events if e.kind == "tool.end")
     assert end.ok is False
@@ -113,9 +127,7 @@ def test_a_failing_tool_is_reported_in_the_failed_tense_not_hidden(
     assert end.detail.startswith("error: ")
 
 
-def test_the_conversation_is_mutated_in_place_so_the_caller_keeps_it(
-    options: TurnOptions
-) -> None:
+def test_the_conversation_is_mutated_in_place_so_the_caller_keeps_it(options: TurnOptions) -> None:
     messages: list[dict[str, Any]] = []
     client = FakeClient([[content("hello")]])
     run(client, options, messages=messages)
@@ -123,9 +135,7 @@ def test_the_conversation_is_mutated_in_place_so_the_caller_keeps_it(
     assert messages[-1]["content"] == "hello"
 
 
-def test_a_system_prompt_is_inserted_once_not_once_per_turn(
-    options: TurnOptions
-) -> None:
+def test_a_system_prompt_is_inserted_once_not_once_per_turn(options: TurnOptions) -> None:
     options.system_prompt = "be terse"
     messages: list[dict[str, Any]] = []
     run(FakeClient([[content("a")]]), options, messages=messages)
@@ -135,14 +145,16 @@ def test_a_system_prompt_is_inserted_once_not_once_per_turn(
 
 
 def test_a_tool_result_is_appended_as_a_tool_message_the_model_can_read(
-    options: TurnOptions
+    options: TurnOptions,
 ) -> None:
     (options.workdir / "note.txt").write_text("contents")
     messages: list[dict[str, Any]] = []
-    client = FakeClient([
-        [tool("read_file", call_id="abc", path="note.txt")],
-        [content("done")],
-    ])
+    client = FakeClient(
+        [
+            [tool("read_file", call_id="abc", path="note.txt")],
+            [content("done")],
+        ]
+    )
     run(client, options, messages=messages)
     assistant = next(m for m in messages if m.get("tool_calls"))
     assert assistant["tool_calls"][0]["id"] == "abc"
@@ -155,17 +167,22 @@ def test_a_tool_result_is_appended_as_a_tool_message_the_model_can_read(
 def test_several_calls_in_one_round_all_run(options: TurnOptions) -> None:
     (options.workdir / "a.txt").write_text("A")
     (options.workdir / "b.txt").write_text("B")
-    client = FakeClient([
-        [tool("read_file", call_id="1", path="a.txt"),
-         tool("read_file", call_id="2", path="b.txt")],
-        [content("both read")],
-    ])
+    client = FakeClient(
+        [
+            [
+                tool("read_file", call_id="1", path="a.txt"),
+                tool("read_file", call_id="2", path="b.txt"),
+            ],
+            [content("both read")],
+        ]
+    )
     events = run(client, options)
     ends = [e for e in events if e.kind == "tool.end"]
     assert [e.id for e in ends] == ["1", "2"]
 
 
 # -- limits -------------------------------------------------------------------
+
 
 def test_a_tool_loop_is_cut_off_rather_than_run_forever(options: TurnOptions) -> None:
     (options.workdir / "note.txt").write_text("x")
@@ -174,12 +191,10 @@ def test_a_tool_loop_is_cut_off_rather_than_run_forever(options: TurnOptions) ->
     error = next(e for e in events if e.kind == "error")
     assert error.message == f"stopped after {MAX_TOOL_ROUNDS} tool rounds"
     assert len([e for e in events if e.kind == "tool.start"]) == MAX_TOOL_ROUNDS
-    assert events[-1].kind == "turn.end"          # still sealed
+    assert events[-1].kind == "turn.end"  # still sealed
 
 
-def test_a_transport_failure_is_reported_and_the_turn_is_still_sealed(
-    options: TurnOptions
-) -> None:
+def test_a_transport_failure_is_reported_and_the_turn_is_still_sealed(options: TurnOptions) -> None:
     client = FakeClient([VllmRequestError("the server hung up")])
     events = run(client, options)
     assert kinds(events) == ["turn.start", "error", "context", "turn.end"]
@@ -198,7 +213,7 @@ def test_the_budget_is_what_the_client_is_asked_for(options: TurnOptions) -> Non
 
 
 def test_the_context_event_reports_the_conversation_against_its_window(
-    options: TurnOptions
+    options: TurnOptions,
 ) -> None:
     options.context_tokens = 50_000
     events = run(FakeClient([[content("hello")]]), options)
@@ -207,9 +222,7 @@ def test_the_context_event_reports_the_conversation_against_its_window(
     assert 0 < context.used < 50_000
 
 
-def test_an_overlong_conversation_is_compacted_and_says_so(
-    options: TurnOptions
-) -> None:
+def test_an_overlong_conversation_is_compacted_and_says_so(options: TurnOptions) -> None:
     options.context_tokens = 2_000
     messages = [{"role": "user", "content": "x" * 4_000} for _ in range(20)]
     events = run(FakeClient([[content("ok")]]), options, messages=messages)
@@ -223,7 +236,7 @@ def test_an_overlong_conversation_is_compacted_and_says_so(
 
 
 def test_compaction_leaves_a_note_in_the_conversation_the_model_will_read(
-    options: TurnOptions
+    options: TurnOptions,
 ) -> None:
     options.context_tokens = 2_000
     messages = [{"role": "user", "content": "x" * 4_000} for _ in range(20)]
@@ -244,9 +257,8 @@ def test_a_conversation_that_fits_is_not_compacted(options: TurnOptions) -> None
 # honoured at one of them looks like a stop button that sometimes does
 # nothing, so each gets its own test.
 
-def test_a_stop_mid_stream_cuts_the_reply_short_and_still_seals(
-    options: TurnOptions
-) -> None:
+
+def test_a_stop_mid_stream_cuts_the_reply_short_and_still_seals(options: TurnOptions) -> None:
     stopped = {"now": False}
     client = FakeClient([[content("one"), content("two"), content("three")]])
 
@@ -257,28 +269,29 @@ def test_a_stop_mid_stream_cuts_the_reply_short_and_still_seals(
     for event in run_turn(client, [], "hi", options, turn=1, cancel=cancel):
         events.append(event)
         if event.kind == "content.delta":
-            stopped["now"] = True                 # stop after the first chunk
+            stopped["now"] = True  # stop after the first chunk
 
     assert [e.text for e in events if e.kind == "content.delta"] == ["one"]
     assert any(e.kind == "error" and e.message == "stopped by you" for e in events)
     assert events[-1].kind == "turn.end"
-    assert events[-1].proof                       # the work done is still recorded
+    assert events[-1].proof  # the work done is still recorded
 
 
-def test_a_stop_between_two_calls_runs_the_first_and_not_the_second(
-    options: TurnOptions
-) -> None:
+def test_a_stop_between_two_calls_runs_the_first_and_not_the_second(options: TurnOptions) -> None:
     (options.workdir / "a.txt").write_text("A")
     (options.workdir / "b.txt").write_text("B")
     stopped = {"now": False}
-    client = FakeClient([
-        [tool("read_file", call_id="1", path="a.txt"),
-         tool("read_file", call_id="2", path="b.txt")],
-    ])
+    client = FakeClient(
+        [
+            [
+                tool("read_file", call_id="1", path="a.txt"),
+                tool("read_file", call_id="2", path="b.txt"),
+            ],
+        ]
+    )
 
     events = []
-    for event in run_turn(client, [], "hi", options, turn=1,
-                          cancel=lambda: stopped["now"]):
+    for event in run_turn(client, [], "hi", options, turn=1, cancel=lambda: stopped["now"]):
         events.append(event)
         if event.kind == "tool.end":
             stopped["now"] = True
@@ -287,39 +300,35 @@ def test_a_stop_between_two_calls_runs_the_first_and_not_the_second(
     assert events[-1].kind == "turn.end"
 
 
-def test_a_stop_between_rounds_does_not_start_another_one(
-    options: TurnOptions
-) -> None:
+def test_a_stop_between_rounds_does_not_start_another_one(options: TurnOptions) -> None:
     (options.workdir / "a.txt").write_text("A")
     stopped = {"now": False}
-    client = FakeClient([
-        [tool("read_file", path="a.txt")],
-        [content("a second round that must not happen")],
-    ])
+    client = FakeClient(
+        [
+            [tool("read_file", path="a.txt")],
+            [content("a second round that must not happen")],
+        ]
+    )
 
     events = []
-    for event in run_turn(client, [], "hi", options, turn=1,
-                          cancel=lambda: stopped["now"]):
+    for event in run_turn(client, [], "hi", options, turn=1, cancel=lambda: stopped["now"]):
         events.append(event)
         if event.kind == "tool.end":
             stopped["now"] = True
 
     assert "content.delta" not in kinds(events)
-    assert len(client.asked) == 1                 # the second round was never asked for
+    assert len(client.asked) == 1  # the second round was never asked for
 
 
-def test_a_turn_that_was_not_stopped_says_nothing_about_stopping(
-    options: TurnOptions
-) -> None:
+def test_a_turn_that_was_not_stopped_says_nothing_about_stopping(options: TurnOptions) -> None:
     events = run(FakeClient([[content("ok")]]), options, cancel=lambda: False)
     assert not any(e.kind == "error" for e in events)
 
 
 # -- images -------------------------------------------------------------------
 
-def test_an_uploaded_image_is_sent_as_content_parts_not_as_a_filename(
-    options: TurnOptions
-) -> None:
+
+def test_an_uploaded_image_is_sent_as_content_parts_not_as_a_filename(options: TurnOptions) -> None:
     shot = options.workdir / "shot.png"
     shot.write_bytes(b"\x89PNG\r\n\x1a\n")
     client = FakeClient([[content("I see it")]])
@@ -340,17 +349,14 @@ def test_a_text_only_turn_stays_a_plain_string(options: TurnOptions) -> None:
     assert messages[0]["content"] == "hi"
 
 
-def test_an_unreadable_image_is_skipped_rather_than_failing_the_turn(
-    options: TurnOptions
-) -> None:
+def test_an_unreadable_image_is_skipped_rather_than_failing_the_turn(options: TurnOptions) -> None:
     # The user still asked a question; losing the whole turn over one
     # attachment would be the worse failure.
     missing = options.workdir / "gone.png"
     good = options.workdir / "here.jpg"
     good.write_bytes(b"\xff\xd8\xff")
     messages: list[dict[str, Any]] = []
-    events = run(FakeClient([[content("ok")]]), options, messages=messages,
-                 images=[missing, good])
+    events = run(FakeClient([[content("ok")]]), options, messages=messages, images=[missing, good])
 
     parts = messages[0]["content"]
     assert [p["type"] for p in parts] == ["text", "image_url"]
@@ -358,22 +364,19 @@ def test_an_unreadable_image_is_skipped_rather_than_failing_the_turn(
     assert events[-1].kind == "turn.end"
 
 
-def test_an_unknown_extension_is_still_offered_as_an_image(
-    options: TurnOptions
-) -> None:
+def test_an_unknown_extension_is_still_offered_as_an_image(options: TurnOptions) -> None:
     odd = options.workdir / "capture.weird"
     odd.write_bytes(b"bytes")
     messages: list[dict[str, Any]] = []
     run(FakeClient([[content("ok")]]), options, messages=messages, images=[odd])
-    assert messages[0]["content"][1]["image_url"]["url"].startswith(
-        "data:image/png;base64,"
-    )
+    assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 # -- the journal --------------------------------------------------------------
 
+
 def test_a_turn_is_journalled_with_its_reasoning_and_chains_to_its_parent(
-    options: TurnOptions
+    options: TurnOptions,
 ) -> None:
     client = FakeClient([[reasoning("deliberating"), content("answer")]])
     events = run(client, options, parent="proof-of-the-previous-turn")
@@ -392,19 +395,20 @@ def test_a_turn_is_journalled_with_its_reasoning_and_chains_to_its_parent(
 
     def sealed_hash(prompt: str) -> str:
         return build_record(
-            evidence_id="chat#1", node_id="chat#1",
+            evidence_id="chat#1",
+            node_id="chat#1",
             diff=json.dumps({"prompt": prompt, "rounds": [{"reply": "answer", "tools": []}]}),
-            parent_proofs=["proof-of-the-previous-turn"], gate_outputs=[],
-            requirement_ids=[], thinking="deliberating",
+            parent_proofs=["proof-of-the-previous-turn"],
+            gate_outputs=[],
+            requirement_ids=[],
+            thinking="deliberating",
         ).diff_hash
 
     assert record["diff_hash"] == sealed_hash("hi")
     assert record["diff_hash"] != sealed_hash("a different question")
 
 
-def test_a_first_turn_has_no_parent_rather_than_a_null_one(
-    options: TurnOptions
-) -> None:
+def test_a_first_turn_has_no_parent_rather_than_a_null_one(options: TurnOptions) -> None:
     events = run(FakeClient([[content("answer")]]), options)
     records = [json.loads(line) for line in options.journal.read_text().splitlines()]
     record = next(r for r in records if r.get("record_hash") == events[-1].proof)
@@ -413,11 +417,15 @@ def test_a_first_turn_has_no_parent_rather_than_a_null_one(
 
 def test_each_tool_call_leaves_a_span_with_its_outcome(options: TurnOptions) -> None:
     (options.workdir / "a.txt").write_text("A")
-    client = FakeClient([
-        [tool("read_file", call_id="ok", path="a.txt"),
-         tool("read_file", call_id="bad", path="absent.txt")],
-        [content("done")],
-    ])
+    client = FakeClient(
+        [
+            [
+                tool("read_file", call_id="ok", path="a.txt"),
+                tool("read_file", call_id="bad", path="absent.txt"),
+            ],
+            [content("done")],
+        ]
+    )
     run(client, options)
     lines = [json.loads(line) for line in options.journal.read_text().splitlines()]
     spans = [line for line in lines if "argv" in line]
