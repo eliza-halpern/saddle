@@ -327,12 +327,55 @@ function renderDiff(target, text) {
   }
 }
 
+/* A newly written file: the header line, then the file itself.
+ *
+ * `created 'x.py' (120 bytes)` says nothing about what was written, and a
+ * new file is exactly the case where there is no diff to read instead. The
+ * tool returns the content after the header, so this is what both a live
+ * row and a reloaded one have to work from -- the same text, so they cannot
+ * disagree the way the diff renderer once did. */
+
+const CREATED = /^created '([^']*)' \((\d+) bytes\)\n([\s\S]*)$/;
+
+const EXTENSIONS = {
+  py: "python", pyi: "python",
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+  ts: "javascript", tsx: "javascript",
+  json: "json", jsonl: "json",
+  sh: "bash", bash: "bash", zsh: "bash",
+  svg: "xml", html: "xml", htm: "xml", xml: "xml", vue: "xml",
+  css: "css", scss: "css", sass: "css", less: "css",
+  yaml: "yaml", yml: "yaml",
+  toml: "toml", sql: "sql", rs: "rust", go: "go",
+  c: "c", h: "c", cpp: "c", hpp: "c", cc: "c", cs: "c",
+  java: "java", patch: "diff", diff: "diff",
+};
+
+function languageForPath(name) {
+  const dot = String(name || "").lastIndexOf(".");
+  if (dot < 0) return null;
+  return EXTENSIONS[name.slice(dot + 1).toLowerCase()] || null;
+}
+
+function renderCreated(target, match) {
+  target.textContent = "";
+  const [, name, bytes, body] = match;
+  target.appendChild(el("div", "c-head", `created ${name} (${bytes} bytes)`));
+  const code = el("code", "created-body");
+  highlight(code, body, languageForPath(name));
+  target.appendChild(code);
+}
+
 /* One filling for a tool row's body, used by the live stream and by a
    reloaded transcript alike. They had separate code and disagreed: the
    live one coloured a diff, the stored one printed it flat. */
 function fillToolDetail(row, detail, text) {
+  const created = typeof text === "string" ? text.match(CREATED) : null;
   if (isDiff(text)) {
     renderDiff(detail, text);
+    row.classList.add("has-diff");
+  } else if (created) {
+    renderCreated(detail, created);
     row.classList.add("has-diff");
   } else {
     detail.textContent = text || "(no output)";
@@ -415,5 +458,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     el, inlineInto, renderMarkdown, splitStable, paintStream,
     isDiff, renderDiff, fillToolDetail, highlight, grammarFor,
+    languageForPath, CREATED,
   };
 }

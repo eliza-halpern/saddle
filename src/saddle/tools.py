@@ -58,6 +58,11 @@ MAX_READ: Final = 200_000
 MAX_MATCHES: Final = 60
 MAX_DIFF: Final = 20_000
 
+MAX_BODY: Final = 20_000
+"""How much of a newly written file is shown back. Same order as a diff: a
+transcript that quietly swallows a 200KB generated file is no better than
+one that prints all of it."""
+
 
 def _tool(
     name: str, description: str, properties: dict[str, Any], required: list[str]
@@ -204,7 +209,15 @@ def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     except OSError:
         return f"error: cannot write {name!r}"
     if not before:
-        return f"created {name!r} ({len(content)} bytes)"
+        # The file itself, not just how big it is. A byte count says nothing
+        # about what was written, and a new file is exactly when there is no
+        # diff to read instead. Capped like a diff is, and carried in the
+        # result rather than beside it so a reloaded transcript shows the
+        # same thing the live one did.
+        body = content
+        if len(body) > MAX_BODY:
+            body = body[:MAX_BODY] + f"\n[... truncated at {MAX_BODY} characters ...]"
+        return f"created {name!r} ({len(content)} bytes)\n{body}"
     return _diff(before, content, name)
 
 

@@ -22,6 +22,9 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+/* The panes scroll, the page does not: without this the whole document can
+   be dragged up on a phone, taking the composer off-screen again. */
+body { overflow: hidden; overscroll-behavior: none; }
 body {
   background:
     radial-gradient(1100px 620px at 12% -8%, #2e2533 0%, transparent 62%),
@@ -29,7 +32,12 @@ body {
     var(--bg);
   color: var(--ink); font: 15px/1.62 var(--sans);
 }
+/* `100vh` on a phone is the viewport as if the URL bar were retracted, so
+   the composer starts just below the fold and you have to scroll to type.
+   `100dvh` tracks what is actually visible; the plain `vh` line stays first
+   as the fallback for anything that does not know it. */
 #app { display: grid; grid-template-columns: 252px 1fr; height: 100vh; }
+@supports (height: 100dvh) { #app { height: 100dvh; } }
 
 /* ---- sidebar ---- */
 #sidebar { background: var(--bg-sunk); border-right: 1px solid var(--line);
@@ -437,3 +445,8 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
 @media (max-width: 420px) {
   .status { display: none; }         /* the send button already says busy */
 }
+
+/* A newly written file, shown as the file rather than a byte count. */
+.tool-detail .c-head { color: var(--ink-faint); margin-bottom: 8px;
+  padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+.tool-detail .created-body { display: block; white-space: pre; font: inherit; }

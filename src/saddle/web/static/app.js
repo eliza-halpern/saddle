@@ -194,6 +194,14 @@ function handle(event) {
     }
     case "tool.start":
       if (!state.turnNode) newTurn(null);
+      // A turn is rounds of "think, say something, call a tool" and the
+      // blocks are cached by round. Without releasing them here, the text
+      // of round two was appended into round one's block -- which sits
+      // above the tool rows -- so the answer appeared before the tools that
+      // produced it. It read correctly again on reload, because history is
+      // rebuilt in stored order, which is what made it look cosmetic.
+      state.assistantNode = null;
+      state.reasoningNode = null;
       toolRow(event);
       setStatus("working", event.present.toLowerCase());
       break;

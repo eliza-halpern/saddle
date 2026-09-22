@@ -382,3 +382,154 @@ test("highlighted code is still built from text nodes, never markup", () => {
   assert.ok(node.html.includes("&lt;img"));
   assert.strictEqual(node.textContent, 'x = "<img src=x onerror=alert(1)>"');
 });
+
+
+/* ---------- transcript ordering ---------- */
+
+test("a turn's blocks are released when a tool starts", () => {
+  /* The ordering bug, as a unit.
+   *
+   * A turn is rounds of "think, say something, call a tool". The assistant
+   * and reasoning blocks are cached so consecutive deltas land in one node,
+   * but the cache has to be dropped when a round ends -- otherwise round
+   * two's text is appended into round one's block, which sits *above* the
+   * tool rows, and the answer appears before the tools that produced it.
+   *
+   * It looked cosmetic because a reload rebuilt it correctly: history is
+   * stored in order, so only the live stream was ever wrong.
+   */
+  const transcript = el("div");
+  const state = { turnNode: transcript, assistantNode: null, reasoningNode: null };
+
+  const say = (text) => {
+    if (!state.assistantNode) {
+      state.assistantNode = el("div", "assistant");
+      transcript.appendChild(state.assistantNode);
+    }
+    state.assistantNode.appendChild(document.createTextNode(text));
+  };
+  const callTool = (name) => {
+    state.assistantNode = null;          // the fix
+    state.reasoningNode = null;
+    transcript.appendChild(el("div", "tool", name));
+  };
+
+  say("first, I will look at the file");
+  callTool("Read a.py");
+  say("now I will change it");
+  callTool("Edited a.py");
+  say("done");
+
+  assert.deepStrictEqual(
+    transcript.children.map((c) => [c.className, c.textContent]),
+    [
+      ["assistant", "first, I will look at the file"],
+      ["tool", "Read a.py"],
+      ["assistant", "now I will change it"],
+      ["tool", "Edited a.py"],
+      ["assistant", "done"],
+    ]);
+});
+
+test("without releasing the cache the text jumps above the tools", () => {
+  // The same script with the fix removed, to show the test can see it.
+  const transcript = el("div");
+  const state = { assistantNode: null };
+  const say = (text) => {
+    if (!state.assistantNode) {
+      state.assistantNode = el("div", "assistant");
+      transcript.appendChild(state.assistantNode);
+    }
+    state.assistantNode.appendChild(document.createTextNode(text));
+  };
+  const callTool = (name) => transcript.appendChild(el("div", "tool", name));
+
+  say("first");
+  callTool("Read a.py");
+  say(" and second");
+
+  // Both sentences are in one block, and that block is before the tool.
+  assert.deepStrictEqual(
+    transcript.children.map((c) => c.className), ["assistant", "tool"]);
+  assert.strictEqual(transcript.children[0].textContent, "first and second");
+});
+
+
+/* ---------- a newly written file ---------- */
+
+const { languageForPath, CREATED } = md;
+
+test("a created file is shown as the file, highlighted", () => {
+  // "created 'x.py' (42 bytes)" says nothing about what was written, and a
+  // new file is the one case with no diff to read instead.
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail,
+    "created 'greet.py' (46 bytes)\ndef greet(name):\n    return \"hi\"");
+
+  assert.ok(row.classList.contains("has-diff"));
+  const head = detail.children[0];
+  assert.strictEqual(head.className, "c-head");
+  assert.strictEqual(head.textContent, "created greet.py (46 bytes)");
+
+  const body = detail.children[1];
+  assert.strictEqual(body.tagName, "CODE");
+  const tokens = body.children.map((c) => [c.className, c.textContent]);
+  assert.deepStrictEqual(tokens, [
+    ["c-keyword", "def"], ["c-keyword", "return"], ["c-string", '"hi"'],
+  ]);
+  assert.strictEqual(body.textContent, 'def greet(name):\n    return "hi"');
+});
+
+test("the language comes from the file's own extension", () => {
+  for (const [name, language] of [
+    ["a.py", "python"], ["a.svg", "xml"], ["index.html", "xml"],
+    ["app.tsx", "javascript"], ["Cargo.toml", "toml"], ["q.sql", "sql"],
+    ["run.sh", "bash"], ["a.rs", "rust"], ["main.go", "go"],
+    ["styles.scss", "css"], ["deep/nested/file.json", "json"],
+  ]) {
+    assert.strictEqual(languageForPath(name), language, name);
+  }
+  // No extension, an unknown one, or nothing at all: plain text, not a guess.
+  for (const name of ["Makefile", "notes.txt", "a.xyz", "", null]) {
+    assert.strictEqual(languageForPath(name), null, String(name));
+  }
+});
+
+test("a created file with no recognised extension is still readable", () => {
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail, "created 'notes.txt' (5 bytes)\nhello");
+  assert.strictEqual(detail.children[1].textContent, "hello");
+  assert.strictEqual(detail.children[1].children.length, 0);   // uncoloured
+});
+
+test("an empty new file says so without pretending to show content", () => {
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail, "created 'empty.py' (0 bytes)\n");
+  assert.strictEqual(detail.children[0].textContent, "created empty.py (0 bytes)");
+  assert.strictEqual(detail.children[1].textContent, "");
+});
+
+test("only the exact created shape is treated as a file body", () => {
+  // Anything else -- a command's output, an error, a message that merely
+  // mentions the word -- must not be parsed as a file.
+  for (const text of [
+    "created 'x.py' (42 bytes)",                 // header with no body
+    "I created 'x.py' (42 bytes)\nstuff",        // not at the start
+    "created x.py (42 bytes)\nstuff",            // unquoted
+    "error: cannot write 'x.py'",
+    "x.py unchanged",
+  ]) {
+    assert.strictEqual(CREATED.test(text), false, text);
+  }
+});
+
+test("a created file and a reloaded one render identically", () => {
+  // The same divergence the diff renderer had: the fix is that both sides
+  // read the same stored text.
+  const text = "created 'a.py' (8 bytes)\nx = 1\n";
+  const live = { row: el("div"), detail: el("div") };
+  const past = { row: el("div"), detail: el("div") };
+  fillToolDetail(live.row, live.detail, text);
+  fillToolDetail(past.row, past.detail, text);
+  assert.strictEqual(past.detail.html, live.detail.html);
+});
