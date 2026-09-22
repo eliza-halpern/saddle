@@ -8929,7 +8929,7 @@ Owner: main session (contract change). Related: T6-25 (the seed-order
 contract this must preserve), T6-30 (the request deadline), T6-17 (why
 `max_tokens` is the whole window), F21.57, F21.58.
 
-### T6-86 — T6-75's `compelled` exemption is inert: `changed` is keyed absolute, `compelled` relative (open; F21.62, supersedes the F21.59 reading)
+### T6-86 — T6-75's `compelled` exemption is inert: `changed` is keyed absolute, `compelled` relative (LANDED `7db10bd`; F21.62, F21.64, supersedes the F21.59 reading)
 
 Files: `src/saddle/runner.py` (the `changed` / `covered` / `ruff_files`
 construction), `src/saddle/gates.py` (`compelled_lines`, and the
@@ -8982,6 +8982,19 @@ Do:
      both tests must die.
 4. Re-run the gate against `g1-79cd848` node-2 attempt 1's tree and show
    `accounts.py:101–122` leave the judgement.
+
+**Landed `7db10bd`.** The wiring fix alone was not enough: with the
+exemption firing, a public definition the baseline had was spared
+ENTIRELY, so an impl node editing one emptied the judgement set and
+coverage passed having measured nothing -- eleven `run_slice` tests
+flipped their coverage DETAIL while keeping their verdict (F21.64). The
+exemption is now narrowed to T6-75's actual premise, a definition
+nothing calls: `compelled_lines` takes `covered`, and a definition whose
+BODY any test reaches is judged line by line as before. Reachability is
+asked of the body, never the whole span -- the `def` line executes at
+import, so the whole-span question answers yes for everything. Five
+contract mutants, all died. Step 4 below (re-running the gate against
+g1-79cd848 node-2's tree) is NOT done and is the one thing outstanding.
 
 Not in scope: the `owed` deferral, `property_modules`, and the scope
 story F21.59 told. Those were a wrong reading of this symptom and the
