@@ -345,3 +345,204 @@ def test_markdown_renderer_suite_passes() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# -- labels: the noun phrase a row points at ----------------------------------
+
+def test_listing_the_working_folder_reads_as_a_sentence_not_a_fragment() -> None:
+    # "Listed" alone is a fragment; the row has to say what was listed.
+    assert describe("list_dir", "{}")[1] == "Listed this folder"
+    assert describe("list_dir", '{"path": "src"}')[1] == "Listed src"
+
+
+def test_a_terminal_is_named_by_its_id() -> None:
+    assert describe("read_terminal", '{"id": "9f2a"}')[0] == "Reading terminal 9f2a"
+    assert describe("wait_for_terminal", '{"id": "9f2a"}')[1] == "Waited for terminal 9f2a"
+
+
+def test_a_command_is_summarised_by_its_head_not_its_whole_line() -> None:
+    long_command = "pytest -q tests/ -x --no-cov --tb=short -p no:randomly --maxfail=1"
+    present = describe("run_command", json.dumps({"command": long_command}))[0]
+    assert present == "Running pytest -q tests/ -x --no-cov --tb=short"
+
+
+def test_an_unquotable_command_still_labels_rather_than_raising() -> None:
+    # shlex.split raises on an unbalanced quote, and an apostrophe is enough
+    # to make one: `echo don't` crashed the label, which propagated out of
+    # run_turn and ended the whole turn over a decoration.
+    assert describe("run_command", json.dumps({"command": "echo don't"}))[0] == (
+        "Running echo don't"
+    )
+    assert describe("run_command", json.dumps({"command": 'grep "TODO'}))[1] == (
+        'Ran grep "TODO'
+    )
+
+
+def test_a_search_shows_the_query_quoted_so_whitespace_is_visible() -> None:
+    assert describe("search", '{"query": "def  run"}')[0] == (
+        "Searching for 'def  run'"
+    )
+
+
+def test_arguments_that_are_not_an_object_are_treated_as_absent() -> None:
+    # The model can emit a bare list or string; a label must never raise.
+    assert describe("read_file", "[1, 2, 3]")[0] == "Reading"
+    assert describe("read_file", '"just a string"')[0] == "Reading"
+    assert describe("read_file", "")[0] == "Reading"
+
+
+# -- memory: the cheap paths --------------------------------------------------
+
+def test_a_short_tool_result_is_returned_unchanged() -> None:
+    from saddle.memory import _truncate_result
+
+    assert _truncate_result("short") == "short"
+
+
+def test_an_image_is_charged_a_flat_rate_not_its_base64_length() -> None:
+    # A photo is megabytes of base64; charging it by length would evict the
+    # entire conversation around it.
+    from saddle.memory import IMAGE_TOKENS
+
+    huge = "A" * 400_000
+    message = [{"role": "user", "content": [
+        {"type": "text", "text": "look"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{huge}"}},
+    ]}]
+    assert estimate_tokens(message) == 1 + IMAGE_TOKENS
+
+
+def test_tool_calls_are_counted_against_the_window_too() -> None:
+    plain = [{"role": "assistant", "content": "hi"}]
+    with_calls = [{"role": "assistant", "content": "hi", "tool_calls": [
+        {"id": "1", "function": {"name": "read_file", "arguments": '{"path": "x"}'}}
+    ]}]
+    assert estimate_tokens(with_calls) > estimate_tokens(plain)
+
+
+def test_a_recent_tool_result_is_not_elided_however_large() -> None:
+    # Stage 1 only touches results old enough to be out of the recent tail.
+    messages = [{"role": "system", "content": "s"}]
+    messages += [{"role": "user", "content": "x" * 8_000} for _ in range(KEEP_RECENT - 1)]
+    messages.append({"role": "tool", "tool_call_id": "1", "content": "Z" * 40_000})
+    compact(messages, limit_tokens=100)
+    assert messages[-1]["content"] == "Z" * 40_000
+
+
+def test_a_dropped_message_with_no_text_contributes_no_topic() -> None:
+    messages = [{"role": "user", "content": "   "} for _ in range(40)]
+    messages += [{"role": "user", "content": "recent"} for _ in range(KEEP_RECENT)]
+    _dropped, summary = compact(messages, limit_tokens=10)
+    assert summary.startswith("earlier message") or ":" not in summary
+
+
+# -- sessions -----------------------------------------------------------------
+
+def test_a_half_written_session_is_skipped_rather_than_breaking_the_list(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(tmp_path)
+    good = store.create(title="Good")
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / "session.json").write_text("{not json")
+    surprising = tmp_path / "surprising"
+    surprising.mkdir()
+    (surprising / "session.json").write_text('{"unexpected_field": 1}')
+
+    assert [s.id for s in store.list()] == [good.id]
+
+
+def test_a_directory_with_no_metadata_is_not_a_session(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    (tmp_path / "uploads-only").mkdir()
+    assert store.list() == []
+
+
+def test_a_torn_line_in_the_middle_of_a_transcript_is_skipped(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create()
+    store.messages_path(session.id).write_text(
+        '{"role": "user", "content": "one"}\n'
+        "{half a line\n"
+        "\n"
+        '{"role": "assistant", "content": "two"}\n'
+    )
+    assert [m["content"] for m in store.load_messages(session.id)] == ["one", "two"]
+
+
+# -- the last corners ---------------------------------------------------------
+
+def test_without_bwrap_a_command_still_runs_unwrapped(tmp_path: Path) -> None:
+    # Isolation is best-effort: on a box with no bwrap the tool still works,
+    # it just is not sandboxed. Silently doing nothing would be worse.
+    box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
+    assert box.isolation == "none"
+    assert box._argv("echo hi") == ["bash", "-lc", "echo hi"]
+    terminal = box.run("echo hi")
+    box.wait(terminal.id, timeout=20)
+    assert "hi" in terminal.output()
+    assert terminal.exit_code == 0
+
+
+def test_a_command_that_cannot_start_is_reported_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    def refuse(*_a: object, **_k: object) -> None:
+        message = "too many open files"
+        raise OSError(message)
+
+    box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    terminal = box.run("echo hi")
+    assert terminal.exit_code == 127
+    assert "could not start command" in terminal.output()
+    assert box.terminals[terminal.id] is terminal
+
+
+def test_killing_a_finished_terminal_is_not_an_error(tmp_path: Path) -> None:
+    box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
+    terminal = box.run("true")
+    box.wait(terminal.id, timeout=20)
+    assert box.kill(terminal.id) is terminal          # already done, nothing to do
+
+
+def test_an_unwritable_target_is_an_error_not_a_crash(tmp_path: Path) -> None:
+    from saddle.tools import ToolContext as Ctx
+
+    target = tmp_path / "readonly.py"
+    target.write_text("x = 1\n")
+    target.chmod(0o444)
+    try:
+        out = execute_tool(
+            call("edit_file", path="readonly.py", old="x = 1", new="x = 2"),
+            workdir=tmp_path, context=Ctx(workdir=tmp_path),
+        )
+    finally:
+        target.chmod(0o644)
+    assert out == "error: cannot write 'readonly.py'"
+
+
+def test_a_handler_that_raises_an_os_error_becomes_an_error_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The dispatcher's last net: no tool failure may escape as an exception,
+    # because the turn above it would die over one bad call.
+    import saddle.tools as tools_module
+
+    def explode(*_a: object, **_k: object) -> str:
+        message = "disk went away"
+        raise OSError(message)
+
+    monkeypatch.setitem(tools_module._HANDLERS, "read_file", explode)
+    out = execute_tool(call("read_file", path="x"), workdir=tmp_path)
+    assert out == "error: OSError: disk went away"
+
+
+def test_a_transcript_with_no_file_yet_is_empty_not_an_error(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create()
+    store.messages_path(session.id).unlink(missing_ok=True)
+    assert store.load_messages(session.id) == []

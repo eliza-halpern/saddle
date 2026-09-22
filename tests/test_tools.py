@@ -145,3 +145,132 @@ def test_execute_tool_rejects_bad_arguments(tmp_path: Path) -> None:
 def test_execute_tool_rejects_an_unknown_tool(tmp_path: Path) -> None:
     result = execute_tool(ToolCall(id="t", name="nope", arguments="{}"), workdir=tmp_path)
     assert result == "error: unknown tool 'nope'"
+
+
+# -- limits: what a tool does when the answer is too big ----------------------
+
+def test_an_enormous_file_is_truncated_rather_than_flooding_the_window(
+    tmp_path: Path,
+) -> None:
+    from saddle.tools import MAX_READ
+
+    (tmp_path / "big.txt").write_text("x" * (MAX_READ + 5_000))
+    out = run("read_file", tmp_path, path="big.txt")
+    assert out.endswith(f"\n[... truncated at {MAX_READ} characters ...]")
+    assert len(out) < MAX_READ + 200
+
+
+def test_an_enormous_diff_is_truncated(tmp_path: Path) -> None:
+    from saddle.tools import MAX_DIFF
+
+    (tmp_path / "big.py").write_text("\n".join(f"old line {i}" for i in range(4_000)))
+    out = run("write_file", tmp_path, path="big.py",
+              content="\n".join(f"new line {i}" for i in range(4_000)))
+    assert out.endswith(f"\n[... diff truncated at {MAX_DIFF} characters ...]")
+
+
+def test_a_search_stops_at_its_cap_and_says_there_are_more(tmp_path: Path) -> None:
+    from saddle.tools import MAX_MATCHES
+
+    (tmp_path / "many.txt").write_text("\n".join("needle" for _ in range(MAX_MATCHES + 50)))
+    out = run("search", tmp_path, query="needle")
+    assert out.endswith("\n[... more matches not shown ...]")
+    assert len(out.splitlines()) == MAX_MATCHES + 1
+
+
+def test_a_search_with_no_matches_says_so_rather_than_returning_nothing(
+    tmp_path: Path,
+) -> None:
+    assert run("search", tmp_path, query="zzz-absent") == "no matches for 'zzz-absent'"
+
+
+def test_a_binary_file_is_skipped_by_search_rather_than_ending_it(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00needle\x00")
+    (tmp_path / "ok.txt").write_text("needle here")
+    out = run("search", tmp_path, query="needle")
+    assert "ok.txt" in out
+    assert "blob.bin" not in out
+
+
+def test_a_write_that_changes_nothing_says_so_rather_than_showing_an_empty_diff(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "same.py").write_text("unchanged\n")
+    assert run("write_file", tmp_path, path="same.py", content="unchanged\n") == (
+        "same.py unchanged"
+    )
+
+
+# -- refusals -----------------------------------------------------------------
+
+def test_editing_a_file_that_is_not_there_is_an_error(tmp_path: Path) -> None:
+    assert run("edit_file", tmp_path, path="absent.py", old="a", new="b") == (
+        "error: cannot read 'absent.py'"
+    )
+
+
+def test_edit_file_rejects_non_string_snippets(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert run("edit_file", tmp_path, path="a.py", old=1, new="b").startswith("error: ")
+    assert run("edit_file", tmp_path, path="a.py", old="x", new=2).startswith("error: ")
+    assert (tmp_path / "a.py").read_text() == "x = 1\n"
+
+
+def test_listing_something_that_is_not_a_directory_is_an_error(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("x")
+    assert run("list_dir", tmp_path, path="a.txt") == "error: not a directory: a.txt"
+
+
+def test_list_dir_rejects_a_non_string_path_rather_than_stringifying_it(
+    tmp_path: Path,
+) -> None:
+    assert run("list_dir", tmp_path, path=7).startswith("error: ")
+    assert not (tmp_path / "7").exists()
+
+
+def test_arguments_that_are_not_an_object_are_an_error(tmp_path: Path) -> None:
+    result = execute_tool(
+        ToolCall(id="t", name="read_file", arguments="[1, 2]"), workdir=tmp_path
+    )
+    assert result == "error: arguments must be a JSON object"
+
+
+def test_empty_arguments_are_an_empty_object_not_a_crash(tmp_path: Path) -> None:
+    result = execute_tool(
+        ToolCall(id="t", name="list_dir", arguments="   "), workdir=tmp_path
+    )
+    assert not result.startswith("error: ")
+
+
+def test_a_missing_required_argument_names_it(tmp_path: Path) -> None:
+    result = execute_tool(
+        ToolCall(id="t", name="read_terminal", arguments="{}"), workdir=tmp_path
+    )
+    assert result.startswith("error: missing argument")
+
+
+def test_a_terminal_that_does_not_exist_is_an_error_in_both_tools(
+    tmp_path: Path,
+) -> None:
+    assert run("wait_for_terminal", tmp_path, id="nope") == "error: no terminal 'nope'"
+    assert run("read_terminal", tmp_path, id="nope").startswith("error: ")
+
+
+def test_waiting_on_a_command_that_is_still_running_reports_it_rather_than_lying(
+    tmp_path: Path,
+) -> None:
+    context = ToolContext(workdir=tmp_path)
+
+    def call(name: str, **kwargs: object) -> str:
+        return execute_tool(
+            ToolCall(id="t", name=name, arguments=json.dumps(kwargs)),
+            workdir=tmp_path, context=context,
+        )
+
+    started = call("run_command", command="sleep 30", background=True)
+    terminal_id = started.split("terminal ")[1].split()[0]
+    out = call("wait_for_terminal", id=terminal_id, timeout=1)
+    assert "still running" in out
+    context.box().kill(terminal_id)

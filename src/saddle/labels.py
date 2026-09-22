@@ -42,7 +42,13 @@ def _object_of(name: str, args: dict[str, Any]) -> str:
         if isinstance(args.get(key), str):
             return args[key]
     if isinstance(args.get("command"), str):
-        command = " ".join(shlex.split(args["command"])[:6])
+        try:
+            command = " ".join(shlex.split(args["command"])[:6])
+        except ValueError:
+            # An apostrophe is enough: shlex.split("echo don't") raises. A
+            # label is decoration, so it falls back to the raw command rather
+            # than taking the turn down with it.
+            return args["command"][:80]
         return command or args["command"]
     if isinstance(args.get("query"), str):
         return f"{args['query']!r}"
@@ -89,45 +95,3 @@ def label_for(name: str, arguments: str, *, ok: bool | None) -> str:
     if ok is None:
         return present
     return past if ok else failed
-
-
-def _selftest() -> int:
-    ok = True
-
-    def check(cond: bool, label: str, detail: str = "") -> None:
-        nonlocal ok
-        print(f"{'ok  ' if cond else 'FAIL'}  {label}{(' -- ' + detail) if detail else ''}")
-        ok = ok and cond
-
-    p, q, f = describe("read_file", '{"path": "pyproject.toml"}')
-    check((p, q, f) == ("Reading pyproject.toml", "Read pyproject.toml",
-                        "Failed to read pyproject.toml"),
-          "known-good: all three tenses read as English", f"{p} / {q} / {f}")
-
-    p, _, f = describe("run_command", '{"command": "pytest -q tests/"}')
-    check(p == "Running pytest -q tests/" and f.startswith("Failed to run"),
-          "known-good: a command is summarised by its head", p)
-
-    p, q, f = describe("read_file", "{not json at all")
-    check(p == "Reading" and "read" in f,
-          "known-bad: malformed arguments still label, never raise", f"{p} / {f}")
-
-    p, _, _ = describe("some_new_tool", '{"path": "x.txt"}')
-    check(p == "Calling some_new_tool x.txt",
-          "known-bad: an unlabelled tool degrades readably, not to JSON", p)
-
-    long = describe("read_file", json.dumps({"path": "a/" * 80 + "b.txt"}))[0]
-    check(len(long) < 90 and long.endswith("…"),
-          "known-good: a very long object is clipped", f"len={len(long)}")
-
-    check(label_for("read_file", '{"path":"x"}', ok=None) == "Reading x"
-          and label_for("read_file", '{"path":"x"}', ok=True) == "Read x"
-          and label_for("read_file", '{"path":"x"}', ok=False) == "Failed to read x",
-          "known-good: state selects the tense")
-
-    print("\nLABELS SELFTEST PASS" if ok else "\nLABELS SELFTEST FAIL")
-    return 0 if ok else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(_selftest())
