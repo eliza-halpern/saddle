@@ -233,3 +233,30 @@ def test_a_preview_only_covers_the_turns_being_undone(tmp_path: Path) -> None:
     late.write_text("changed\n")
 
     assert log.pending(4).reverted == [str(late)]
+
+
+def test_a_file_edited_repeatedly_in_one_turn_is_copied_once(tmp_path: Path) -> None:
+    """The once-per-turn guard is an optimisation, and this is what it buys.
+
+    Removing it does not change what a rewind produces -- restores run
+    newest-first and each overwrites the last, so the oldest snapshot wins
+    either way. What it changes is cost: a turn that edits a 50MB file ten
+    times would copy it ten times. So the property pinned here is the number
+    of copies, not the final contents, which another test already covers.
+    """
+    log, work = _log(tmp_path)
+    target = work / "big.py"
+    target.write_text("v0\n")
+
+    log.begin(turn=1, start_index=0)
+    for version in range(6):
+        log.before_write(target)
+        target.write_text(f"v{version + 1}\n")
+
+    blobs = list((log.root / "blobs").iterdir())
+    assert len(blobs) == 1, f"{len(blobs)} copies of one file in one turn"
+
+    # A later turn snapshots it again, because that is a different point.
+    log.begin(turn=2, start_index=4)
+    log.before_write(target)
+    assert len(list((log.root / "blobs").iterdir())) == 2
