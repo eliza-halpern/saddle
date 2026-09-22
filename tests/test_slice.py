@@ -4896,3 +4896,69 @@ def test_a_survivor_draws_transport_failure_does_not_discard_its_siblings(
     span = _survivor_span(journal, "n1")
     assert "s0: kept:" in span.detail
     assert f"s1: dropped: worker call failed: {TIMED_OUT}" in span.detail
+
+
+def test_an_attempt_that_applied_nothing_carries_the_last_gate_failure_forward(
+    tmp_path: Path,
+) -> None:
+    """T6-79 known-good: attempt 1 fails a gate; attempt 2's call truncates
+    and so writes nothing. Attempt 3 is therefore still looking at the tree
+    attempt 1's gate judged, and must be told what that gate said.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        calls.append(failure)
+        retries = sum(1 for entry in calls if entry is not None)
+        if failure is None:
+            return DiffProposal(BAD_DIFF, "")
+        if retries == 1:
+            raise VllmResponseError(TRUNCATED)
+        return DiffProposal(FIX_DIFF, "")
+
+    run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    recoveries = [entry for entry in calls if entry is not None]
+    third = recoveries[1]
+    assert "worker call failed" in third
+    assert "Nothing was applied" in third
+    assert "Attempt 1 of 3 failed" in third
+
+
+def test_a_first_attempt_that_applied_nothing_carries_no_gate_failure(
+    tmp_path: Path,
+) -> None:
+    """T6-79 known-bad, the half that matters: a node whose first attempt
+    truncates has no gate verdict yet, and must not be handed one.
+    """
+    _slice_repo(tmp_path)
+    dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
+    journal = tmp_path / "proofs.jsonl"
+    calls: list[str | None] = []
+
+    def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
+        calls.append(failure)
+        if failure is None:
+            raise VllmResponseError(TRUNCATED)
+        return DiffProposal(FIX_DIFF, "")
+
+    run_slice(
+        "Fix f.",
+        dag,
+        workdir=tmp_path,
+        journal_path=journal,
+        propose=propose,
+        now=lambda: "2026-09-16T00:00:00+00:00",
+    )
+    recoveries = [entry for entry in calls if entry is not None]
+    assert "worker call failed" in recoveries[0]
+    assert "Nothing was applied" not in recoveries[0]

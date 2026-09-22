@@ -768,6 +768,24 @@ def _run_is_allowed(
     return governing in {GATE_TOOL.get(name) for name in failed_gates}
 
 
+def _carrying(own: str, gate_failure: str | None) -> str:
+    """`own`, plus the last gate failure when this one applied nothing.
+
+    A truncated worker call and a failed apply both write nothing to the
+    worktree, so the code the next attempt is handed is still the code
+    the last GATE ruled on -- and that gate's detail is the only thing
+    that describes it. Keeping only the newer message told attempt 3 of
+    `runs/g1-0f6b83d` node-1 that a call had truncated, and nothing
+    about the `requirement-binding` verdict it then failed again (T6-79).
+
+    A node whose FIRST attempt fails this way has no gate verdict yet,
+    and says so by carrying nothing rather than inventing one.
+    """
+    if gate_failure is None:
+        return own
+    return f"{own}\n\nNothing was applied, so the tree is unchanged since:\n\n{gate_failure}"
+
+
 def format_attempt_failure(
     result: Tier1Result,
     captured: Sequence[CapturedRun],
@@ -1105,6 +1123,7 @@ async def _run_node(
     max_attempts = 1 + MAX_RECOVERY_RETRIES
     baseline: str | None = None
     failure: str | None = None
+    gate_failure: str | None = None
     sampling = ""
     samples: list[dict[str, Any]] = []
     seen: list[str] = []
@@ -1164,14 +1183,15 @@ async def _run_node(
                     ]
             except VllmResponseError as exc:
                 ctx.prompt_hash = _prompt_hash(str(_call_evidence(exc).get("prompt", "")))
-                failure = f"Attempt {attempt} of {max_attempts}: worker call failed: {exc}"
+                own = f"Attempt {attempt} of {max_attempts}: worker call failed: {exc}"
+                failure = _carrying(own, gate_failure)
                 _seal_attempt(
                     journal_path,
                     node.id,
                     run_span_id,
                     ctx,
                     1,
-                    failure,
+                    own,
                     {**_error_evidence(exc), "samples": samples},
                 )
                 continue
@@ -1196,7 +1216,8 @@ async def _run_node(
             try:
                 _write_files(workdir, proposal.diff, recorder=recorder)
             except RuntimeError as exc:
-                failure = f"Attempt {attempt} of {max_attempts}: diff did not apply: {exc}"
+                own = f"Attempt {attempt} of {max_attempts}: diff did not apply: {exc}"
+                failure = _carrying(own, gate_failure)
                 # A retry's apply-failure is recorded HERE, in the
                 # attempt, while its own sample reads "retry draw, gated
                 # in place" -- a filter on sample outcome misses it
@@ -1208,7 +1229,7 @@ async def _run_node(
                     run_span_id,
                     ctx,
                     1,
-                    failure,
+                    own,
                     {
                         **_proposal_evidence(proposal),
                         **_reconstruction_evidence(proposal.diff),
@@ -1272,6 +1293,7 @@ async def _run_node(
                 max_attempts=max_attempts,
                 tools=node.execution_constraints.allowed_tools,
             )
+            gate_failure = failure
             # The seal names the failed gates in check order (T3-25): a
             # failed node has no proof record and the transcript renders
             # its last attempt only, so the journal is the one place an
