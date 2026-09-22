@@ -8993,8 +8993,14 @@ nothing calls: `compelled_lines` takes `covered`, and a definition whose
 BODY any test reaches is judged line by line as before. Reachability is
 asked of the body, never the whole span -- the `def` line executes at
 import, so the whole-span question answers yes for everything. Five
-contract mutants, all died. Step 4 below (re-running the gate against
-g1-79cd848 node-2's tree) is NOT done and is the one thing outstanding.
+contract mutants, all died. Step 4 is done too (bench F21.64a): on
+node-2's real tree, 112 changed lines, the exemption spared 0 as
+shipped, 69 with the wiring alone and 17 as landed, and the four
+trapped functions -- `accounts.py:93, 101-114, 119, 122`, i.e.
+`to_dict`, `from_dict`, `__eq__`, `__repr__` -- leave the judgement
+while `accounts.py:26, 28` and `fees.py:32, 37` stay in it. The node
+gets an answerable four-line brief instead of a twenty-one-line one it
+could not satisfy. Item closed.
 
 Not in scope: the `owed` deferral, `property_modules`, and the scope
 story F21.59 told. Those were a wrong reading of this symptom and the
