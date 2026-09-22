@@ -8121,7 +8121,7 @@ Owner: main session. Related: T6-30 (withdrawn -- it asked whether
 authorised under it), T6-73 (the same instance; that one loses the
 siblings, this one creates the failure).
 
-### T6-75 — `coverage` and `public-deletions` are jointly unsatisfiable on a node whose public API a later node consumes (open; instance on disk, reproduced)
+### T6-75 — `coverage` and `public-deletions` are jointly unsatisfiable on a node carrying baseline public API no test reaches (fixed, unmeasured)
 
 Files: `src/saddle/gates.py` (`check_changed_line_coverage`,
 `check_public_deletions`), `src/saddle/runner.py` (`baseline_modules`,
@@ -8196,6 +8196,20 @@ narrower change and keeps the gate load-bearing on new code; (a) is
 closer to what the node is actually being asked to prove. Whichever
 lands, the direction is **loosened**, it must say so, and it needs a
 known-bad: a draw that adds an uncovered public member must still fail.
+
+Status: fixed by `compelled_lines` in `gates.py`, which removes the
+lines `check_public_deletions` refuses to let go from the coverage
+judgement -- out of the denominator, not just the shortfall. Direction
+LOOSENED; the known-good it now accepts is frozen at
+`tests/fixtures/compelled_accounts_g1.txt` (attempt 3's real
+`accounts.py`, 29 passed, mutation 92.3%), and the known-bad it still
+rejects is a public definition the baseline did NOT have. Five contract
+mutants; the call-site one SURVIVED all 949 tests before two `run_tier1`
+tests were added, so the fix would have shipped inert (T6-63's shape,
+CLAUDE.md check 6). check.sh 951 passed, 100% line+branch.
+
+UNMEASURED: no run has exercised this yet. The done-when is a t5 seed in
+which `impl-money-core` seals, which is also what G1 needs next.
 
 Related: T6-66 (a gate that refuses correct work -- this is the first
 reproduced instance with a known-good in hand), T6-42 (public-deletions'
