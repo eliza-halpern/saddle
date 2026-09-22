@@ -50,6 +50,9 @@ class Session:
     persona: str = "engineer"
     system_prompt: str = ""
     reasoning_effort: str = "xhigh"
+    auto_title: bool = True
+    """False once someone renames the session by hand: a title the user chose
+    is never overwritten by the model."""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
 

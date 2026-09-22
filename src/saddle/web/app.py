@@ -27,9 +27,16 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from saddle.engine import TurnOptions, run_turn
-from saddle.events import ErrorEvent, Event, SessionInfo, TerminalOutput
+from saddle.events import (
+    ErrorEvent,
+    Event,
+    SessionInfo,
+    SessionTitle,
+    TerminalOutput,
+)
 from saddle.memory import estimate_tokens
 from saddle.sessions import SessionStore, personas
+from saddle.titles import title_for
 from saddle.tools import ToolContext
 from saddle.vllm import VllmClient
 
@@ -93,6 +100,28 @@ class ChatServer:
                 self.window = 120_000
         return self.window
 
+    def _name_session(
+        self, session: Any, text: str, client: Any, live: Live
+    ) -> None:
+        """Name a new session after its opening message, once.
+
+        Deliberately after the turn, not before it: the answer is already on
+        screen by the time this costs anything, and a session that is never
+        answered does not need a name. Failures are swallowed -- a session
+        called "New session" is a cosmetic problem, and a turn that died
+        because its title could not be written would not be.
+        """
+        if not session.auto_title or live.turn != 1:
+            return
+        try:
+            title = title_for(client, text)
+            if not title:
+                return
+            self.store.update(session.id, title=title, auto_title=False)
+        except Exception:
+            return
+        live.publish(SessionTitle(session_id=session.id, title=title))
+
     # -- turn ------------------------------------------------------------
 
     def _run(self, session_id: str, text: str, images: list[str] | None = None) -> None:
@@ -135,6 +164,7 @@ class ChatServer:
                     live.publish(event)
                     if event.kind == "turn.end":
                         live.parent = getattr(event, "proof", None)
+                self._name_session(session, text, client, live)
             self.store.save_messages(session_id, messages)
         except Exception as exc:  # a dead turn must not take the server with it
             live.publish(ErrorEvent(message=f"{type(exc).__name__}: {exc}"))
@@ -164,6 +194,9 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
 
     async def patch_session(request: Request) -> JSONResponse:
         body = await request.json()
+        # A name the user typed is theirs; the model must not replace it.
+        if "title" in body:
+            body.setdefault("auto_title", False)
         session = store.update(request.path_params["sid"], **body)
         server.live.pop(session.id, None)  # workdir or persona may have moved
         return JSONResponse(session.__dict__)

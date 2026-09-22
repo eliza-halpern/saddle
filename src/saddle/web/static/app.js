@@ -191,6 +191,12 @@ function handle(event) {
     case "session.info":
       renderHistory(event);
       break;
+    case "session.title":
+      // The first turn named its session. Take it only if the user is not
+      // mid-rename: stealing focus mid-edit would discard what they typed.
+      if (document.activeElement !== $("#title")) $("#title").value = event.title;
+      loadSessions();
+      break;
     case "turn.start":
       newTurn(null);
       break;

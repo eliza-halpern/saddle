@@ -553,9 +553,12 @@ def test_a_turn_streams_to_a_connected_browser_end_to_end(
             _settle(lambda: bool(live.subscribers))
             client.post(f"/api/sessions/{sid}/message", json={"text": "go"})
 
-        frames = _frames(client, sid, 3, prime=prime)
-    assert [f["kind"] for f in frames] == ["session.info", "content.delta", "idle"]
+        frames = _frames(client, sid, 4, prime=prime)
+    assert [f["kind"] for f in frames] == [
+        "session.info", "content.delta", "session.title", "idle"
+    ]
     assert frames[1]["text"] == "streamed"
+    assert frames[2]["title"] == "go"
 
 
 # -- the turn runner ----------------------------------------------------------
@@ -571,6 +574,11 @@ def test_a_turn_publishes_its_events_saves_its_messages_and_signals_the_end(
         server._run(sid, "ping")
 
         assert channel.get_nowait().text == "done"
+        # The session names itself after the answer is already on screen, and
+        # before the end signal. FakeClient cannot be asked, so the name falls
+        # back to the user's own words.
+        named = channel.get_nowait()
+        assert (named.kind, named.title) == ("session.title", "ping")
         assert channel.get_nowait() is None          # the turn is over
         assert live.busy is False
         assert store.load_messages(sid)[-1]["content"] == "ping"
@@ -836,3 +844,117 @@ def test_the_client_factory_builds_a_real_client_per_turn(tmp_path: Path) -> Non
 
     built = _server_of(handed["app"]).client_factory()
     assert isinstance(built, VllmClient)
+
+
+# -- naming a session ---------------------------------------------------------
+
+class Naming(FakeClient):
+    """A client that also answers the titling call."""
+
+    answer: Any = "Slow Rust Build"
+
+    def complete(self, _prompt: str, **_kw: Any) -> str:
+        if isinstance(Naming.answer, BaseException):
+            raise Naming.answer
+        return str(Naming.answer)
+
+
+@contextmanager
+def naming_app(store: SessionStore, tmp_path: Path, answer: Any = "Slow Rust Build") -> Any:
+    previous = Naming.answer
+    Naming.answer = answer
+    import saddle.web.app as module
+
+    original = module.run_turn
+
+    def fake_run_turn(_c: Any, messages: list[dict[str, Any]], text: str,
+                      _o: Any, **_kw: Any) -> Any:
+        messages.append({"role": "user", "content": text})
+        yield ContentDelta(text="answered")
+
+    module.run_turn = fake_run_turn  # type: ignore[assignment]
+    try:
+        app = build_app(store, Naming, default_workdir=tmp_path)
+        with TestClient(app) as client:
+            yield client, app
+    finally:
+        module.run_turn = original  # type: ignore[assignment]
+        Naming.answer = previous
+
+
+def test_the_first_turn_names_its_session_and_tells_every_tab(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with naming_app(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        assert store.get(sid).title == "New session"
+        channel = _server_of(app)._live(sid).subscribe()
+        _server_of(app)._run(sid, "why is my rust build taking 4 minutes")
+
+        assert store.get(sid).title == "Slow Rust Build"
+        published = [channel.get_nowait() for _ in range(channel.qsize())]
+        titled = next(e for e in published if e is not None and e.kind == "session.title")
+        assert titled.title == "Slow Rust Build"
+        assert titled.session_id == sid
+
+
+def test_a_later_turn_does_not_rename_the_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with naming_app(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        server = _server_of(app)
+        server._run(sid, "first question")
+        Naming.answer = "A Completely Different Name"
+        server._run(sid, "second question")
+        assert store.get(sid).title == "Slow Rust Build"
+
+
+def test_a_name_the_user_chose_is_never_overwritten(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with naming_app(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"title": "My own name"})
+        assert store.get(sid).auto_title is False
+        _server_of(app)._run(sid, "why is my rust build slow")
+        assert store.get(sid).title == "My own name"
+
+
+def test_a_titling_failure_leaves_the_users_words_and_does_not_break_the_turn(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with naming_app(store, tmp_path, answer=RuntimeError("model is down")) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        channel = _server_of(app)._live(sid).subscribe()
+        _server_of(app)._run(sid, "why is my rust build slow")
+
+        assert store.get(sid).title == "why is my rust build slow"
+        published = [channel.get_nowait() for _ in range(channel.qsize())]
+        assert not any(e is not None and e.kind == "error" for e in published)
+        assert any(e is not None and e.kind == "content.delta" for e in published)
+
+
+def test_a_turn_that_raises_is_not_titled(store: SessionStore, tmp_path: Path) -> None:
+    # Naming happens after a turn that worked; a turn that died has nothing
+    # to name and the error is what matters.
+    import saddle.web.app as module
+
+    def explode(*_a: Any, **_k: Any) -> Any:
+        message = "the model went away"
+        raise RuntimeError(message)
+
+    with naming_app(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        module.run_turn = explode  # type: ignore[assignment]
+        _server_of(app)._run(sid, "why is my rust build slow")
+        assert store.get(sid).title == "New session"
+
+
+def test_a_renamed_session_reports_its_own_name_on_reconnect(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with naming_app(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        _server_of(app)._run(sid, "why is my rust build slow")
+        assert client.get("/api/sessions").json()[0]["title"] == "Slow Rust Build"

@@ -122,6 +122,15 @@ class Compaction(Event):
 
 
 @dataclass(frozen=True)
+class SessionTitle(Event):
+    """A session named itself from the message that opened it."""
+
+    session_id: str
+    title: str
+    kind: str = "session.title"
+
+
+@dataclass(frozen=True)
 class SessionInfo(Event):
     """Sent once on connect so a reloading client can rebuild its state."""
 
