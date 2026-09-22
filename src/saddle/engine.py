@@ -11,8 +11,10 @@ formatting at all.
 
 from __future__ import annotations
 
+import base64
 import json
-from collections.abc import Iterator
+import mimetypes
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -110,6 +112,31 @@ def _seal(
     return record.record_hash
 
 
+def _user_message(text: str, images: Sequence[Path]) -> dict[str, Any]:
+    """A user turn, as text or as text plus images.
+
+    The server accepts OpenAI-style content parts and this model reads them,
+    so an uploaded screenshot is something it can actually look at rather
+    than a filename it is told about. A file that cannot be read is skipped
+    rather than failing the turn: the user still asked a question.
+    """
+    if not images:
+        return {"role": "user", "content": text}
+    parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for path in images:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        mime = mimetypes.guess_type(path.name)[0] or "image/png"
+        encoded = base64.b64encode(raw).decode()
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{encoded}"},
+        })
+    return {"role": "user", "content": parts}
+
+
 def run_turn(
     client: VllmClient,
     messages: list[dict[str, Any]],
@@ -119,6 +146,7 @@ def run_turn(
     turn: int,
     parent: str | None = None,
     context: ToolContext | None = None,
+    images: Sequence[Path] = (),
 ) -> Iterator[Event]:
     """Run one user turn, yielding events as they happen.
 
@@ -129,7 +157,7 @@ def run_turn(
     yield TurnStart(turn=turn, prompt=text)
     if options.system_prompt and not any(m.get("role") == "system" for m in messages):
         messages.insert(0, {"role": "system", "content": options.system_prompt})
-    messages.append({"role": "user", "content": text})
+    messages.append(_user_message(text, images))
 
     dropped, summary = compact(messages, limit_tokens=options.context_tokens)
     if dropped:

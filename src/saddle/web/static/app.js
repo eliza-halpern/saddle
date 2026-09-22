@@ -384,12 +384,15 @@ async function boot() {
 
 async function send() {
   const input = $("#input");
-  let text = input.value.trim();
+  const text = input.value.trim();
   if (!text || state.busy) return;
-  if (state.attachments.length) {
-    const names = state.attachments.map((a) => a.name).join(", ");
-    text += `\n\n[attached in uploads/: ${names}]`;
-  }
+  // Images ride along as real content parts the model can look at; other
+  // files are named so it knows to read them from uploads/.
+  const images = state.attachments.filter((a) => a.isImage).map((a) => a.path);
+  const others = state.attachments.filter((a) => !a.isImage).map((a) => a.name);
+  const body = others.length
+    ? `${text}\n\n[also attached in uploads/: ${others.join(", ")}]`
+    : text;
   const turn = newTurn(input.value.trim());
   turn.scrollIntoView({ block: "end" });
   input.value = "";
@@ -401,7 +404,7 @@ async function send() {
   try {
     await api(`/api/sessions/${state.sessionId}/message`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text: body, images }),
     });
   } catch (error) {
     notice(String(error.message || error), "error");
@@ -415,10 +418,11 @@ async function upload(files) {
   for (const file of files) form.append("files", file);
   const result = await api(`/api/sessions/${state.sessionId}/upload`, { method: "POST", body: form });
   for (const saved of result.saved) {
+    const file = [...files].find((f) => f.name === saved.name);
+    saved.isImage = Boolean(file && file.type.startsWith("image/"));
     state.attachments.push(saved);
     const chip = el("span", "chip");
-    const file = [...files].find((f) => f.name === saved.name);
-    if (file && file.type.startsWith("image/")) {
+    if (saved.isImage) {
       const img = el("img");
       img.src = URL.createObjectURL(file);
       chip.appendChild(img);

@@ -117,6 +117,23 @@ turn (was 10), 200,000 characters per file read, 400,000 per terminal
 capture (head-and-tail, so a runaway loop cannot exhaust memory), and
 reasoning itself is **never** truncated in the UI.
 
+## Images
+
+This model is vision-capable, so an uploaded image becomes real
+`image_url` content the model looks at -- not a filename it is told about.
+Verified end to end: a generated test picture came back as *"A red
+rectangular border frames a blue circle and a yellow square on a cream
+background"*, which is exactly what was drawn.
+
+Non-image uploads are named in the prompt instead, so the model knows to
+`read_file` them from `uploads/`.
+
+Only files the session actually uploaded may be attached: a request naming
+any other path is filtered, so a crafted call cannot read an arbitrary
+file off the machine. Image parts are charged a flat 1,200 tokens in
+compaction rather than by their base64 length -- charging a photo 200,000
+tokens would evict the conversation around it.
+
 ## Compaction
 
 Deterministic and staged — no model call, because a summariser that is

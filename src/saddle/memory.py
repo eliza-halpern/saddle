@@ -28,6 +28,9 @@ CHARS_PER_TOKEN: Final = 4
 """Deliberately crude. An exact tokeniser would tie compaction to one model,
 and the decision this feeds is "is there room", not "how many exactly"."""
 
+IMAGE_TOKENS: Final = 1200
+"""What one image part is charged against the window."""
+
 KEEP_RECENT: Final = 6
 """Messages at the tail that are never touched, whatever the pressure."""
 
@@ -41,6 +44,16 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     total = 0
     for message in messages:
         content = message.get("content") or ""
+        if isinstance(content, list):
+            # Multimodal parts. Image data is base64 and enormous, so it is
+            # counted at a flat rate rather than by length: charging a photo
+            # 200,000 tokens would evict the whole conversation around it.
+            for part in content:
+                if part.get("type") == "text":
+                    total += len(part.get("text") or "") // CHARS_PER_TOKEN
+                else:
+                    total += IMAGE_TOKENS
+            continue
         total += len(content) // CHARS_PER_TOKEN
         for call in message.get("tool_calls") or []:
             total += len(str(call)) // CHARS_PER_TOKEN

@@ -93,7 +93,7 @@ class ChatServer:
 
     # -- turn ------------------------------------------------------------
 
-    def _run(self, session_id: str, text: str) -> None:
+    def _run(self, session_id: str, text: str, images: list[str] | None = None) -> None:
         live = self._live(session_id)
         try:
             session = self.store.get(session_id)
@@ -118,6 +118,7 @@ class ChatServer:
                     turn=live.turn,
                     parent=live.parent,
                     context=live.context,
+                    images=[Path(raw) for raw in (images or [])],
                 ):
                     live.publish(event)
                     if event.kind == "turn.end":
@@ -204,12 +205,23 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
         text = str(body.get("text") or "").strip()
         if not text:
             return JSONResponse({"error": "empty message"}, status_code=400)
+        # Only files this session actually uploaded may be attached, so a
+        # crafted request cannot read an arbitrary path off the machine.
+        allowed = store.uploads_dir(sid).resolve()
+        images = [
+            str(candidate)
+            for raw in (body.get("images") or [])
+            if (candidate := Path(str(raw)).resolve()).is_file()
+            and allowed in candidate.parents
+        ]
         live = server._live(sid)
         with live.lock:
             if live.busy:
                 return JSONResponse({"error": "a turn is already running"}, status_code=409)
             live.busy = True
-        threading.Thread(target=server._run, args=(sid, text), daemon=True).start()
+        threading.Thread(
+            target=server._run, args=(sid, text, images), daemon=True
+        ).start()
         return JSONResponse({"ok": True})
 
     async def events(request: Request) -> StreamingResponse:
