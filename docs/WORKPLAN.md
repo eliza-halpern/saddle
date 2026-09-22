@@ -8929,110 +8929,69 @@ Owner: main session (contract change). Related: T6-25 (the seed-order
 contract this must preserve), T6-30 (the request deadline), T6-17 (why
 `max_tokens` is the whole window), F21.57, F21.58.
 
-### T6-86 — `coverage` fails an impl node for lines whose reaching test file is outside its declared scope (open; F21.59)
+### T6-86 — T6-75's `compelled` exemption is inert: `changed` is keyed absolute, `compelled` relative (open; F21.62, supersedes the F21.59 reading)
 
-Files: `src/saddle/gates.py` (`check_changed_line_coverage`, the `owed`
-deferral), `src/saddle/evidence.py` (`property_modules`, to be split),
-`src/saddle/runner.py` (what it passes as `owed`), `tests/test_gates.py`,
-`tests/test_evidence.py`.
+Files: `src/saddle/runner.py` (the `changed` / `covered` / `ruff_files`
+construction), `src/saddle/gates.py` (`compelled_lines`, and the
+`Tier1Inputs` field docs), `tests/test_gates.py`.
 
-`g1-79cd848` node-2 is `impl` over `accounts.py` + `fees.py`; its gate ran
-`pytest tests/test_accounts.py tests/test_fees.py`. Four of the functions
-it changed -- `to_dict`, `from_dict`, `__eq__`, `__repr__` -- are
-exercised by `tests/test_store.py`, written and sealed by node-1, and
-excluded by node-2's scope. `coverage` reported "no test runs" on lines
-that the tree does test.
+**Direction: neither. This restores wiring T6-75 already argued for and
+already exhibited a known-bad against; it adds no new exemption.**
 
-T6-53's deferral asks "has a test node still to run" (`owed`). Node-1 was
-the only test node and had sealed, so `owed` was empty and the deferral
-did not fire. The condition that bites is not "written yet" but "in this
-node's scope".
+`run_tier1` applies the exemption as `spared = changed & set(compelled)`.
+The two sides are built in different coordinate systems:
 
-The worker has no move: `check_node_scope` forbids an impl node from
-editing tests, the scope is the planner's, and deleting the uncovered
-functions breaks node-4 and is what `public-deletions` (T6-75) stops.
+- `runner.py`: `changed = {(str(workdir / path), line) ...}` — absolute.
+  `covered_lines` is handed `changed_files` and "emitted tuples keep the
+  caller's spelling", so `changed` and `covered` agree and coverage
+  itself works.
+- `compelled_lines` iterates `baseline_sources`, i.e. `read_sources`,
+  which maps "workdir-**relative** posix paths to text", and emits
+  `(rel, line)`.
 
-**Do not widen the gating run.** Collecting `test_store.py` into node-2's
-`test_command` is F21.12a -- `store.py` is unimplemented, the suite is
-red, and mutmut cannot baseline against a red suite. Widen the
-*judgement*, not the command.
+An intersection of absolute with relative is empty, so `spared` is always
+empty in production and the T6-75 exemption removes nothing. Reproduced
+with saddle's own functions: one input pair, two spellings, opposite
+verdicts — production spelling gives `passed=False`, `no test runs
+/abs/.../accounts.py:2, :3, :4`, `basis=changed-lines=3`; relative gives
+`passed=True`, `basis=changed-lines=3 compelled-lines=3`. The production
+line is byte-compatible with what `g1-79cd848` node-2 attempt 1 recorded.
 
-**How the judgement learns what an unrun test would cover**, which "widen
-the judgement" leaves open: it runs it, separately and tolerantly.
-`coverage` records the lines a test executes whether or not it then
-fails, and the out-of-scope modules here fail on assertions, not on
-import -- `test_store.py` does `from store import append_account,
-load_accounts, save_accounts` against the baseline `store.py`, which has
-all three. So a second coverage run over the out-of-scope modules that
-import a changed file, with its exit code **ignored and never gated**,
-yields the extra covered set. Nothing about it reaches `mutation`, the
-`tests` gate, or the red-phase leg; it only enlarges `covered` for
-`check_changed_line_coverage`.
+Why the suite missed it: `test_run_tier1_spares_a_compelled_definition_
+the_coverage_gate_would_fail` exists precisely for this hazard and calls
+`run_tier1`, so the wiring is genuine — but it hand-builds
+`changed={("n1.py", 2), ("n1.py", 3)}`, relative. It proves the wiring in
+a spelling `runner.py` never produces. CLAUDE.md check 6, one level up:
+the fixture's own key spelling was the untested assumption.
 
-That is a real widening of what "covered" means -- a line executed by a
-failing test counts as executed -- so say so: the contract becomes "some
-test in the tree runs this line", not "some passing test runs this line".
-The in-scope suite still has to pass, under the `tests` gate, which is
-where that question belongs. An impl node cannot write tests
-(`check_node_scope`), so the worker cannot manufacture the extra
-coverage.
+Do:
 
-Done when, both halves:
+1. Pick ONE spelling for every `(path, line)` set in `Tier1Inputs` and
+   make all three producers use it. Prefer workdir-relative: it is what
+   `read_sources`, `changed_lines` and `ruff_files` already want, and it
+   makes gate details reproducible across machines (they currently print
+   the bench operator's absolute paths to the worker). Then `changed`
+   normalizes once in `runner.py` and `covered_lines` follows.
+2. Add a `run_tier1` test whose `changed`/`covered` are built by the same
+   expression `runner.py` uses, so a spelling regression is red. The
+   existing relative-fixture test stays; it is not wrong, only partial.
+3. Contract mutants (target count verified 1 by `str.count`, restored
+   from a saved copy, `__pycache__` dropped):
+   - revert the normalization → the new test must die;
+   - drop `compelled` from the `check_changed_line_coverage` call →
+     both tests must die.
+4. Re-run the gate against `g1-79cd848` node-2 attempt 1's tree and show
+   `accounts.py:101–122` leave the judgement.
 
-1. `property_modules` is split so the import-matching half --
-   "test modules whose AST imports name a changed file" -- is callable
-   without the `@given` filter, and `property_modules` is expressed in
-   terms of it. Known-good: a test module importing a changed file and
-   carrying no property is returned by the new function and still absent
-   from `property_modules`. Known-bad: a module importing nothing changed
-   is returned by neither. Scope narrowed (a refactor with a new caller).
-2. `check_changed_line_coverage` defers a line whose only reaching test
-   module is out of scope, recording it in `basis` the way `owed` does.
-   Known-good, the input the contract is wrong about: node-2's
-   `accounts.py` change, whose `to_dict`/`from_dict` lines are reached by
-   `tests/test_store.py` -- today FAILED, must defer. Known-bad, the half
-   that keeps T6-53's force: a changed line **no** test file in the tree
-   reaches still fails, and a line reached by an in-scope module that
-   simply does not run it still fails. **Loosened**, on the evidence that
-   the contract is wrong -- the lines are tested, by the same test node,
-   in the same tree.
-3. Whether `property-coverage` fails node-2 for the same reason is a
-   hypothesis, not a result: mutants on `to_dict`/`from_dict` cannot be
-   killed by `test_accounts.py`/`test_fees.py`. Reproduce on the restored
-   node-2 tree before deciding whether it needs its own clause. Do not
-   loosen it on this item's evidence.
+Not in scope: the `owed` deferral, `property_modules`, and the scope
+story F21.59 told. Those were a wrong reading of this symptom and the
+evidence for them is withdrawn. If a genuine out-of-scope-coverage
+defect exists it needs its own item and its own reproduction — node-1's
+`tests/test_store.py` DOES call all four functions, which is the one
+fact that is not explained by the key mismatch and is worth a look after
+this lands.
 
-**Plumbing, so the implementation is mechanical.** `runner.py` already
-holds everything the second pass needs at the point it computes
-`covered = covered_lines(data_file, changed_files)` and `test_sources =
-read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")`:
-take `importing_modules(test_sources, changed_files)`, drop the ones
-already named by `pytest_scope(gate.test_command)`, and if any remain run
-them under `under_coverage` into a second data file whose exit code is
-discarded. Carry the result as a new `Tier1Inputs` field beside
-`covered`, and hand it to `check_changed_line_coverage` at its single
-call site in `gates.py`, which today passes `inputs.changed`,
-`inputs.covered`, `gate.changed_line_coverage_min`, `inputs.owed_tests`
-and `compelled_lines(...)`.
-
-**Reproduced (F21.59b).** `public-deletions` has fired twice in the
-project's history and both were the attempt after a `coverage` failure on
-the same node -- `g1-79cd848` node-2 and `g1-cw100k` `impl-money-core` --
-naming *the same four functions in the same order*: `Account.__eq__`,
-`Account.__repr__`, `Account.from_dict`, `Account.to_dict`. `g1-cw100k`
-ran the cycle to the end: coverage -> delete -> `public-deletions` ->
-restore -> coverage again, ladder exhausted, no impl node sealed. Across
-63 attempt sidecars carrying a gates list, `coverage` is the second most
-frequent failure (22, in 8 runs) behind `mutation` (23, in 7) and level
-with `requirement-binding` (22, in 6) -- so this is not a corner.
-
-Related: T6-53 (the deferral this extends), T6-75 (`public-deletions`,
-why deletion is not the way out), T6-85 recommendation 63 (the missing
-line list that made this take reading instead of reading a sidecar),
-T6-87 (the refusal this node needed and did not have), F21.12a (why the
-run stays scoped), F21.59, F21.59a, F21.59b, F21.61.
-
-### T6-87 — There is no honest way out of an impossible gate (open; F21.59, Goal G1's own clause)
+### T6-87 — There is no honest way out of an impossible gate (open; F21.62, Goal G1's own clause)
 
 Goal G1 specifies it: "if a requirement cannot be satisfied without code
 that exists only to satisfy a gate, say so and stop. A recorded refusal
