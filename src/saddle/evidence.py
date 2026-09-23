@@ -34,6 +34,17 @@ from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _MUTANT_VERDICT = re.compile(r"^\s*(\S+): (killed|survived|timeout|not checked)\s*$")
+_MUTANT_NAME = re.compile(
+    r"^(?:\w+\.)+x(?:_(?P<func>.+?)|ǁ(?P<cls>\w+)ǁ(?P<method>.+?))__mutmut_\d+$"
+)
+"""mutmut's two mangled-name shapes (P0-2), parsed locally so saddle never
+imports mutmut into its own process: `<dotted.module>.x_<func>__mutmut_<n>`
+for a function, `<dotted.module>.xǁ<Class>ǁ<method>__mutmut_<n>` for a
+method (ǁ is U+01C1). Checked against mutmut's own
+`orig_function_and_class_names_from_key` as the test oracle
+(test_mutant_name_matches_mutmut_names_from_key), not used at runtime. A
+name that does not match this shape is a hand-built test stub and takes
+`_mutant_lines`'s old whole-file fallback."""
 _MUTATION_TIMEOUT_S = 600
 
 DEFAULT_TEST_TIMEOUT_S: Final = 300.0
@@ -824,11 +835,95 @@ def text_only_mutant(show_output: str) -> bool:
     return differs
 
 
-def _mutant_lines(show_output: str, source: str) -> set[int]:
-    """File line numbers matching the removed (`-`) hunk lines.
+def _mutant_def(
+    tree: ast.Module, match: re.Match[str]
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The `def` mutmut mutated, from `_MUTANT_NAME`'s parse of `mutant_name`.
 
-    Hunk headers are function-relative, so the `-` excerpts themselves
-    locate the mutant: exact matches against the scratch file.
+    A method resolves only inside its own top-level `ClassDef`'s direct
+    children (P0-2's M-L5: name alone is not enough -- two classes, or a
+    module-level function sharing a method's name, must not collide). A
+    function resolves only among top-level `def`s, matching the spec's
+    "the top-level def named <func>".
+    """
+    cls_name = match.group("cls")
+    func_name = match.group("func") or match.group("method")
+    scope: list[ast.stmt] = tree.body
+    if cls_name is not None:
+        class_node = next(
+            (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls_name),
+            None,
+        )
+        if class_node is None:
+            return None
+        scope = class_node.body
+    for node in scope:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            return node
+    return None
+
+
+def _statement_start(tree: ast.Module, line: int) -> int | None:
+    """First line of the innermost `ast.stmt`/`ast.excepthandler` in `tree`
+    whose `[lineno, end_lineno]` contains `line`; `None` if none does.
+
+    This is the coordinate system `statement_lines` (and so `changed`)
+    uses, built by taking the enclosing statement with the smallest span --
+    a nested statement's range is always a subset of its parents', so the
+    smallest one containing `line` is the innermost. Walking the whole
+    module rather than just the resolved def's own subtree is deliberate
+    (P0-2's M-L1): the def's own search range is what keeps a duplicate
+    line elsewhere in the file out of `matched` in the first place, and
+    this function must not independently re-derive that scoping, or a
+    mutant that widens the range to the whole file stops being
+    observable -- it would land back on a real statement (the duplicate's
+    own) instead of the resolved def's, silently passing.
+    """
+    best: ast.stmt | ast.excepthandler | None = None
+    best_span = -1
+    for child in ast.walk(tree):
+        if not isinstance(child, (ast.stmt, ast.excepthandler)):
+            continue
+        end = child.end_lineno or child.lineno
+        if not (child.lineno <= line <= end):
+            continue
+        span = end - child.lineno
+        if best is None or span < best_span:
+            best, best_span = child, span
+    return best.lineno if best is not None else None
+
+
+def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
+    """Statement-start line numbers the mutant's removed (`-`) hunk lines locate to.
+
+    Scoped to the function mutmut actually mutated (P0-2's contract): a
+    method mutant on a changed line enters the population, a mutant on a
+    continuation line of a changed statement enters it, and a mutant whose
+    text merely repeats a changed line elsewhere in the file does not.
+
+    `mutant_name`'s two production shapes (`_MUTANT_NAME`) resolve a `def`
+    with `ast` (`_mutant_def`). Only lines inside that def's own range --
+    from its first decorator line (or the `def` line) to `end_lineno` --
+    can match, either at the def's own indentation added back (mutmut
+    renders the extracted function at column 0, so every line including a
+    continuation loses that one level of dedent -- verified against a
+    real method mutant on a continuation line, see the report) or
+    unreindented (defensive: the spec calls for both forms). Restricting
+    `matched` to the def's own range is the only thing standing between a
+    duplicate line elsewhere in the file and a wrong attribution (P0-2's
+    M-L1): `_statement_start` looks up the innermost statement over the
+    *whole* module, not just this def's subtree, so a matched line is
+    trusted to belong to this def only because the range already
+    confined it there. A matched line the whole module covers by no
+    statement at all -- a decorator, since `ast.FunctionDef.lineno` is
+    the `def` line and never the decorator's -- falls back to the def's
+    own line, `statement_lines`'s coordinate for the whole decorated
+    function.
+
+    A name that does not match either shape is a hand-built test stub
+    (`m1`, `m_hit1`, ...): production names always parse, so this keeps
+    the old whole-file exact match, with no statement mapping, exactly as
+    it was before this function took `mutant_name`.
     """
     removed = [
         line[1:]
@@ -837,8 +932,29 @@ def _mutant_lines(show_output: str, source: str) -> set[int]:
     ]
     if not removed:
         return set()
-    numbered = list(enumerate(source.splitlines(), start=1))
-    return {lineno for lineno, text in numbered for snippet in removed if text == snippet}
+    match = _MUTANT_NAME.match(mutant_name)
+    if match is None:
+        numbered = list(enumerate(source.splitlines(), start=1))
+        return {lineno for lineno, text in numbered for snippet in removed if text == snippet}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    node = _mutant_def(tree, match)
+    if node is None:
+        return set()
+    lines = source.splitlines()
+    start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+    end = min(node.end_lineno or node.lineno, len(lines))
+    indent_match = re.match(r"[ \t]*", lines[node.lineno - 1])
+    indent = indent_match.group() if indent_match else ""
+    matched = {
+        lineno
+        for lineno in range(start, end + 1)
+        for snippet in removed
+        if lines[lineno - 1] == indent + snippet or lines[lineno - 1] == snippet
+    }
+    return {(_statement_start(tree, lineno) or node.lineno) for lineno in matched}
 
 
 def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) -> str:
@@ -1040,7 +1156,7 @@ def mutation_sample(
             target = scratch / rel
             if not target.is_file():
                 continue
-            hit = _mutant_lines(shown_stdout, target.read_text()) & lines
+            hit = _mutant_lines(shown_stdout, target.read_text(), name) & lines
             if not hit:
                 continue
             # F21.32: only a SURVIVING text-only mutant is excluded. The

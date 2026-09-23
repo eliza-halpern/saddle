@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -24,7 +25,9 @@ from saddle.evidence import (
     CapturedRun,
     MutantLookupError,
     MutationOutcome,
+    _mutant_lines,
     _mutmut_scratch_config,
+    _statement_start,
     attempt_ref,
     changed_lines,
     covered_lines,
@@ -1364,6 +1367,239 @@ def test_show_all_mutants_raises_when_stdout_is_not_a_string_mapping(
     )
     with pytest.raises(MutantLookupError, match=r"exit 0: no output"):
         show_all_mutants(tmp_path)
+
+
+# P0-2: `_mutant_lines` used to match a removed hunk line against the
+# *whole file*. A method's own line never matched (mutmut renders the
+# extracted def at column 0, so the line is dedented one level relative to
+# the file); an identical line anywhere else in the file matched instead,
+# so `survivor_lines` could name the wrong function; and a continuation
+# line of a multi-line statement could never intersect `changed`, which
+# only ever holds first lines (`statement_lines`). The three pairs below
+# are the spec's own minimal reproduction (P0-2-locator.md), against the
+# real engine (CLAUDE.md): a module-level `f`/`g` sharing a body line, a
+# method `K.m`, and a multi-line `return sum([a, b + 1])` inside `total`.
+
+
+def _locator_workdir(root: Path) -> Path:
+    """`a.py`/`tests/test_a.py`, byte-for-byte the spec's tree (line numbers
+    2, 11, 15 and 16 are named in the spec and must not move)."""
+    workdir = root / "work"
+    (workdir / "tests").mkdir(parents=True)
+    (workdir / "a.py").write_text(
+        "def f(x):\n"
+        "    return x + 1\n"
+        "\n"
+        "\n"
+        "def g(x):\n"
+        "    return x + 1\n"
+        "\n"
+        "\n"
+        "class K:\n"
+        "    def m(self, y):\n"
+        "        return y * 3\n"
+        "\n"
+        "\n"
+        "def total(a, b):\n"
+        "    return sum(\n"
+        "        [a, b + 1]\n"
+        "    )\n"
+    )
+    (workdir / "tests" / "test_a.py").write_text(
+        "from a import K, f, g, total\n"
+        "\n"
+        "\n"
+        "def test_f():\n"
+        "    assert f(1) == 2\n"
+        "\n"
+        "\n"
+        "def test_g_runs():\n"
+        "    g(1)  # runs g, checks nothing: g's mutants survive\n"
+        "\n"
+        "\n"
+        "def test_m():\n"
+        "    assert K().m(2) == 6\n"
+        "\n"
+        "\n"
+        "def test_total():\n"
+        "    assert total(1, 2) == 4\n"
+    )
+    return workdir
+
+
+def test_mutation_sample_excludes_a_survivor_located_only_via_duplicate_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad pair 1 (P0-2-locator.md): `changed` names only `f`'s line
+    (2), and `g` has an identical body line (6) but no discriminating
+    test. Before this task the whole-file match let `g`'s survivors in,
+    located on `f`'s line -- must fail on be99efe (red-first, recorded in
+    the report). After: `g`'s mutants stay out and `survivor_lines` holds
+    only `f`'s own line.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _locator_workdir(tmp_path)
+    changed = {(str(workdir / "a.py"), 2)}
+    outcome = mutation_sample(workdir, changed, 100, test_files={"tests/test_a.py"})
+    assert not any(name.startswith("a.x_g__mutmut_") for name in outcome.survivors)
+    assert all(line == 2 for _, line in outcome.survivor_lines)
+    assert outcome.total == 2
+    assert outcome.killed == 2
+
+
+def test_mutation_sample_admits_a_method_mutant_on_its_own_changed_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good pair 2: `changed` names `K.m`'s own body line (11). Before
+    this task a method mutant never matched its own dedented line, so
+    `total == 0`; every real `K.xǁKǁm__mutmut_N` mutant now enters the
+    population and `test_m` kills all of them.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _locator_workdir(tmp_path)
+    changed = {(str(workdir / "a.py"), 11)}
+    outcome = mutation_sample(workdir, changed, 100, test_files={"tests/test_a.py"})
+    assert outcome.total > 0
+    assert outcome.killed == outcome.total
+    assert outcome.survivors == ()
+
+
+def test_mutation_sample_admits_a_continuation_line_mutant_via_its_statement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good pair 3: `changed` names line 15, `return sum(`'s own first
+    line -- `statement_lines`'s coordinate for the whole multi-line
+    return. Before this task a mutant on line 16 (`[a, b + 1]`, a
+    continuation line) could never intersect `changed`, so `total == 0`;
+    it now maps to line 15 and enters the population.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _locator_workdir(tmp_path)
+    changed = {(str(workdir / "a.py"), 15)}
+    outcome = mutation_sample(workdir, changed, 100, test_files={"tests/test_a.py"})
+    assert outcome.total > 0
+    assert outcome.killed == outcome.total
+    assert outcome.survivors == ()
+
+
+def test_mutant_name_parses_like_mutmuts_own_orig_names_from_key() -> None:
+    """`_MUTANT_NAME`'s local parse (P0-2: no import of mutmut into
+    saddle's process at runtime) agrees with mutmut's own
+    `orig_function_and_class_names_from_key`, used here only as the test
+    oracle, across both production shapes: a function, a method, a
+    private-looking function name (`_to_decimal`), a dunder method
+    (`__eq__`/`__init__`), and a dotted package path.
+    """
+    from mutmut.utils.format_utils import orig_function_and_class_names_from_key
+
+    names = [
+        "a.x_f__mutmut_1",
+        "a.x_g__mutmut_2",
+        "a.x__to_decimal__mutmut_9",
+        "a.xǁKǁm__mutmut_1",
+        "accounts.xǁAccountǁ__init____mutmut_10",
+        "accounts.xǁAccountǁ__eq____mutmut_2",
+        "pkg.sub.x_helper__mutmut_3",
+        "pkg.sub.xǁCǁ_private__mutmut_1",
+    ]
+    for name in names:
+        expected_func, expected_cls = orig_function_and_class_names_from_key(name)
+        match = evidence_module._MUTANT_NAME.match(name)
+        assert match is not None, name
+        func = match.group("func") or match.group("method")
+        assert (func, match.group("cls")) == (expected_func, expected_cls), name
+
+
+def test_mutant_lines_a_stub_name_keeps_the_old_whole_file_match(tmp_path: Path) -> None:
+    """A name that does not match `_MUTANT_NAME` (a hand-built test stub,
+    e.g. `m1`) is not a production mutmut name and takes the old
+    whole-file exact match, byte for byte, with no statement mapping --
+    the conftest autouse stub's tests all use names of this shape and
+    must not move.
+    """
+    source = "x = 1\ny = 1\n"
+    show = "--- a.py\n+++ a.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
+    assert _mutant_lines(show, source, "m1") == {1}
+
+
+def test_mutant_lines_a_method_locates_inside_its_own_class_never_the_function() -> None:
+    """M-L5: a method and a same-named module-level function must not
+    collide -- the class scopes the lookup, not the name alone. The two
+    names below share the exact same `show` text (mutmut renders both
+    defs' single-line bodies identically once dedented to column 0);
+    only the name's class tag picks which `def` it locates inside.
+    """
+    source = (
+        "def f(x):\n    return x + 1\n\n\nclass K:\n    def f(self, x):\n        return x + 1\n"
+    )
+    show = (
+        "--- a.py\n+++ a.py\n@@ -1,2 +1,2 @@\n"
+        " def f(self, x):\n-    return x + 1\n+    return x + 2\n"
+    )
+    assert _mutant_lines(show, source, "a.x_f__mutmut_1") == {2}
+    assert _mutant_lines(show, source, "a.xǁKǁf__mutmut_1") == {7}
+
+
+def test_mutant_lines_reindents_two_space_class_bodies() -> None:
+    """A non-default (2-space) indentation still locates correctly: the
+    dedent mutmut applies is the `def` line's own leading whitespace, not
+    a fixed 4 spaces."""
+    source = "class K:\n  def m(self):\n    return 1\n"
+    show = "--- a.py\n+++ a.py\n@@ -1,2 +1,2 @@\n def m(self):\n-  return 1\n+  return 2\n"
+    assert _mutant_lines(show, source, "a.xǁKǁm__mutmut_1") == {3}
+
+
+def test_mutant_lines_a_decorated_functions_range_starts_at_the_decorator() -> None:
+    """The search range runs from the first decorator line, not the `def`
+    line (P0-2-locator.md), so a mutant on the decorator itself (mutmut
+    can mutate a decorator call's own arguments) still matches -- and
+    maps to the `def` line, `statement_lines`'s own coordinate for the
+    whole decorated function, since no nested statement covers a
+    decorator's line (`ast.FunctionDef.lineno` is the `def` line).
+    """
+    source = "@deco(1)\ndef f():\n    return 1\n"
+    show = "--- a.py\n+++ a.py\n@@ -1,3 +1,3 @@\n-@deco(1)\n+@deco(2)\n def f():\n     return 1\n"
+    assert _mutant_lines(show, source, "a.x_f__mutmut_1") == {2}
+
+
+def test_mutant_lines_unknown_class_in_the_name_returns_empty() -> None:
+    """`_mutant_def`'s class lookup can miss even though `mutant_name`
+    parses: a name shaped like a production method mutant but naming a
+    class absent from `source` (a stale name against a rewritten file)
+    fails closed to no lines, never the whole-file fallback -- that
+    fallback is reserved for a name `_MUTANT_NAME` cannot parse at all.
+    """
+    source = "class K:\n    def m(self):\n        return 1\n"
+    show = "--- a.py\n+++ a.py\n@@ -1 +1 @@\n-        return 1\n+        return 2\n"
+    assert _mutant_lines(show, source, "a.xǁZǁm__mutmut_1") == set()
+
+
+def test_mutant_lines_unknown_function_in_the_name_returns_empty() -> None:
+    """`_mutant_def`'s function-name lookup can also miss: a name naming a
+    function absent from `source`'s top level fails closed the same way.
+    """
+    source = "def f():\n    return 1\n"
+    show = "--- a.py\n+++ a.py\n@@ -1 +1 @@\n-    return 1\n+    return 2\n"
+    assert _mutant_lines(show, source, "a.x_missing__mutmut_1") == set()
+
+
+def test_mutant_lines_unparseable_source_with_a_parsed_name_returns_empty() -> None:
+    """`ast.parse` can fail even though `mutant_name` parsed fine -- a
+    stale or rewritten source. Fails closed, the same as an unresolved
+    `def`."""
+    source = "def f(:\n"
+    show = "--- a.py\n+++ a.py\n@@ -1 +1 @@\n-    return 1\n+    return 2\n"
+    assert _mutant_lines(show, source, "a.x_f__mutmut_1") == set()
+
+
+def test_statement_start_keeps_the_first_best_on_a_tied_span() -> None:
+    """`ast.walk` visits a parent before its child, so a one-line
+    `if True: pass` gives the `If` and its `pass` the same span (0): the
+    second candidate must not overwrite the first (branch coverage for
+    the `best is None or span < best_span` guard's false arm).
+    """
+    tree = ast.parse("if True: pass\n")
+    assert _statement_start(tree, 1) == 1
 
 
 def test_statement_lines_skips_blanks_and_comments() -> None:
