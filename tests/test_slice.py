@@ -5062,3 +5062,45 @@ def test_a_first_attempt_that_applied_nothing_carries_no_gate_failure(
     recoveries = [entry for entry in calls if entry is not None]
     assert "worker call failed" in recoveries[0]
     assert "Nothing was applied" not in recoveries[0]
+
+
+def test_candidate_runner_covers_a_statement_whose_only_changed_line_is_a_continuation(
+    tmp_path: Path,
+) -> None:
+    """P1-1 known-bad: the survivor round's runner had the runner's blind spot.
+
+    The diff changes line 4, the message of the `raise ValueError(` on line
+    3. A candidate that reaches the `raise` must show line 3 as covered;
+    with first-line-only `changed`, `changed_files` was empty and `covered`
+    came back `()`, so a candidate that exercised the statement was
+    indistinguishable from one that did not.
+    """
+    baseline = (
+        "def f(x):\n"
+        "    if x < 0:\n"
+        "        raise ValueError(\n"
+        '            "old"\n'
+        "        )\n"
+        "    return x\n"
+    )
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, tmp_path) == 0
+    (tmp_path / "n.py").write_text(baseline)
+    assert run_argv(["git", "add", "n.py"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "base"], tmp_path) == 0
+    (tmp_path / "n.py").write_text(baseline.replace('"old"', '"new"'))
+    (tmp_path / "test_cand.py").write_text(
+        "import pytest\n"
+        "from n import f\n\n\n"
+        "def test_negative():  # REQ-001\n"
+        "    with pytest.raises(ValueError):\n"
+        "        f(-1)\n"
+    )
+    node = Node.model_validate(_node_dict("n1", []))
+    result = slice_module._candidate_runner(tmp_path, "HEAD", node)(tmp_path, "test_cand.py")
+    assert result.exit_code == 0
+    assert (str(tmp_path / "n.py"), 3) in result.covered

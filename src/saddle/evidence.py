@@ -912,6 +912,52 @@ def _statement_start(tree: ast.Module, line: int) -> int | None:
     return best.lineno if best is not None else None
 
 
+def changed_statements(workdir: Path, diff: str) -> set[tuple[str, int]]:
+    """First line of every statement with at least one of its own lines changed.
+
+    A line belongs to a statement if it is non-blank, not a comment, and
+    inside the statement's span; a decorator line belongs to the `def` or
+    `class` it decorates. Docstrings stay exempt (`statement_lines`), and the
+    spelling is `(str(workdir / rel), line)`, the one `changed` has always
+    used. Only `.py` files that exist under `workdir` and parse contribute
+    (P1-1). Before P1-1 a changed line that was not a statement's first line,
+    such as the message of a multi-line `raise`, vanished, and a diff confined
+    to such lines passed coverage with "no changed lines".
+    """
+    by_path: dict[str, set[int]] = {}
+    for rel, number in changed_lines(diff):
+        by_path.setdefault(rel, set()).add(number)
+    found: set[tuple[str, int]] = set()
+    for rel, numbers in by_path.items():
+        path = workdir / rel
+        if path.suffix != ".py" or not path.is_file():
+            continue
+        source = path.read_text()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        text = source.splitlines()
+        decorated = [
+            (decorator.lineno, decorator.end_lineno or decorator.lineno, node.lineno)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for decorator in node.decorator_list
+        ]
+        executable = statement_lines(source)
+        for number in numbers:
+            stripped = text[number - 1].strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            start = next(
+                (owner for first, last, owner in decorated if first <= number <= last),
+                _statement_start(tree, number),
+            )
+            if start in executable:
+                found.add((str(workdir / rel), start))
+    return found
+
+
 def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
     """Statement-start line numbers the mutant's removed (`-`) hunk lines locate to.
 

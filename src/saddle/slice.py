@@ -39,7 +39,7 @@ from saddle.edits import EditError, apply_edits
 from saddle.evidence import (
     CapturedRun,
     attempt_ref,
-    changed_lines,
+    changed_statements,
     covered_lines,
     drop_test_caches,
     git_changed_files,
@@ -55,7 +55,6 @@ from saddle.evidence import (
     run_stdin_capture,
     snapshot_baseline,
     snapshot_tree,
-    statement_lines,
     under_coverage,
 )
 from saddle.gates import SHELL_TIMEOUT, GateCheck, Tier1Result
@@ -1710,15 +1709,7 @@ def _candidate_runner(real_tree: Path, baseline: str, node: Node) -> CandidateRu
     so the survivors it still reports are the ones the candidate failed
     to kill. The stub tree contributes its exit code and nothing else.
     """
-    sources = read_sources(real_tree, "*.py")
-    statements = {
-        (str(real_tree / rel), number)
-        for rel, source in sources.items()
-        for number in statement_lines(source)
-    }
-    changed = {
-        (str(real_tree / path), line) for path, line in changed_lines(git_diff(real_tree, baseline))
-    } & statements
+    changed = changed_statements(real_tree, git_diff(real_tree, baseline))
     changed_files = sorted({path for path, _ in changed})
     ceiling = node.deterministic_gate.mutation_sample.max_mutants
 

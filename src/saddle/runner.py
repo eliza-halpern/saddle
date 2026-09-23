@@ -19,7 +19,7 @@ from saddle.dag import Node
 from saddle.evidence import (
     CapturedRun,
     MutationOutcome,
-    changed_lines,
+    changed_statements,
     covered_lines,
     drop_test_caches,
     git_added_files,
@@ -34,7 +34,6 @@ from saddle.evidence import (
     run_capture,
     run_shell_capture,
     scoped_targets,
-    statement_lines,
     under_coverage,
 )
 from saddle.gates import (
@@ -138,15 +137,7 @@ def run_node_gate(
     """
     gate = node.deterministic_gate
     sources = read_sources(workdir, "*.py")
-    statements = {
-        (str(workdir / rel), number)
-        for rel, source in sources.items()
-        for number in statement_lines(source)
-    }
-    changed = {
-        (str(workdir / path), line)
-        for path, line in changed_lines(git_diff(workdir, baseline, recorder=recorder))
-    } & statements
+    changed = changed_statements(workdir, git_diff(workdir, baseline, recorder=recorder))
     changed_files = sorted({path for path, _ in changed})
     added = git_added_files(workdir, baseline, recorder=recorder)
     # Every file the diff names (git decides, so deletions and non-Python

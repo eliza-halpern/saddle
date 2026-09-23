@@ -12,7 +12,7 @@ import pytest
 
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import RED_PHASE_SAMPLES
+from saddle.gates import RED_PHASE_SAMPLES, GateCheck
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import _stub_module, read_sources, run_node_gate
 
@@ -114,6 +114,54 @@ def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:
     assert result.passed is True
     assert all(check.passed for check in result.checks)
     assert (tmp_path / ".coverage.tier1").is_file()
+
+
+_CONTINUATION_BASELINE = (
+    "def f(x):\n    if x < 0:\n        raise ValueError(\n"
+    '            "old"\n        )\n    return x\n'
+)
+"""`raise ValueError(` starts on line 3; only its message, line 4, changes below."""
+
+
+def _continuation_coverage(root: Path, kind: str) -> GateCheck:
+    test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f(1) == 1\n"
+    _worktree(
+        root,
+        test_body,
+        baseline_code=_CONTINUATION_BASELINE,
+        fixed_code=_CONTINUATION_BASELINE.replace('"old"', '"new"'),
+    )
+    node = _node(kind=kind, target_files=["n.py"] if kind == "refactor" else None)
+    result = run_node_gate(node, root)
+    return next(check for check in result.checks if check.name == "coverage")
+
+
+def test_run_node_gate_coverage_fails_a_statement_whose_only_changed_line_is_a_continuation(
+    tmp_path: Path,
+) -> None:
+    """P1-1 known-bad: the diff touches line 4 of the `raise` on line 3, which no test runs.
+
+    Before P1-1 `changed` held first lines only, so line 4 vanished and
+    the `raise` was never judged. A `refactor` node may write the missing
+    test (an `impl` node may not, and a `test` node is not judged on
+    coverage), so the gap fails it and names the statement's first line.
+    """
+    coverage = _continuation_coverage(tmp_path, "refactor")
+    assert coverage.passed is False
+    assert f"{tmp_path / 'n.py'}:3" in coverage.detail
+
+
+def test_run_node_gate_coverage_names_a_continuation_statement_an_impl_node_cannot_reach(
+    tmp_path: Path,
+) -> None:
+    """P1-1 known-bad: an `impl` node defers the gap (F21.66) but must name it.
+
+    Before P1-1 the verdict was "every changed line runs" and the `raise`
+    was not among the lines judged.
+    """
+    coverage = _continuation_coverage(tmp_path, "impl")
+    assert f"{tmp_path / 'n.py'}:3" in coverage.detail
+    assert "unreachable-lines=1" in (coverage.basis or "")
 
 
 def _mutmut_that_cannot_baseline(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

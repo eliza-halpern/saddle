@@ -31,6 +31,7 @@ from saddle.evidence import (
     _statement_start,
     attempt_ref,
     changed_lines,
+    changed_statements,
     covered_lines,
     drop_test_caches,
     git_added_files,
@@ -2287,3 +2288,112 @@ def test_snapshot_baseline_does_not_borrow_the_operators_identity(tmp_path: Path
     ref = snapshot_baseline(tmp_path, "n1")
     assert _author_of(tmp_path, "HEAD") == "test <test@example.com>"
     assert _author_of(tmp_path, ref) == "saddle <saddle@local>"
+
+
+def _diff_of(root: Path, before: dict[str, str], after: dict[str, str | None]) -> str:
+    """`git diff -U0 HEAD` after committing `before` and rewriting to `after`.
+
+    A `None` in `after` deletes the file. The real diff, not a hand-written
+    one, so the hunk shapes are the ones the gates are handed.
+    """
+    _git_repo(root)
+    for name, text in before.items():
+        (root / name).write_text(text)
+    assert run_argv(["git", "add", "-A"], root) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
+    for name, rewritten in after.items():
+        if rewritten is None:
+            (root / name).unlink()
+        else:
+            (root / name).write_text(rewritten)
+    return git_diff(root, "HEAD")
+
+
+def test_changed_statements_ignores_blank_and_comment_lines_inside_a_body(tmp_path: Path) -> None:
+    """P1-1 known-bad: an inserted comment or blank line is not a change to the `def`.
+
+    The innermost statement containing them is the `FunctionDef`, so
+    without the skip its first line (1) would enter `changed`.
+    """
+    diff = _diff_of(
+        tmp_path,
+        {"n.py": "def f():\n    x = 1\n    return x\n"},
+        {"n.py": "def f():\n    x = 1\n    # note\n\n    return x\n"},
+    )
+    assert changed_lines(diff) == {("n.py", 3), ("n.py", 4)}
+    assert changed_statements(tmp_path, diff) == set()
+
+
+def test_changed_statements_maps_a_decorator_line_to_its_def_not_its_class(tmp_path: Path) -> None:
+    """P1-1 known-bad: `@classmethod` on line 2 belongs to the `def` on line 3.
+
+    `_statement_start` alone returns the enclosing `class` line, 1.
+    """
+    diff = _diff_of(
+        tmp_path,
+        {"n.py": "class C:\n    @staticmethod\n    def m():\n        return 1\n"},
+        {"n.py": "class C:\n    @classmethod\n    def m():\n        return 1\n"},
+    )
+    assert changed_lines(diff) == {("n.py", 2)}
+    assert changed_statements(tmp_path, diff) == {(str(tmp_path / "n.py"), 3)}
+
+
+def test_changed_statements_maps_a_decorated_class_decorator_to_the_class(tmp_path: Path) -> None:
+    diff = _diff_of(
+        tmp_path,
+        {"n.py": "x = 1\n\n\n@a\nclass C:\n    y = 1\n"},
+        {"n.py": "x = 1\n\n\n@b\nclass C:\n    y = 1\n"},
+    )
+    assert changed_statements(tmp_path, diff) == {(str(tmp_path / "n.py"), 5)}
+
+
+def test_changed_statements_maps_a_continuation_line_to_its_statement(tmp_path: Path) -> None:
+    diff = _diff_of(
+        tmp_path,
+        {
+            "n.py": (
+                "def f(x):\n    if x < 0:\n        raise ValueError(\n"
+                "            'old'\n        )\n"
+            )
+        },
+        {
+            "n.py": (
+                "def f(x):\n    if x < 0:\n        raise ValueError(\n"
+                "            'new'\n        )\n"
+            )
+        },
+    )
+    assert changed_statements(tmp_path, diff) == {(str(tmp_path / "n.py"), 3)}
+
+
+def test_changed_statements_exempts_a_docstring_continuation_line(tmp_path: Path) -> None:
+    """P1-1 known-good: the middle line of a docstring is not a statement."""
+    diff = _diff_of(
+        tmp_path,
+        {"n.py": 'def f():\n    """First.\n    old\n    Last."""\n    return 1\n'},
+        {"n.py": 'def f():\n    """First.\n    new\n    Last."""\n    return 1\n'},
+    )
+    assert changed_lines(diff) == {("n.py", 3)}
+    assert changed_statements(tmp_path, diff) == set()
+
+
+def test_changed_statements_keeps_first_lines_in_the_runners_spelling(tmp_path: Path) -> None:
+    """P1-1 known-good: `return 1` -> `return 2` is `(str(workdir / rel), line)`."""
+    diff = _diff_of(
+        tmp_path,
+        {"n.py": "def f():\n    return 1\n"},
+        {"n.py": "def f():\n    return 2\n"},
+    )
+    assert changed_statements(tmp_path, diff) == {(str(tmp_path / "n.py"), 2)}
+
+
+def test_changed_statements_ignores_non_python_and_deleted_and_unparseable_files(
+    tmp_path: Path,
+) -> None:
+    diff = _diff_of(
+        tmp_path,
+        {"a.txt": "one\n", "gone.py": "x = 1\n", "bad.py": "x = 1\n"},
+        {"a.txt": "two\n", "gone.py": None, "bad.py": "def broken(:\n"},
+    )
+    assert {path for path, _ in changed_lines(diff)} == {"a.txt", "bad.py"}
+    assert changed_statements(tmp_path, diff) == set()
