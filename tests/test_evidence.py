@@ -27,6 +27,7 @@ from saddle.evidence import (
     MutationOutcome,
     _mutant_lines,
     _mutmut_scratch_config,
+    _parse_mutant_verdicts,
     _statement_start,
     attempt_ref,
     changed_lines,
@@ -61,8 +62,8 @@ from saddle.journal import SpanRecorder, read_spans
 
 _ALL_MUTANT_NAMES = re.compile(r"^\s*(\S+): ", re.MULTILINE)
 """Every name `mutmut results --all True` lines, whatever its verdict --
-broader than `_parse_mutant_verdicts`, which only recognizes killed,
-survived, timeout and not-checked and silently drops e.g. "no tests"."""
+used only to check `show_all_mutants`'s own completeness (P0-1),
+independent of `_parse_mutant_verdicts`'s verdict text."""
 
 
 def _git_subcommand(argv: Sequence[str]) -> str:
@@ -876,6 +877,35 @@ def test_mutation_sample_still_excludes_a_text_only_mutant_that_survived(
     outcome = _text_only_outcome(tmp_path, monkeypatch)
     assert outcome.survivors == ()
     assert "m_survtext" not in outcome.survivors
+
+
+def test_mutation_sample_excludes_an_untested_text_only_mutant_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-3: the text-only exclusion covers every not-killed status.
+
+    T6-33's argument -- no spec-derived test can kill a message-only
+    mutant without pinning wording -- does not depend on whether a test
+    runs the function, so an untested text-only mutant stays out exactly
+    as a surviving one does, rather than counting as a survivor.
+    """
+    workdir = _text_only_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(
+        stub_dir,
+        "\n".join(["", "  m_untext: no tests", "  m_real: killed", ""]),
+        {
+            "m_untext": _show_diff("a.py", 'n = "world"', 'n = "XXworldXX"'),
+            "m_real": _show_diff("a.py", "q = 5", "q = 6"),
+        },
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), line) for line in (2, 3)}
+    outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
+    assert (outcome.killed, outcome.total, outcome.text_only) == (1, 1, 1)
+    assert outcome.survivors == ()
+    assert outcome.untested == 0
 
 
 def test_mutmut_scratch_config_exact() -> None:
@@ -1988,6 +2018,217 @@ def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
         text_only=1,
         survivor_lines=((str(workdir / "a.py"), 1),),
     )
+
+
+# --- P0-3: count every mutmut-decided status, not just the four the old
+# parser recognized -----------------------------------------------------
+#
+# Contract: every decided mutant on a changed line enters the population.
+# Only `killed` and `timeout` count as killed; `not checked` stays
+# undecided; every other status -- `no tests` included -- is a survivor
+# and, when it is `no tests`, also raises `untested`.
+
+
+def _monotonicity_workdir(root: Path, *, include_test_b: bool) -> Path:
+    """The spec's own established tree: `a.py`'s `f` is tested by
+    `test_a.py`; `b.py`'s `h` is tested by `test_b.py` only when
+    `include_test_b` is True. Both files' single `return` line (2) is
+    the changed line."""
+    workdir = root / "work"
+    workdir.mkdir()
+    (workdir / "a.py").write_text("def f(x):\n    return x + 1\n")
+    (workdir / "b.py").write_text("def h(z):\n    return z * 2\n")
+    (workdir / "test_a.py").write_text("from a import f\n\n\ndef test_a():\n    assert f(1) == 2\n")
+    if include_test_b:
+        (workdir / "test_b.py").write_text(
+            "from b import h\n\n\ndef test_b():\n    assert h(3) == 6\n"
+        )
+    return workdir
+
+
+def test_mutation_sample_deleting_a_modules_tests_lowers_the_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-3 pair 1 (known-bad, the plan's own), real engine: deleting a
+    module's only test must lower its rate, not remove its mutants from
+    the population.
+
+    Reproduced with real mutmut (2026-09-23), same tree as
+    `test_mutation_sample_a_fully_tested_tree_does_not_move`, but without
+    `test_b.py`: `a.x_f__mutmut_1/2` decide `killed`, `b.x_h__mutmut_1/2`
+    decide `no tests`. Must fail on 45416a1: `_MUTANT_VERDICT`'s
+    alternation does not recognize "no tests", so those two lines never
+    enter `verdicts` and the outcome reads killed=2, total=2 -- still
+    100%, with `h`'s mutants simply absent instead of counting against
+    the node.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _monotonicity_workdir(tmp_path, include_test_b=False)
+    changed = {(str(workdir / "a.py"), 2), (str(workdir / "b.py"), 2)}
+    outcome = mutation_sample(workdir, changed, 10, test_files={"test_a.py"})
+    assert outcome.killed == 2
+    assert outcome.total == 4
+    assert outcome.untested == 2
+    assert set(outcome.survivors) == {"b.x_h__mutmut_1", "b.x_h__mutmut_2"}
+
+
+def test_mutation_sample_a_fully_tested_tree_does_not_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-3 pair 2 (known-good): the same tree with `test_b.py` present
+    gives the identical `MutationOutcome` before and after this task --
+    pin the value: 4 of 4. Deliberately does not reference `.untested`
+    (a field this task adds): the spec's red-first list has this pair
+    passing on the base commit too, which only a field-agnostic
+    assertion can do.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _monotonicity_workdir(tmp_path, include_test_b=True)
+    changed = {(str(workdir / "a.py"), 2), (str(workdir / "b.py"), 2)}
+    outcome = mutation_sample(workdir, changed, 10, test_files={"test_a.py", "test_b.py"})
+    assert outcome.killed == 4
+    assert outcome.total == 4
+    assert outcome.survivors == ()
+
+
+_ALL_TEN_MUTMUT_STATUSES = (
+    "killed",
+    "survived",
+    "no tests",
+    "check was interrupted by user",
+    "not checked",
+    "skipped",
+    "suspicious",
+    "timeout",
+    "caught by type check",
+    "segfault",
+)
+"""Every value of mutmut 3.8's `status_by_exit_code`
+(`mutmut/stats.py`), verified 2026-09-23:
+`{1: "killed", 3: "killed", 0: "survived", 5: "no tests", 33: "no
+tests", 2: "check was interrupted by user", None: "not checked", 34:
+"skipped", 35: "suspicious", 36/-24/24/152/255: "timeout", 37: "caught
+by type check", -11/-9: "segfault"}` -- ten distinct strings."""
+
+
+def test_parse_mutant_verdicts_keeps_every_status() -> None:
+    """P0-3 pair 3a (known-bad): parser unit test. Every one of mutmut's
+    ten decided statuses, the multi-word ones included, plus a status
+    mutmut has not shipped yet, all come back with their full verdict
+    text. Must fail on 45416a1: `_MUTANT_VERDICT`'s alternation
+    recognizes only 4 of the 10, so 7 lines silently fail to match and
+    this returns 4 entries instead of 11.
+    """
+    names = [f"m{i}" for i in range(1, 11)]
+    lines = [
+        f"  {name}: {status}" for name, status in zip(names, _ALL_TEN_MUTMUT_STATUSES, strict=True)
+    ]
+    lines.append("  m9b: some future status")
+    text = "\n".join(["", *lines, ""])
+    verdicts = _parse_mutant_verdicts(text)
+    assert len(verdicts) == 11
+    for name, status in zip(names, _ALL_TEN_MUTMUT_STATUSES, strict=True):
+        assert verdicts[name] == status
+    assert verdicts["m9b"] == "some future status"
+
+
+def _every_status_workdir(root: Path) -> Path:
+    """Nine changed lines, one per decided mutmut status (excludes `not
+    checked`, which needs no location)."""
+    workdir = root / "work"
+    (workdir / "tests").mkdir(parents=True)
+    (workdir / "a.py").write_text("".join(f"v{i} = {i}\n" for i in range(1, 10)))
+    (workdir / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    return workdir
+
+
+_DECIDED_STATUSES_ON_A_LINE = (
+    ("m_killed", "killed", 1),
+    ("m_survived", "survived", 2),
+    ("m_notests", "no tests", 3),
+    ("m_interrupted", "check was interrupted by user", 4),
+    ("m_skipped", "skipped", 5),
+    ("m_suspicious", "suspicious", 6),
+    ("m_timeout", "timeout", 7),
+    ("m_typecheck", "caught by type check", 8),
+    ("m_segfault", "segfault", 9),
+)
+"""One mutant per non-"not checked" status, each on its own changed line,
+each a numeric-literal edit (never text-only)."""
+
+
+def test_mutation_sample_counts_every_decided_status_by_the_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-3 pair 3b (known-bad): stubbed engine, one mutant per decided
+    status plus one `not checked`, none text-only, all on a changed
+    line. Only `killed` and `timeout` count as killed; `not checked`
+    stays out of `total`; every other status -- `no tests` included --
+    is a survivor, and the `no tests` one also raises `untested`. Must
+    fail on 45416a1 for the same reason as pair 3a.
+    """
+    workdir = _every_status_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    lines = [f"v{i} = {i}" for i in range(1, 10)]
+    results = "\n".join(
+        [
+            "",
+            *(f"  {name}: {verdict}" for name, verdict, _ in _DECIDED_STATUSES_ON_A_LINE),
+            "  m_pending: not checked",
+            "",
+        ]
+    )
+    shows = {
+        name: _show_diff("a.py", lines[line - 1])
+        for name, _verdict, line in _DECIDED_STATUSES_ON_A_LINE
+    }
+    _stub_mutmut(stub_dir, results, shows)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), i) for i in range(1, 10)}
+    outcome = mutation_sample(workdir, changed, 20, test_files={"tests/test_a.py"})
+    assert outcome.killed == 2
+    assert outcome.total == 9
+    assert outcome.generated == 10
+    assert outcome.untested == 1
+    assert set(outcome.survivors) == {
+        name
+        for name, verdict, _ in _DECIDED_STATUSES_ON_A_LINE
+        if verdict not in ("killed", "timeout")
+    }
+
+
+def test_mutation_sample_run_tests_restriction_does_not_erase_an_unexecuted_survivor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-3 pair 4 (known-bad), real engine: the second, latent
+    consequence the spec names (`survivors.keep_candidate`'s scoped
+    re-run via `slice._candidate_runner`). `test_b.py` calls `h(3)` but
+    asserts nothing, so with both test files collected `h`'s mutants
+    decide "survived". Restricting collection to `test_a.py` alone
+    (`run_tests`) must not erase them -- it turns "survived" into "no
+    tests", still a survivor, with `untested == 2`.
+
+    Reproduced with real mutmut (2026-09-23): unrestricted, both
+    `b.x_h__mutmut_1/2` are `survived`; restricted to `test_a.py`
+    (`run_tests=("test_a.py",)`), both are `no tests`. Must fail on
+    45416a1: the "no tests" lines never enter `verdicts`, so
+    `mutation_sample` reads `survivors=()` -- exactly the false credit
+    `keep_candidate` would give `test_a.py` for both of `h`'s mutants.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / "a.py").write_text("def f(x):\n    return x + 1\n")
+    (workdir / "b.py").write_text("def h(z):\n    return z * 2\n")
+    (workdir / "test_a.py").write_text("from a import f\n\n\ndef test_a():\n    assert f(1) == 2\n")
+    (workdir / "test_b.py").write_text("from b import h\n\n\ndef test_b():\n    h(3)\n")
+    changed = {(str(workdir / "a.py"), 2), (str(workdir / "b.py"), 2)}
+    tests = {"test_a.py", "test_b.py"}
+    outcome = mutation_sample(workdir, changed, 10, test_files=tests, run_tests=("test_a.py",))
+    assert outcome.total == 4
+    assert outcome.untested == 2
+    assert set(outcome.survivors) == {"b.x_h__mutmut_1", "b.x_h__mutmut_2"}
 
 
 def _git_repo_that_refuses_to_guess(root: Path) -> None:

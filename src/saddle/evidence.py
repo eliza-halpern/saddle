@@ -33,7 +33,15 @@ from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding
 from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-_MUTANT_VERDICT = re.compile(r"^\s*(\S+): (killed|survived|timeout|not checked)\s*$")
+_MUTANT_VERDICT = re.compile(r"^\s*(\S+): (.+?)\s*$")
+"""Any status to end of line (P0-3): mutmut 3.8's `status_by_exit_code`
+emits ten distinct strings (killed, survived, no tests, check was
+interrupted by user, not checked, skipped, suspicious, timeout, caught
+by type check, segfault), and the contract is that every one of them
+enters the population except `not checked`. The old alternation
+recognized only four and silently dropped the other six -- a "no tests"
+mutant simply vanished from both `total` and `killed` instead of
+counting as a survivor."""
 _MUTANT_NAME = re.compile(
     r"^(?:\w+\.)+x(?:_(?P<func>.+?)|ǁ(?P<cls>\w+)ǁ(?P<method>.+?))__mutmut_\d+$"
 )
@@ -687,6 +695,12 @@ class MutationOutcome:
     # lines matched, spelled as the caller spelled `changed`, so a recovery
     # can name the enclosing function without re-running the engine.
     survivor_lines: tuple[tuple[str, int], ...] = ()
+    # How many sampled mutants (P0-3) decided "no tests": no test executes
+    # the mutated function at all (mutmut's own exit codes 33 and 5). Their
+    # names are already in `survivors` and their lines in `survivor_lines`,
+    # so a repair round can target them; this is only the count for the
+    # gate's own detail string.
+    untested: int = 0
 
 
 def _is_given(decorator: ast.expr) -> bool:
@@ -751,7 +765,12 @@ def property_modules(
 
 
 def _parse_mutant_verdicts(text: str) -> dict[str, str]:
-    """Mutant name to verdict from `mutmut results --all True` output."""
+    """Mutant name to verdict from `mutmut results --all True` output.
+
+    Every decided status, not only killed/survived/timeout/not-checked
+    (P0-3): a status this parser cannot match is a status that silently
+    leaves both `total` and `killed` in `mutation_sample`.
+    """
     verdicts = {}
     for line in text.splitlines():
         match = _MUTANT_VERDICT.match(line)
@@ -1077,9 +1096,14 @@ def mutation_sample(
     `run_tests` restricts which tests pytest collects against each mutant
     and leaves the scope alone -- the two are different sets (T3-3: a
     session read the first as the second and built a vacuous oracle).
-    Text-only mutants are excluded only when they SURVIVED (F21.32).
+    Text-only mutants are excluded only when they did NOT kill (F21.32,
+    widened by P0-3 from "survived" alone to every not-killed status).
     Timeouts count as killed (behavior changed), and missing mutmut
-    fails closed.
+    fails closed. Every decided mutant on a changed line enters the
+    population (P0-3): `killed` and `timeout` are the only killed
+    statuses, `not checked` stays undecided, and everything else --
+    `no tests` included -- is a survivor; `no tests` ones are also
+    counted in `MutationOutcome.untested`.
     """
     if not changed:
         return MutationOutcome(killed=0, total=0, generated=0, survivors=())
@@ -1164,27 +1188,38 @@ def mutation_sample(
             hit = _mutant_lines(shown_stdout, target.read_text(), name) & lines
             if not hit:
                 continue
-            # F21.32: only a SURVIVING text-only mutant is excluded. The
-            # tokenizer cannot tell a message from a currency code or a
-            # `Decimal` exponent, so round 3h dropped `currency == "XXJPYXX"`
-            # and `Decimal("XX1XX")` -- real behaviour changes the suite
-            # killed -- from both sides of the ratio. A kill is evidence the
-            # suite discriminates; the verdict decides, not the shape.
-            if verdict == "survived" and text_only_mutant(shown_stdout):
+            # F21.32: only a mutant that did NOT kill is excluded as
+            # text-only (P0-3 widens this from "survived" alone to every
+            # not-killed status, since T6-33's argument -- no spec-derived
+            # test can kill a message-only mutant without pinning wording
+            # -- does not depend on whether a test currently runs the
+            # function). The tokenizer cannot tell a message from a
+            # currency code or a `Decimal` exponent, so round 3h dropped
+            # `currency == "XXJPYXX"` and `Decimal("XX1XX")` -- real
+            # behaviour changes the suite killed -- from both sides of the
+            # ratio. A kill is evidence the suite discriminates; the
+            # verdict decides, not the shape.
+            if verdict not in ("killed", "timeout") and text_only_mutant(shown_stdout):
                 text_only += 1
                 continue
             scoped.append((name, verdict, key, hit))
     sample = scoped
     killed = sum(1 for _, verdict, _, _ in sample if verdict in ("killed", "timeout"))
-    survivors = tuple(name for name, verdict, _, _ in sample if verdict == "survived")
+    # Every not-killed status is a survivor (P0-3's contract), not only
+    # "survived": `no tests`, `suspicious`, `segfault` and the rest all
+    # count against the node exactly as a survived mutant does.
+    survivors = tuple(
+        name for name, verdict, _, _ in sample if verdict not in ("killed", "timeout")
+    )
     survivor_lines = sorted(
         {
             (spelled[key], line)
             for _, verdict, key, hit in sample
-            if verdict == "survived"
+            if verdict not in ("killed", "timeout")
             for line in hit
         }
     )
+    untested = sum(1 for _, verdict, _, _ in sample if verdict == "no tests")
     return MutationOutcome(
         killed=killed,
         total=len(sample),
@@ -1192,6 +1227,7 @@ def mutation_sample(
         survivors=survivors,
         text_only=text_only,
         survivor_lines=tuple(survivor_lines),
+        untested=untested,
     )
 
 

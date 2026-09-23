@@ -1860,11 +1860,22 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
         names = sorted(outcome.survivors)
         shown = ", ".join(names[:5]) + (", ..." if len(names) > 5 else "")
         note = f" (small sample: {outcome.total} mutant(s), all must die)" if small else ""
+        # P0-3: a mutant no test runs at all is a missing test, not an
+        # absence of evidence, so a failing detail names how many of the
+        # survivors above are `no tests` rather than actually surviving a
+        # run. Only on a fail, and only when there is at least one --
+        # `untested == 0` renders byte-identical to before this task.
+        untested = (
+            f"; {outcome.untested} untested (no test runs the mutated function)"
+            if outcome.untested
+            else ""
+        )
         return GateCheck(
             name="mutation",
             passed=False,
             detail=(
-                f"{percent:.1f}% < {required:.1f}%{note}: survived {len(names)}: {shown}{excluded}"
+                f"{percent:.1f}% < {required:.1f}%{note}: survived {len(names)}: "
+                f"{shown}{excluded}{untested}"
             ),
             basis=f"sampled n={outcome.total}",
         )

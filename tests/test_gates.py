@@ -1797,6 +1797,32 @@ def test_mutation_detail_reports_the_text_only_mutants_left_out() -> None:
     )
 
 
+def test_mutation_detail_names_the_untested_mutants_only_on_a_fail() -> None:
+    """P0-3 gate-level pair (M-B5): a failing outcome with `untested > 0`
+    appends the count and the reason; the same outcome with `untested ==
+    0` renders today's exact string, byte-identical, so the existing
+    detail tests above stay pinned unmodified."""
+    failing = MutationOutcome(
+        killed=1, total=7, generated=7, survivors=tuple(f"s{i}" for i in range(6)), untested=2
+    )
+    check = check_mutation(failing, 85.0)
+    assert check.detail == (
+        "14.3% < 85.0%: survived 6: s0, s1, s2, s3, s4, ...; "
+        "2 untested (no test runs the mutated function)"
+    )
+    untested_zero = MutationOutcome(
+        killed=1, total=7, generated=7, survivors=tuple(f"s{i}" for i in range(6))
+    )
+    assert check_mutation(untested_zero, 85.0).detail == (
+        "14.3% < 85.0%: survived 6: s0, s1, s2, s3, s4, ..."
+    )
+    # A pass never carries the suffix (the spec scopes it to a fail).
+    passing_but_untested = MutationOutcome(
+        killed=9, total=10, generated=10, survivors=("s1",), untested=1
+    )
+    assert "untested" not in check_mutation(passing_but_untested, 85.0).detail
+
+
 # --- T6-29c: the verdict carries the gap it found ---------------------------
 
 
