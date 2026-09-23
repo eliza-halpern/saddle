@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -652,6 +653,130 @@ def test_run_chat_keyboard_interrupt_returns_130(tmp_path: Path) -> None:
     assert code == 130
     assert out.getvalue() == RULE + "you> \n"
     assert not journal.exists()
+
+
+def test_run_chat_terminal_survives_across_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A background terminal started in turn 1 is still reachable in turn 2.
+
+    `run_chat` must run every tool call in one session against the same
+    `ToolContext`, so the `Sandbox` (and its `terminals` dict) started by
+    `run_command(background=true)` in an earlier turn is the same one a
+    later turn's `wait_for_terminal` looks in. A context built fresh per
+    call, or even fresh per turn, loses the terminal: this test crosses two
+    turns precisely so a per-turn context (which would pass a single-turn
+    version of this test) still fails it.
+    """
+    monkeypatch.setattr("saddle.sandbox.uuid.uuid4", lambda: uuid.UUID("1234abcd" + "0" * 24))
+    journal = tmp_path / "chat.jsonl"
+    start_body = (
+        _chunk({"content": "Starting. "})
+        + _chunk({"tool_calls": [{"id": "c1", "index": 0, "function": {"name": "run_command"}}]})
+        + _chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {"arguments": '{"command": "echo ready", "background": true}'},
+                    }
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+    started_body = _chunk({"content": "Started."}) + "data: [DONE]\n\n"
+    wait_body = (
+        _chunk({"content": "Waiting. "})
+        + _chunk(
+            {"tool_calls": [{"id": "c2", "index": 0, "function": {"name": "wait_for_terminal"}}]}
+        )
+        + _chunk(
+            {
+                "tool_calls": [
+                    {"index": 0, "function": {"arguments": '{"id": "1234abcd", "timeout": 10}'}}
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+    done_body = _chunk({"content": "Done."}) + "data: [DONE]\n\n"
+    seen: list[httpx.Request] = []
+
+    code = run_chat(
+        ChatOptions(workdir=tmp_path, journal=journal),
+        _scripted_client([start_body, started_body, wait_body, done_body], seen),
+        stdin=io.StringIO("start it\nwait for it\n/quit\n"),
+        console=Console(file=io.StringIO(), width=80),
+    )
+
+    assert code == 0
+    assert len(seen) == 4
+    spans = read_spans(journal)
+    wait_span = next(span for span in spans if span.argv[0] == "wait_for_terminal")
+    assert wait_span.detail.startswith("exit 0")
+    assert "ready" in wait_span.detail
+
+
+def test_run_chat_sessions_do_not_share_terminals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two `run_chat` sessions never see each other's background terminals."""
+    monkeypatch.setattr("saddle.sandbox.uuid.uuid4", lambda: uuid.UUID("1234abcd" + "0" * 24))
+    start_body = (
+        _chunk({"content": "Starting. "})
+        + _chunk({"tool_calls": [{"id": "c1", "index": 0, "function": {"name": "run_command"}}]})
+        + _chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {"arguments": '{"command": "echo ready", "background": true}'},
+                    }
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+    started_body = _chunk({"content": "Started."}) + "data: [DONE]\n\n"
+    journal_a = tmp_path / "a.jsonl"
+
+    code_a = run_chat(
+        ChatOptions(workdir=tmp_path, journal=journal_a),
+        _scripted_client([start_body, started_body]),
+        stdin=io.StringIO("start it\n/quit\n"),
+        console=Console(file=io.StringIO(), width=80),
+    )
+    assert code_a == 0
+
+    wait_body = (
+        _chunk({"content": "Waiting. "})
+        + _chunk(
+            {"tool_calls": [{"id": "c2", "index": 0, "function": {"name": "wait_for_terminal"}}]}
+        )
+        + _chunk(
+            {
+                "tool_calls": [
+                    {"index": 0, "function": {"arguments": '{"id": "1234abcd", "timeout": 10}'}}
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+    done_body = _chunk({"content": "Done."}) + "data: [DONE]\n\n"
+    journal_b = tmp_path / "b.jsonl"
+
+    code_b = run_chat(
+        ChatOptions(workdir=tmp_path, journal=journal_b),
+        _scripted_client([wait_body, done_body]),
+        stdin=io.StringIO("wait for it\n/quit\n"),
+        console=Console(file=io.StringIO(), width=80),
+    )
+    assert code_b == 0
+
+    (wait_span,) = read_spans(journal_b)
+    assert wait_span.argv[0] == "wait_for_terminal"
+    assert wait_span.detail.startswith("error: no terminal")
 
 
 @needs_live

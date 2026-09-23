@@ -12,7 +12,7 @@ from rich.console import Console
 
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.timeline import Timeline
-from saddle.tools import TOOLS, execute_tool
+from saddle.tools import TOOLS, ToolContext, execute_tool
 from saddle.vllm import ToolCall, VllmClient, VllmError
 
 MAX_TOOL_ROUNDS: Final = 10
@@ -92,9 +92,18 @@ def _run_turn(
     turn: int,
     parent: str | None,
     display: Timeline,
+    context: ToolContext | None = None,
 ) -> str:
-    """Run one user turn: stream, journal tool calls, seal the turn proof."""
+    """Run one user turn: stream, journal tool calls, seal the turn proof.
+
+    `context` is the session's shared `ToolContext`, carrying the sandbox and
+    its background terminals across turns. A caller with no session (a
+    direct test, or any future caller that wants one turn in isolation)
+    passes none, and this builds exactly one for the whole turn -- never one
+    per tool call, which would strand a terminal after its first read.
+    """
     node_id = f"chat#{turn}"
+    ctx = context or ToolContext(workdir=options.workdir)
     messages.append({"role": "user", "content": text})
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
@@ -130,7 +139,7 @@ def _run_turn(
         for call in calls:
             display.tool_call(call)
             start = perf_counter()
-            result = execute_tool(call, workdir=options.workdir)
+            result = execute_tool(call, workdir=options.workdir, context=ctx)
             duration_ms = int((perf_counter() - start) * 1000)
             # execute_tool reports every failure as an "error: ..." string, so
             # the prefix is the success signal (a file starting that way
@@ -167,6 +176,11 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     turn = 0
     parent: str | None = None
     display = Timeline(console)
+    # One context for the whole session: a background terminal started by
+    # run_command in turn N must still be there for read_terminal or
+    # wait_for_terminal in turn N+1. Built here, not inside the loop, so two
+    # sessions (two `run_chat` calls) never share it.
+    context = ToolContext(workdir=options.workdir)
     try:
         while True:
             display.show_prompt()
@@ -192,6 +206,7 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
                         turn=turn,
                         parent=parent,
                         display=display,
+                        context=context,
                     )
             except VllmError as exc:
                 display.show_error(str(exc))
