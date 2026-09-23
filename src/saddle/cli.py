@@ -1417,9 +1417,16 @@ def main(
             )
             return run_dag(dag_options, client, stdout=stdout or sys.stdout)
     if args.command in ("chat", "web"):
-        from saddle.web.app import serve
+        from saddle.web.app import chat_token, needs_token, serve
 
+        # A non-loopback bind needs the token resolved here, once, so the
+        # same value both goes in the printed URL and reaches `serve` --
+        # `serve` would generate its own otherwise, and the link printed
+        # would not open what actually answers.
+        token = chat_token() if needs_token(args.host) else None
         url = f"http://{args.host}:{args.port}/"
+        if token is not None:
+            url = f"{url}?token={token}"
         print(f"saddle chat UI on {url}", file=stdout or sys.stdout)
         if not args.no_open:
             import webbrowser
@@ -1433,6 +1440,7 @@ def main(
             model=args.model,
             workdir=_chat_workdir(args.workdir),
             sessions_root=Path(args.sessions) if args.sessions else None,
+            token=token,
         )
         return 0
     if args.command == "up":

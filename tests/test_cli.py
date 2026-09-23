@@ -3497,6 +3497,52 @@ def test_chat_and_web_are_the_same_command(tmp_path: Path, monkeypatch: pytest.M
     assert calls[0] == calls[1]
 
 
+def test_web_on_a_non_loopback_host_prints_and_opens_a_token_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-6: a bind address beyond loopback needs a token, so the printed
+    link -- and the one this opens in a browser -- has to carry it, and the
+    same value has to be the one `serve` is told to require."""
+    import webbrowser
+
+    from saddle.web import app as web_app
+
+    served: dict[str, object] = {}
+    opened: list[str] = []
+    monkeypatch.setattr(web_app, "serve", lambda **kw: served.update(kw))
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    monkeypatch.setenv("SADDLE_CHAT_TOKEN", "t0k3n")
+
+    out = io.StringIO()
+    code = main(
+        ["web", "--host", "100.64.0.7", "--port", "8123", "--workdir", str(tmp_path)],
+        stdout=out,
+    )
+
+    assert code == 0
+    assert out.getvalue() == "saddle chat UI on http://100.64.0.7:8123/?token=t0k3n\n"
+    assert opened == ["http://100.64.0.7:8123/?token=t0k3n"]
+    assert served["token"] == "t0k3n"
+    assert served["host"] == "100.64.0.7"
+
+
+def test_web_on_loopback_passes_no_token_and_the_url_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from saddle.web import app as web_app
+
+    served: dict[str, object] = {}
+    monkeypatch.setattr(web_app, "serve", lambda **kw: served.update(kw))
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+
+    out = io.StringIO()
+    main(["web", "--no-open", "--workdir", str(tmp_path)], stdout=out)
+
+    assert out.getvalue() == "saddle chat UI on http://127.0.0.1:8777/\n"
+    assert served["token"] is None
+
+
 def test_the_key_is_read_from_the_env_file_when_it_is_not_exported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

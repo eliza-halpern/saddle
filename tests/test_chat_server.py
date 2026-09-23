@@ -36,7 +36,9 @@ from saddle.web.app import (
     ChatServer,
     Live,
     build_app,
+    chat_token,
     history_for_display,
+    needs_token,
 )
 
 
@@ -2032,3 +2034,263 @@ def test_making_a_folder_somewhere_that_is_not_a_folder_is_refused(
         assert client.post(
             "/api/browse", json={"path": str(tmp_path / "absent"), "name": "x"}
         ).status_code == 400
+
+
+# -- token auth for a server bound beyond loopback -----------------------------
+#
+# `saddle chat --host <tailnet-ip>` binds a process that runs shell tools and
+# can make directories, to an interface other machines can reach. At d04ede8
+# it answers every route with no credentials at all. These pin the gate: it
+# covers the page, the API, uploads, the SSE stream and the static mount, and
+# nothing but the right token opens it.
+
+
+@contextmanager
+def gated_app(store: SessionStore, tmp_path: Path, token: str = "t0k3n") -> Any:
+    app = build_app(store, FakeClient, default_workdir=tmp_path, token=token)
+    with TestClient(app) as client:
+        yield client, app
+
+
+def test_an_open_non_loopback_server_is_now_401_everywhere(
+    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad at d04ede8: every one of these was 200 with no credentials.
+
+    `serve` is exercised directly (as `test_serve_builds_an_app_and_hands_it_to_uvicorn`
+    does), with the token set via SADDLE_CHAT_TOKEN rather than TOKEN_FILE --
+    TOKEN_FILE does not exist as a fallback at d04ede8, so patching it would
+    not reproduce the defect there.
+    """
+    import uvicorn
+
+    from saddle.web import app as module
+
+    handed: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: handed.update(app=app))
+    monkeypatch.setenv("SADDLE_CHAT_TOKEN", "t0k3n")
+
+    module.serve(
+        host="100.64.0.7",
+        port=9999,
+        api_key="unused-in-this-test",
+        base_url="http://example.invalid/v1",
+        model="a-model",
+        workdir=tmp_path,
+        sessions_root=tmp_path / "sessions",
+    )
+
+    with TestClient(handed["app"]) as client:
+        assert client.get("/").status_code == 401
+        assert client.get("/api/sessions").status_code == 401
+        assert client.get("/static/app.css").status_code == 401
+        assert client.get("/api/sessions/any-session/events").status_code == 401
+        assert client.post("/api/sessions", json={}).status_code == 401
+        refusal = client.get("/")
+        assert refusal.headers["content-type"].startswith("text/plain")
+        assert refusal.text == "saddle: token required"
+
+
+def test_the_token_opens_it_by_header_query_or_cookie(store: SessionStore, tmp_path: Path) -> None:
+    with gated_app(store, tmp_path, token="t0k3n") as (client, _app):
+        assert client.get("/", headers={"Authorization": "Bearer t0k3n"}).status_code == 200
+        assert (
+            client.get("/api/sessions", headers={"Authorization": "Bearer t0k3n"}).status_code
+            == 200
+        )
+
+        query = client.get("/", params={"token": "t0k3n"}, follow_redirects=False)
+        assert query.status_code == 303
+        assert query.headers["location"] == "/"
+        cookie = query.headers["set-cookie"]
+        assert "saddle_token=t0k3n" in cookie
+        assert "httponly" in cookie.lower()
+        assert "samesite=lax" in cookie.lower()
+
+        followup = client.get("/", cookies={"saddle_token": "t0k3n"})
+        assert followup.status_code == 200
+
+
+def test_a_query_token_keeps_the_rest_of_the_query_string(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with gated_app(store, tmp_path, token="t0k3n") as (client, _app):
+        reply = client.get(
+            "/api/browse", params={"token": "t0k3n", "path": "/tmp"}, follow_redirects=False
+        )
+        assert reply.status_code == 303
+        assert reply.headers["location"] == "/api/browse?path=%2Ftmp"
+
+
+def test_chat_token_is_cached_in_a_mode_0600_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    import saddle.web.app as module
+
+    token_path = tmp_path / "config" / "chat-token"
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+
+    first = chat_token()
+    assert token_path.is_file()
+    assert oct(token_path.stat().st_mode)[-3:] == "600"
+    assert chat_token() == first  # a second call reads back the same token
+
+
+def test_the_env_token_beats_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import saddle.web.app as module
+
+    token_path = tmp_path / "chat-token"
+    token_path.write_text("from-the-file")
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+    monkeypatch.setenv("SADDLE_CHAT_TOKEN", "from-the-env")
+    assert chat_token() == "from-the-env"
+
+
+def test_an_empty_cached_token_file_is_not_silently_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`chat_token` only ever creates its file with O_EXCL, so a file that is
+    already there -- even one that is empty rather than absent -- is not a
+    case it silently regenerates into: it raises rather than racing whatever
+    put that file there."""
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    import saddle.web.app as module
+
+    token_path = tmp_path / "chat-token"
+    token_path.write_text("")
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+
+    with pytest.raises(FileExistsError):
+        chat_token()
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["Bearer t0k3", "Bearer t0k3nX", "Bearer ", "Bearer  t0k3n", "Basic t0k3n"],
+)
+def test_a_near_miss_authorization_header_is_refused(
+    store: SessionStore, tmp_path: Path, header: str
+) -> None:
+    with gated_app(store, tmp_path, token="t0k3n") as (client, _app):
+        assert client.get("/", headers={"Authorization": header}).status_code == 401
+
+
+def test_the_right_value_under_the_wrong_cookie_name_is_refused(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with gated_app(store, tmp_path, token="t0k3n") as (client, _app):
+        assert client.get("/", cookies={"token": "t0k3n"}).status_code == 401
+
+
+def test_a_near_miss_query_token_is_401_and_sets_no_cookie(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    with gated_app(store, tmp_path, token="t0k3n") as (client, _app):
+        reply = client.get("/", params={"token": "t0k3nX"}, follow_redirects=False)
+        assert reply.status_code == 401
+        assert "set-cookie" not in reply.headers
+
+
+@pytest.mark.parametrize(
+    ("host", "want"),
+    [
+        ("127.0.0.1", False),
+        ("127.0.1.1", False),
+        ("::1", False),
+        ("localhost", False),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("", True),
+        ("100.64.0.7", True),
+        ("fd7a:115c:a1e0::1", True),
+        ("box.tail1234.ts.net", True),
+        ("not an address", True),
+    ],
+)
+def test_needs_token_table(host: str, want: bool) -> None:
+    assert needs_token(host) is want
+
+
+def test_serve_on_loopback_stays_open_and_writes_no_token_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import uvicorn
+
+    from saddle.web import app as module
+
+    handed: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: handed.update(app=app))
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    token_path = tmp_path / "chat-token"
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+
+    module.serve(
+        host="127.0.0.1",
+        port=9999,
+        api_key="unused-in-this-test",
+        base_url="http://example.invalid/v1",
+        model="a-model",
+        workdir=tmp_path,
+        sessions_root=tmp_path / "sessions",
+    )
+
+    with TestClient(handed["app"]) as client:
+        assert client.get("/").status_code == 200
+    assert not token_path.exists()
+
+
+def test_serve_keeps_uvicorn_at_warning_so_a_query_token_is_never_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """uvicorn's access log writes each request's path and query string at
+    INFO, so at that level the `/?token=<t>` login link would be printed by
+    the server itself. `log_level="warning"` is what keeps it out."""
+    import uvicorn
+
+    from saddle.web import app as module
+
+    handed: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: handed.update(kw))
+    monkeypatch.setenv("SADDLE_CHAT_TOKEN", "t0k3n")
+
+    module.serve(
+        host="100.64.0.7",
+        port=9999,
+        api_key="unused-in-this-test",
+        base_url="http://example.invalid/v1",
+        model="a-model",
+        workdir=tmp_path,
+        sessions_root=tmp_path / "sessions",
+    )
+
+    assert handed["log_level"] == "warning"
+
+
+def test_serve_fails_closed_even_when_no_token_was_handed_to_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A direct `serve(host=<non-loopback>)` call with no `token=` argument
+    must still gate the server -- the caller omitting a token is not a way
+    to open it, only `saddle chat`'s own loopback default is."""
+    import uvicorn
+
+    from saddle.web import app as module
+
+    handed: dict[str, Any] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: handed.update(app=app))
+    monkeypatch.setenv("SADDLE_CHAT_TOKEN", "t0k3n")
+
+    module.serve(
+        host="100.64.0.7",
+        port=9999,
+        api_key="unused-in-this-test",
+        base_url="http://example.invalid/v1",
+        model="a-model",
+        workdir=tmp_path,
+        sessions_root=tmp_path / "sessions",
+    )
+
+    with TestClient(handed["app"]) as client:
+        assert client.get("/").status_code == 401
+        assert client.get("/", headers={"Authorization": "Bearer t0k3n"}).status_code == 200

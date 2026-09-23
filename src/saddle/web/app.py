@@ -13,13 +13,18 @@ the turn in flight and nothing else.
 from __future__ import annotations
 
 import asyncio
+import hmac
+import ipaddress
 import json
 import mimetypes
+import os
 import queue
+import secrets
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
@@ -28,11 +33,14 @@ from starlette.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
     Response,
     StreamingResponse,
 )
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from saddle.engine import TurnOptions
 from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
@@ -53,6 +61,123 @@ from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+TOKEN_FILE = "~/.config/saddle/chat-token"
+"""Where a generated chat token is cached across restarts, when the caller
+gives none and SADDLE_CHAT_TOKEN is not set. Distinct from `cli.KEY_FILE`,
+which holds the vLLM key -- this file is never read for that purpose."""
+
+TOKEN_COOKIE = "saddle_token"
+TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 365  # one year
+
+
+def needs_token(host: str) -> bool:
+    """Whether a server bound to `host` must require a token.
+
+    False only for `localhost` and an address `ipaddress` parses as
+    loopback (127.0.0.0/8, ::1). Everything else -- `0.0.0.0`, `::`, an
+    empty string, a tailnet IP, a MagicDNS name, garbage -- fails closed
+    and answers True, because a bind address this function cannot make
+    sense of is not one it can vouch for as local-only.
+    """
+    if host == "localhost":
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not address.is_loopback
+
+
+def chat_token() -> str:
+    """The token to require: env, then the cached file, then a fresh one.
+
+    `SADDLE_CHAT_TOKEN` wins when set and non-empty. Otherwise `TOKEN_FILE`
+    is read if it exists and is non-empty. Otherwise a random token is
+    generated and the file is created with mode 0o600 before anything else
+    can read it, mirroring `cli.KEY_FILE`'s fallback for the vLLM key --
+    this constant is never used to read or print that key.
+    """
+    env = os.environ.get("SADDLE_CHAT_TOKEN")
+    if env:
+        return env
+    path = Path(TOKEN_FILE).expanduser()
+    if path.exists():
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    token = secrets.token_urlsafe(32)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(token)
+    return token
+
+
+def _token_matches(provided: str | None, token: str) -> bool:
+    """Constant-time comparison on bytes; a prefix or a near-miss must not pass."""
+    if provided is None:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), token.encode("utf-8"))
+
+
+def _unauthorized() -> PlainTextResponse:
+    # Never echo the token back, even implicitly -- the body is fixed text.
+    return PlainTextResponse("saddle: token required", status_code=401)
+
+
+class TokenGate:
+    """Pure ASGI middleware: every `http` request must carry the token.
+
+    Deliberately not `starlette.middleware.base.BaseHTTPMiddleware`, which
+    buffers a handler's whole response before it can be forwarded -- that
+    would break the SSE stream, which has to flush each event as it is
+    published rather than after the connection closes. This wraps `scope`,
+    `receive` and `send` directly, so an authorized request reaches the
+    inner app, uploads and the static mount included, exactly as if the
+    gate were not there.
+    """
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        query_token = request.query_params.get("token")
+        if query_token is not None:
+            if not _token_matches(query_token, self.token):
+                await _unauthorized()(scope, receive, send)
+                return
+            kept = [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
+            location = request.url.path + (f"?{urlencode(kept)}" if kept else "")
+            response = RedirectResponse(location, status_code=303)
+            # HttpOnly so a page script cannot read the token back out of
+            # document.cookie; Lax because every state-changing route is
+            # POST/PATCH/DELETE and Lax never sends it cross-site for those,
+            # while Strict would withhold it on the very first load after a
+            # cross-site redirect (the phone-open-link path).
+            response.set_cookie(
+                TOKEN_COOKIE,
+                self.token,
+                max_age=TOKEN_COOKIE_MAX_AGE,
+                httponly=True,
+                samesite="lax",
+                path="/",
+            )
+            await response(scope, receive, send)
+            return
+        header = request.headers.get("authorization") or ""
+        scheme, _, value = header.partition(" ")
+        bearer = value if scheme == "Bearer" else None
+        cookie = request.cookies.get(TOKEN_COOKIE)
+        if not (_token_matches(bearer, self.token) or _token_matches(cookie, self.token)):
+            await _unauthorized()(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def history_for_display(
@@ -240,7 +365,13 @@ class ChatServer:
             live.publish(None)
 
 
-def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path) -> Starlette:
+def build_app(
+    store: SessionStore,
+    client_factory: Any,
+    *,
+    default_workdir: Path,
+    token: str | None = None,
+) -> ASGIApp:
     server = ChatServer(store, client_factory, default_workdir=default_workdir)
 
     async def index(_: Request) -> Response:
@@ -618,7 +749,7 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             },
         )
 
-    return Starlette(
+    app: ASGIApp = Starlette(
         routes=[
             Route("/", index),
             Route("/api/personas", list_personas),
@@ -643,6 +774,13 @@ def build_app(store: SessionStore, client_factory: Any, *, default_workdir: Path
             Mount("/static", StaticFiles(directory=str(STATIC)), name="static"),
         ]
     )
+    # A token wraps the whole app in the pure-ASGI gate, so the SSE stream
+    # and the static mount are covered too -- not just the routes a
+    # Starlette middleware would see. No token (a loopback bind) leaves the
+    # app exactly as it always was.
+    if token is not None:
+        return TokenGate(app, token)
+    return app
 
 
 def serve(
@@ -654,6 +792,7 @@ def serve(
     model: str,
     workdir: Path,
     sessions_root: Path | None = None,
+    token: str | None = None,
 ) -> None:
     import uvicorn
 
@@ -662,5 +801,9 @@ def serve(
     def factory() -> VllmClient:
         return VllmClient(api_key=api_key, base_url=base_url, model=model)
 
-    app = build_app(store, factory, default_workdir=workdir)
+    # Fail closed: a non-loopback host requires a token even when the
+    # caller passed none, so a direct call can never open the server by
+    # omission the way the CLI's own resolution does deliberately.
+    resolved = (token or chat_token()) if needs_token(host) else None
+    app = build_app(store, factory, default_workdir=workdir, token=resolved)
     uvicorn.run(app, host=host, port=port, log_level="warning")
