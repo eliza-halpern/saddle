@@ -1102,6 +1102,25 @@ def test_count_tokens_keeps_a_deployment_prefix() -> None:
 
 
 @pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [("http://h:8000", "/tokenize"), ("http://h/x", "/x/tokenize")],
+    ids=["no path", "a prefix that is not the api root"],
+)
+def test_count_tokens_only_steps_out_of_a_v1_api_root(base_url: str, expected: str) -> None:
+    # Only a trailing `v1` segment is the API root to step out of; any other
+    # path is kept whole rather than losing its last segment.
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"count": 5})
+
+    client = VllmClient(api_key="k", base_url=base_url, transport=httpx.MockTransport(handler))
+    assert client.count_tokens([{"role": "user", "content": "hi"}]) == 5
+    assert seen[0].url.path == expected
+
+
+@pytest.mark.parametrize(
     ("status", "payload"),
     [
         (404, {"detail": "Not Found"}),      # an older vLLM with no endpoint

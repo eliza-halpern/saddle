@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from saddle.undo import UndoLog
 
 
@@ -306,6 +308,41 @@ def test_a_version_outside_a_turn_is_not_kept(tmp_path: Path) -> None:
     target.write_text("x")
     assert log.after_write(target, call="c") is None
     assert log.versions() == {}
+
+
+def test_a_version_that_cannot_be_copied_is_not_claimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A failed copy is not a kept version: no id comes back and no record
+    # points a transcript at a blob that was never written.
+    log, work = _log(tmp_path)
+    target = work / "a.svg"
+    target.write_text("x")
+    log.begin(turn=1, start_index=0)
+
+    def refuse(*_: object, **__: object) -> None:
+        message = "disk full"
+        raise OSError(message)
+
+    monkeypatch.setattr("saddle.undo.shutil.copy2", refuse)
+    assert log.after_write(target, call="c") is None
+    assert log.versions() == {}
+
+
+def test_a_blank_line_in_the_log_does_not_hide_the_records_after_it(
+    tmp_path: Path,
+) -> None:
+    log, work = _log(tmp_path)
+    target = work / "a.py"
+    target.write_text("original\n")
+    log.begin(turn=1, start_index=0)
+    with (log.root / "turns.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write("\n   \n")
+    log.before_write(target)  # recorded after the blank lines
+    target.write_text("changed\n")
+
+    assert log.restore_to(0).reverted == [str(target)]
+    assert target.read_text() == "original\n"
 
 
 def test_rewinding_does_not_take_the_pictures_with_it(tmp_path: Path) -> None:

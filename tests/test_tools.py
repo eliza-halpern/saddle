@@ -167,6 +167,23 @@ def test_an_enormous_file_is_truncated_rather_than_flooding_the_window(
     assert len(out) < MAX_READ + 200
 
 
+def test_an_enormous_new_file_is_shown_truncated_but_counted_in_full(
+    tmp_path: Path,
+) -> None:
+    # A created file's result carries the file itself, capped like a diff;
+    # the byte count still says how much was actually written.
+    from saddle.tools import MAX_BODY
+
+    content = "x" * (MAX_BODY + 500)
+    out = run("write_file", tmp_path, path="big.txt", content=content)
+    assert (tmp_path / "big.txt").read_text() == content
+    assert out == (
+        f"created 'big.txt' ({MAX_BODY + 500} bytes)\n"
+        + "x" * MAX_BODY
+        + f"\n[... truncated at {MAX_BODY} characters ...]"
+    )
+
+
 def test_an_enormous_diff_is_truncated(tmp_path: Path) -> None:
     from saddle.tools import MAX_DIFF
 

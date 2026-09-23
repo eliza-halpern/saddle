@@ -38,6 +38,8 @@ from saddle.events import (
     TurnStart,
 )
 from saddle.memory import estimate_tokens
+from saddle.tools import ToolContext
+from saddle.undo import UndoLog
 from saddle.vllm import StreamToken, ToolCall, VllmClient, VllmRequestError
 
 
@@ -392,6 +394,59 @@ def test_a_stop_between_rounds_does_not_start_another_one(options: TurnOptions) 
 def test_a_turn_that_was_not_stopped_says_nothing_about_stopping(options: TurnOptions) -> None:
     events = run(FakeClient([[content("ok")]]), options, cancel=lambda: False)
     assert not any(e.kind == "error" for e in events)
+
+
+# -- a retry answers the question already there -------------------------------
+
+
+def _retry(
+    client: FakeClient, options: TurnOptions, messages: list[dict[str, Any]]
+) -> tuple[list[Event], list[dict[str, Any]]]:
+    """Run a retry (`text=None`) with an undo log; return events and log records."""
+    log = UndoLog(options.workdir / "undo")
+    events = list(
+        run_turn(
+            cast(VllmClient, client),
+            messages,
+            None,
+            options,
+            turn=2,
+            context=ToolContext(workdir=options.workdir, undo=log),
+        )
+    )
+    records = [json.loads(line) for line in (log.root / "turns.jsonl").read_text().splitlines()]
+    return events, records
+
+
+def test_a_retry_of_an_image_question_records_its_text_and_where_it_sits(
+    options: TurnOptions,
+) -> None:
+    # The question is the last *user* message, not the last message, and an
+    # image upload stores it as parts: the turn's prompt is the text part,
+    # and the undo log keys the turn to the question's own index.
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "be brief"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                {"type": "text", "text": "what is in this picture?"},
+            ],
+        },
+        {"role": "assistant", "content": "a frog"},
+    ]
+    events, records = _retry(FakeClient([[content("a toad")]]), options, messages)
+    assert one(events[0], TurnStart).prompt == "what is in this picture?"
+    assert records[0] == {"kind": "turn", "turn": 2, "start_index": 1}
+
+
+def test_a_retry_with_no_question_has_an_empty_prompt_and_no_index(
+    options: TurnOptions,
+) -> None:
+    messages: list[dict[str, Any]] = [{"role": "system", "content": "be brief"}]
+    events, records = _retry(FakeClient([[content("ok")]]), options, messages)
+    assert one(events[0], TurnStart).prompt == ""
+    assert records[0]["start_index"] == -1
 
 
 # -- images -------------------------------------------------------------------

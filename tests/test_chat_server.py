@@ -1208,6 +1208,30 @@ def test_the_page_versions_its_assets_and_is_never_stored(
         assert 'src="/static/app.js"' not in body  # the unversioned form is gone
 
 
+def test_an_asset_that_cannot_be_stat_ed_is_served_unversioned(
+    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A missing version is not a reason to fail the page: that one asset
+    # keeps its plain URL and the others are still versioned.
+    from saddle.web.app import STATIC
+
+    real_stat = Path.stat
+
+    def stat(self: Path, **kwargs: Any) -> Any:
+        if self == STATIC / "app.js":
+            message = "gone"
+            raise OSError(message)
+        return real_stat(self, **kwargs)
+
+    with app_for(store, tmp_path) as (client, _app):
+        monkeypatch.setattr(Path, "stat", stat)
+        page = client.get("/")
+    assert page.status_code == 200
+    assert 'src="/static/app.js"' in page.text
+    assert "/static/app.js?v=" not in page.text
+    assert "/static/app.css?v=" in page.text
+
+
 # -- one unstarted session ----------------------------------------------------
 
 def test_asking_for_a_new_session_twice_gives_the_same_unwritten_one(
@@ -1392,6 +1416,16 @@ def test_an_unknown_setting_is_ignored_rather_than_stored(
         }
 
 
+def test_an_empty_setting_keeps_the_value_it_would_have_blanked(
+    store: SessionStore,
+) -> None:
+    # A cleared field in the page sends "", which is "no change", not "store
+    # nothing" -- a stored blank would silently fall back to the default.
+    store.update_settings(persona="reviewer")
+    assert store.update_settings(persona="")["persona"] == "reviewer"
+    assert store.settings()["persona"] == "reviewer"
+
+
 # -- writing and editing personas ---------------------------------------------
 
 def test_a_persona_can_be_written_and_reaches_the_model(
@@ -1476,6 +1510,14 @@ def test_a_corrupt_persona_file_falls_back_to_the_builtins(
     (store.root / "personas.json").write_text("{not json")
     assert "engineer" in store.personas()
     assert store.custom_personas() == {}
+
+
+def test_a_stored_persona_that_is_not_text_is_ignored(store: SessionStore) -> None:
+    # A hand-edited file may hold anything; only a string is a prompt.
+    (store.root / "personas.json").write_text(json.dumps({"mine": "Be kind.", "odd": 3}))
+    table = store.personas()
+    assert table["mine"] == "Be kind."
+    assert "odd" not in table
 
 
 def test_a_thinking_level_you_set_also_protects_an_empty_session(
@@ -1885,6 +1927,52 @@ def test_rewinding_to_something_that_is_not_a_question_is_refused(
         assert client.post(f"/api/sessions/{sid}/stop").json() == {"stopping": False}
 
 
+def test_a_rewind_preview_names_an_image_question_by_its_text(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # An upload stores the question as parts; the confirmation must quote
+    # its words, not the image or a stringified list.
+    sid = store.create().id
+    store.save_messages(
+        sid,
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                    {"type": "text", "text": "what is this?"},
+                ],
+            },
+            {"role": "assistant", "content": "a frog"},
+        ],
+    )
+    with app_for(store, tmp_path) as (client, _app):
+        preview = client.get(f"/api/sessions/{sid}/rewind", params={"index": 0}).json()
+    assert preview == {"text": "what is this?", "reverted": [], "deleted": []}
+
+
+def test_a_rewind_preview_refuses_what_is_not_a_question(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    sid = store.create().id
+    store.save_messages(
+        sid,
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ],
+    )
+    with app_for(store, tmp_path) as (client, _app):
+        url = f"/api/sessions/{sid}/rewind"
+        for index in (1, 2, -1):
+            reply = client.get(url, params={"index": index})
+            assert reply.status_code == 404, index
+            assert reply.json() == {"error": "no question there"}
+        reply = client.get(url, params={"index": "second"})
+        assert reply.status_code == 400
+        assert reply.json() == {"error": "index must be a number"}
+
+
 def test_a_rewind_is_refused_while_a_turn_is_running(
     store: SessionStore, tmp_path: Path
 ) -> None:
@@ -2034,6 +2122,24 @@ def test_making_a_folder_somewhere_that_is_not_a_folder_is_refused(
         assert client.post(
             "/api/browse", json={"path": str(tmp_path / "absent"), "name": "x"}
         ).status_code == 400
+
+
+def test_a_folder_that_cannot_be_made_says_why(
+    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_mkdir = Path.mkdir
+
+    def mkdir(self: Path, *args: Any, **kwargs: Any) -> None:
+        if self.name == "new-project":
+            raise OSError(28, "No space left on device")
+        real_mkdir(self, *args, **kwargs)
+
+    with app_for(store, tmp_path) as (client, _app):
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+        reply = client.post("/api/browse", json={"path": str(tmp_path), "name": "new-project"})
+    assert reply.status_code == 400
+    assert reply.json() == {"error": "[Errno 28] No space left on device"}
+    assert not (tmp_path / "new-project").exists()
 
 
 # -- token auth for a server bound beyond loopback -----------------------------
