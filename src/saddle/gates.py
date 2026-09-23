@@ -1879,7 +1879,8 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
             name="mutation",
             passed=False,
             detail=(
-                f"{percent:.1f}% < {required:.1f}%{note}: survived {len(names)}: "
+                f"killed {outcome.killed} of {outcome.total} changed-line mutants "
+                f"({percent:.1f}% < {required:.1f}%){note}: survived {len(names)}: "
                 f"{shown}{excluded}{untested}"
             ),
             basis=f"sampled n={outcome.total}",
@@ -1887,7 +1888,10 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     return GateCheck(
         name="mutation",
         passed=True,
-        detail=f"{percent:.1f}% >= {required:.1f}% over {outcome.total} mutant(s){excluded}",
+        detail=(
+            f"killed {outcome.killed} of {outcome.total} changed-line mutants "
+            f"({percent:.1f}% >= {required:.1f}%){excluded}"
+        ),
         basis=f"sampled n={outcome.total}",
     )
 
@@ -1900,7 +1904,7 @@ def _not_required(name: str) -> GateCheck:
 
 
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
-    """Run all twelve Tier-1 checks against `node`'s gate spec and aggregate.
+    """Run all thirteen Tier-1 checks against `node`'s gate spec and aggregate.
 
     A `test` node is a red specification (T3-7a): its tests check inverts,
     red-phase mirrors that verdict, and the three source-only checks

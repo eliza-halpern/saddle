@@ -776,7 +776,9 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "- Gate requirement-binding: PASS (not judged: every clause reads tests"
         " this node may not write)\n"
     ) in result.transcript
-    assert "- Gate mutation: PASS (100.0% >= 85.0% over 5 mutant(s))\n" in result.transcript
+    assert (
+        "- Gate mutation: PASS (killed 5 of 5 changed-line mutants (100.0% >= 85.0%))\n"
+    ) in result.transcript
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
     assert "- Issues: none (chain verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"

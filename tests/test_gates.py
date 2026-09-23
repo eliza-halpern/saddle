@@ -519,7 +519,7 @@ def test_run_tier1_all_green_passes() -> None:
     by_name = {check.name: check for check in result.checks}
     assert by_name["coverage"].detail == "every changed line runs"
     assert by_name["red-phase"].detail == "fail pre-change, pass post-change"
-    assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
+    assert by_name["mutation"].detail == "killed 9 of 10 changed-line mutants (90.0% >= 85.0%)"
 
 
 def test_run_tier1_one_red_check_fails_but_all_run() -> None:
@@ -539,7 +539,9 @@ def test_mutation_below_threshold_fails_with_survivors() -> None:
     check = check_mutation(outcome, 85.0)
     assert check.name == "mutation"
     assert check.passed is False
-    assert check.detail == "14.3% < 85.0%: survived 6: s1, s2, s3, s4, s5, ..."
+    assert check.detail == (
+        "killed 1 of 7 changed-line mutants (14.3% < 85.0%): survived 6: s1, s2, s3, s4, s5, ..."
+    )
     assert check.basis == "sampled n=7"
 
 
@@ -548,10 +550,34 @@ def test_mutation_boundary_threshold_passes() -> None:
     check = check_mutation(outcome, 85.0)
     assert check.name == "mutation"
     assert check.passed is True
-    assert check.detail == "85.0% >= 85.0% over 20 mutant(s)"
+    assert check.detail == "killed 17 of 20 changed-line mutants (85.0% >= 85.0%)"
     # T2-4: the verdict carries its evidence basis, so a reader can tell a
     # pass over 20 mutants from a pass over 0 without parsing the detail.
     assert check.basis == "sampled n=20"
+
+
+def test_mutation_fail_detail_states_the_denominator() -> None:
+    """T6-97 (WORKPLAN, key pair 1). F21.70 had to rebuild n=29 by
+    arithmetic from `82.8% < 85.0%: survived 5: ...` because the detail
+    never printed how many mutants were decided; the count precedes the
+    percentage so the worker's next attempt sees both."""
+    outcome = MutationOutcome(
+        killed=24, total=29, generated=29, survivors=("s1", "s2", "s3", "s4", "s5")
+    )
+    check = check_mutation(outcome, 85.0)
+    assert check.passed is False
+    assert check.detail.startswith(
+        "killed 24 of 29 changed-line mutants (82.8% < 85.0%): survived 5: "
+    )
+
+
+def test_mutation_pass_detail_states_the_denominator() -> None:
+    """T6-97 (WORKPLAN, key pair 2): the pass detail also names both
+    counts, not just the percentage over the total."""
+    outcome = MutationOutcome(killed=9, total=10, generated=10, survivors=("s1",))
+    check = check_mutation(outcome, 85.0)
+    assert check.passed is True
+    assert check.detail == "killed 9 of 10 changed-line mutants (90.0% >= 85.0%)"
 
 
 def test_mutation_no_longer_passes_without_mutants() -> None:
@@ -1114,7 +1140,7 @@ def test_mutation_small_sample_demands_every_mutant() -> None:
 def test_mutation_detail_always_reports_the_sample_size() -> None:
     """Weak evidence has to be visible in the transcript, not inferred."""
     outcome = MutationOutcome(generated=20, total=20, killed=20, survivors=())
-    assert "20 mutant" in check_mutation(outcome, 85.0).detail
+    assert "of 20 changed-line mutants" in check_mutation(outcome, 85.0).detail
 
 
 def test_impl_node_may_not_touch_test_files() -> None:
@@ -1739,7 +1765,7 @@ def test_run_tier1_impl_node_keeps_the_real_coverage_and_mutation_checks() -> No
     by_name = {check.name: check for check in result.checks}
     assert by_name["coverage"].basis == "changed-lines=1 unreachable-lines=1"
     assert by_name["coverage"].basis != "test node"
-    assert by_name["mutation"].detail == "90.0% >= 85.0% over 10 mutant(s)"
+    assert by_name["mutation"].detail == "killed 9 of 10 changed-line mutants (90.0% >= 85.0%)"
     writable = {c.name: c for c in run_tier1(_node(kind="refactor"), inputs).checks}
     assert writable["coverage"].passed is False
     assert writable["coverage"].detail == "no test runs n1.py:1"
@@ -1781,13 +1807,16 @@ def test_mutation_detail_reports_the_text_only_mutants_left_out() -> None:
     passing = MutationOutcome(killed=9, total=10, generated=10, survivors=("s1",), text_only=4)
     check = check_mutation(passing, 85.0)
     assert check.passed is True
-    assert check.detail == "90.0% >= 85.0% over 10 mutant(s); 4 text-only mutant(s) excluded"
+    assert check.detail == (
+        "killed 9 of 10 changed-line mutants (90.0% >= 85.0%); 4 text-only mutant(s) excluded"
+    )
     failing = MutationOutcome(
         killed=1, total=7, generated=7, survivors=tuple(f"s{i}" for i in range(6)), text_only=2
     )
     check = check_mutation(failing, 85.0)
     assert check.detail == (
-        "14.3% < 85.0%: survived 6: s0, s1, s2, s3, s4, ...; 2 text-only mutant(s) excluded"
+        "killed 1 of 7 changed-line mutants (14.3% < 85.0%): survived 6: s0, s1, s2, s3, s4, "
+        "...; 2 text-only mutant(s) excluded"
     )
     assert (
         "excluded"
@@ -1807,14 +1836,14 @@ def test_mutation_detail_names_the_untested_mutants_only_on_a_fail() -> None:
     )
     check = check_mutation(failing, 85.0)
     assert check.detail == (
-        "14.3% < 85.0%: survived 6: s0, s1, s2, s3, s4, ...; "
-        "2 untested (no test runs the mutated function)"
+        "killed 1 of 7 changed-line mutants (14.3% < 85.0%): survived 6: s0, s1, s2, s3, s4, "
+        "...; 2 untested (no test runs the mutated function)"
     )
     untested_zero = MutationOutcome(
         killed=1, total=7, generated=7, survivors=tuple(f"s{i}" for i in range(6))
     )
     assert check_mutation(untested_zero, 85.0).detail == (
-        "14.3% < 85.0%: survived 6: s0, s1, s2, s3, s4, ..."
+        "killed 1 of 7 changed-line mutants (14.3% < 85.0%): survived 6: s0, s1, s2, s3, s4, ..."
     )
     # A pass never carries the suffix (the spec scopes it to a fail).
     passing_but_untested = MutationOutcome(

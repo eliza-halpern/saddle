@@ -254,7 +254,8 @@ def test_run_node_gate_full_sample_catches_what_a_small_cap_hid(
     assert result.passed is False
     by_name = {check.name: check for check in result.checks}
     assert by_name["mutation"].detail == (
-        "50.0% < 100.0% (small sample: 2 mutant(s), all must die): survived 1: m2"
+        "killed 1 of 2 changed-line mutants (50.0% < 100.0%) "
+        "(small sample: 2 mutant(s), all must die): survived 1: m2"
     )
 
 
