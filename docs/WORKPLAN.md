@@ -9310,7 +9310,16 @@ whose effect cannot be measured — the vacuity rule. T6-91's
 `survivor-skipped` record is what makes this item answerable; do it
 after, not before.
 
-### T6-93 — The survivor round declines before it draws, on a name; remove the guard and let `keep_candidate` decide (LANDED pending; F21.68)
+### T6-93 — The survivor round declines before it draws, on a name; remove the guard and let `keep_candidate` decide (open: NOT landed; deferred to Phase 2; F21.68)
+
+**Status corrected 2026-09-23.** The heading used to say "LANDED pending", and
+the "Done:" paragraph below describes a change that never reached any branch.
+`_sealed_test_names` and the decline guard are still in `slice.py` on `main`
+(`29dc661`) and on every local and remote branch
+(`git grep -c _sealed_test_names <branch> -- src/saddle/slice.py`). The user
+decided to defer the code to Phase 2, where the DAG pipeline becomes the Long
+lane. FINDINGS recommendation 81 still calls it blocking for any further DAG
+seed. T6-94 is deferred with it.
 
 `_survivor_round` computes the gap's enclosing functions and then, before
 the draw and before its own `SpanRecorder` call, returns None if any of
