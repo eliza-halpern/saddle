@@ -3641,7 +3641,7 @@ def test_chat_defaults_its_workdir_to_the_ranch_and_makes_it(
     main(["chat", "--no-open"], stdout=io.StringIO())
 
     assert served["workdir"] == (home / "saddle-ranch").resolve()
-    assert (home / "saddle-ranch").is_dir()      # made, not just named
+    assert (home / "saddle-ranch").is_dir()  # made, not just named
 
 
 def test_an_explicit_workdir_still_wins_and_is_created(
@@ -3895,9 +3895,7 @@ def test_audit_test_command_reaches_the_audit_in_both_modes(
     root, c1, c2 = audit_two_commits
     command = "python -m pytest -q -p no:cacheprovider"
     for extra in (("--baseline", c1), (c2,)):
-        code, out, _err = _audit_main(
-            tmp_path, root, *extra, "--test-command", command, "--json"
-        )
+        code, out, _err = _audit_main(tmp_path, root, *extra, "--test-command", command, "--json")
         assert json.loads(out)["test_command"] == command
         assert code in (0, 1)
 
