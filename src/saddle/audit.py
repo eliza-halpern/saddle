@@ -15,18 +15,32 @@ a `pass` would be a claim nothing measured. The remaining checks run exactly
 as `runner.run_node_gate` runs them, on a synthesized `refactor` node: the
 one kind whose coverage gate has full force.
 
+With `cache=<dir>` (P1-4), `audit_tree` serves a stored `AuditResult` only
+when the staged tree, the resolved baseline, `test_command` and the gate
+surface (`gate_surface()`: a hash of the gate modules' bytes plus the shelled-
+out tools' versions) all match a stored key exactly. Any other file state --
+a missing file, unparseable JSON, a mismatched key -- is a miss, never a
+verdict and never an exception. `nothing-to-audit` is never cached.
+
 Layering: this module imports `dag`, `evidence` and `runner`; nothing imports
 it except the CLI (P1-5).
 """
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import importlib
+import importlib.metadata
+import json
+import os
+import platform
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal, cast
 
 from saddle.dag import Node
 from saddle.evidence import MutationOutcome, run_capture
@@ -35,19 +49,31 @@ from saddle.runner import run_node_gate
 
 AUDIT_TEST_COMMAND: Final = "python -m pytest -q"
 
-# Machine noise a run leaves behind. None of it is a change, so none of it may
-# reach `git add -A` in the copy, whatever the audited tree's own `.gitignore`.
-COPY_IGNORE: Final[tuple[str, ...]] = (
-    "__pycache__",
-    "*.pyc",
-    ".pytest_cache",
-    ".coverage*",
-    ".saddle",
-    ".hypothesis",
-    ".ruff_cache",
-    ".mutmut-cache",
-    "mutants",
+# The CLI (P1-5) expands and uses this; the library never defaults to it.
+DEFAULT_AUDIT_CACHE: Final = Path("~/.cache/saddle/audit")
+
+# The modules whose bytes decide a verdict, and the tools the gates shell out
+# to, in the order `gate_surface()` hashes them.
+SURFACE_MODULES: Final[tuple[str, ...]] = (
+    "saddle.audit",
+    "saddle.runner",
+    "saddle.gates",
+    "saddle.evidence",
+    "saddle.dag",
 )
+SURFACE_TOOLS: Final[tuple[str, ...]] = ("mutmut", "ruff", "coverage")
+
+# Machine noise a run leaves behind, ignored at any depth: none of it is a
+# change, so none of it may reach `git add -A` in the copy, whatever the
+# audited tree's own `.gitignore`.
+_COPY_IGNORE_ANY_DEPTH: Final[frozenset[str]] = frozenset(
+    {"__pycache__", ".pytest_cache", ".hypothesis", ".ruff_cache", ".mutmut-cache"}
+)
+# Noise saddle and mutmut write only at the tree's own top level (P1-4): a
+# pattern here must not eat a tracked file of the same name deeper in the
+# tree (`pkg/mutants/__init__.py`) or a same-prefixed one at the top
+# (`.coveragerc`, a project's own coverage config, is not `.coverage.*`).
+_COPY_IGNORE_TOP_LEVEL: Final[frozenset[str]] = frozenset({".saddle", "mutants", ".coverage"})
 
 # Check name -> the reason printed as its detail.
 NOT_APPLICABLE: Final[Mapping[str, str]] = {
@@ -78,6 +104,8 @@ class AuditResult:
     test_command: str
     checks: tuple[AuditCheck, ...]  # run_tier1's order; () for nothing-to-audit
     mutation: MutationOutcome | None  # None for nothing-to-audit
+    surface: str  # gate_surface() at the time this result was produced
+    cached: bool = False  # True when served from a stored key match, not gated
 
     def to_dict(self) -> dict[str, object]:
         """A JSON-serialisable view; `mutation` goes through `dataclasses.asdict`."""
@@ -88,7 +116,34 @@ class AuditResult:
             "test_command": self.test_command,
             "checks": [asdict(check) for check in self.checks],
             "mutation": asdict(self.mutation) if self.mutation is not None else None,
+            "surface": self.surface,
+            "cached": self.cached,
         }
+
+    @staticmethod
+    def from_dict(data: Mapping[str, Any]) -> AuditResult:
+        """The exact inverse of `to_dict`: every JSON list becomes a tuple, recursively."""
+        mutation_data = data["mutation"]
+        mutation = MutationOutcome(**_tuplify(mutation_data)) if mutation_data is not None else None
+        return AuditResult(
+            verdict=data["verdict"],
+            tree=data["tree"],
+            baseline=data["baseline"],
+            test_command=data["test_command"],
+            checks=tuple(AuditCheck(**check) for check in data["checks"]),
+            mutation=mutation,
+            surface=data["surface"],
+            cached=data["cached"],
+        )
+
+
+def _tuplify(value: Any) -> Any:
+    """Recursively turn every JSON list into a tuple: `asdict`'s exact inverse for tuples."""
+    if isinstance(value, list):
+        return tuple(_tuplify(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _tuplify(item) for key, item in value.items()}
+    return value
 
 
 def audit_node(test_command: str = AUDIT_TEST_COMMAND) -> Node:
@@ -131,23 +186,123 @@ def _git(copy: Path, *argv: str) -> str:
     return run.stdout.strip()
 
 
+def _audit_ignore(root: Path) -> Callable[[str, list[str]], set[str]]:
+    """`shutil.copytree`'s `ignore` callable: some names are noise at any depth,
+    others only at `root` -- where saddle and mutmut actually write them. A
+    pattern scoped to the top level must never key off a *prefix* that a
+    same-named top-level project file also has (`.coveragerc` starts with
+    `.coverage` but is not run noise).
+    """
+    root_str = os.fspath(root)
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        skip = {name for name in names if name in _COPY_IGNORE_ANY_DEPTH or name.endswith(".pyc")}
+        if directory == root_str:
+            skip |= {
+                name
+                for name in names
+                if name in _COPY_IGNORE_TOP_LEVEL or name.startswith(".coverage.")
+            }
+        return skip
+
+    return ignore
+
+
+def gate_surface(
+    files: Sequence[Path] | None = None,
+    versions: Mapping[str, str] | None = None,
+) -> str:
+    """A hex sha256 of what decides a verdict: gate module bytes, tool versions,
+    and the interpreter version. Two audits agree only when all three agree.
+
+    With no arguments, hashes each module named in `SURFACE_MODULES`' `__file__`
+    bytes in order, then `importlib.metadata.version(t)` for each tool named in
+    `SURFACE_TOOLS`, then `platform.python_version()`. The arguments let a test
+    pass explicit files and versions instead.
+    """
+    if files is None:
+        # `__file__` is `str | None` in general (a frozen or namespace import has
+        # none), but every real module on disk has one; `cast` records that
+        # without adding a branch a test would have to exercise to cover.
+        files = [
+            Path(cast(str, importlib.import_module(name).__file__)) for name in SURFACE_MODULES
+        ]
+    if versions is None:
+        versions = {tool: importlib.metadata.version(tool) for tool in SURFACE_TOOLS}
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(Path(path).read_bytes())
+    for tool, version in versions.items():
+        digest.update(f"{tool}={version}\n".encode())
+    digest.update(platform.python_version().encode())
+    return digest.hexdigest()
+
+
+def _cache_key(tree: str, baseline: str, test_command: str, surface: str) -> dict[str, str]:
+    return {"tree": tree, "baseline": baseline, "test_command": test_command, "surface": surface}
+
+
+def _cache_path(cache: Path, key: Mapping[str, str]) -> Path:
+    digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+    return cache / f"{digest}.json"
+
+
+def _cache_read(path: Path, key: Mapping[str, str]) -> AuditResult | None:
+    """A stored result whose key matches `key` exactly; any other file state is
+    a miss, never a verdict and never an exception."""
+    try:
+        raw = path.read_text()
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or data.get("key") != key or "result" not in data:
+        return None
+    try:
+        stored = AuditResult.from_dict(data["result"])
+    except (KeyError, TypeError, ValueError):
+        # A matching key over a result that cannot be rebuilt (a hand edit, a
+        # partial write that still parses) is a miss like any other bad file.
+        return None
+    return dataclasses.replace(stored, cached=True)
+
+
+def _cache_write(cache: Path, path: Path, key: Mapping[str, str], result: AuditResult) -> None:
+    """Write `{"key": key, "result": ...}` atomically: a temp file, then `os.replace`."""
+    cache.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"key": key, "result": result.to_dict()}, sort_keys=True)
+    handle, tmp_name = tempfile.mkstemp(dir=cache, prefix=".audit-tmp-")
+    with os.fdopen(handle, "w") as tmp_file:
+        tmp_file.write(payload)
+    os.replace(tmp_name, path)
+
+
 def audit_tree(
     tree: Path,
     baseline: str = "HEAD",
     *,
     test_command: str = AUDIT_TEST_COMMAND,
     recorder: SpanRecorder | None = None,
+    cache: Path | None = None,
 ) -> AuditResult:
-    """Gate `tree`, as it is on disk, against `baseline`; `tree` is never written to."""
+    """Gate `tree`, as it is on disk, against `baseline`; `tree` is never written to.
+
+    With `cache=None`, exactly P1-2's behaviour, plus `surface` and `cached` on
+    the result. With a directory, a stored result is served only on a key hit
+    (see the module docstring); `nothing-to-audit` is never cached.
+    """
     # A linked worktree's `.git` is a file naming a gitdir outside the tree: a
     # copy of it would still write to that original, and `git add -A` changes
     # the index even when no source byte moves.
     if not (tree / ".git").is_dir():
         msg = f"{tree} is not a git repository (no .git directory)"
         raise AuditError(msg)
+    surface = gate_surface()
     with tempfile.TemporaryDirectory() as scratch:
         copy = Path(scratch) / "tree"
-        shutil.copytree(tree, copy, ignore=shutil.ignore_patterns(*COPY_IGNORE))
+        shutil.copytree(tree, copy, ignore=_audit_ignore(tree))
         # Untracked files must be staged: `git diff <ref>` sees tracked files
         # only, so a new module would be invisible to every gate.
         _git(copy, "add", "-A")
@@ -165,7 +320,15 @@ def audit_tree(
                 test_command=test_command,
                 checks=(),
                 mutation=None,
+                surface=surface,
+                cached=False,
             )
+        key = _cache_key(staged, resolved, test_command, surface)
+        cache_file = _cache_path(cache, key) if cache is not None else None
+        if cache_file is not None:
+            hit = _cache_read(cache_file, key)
+            if hit is not None:
+                return hit
         gated = run_node_gate(audit_node(test_command), copy, baseline=resolved, recorder=recorder)
     checks = tuple(
         AuditCheck(
@@ -178,11 +341,16 @@ def audit_tree(
         )
         for check in gated.checks
     )
-    return AuditResult(
+    result = AuditResult(
         verdict="refuse" if any(check.status == "fail" for check in checks) else "accept",
         tree=staged,
         baseline=resolved,
         test_command=test_command,
         checks=checks,
         mutation=gated.mutation,
+        surface=surface,
+        cached=False,
     )
+    if cache is not None and cache_file is not None:
+        _cache_write(cache, cache_file, key, result)
+    return result

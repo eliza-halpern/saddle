@@ -15,12 +15,15 @@ from pathlib import Path
 
 import pytest
 
+from saddle import audit
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     NOT_APPLICABLE,
     AuditError,
+    AuditResult,
     audit_node,
     audit_tree,
+    gate_surface,
 )
 from saddle.dag import Node
 from saddle.evidence import run_argv, run_capture
@@ -59,7 +62,9 @@ def _init(root: Path, files: dict[str, str]) -> None:
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "test")
     for name, text in files.items():
-        (root / name).write_text(text)
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
     _git(root, "add", "-A")
     _git(root, "commit", "-m", "baseline")
 
@@ -168,6 +173,24 @@ def test_nothing_to_audit_result_serialises(tmp_path: Path) -> None:
     assert payload["mutation"] is None
 
 
+def test_from_dict_is_the_exact_inverse_of_to_dict(clean_tree: Path) -> None:
+    """`from_dict(to_dict(r))` round-trips every field, including `mutation`'s
+    tuple-typed `survivors` and `survivor_lines`, through a real JSON hop."""
+    result = audit_tree(clean_tree)
+    assert result.mutation is not None
+    round_tripped = json.loads(json.dumps(result.to_dict()))
+    assert AuditResult.from_dict(round_tripped) == result
+
+
+def test_from_dict_round_trips_a_nothing_to_audit_result(tmp_path: Path) -> None:
+    """The `mutation is None` half of the inverse: nothing-to-audit has no mutation."""
+    _init(tmp_path / "tree", {"n.py": BASE_CODE})
+    result = audit_tree(tmp_path / "tree")
+    assert result.mutation is None
+    round_tripped = json.loads(json.dumps(result.to_dict()))
+    assert AuditResult.from_dict(round_tripped) == result
+
+
 def test_baseline_names_an_earlier_commit(tmp_path: Path) -> None:
     """The baseline argument is resolved, so a branch or sha compares against that commit."""
     tree = tmp_path / "tree"
@@ -266,3 +289,158 @@ def test_the_recorder_is_threaded_into_the_gate(clean_tree: Path, tmp_path: Path
     journal = tmp_path / "proofs.jsonl"
     audit_tree(clean_tree, recorder=SpanRecorder(path=journal, node_id="audit"))
     assert [span for span in read_spans(journal) if span.kind == "tool"]
+
+
+# ---------------------------------------- P1-4: the audit's verdict cache
+
+
+def _the_only_cache_file(cache: Path) -> Path:
+    [cache_file] = list(cache.iterdir())
+    return cache_file
+
+
+def test_cache_hit_skips_gates_and_returns_the_same_verdict(
+    clean_tree: Path, tmp_path: Path
+) -> None:
+    """Pair 1 (key): a hit skips the gates and returns the same verdict."""
+    cache = tmp_path / "cache"
+    journal_1 = tmp_path / "first.jsonl"
+    first = audit_tree(
+        clean_tree, cache=cache, recorder=SpanRecorder(path=journal_1, node_id="audit")
+    )
+    assert first.cached is False
+    assert read_spans(journal_1)
+
+    journal_2 = tmp_path / "second.jsonl"
+    second = audit_tree(
+        clean_tree, cache=cache, recorder=SpanRecorder(path=journal_2, node_id="audit")
+    )
+    assert second.cached is True
+    assert read_spans(journal_2) == []
+    assert second.to_dict() == {**first.to_dict(), "cached": True}
+
+
+def test_one_byte_of_source_is_a_miss(clean_tree: Path, tmp_path: Path) -> None:
+    """Pair 2: a single changed byte of the audited tree's source is a miss."""
+    cache = tmp_path / "cache"
+    audit_tree(clean_tree, cache=cache)
+    # One trailing space: same statement, same behaviour, one different byte.
+    (clean_tree / "n.py").write_text(FIXED_CODE.replace("return 2", "return 2 "))
+    journal = tmp_path / "second.jsonl"
+    result = audit_tree(
+        clean_tree, cache=cache, recorder=SpanRecorder(path=journal, node_id="audit")
+    )
+    assert result.cached is False
+    assert read_spans(journal)
+
+
+def test_a_different_gate_surface_is_a_miss(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pair 3: a different gate surface is a miss (M-K1)."""
+    cache = tmp_path / "cache"
+    audit_tree(clean_tree, cache=cache)
+    monkeypatch.setattr(audit, "gate_surface", lambda *a, **kw: "other")
+    result = audit_tree(clean_tree, cache=cache)
+    assert result.cached is False
+
+
+def test_a_different_test_command_is_a_miss(clean_tree: Path, tmp_path: Path) -> None:
+    """Pair 4: a different test command is a miss (M-K2)."""
+    cache = tmp_path / "cache"
+    audit_tree(clean_tree, cache=cache)
+    result = audit_tree(clean_tree, cache=cache, test_command="python -m pytest -q test_n.py")
+    assert result.cached is False
+
+
+def test_a_planted_verdict_is_not_served(untracked_module_tree: Path, tmp_path: Path) -> None:
+    """Pair 5: a planted verdict, filed under a tampered key, is not served (M-K3)."""
+    cache = tmp_path / "cache"
+    first = audit_tree(untracked_module_tree, cache=cache)
+    assert first.verdict == "refuse"
+    cache_file = _the_only_cache_file(cache)
+    payload = json.loads(cache_file.read_text())
+    payload["key"]["tree"] = "0" * 40
+    payload["result"]["verdict"] = "accept"
+    cache_file.write_text(json.dumps(payload))
+
+    result = audit_tree(untracked_module_tree, cache=cache)
+    assert result.verdict == "refuse"
+    assert result.cached is False
+
+
+def test_garbage_cache_file_is_a_miss_not_a_crash(clean_tree: Path, tmp_path: Path) -> None:
+    """Pair 6: unparseable cache content is a miss, never an exception (M-K4)."""
+    cache = tmp_path / "cache"
+    audit_tree(clean_tree, cache=cache)
+    _the_only_cache_file(cache).write_bytes(b"{not json")
+
+    result = audit_tree(clean_tree, cache=cache)
+    assert result.cached is False
+
+
+def test_gate_surface_moves_with_each_input_and_nothing_else(tmp_path: Path) -> None:
+    """Pair 7: `gate_surface` moves with each input and nothing else (M-K5)."""
+    a = tmp_path / "a.py"
+    b = tmp_path / "b.py"
+    a.write_text("x = 1\n")
+    b.write_text("y = 2\n")
+    versions = {"mutmut": "1.0", "ruff": "2.0", "coverage": "3.0"}
+
+    base = gate_surface([a, b], versions)
+    assert gate_surface([a, b], dict(versions)) == base
+
+    a.write_text("x = 11\n")
+    assert gate_surface([a, b], versions) != base
+    a.write_text("x = 1\n")
+    assert gate_surface([a, b], versions) == base
+
+    assert gate_surface([a, b], {**versions, "ruff": "2.1"}) != base
+    assert gate_surface([b, a], versions) != base
+
+
+def test_a_tracked_coveragerc_is_not_noise(tmp_path: Path) -> None:
+    """Pair 8 (COPY_IGNORE): a tracked `.coveragerc` is not noise (M-K6).
+
+    Red at 29dc661: `shutil.ignore_patterns(".coverage*", ...)` also drops
+    `.coveragerc`, so the copy loses a tracked file the baseline has and an
+    unchanged repo audits as `refuse`, not `nothing-to-audit`.
+    """
+    tree = tmp_path / "tree"
+    _init(
+        tree,
+        {
+            ".coveragerc": "[run]\nbranch = True\n",
+            "n.py": BASE_CODE,
+            "test_n.py": TEST_BODY.format(value=1),
+        },
+    )
+    assert audit_tree(tree).verdict == "nothing-to-audit"
+
+
+def test_mutants_and_saddle_below_top_level_are_real_files(tmp_path: Path) -> None:
+    """Pair 9: `mutants`/`.saddle` below the top level are real, tracked files (M-K7)."""
+    tree = tmp_path / "tree"
+    _init(
+        tree,
+        {
+            "pkg/mutants/__init__.py": "x = 1\n",
+            "pkg/.saddle/keep.txt": "keep\n",
+        },
+    )
+    assert audit_tree(tree).verdict == "nothing-to-audit"
+
+
+def test_a_matching_key_over_a_malformed_result_is_a_miss(clean_tree: Path, tmp_path: Path) -> None:
+    """A parseable cache file whose key matches but whose result cannot be
+    rebuilt is a miss, never an exception (contract; checker probe X-P1-4-1:
+    `from_dict` raised KeyError here and the audit crashed)."""
+    cache = tmp_path / "cache"
+    audit_tree(clean_tree, cache=cache)
+    stored = _the_only_cache_file(cache)
+    data = json.loads(stored.read_text())
+    data["result"] = {"verdict": "accept"}
+    stored.write_text(json.dumps(data))
+
+    result = audit_tree(clean_tree, cache=cache)
+    assert result.cached is False
