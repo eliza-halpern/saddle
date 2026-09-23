@@ -1,0 +1,268 @@
+"""Tests for saddle.audit: the Tier-1 battery over a tree with no plan (P1-2).
+
+Every fixture's changed source line is exactly `    return 2`: the conftest's
+autouse `mutmut` stub reports five killed mutants located on that line, so a
+tree with healthy tests passes the mutation gate for the stated reason.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+from pathlib import Path
+
+import pytest
+
+from saddle.audit import (
+    AUDIT_TEST_COMMAND,
+    NOT_APPLICABLE,
+    AuditError,
+    audit_node,
+    audit_tree,
+)
+from saddle.dag import Node
+from saddle.evidence import run_argv, run_capture
+from saddle.journal import SpanRecorder, read_spans
+
+BASE_CODE = "def f():\n    return 1\n"
+FIXED_CODE = "def f():\n    return 2\n"
+TEST_BODY = "from n import f\n\n\ndef test_f():\n    assert f() == {value}\n"
+
+# run_tier1's order at the base; the audit reports it unchanged.
+CHECK_ORDER = (
+    "syntax",
+    "ruff",
+    "tests",
+    "coverage",
+    "dead-code",
+    "public-deletions",
+    "red-phase",
+    "node-scope",
+    "target-scope",
+    "property-coverage",
+    "assertion-preservation",
+    "requirement-binding",
+    "mutation",
+)
+
+
+def _git(root: Path, *argv: str) -> None:
+    assert run_argv(["git", *argv], root) == 0
+
+
+def _init(root: Path, files: dict[str, str]) -> None:
+    """Commit `files` as the baseline of a fresh repository at `root`."""
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "test")
+    for name, text in files.items():
+        (root / name).write_text(text)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "baseline")
+
+
+def _hashes(root: Path) -> dict[str, str]:
+    """Content hash of every file under `root`, `.git` included."""
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+@pytest.fixture
+def untracked_module_tree(tmp_path: Path) -> Path:
+    """Pair 1: a tracked change that is fully tested, plus an untracked `m.py` no test imports."""
+    tree = tmp_path / "tree"
+    _init(tree, {"n.py": BASE_CODE, "test_n.py": TEST_BODY.format(value=1)})
+    (tree / "n.py").write_text(FIXED_CODE)
+    (tree / "test_n.py").write_text(TEST_BODY.format(value=2))
+    (tree / "m.py").write_text("def g():\n    return 7\n")
+    return tree
+
+
+@pytest.fixture
+def clean_tree(tmp_path: Path) -> Path:
+    """Pair 2: the change and its test are both new to the index, the test untracked."""
+    tree = tmp_path / "tree"
+    _init(tree, {"n.py": BASE_CODE})
+    (tree / "n.py").write_text(FIXED_CODE)
+    (tree / "test_n.py").write_text(TEST_BODY.format(value=2))
+    return tree
+
+
+def test_untracked_new_module_is_judged(untracked_module_tree: Path) -> None:
+    result = audit_tree(untracked_module_tree)
+    assert result.verdict == "refuse"
+    coverage = next(check for check in result.checks if check.name == "coverage")
+    assert coverage.status == "fail"
+    assert "m.py" in coverage.detail
+
+
+def test_clean_diff_is_accepted_and_plan_checks_are_not_applicable(clean_tree: Path) -> None:
+    result = audit_tree(clean_tree)
+    assert result.verdict == "accept", [
+        (c.name, c.detail) for c in result.checks if c.status == "fail"
+    ]
+    assert tuple(check.name for check in result.checks) == CHECK_ORDER
+    by_name = {check.name: check for check in result.checks}
+    assert set(NOT_APPLICABLE) == {
+        "node-scope",
+        "target-scope",
+        "requirement-binding",
+        "property-coverage",
+    }
+    for name, reason in NOT_APPLICABLE.items():
+        assert by_name[name].status == "not-applicable"
+        assert by_name[name].detail == reason
+    assert [c.name for c in result.checks if c.status == "pass"] == [
+        name for name in CHECK_ORDER if name not in NOT_APPLICABLE
+    ]
+    # The refactor rule that a new file is out of scope would fail this diff;
+    # node-scope is not-applicable, so its detail must not carry that verdict.
+    assert "added file" not in by_name["node-scope"].detail
+
+
+def test_audited_tree_is_never_written_to(untracked_module_tree: Path) -> None:
+    before = _hashes(untracked_module_tree)
+    assert ".git/index" in before
+    audit_tree(untracked_module_tree)
+    assert _hashes(untracked_module_tree) == before
+    assert not (untracked_module_tree / ".coverage.tier1").exists()
+
+
+@pytest.mark.parametrize("noise", [False, True])
+def test_noise_is_not_a_change(tmp_path: Path, noise: bool) -> None:
+    tree = tmp_path / "tree"
+    _init(tree, {"n.py": BASE_CODE, "test_n.py": TEST_BODY.format(value=1)})
+    if noise:
+        (tree / "__pycache__").mkdir()
+        (tree / "__pycache__" / "x.pyc").write_bytes(b"\x00")
+        (tree / ".saddle").mkdir()
+        (tree / ".saddle" / "proofs.jsonl").write_text("{}\n")
+        (tree / ".coverage.tier1").write_bytes(b"\x00")
+    result = audit_tree(tree)
+    assert result.verdict == "nothing-to-audit"
+    assert result.checks == ()
+    assert result.mutation is None
+
+
+def test_result_is_portable(clean_tree: Path) -> None:
+    result = audit_tree(clean_tree)
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert payload["verdict"] == "accept"
+    assert re.fullmatch(r"[0-9a-f]{40}", payload["baseline"])
+    assert payload["baseline"] != "HEAD"
+    assert payload["mutation"]["total"] == 5
+    assert payload["test_command"] == AUDIT_TEST_COMMAND
+    assert [c["name"] for c in payload["checks"]] == list(CHECK_ORDER)
+
+
+def test_nothing_to_audit_result_serialises(tmp_path: Path) -> None:
+    _init(tmp_path / "tree", {"n.py": BASE_CODE})
+    payload = json.loads(json.dumps(audit_tree(tmp_path / "tree").to_dict()))
+    assert payload["checks"] == []
+    assert payload["mutation"] is None
+
+
+def test_baseline_names_an_earlier_commit(tmp_path: Path) -> None:
+    """The baseline argument is resolved, so a branch or sha compares against that commit."""
+    tree = tmp_path / "tree"
+    _init(tree, {"n.py": BASE_CODE})
+    (tree / "n.py").write_text(FIXED_CODE)
+    _git(tree, "commit", "-am", "second")
+    head = audit_tree(tree, "HEAD")
+    earlier = audit_tree(tree, "HEAD~1")
+    assert head.verdict == "nothing-to-audit"
+    assert earlier.verdict != "nothing-to-audit"
+    assert earlier.baseline != head.baseline
+
+
+def test_unknown_baseline_is_an_audit_error(tmp_path: Path) -> None:
+    _init(tmp_path / "tree", {"n.py": BASE_CODE})
+    with pytest.raises(AuditError, match="no-such-ref"):
+        audit_tree(tmp_path / "tree", "no-such-ref")
+
+
+def test_a_tree_that_is_not_a_git_repository_is_an_audit_error(tmp_path: Path) -> None:
+    (tmp_path / "plain").mkdir()
+    with pytest.raises(AuditError, match="not a git repository"):
+        audit_tree(tmp_path / "plain")
+
+
+def test_a_linked_worktree_is_an_audit_error(tmp_path: Path) -> None:
+    """A `.git` file points at a gitdir outside the copy; `git add -A` there would write to it."""
+    _init(tmp_path / "main", {"n.py": BASE_CODE})
+    linked = tmp_path / "linked"
+    _git(tmp_path / "main", "worktree", "add", "--detach", str(linked))
+    assert (linked / ".git").is_file()
+    index_before = _hashes(tmp_path / "main")
+    with pytest.raises(AuditError, match="not a git repository"):
+        audit_tree(linked)
+    assert _hashes(tmp_path / "main") == index_before
+
+
+def test_audit_node_is_a_valid_refactor_node() -> None:
+    node = audit_node("pytest -q tests")
+    assert Node.model_validate(node.model_dump()) == node
+    assert node.kind == "refactor"
+    assert node.id == "audit"
+    assert node.dependencies == []
+    assert node.deterministic_gate.test_command == "pytest -q tests"
+    assert "write_file" in node.execution_constraints.allowed_tools
+    assert node.execution_constraints.max_context_tokens == 8000
+    assert node.requirement_ids == ["REQ-000"]
+    assert node.deterministic_gate.mutation_sample.max_mutants == 100
+    assert node.deterministic_gate.mutation_sample.kill_threshold == 85.0
+    assert audit_node().deterministic_gate.test_command == AUDIT_TEST_COMMAND
+
+
+# ---------------------------------------- checker additions (X-P1-2-1/2/3/4-8/13/17)
+
+
+@pytest.mark.parametrize(
+    "noise_dir", [".pytest_cache", ".hypothesis", ".ruff_cache", ".mutmut-cache", "mutants"]
+)
+def test_every_listed_noise_directory_is_not_a_change(tmp_path: Path, noise_dir: str) -> None:
+    tree = tmp_path / "tree"
+    _init(tree, {"n.py": BASE_CODE, "test_n.py": TEST_BODY.format(value=1)})
+    (tree / noise_dir).mkdir()
+    (tree / noise_dir / "x").write_text("noise\n")
+    assert audit_tree(tree).verdict == "nothing-to-audit"
+
+
+def test_the_result_tree_is_the_staged_copys_write_tree(clean_tree: Path, tmp_path: Path) -> None:
+    """`tree` names what was judged: the write-tree with the untracked test staged."""
+    twin = tmp_path / "twin"
+    shutil.copytree(clean_tree, twin)
+    _git(twin, "add", "-A")
+    expected = run_capture(["git", "write-tree"], twin).stdout.strip()
+    result = audit_tree(clean_tree)
+    assert result.tree == expected
+    assert result.tree != result.baseline
+
+
+def test_a_check_keeps_the_basis_the_gate_gave_it(clean_tree: Path) -> None:
+    result = audit_tree(clean_tree)
+    by_name = {check.name: check for check in result.checks}
+    assert result.mutation is not None
+    assert by_name["mutation"].basis == f"sampled n={result.mutation.total}"
+    assert by_name["coverage"].basis == "changed-lines=4"
+
+
+def test_a_custom_test_command_is_the_one_gated_and_reported(clean_tree: Path) -> None:
+    command = "python -m pytest -q -k no_such_test"  # collects nothing: exit 5
+    result = audit_tree(clean_tree, test_command=command)
+    failing = {check.name for check in result.checks if check.status == "fail"}
+    assert result.test_command == command
+    assert result.verdict == "refuse"
+    assert "tests" in failing
+
+
+def test_the_recorder_is_threaded_into_the_gate(clean_tree: Path, tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    audit_tree(clean_tree, recorder=SpanRecorder(path=journal, node_id="audit"))
+    assert [span for span in read_spans(journal) if span.kind == "tool"]

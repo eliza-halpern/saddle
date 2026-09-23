@@ -1794,6 +1794,11 @@ class Tier1Result:
     # these without re-running the gate that found them.
     survivors: tuple[str, ...] = ()
     gaps: tuple[tuple[str, int], ...] = ()
+    # The sampled-mutation evidence itself (P1-2): killed, total, untested
+    # and the survivors, which the mutation check's detail string only
+    # summarises. Carried for a caller that must compare numbers; nothing in
+    # `gates` reads it.
+    mutation: MutationOutcome | None = None
 
 
 def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
@@ -2000,4 +2005,5 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         checks=checks,
         survivors=tuple(inputs.mutation.survivors),
         gaps=tuple(sorted(gaps)),
+        mutation=inputs.mutation,
     )
