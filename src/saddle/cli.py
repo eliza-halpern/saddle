@@ -1535,7 +1535,11 @@ def main(
         # same value both goes in the printed URL and reaches `serve` --
         # `serve` would generate its own otherwise, and the link printed
         # would not open what actually answers.
-        token = chat_token() if needs_token(args.host) else None
+        try:
+            token = chat_token() if needs_token(args.host) else None
+        except FileExistsError as exc:
+            print(f"error: {exc}", file=stderr or sys.stderr)
+            return 2
         url = f"http://{args.host}:{args.port}/"
         if token is not None:
             url = f"{url}?token={token}"

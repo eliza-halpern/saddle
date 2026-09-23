@@ -279,6 +279,36 @@ def _cache_write(cache: Path, path: Path, key: Mapping[str, str], result: AuditR
     os.replace(tmp_name, path)
 
 
+def _spelled_from_the_root(
+    checks: tuple[AuditCheck, ...], mutation: MutationOutcome | None, copy: Path
+) -> tuple[tuple[AuditCheck, ...], MutationOutcome | None]:
+    """Rewrite every path the gates spelled inside `copy` relative to the tree's root (P1-13).
+
+    The gates gate a temporary copy and name files as `<copy>/accounts.py:84`,
+    a directory deleted when the audit returns and named differently every
+    run. No string of an `AuditResult` may name it: `detail` and `basis` lose
+    the `<copy>/` prefix, and each `survivor_lines` path goes relative, so two
+    audits of one tree are byte-identical and an editor can open what is named.
+    """
+    prefix = f"{copy}{os.sep}"
+    checks = tuple(
+        dataclasses.replace(
+            check,
+            detail=check.detail.replace(prefix, ""),
+            basis=None if check.basis is None else check.basis.replace(prefix, ""),
+        )
+        for check in checks
+    )
+    if mutation is not None:
+        mutation = dataclasses.replace(
+            mutation,
+            survivor_lines=tuple(
+                (os.path.relpath(path, copy), line) for path, line in mutation.survivor_lines
+            ),
+        )
+    return checks, mutation
+
+
 def audit_tree(
     tree: Path,
     baseline: str = "HEAD",
@@ -341,13 +371,14 @@ def audit_tree(
         )
         for check in gated.checks
     )
+    checks, mutation = _spelled_from_the_root(checks, gated.mutation, copy)
     result = AuditResult(
         verdict="refuse" if any(check.status == "fail" for check in checks) else "accept",
         tree=staged,
         baseline=resolved,
         test_command=test_command,
         checks=checks,
-        mutation=gated.mutation,
+        mutation=mutation,
         surface=surface,
         cached=False,
     )

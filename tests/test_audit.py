@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
@@ -444,3 +446,88 @@ def test_a_matching_key_over_a_malformed_result_is_a_miss(clean_tree: Path, tmp_
 
     result = audit_tree(clean_tree, cache=cache)
     assert result.cached is False
+
+
+# ------------------------------- P1-13: results name real paths, not the copy
+
+
+def _surviving_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutmut stub whose one changed-line mutant survives the tree's tests."""
+    stub_dir.mkdir()
+    script = stub_dir / "mutmut"
+    script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  run) exit 0;;\n"
+        "  results) echo '  m1: survived';;\n"
+        "  show) printf -- '--- n.py\\n+++ n.py\\n@@ -2 +2 @@\\n"
+        "-    return 2\\n+    return 3\\n';;\n"
+        "esac\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_a_check_detail_names_the_trees_file_not_the_temporary_copys(
+    untracked_module_tree: Path,
+) -> None:
+    """Contract A, pair 1: the coverage detail says `m.py:1`, never `<tmp>/tree/m.py:1`."""
+    result = audit_tree(untracked_module_tree)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+    assert "m.py:" in coverage.detail
+    assert "/m.py" not in coverage.detail
+
+
+def test_survivor_lines_are_spelled_relative_to_the_tree(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract A, pair 2: a survivor's path has no directory part."""
+    _surviving_mutmut(tmp_path / "stub", monkeypatch)
+    result = audit_tree(clean_tree)
+    assert result.mutation is not None
+    assert result.mutation.survivor_lines == (("n.py", 2),)
+
+
+def test_two_uncached_audits_of_one_tree_are_byte_identical(
+    untracked_module_tree: Path,
+) -> None:
+    """Contract A, pair 3: the temporary directory's name reaches no result byte."""
+    first = audit_tree(untracked_module_tree)
+    second = audit_tree(untracked_module_tree)
+    assert json.dumps(first.to_dict(), sort_keys=True) == json.dumps(
+        second.to_dict(), sort_keys=True
+    )
+
+
+def test_rewriting_paths_moves_no_verdict_status_or_plan_reason(
+    untracked_module_tree: Path,
+) -> None:
+    """Contract A, pair 4 (known-good): a detail that never named the copy is untouched."""
+    result = audit_tree(untracked_module_tree)
+    assert result.verdict == "refuse"
+    statuses = {check.name: check.status for check in result.checks}
+    assert statuses["coverage"] == "fail"
+    assert statuses["tests"] == "pass"
+    for name, reason in NOT_APPLICABLE.items():
+        check = next(check for check in result.checks if check.name == name)
+        assert (check.status, check.detail) == ("not-applicable", reason)
+
+
+def test_a_basis_that_names_the_copy_is_spelled_from_the_root(tmp_path: Path) -> None:
+    """Contract A covers `basis` too. No gate puts a path there today (every
+    basis is a count), so this pins the helper directly rather than through
+    a gate: known-bad `<copy>/n.py` in a basis, known-good a `None` basis and
+    a basis that never named the copy."""
+    copy = tmp_path / "tree"
+    checks = (
+        audit.AuditCheck("a", "pass", f"see {copy}/n.py:2", f"from {copy}/n.py"),
+        audit.AuditCheck("b", "pass", "clean", None),
+        audit.AuditCheck("c", "pass", "clean", "changed-lines=1"),
+    )
+    spelled, mutation = audit._spelled_from_the_root(checks, None, copy)
+    assert [(c.detail, c.basis) for c in spelled] == [
+        ("see n.py:2", "from n.py"),
+        ("clean", None),
+        ("clean", "changed-lines=1"),
+    ]
+    assert mutation is None

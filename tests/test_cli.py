@@ -3930,3 +3930,33 @@ def test_audit_rev_mode_accepts_a_relative_repo(
     )
     assert (code, err.getvalue()) == (0, "")
     assert out.getvalue().rstrip().endswith("verdict: accept")
+
+
+def test_chat_with_an_empty_token_file_is_a_clean_error_and_never_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1-13, contract B: `chat_token()` refuses an empty file with a message
+    that names the path and the remedy; the CLI shows that one line and exits
+    2 instead of a traceback, before any URL, browser or server."""
+    import webbrowser
+
+    from saddle.web import app as web_app
+
+    token_file = tmp_path / "chat-token"
+    token_file.write_text("")
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    monkeypatch.setattr(web_app, "TOKEN_FILE", token_file)
+    monkeypatch.setattr(web_app, "serve", lambda **kw: pytest.fail("served"))
+    monkeypatch.setattr(webbrowser, "open", lambda url: pytest.fail("opened"))
+
+    out, err = io.StringIO(), io.StringIO()
+    # No `--no-open`: the browser opener is patched to fail, so it must not be reached.
+    code = main(["chat", "--host", "100.64.0.1"], stdout=out, stderr=err)
+
+    assert code == 2
+    assert out.getvalue() == ""
+    assert (
+        err.getvalue()
+        == f"error: {token_file} exists but is empty; write a token into it or delete it\n"
+    )
