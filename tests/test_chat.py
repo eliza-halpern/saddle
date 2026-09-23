@@ -718,6 +718,69 @@ def test_run_chat_terminal_survives_across_turns(
     assert "ready" in wait_span.detail
 
 
+def test_run_turn_without_a_context_shares_one_across_its_tool_rounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_run_turn(context=None)` builds one `ToolContext` for the whole turn.
+
+    A background terminal started in round 1 is reachable by
+    `wait_for_terminal` in round 2 of the same turn. A context built inside
+    the round loop would give round 2 a fresh `Sandbox` with no terminals,
+    and the wait would fail instead of reporting `exit 0`. Calls `_run_turn`
+    directly, so no `run_chat` session context can mask the per-round build.
+    """
+    monkeypatch.setattr("saddle.sandbox.uuid.uuid4", lambda: uuid.UUID("1234abcd" + "0" * 24))
+    journal = tmp_path / "chat.jsonl"
+    start_body = (
+        _chunk({"content": "Starting. "})
+        + _chunk({"tool_calls": [{"id": "c1", "index": 0, "function": {"name": "run_command"}}]})
+        + _chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "function": {"arguments": '{"command": "echo ready", "background": true}'},
+                    }
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+    wait_body = (
+        _chunk({"content": "Waiting. "})
+        + _chunk(
+            {"tool_calls": [{"id": "c2", "index": 0, "function": {"name": "wait_for_terminal"}}]}
+        )
+        + _chunk(
+            {
+                "tool_calls": [
+                    {"index": 0, "function": {"arguments": '{"id": "1234abcd", "timeout": 10}'}}
+                ]
+            }
+        )
+        + "data: [DONE]\n\n"
+    )
+    done_body = _chunk({"content": "Done."}) + "data: [DONE]\n\n"
+    seen: list[httpx.Request] = []
+    display = _display(io.StringIO())
+
+    with display.live_turn():
+        _run_turn(
+            _scripted_client([start_body, wait_body, done_body], seen),
+            [],
+            "start it and wait for it",
+            ChatOptions(workdir=tmp_path, journal=journal),
+            turn=1,
+            parent=None,
+            display=display,
+        )
+
+    assert len(seen) == 3
+    wait_span = next(span for span in read_spans(journal) if span.argv[0] == "wait_for_terminal")
+    assert wait_span.detail.startswith("exit 0")
+    assert "ready" in wait_span.detail
+
+
 def test_run_chat_sessions_do_not_share_terminals(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

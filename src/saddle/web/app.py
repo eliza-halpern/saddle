@@ -97,6 +97,10 @@ def chat_token() -> str:
     generated and the file is created with mode 0o600 before anything else
     can read it, mirroring `cli.KEY_FILE`'s fallback for the vLLM key --
     this constant is never used to read or print that key.
+
+    An existing file is never overwritten. One that exists but is empty
+    raises `FileExistsError` naming the path and how to recover, rather than
+    regenerating into it.
     """
     env = os.environ.get("SADDLE_CHAT_TOKEN")
     if env:
@@ -106,6 +110,8 @@ def chat_token() -> str:
         existing = path.read_text(encoding="utf-8").strip()
         if existing:
             return existing
+        message = f"{path} exists but is empty; write a token into it or delete it"
+        raise FileExistsError(message)
     token = secrets.token_urlsafe(32)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

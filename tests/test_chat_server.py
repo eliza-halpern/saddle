@@ -2271,6 +2271,58 @@ def test_an_empty_cached_token_file_is_not_silently_overwritten(
         chat_token()
 
 
+def test_an_empty_cached_token_file_error_names_the_path_and_the_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure says which file is empty, not just `[Errno 17] File exists`,
+    and leaves the file exactly as it found it."""
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    import saddle.web.app as module
+
+    token_path = tmp_path / "chat-token"
+    token_path.write_text("")
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+
+    with pytest.raises(FileExistsError, match="exists but is empty") as caught:
+        chat_token()
+
+    assert str(token_path) in str(caught.value)
+    assert token_path.read_text() == ""
+
+
+def test_an_empty_token_file_error_says_how_to_recover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    import saddle.web.app as module
+
+    token_path = tmp_path / "chat-token"
+    token_path.write_text("")
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+
+    with pytest.raises(FileExistsError) as caught:
+        chat_token()
+
+    assert "write a token into it or delete it" in str(caught.value)
+
+
+def test_a_whitespace_only_token_file_is_empty_not_a_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A newline is not a token: the file is treated as empty and left as found."""
+    monkeypatch.delenv("SADDLE_CHAT_TOKEN", raising=False)
+    import saddle.web.app as module
+
+    token_path = tmp_path / "chat-token"
+    token_path.write_text("\n")
+    monkeypatch.setattr(module, "TOKEN_FILE", str(token_path))
+
+    with pytest.raises(FileExistsError, match="exists but is empty"):
+        chat_token()
+
+    assert token_path.read_text() == "\n"
+
+
 @pytest.mark.parametrize(
     "header",
     ["Bearer t0k3", "Bearer t0k3nX", "Bearer ", "Bearer  t0k3n", "Basic t0k3n"],
