@@ -1063,12 +1063,17 @@ def mutation_sample(
     timeout_s: int = _MUTATION_TIMEOUT_S,
     recorder: SpanRecorder | None = None,
 ) -> MutationOutcome:
-    """Kill-rate over changed-line mutants, sampled to `max_mutants` by name.
+    """Kill-rate over every decided mutant on a changed line.
 
     Runs in a scratch copy (mutmut writes mutants/ into cwd) under a time
-    budget; the verdict covers the deterministic name-sorted sample and
-    degrades to decided mutants when the budget binds first. `test_files`
-    are excluded from mutation scope (mutating tests pollutes the rate);
+    budget; the verdict covers every changed-line mutant mutmut decided
+    and degrades to decided mutants when the budget binds first (a real
+    timeout, not a truncation: see `max_mutants` below). `max_mutants` is
+    kept as a parameter only because the plan schema and its callers
+    still pass it; it no longer samples or truncates the population
+    (P0-8, T6-61), so no verdict depends on which mutants sort first by
+    name. `test_files` are excluded from mutation scope (mutating tests
+    pollutes the rate);
     `run_tests` restricts which tests pytest collects against each mutant
     and leaves the scope alone -- the two are different sets (T3-3: a
     session read the first as the second and built a vacuous oracle).
@@ -1169,7 +1174,7 @@ def mutation_sample(
                 text_only += 1
                 continue
             scoped.append((name, verdict, key, hit))
-    sample = scoped[:max_mutants]
+    sample = scoped
     killed = sum(1 for _, verdict, _, _ in sample if verdict in ("killed", "timeout"))
     survivors = tuple(name for name, verdict, _, _ in sample if verdict == "survived")
     survivor_lines = sorted(

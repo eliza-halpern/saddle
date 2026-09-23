@@ -735,14 +735,89 @@ def test_mutation_sample_filters_scopes_and_counts(
         # T6-29c: the survivor is located in the caller's own spelling.
         survivor_lines=((str(workdir / "a.py"), 1),),
     )
+    # P0-8 flip: `max_mutants=2` no longer truncates the scoped population
+    # to its first two names. Before this change the call below returned
+    # killed=1, total=2 -- the cap discarding two already-decided kills
+    # (T6-61's reproduction: three killed mutants dropped at zero margin).
+    # It now agrees with the max_mutants=10 call above on every field.
     sampled = mutation_sample(workdir, changed, 2, test_files={"tests/test_a.py"})
     assert sampled == MutationOutcome(
-        killed=1,
-        total=2,
+        killed=3,
+        total=4,
         generated=6,
         survivors=("m_hit2",),
         survivor_lines=((str(workdir / "a.py"), 1),),
     )
+
+
+def _name_order_workdir(root: Path) -> Path:
+    """Six distinct changed lines, one mutant per line, in `a.py`."""
+    workdir = root / "work"
+    (workdir / "tests").mkdir(parents=True)
+    (workdir / "a.py").write_text("a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n")
+    (workdir / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    return workdir
+
+
+def _name_order_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run: str, verdicts: dict[str, str]
+) -> MutationOutcome:
+    workdir = _name_order_workdir(tmp_path / run)
+    stub_dir = tmp_path / run / "stub"
+    stub_dir.mkdir(parents=True)
+    lines = ["a = 1", "b = 2", "c = 3", "d = 4", "e = 5", "f = 6"]
+    names = ["m_a1", "m_a2", "m_a3", "m_b1", "m_b2", "m_b3"]
+    _stub_mutmut(
+        stub_dir,
+        "\n".join(["", *(f"  {name}: {verdicts[name]}" for name in names), ""]),
+        {name: _show_diff("a.py", line) for name, line in zip(names, lines, strict=True)},
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), n) for n in range(1, 7)}
+    return mutation_sample(workdir, changed, 3, test_files={"tests/test_a.py"})
+
+
+def test_mutation_sample_ignores_which_mutant_name_sorts_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0-8 pair 3: at `max_mutants=3`, `m_a1..m_a3` sorting ahead of
+    `m_b1..m_b3` must not decide which trio the verdict is scored on.
+
+    Before this change, `scoped[:max_mutants]` always kept the `m_a*`
+    trio (sorted first by name) regardless of which trio the engine
+    actually killed: run one (`m_a*` killed, `m_b*` survived) read 3/3
+    and run two (statuses swapped) read 0/3 -- the verdict flipped from
+    a perfect score to a total loss without a single mutant's outcome
+    changing, purely from which name sorted first. After the change both
+    runs score the whole population and must agree.
+    """
+    run_one = _name_order_outcome(
+        tmp_path,
+        monkeypatch,
+        "run1",
+        {
+            "m_a1": "killed",
+            "m_a2": "killed",
+            "m_a3": "killed",
+            "m_b1": "survived",
+            "m_b2": "survived",
+            "m_b3": "survived",
+        },
+    )
+    run_two = _name_order_outcome(
+        tmp_path,
+        monkeypatch,
+        "run2",
+        {
+            "m_a1": "survived",
+            "m_a2": "survived",
+            "m_a3": "survived",
+            "m_b1": "killed",
+            "m_b2": "killed",
+            "m_b3": "killed",
+        },
+    )
+    assert (run_one.killed, run_one.total) == (run_two.killed, run_two.total) == (3, 6)
 
 
 def _text_only_workdir(root: Path) -> Path:
