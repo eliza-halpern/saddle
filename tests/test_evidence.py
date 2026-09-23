@@ -145,6 +145,40 @@ def test_run_shell_capture_splits_and_returns_output(tmp_path: Path) -> None:
     assert (run.exit_code, run.stdout) == (0, "hi\n")
 
 
+def test_run_shell_capture_ceilings_a_runaway_allocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pair 4 (P1-14 contract B, key; M-Z3): tested code runs under an
+    address-space ceiling. Red at 27dc53f: no ceiling, the 512 MiB bytearray
+    succeeds and the command exits 0. The M1 audit of t7-untouched grew to
+    20.3 GB the same way and was OOM-killed."""
+    monkeypatch.setattr(evidence_module, "TEST_MEMORY_LIMIT_BYTES", 256 * 1024**2, raising=False)
+    run = run_shell_capture(f'{sys.executable} -c "b = bytearray(512 * 1024**2)"', tmp_path)
+    assert run.exit_code != 0
+    assert "MemoryError" in run.stdout + run.stderr
+
+
+def test_run_shell_capture_under_the_real_ceiling_is_unchanged(tmp_path: Path) -> None:
+    """Pair 5 (P1-14 contract B): normal code is unaffected by the real 6 GiB
+    ceiling, and the span records the command, not the `prlimit` wrapper."""
+    assert evidence_module.TEST_MEMORY_LIMIT_BYTES == 6 * 1024**3
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    run = run_shell_capture(f'{sys.executable} -c "print(1)"', tmp_path, recorder=recorder)
+    assert (run.exit_code, run.stdout) == (0, "1\n")
+    assert run.argv[0] == sys.executable
+    (span,) = read_spans(journal)
+    assert span.argv[0] == sys.executable
+    assert "prlimit" not in span.argv
+
+
+def test_run_capture_without_a_limit_runs_uncapped(tmp_path: Path) -> None:
+    """`memory_limit` defaults to none: bookkeeping calls (`git`, `ruff`,
+    `coverage`) are not capped, so 512 MiB allocates."""
+    run = run_capture([sys.executable, "-c", "b = bytearray(512 * 1024**2)"], tmp_path)
+    assert run.exit_code == 0
+
+
 def test_drop_test_caches_removes_caches_but_keeps_sources(tmp_path: Path) -> None:
     drop_test_caches(tmp_path)
     cache = tmp_path / "pkg" / "__pycache__"
@@ -1148,7 +1182,11 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
     calls: list[tuple[tuple[str, ...], Path | None, SpanRecorder | None]] = []
 
     def fake(
-        argv: Sequence[str], cwd: Path | None, *, recorder: SpanRecorder | None = None
+        argv: Sequence[str],
+        cwd: Path | None,
+        *,
+        recorder: SpanRecorder | None = None,
+        memory_limit: int | None = None,
     ) -> CapturedRun:
         assert cwd is not None
         assert cwd.name.startswith("saddle-mutation-")
@@ -1189,6 +1227,32 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
     assert cwds[0] is not None
     assert all(cwd == cwds[0] for cwd in cwds)
     assert [item is rec for _, _, item in calls] == [True, True, True]
+
+
+def test_mutmut_run_is_ceilinged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pair 6 (P1-14 contract B; M-Z4): `mutmut run` executes the tested code
+    in forked workers that inherit the launcher's limit, so the launch carries
+    `memory_limit == TEST_MEMORY_LIMIT_BYTES`. The bookkeeping calls after it
+    do not."""
+    workdir = _mutation_workdir(tmp_path)
+    limits: list[tuple[tuple[str, ...], int | None]] = []
+
+    def spy(
+        argv: Sequence[str],
+        cwd: Path | None,
+        *,
+        recorder: SpanRecorder | None = None,
+        memory_limit: int | None = None,
+    ) -> CapturedRun:
+        limits.append((tuple(argv), memory_limit))
+        return CapturedRun(argv=tuple(argv), exit_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(evidence_module, "run_capture", spy)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/{name}")
+    mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
+    (run_limit,) = [limit for argv, limit in limits if argv[-2:] == ("mutmut", "run")]
+    assert run_limit == evidence_module.TEST_MEMORY_LIMIT_BYTES
+    assert all(limit is None for argv, limit in limits if argv[-2:] != ("mutmut", "run"))
 
 
 def test_mutation_sample_missing_tool_fails_closed(
@@ -1402,9 +1466,12 @@ def test_mutation_sample_uses_one_lookup_subprocess_not_one_per_mutant(
         *,
         recorder: SpanRecorder | None = None,
         timeout: float | None = None,
+        memory_limit: int | None = None,
     ) -> CapturedRun:
         calls.append(tuple(argv))
-        return real_run_capture(argv, cwd, recorder=recorder, timeout=timeout)
+        return real_run_capture(
+            argv, cwd, recorder=recorder, timeout=timeout, memory_limit=memory_limit
+        )
 
     monkeypatch.setattr(evidence_module, "run_capture", spy)
     journal = tmp_path / "spans.jsonl"

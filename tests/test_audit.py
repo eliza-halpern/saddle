@@ -420,6 +420,52 @@ def test_a_tracked_coveragerc_is_not_noise(tmp_path: Path) -> None:
     assert audit_tree(tree).verdict == "nothing-to-audit"
 
 
+def test_tracked_bytecode_is_not_noise(tmp_path: Path) -> None:
+    """Pair 1 (P1-14 contract A): a tracked `__pycache__/*.pyc` is not noise (M-Z1).
+
+    Red at 27dc53f: `_audit_ignore` drops `__pycache__` and `*.pyc` at any
+    depth by name alone, so the copy lacks a file the baseline tracks, git
+    reads it as deleted, and an unchanged repo audits as `refuse`. 21 of the
+    88 labelled bench trees (every T2, T3 and T4 tree) track bytecode.
+    """
+    tree = tmp_path / "tree"
+    _init(
+        tree,
+        {
+            "n.py": BASE_CODE,
+            "test_n.py": TEST_BODY.format(value=1),
+            "__pycache__/n.cpython-312.pyc": "not real bytecode\n",
+        },
+    )
+    assert audit_tree(tree).verdict == "nothing-to-audit"
+
+
+def test_audit_ignore_tells_tracked_and_untracked_siblings_apart(tmp_path: Path) -> None:
+    """Pair 2 (P1-14 contract A): one directory, a tracked and an untracked
+    `.pyc`. The directory is kept because a tracked file lives beneath it (M-Z2:
+    the ancestor set), the untracked sibling is still dropped, the tracked one
+    is kept, and an untracked `__pycache__` elsewhere is still dropped."""
+    tree = tmp_path / "tree"
+    _init(tree, {"pkg/__init__.py": "", "pkg/__pycache__/a.pyc": "a"})
+    (tree / "pkg" / "__pycache__" / "b.pyc").write_bytes(b"b")
+    (tree / "other" / "__pycache__").mkdir(parents=True)
+    (tree / "other" / "__pycache__" / "c.pyc").write_bytes(b"c")
+    ignore = audit._audit_ignore(tree)
+    assert ignore(str(tree / "pkg"), ["__init__.py", "__pycache__"]) == set()
+    assert ignore(str(tree / "pkg" / "__pycache__"), ["a.pyc", "b.pyc"]) == {"b.pyc"}
+    assert ignore(str(tree / "other"), ["__pycache__"]) == {"__pycache__"}
+    assert ignore(str(tree / "other" / "__pycache__"), ["c.pyc"]) == {"c.pyc"}
+
+
+def test_a_git_directory_git_cannot_read_is_an_audit_error(tmp_path: Path) -> None:
+    """`git ls-files` failing is a named error, not a silently empty tracked set
+    that would drop tracked bytecode again."""
+    tree = tmp_path / "tree"
+    (tree / ".git").mkdir(parents=True)
+    with pytest.raises(AuditError, match="git ls-files failed"):
+        audit_tree(tree)
+
+
 def test_mutants_and_saddle_below_top_level_are_real_files(tmp_path: Path) -> None:
     """Pair 9: `mutants`/`.saddle` below the top level are real, tracked files (M-K7)."""
     tree = tmp_path / "tree"

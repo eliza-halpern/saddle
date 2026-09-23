@@ -39,7 +39,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal, cast
 
 from saddle.dag import Node
@@ -192,8 +192,27 @@ def _audit_ignore(root: Path) -> Callable[[str, list[str]], set[str]]:
     pattern scoped to the top level must never key off a *prefix* that a
     same-named top-level project file also has (`.coveragerc` starts with
     `.coverage` but is not run noise).
+
+    A name is dropped only when it matches a noise pattern **and** git does not
+    track it: neither the path itself nor any path beneath it is in
+    `git ls-files`. A tracked file is part of the baseline, and a copy without
+    it reads as a deletion, so an unchanged tree stops being `nothing-to-audit`.
+    21 of the 88 labelled bench trees (every T2, T3 and T4 tree) track
+    `__pycache__`/`*.pyc`; P1-4 fixed `.coveragerc` by pattern, this is the rule
+    it was an instance of.
     """
     root_str = os.fspath(root)
+    listed = run_capture(["git", "ls-files", "-z"], root)
+    if listed.exit_code != 0:
+        msg = f"git ls-files failed: {listed.stderr.strip()}"
+        raise AuditError(msg)
+    tracked = {name for name in listed.stdout.split("\0") if name}
+    kept = tracked | {
+        str(parent)
+        for name in tracked
+        for parent in PurePosixPath(name).parents
+        if str(parent) != "."
+    }
 
     def ignore(directory: str, names: list[str]) -> set[str]:
         skip = {name for name in names if name in _COPY_IGNORE_ANY_DEPTH or name.endswith(".pyc")}
@@ -203,7 +222,9 @@ def _audit_ignore(root: Path) -> Callable[[str, list[str]], set[str]]:
                 for name in names
                 if name in _COPY_IGNORE_TOP_LEVEL or name.startswith(".coverage.")
             }
-        return skip
+        below = os.path.relpath(directory, root_str)
+        prefix = "" if below == "." else f"{below}/"
+        return {name for name in skip if f"{prefix}{name}" not in kept}
 
     return ignore
 

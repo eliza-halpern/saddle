@@ -60,6 +60,15 @@ DEFAULT_TEST_TIMEOUT_S: Final = 300.0
 in seconds; this bounds non-termination without failing slow-but-sound
 runs."""
 
+TEST_MEMORY_LIMIT_BYTES: Final = 6 * 1024**3
+"""Address-space ceiling (`RLIMIT_AS`, applied with `prlimit`) for every
+subprocess that executes the audited tree's code: the declared test command
+and `mutmut run`. The oracle harness caps at the same 6 GiB
+(`MEM_LIMIT_GB` in saddle-bench's `oracles/_harness.py`, after a 57 GB OOM on
+2026-09-20); the M1 audit of t7-untouched, uncapped, grew to 20.3 GB and was
+OOM-killed. Code past it gets `MemoryError` in its own process, and its tests
+fail. `git`, `ruff` and `coverage` bookkeeping calls are not capped."""
+
 
 def _record(
     recorder: SpanRecorder | None,
@@ -278,15 +287,22 @@ def run_capture(
     *,
     recorder: SpanRecorder | None = None,
     timeout: float | None = None,
+    memory_limit: int | None = None,
 ) -> CapturedRun:
     """Run `argv` in `cwd`; journal its span and return exit plus output.
 
     On timeout the partial output is preserved and `timed_out` is set, so
     recovery prompts still see how far the run got before it stalled.
+
+    `memory_limit` caps the child's address space through a `prlimit` prefix,
+    not `preexec_fn`, which is unsafe once threads exist (`slice` runs a
+    `ThreadPoolExecutor`). The span and the result record `argv` without the
+    prefix, so journals and cache keys read as the command that was asked for.
     """
     start = perf_counter()
+    launched = argv if memory_limit is None else ["prlimit", f"--as={memory_limit}", "--", *argv]
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(launched, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as expired:
         _record_timeout(recorder, argv, start, expired)
         return CapturedRun(
@@ -312,8 +328,15 @@ def run_shell_capture(
     recorder: SpanRecorder | None = None,
     timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
 ) -> CapturedRun:
-    """Run a `test_command` string via shlex splitting, capturing output."""
-    return run_capture(shlex.split(command), cwd, recorder=recorder, timeout=timeout)
+    """Run a `test_command` string via shlex splitting, capturing output, under
+    the `TEST_MEMORY_LIMIT_BYTES` ceiling: it executes the tree's code."""
+    return run_capture(
+        shlex.split(command),
+        cwd,
+        recorder=recorder,
+        timeout=timeout,
+        memory_limit=TEST_MEMORY_LIMIT_BYTES,
+    )
 
 
 def drop_test_caches(root: Path) -> None:
@@ -1190,7 +1213,12 @@ def mutation_sample(
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
         (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production, run_tests))
-        ran = run_capture(["timeout", str(timeout_s), "mutmut", "run"], scratch, recorder=recorder)
+        ran = run_capture(
+            ["timeout", str(timeout_s), "mutmut", "run"],
+            scratch,
+            recorder=recorder,
+            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+        )
         # `mutmut run` exits 0 even when mutants survive, so any other exit
         # is the tool failing, not a verdict (T3-20): the smoke run's mutmut
         # 3.8 refused a package named `src` and exited 1 in 658 ms, and the
