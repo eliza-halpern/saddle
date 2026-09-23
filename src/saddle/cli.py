@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,7 +20,8 @@ from typing import IO, Final
 from pydantic import ValidationError
 from rich.console import Console
 
-from saddle import __version__
+from saddle import __version__, audit
+from saddle.audit import AuditError, AuditResult, audit_tree
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
@@ -29,6 +31,7 @@ from saddle.evidence import (
     git_ls_files,
     ruff_version,
     run_argv,
+    run_capture,
 )
 from saddle.gates import (
     plan_prescribes_deletion,
@@ -1166,6 +1169,86 @@ def run_tail(
         return 130
 
 
+AUDIT_EXIT_CODES: Final = {"accept": 0, "refuse": 1, "nothing-to-audit": 3}
+AUDIT_COULD_NOT_AUDIT: Final = 2
+_AUDIT_STATUS_LABELS: Final = {"pass": "PASS", "fail": "FAIL", "not-applicable": "n/a"}
+
+
+def _audit_git_or_raise(cwd: Path, *argv: str, what: str) -> None:
+    run = run_capture(["git", *argv], cwd)
+    if run.exit_code != 0:
+        msg = f"{what}: {run.stderr.strip()}"
+        raise AuditError(msg)
+
+
+def _render_audit(result: AuditResult, stdout: IO[str]) -> None:
+    """The text report: a header, one line per check, then the verdict."""
+    freshness = "cached" if result.cached else "fresh"
+    stdout.write(
+        f"audit tree {result.tree[:12]} baseline {result.baseline[:12]} "
+        f"surface {result.surface[:12]} {freshness}\n"
+    )
+    width = max((len(check.name) for check in result.checks), default=0)
+    for check in result.checks:
+        label = _AUDIT_STATUS_LABELS[check.status]
+        stdout.write(f"{label:<4} {check.name:<{width}}  {check.detail}\n")
+    stdout.write(f"verdict: {result.verdict.replace('-', ' ')}\n")
+
+
+def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> int:
+    """Gate a diff with no plan and exit with the verdict (P1-5).
+
+    No revision: `--repo`'s working tree, untracked files included, against
+    `--baseline` (default HEAD). A revision: that commit's tree, taken from a
+    fresh clone so the source repo's uncommitted files cannot reach the gates
+    and nothing is written to it.
+    """
+    cache = None if args.no_cache else Path(args.cache).expanduser()
+    rev: str | None = args.rev
+    try:
+        if rev is None:
+            result = audit_tree(
+                Path(args.repo),
+                args.baseline or "HEAD",
+                test_command=args.test_command,
+                cache=cache,
+            )
+        else:
+            with tempfile.TemporaryDirectory() as scratch:
+                clone = Path(scratch) / "tree"
+                _audit_git_or_raise(
+                    Path(scratch),
+                    "clone",
+                    "--quiet",
+                    "--no-checkout",
+                    str(Path(args.repo).resolve()),
+                    str(clone),
+                    what=f"cannot clone {args.repo}",
+                )
+                _audit_git_or_raise(
+                    clone,
+                    "checkout",
+                    "--quiet",
+                    "--detach",
+                    rev,
+                    what=f"cannot check out revision {rev!r}",
+                )
+                result = audit_tree(
+                    clone,
+                    args.baseline or f"{rev}^",
+                    test_command=args.test_command,
+                    cache=cache,
+                )
+    except AuditError as exc:
+        print(f"error: {exc}", file=stderr)
+        return AUDIT_COULD_NOT_AUDIT
+    if args.json:
+        stdout.write(json.dumps(result.to_dict(), indent=2) + "\n")
+    else:
+        _render_audit(result, stdout)
+    return AUDIT_EXIT_CODES[result.verdict]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -1217,6 +1300,32 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument(
         "--attempt",
         help="Print one attempt's raw sidecar (prefix of its span id); includes prompt and diff.",
+    )
+    audit_cmd = sub.add_parser(
+        "audit", help="Gate a diff with no plan: the working tree, or one commit."
+    )
+    audit_cmd.add_argument(
+        "rev",
+        nargs="?",
+        help="Commit to gate (default: --repo's working tree, untracked files included).",
+    )
+    audit_cmd.add_argument("--repo", default=".", help="Git repository to audit.")
+    audit_cmd.add_argument(
+        "--baseline", help="Commit to gate against (default: HEAD, or REV^ with a REV)."
+    )
+    audit_cmd.add_argument(
+        "--test-command",
+        default=audit.AUDIT_TEST_COMMAND,
+        help="Command that runs the tests.",
+    )
+    audit_cmd.add_argument(
+        "--json", action="store_true", help="Print the result as JSON and nothing else."
+    )
+    audit_cmd.add_argument(
+        "--cache", default=audit.DEFAULT_AUDIT_CACHE, help="Verdict cache directory."
+    )
+    audit_cmd.add_argument(
+        "--no-cache", action="store_true", help="Neither read nor write the verdict cache."
     )
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
@@ -1385,6 +1494,7 @@ def main(
         "explain",
         "chat",
         "web",
+        "audit",
     ):
         return 0
     if args.command == "verify":
@@ -1393,6 +1503,8 @@ def main(
         return run_explain(Path(args.journal), attempt=args.attempt, stdout=stdout or sys.stdout)
     if args.command == "tail":
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
+    if args.command == "audit":
+        return run_audit(args, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr)
     key = _api_key()
     if not key:
         print(
