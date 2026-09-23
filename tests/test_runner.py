@@ -12,7 +12,7 @@ import pytest
 
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import MIN_SIGNIFICANT_MUTANTS, RED_PHASE_SAMPLES
+from saddle.gates import RED_PHASE_SAMPLES
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import _stub_module, read_sources, run_node_gate
 
@@ -251,9 +251,11 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         "ruff",
         "ruff",
         "timeout",
-        # `results`, then one `show` per mutant in the sample.
+        # `results`. The per-mutant `show` spans are gone (P0-1): the one
+        # batched lookup replaces them, and here it runs through the conftest
+        # replay, which journals nothing. Its production span is pinned in
+        # test_evidence (exactly one lookup span, real engine).
         "mutmut",
-        *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
     ]
     assert all(span.node_id == "n1" for span in spans)
     # Spans 4..6 are the red-phase baseline samples: same coverage-wrapped
@@ -270,7 +272,7 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
         0,
         0,
         *[1] * RED_PHASE_SAMPLES,
-        *[0] * (2 + MIN_SIGNIFICANT_MUTANTS + 2),
+        *[0] * (2 + 2),
     ]
 
 

@@ -16,6 +16,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tokenize
@@ -857,6 +858,84 @@ def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) 
     return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
 
 
+class MutantLookupError(RuntimeError):
+    """The batched mutant-lookup subprocess failed or gave unparseable output.
+
+    A lookup failure must be named, never silently read as "no mutants"
+    (T3-20's rule for `mutmut run`, extended to this lookup).
+    """
+
+
+# First line is the marker the journal is grepped for (P0-1): argv for this
+# call is `[sys.executable, "-c", _MUTANT_LOOKUP_SCRIPT]`, so the marker
+# lands in the recorded span's argv and a census can count "one lookup
+# subprocess" instead of one `mutmut show` per mutant. Reads every mutant's
+# diff in one process: `SourceFileMutationData` and `get_diff_for_mutant`
+# are the same functions `mutmut show NAME` calls
+# (`mutmut/__main__.py:show`, `mutmut/mutation/diff_apply.py`), so walking
+# `walk_mutatable_files()` once and loading each file's meta once
+# reproduces `mutmut show`'s stdout byte for byte (measured 2026-09-22,
+# `lookup_equiv.py`: 480/480, 535/535, 541/541 across three sealed trees).
+# The first file to name a key wins, matching `find_mutant`. A name whose
+# diff raises keeps only the header line, exactly what `show` printed to
+# stdout before its traceback -- today's silent per-name skip, preserved.
+_MUTANT_LOOKUP_SCRIPT: Final = r"""# saddle-mutant-lookup
+import json
+import sys
+
+from mutmut.mutation.data import SourceFileMutationData
+from mutmut.mutation.diff_apply import get_diff_for_mutant
+from mutmut.stats import status_by_exit_code
+from mutmut.utils.file_utils import walk_mutatable_files
+
+mapping: dict[str, str] = {}
+for path in walk_mutatable_files():
+    data = SourceFileMutationData(path=path)
+    data.load()
+    for name, exit_code in data.exit_code_by_key.items():
+        if name in mapping:
+            continue
+        header = f"# {name}: {status_by_exit_code[exit_code]}\n"
+        try:
+            diff = get_diff_for_mutant(name, path=data.path)
+        except Exception:
+            mapping[name] = header
+        else:
+            mapping[name] = header + diff + "\n"
+json.dump(mapping, sys.stdout)
+"""
+
+
+def _lookup_failure(run: CapturedRun) -> MutantLookupError:
+    """One line: the lookup subprocess's exit code and its last stderr line."""
+    lines = run.stderr.strip().splitlines()
+    last = lines[-1] if lines else "no output"
+    msg = f"exit {run.exit_code}: {last}"
+    return MutantLookupError(msg)
+
+
+def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> dict[str, str]:
+    """`mutmut show NAME`'s stdout for every mutant, in one subprocess (P0-1).
+
+    Runs `_MUTANT_LOOKUP_SCRIPT` with `cwd=scratch`: mutmut's `config()` is a
+    process-global cache read from `./pyproject.toml` and
+    `read_mutants_module` opens `Path("mutants") / path` relative to the
+    working directory, so the lookup must run as a subprocess rooted at
+    `scratch` rather than inside saddle's own process. Raises
+    `MutantLookupError` on a non-zero exit or unparseable stdout.
+    """
+    run = run_capture([sys.executable, "-c", _MUTANT_LOOKUP_SCRIPT], scratch, recorder=recorder)
+    if run.exit_code != 0:
+        raise _lookup_failure(run)
+    try:
+        mapping = json.loads(run.stdout)
+    except ValueError:
+        raise _lookup_failure(run) from None
+    if not isinstance(mapping, dict) or not all(isinstance(v, str) for v in mapping.values()):
+        raise _lookup_failure(run)
+    return mapping
+
+
 def mutation_sample(
     workdir: Path,
     changed: Collection[tuple[str, int]],
@@ -932,6 +1011,13 @@ def mutation_sample(
             )
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)
+        try:
+            shows = show_all_mutants(scratch, recorder=recorder)
+        except MutantLookupError as exc:
+            # A lookup failure is named, never read as "no mutants" (T3-20's
+            # rule for `mutmut run`, extended to the batched lookup).
+            msg = f"mutant lookup failed: {exc}"
+            return MutationOutcome(killed=0, total=0, generated=0, survivors=(msg,))
         scoped: list[tuple[str, str, str, set[int]]] = []
         undecided = 0
         text_only = 0
@@ -940,8 +1026,8 @@ def mutation_sample(
             if verdict == "not checked":
                 undecided += 1
                 continue
-            shown = run_capture(["mutmut", "show", name], scratch, recorder=recorder)
-            rel = _mutant_path(shown.stdout)
+            shown_stdout = shows.get(name, "")
+            rel = _mutant_path(shown_stdout)
             if rel is None:
                 continue
             posix_rel = rel.replace(os.sep, "/")
@@ -954,7 +1040,7 @@ def mutation_sample(
             target = scratch / rel
             if not target.is_file():
                 continue
-            hit = _mutant_lines(shown.stdout, target.read_text()) & lines
+            hit = _mutant_lines(shown_stdout, target.read_text()) & lines
             if not hit:
                 continue
             # F21.32: only a SURVIVING text-only mutant is excluded. The
@@ -963,7 +1049,7 @@ def mutation_sample(
             # and `Decimal("XX1XX")` -- real behaviour changes the suite
             # killed -- from both sides of the ratio. A kill is evidence the
             # suite discriminates; the verdict decides, not the shape.
-            if verdict == "survived" and text_only_mutant(shown.stdout):
+            if verdict == "survived" and text_only_mutant(shown_stdout):
                 text_only += 1
                 continue
             scoped.append((name, verdict, key, hit))

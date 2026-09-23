@@ -834,9 +834,10 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "ruff",
         "ruff",
         "timeout",
-        # `results`, then one `show` per mutant in the sample (#49).
+        # `results` (#49). The per-mutant `show` spans are gone (P0-1): the
+        # batched lookup runs through the conftest replay, which journals
+        # nothing; its production span is pinned in test_evidence.
         "mutmut",
-        *["mutmut"] * MIN_SIGNIFICANT_MUTANTS,
         # T3-10: the tree the gate passed on -- `add -u`, `write-tree`,
         # `commit-tree`, `update-ref` again -- taken after the verdict and
         # before the record is sealed, so the proof names its worktree.

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -12,6 +14,7 @@ import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
+import conftest
 import pytest
 
 import saddle.evidence as evidence_module
@@ -19,6 +22,7 @@ from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
     SADDLE_COMMIT_IDENTITY,
     CapturedRun,
+    MutantLookupError,
     MutationOutcome,
     _mutmut_scratch_config,
     attempt_ref,
@@ -43,6 +47,7 @@ from saddle.evidence import (
     run_shell_capture,
     run_stdin,
     scoped_targets,
+    show_all_mutants,
     snapshot_baseline,
     statement_lines,
     text_only_mutant,
@@ -50,6 +55,11 @@ from saddle.evidence import (
 )
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
 from saddle.journal import SpanRecorder, read_spans
+
+_ALL_MUTANT_NAMES = re.compile(r"^\s*(\S+): ", re.MULTILINE)
+"""Every name `mutmut results --all True` lines, whatever its verdict --
+broader than `_parse_mutant_verdicts`, which only recognizes killed,
+survived, timeout and not-checked and silently drops e.g. "no tests"."""
 
 
 def _git_subcommand(argv: Sequence[str]) -> str:
@@ -819,9 +829,16 @@ def test_mutmut_scratch_config_keeps_a_declared_scope_in_order() -> None:
 
 
 def _without_stubbed_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drop the conftest `mutmut` stub from PATH so the real engine runs."""
+    """Drop the conftest `mutmut` stub from PATH so the real engine runs.
+
+    Also restores the production `show_all_mutants` (P0-1): the autouse
+    `_stub_mutmut` fixture points it at a PATH-stub replay that never
+    touches a real mutmut installation's meta files, so a test using the
+    real engine must undo that too, or the lookup finds nothing.
+    """
     kept = [p for p in os.environ["PATH"].split(os.pathsep) if "mutmut-stub" not in p]
     monkeypatch.setenv("PATH", os.pathsep.join(kept))
+    monkeypatch.setattr(evidence_module, "show_all_mutants", conftest._PRODUCTION_SHOW_ALL)
     assert shutil.which("mutmut") is not None, "the venv must be on PATH (CLAUDE.md)"
 
 
@@ -1002,9 +1019,15 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
     A recording fake (not the shell stub) observes the invocation shape the
     stub cannot see: exact argv per call, a saddle-mutation- scratch cwd
     carrying the config and deep tree but no __pycache__, and recorder
-    pass-through on every call.
+    pass-through on every call. Updated pin (P0-1), not a flip: the third
+    call used to be a per-name `mutmut show`; this task removes that call
+    and replaces it with the one batched lookup subprocess, so the pin now
+    names that call instead -- `sys.executable -c <script carrying the
+    saddle-mutant-lookup marker>` -- while `show_all_mutants` itself is
+    restored to production so the fake `run_capture` actually sees it.
     """
     workdir = _mutation_workdir(tmp_path)
+    monkeypatch.setattr(evidence_module, "show_all_mutants", conftest._PRODUCTION_SHOW_ALL)
     calls: list[tuple[tuple[str, ...], Path | None, SpanRecorder | None]] = []
 
     def fake(
@@ -1018,11 +1041,11 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
         calls.append((tuple(argv), cwd, recorder))
         if list(argv[:2]) == ["mutmut", "results"]:
             return CapturedRun(argv=tuple(argv), exit_code=0, stdout="  m1: killed\n", stderr="")
-        if list(argv[:2]) == ["mutmut", "show"]:
+        if argv[0] == sys.executable and any("saddle-mutant-lookup" in part for part in argv):
             return CapturedRun(
                 argv=tuple(argv),
                 exit_code=0,
-                stdout=_show_diff("a.py", "x = 1"),
+                stdout=json.dumps({"m1": _show_diff("a.py", "x = 1")}),
                 stderr="",
             )
         return CapturedRun(argv=tuple(argv), exit_code=0, stdout="", stderr="")
@@ -1034,11 +1057,15 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
         workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set(), recorder=rec
     )
     assert outcome == MutationOutcome(killed=1, total=1, generated=1, survivors=())
-    assert [argv for argv, _, _ in calls] == [
+    calls_argv = [argv for argv, _, _ in calls]
+    assert calls_argv[:2] == [
         ("timeout", str(_MUTATION_TIMEOUT_S), "mutmut", "run"),
         ("mutmut", "results", "--all", "True"),
-        ("mutmut", "show", "m1"),
     ]
+    assert len(calls_argv) == 3
+    lookup_argv = calls_argv[2]
+    assert lookup_argv[0] == sys.executable
+    assert any("saddle-mutant-lookup" in part for part in lookup_argv)
     cwds = [cwd for _, cwd, _ in calls]
     assert cwds[0] is not None
     assert all(cwd == cwds[0] for cwd in cwds)
@@ -1123,6 +1150,220 @@ def test_mutation_sample_skips_test_file_mutants(
     changed = {(str(workdir / "a.py"), 1), (str(workdir / "tests" / "test_a.py"), 1)}
     outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
     assert outcome == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+
+
+# --- P0-1: batch the mutant lookup ------------------------------------------
+#
+# `mutation_sample` used to run one `mutmut show NAME` subprocess per decided
+# mutant; it now runs one `show_all_mutants` lookup subprocess per call. The
+# tests below are the three known-good/known-bad pairs the task names, plus
+# direct coverage of `show_all_mutants`'s own failure branches.
+
+
+def _mutant_shapes_workdir(root: Path) -> Path:
+    """A tiny real tree with each mutant shape P0-1 names: a module-level
+    function, a method, a string-literal-only mutant, and a second module
+    ("c.py") no test imports (its mutants come back "no tests")."""
+    workdir = root / "work"
+    workdir.mkdir()
+    (workdir / "a.py").write_text(
+        "def f():\n    return 2\n\n\nclass C:\n    def m(self):\n        return 3\n"
+    )
+    (workdir / "b.py").write_text('def g():\n    return "hello"\n')
+    (workdir / "c.py").write_text("def h():\n    return 5\n")
+    (workdir / "test_a.py").write_text(
+        "from a import f, C\n"
+        "\n"
+        "\n"
+        "def test_f():\n"
+        "    assert f() == 2\n"
+        "\n"
+        "\n"
+        "def test_m():\n"
+        "    assert C().m() == 3\n"
+    )
+    (workdir / "test_b.py").write_text(
+        'from b import g\n\n\ndef test_g():\n    assert g() == "hello"\n'
+    )
+    return workdir
+
+
+def _build_real_scratch(workdir: Path, scratch: Path, tests: set[str]) -> None:
+    """Copy `workdir`'s .py files into `scratch` and run real `mutmut run`,
+    exactly the shape `mutation_sample` builds internally."""
+    production = []
+    for source in sorted(workdir.rglob("*.py")):
+        dest = scratch / source.relative_to(workdir)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+        rel = source.relative_to(workdir).as_posix()
+        if rel not in tests:
+            production.append(rel)
+    (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production))
+    ran = subprocess.run(["mutmut", "run"], cwd=scratch, capture_output=True, text=True)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+
+
+def test_show_all_mutants_matches_mutmut_show_byte_for_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (P0-1), real engine (CLAUDE.md): `show_all_mutants` is
+    byte-identical to `mutmut show NAME` for every name `mutmut results
+    --all True` lists, across a module-level function, a method, a
+    string-literal mutant and a module no test imports ("no tests").
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _mutant_shapes_workdir(tmp_path)
+    tests = {"test_a.py", "test_b.py"}
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    _build_real_scratch(workdir, scratch, tests)
+
+    results = subprocess.run(
+        ["mutmut", "results", "--all", "True"], cwd=scratch, capture_output=True, text=True
+    )
+    names = sorted(set(_ALL_MUTANT_NAMES.findall(results.stdout)))
+    assert names, "fixture produced no mutants to compare"
+
+    mapping = show_all_mutants(scratch)
+    assert set(mapping) == set(names)
+    for name in names:
+        expected = subprocess.run(
+            ["mutmut", "show", name], cwd=scratch, capture_output=True, text=True
+        ).stdout
+        assert mapping[name] == expected
+
+
+def test_mutation_sample_matches_the_per_name_replay_at_unit_scale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (P0-1), real engine: `mutation_sample` gives an identical
+    `MutationOutcome` whether the lookup is the production batched
+    subprocess or the old per-name `mutmut show` loop -- "same verdicts"
+    at the level `mutation_sample` itself operates.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _mutant_shapes_workdir(tmp_path)
+    tests = {"test_a.py", "test_b.py"}
+    changed = {
+        (str(workdir / "a.py"), 2),
+        (str(workdir / "a.py"), 7),
+        (str(workdir / "b.py"), 2),
+        (str(workdir / "c.py"), 2),
+    }
+    production = mutation_sample(workdir, changed, 10, test_files=tests)
+    monkeypatch.setattr(evidence_module, "show_all_mutants", conftest._replay_show_all_mutants)
+    replayed = mutation_sample(workdir, changed, 10, test_files=tests)
+    assert production == replayed
+    assert production.total > 0
+
+
+def test_mutation_sample_uses_one_lookup_subprocess_not_one_per_mutant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad (P0-1), real engine: a per-mutant `mutmut show` subprocess
+    must not reappear. A recording spy wraps the real `run_capture` (not a
+    fake) so this exercises the actual mutmut subprocess protocol. Must
+    fail on d04ede8, on the `mutmut show` calls (red-first, recorded in
+    the report).
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _mutant_shapes_workdir(tmp_path)
+    tests = {"test_a.py", "test_b.py"}
+    changed = {(str(workdir / "a.py"), 2), (str(workdir / "a.py"), 7)}
+
+    calls: list[tuple[str, ...]] = []
+    real_run_capture = evidence_module.run_capture
+
+    def spy(
+        argv: Sequence[str],
+        cwd: Path,
+        *,
+        recorder: SpanRecorder | None = None,
+        timeout: float | None = None,
+    ) -> CapturedRun:
+        calls.append(tuple(argv))
+        return real_run_capture(argv, cwd, recorder=recorder, timeout=timeout)
+
+    monkeypatch.setattr(evidence_module, "run_capture", spy)
+    journal = tmp_path / "spans.jsonl"
+    rec = SpanRecorder(path=journal, node_id="n1")
+    outcome = mutation_sample(workdir, changed, 10, test_files=tests, recorder=rec)
+    assert outcome.total > 0
+
+    show_calls = [c for c in calls if c[:2] == ("mutmut", "show")]
+    assert show_calls == []
+    lookup_calls = [c for c in calls if any("saddle-mutant-lookup" in part for part in c)]
+    assert len(lookup_calls) == 1
+
+    spans = read_spans(journal)
+    lookup_spans = [s for s in spans if any("saddle-mutant-lookup" in part for part in s.argv)]
+    assert len(lookup_spans) == 1
+
+
+def test_mutation_sample_names_a_failed_lookup_instead_of_reading_no_mutants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad (P0-1), real engine: a batched-lookup subprocess failure is
+    named, never silently read as "no mutants" (CLAUDE.md: a lookup
+    failure must never read as absence, per T3-20's rule for `mutmut
+    run`). `sys.executable` is the seam `show_all_mutants` shells out
+    through for the lookup; breaking it is harmless to `mutmut run` and
+    `mutmut results`, both spawned by bare name via PATH and each its own
+    OS process with its own interpreter, so the same test also runs
+    unmodified on d04ede8 -- there it fails this assertion instead (the
+    old code never touches `sys.executable`), which is this pair's
+    red-first record.
+    """
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f():\n    return 2\n")
+    (workdir / "test_n.py").write_text("from n import f\n\n\ndef test_f():\n    assert f() == 2\n")
+    changed = {(str(workdir / "n.py"), 2)}
+    monkeypatch.setattr(sys, "executable", "/bin/false")
+    outcome = mutation_sample(workdir, changed, 5, test_files={"test_n.py"})
+    assert outcome.total == 0
+    assert len(outcome.survivors) == 1
+    assert outcome.survivors[0].startswith("mutant lookup failed: ")
+
+
+def test_show_all_mutants_raises_on_a_nonzero_lookup_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`show_all_mutants` names a lookup subprocess failure instead of
+    returning a mapping it never got."""
+    monkeypatch.setattr(
+        evidence_module,
+        "run_capture",
+        lambda *a, **k: CapturedRun(argv=("x",), exit_code=1, stdout="", stderr="boom\nlast line"),
+    )
+    with pytest.raises(MutantLookupError, match=r"exit 1: last line"):
+        show_all_mutants(tmp_path)
+
+
+def test_show_all_mutants_raises_on_unparseable_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        evidence_module,
+        "run_capture",
+        lambda *a, **k: CapturedRun(argv=("x",), exit_code=0, stdout="not json", stderr=""),
+    )
+    with pytest.raises(MutantLookupError, match=r"exit 0: no output"):
+        show_all_mutants(tmp_path)
+
+
+def test_show_all_mutants_raises_when_stdout_is_not_a_string_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        evidence_module,
+        "run_capture",
+        lambda *a, **k: CapturedRun(argv=("x",), exit_code=0, stdout="[1, 2]", stderr=""),
+    )
+    with pytest.raises(MutantLookupError, match=r"exit 0: no output"):
+        show_all_mutants(tmp_path)
 
 
 def test_statement_lines_skips_blanks_and_comments() -> None:
