@@ -71,6 +71,21 @@ def _truncate_result(text: str) -> str:
     )
 
 
+def _content_text(content: Any) -> str:
+    """A message's content as plain text, whichever shape it is stored in.
+
+    A string is the common case. An uploaded image makes it a list of
+    content parts instead (`engine._user_message` builds
+    `[{"type": "text", ...}, {"type": "image_url", ...}]`), so this takes
+    the text of the first text part -- the same rule `engine._last_asked`
+    applies to a retry, kept in sync by hand since `memory` must not import
+    `engine`.
+    """
+    if isinstance(content, list):
+        return next((p.get("text", "") for p in content if p.get("type") == "text"), "")
+    return str(content or "")
+
+
 def _protected(messages: list[dict[str, Any]], index: int) -> bool:
     """System prompts and the recent tail are never compacted."""
     if messages[index].get("role") == "system":
@@ -107,7 +122,7 @@ def compact(messages: list[dict[str, Any]], *, limit_tokens: int) -> tuple[int, 
         message = messages.pop(oldest)
         dropped += 1
         if message.get("role") == "user":
-            text = (message.get("content") or "").strip().splitlines()
+            text = _content_text(message.get("content")).strip().splitlines()
             if text:
                 topics.append(text[0][:60])
     if not dropped:

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from saddle.engine import MIN_OUTPUT, TurnOptions
+from saddle.engine import MIN_OUTPUT, TurnOptions, _user_message
 from saddle.labels import describe, label_for
 from saddle.memory import KEEP_RECENT, compact, estimate_tokens
 from saddle.sandbox import OutsideRootError, Sandbox, resolve_within
@@ -96,6 +96,47 @@ def test_compaction_stops_rather_than_emptying_a_list_of_protected_messages() ->
     assert compact(messages, limit_tokens=10) == (0, "large tool results elided")
     assert len(messages) == 1
     assert estimate_tokens(messages) > 10
+
+
+def test_compaction_names_a_dropped_text_turn_by_its_first_line() -> None:
+    # The text-only twin of the image test below (P0-4's known-good pair):
+    # a dropped plain-text user turn is named in the summary, and the note
+    # takes the slot right after the system prompt.
+    messages: list[dict[str, object]] = [{"role": "system", "content": "you are saddle"}]
+    messages.append({"role": "user", "content": "first question " + "x" * 400})
+    for index in range(12):
+        messages.append({"role": "assistant", "content": "a" * 400})
+        messages.append({"role": "user", "content": f"question {index} " + "q" * 400})
+
+    dropped, summary = compact(messages, limit_tokens=estimate_tokens(messages) - 250)
+
+    assert dropped == 3
+    assert summary.startswith("3 earlier message(s) compacted: first question")
+    assert "Earlier conversation compacted" in str(messages[1]["content"])
+
+
+def test_compaction_survives_an_image_in_the_dropped_turn(tmp_path: Path) -> None:
+    # The first user turn is built by the production `_user_message`, which
+    # makes an uploaded image a list of content parts, not a hand-written
+    # dict: `.strip()` on that list is what raised AttributeError.
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+    messages: list[dict[str, object]] = [{"role": "system", "content": "you are saddle"}]
+    messages.append(_user_message("look at this screenshot", [shot]))
+    for index in range(12):
+        messages.append({"role": "assistant", "content": "a" * 400})
+        messages.append({"role": "user", "content": f"question {index} " + "q" * 400})
+    before = len(messages)
+    limit = estimate_tokens(messages) - 250
+
+    dropped, summary = compact(messages, limit_tokens=limit)  # must not raise
+
+    # The image part costs IMAGE_TOKENS regardless of the fixture, so how
+    # many messages go is computed here, not hard-coded.
+    assert dropped == before - len(messages) + 1  # +1: the note that was inserted
+    assert summary.split(": ", 1)[1].startswith("look at this screenshot")
+    note = next(m for m in messages if "Earlier conversation compacted" in str(m.get("content")))
+    assert note is not None
 
 
 # -- the sandbox boundary -----------------------------------------------------

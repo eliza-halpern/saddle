@@ -23,6 +23,7 @@ from saddle.engine import (
     MIN_OUTPUT,
     OUTPUT_MARGIN,
     TurnOptions,
+    _user_message,
     run_turn,
 )
 from saddle.events import (
@@ -291,6 +292,27 @@ def test_compaction_leaves_a_note_in_the_conversation_the_model_will_read(
 def test_a_conversation_that_fits_is_not_compacted(options: TurnOptions) -> None:
     events = run(FakeClient([[content("ok")]]), options)
     assert "compaction" not in kinds(events)
+
+
+def test_a_turn_survives_compacting_away_an_earlier_image_upload(
+    options: TurnOptions, tmp_path: Path
+) -> None:
+    # compact() used to be called before run_turn's own try/except, and that
+    # except only catches VllmError -- so an AttributeError popping a
+    # list-content message (an uploaded image) killed the whole turn rather
+    # than being compacted around.
+    options.context_tokens = 2_000
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+    messages: list[dict[str, Any]] = [_user_message("look at this screenshot", [shot])]
+    for index in range(12):
+        messages.append({"role": "assistant", "content": "a" * 4_000})
+        messages.append({"role": "user", "content": f"question {index} " + "q" * 4_000})
+
+    events = run(FakeClient([[content("ok")]]), options, messages=messages)
+
+    assert those(events, Compaction)
+    assert events[-1].kind == "turn.end"
 
 
 # -- stopping -----------------------------------------------------------------
