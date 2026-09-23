@@ -736,6 +736,8 @@ def test_mutation_sample_filters_scopes_and_counts(
         survivors=("m_hit2",),
         # T6-29c: the survivor is located in the caller's own spelling.
         survivor_lines=((str(workdir / "a.py"), 1),),
+        # P1-6: two kills, one survivor, one timeout (also a kill).
+        statuses=(("killed", 2), ("survived", 1), ("timeout", 1)),
     )
     # P0-8 flip: `max_mutants=2` no longer truncates the scoped population
     # to its first two names. Before this change the call below returned
@@ -749,6 +751,7 @@ def test_mutation_sample_filters_scopes_and_counts(
         generated=6,
         survivors=("m_hit2",),
         survivor_lines=((str(workdir / "a.py"), 1),),
+        statuses=(("killed", 2), ("survived", 1), ("timeout", 1)),
     )
 
 
@@ -976,7 +979,9 @@ def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
     changed = {(str(workdir / "n.py"), 2)}
     tests = {"test_prop.py", "test_ex.py"}
     example = mutation_sample(workdir, changed, 5, test_files=tests, run_tests={"test_ex.py"})
-    assert example == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+    assert example == MutationOutcome(
+        killed=1, total=1, generated=1, survivors=(), statuses=(("killed", 1),)
+    )
     prop = mutation_sample(workdir, changed, 5, test_files=tests, run_tests={"test_prop.py"})
     assert prop == MutationOutcome(
         killed=0,
@@ -984,6 +989,7 @@ def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
         generated=1,
         survivors=("n.x_f__mutmut_1",),
         survivor_lines=((str(workdir / "n.py"), 2),),
+        statuses=(("survived", 1),),
     )
 
 
@@ -1009,7 +1015,9 @@ def test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification(
         "mutmut run exited 1: failed to collect stats. runner returned 1",
     )
     scoped = mutation_sample(workdir, changed, 5, test_files=tests, run_tests=("test_n.py",))
-    assert scoped == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+    assert scoped == MutationOutcome(
+        killed=1, total=1, generated=1, survivors=(), statuses=(("killed", 1),)
+    )
 
 
 def test_mutation_sample_names_a_red_suite_instead_of_blaming_the_tool(
@@ -1165,7 +1173,9 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
     outcome = mutation_sample(
         workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set(), recorder=rec
     )
-    assert outcome == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+    assert outcome == MutationOutcome(
+        killed=1, total=1, generated=1, survivors=(), statuses=(("killed", 1),)
+    )
     calls_argv = [argv for argv, _, _ in calls]
     assert calls_argv[:2] == [
         ("timeout", str(_MUTATION_TIMEOUT_S), "mutmut", "run"),
@@ -1258,7 +1268,9 @@ def test_mutation_sample_skips_test_file_mutants(
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
     changed = {(str(workdir / "a.py"), 1), (str(workdir / "tests" / "test_a.py"), 1)}
     outcome = mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
-    assert outcome == MutationOutcome(killed=1, total=1, generated=1, survivors=())
+    assert outcome == MutationOutcome(
+        killed=1, total=1, generated=1, survivors=(), statuses=(("killed", 1),)
+    )
 
 
 # --- P0-1: batch the mutant lookup ------------------------------------------
@@ -1698,6 +1710,26 @@ def test_mutant_lines_unparseable_source_with_a_parsed_name_returns_empty() -> N
     assert _mutant_lines(show, source, "a.x_f__mutmut_1") == set()
 
 
+def test_mutant_lines_a_dedented_string_content_line_is_not_its_own() -> None:
+    """Known-bad for A (X-L6, P1-6): a mutant inside method `m` removes its
+    own body line (`        return x`, 8 spaces -- mutmut's rendering adds
+    that level back at `indent + snippet`). The method also holds a
+    multi-line string whose content line, once dedented, reads exactly
+    the same as the mutant's removed line with the indent stripped
+    (`    return x`, 4 spaces) -- the bare
+    ``lines[lineno - 1] == snippet`` form matched that string line too,
+    attributing the mutant to a statement it never touched. P0-2's own
+    contract rules this out ("a mutant whose text merely repeats a
+    changed line elsewhere ... does not"). Red at the base: `{3, 6}`,
+    line 3 being the `s = ...` triple-quoted-string statement.
+    """
+    source = 'class C:\n    def m(self, x):\n        s = """\n    return x\n"""\n        return x\n'
+    show = (
+        "--- n.py\n+++ n.py\n@@ -1,3 +1,3 @@\n def m(self, x):\n-    return x\n+    return None\n"
+    )
+    assert _mutant_lines(show, source, "n.xǁCǁm__mutmut_1") == {6}
+
+
 def test_statement_start_keeps_the_first_best_on_a_tied_span() -> None:
     """`ast.walk` visits a parent before its child, so a one-line
     `if True: pass` gives the `If` and its `pass` the same span (0): the
@@ -2018,6 +2050,7 @@ def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
         survivors=("m_value",),
         text_only=1,
         survivor_lines=((str(workdir / "a.py"), 1),),
+        statuses=(("killed", 1), ("survived", 1)),
     )
 
 
@@ -2197,6 +2230,94 @@ def test_mutation_sample_counts_every_decided_status_by_the_contract(
         for name, verdict, _ in _DECIDED_STATUSES_ON_A_LINE
         if verdict not in ("killed", "timeout")
     }
+
+
+# --- P1-6: `MutationOutcome.statuses` -----------------------------------
+#
+# Contract B: every scored mutant is counted by the status string mutmut
+# gave it, and the counts sum to `total`. Nothing in `gates` reads it;
+# it is calibration evidence for the SIGKILL/SIGSEGV question (mutmut 3.8
+# maps both to "segfault").
+
+_STATUSES_PAIR3 = (
+    ("m_k1", "killed", 1),
+    ("m_k2", "killed", 2),
+    ("m_k3", "killed", 3),
+    ("m_survived", "survived", 4),
+    ("m_notests", "no tests", 5),
+    ("m_segfault", "segfault", 6),
+)
+"""Six decided mutants, all located on a changed line: three `killed`,
+one `survived`, one `no tests`, one `segfault`."""
+
+
+def test_mutation_sample_statuses_sum_to_total_and_keep_every_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (key for B): `statuses` sums to `total` and keeps every
+    distinct status, sorted by status string.
+    """
+    workdir = _every_status_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    lines = [f"v{i} = {i}" for i in range(1, 10)]
+    results = "\n".join(["", *(f"  {name}: {verdict}" for name, verdict, _ in _STATUSES_PAIR3), ""])
+    shows = {name: _show_diff("a.py", lines[line - 1]) for name, _verdict, line in _STATUSES_PAIR3}
+    _stub_mutmut(stub_dir, results, shows)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), line) for _, _, line in _STATUSES_PAIR3}
+    outcome = mutation_sample(workdir, changed, 20, test_files={"tests/test_a.py"})
+    assert outcome.total == 6
+    assert outcome.killed == 3
+    assert outcome.statuses == (
+        ("killed", 3),
+        ("no tests", 1),
+        ("segfault", 1),
+        ("survived", 1),
+    )
+    assert sum(n for _, n in outcome.statuses) == outcome.total
+
+
+def test_mutation_sample_statuses_exclude_text_only_and_not_checked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad for B (pair 4): pair 3's population plus a text-only
+    survivor (a message edit) and a `not checked` mutant, both located on
+    a changed line. `statuses` is built after the text-only exclusion and
+    the `not checked` drop, so it is unchanged from pair 3 and still sums
+    to `total`.
+    """
+    workdir = _every_status_workdir(tmp_path)
+    (workdir / "a.py").write_text("".join(f"v{i} = {i}\n" for i in range(1, 10)) + 'msg = "bad"\n')
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    lines = [f"v{i} = {i}" for i in range(1, 10)]
+    results = "\n".join(
+        [
+            "",
+            *(f"  {name}: {verdict}" for name, verdict, _ in _STATUSES_PAIR3),
+            "  m_text: survived",
+            "  m_pending: not checked",
+            "",
+        ]
+    )
+    shows = {name: _show_diff("a.py", lines[line - 1]) for name, _verdict, line in _STATUSES_PAIR3}
+    shows["m_text"] = _show_diff("a.py", 'msg = "bad"', 'msg = "XXbadXX"')
+    _stub_mutmut(stub_dir, results, shows)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), line) for _, _, line in _STATUSES_PAIR3} | {
+        (str(workdir / "a.py"), 10)
+    }
+    outcome = mutation_sample(workdir, changed, 20, test_files={"tests/test_a.py"})
+    assert outcome.total == 6
+    assert outcome.text_only == 1
+    assert outcome.statuses == (
+        ("killed", 3),
+        ("no tests", 1),
+        ("segfault", 1),
+        ("survived", 1),
+    )
+    assert sum(n for _, n in outcome.statuses) == outcome.total
 
 
 def test_mutation_sample_run_tests_restriction_does_not_erase_an_unexecuted_survivor(
@@ -2397,3 +2518,29 @@ def test_changed_statements_ignores_non_python_and_deleted_and_unparseable_files
     )
     assert {path for path, _ in changed_lines(diff)} == {"a.txt", "bad.py"}
     assert changed_statements(tmp_path, diff) == set()
+
+
+def test_mutation_sample_statuses_are_sorted_by_status_not_by_mutant_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`statuses` is ordered by status string, whatever order the mutants'
+    names put them in (checker probe X-P1-6-1: pair 3's names happen to
+    sort into status order, so dropping the `sorted` survived it).
+    """
+    workdir = _every_status_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    lines = [f"v{i} = {i}" for i in range(1, 10)]
+    reordered = [
+        ("m1", "survived", 1),
+        ("m2", "segfault", 2),
+        ("m3", "no tests", 3),
+        ("m4", "killed", 4),
+    ]
+    results = "\n".join(["", *(f"  {name}: {verdict}" for name, verdict, _ in reordered), ""])
+    shows = {name: _show_diff("a.py", lines[line - 1]) for name, _verdict, line in reordered}
+    _stub_mutmut(stub_dir, results, shows)
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "a.py"), line) for _, _, line in reordered}
+    outcome = mutation_sample(workdir, changed, 20, test_files={"tests/test_a.py"})
+    assert outcome.statuses == (("killed", 1), ("no tests", 1), ("segfault", 1), ("survived", 1))

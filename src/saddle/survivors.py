@@ -279,9 +279,9 @@ Injected rather than imported, so the decision below is a pure function
 of two observations (`gates` holds the predicates, runners arrive at the
 boundary). An implementation runs only the candidate file, and against
 the real tree also re-runs `evidence.mutation_sample` with `run_tests`
-scoped to that file under the node's own `max_mutants` -- the sample is
-name-sorted, so the same ceiling selects the same mutants -- reporting
-the lines the run executed alongside.
+scoped to that file. Since P0-8 (T6-61) that scores every decided
+mutant on a changed line, so the candidate and the original gate score
+the same population, reporting the lines the run executed alongside.
 
 A runner that reports `survivors=()` without having re-run the sample
 makes every previously surviving mutant read as killed. Reporting the

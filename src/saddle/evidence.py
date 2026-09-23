@@ -701,6 +701,14 @@ class MutationOutcome:
     # so a repair round can target them; this is only the count for the
     # gate's own detail string.
     untested: int = 0
+    # Every scored mutant's status string (P1-6), counted after the
+    # text-only exclusion and the `not checked` drop, so the counts
+    # always sum to `total`. Nothing in `gates` reads this; it is
+    # calibration evidence for the SIGKILL/SIGSEGV question (mutmut 3.8
+    # maps both to "segfault", and can escalate a timeout to it) -- a
+    # question the raw status distribution can answer without decoding
+    # exit codes. An engine failure (`total == 0`) leaves it empty.
+    statuses: tuple[tuple[str, int], ...] = ()
 
 
 def _is_given(decorator: ast.expr) -> bool:
@@ -969,11 +977,14 @@ def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
     `mutant_name`'s two production shapes (`_MUTANT_NAME`) resolve a `def`
     with `ast` (`_mutant_def`). Only lines inside that def's own range --
     from its first decorator line (or the `def` line) to `end_lineno` --
-    can match, either at the def's own indentation added back (mutmut
-    renders the extracted function at column 0, so every line including a
+    can match, at the def's own indentation added back (mutmut renders
+    the extracted function at column 0, so every line including a
     continuation loses that one level of dedent -- verified against a
-    real method mutant on a continuation line, see the report) or
-    unreindented (defensive: the spec calls for both forms). Restricting
+    real method mutant on a continuation line, see the report). The
+    unreindented form is gone (P1-6, scope narrowed): it matched a
+    multi-line string's dedented content line against the wrong
+    statement, and a no-effect check against real mutmut on the s1/s3/s4
+    trees found no mutant whose outcome depended on it. Restricting
     `matched` to the def's own range is the only thing standing between a
     duplicate line elsewhere in the file and a wrong attribution (P0-2's
     M-L1): `_statement_start` looks up the innermost statement over the
@@ -1017,7 +1028,7 @@ def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
         lineno
         for lineno in range(start, end + 1)
         for snippet in removed
-        if lines[lineno - 1] == indent + snippet or lines[lineno - 1] == snippet
+        if lines[lineno - 1] == indent + snippet
     }
     return {(_statement_start(tree, lineno) or node.lineno) for lineno in matched}
 
@@ -1266,6 +1277,9 @@ def mutation_sample(
         }
     )
     untested = sum(1 for _, verdict, _, _ in sample if verdict == "no tests")
+    status_tally: dict[str, int] = {}
+    for _, verdict, _, _ in sample:
+        status_tally[verdict] = status_tally.get(verdict, 0) + 1
     return MutationOutcome(
         killed=killed,
         total=len(sample),
@@ -1274,6 +1288,7 @@ def mutation_sample(
         text_only=text_only,
         survivor_lines=tuple(survivor_lines),
         untested=untested,
+        statuses=tuple(sorted(status_tally.items())),
     )
 
 

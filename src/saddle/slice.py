@@ -1705,9 +1705,10 @@ def _candidate_runner(real_tree: Path, baseline: str, node: Node) -> CandidateRu
 
     The candidate file alone runs under coverage; against `real_tree` a
     green run also re-runs `mutation_sample` over the node's changed
-    lines with pytest scoped to that file, under the node's own ceiling,
-    so the survivors it still reports are the ones the candidate failed
-    to kill. The stub tree contributes its exit code and nothing else.
+    lines with pytest scoped to that file, scoring every decided mutant
+    on a changed line (P0-8), so the survivors it still reports are the
+    ones the candidate failed to kill. The stub tree contributes its
+    exit code and nothing else.
     """
     changed = changed_statements(real_tree, git_diff(real_tree, baseline))
     changed_files = sorted({path for path, _ in changed})
