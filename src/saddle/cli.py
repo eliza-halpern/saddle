@@ -49,7 +49,14 @@ from saddle.journal import (
     verify_journal,
 )
 from saddle.sessions import DEFAULT_WORKDIR
-from saddle.slice import DEADLINE_EXIT, SURVIVOR_SAMPLES, ReplanFailedError, TestDrawer, run_slice
+from saddle.slice import (
+    DEADLINE_EXIT,
+    SURVIVOR_SAMPLES,
+    TASK_FIRST_PREAMBLE,
+    ReplanFailedError,
+    TestDrawer,
+    run_slice,
+)
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
 from saddle.vllm import (
@@ -467,6 +474,102 @@ def build_worker_prompt(
     files: Sequence[str],
     contents: Mapping[str, str],
     emission: str = "whole-file",
+    failure: str | None = None,
+) -> str:
+    """The prompt a node's attempt is drawn from (P2-1).
+
+    An `impl` node's FIRST attempt gets the task-first prompt: the task,
+    the files, the wire format and the scope line, nothing else. With the
+    loop, tools, sampling and effort held equal, the structured prompt
+    alone moved T1 first drafts from 10/18 correct to 0/18 (F21.77). Every
+    retry, and every `test` or `refactor` node on any attempt, keeps the
+    structured prompt: a retry arrives after a gate said what was wrong,
+    and a test node's binding rules are what its gates check.
+    """
+    if failure is None and node.kind == "impl":
+        return build_task_first_prompt(
+            task=task, node=node, files=files, contents=contents, emission=emission
+        )
+    return build_structured_prompt(
+        task=task, node=node, files=files, contents=contents, emission=emission
+    )
+
+
+def _shown_files(files: Sequence[str]) -> str:
+    """The repo file listing, capped at MAX_FILES_IN_PROMPT names."""
+    listed = list(files)
+    if not listed:
+        return "(no tracked files)"
+    shown = "\n".join(listed[:MAX_FILES_IN_PROMPT])
+    if len(listed) > MAX_FILES_IN_PROMPT:
+        shown += f"\n... and {len(listed) - MAX_FILES_IN_PROMPT} more"
+    return shown
+
+
+def _file_context(node: Node, contents: Mapping[str, str]) -> str:
+    """File contents truncated to the node's own context ceiling (T3-4 binding)."""
+    if "read_file" not in node.execution_constraints.allowed_tools:
+        return CONTENTS_WITHHELD
+    context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
+    budget = min(node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS)
+    if len(context) > budget:
+        context = context[:budget] + "\n[file context truncated]"
+    return context
+
+
+def _scope_line(node: Node) -> str:
+    """The one-line target-file rule, or empty when the node names none."""
+    if not node.target_files:
+        return ""
+    # The planner's list reaches the gate; the worker has to hear it
+    # too, or it writes the extra test file 20b's node-2 wrote (R3).
+    return (
+        f"- Touch only these files: {', '.join(node.target_files)}. "
+        "The gate rejects a diff that names any other file.\n"
+    )
+
+
+def build_task_first_prompt(
+    *,
+    task: str,
+    node: Node,
+    files: Sequence[str],
+    contents: Mapping[str, str],
+    emission: str = "whole-file",
+) -> str:
+    """First-attempt impl prompt: the task and the files, then the wire format.
+
+    The opening sentence stands in for a system turn: `propose_diff` sends
+    one user message, so it rides at the top of the text. `slice` reads
+    that sentence back to seal the attempt's `prompt_shape`. No
+    requirement ids, literals, gate command or working rules: those are
+    the retry prompt's, where a gate has already said what was wrong.
+    """
+    rules = EDIT_RULES if emission == "edit" else WHOLE_FILE_RULES
+    return f"""{TASK_FIRST_PREAMBLE}
+
+Task: {task}
+
+Node {node.id}: {node.task_prompt}
+
+Repo files:
+{_shown_files(files)}
+
+File contents:
+{_file_context(node, contents)}
+
+{rules}{_scope_line(node)}
+Output ONLY the file sections, no commentary.
+"""
+
+
+def build_structured_prompt(
+    *,
+    task: str,
+    node: Node,
+    files: Sequence[str],
+    contents: Mapping[str, str],
+    emission: str = "whole-file",
 ) -> str:
     """Node work prompt: task, requirements, repo files, diff format rules.
 
@@ -485,23 +588,8 @@ def build_worker_prompt(
     at all (T3-4): without it the node still gets the file *names*, which
     is what makes omitting it a context-cost lever rather than blindness.
     """
-    listed = list(files)
-    if not listed:
-        shown = "(no tracked files)"
-    else:
-        shown = "\n".join(listed[:MAX_FILES_IN_PROMPT])
-        if len(listed) > MAX_FILES_IN_PROMPT:
-            shown += f"\n... and {len(listed) - MAX_FILES_IN_PROMPT} more"
-    tools = node.execution_constraints.allowed_tools
-    if "read_file" in tools:
-        context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
-        budget = min(
-            node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS
-        )
-        if len(context) > budget:
-            context = context[:budget] + "\n[file context truncated]"
-    else:
-        context = CONTENTS_WITHHELD
+    shown = _shown_files(files)
+    context = _file_context(node, contents)
     reqs = "\n".join(
         f"  {req.id}: {req.statement}\n"
         f"    accepts: {', '.join(repr(text) for text in req.accepts)}\n"
@@ -509,14 +597,7 @@ def build_worker_prompt(
         for req in node.requirements
     )
     rules = EDIT_RULES if emission == "edit" else WHOLE_FILE_RULES
-    scope = ""
-    if node.target_files:
-        # The planner's list reaches the gate; the worker has to hear it
-        # too, or it writes the extra test file 20b's node-2 wrote (R3).
-        scope = (
-            f"- Touch only these files: {', '.join(node.target_files)}. "
-            "The gate rejects a diff that names any other file.\n"
-        )
+    scope = _scope_line(node)
     return f"""Task: {task}
 
 Node {node.id}: {node.task_prompt}
@@ -584,7 +665,7 @@ def build_recovery_plan_prompt(
     emission: str = "whole-file",
 ) -> str:
     """Diagnosis prompt: root-cause the failure and outline the minimal fix."""
-    base = build_worker_prompt(
+    base = build_structured_prompt(
         task=task, node=node, files=files, contents=contents, emission=emission
     )
     return (
@@ -635,7 +716,7 @@ def build_repair_prompt(
     replaced, so the worker fixes forward on the failure alone and the
     harness does not hand it a plan it cannot legally follow.
     """
-    base = build_worker_prompt(
+    base = build_structured_prompt(
         task=task, node=node, files=files, contents=contents, emission=emission
     )
     recovery = "" if plan is None else "\n\nRecovery plan:\n" + plan

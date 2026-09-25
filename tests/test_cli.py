@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Final, cast
 
 import httpx
 import pytest
@@ -27,6 +27,7 @@ from saddle.cli import (
     PROMPT_CHARS_PER_TOKEN,
     RUN_ALLOWLIST,
     TOOL_BINDINGS,
+    WHOLE_FILE_RULES,
     DagOptions,
     RunError,
     RunOptions,
@@ -38,6 +39,8 @@ from saddle.cli import (
     build_recovery_plan_prompt,
     build_repair_prompt,
     build_replan_task,
+    build_structured_prompt,
+    build_task_first_prompt,
     build_worker_prompt,
     check_server,
     diff_budget,
@@ -71,7 +74,12 @@ from saddle.journal import (
     read_spans,
     write_attempt_sidecar,
 )
-from saddle.slice import PROPOSAL_SAMPLES, SURVIVOR_SAMPLES, format_attempt_failure
+from saddle.slice import (
+    PROPOSAL_SAMPLES,
+    SURVIVOR_SAMPLES,
+    TASK_FIRST_PREAMBLE,
+    format_attempt_failure,
+)
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -343,7 +351,7 @@ def test_build_worker_prompt_tells_the_worker_its_target_files() -> None:
 
 def test_build_worker_prompt_covers_format_rules_and_files() -> None:
     node = Node.model_validate(_node_dict())
-    prompt = build_worker_prompt(
+    prompt = build_structured_prompt(
         task=TASK, node=node, files=["n.py", "m.py"], contents={"n.py": "x = 1\n"}
     )
     assert TASK in prompt
@@ -390,7 +398,7 @@ def test_build_worker_prompt_joins_requirements_and_context() -> None:
         {"id": "REQ-002", "statement": "REQ-002 holds.", "accepts": ["2"], "rejects": ["3"]},
     ]
     node = Node.model_validate(node_dict)
-    prompt = build_worker_prompt(
+    prompt = build_structured_prompt(
         task=TASK,
         node=node,
         files=["a.py", "b.py"],
@@ -417,7 +425,7 @@ def test_build_worker_prompt_lists_every_example() -> None:
             "rejects": ["user@@example.com", "user@example.com."],
         }
     ]
-    prompt = build_worker_prompt(
+    prompt = build_structured_prompt(
         task=TASK, node=Node.model_validate(node_dict), files=[], contents={}
     )
     assert (
@@ -432,7 +440,7 @@ def test_build_worker_prompt_truncates_large_context() -> None:
 
     node = Node.model_validate(_node_dict())
     big = "x" * (MAX_CONTEXT_CHARS + 1000)
-    prompt = build_worker_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": big})
+    prompt = build_structured_prompt(task=TASK, node=node, files=["n.py"], contents={"n.py": big})
     assert "[file context truncated]" in prompt
     assert "x" * (MAX_CONTEXT_CHARS + 1000) not in prompt
     # The node task is restated after the contents (#56), so the context
@@ -2561,7 +2569,7 @@ def test_worker_prompt_restates_the_node_task_at_the_tail() -> None:
     that matters has to bracket it, not sit only in front of it.
     """
     node = Node.model_validate(_node_dict("n1", "low"))
-    prompt = build_worker_prompt(
+    prompt = build_structured_prompt(
         task="Do the thing.",
         node=node,
         files=["n.py"],
@@ -2716,7 +2724,7 @@ def test_worker_prompt_asks_test_nodes_for_a_property() -> None:
     """The property gate otherwise just rejects what the worker keeps
     writing: examples probe the cases already in mind (#58)."""
     node = Node.model_validate(_node_dict("n1", "low"))
-    prompt = build_worker_prompt(
+    prompt = build_structured_prompt(
         task="Do the thing.", node=node, files=["n.py"], contents={"n.py": "x = 1\n"}
     )
     assert "@given" in prompt
@@ -3958,3 +3966,173 @@ def test_chat_with_an_empty_token_file_is_a_clean_error_and_never_serves(
         err.getvalue()
         == f"error: {token_file} exists but is empty; write a token into it or delete it\n"
     )
+
+
+def _p2_1_node(kind: str = "impl") -> Node:
+    """P2-1 fixture: two requirements with literals, a gate, one target file."""
+    data = _node_dict()
+    data["kind"] = kind
+    data["target_files"] = ["validators.py"]
+    data["task_prompt"] = "Write is_valid_code in validators.py."
+    data["requirements"] = [
+        {
+            "id": "REQ-001",
+            "statement": "A code is three digits.",
+            "accepts": ["LITERAL-123"],
+            "rejects": ["LITERAL-12a"],
+        },
+        {"id": "REQ-002", "statement": "Empty is invalid.", "accepts": ["ok"], "rejects": [""]},
+    ]
+    data["deterministic_gate"]["test_command"] = "pytest test_validators.py"
+    return Node.model_validate(data)
+
+
+P2_1_TASK: Final = "Add a validator for three-digit codes."
+P2_1_BODY: Final = "def is_valid_code(text):\n    return FILE_BODY_MARKER\n"
+# Everything the structured prompt carries that the task-first one drops.
+P2_1_STRUCTURED_ONLY: Final = (
+    "Requirements",
+    "Gate command",
+    "REQ-",
+    "LITERAL-123",
+    "LITERAL-12a",
+    "hypothesis",
+    "ruff",
+)
+
+
+def _p2_1_prompt(kind: str = "impl", failure: str | None = None) -> str:
+    return build_worker_prompt(
+        task=P2_1_TASK,
+        node=_p2_1_node(kind),
+        files=["validators.py"],
+        contents={"validators.py": P2_1_BODY},
+        failure=failure,
+    )
+
+
+def test_first_impl_attempt_prompt_is_task_first() -> None:
+    """P2-1 Contract A known-good: task, node, file body, wire format and
+    scope line, preceded by the system sentence; no requirement ids, literals,
+    gate command or working rules (F21.77). Known-bad is the next test: the
+    same node's repair prompt carries every one of them."""
+    prompt = _p2_1_prompt()
+    assert prompt.startswith(TASK_FIRST_PREAMBLE + "\n")
+    assert TASK_FIRST_PREAMBLE == (
+        "You are an expert coding assistant. Read the task and the files, "
+        "then write the finished code."
+    )
+    for present in (
+        f"Task: {P2_1_TASK}",
+        "Node n1: Write is_valid_code in validators.py.",
+        "--- validators.py ---\n" + P2_1_BODY,
+        WHOLE_FILE_RULES,
+        "- Touch only these files: validators.py.",
+        "Output ONLY the file sections, no commentary.",
+    ):
+        assert present in prompt, present
+    for absent in P2_1_STRUCTURED_ONLY:
+        assert absent not in prompt, absent
+    # Order as the spec lists it: task, files, rules, scope, closing line.
+    order = [
+        prompt.index("Task: "),
+        prompt.index("Repo files:"),
+        prompt.index(WHOLE_FILE_RULES),
+        prompt.index("- Touch only these files"),
+        prompt.index("Output ONLY"),
+    ]
+    assert order == sorted(order)
+    edit = build_worker_prompt(
+        task=P2_1_TASK,
+        node=_p2_1_node(),
+        files=["validators.py"],
+        contents={},
+        emission="edit",
+    )
+    assert EDIT_RULES in edit
+    assert WHOLE_FILE_RULES not in edit
+
+
+def test_repair_and_retry_prompts_stay_structured() -> None:
+    """P2-1 Contract B known-bad for the first-attempt test: every string
+    that test requires absent is present in the retry prompts, beside the
+    failure, and the preamble that marks the task-first shape is not."""
+    kwargs: dict[str, Any] = {
+        "task": P2_1_TASK,
+        "node": _p2_1_node(),
+        "files": ["validators.py"],
+        "contents": {"validators.py": P2_1_BODY},
+        "failure": "FAILURE-TEXT-9",
+    }
+    retry = _p2_1_prompt(failure="FAILURE-TEXT-9")
+    repair = build_repair_prompt(**kwargs, plan="1. fix")
+    recovery = build_recovery_plan_prompt(**kwargs)
+    for prompt in (repair, recovery):
+        for present in (*P2_1_STRUCTURED_ONLY, "FAILURE-TEXT-9", "- Touch only these files"):
+            assert present in prompt, present
+        assert TASK_FIRST_PREAMBLE not in prompt
+    for present in P2_1_STRUCTURED_ONLY:
+        assert present in retry, present
+    assert not retry.startswith(TASK_FIRST_PREAMBLE)
+    assert retry == build_structured_prompt(
+        task=P2_1_TASK,
+        node=_p2_1_node(),
+        files=["validators.py"],
+        contents={"validators.py": P2_1_BODY},
+    )
+
+
+def test_test_and_refactor_nodes_keep_the_structured_first_prompt() -> None:
+    """P2-1 Contract C: only an impl node's first attempt changes shape (U2)."""
+    for kind in ("test", "refactor"):
+        prompt = _p2_1_prompt(kind)
+        assert "Requirements" in prompt
+        assert "Gate command: pytest test_validators.py" in prompt
+        assert not prompt.startswith(TASK_FIRST_PREAMBLE)
+    assert "Requirements" not in _p2_1_prompt("impl")
+
+
+def test_task_first_prompt_withholds_contents_without_read_file() -> None:
+    """The T3-4 binding holds on the task-first prompt too: names, no bodies."""
+    data = _node_dict(tools=["write_file"])
+    prompt = build_task_first_prompt(
+        task="T", node=Node.model_validate(data), files=["n.py"], contents={"n.py": "MARKER = 1\n"}
+    )
+    assert CONTENTS_WITHHELD in prompt
+    assert "MARKER = 1" not in prompt
+    assert "Repo files:\nn.py" in prompt
+    unscoped = _node_dict()
+    unscoped["kind"] = "test"
+    unscoped["target_files"] = []
+    bare = build_task_first_prompt(
+        task="T", node=Node.model_validate(unscoped), files=[], contents={}
+    )
+    assert "Touch only" not in bare
+    assert "(no tracked files)" in bare
+
+
+def test_run_seals_prompt_shape_per_attempt(tmp_path: Path) -> None:
+    """P2-1 Contract D through the real caller: `saddle run`'s propose sends
+    the task-first prompt on attempt 1 of an impl node and the structured
+    repair prompt on attempt 2, and each attempt's sidecar says which.
+    Known-bad: attempt 2's sidecar does not read "task-first"."""
+    _git_repo(tmp_path)
+    seen: list[dict[str, Any]] = []
+    bad = DIFF.replace("+    return 2\n", "+    return 3\n")
+    fix = whole_file("n.py", "def f():", "    return 2")
+    script = [
+        _emit_response({"nodes": [_node_dict()]}),
+        _diff_response(bad),
+        _text_response("1. Change the return value.\n"),
+        _diff_response(fix),
+    ]
+    code, out = _run(_options(tmp_path), _scripted_client(script, seen))
+    assert code == 0, out
+    diff_calls = [call for call in seen if _is_diff_request(call)]
+    assert _prompt(diff_calls[0]).startswith(TASK_FIRST_PREAMBLE)
+    assert "Requirements" not in _prompt(diff_calls[0])
+    assert "Requirements" in _prompt(diff_calls[-1])
+    journal = tmp_path / "proofs.jsonl"
+    agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
+    shapes = [_sidecar(journal, span)["prompt_shape"] for span in agents]
+    assert shapes == ["task-first", "structured"]

@@ -5106,3 +5106,16 @@ def test_candidate_runner_covers_a_statement_whose_only_changed_line_is_a_contin
     result = slice_module._candidate_runner(tmp_path, "HEAD", node)(tmp_path, "test_cand.py")
     assert result.exit_code == 0
     assert (str(tmp_path / "n.py"), 3) in result.covered
+
+
+def test_prompt_shape_is_read_off_the_prompt_start() -> None:
+    """P2-1 Contract D: the sealed shape is what the sent text was. Known-good:
+    a prompt opening with the preamble is task-first. Known-bad: the same
+    sentence anywhere but the start, or absent, is structured."""
+    assert slice_module.prompt_shape(slice_module.TASK_FIRST_PREAMBLE + "\n\nTask: x") == (
+        "task-first"
+    )
+    assert slice_module.prompt_shape("Task: x\n" + slice_module.TASK_FIRST_PREAMBLE) == (
+        "structured"
+    )
+    assert slice_module.prompt_shape("") == "structured"

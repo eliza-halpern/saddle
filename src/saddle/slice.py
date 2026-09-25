@@ -818,6 +818,21 @@ def format_attempt_failure(
     return "\n".join(lines) + "\n"
 
 
+TASK_FIRST_PREAMBLE: Final = (
+    "You are an expert coding assistant. Read the task and the files, then write the finished code."
+)
+"""The opening line of the task-first worker prompt (P2-1), and its mark."""
+
+
+def prompt_shape(prompt: str) -> str:
+    """Which worker prompt a draw came from, read off the prompt itself (P2-1).
+
+    Read from the text the call sent, not from the caller's intent, so the
+    sealed field cannot say "task-first" about a draw that was not.
+    """
+    return "task-first" if prompt.startswith(TASK_FIRST_PREAMBLE) else "structured"
+
+
 def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
     """What a proposal leaves behind for its attempt's sidecar (T6-12)."""
     return {
@@ -829,6 +844,7 @@ def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
         # written down.
         "diff": proposal.diff,
         "prompt": proposal.prompt,
+        "prompt_shape": prompt_shape(proposal.prompt),
         "seed": proposal.seed,
         "temperature": proposal.temperature,
         "reasoning_effort": proposal.reasoning_effort,
