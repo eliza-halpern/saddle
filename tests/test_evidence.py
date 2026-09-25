@@ -1419,6 +1419,87 @@ def test_show_all_mutants_matches_mutmut_show_byte_for_byte(
         assert mapping[name] == expected
 
 
+def _every_exit_code_workdir(root: Path) -> Path:
+    """A tiny real tree with more mutants than mutmut has exit codes (19
+    mutants at mutmut 3.8, against 17 listed codes plus the one unlisted
+    code the E1 test adds), so every code can be recorded at least once."""
+    workdir = root / "work"
+    workdir.mkdir()
+    (workdir / "a.py").write_text(
+        "def f(a, b):\n"
+        "    return a + b * 2 - 3\n"
+        "\n\n"
+        "def g(x):\n"
+        "    if x > 10 and x < 20:\n"
+        "        return 1\n"
+        "    return 0\n"
+        "\n\n"
+        "def k(n):\n"
+        "    total = 0\n"
+        "    for i in range(n):\n"
+        "        total += i * 3\n"
+        "    return total\n"
+    )
+    (workdir / "test_a.py").write_text(
+        "from a import f, g, k\n\n\n"
+        "def test_f():\n    assert f(1, 2) == 2\n\n\n"
+        "def test_g():\n    assert g(15) == 1\n    assert g(3) == 0\n\n\n"
+        "def test_k():\n    assert k(3) == 9\n"
+    )
+    return workdir
+
+
+def test_show_all_mutants_returns_a_mutant_of_every_status_mutmut_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good (E1), real engine: the batched lookup returns every mutant
+    whatever mutmut recorded for it, byte-identical to `mutmut show`.
+
+    The real-engine fixtures above decide only killed, survived and no
+    tests. Real trees also decide timeout (11 scored mutants in 7 of the 68
+    trees audited in calib-60b7514), and mutmut records seventeen exit codes
+    in all. At 60b7514 a lookup that skipped every `timeout` mutant passed
+    the whole suite, while `mutation_sample` silently dropped those mutants
+    from both sides of the ratio (`shows.get(name, "")` -> no path -> skip).
+
+    So each mutant's exit code is rewritten in mutmut's own meta file to walk
+    every code in `status_by_exit_code` -- the engine's table, imported, so a
+    code mutmut adds is covered without editing this test -- plus 99, a code
+    the table does not list (its default, "suspicious"). `mutmut results`
+    and `mutmut show` then read the same meta the lookup reads.
+    """
+    from mutmut.stats import status_by_exit_code
+
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = _every_exit_code_workdir(tmp_path)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    _build_real_scratch(workdir, scratch, {"test_a.py"})
+
+    codes = [*dict(status_by_exit_code), 99]
+    metas = {meta: json.loads(meta.read_text()) for meta in (scratch / "mutants").rglob("*.meta")}
+    keys = sorted((key, meta) for meta, data in metas.items() for key in data["exit_code_by_key"])
+    assert len(keys) >= len(codes), f"{len(keys)} mutants cannot carry {len(codes)} exit codes"
+    for index, (key, meta) in enumerate(keys):
+        metas[meta]["exit_code_by_key"][key] = codes[index % len(codes)]
+    for meta, data in metas.items():
+        meta.write_text(json.dumps(data))
+
+    results = subprocess.run(
+        ["mutmut", "results", "--all", "True"], cwd=scratch, capture_output=True, text=True
+    )
+    listed = dict(re.findall(r"^\s*(\S+): (.+?)\s*$", results.stdout, re.MULTILINE))
+    assert set(listed.values()) == set(status_by_exit_code.values())
+
+    mapping = show_all_mutants(scratch)
+    assert set(mapping) == set(listed)
+    for name in sorted(listed):
+        expected = subprocess.run(
+            ["mutmut", "show", name], cwd=scratch, capture_output=True, text=True
+        ).stdout
+        assert mapping[name] == expected
+
+
 def test_mutation_sample_matches_the_per_name_replay_at_unit_scale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
