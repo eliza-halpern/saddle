@@ -36,3 +36,7 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
 - Self-operated vLLM ≥ 0.28 server with guided decoding (XGrammar) + KV offloading —
   the proven setup is [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)
 - pytest, coverage.py, ruff, mutmut (sampled per node in Tier 1; the merge-time Tier 2 is not built)
+
+## License
+
+Saddle is free software under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See [LICENSE](LICENSE).

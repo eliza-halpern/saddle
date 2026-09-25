@@ -3,6 +3,8 @@ name = "saddle-harness"
 version = "0.1.0"
 description = "Deterministic execution harness for non-deterministic local LLMs."
 readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "coverage>=7.0",
