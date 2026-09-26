@@ -139,12 +139,20 @@ try {
     await until(`!!document.querySelector(".act-result")`);
     out.result = await js(`document.querySelector(".act-output").textContent`);
     out.after = await read();
-  } else if (step === "chat") {
+  } else if (step === "chat" || step === "chat-send") {
     await click(".act-chat");
     await sleep(300);
     out.input = await js(`document.querySelector("#input").value`);
     out.mode = await js(`state.mode`);
     out.focused = await js(`document.activeElement.id`);
+    if (step === "chat-send") {
+      // Send the pre-fill as the Ask turn and wait for the turn to end.
+      await js(`document.querySelector("#composer").requestSubmit()`);
+      await until(`state.busy === true`, 5000).catch(() => {});
+      await until(`state.busy === false`, 120000);
+      await sleep(500);
+      out.transcript = await js(`document.querySelector("#transcript").innerText`);
+    }
   }
   console.log(JSON.stringify(out));
   await finish(0);

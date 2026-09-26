@@ -292,3 +292,140 @@ def test_the_report_download_is_the_full_packet_text_written_beside_the_ledger(
     assert missing.status_code == no_branch.status_code == 404
     assert not list((calc / ".saddle" / "runs").glob("000000000000*"))
     assert [p.name for p in (calc / ".saddle" / "runs").rglob("packet.md")] == ["packet.md"]
+
+
+# Q9/Q10 end to end -- the Ask lane opens the report the pre-fill names.
+# A harness test, not a model-behaviour measurement: the "model" is the
+# fake server (tests/fixtures/fake_model_server.py, from saddle-bench's M3
+# dry run) replaying scripted tool calls. What it proves: a turn started
+# from the pre-filled composer can read_file the exact path on the
+# pre-fill's last line and gets the full packet bytes back (known-good);
+# a read_file of a path outside the session's folder is refused by the
+# Ask lane's scoping and returns none of that file (known-bad).
+
+FAKE_SERVER = Path(__file__).parent / "fixtures" / "fake_model_server.py"
+
+
+@pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
+def test_the_ask_lane_reads_the_report_the_prefill_names_and_nothing_outside(
+    tmp_path: Path,
+) -> None:
+    import socket
+    import sys
+
+    from packet_seed import make_repo, seed
+
+    from saddle.auto import ledger_path
+    from saddle.packet import compile_packet, render_packet_text
+    from saddle.vllm import VllmClient
+
+    calc = make_repo(tmp_path / "repo")
+    store = SessionStore(tmp_path / "s")
+    sid, rid, _branch = seed(store, calc, "audited")
+    store.update(sid, mode="task")
+    report = ledger_path(calc, rid).parent / "packet.md"
+    outside = tmp_path / "outside.txt"  # beside the repo, not inside it
+    outside.write_text("SECRET-OUTSIDE-THE-FOLDER\n")
+    # One key, scripted in order: the good session's read, reply and the
+    # title request app._name_session makes after turn 1 (an empty turn);
+    # then the same three for the bad session.
+    scripts = {
+        "ux": [
+            [["read_file", {"path": str(report)}]],
+            [],
+            [],
+            [["read_file", {"path": str(outside)}]],
+            [],
+            [],
+        ]
+    }
+    (tmp_path / "scripts.json").write_text(json.dumps(scripts))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    fake = subprocess.Popen(
+        [
+            sys.executable,
+            str(FAKE_SERVER),
+            "--port",
+            str(port),
+            "--scripts",
+            str(tmp_path / "scripts.json"),
+            "--log",
+            str(tmp_path / "requests.jsonl"),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        wait_for(lambda: _open(port), timeout=20)
+
+        def factory() -> VllmClient:
+            return VllmClient(
+                api_key="fake-local", base_url=f"http://127.0.0.1:{port}/ux/v1", model="fake"
+            )
+
+        app = build_app(store, factory, default_workdir=calc)
+        server = _server_of(app)
+        with serving(app) as base:
+            args = ["node", str(Path(__file__).parent / "fixtures" / "packet_cdp.mjs")]
+            args += [base, sid, "chat-send", "", "", "1200"]
+            out = subprocess.run(args, capture_output=True, text=True, timeout=300, check=False)
+            assert out.returncode == 0, out.stderr
+            got = json.loads(out.stdout.strip().splitlines()[-1])
+            wait_for(lambda: idle(server, sid), timeout=60)
+            bad = store.create(title="bad", workdir=str(calc)).id  # Ask is the default lane
+            with TestClient(app) as http:
+                http.post(f"/api/sessions/{bad}/message", json={"text": "read the outside file"})
+                wait_for(lambda: idle(server, bad), timeout=60)
+    finally:
+        fake.terminate()
+        fake.wait(timeout=10)
+    # Known-good: the pre-fill's last line names the report; the turn's
+    # read_file asked for exactly that path and got the full packet back.
+    named = got["input"].strip().splitlines()[-1].removeprefix("Full report: ")
+    assert Path(named) == report
+    full = render_packet_text(compile_packet(ledger_path(calc, rid), run_id=rid))
+    calls, results = _tool_calls(store.load_messages(sid))
+    assert [(c["name"], json.loads(c["arguments"])["path"]) for c in calls] == [
+        ("read_file", named)
+    ]
+    assert results == [full]
+    assert report.read_text(encoding="utf-8") == full
+    # Known-bad: the outside path is refused by the Ask lane's scoping.
+    calls, results = _tool_calls(store.load_messages(bad))
+    assert [c["name"] for c in calls] == ["read_file"]
+    assert len(results) == 1
+    assert "resolves outside the working directory" in results[0]
+    assert "SECRET-OUTSIDE-THE-FOLDER" not in results[0]
+    # Every streamed turn offered Ask's read-only tools and nothing else
+    # (the title requests offer none).
+    seen = [json.loads(line) for line in (tmp_path / "requests.jsonl").read_text().splitlines()]
+    assert [r["tools"] for r in seen if r["stream"]] == [["list_dir", "read_file", "search"]] * 4
+    e2e = os.environ.get("UXFIX_E2E_DIR")
+    if e2e:  # a transcript for the lane's report, when asked for
+        for name, messages in (
+            ("good", store.load_messages(sid)),
+            ("bad", store.load_messages(bad)),
+        ):
+            (Path(e2e) / f"{name}-messages.json").write_text(json.dumps(messages, indent=1))
+        (Path(e2e) / "page-transcript.txt").write_text(got["transcript"])
+        (Path(e2e) / "requests.jsonl").write_text((tmp_path / "requests.jsonl").read_text())
+
+
+def _open(port: int) -> bool:
+    import socket
+
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _tool_calls(messages: list[dict]) -> tuple[list[dict], list[str]]:
+    calls = [
+        call["function"]
+        for m in messages
+        if m.get("role") == "assistant"
+        for call in (m.get("tool_calls") or [])
+    ]
+    results = [str(m.get("content")) for m in messages if m.get("role") == "tool"]
+    return calls, results
