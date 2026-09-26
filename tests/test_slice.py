@@ -780,7 +780,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "- Gate mutation: PASS (killed 5 of 5 changed-line mutants (100.0% >= 85.0%))\n"
     ) in result.transcript
     assert f"- Proof: {result.proofs['n1']}\n" in result.transcript
-    assert "- Issues: none (chain verifies)\n" in result.transcript
+    assert "- Issues: none (ledger verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
     assert "  - thought: return two instead\n" in result.transcript
     # T6-62/A1: the worker path writes files and stages them; `git apply`

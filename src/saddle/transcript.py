@@ -153,7 +153,7 @@ def render_transcript(run: RunTranscript) -> str:
     lines.append(f"- Path: {run.journal_path}")
     proven = sum(1 for node in run.nodes if node.proof_hash is not None)
     lines.append(f"- Proven nodes: {proven}")
-    lines.append("- Issues: none (chain verifies)")
+    lines.append("- Issues: none (ledger verifies)")
     return "\n".join(lines) + "\n"
 
 

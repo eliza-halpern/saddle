@@ -37,4 +37,4 @@ Live run, 2026-09-16, self-operated vLLM (qwen3.8-27b). Emission succeeded first
 
 - Path: /tmp/slice-live/proofs.jsonl
 - Proven nodes: 2
-- Issues: none (chain verifies)
+- Issues: none (ledger verifies)
