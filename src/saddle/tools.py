@@ -161,6 +161,20 @@ def tools_for_mode(mode: str) -> list[dict[str, Any]]:
     return list(TOOLS) if mode == "edit" else list(ASK_TOOLS)
 
 
+def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
+    """Scope one chat turn to its lane: the schemas to offer, and the refusal.
+
+    The one lane policy for a chat turn, shared by the web chat
+    (`ChatServer._run`) and the terminal chat (`saddle up`, `chat._run_turn`)
+    so the two cannot drift: both offer `tools_for_mode(mode)` and both set
+    `context.allowed` to exactly those names, so a call to any other tool is
+    refused before it runs. Set on every turn, because a context outlives a
+    lane change."""
+    tools = tools_for_mode(mode)
+    context.allowed = tuple(t["function"]["name"] for t in tools)
+    return tools
+
+
 FINISH_TOOL: Final = "finish"
 """The only way an autonomous run ends "finished" (engine.AutoRun).
 

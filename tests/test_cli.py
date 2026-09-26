@@ -2378,6 +2378,7 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                 [--base-url BASE_URL] [--model MODEL]\n"
         "                 [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
         "                 [--reasoning-effort {none,low,medium,xhigh}]\n"
+        "                 [--mode {ask,edit}]\n"
         "\n"
         "options:\n"
         "  -h, --help            show this help message and exit\n"
@@ -2391,6 +2392,9 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                        Sampling temperature.\n"
         "  --reasoning-effort {none,low,medium,xhigh}\n"
         "                        Reply reasoning effort.\n"
+        "  --mode {ask,edit}     ask (default): read-only tools, as in the web chat's\n"
+        "                        Ask lane. edit: may write files and run commands in\n"
+        "                        --workdir, unaudited.\n"
     )
 
 
@@ -2406,6 +2410,7 @@ def test_up_parser_defaults_and_overrides() -> None:
         "max_tokens": 8192,
         "temperature": 0.0,
         "reasoning_effort": "medium",
+        "mode": "ask",
     }
     full = parser.parse_args(
         [
@@ -2424,6 +2429,8 @@ def test_up_parser_defaults_and_overrides() -> None:
             "0.5",
             "--reasoning-effort",
             "low",
+            "--mode",
+            "edit",
         ]
     )
     assert vars(full) == {
@@ -2435,6 +2442,7 @@ def test_up_parser_defaults_and_overrides() -> None:
         "max_tokens": 100,
         "temperature": 0.5,
         "reasoning_effort": "low",
+        "mode": "edit",
     }
 
 
@@ -2498,6 +2506,7 @@ def test_main_up_wires_options_and_defaults(
     assert options.max_tokens == 8192
     assert options.temperature == 0.0
     assert options.reasoning_effort == "medium"
+    assert options.mode == "ask"
     assert seen[0]["stdin"] is stdin
     assert seen[0]["console"].file is out
     assert isinstance(seen[0]["client"], _FakeClient)
@@ -2527,6 +2536,8 @@ def test_main_up_passes_flags_through(tmp_path: Path, monkeypatch: pytest.Monkey
             "0.5",
             "--reasoning-effort",
             "low",
+            "--mode",
+            "edit",
         ],
         stdin=io.StringIO("/quit\n"),
         stdout=out,
@@ -2540,6 +2551,7 @@ def test_main_up_passes_flags_through(tmp_path: Path, monkeypatch: pytest.Monkey
     assert options.max_tokens == 100
     assert options.temperature == 0.5
     assert options.reasoning_effort == "low"
+    assert options.mode == "edit"
 
 
 def test_main_up_uses_default_streams(monkeypatch: pytest.MonkeyPatch) -> None:

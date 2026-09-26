@@ -77,6 +77,7 @@ def test_stream_response_prints_reasoning_then_content() -> None:
             [{"role": "user", "content": "hi"}],
             ChatOptions(),
             display=display,
+            tools=TOOLS,
         )
 
     assert out.getvalue() == (
@@ -97,6 +98,7 @@ def test_stream_response_content_without_reasoning() -> None:
             [{"role": "user", "content": "hi"}],
             ChatOptions(),
             display=display,
+            tools=TOOLS,
         )
 
     assert out.getvalue() == "saddle> \n" + "Hi!" + " " * 77 + "\n"
@@ -115,6 +117,7 @@ def test_stream_response_reasoning_without_content() -> None:
             [{"role": "user", "content": "hi"}],
             ChatOptions(),
             display=display,
+            tools=TOOLS,
         )
 
     assert out.getvalue() == "thinking: Hmm. \n"
@@ -133,6 +136,7 @@ def test_stream_response_empty_response_prints_nothing() -> None:
             [{"role": "user", "content": "hi"}],
             ChatOptions(),
             display=display,
+            tools=TOOLS,
         )
 
     assert out.getvalue() == ""
@@ -157,6 +161,7 @@ def test_stream_response_collects_tool_calls() -> None:
             [{"role": "user", "content": "hi"}],
             ChatOptions(),
             display=display,
+            tools=TOOLS,
         )
 
     assert out.getvalue() == "saddle> \n" + "Ok." + " " * 77 + "\n"
@@ -175,13 +180,14 @@ def test_stream_response_sends_knobs_and_tools() -> None:
         [{"role": "user", "content": "hi"}],
         options,
         display=_display(out),
+        tools=TOOLS[:1],
     )
 
     body = json.loads(seen[0].content)
     assert body["max_tokens"] == 128
     assert body["temperature"] == 0.5
     assert body["reasoning_effort"] == "low"
-    assert body["tools"] == TOOLS
+    assert body["tools"] == TOOLS[:1]
     assert body["tool_choice"] == "auto"
 
 
@@ -704,7 +710,7 @@ def test_run_chat_terminal_survives_across_turns(
     seen: list[httpx.Request] = []
 
     code = run_chat(
-        ChatOptions(workdir=tmp_path, journal=journal),
+        ChatOptions(workdir=tmp_path, journal=journal, mode="edit"),
         _scripted_client([start_body, started_body, wait_body, done_body], seen),
         stdin=io.StringIO("start it\nwait for it\n/quit\n"),
         console=Console(file=io.StringIO(), width=80),
@@ -769,7 +775,7 @@ def test_run_turn_without_a_context_shares_one_across_its_tool_rounds(
             _scripted_client([start_body, wait_body, done_body], seen),
             [],
             "start it and wait for it",
-            ChatOptions(workdir=tmp_path, journal=journal),
+            ChatOptions(workdir=tmp_path, journal=journal, mode="edit"),
             turn=1,
             parent=None,
             display=display,
@@ -805,7 +811,7 @@ def test_run_chat_sessions_do_not_share_terminals(
     journal_a = tmp_path / "a.jsonl"
 
     code_a = run_chat(
-        ChatOptions(workdir=tmp_path, journal=journal_a),
+        ChatOptions(workdir=tmp_path, journal=journal_a, mode="edit"),
         _scripted_client([start_body, started_body]),
         stdin=io.StringIO("start it\n/quit\n"),
         console=Console(file=io.StringIO(), width=80),
@@ -830,7 +836,7 @@ def test_run_chat_sessions_do_not_share_terminals(
     journal_b = tmp_path / "b.jsonl"
 
     code_b = run_chat(
-        ChatOptions(workdir=tmp_path, journal=journal_b),
+        ChatOptions(workdir=tmp_path, journal=journal_b, mode="edit"),
         _scripted_client([wait_body, done_body]),
         stdin=io.StringIO("wait for it\n/quit\n"),
         console=Console(file=io.StringIO(), width=80),

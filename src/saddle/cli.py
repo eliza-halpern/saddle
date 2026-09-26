@@ -1563,6 +1563,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="medium",
         help="Reply reasoning effort.",
     )
+    up.add_argument(
+        "--mode",
+        choices=["ask", "edit"],
+        default="ask",
+        help="ask (default): read-only tools, as in the web chat's Ask lane. "
+        "edit: may write files and run commands in --workdir, unaudited.",
+    )
     auto = sub.add_parser(
         "auto", help="Run one task autonomously in a worktree; the result is a branch."
     )
@@ -1812,6 +1819,7 @@ def main(
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 reasoning_effort=args.reasoning_effort,
+                mode=args.mode,
             )
             return run_chat(
                 chat_options,
