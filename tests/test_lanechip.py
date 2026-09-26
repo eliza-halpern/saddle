@@ -202,7 +202,8 @@ def test_git_branch_is_empty_when_git_cannot_run(
     import saddle.web.app as module
 
     def boom(*_a: Any, **_k: Any) -> Any:
-        raise FileNotFoundError("git")
+        missing = "git"
+        raise FileNotFoundError(missing)
 
     monkeypatch.setattr(module.subprocess, "run", boom)
     assert module.git_branch(tmp_path) == ""
