@@ -526,7 +526,13 @@ function actionRow(card, packet) {
     view.disabled = !got.exists;
     discard.disabled = !got.exists;
     merge.disabled = !got.exists || !!got.merge_refusal;
-    merge.textContent = got.target ? `Merge into ${got.target}` : "Merge";
+    // Merge needs one auditor verdict, not all of them: a run with no proven
+    // Mutation row may merge, and the button says what it is merging without.
+    const mutation = packet.rows.find((r) => r.key === "mutation");
+    const unproven = !mutation || mutation.status !== "proven";
+    merge.textContent = (got.target ? `Merge into ${got.target}` : "Merge")
+      + (unproven ? " (mutation unproven)" : "");
+    merge.classList.toggle("unproven", unproven);
     if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
     else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
   }).catch((error) => {

@@ -827,3 +827,4 @@ main { position: relative; }
   .band-text, .band-items { grid-column: 2; }
   .act { flex: 1 1 auto; }
 }
+.act.act-merge.unproven:not(:disabled) { border-color: var(--ask); color: var(--ask); }

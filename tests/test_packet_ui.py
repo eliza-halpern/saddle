@@ -80,7 +80,10 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     # lines (each opens to its full row), Scope, Audit, and 4 in Details.
     assert r["allRows"] == 9
     assert r["bandRows"] == ["tests", "mutation", "not-proven"]
-    assert r["merge"] == {"text": "Merge into main", "disabled": False}
+    # Merge needs one proven audit row, not a mutation record; with none,
+    # the button names what is missing instead of reading as fully proven.
+    assert r["merge"] == {"text": "Merge into main (mutation unproven)", "disabled": False}
+    assert r["mergeClass"] == "unproven"
     assert r["view"]["disabled"] is False
     assert r["discard"]["disabled"] is False
     assert r["why"] == ""
@@ -152,3 +155,12 @@ def test_continue_in_chat_seeds_the_composer_with_the_recap(tmp_path: Path) -> N
     assert "Tests [proven]: The auditor ran the suite: 2 passed" in got["input"]
     assert got["mode"] == "chat"
     assert got["focused"] == "input"
+
+
+def test_a_run_with_a_proven_mutation_row_merges_under_a_plain_label(tmp_path: Path) -> None:
+    got, _repo, _branch = page(tmp_path, "mutated", "read")
+    r = got["read"]
+    assert [x["tone"] for x in r["lines"]] == ["ok", "ok", "ok"]
+    assert r["band"] == "ok"
+    assert r["merge"] == {"text": "Merge into main", "disabled": False}
+    assert r["mergeClass"] == ""

@@ -19,7 +19,7 @@ from saddle.packet import compile_packet, render_packet_text
 from saddle.sessions import SessionStore
 from saddle.web.tasks import RUN_REF, TaskRun, recap_message
 
-Kind = Literal["audited", "unaudited", "stopped", "failed"]
+Kind = Literal["audited", "mutated", "unaudited", "stopped", "failed"]
 
 
 def git(repo: Path, *args: str) -> str:
@@ -74,6 +74,11 @@ def seed(
     append_span(journal, start)
     audits = {
         "audited": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
+        "mutated": [
+            ("audit:tests", 0, "2 passed"),
+            ("audit:mutation", 0, "killed 2 of 2 changed-line mutants"),
+            ("audit:coverage", 0, "covered"),
+        ],
         "unaudited": [],
         "stopped": [("audit:tests", 0, "2 passed"), ("audit:coverage", 1, "line 2 uncovered")],
         "failed": [("audit:tests", 1, "1 failed")],

@@ -99,6 +99,7 @@ try {
       bandRows: [...band.querySelectorAll(":scope > .band-line > .prow")].map((n) => [...n.classList].find((c) => c.startsWith("k-")).slice(2)),
       view: btn(".act-diff"), merge: btn(".act-merge"), discard: btn(".act-discard"), chat: btn(".act-chat"),
       why: p.querySelector(".act-why").textContent,
+      mergeClass: p.querySelector(".act-merge").classList.contains("unproven") ? "unproven" : "",
       panel: p.querySelector(".act-panel").textContent,
     };
   })()`);
