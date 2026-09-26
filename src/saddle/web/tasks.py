@@ -57,6 +57,15 @@ end of a slice run."""
 
 ANSWER_POLL_S: Final = 0.25
 
+SMALL_LANE_TEST_EDITS: Final = True
+"""The Small lane lets a chat-started run edit tests unless the user unticks it.
+
+The auditor reports an uncovered changed line as a finding, and the repair
+the Daily Driver page names is "write the test that closes it"; with tests
+read-only that repair is refused and a correct change ends "audit
+unresolved". Weakening a pre-existing assertion is still refused at finish:
+the assertion-preservation gate does not read this flag."""
+
 type Audit = Callable[[str, str, str], Sequence[Event]]
 type AuditorFactory = Callable[["TaskRun"], Audit | None]
 
@@ -70,6 +79,7 @@ class TaskRun:
     task: str
     time_budget_s: float
     token_budget: int
+    allow_test_edits: bool = SMALL_LANE_TEST_EDITS
     state: str = "running"
     journal: Path | None = None
     question: Question | None = None
@@ -89,6 +99,7 @@ class TaskRun:
             detail=detail,
             time_budget_s=self.time_budget_s,
             token_budget=self.token_budget,
+            test_edits=self.allow_test_edits,
             question=(
                 {
                     "id": self.question.id,

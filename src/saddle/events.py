@@ -242,6 +242,8 @@ class TaskState(Event):
     time_budget_s: float = 0.0
     token_budget: int = 0
     question: dict[str, Any] | None = None
+    test_edits: bool = False
+    """Whether this run may edit test files (`allow_test_edits`)."""
     kind: str = "task.state"
 
 
