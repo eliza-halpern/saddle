@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from starlette.testclient import TestClient
 from test_ask_budget import Reader, repo  # noqa: F401 -- the fixture
 from test_ask_web import BROWSER, app_for, start
 from test_ui3_mode import _server_of, serving
@@ -124,3 +125,50 @@ def test_the_newest_pill_sits_above_the_composer(tmp_path: Path) -> None:
         assert pill["jumpBottom"] <= pill["composerTop"], (width, pill)
         assert pill["jumpTop"] >= 0, (width, pill)
         assert pill["jumpRight"] <= pill["viewport"], (width, pill)
+
+
+# Q1 (N4) -- the sidebar forgot every run when the server restarted, because
+# `app.list_sessions` read only `server.tasks` (memory). Contract: a session's
+# latest ended run reads the same after a restart over the same store as it
+# did before -- state and task in `/api/sessions`, verdict and budget in the
+# packet, branch from the branch endpoint -- because the chat journal's
+# `run-ref` span names it (shots/10-sidebar-after-restart-desktop.png).
+# Known-bad half: a session whose journal has no run-ref shows no run.
+
+
+def test_the_sidebar_rebuilds_a_runs_state_after_a_restart(
+    tmp_path: Path,
+    repo: Path,  # noqa: F811
+) -> None:
+    from test_web_tasks import FIX
+    from test_web_tasks import app_for as tasks_app
+
+    store = SessionStore(tmp_path / "s")
+    with tasks_app(store, repo, FIX) as (http, server):
+        sid = http.post("/api/sessions").json()["id"]
+        blank = http.post("/api/sessions", json={"reuse_unstarted": False}).json()["id"]
+        rid = http.post(f"/api/sessions/{sid}/task", json={"text": "make add add"}).json()["run_id"]
+        wait_for(lambda: idle(server, sid))
+        before = _seen(http, sid, rid)
+        assert before["state"] == "finished"
+    # A new server over the same store: nothing in memory.
+    app = build_app(store, lambda: None, default_workdir=repo)
+    assert _server_of(app).tasks == {}
+    with TestClient(app) as http:
+        after = _seen(http, sid, rid)
+        rows = {row["id"]: row for row in http.get("/api/sessions").json()}
+    assert after == before
+    assert (rows[blank]["run_state"], rows[blank]["run_task"]) == (None, None)
+
+
+def _seen(http: TestClient, sid: str, rid: str) -> dict:
+    row = next(r for r in http.get("/api/sessions").json() if r["id"] == sid)
+    packet = http.get(f"/api/sessions/{sid}/tasks/{rid}/packet").json()
+    cost = next(r for r in packet["rows"] if r["key"] == "cost")
+    return {
+        "state": row["run_state"],
+        "task": row["run_task"],
+        "verdict": packet["verdict"],
+        "budget": cost["text"],
+        "branch": http.get(f"/api/sessions/{sid}/tasks/{rid}/branch").json()["branch"],
+    }

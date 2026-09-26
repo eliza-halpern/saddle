@@ -510,8 +510,14 @@ def build_app(
         for session in store.list():
             newest = latest.get(session.id)
             row = dict(session.__dict__)
-            row["run_state"] = newest.state if newest is not None else None
-            row["run_task"] = newest.task if newest is not None else None
+            if newest is not None:
+                shown: tuple[str, str] | None = (newest.state, newest.task)
+            else:
+                # Nothing in memory (a restart, above all): the session's own
+                # chat journal still names its latest ended run (UXREVIEW2 Q1).
+                shown = tasks.latest_run_ref(store.journal_path(session.id))
+            row["run_state"] = shown[0] if shown is not None else None
+            row["run_task"] = shown[1] if shown is not None else None
             rows.append(row)
         return JSONResponse(rows)
 

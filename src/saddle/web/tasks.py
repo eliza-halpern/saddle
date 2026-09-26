@@ -187,6 +187,28 @@ def journal_for(chat_journal: Path, run_id: str) -> Path | None:
     return None
 
 
+def latest_run_ref(chat_journal: Path) -> tuple[str, str] | None:
+    """The state and task of the session's latest ended run, from its `run-ref`.
+
+    The sidebar's memory of a run (`ChatServer.tasks`) dies with the process;
+    the chat journal does not. A run that ended sealed a run-ref whose
+    detail opens with its ledger verdict, so a restarted server shows the
+    run as it ended. A verdict outside finished/stopped reads as "failed"
+    (the card's "no outcome"), the same as `execute` would have published.
+    A run that never ended -- no run-ref -- is not shown: nothing here can
+    vouch for a state the ledger never sealed.
+    """
+    if not chat_journal.is_file():
+        return None
+    found = None
+    for span in read_spans(chat_journal):
+        if span.name == RUN_REF and len(span.argv) >= 3:
+            verdict = span.detail.split(":", 1)[0]
+            state = verdict if verdict in ("finished", "stopped") else "failed"
+            found = (state, span.argv[2])
+    return found
+
+
 def execute(
     run: TaskRun,
     *,
