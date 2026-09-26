@@ -15,6 +15,7 @@ report a budget the run never had.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -33,8 +34,13 @@ CDP = Path(__file__).parent / "fixtures" / "uxfix_cdp.mjs"
 
 
 def cdp(base: str, *args: str) -> dict:
+    shots = [os.environ["UXFIX_SHOTS"]] if os.environ.get("UXFIX_SHOTS") else []
     out = subprocess.run(
-        ["node", str(CDP), base, *args], capture_output=True, text=True, timeout=300, check=False
+        ["node", str(CDP), base, *args, *shots],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
     )
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -172,3 +178,41 @@ def _seen(http: TestClient, sid: str, rid: str) -> dict:
         "budget": cost["text"],
         "branch": http.get(f"/api/sessions/{sid}/tasks/{rid}/branch").json()["branch"],
     }
+
+
+# Q3 (N5) -- on a phone, nothing outside the closed drawer said that another
+# session needs you: `.status` was display:none at 420 px and below, and ☰
+# had no badge (shots/13-needs-you-from-another-session-400.png). Contract,
+# at 400 px: on the run's own session the header pill "needs you" is
+# rendered and on screen; on any other session the ☰ button carries a
+# visible dot (a ::after with a width) and says so in its label, with the
+# drawer closed. Known-bad half: with no run needing you, ☰ has no dot.
+
+
+@pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
+def test_a_phone_shows_needs_you_outside_the_drawer(
+    tmp_path: Path,
+    repo: Path,  # noqa: F811
+) -> None:
+    store = SessionStore(tmp_path / "s")
+    app = build_app(store, lambda: Reader(13), default_workdir=repo, arm="E")
+    server = _server_of(app)
+    with serving(app) as base:
+        a = store.create(title="a", workdir=str(repo)).id
+        store.update(a, mode="task")
+        b = store.create(title="b", workdir=str(repo)).id
+        got = cdp(base, "phone", a, b)
+        [rid] = list(server.tasks)
+        server.tasks[rid].answers.put("Stop at limit")
+        wait_for(lambda: idle(server, a), timeout=60)
+    on_a, on_b = got["onA"], got["onB"]
+    assert on_a["pill"]["text"] == "needs you"
+    assert on_a["pill"]["display"] != "none"
+    assert on_a["pill"]["onScreen"] is True
+    assert on_a["menu"]["needs"] is False, "the dot is for another session's run"
+    assert on_b["menu"]["drawerOpen"] is False
+    assert on_b["menu"]["needs"] is True
+    assert on_b["menu"]["after"] not in ("none", "normal", "")
+    assert on_b["menu"]["afterWidth"] >= 6, on_b["menu"]
+    assert "needs you" in (on_b["menu"]["label"] or "")
+    assert on_b["pill"]["text"] == "idle"
