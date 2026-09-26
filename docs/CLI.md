@@ -20,6 +20,10 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--no-audit` | | arm E: no auditor at all (mutually exclusive with `--no-feedback`) |
 | `--sanctioned-test-rewrite NAME` | none | repeatable; see AUDIT-TIERS.md |
 | `--finish-refusal-cap N` | `3` | stop `audit unresolved` after N consecutive refusals on an unchanged finding set; must be ≥ 1 |
+| `--tier2 {score,shortlist}` | `score` | tier-2 mutation verdict: `score` is the 85% kill-rate bar; `shortlist` makes an open changed-line survivor `not-proven` (surfaced, not refused) and names it, with coverage as a locator only (USING-SADDLE.md §7a) |
+| `--mutant-shortlist N` | `5` | with `--tier2 shortlist`: how many surviving mutants a refused finish names, one per changed line first |
+| `--keep-reasoning` | off | send each round's reasoning back to the model for the rest of the run; sealed as `prompt_shape.keep_reasoning`; effect under measurement |
+| `--check-tool` | off | offer the model a `check` tool that runs audit tiers 0 and 1 on the current tree before finish (arm E+A+F only) |
 | `--base-url URL` | `http://127.0.0.1:18020/v1` | model server |
 | `--model ID` | `qwen3.8-27b` | model id |
 | `--temperature T` | `0.0` | sampling temperature |
@@ -62,6 +66,8 @@ This command runs the tiered battery on a diff with no plan: tier 0 on each chan
 | `--cache DIR` | `~/.cache/saddle/audit` | verdict cache |
 | `--no-cache` | off | neither read nor write the cache |
 | `--tiered` | off | without it, `saddle audit` runs the older flat audit (`audit.audit_tree`) |
+| `--tier2 {score,shortlist}` | `score` | as for `auto`; `shortlist` implies `--tiered` |
+| `--mutant-shortlist N` | `5` | with `--tier2 shortlist`: how many surviving mutants the mutation finding names |
 
 The text output prints each tier as a header, then one line per finding in the form
 `verdict gate [reason] detail`, then `verdict: accept|refuse`.
@@ -95,3 +101,18 @@ Exit 0 prints the `OK: … ledger verifies …` line and a transcript. Exit 1 pr
 | `--no-open` | do not open a browser |
 
 Exit 2 if the token file cannot be created (`FileExistsError`).
+
+## saddle up
+
+The terminal chat. Same lanes and tool lists as the web chat's Ask and Edit
+(`tools.scope_turn`).
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--mode {ask,edit}` | `ask` | `ask`: read-only tools (`read_file`, `list_dir`, `search`), any other call refused; `edit`: may write files and run commands in `--workdir`, unaudited |
+| `--workdir DIR` | `.` | directory tools run in |
+| `--journal PATH` | `.saddle/chat.jsonl` | journal path |
+| `--max-tokens N` | `8192` | reply max tokens |
+| `--temperature T` | `0.0` | sampling temperature |
+| `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
+| `--base-url`, `--model` | as for `auto` |
