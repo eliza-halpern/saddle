@@ -108,6 +108,7 @@ function taskCard(runId, task, turnNode) {
     runId, task, node, pill, stop, testsChip, time, tokens, now, log, logSummary, lines, ask, packet,
     state: "running", elapsed: 0, elapsedAt: Date.now(), timeBudget: 0, tokenBudget: 0,
     spent: 0, timer: 0, count: 0,
+    phase: "starting", round: 1, lastEventAt: Date.now(), ageTimer: 0,
   };
   tasks.set(runId, card);
   paintState(card);
@@ -132,10 +133,24 @@ function paintState(card) {
   tick(card);
   clearInterval(card.timer);
   if (card.state === "running") card.timer = setInterval(() => tick(card), 1000);
+  clearInterval(card.ageTimer);
   if (ENDED.has(card.state)) {
     card.now.textContent = "";
     card.now.hidden = true;
+  } else if (card.state !== "loading") {
+    paintNow(card);
+    card.ageTimer = setInterval(() => paintNow(card), 1000);
   }
+}
+
+/* The head's live line: `phase · round N · last event Xs ago`. The phase
+   and round come from the server (task.phase); the age is this page's clock. */
+function paintNow(card) {
+  if (ENDED.has(card.state)) return;
+  const age = (Date.now() - card.lastEventAt) / 1000;
+  const phase = card.state === "needs_you" ? "waiting for you" : card.phase;
+  card.now.hidden = false;
+  card.now.textContent = `${card.stopping ? "stopping · " : ""}${phase} · round ${card.round} · last event ${fmtDuration(age)} ago`;
 }
 
 function tick(card) {
@@ -220,7 +235,7 @@ function showQuestion(card, question) {
 
 async function stopTask(runId) {
   const card = tasks.get(runId);
-  if (card) card.now.textContent = "stopping at the next safe point…";
+  if (card) { card.stopping = true; paintNow(card); }
   try {
     await api(`/api/tasks/${runId}/stop`, { method: "POST" });
   } catch (error) {
@@ -405,6 +420,7 @@ function handleTask(event) {
       }
       if (event.state === "running" && was !== "running") card.elapsedAt = Date.now();
       card.state = event.state;
+      card.lastEventAt = Date.now();
       paintState(card);
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
@@ -422,13 +438,23 @@ function handleTask(event) {
     }
     case "task.line": {
       const card = tasks.get(event.run_id);
-      if (card) addLine(card, event);
+      if (card) { addLine(card, event); card.lastEventAt = Date.now(); }
+      return true;
+    }
+    case "task.phase": {
+      const card = tasks.get(event.run_id);
+      if (!card) return true;
+      card.phase = event.phase;
+      card.round = event.round;
+      card.lastEventAt = Date.now();
+      paintNow(card);
       return true;
     }
     case "task.event": {
       const card = tasks.get(event.run_id);
       if (!card) return true;
       const inner = event.event || {};
+      card.lastEventAt = Date.now();
       if (inner.kind === "run.progress") {
         card.elapsed = inner.elapsed_s;
         card.elapsedAt = Date.now();
@@ -436,13 +462,8 @@ function handleTask(event) {
         card.timeBudget = inner.time_budget_s;
         card.tokenBudget = inner.token_budget;
         tick(card);
-      } else if (inner.kind === "tool.start") {
-        card.now.textContent = `${inner.present}…`;
-      } else if (inner.kind === "reasoning.delta") {
-        if (!card.now.textContent.startsWith("thinking")) card.now.textContent = "thinking…";
-      } else if (inner.kind === "tool.end" || inner.kind === "turn.end") {
-        card.now.textContent = "";
       }
+      paintNow(card);
       return true;
     }
     default:

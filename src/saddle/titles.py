@@ -90,6 +90,23 @@ def fallback_title(request: str) -> str:
     return ""
 
 
+TITLE_WORDS: Final = 6
+
+
+def words_title(request: str, words: int = TITLE_WORDS) -> str:
+    """The first `words` words of a request, for a session named without a model.
+
+    A task names its session this way: the run's own model is busy, and a
+    title call is a request to the GPU the run did not budget for.
+    """
+    first = fallback_title(request).rstrip("…")
+    parts = first.split()
+    if not parts:
+        return ""
+    head = " ".join(parts[:words]).rstrip(".!,;:")
+    return _clip(head + ("…" if len(parts) > words else ""))
+
+
 def title_for(client: Any, request: str) -> str:
     """Ask the model to name this session; never raise, never return "".
 

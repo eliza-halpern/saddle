@@ -523,17 +523,18 @@ async function loadSessions() {
     row.appendChild(el("span", "name", session.title));
     const kill = el("button", "kill", "×");
     kill.title = "Delete session";
+    kill.type = "button";
+    kill.setAttribute("aria-label", `Delete session ${session.title}`);
     kill.onclick = async (event) => {
       event.stopPropagation();
-      await fetch(`/api/sessions/${session.id}`, { method: "DELETE" });
-      if (session.id === state.sessionId) state.sessionId = null;
-      await boot();
+      await deleteSession(session);  // runs.js: hidden now, gone after the undo toast
     };
     row.appendChild(kill);
     row.onclick = () => select(session.id);
     list.appendChild(row);
   }
   noteSessions(sessions);
+  loadRuns();
   return sessions;
 }
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -38,7 +39,9 @@ from saddle.events import (
     RunProgress,
     TaskEvent,
     TaskLine,
+    TaskPhase,
     TaskState,
+    ToolStart,
 )
 from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
@@ -66,6 +69,55 @@ read-only that repair is refused and a correct change ends "audit
 unresolved". Weakening a pre-existing assertion is still refused at finish:
 the assertion-preservation gate does not read this flag."""
 
+LANE: Final = "small"
+"""The one lane a chat-started run uses today (the confirm strip's "Small lane")."""
+
+PHASE_START: Final = "starting"
+EDITING: Final = "editing"
+RUNNING_TESTS: Final = "running tests"
+WAITING_FOR_AUDIT: Final = "waiting for audit"
+AUDIT_REFUSED: Final = "audit refused"
+WAITING_FOR_YOU: Final = "waiting for you"
+WORKING: Final = "working"
+EDIT_TOOLS: Final = frozenset({"edit_file", "write_file"})
+_TESTISH: Final = ("pytest", "unittest", "tox", "nox", "npm test", "cargo test", "go test")
+
+
+def _is_test_command(arguments: str) -> bool:
+    return any(word in arguments for word in _TESTISH)
+
+
+def tool_phase(name: str, arguments: str) -> str:
+    """The phase a tool call starting now puts the run in."""
+    if name in EDIT_TOOLS:
+        return EDITING
+    if name == "run_command" and _is_test_command(arguments):
+        return RUNNING_TESTS
+    return WORKING
+
+
+def phase_for(name: str, kind: str, argv: Sequence[str], exit_code: int) -> str | None:
+    """The phase a sealed ledger entry leaves the run in, or None for no change.
+
+    An edit is sealed before the auditor has seen it, so a sealed edit means
+    the run is waiting for audit; an audit or guard span that failed means
+    it refused; a question means the run is waiting for you.
+    """
+    if name == "question":
+        return WAITING_FOR_YOU
+    if name == "answer":
+        return WORKING
+    if name.startswith("refused:"):
+        return AUDIT_REFUSED
+    if name.startswith("audit"):
+        return WORKING if exit_code == 0 else AUDIT_REFUSED
+    if kind == "tool" and argv:
+        if argv[0] in EDIT_TOOLS:
+            return WAITING_FOR_AUDIT
+        return WORKING
+    return None
+
+
 type Audit = Callable[[str, str, str], Sequence[Event]]
 type AuditorFactory = Callable[["TaskRun"], Audit | None]
 
@@ -89,6 +141,14 @@ class TaskRun:
     seen: int = 0
     progress: TaskEvent | None = None
     """The last spend report, so a page that reconnects mid-run shows it."""
+    lane: str = LANE
+    phase: str = PHASE_START
+    round: int = 1
+    """1 + the number of rounds whose spend has been reported (`RunProgress`)."""
+    started: float = field(default_factory=time.time)
+    ended: float | None = None
+    state_since: float = field(default_factory=time.time)
+    """When `state` last changed: a needs-you row says how long it has waited."""
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def state_event(self, detail: str = "") -> TaskState:
@@ -111,6 +171,21 @@ class TaskRun:
             ),
         )
 
+    def phase_event(self) -> TaskPhase:
+        return TaskPhase(run_id=self.run_id, phase=self.phase, round=self.round)
+
+    def index_row(self) -> dict[str, Any]:
+        """The run's row in its session's run index (`SessionStore.record_run`)."""
+        return {
+            "run_id": self.run_id,
+            "task": self.task,
+            "state": self.state,
+            "lane": self.lane,
+            "started": self.started,
+            "ended": self.ended,
+            "state_since": self.state_since,
+        }
+
     def new_lines(self) -> list[TaskLine]:
         """Ledger entries sealed since the last call, as session lines."""
         if self.journal is None or not self.journal.is_file():
@@ -121,6 +196,16 @@ class TaskRun:
             self.seen = len(entries)
             out = []
             for entry in fresh:
+                name = getattr(entry, "name", None)
+                if isinstance(name, str):
+                    moved = phase_for(
+                        name,
+                        str(getattr(entry, "kind", "")),
+                        list(getattr(entry, "argv", []) or []),
+                        int(getattr(entry, "exit_code", 0) or 0),
+                    )
+                    if moved is not None:
+                        self.phase = moved
                 line = session_line(entry)
                 if line is None:
                     continue
@@ -220,16 +305,26 @@ def execute(
     def on_event(event: Event) -> None:
         wrapped = TaskEvent(run_id=run.run_id, event=event.payload())
         publish(wrapped)
+        before = (run.phase, run.round)
         if isinstance(event, RunProgress):
             run.progress = wrapped
+            run.round += 1
+        if isinstance(event, ToolStart):
+            run.phase = tool_phase(event.name, event.arguments)
         if isinstance(event, Question):
             run.question = event
             run.state = "needs_you"
+            run.phase = WAITING_FOR_YOU
         elif isinstance(event, Answered):
             run.question = None
             run.state = "running"
+            run.phase = WORKING
         for line in run.new_lines():
             publish(line)
+        if run.state == "needs_you":
+            run.phase = WAITING_FOR_YOU
+        if (run.phase, run.round) != before:
+            publish(run.phase_event())
         if isinstance(event, Question | Answered):
             publish(run.state_event())
 
