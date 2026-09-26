@@ -38,6 +38,7 @@
     <header id="topbar">
       <button id="menu" type="button" title="Sessions" aria-label="Sessions">☰</button>
       <input id="title" spellcheck="false" aria-label="Session title">
+      <span id="mode-chip" class="mode-chip" title="This session's mode: what Enter does"></span>
       <span id="meter" title="context used"><i></i><b></b></span>
       <span id="status" class="status idle">idle</span>
     </header>
@@ -70,9 +71,16 @@
         <button type="button" id="attach" title="Attach files or images">＋</button>
         <textarea id="input" rows="1" placeholder="what are we making today?"
                   spellcheck="false"></textarea>
-        <button type="button" id="run" title="Run as a task: saddle works on it alone and reports back with evidence">▶ Run</button>
         <button type="submit" id="send" title="Send">↑</button>
       </div>
+      <div class="mode-bar">
+        <div id="mode-switch" role="group" aria-label="Mode">
+          <button type="button" data-mode="chat" aria-pressed="true">Chat</button>
+          <button type="button" data-mode="task" aria-pressed="false">Task</button>
+        </div>
+        <p id="mode-desc"></p>
+      </div>
+      <p id="mode-note" class="mode-note" role="alert" hidden></p>
       <input type="file" id="file-input" multiple hidden>
     </form>
   </main>

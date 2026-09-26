@@ -494,6 +494,12 @@ function openRunConfirm() {
     $("#input").focus();
     return;
   }
+  if (!state.folder) {
+    $("#mode-note").textContent = "Pick a folder first (Folder, in the sidebar). A task works on a copy of it.";
+    $("#mode-note").hidden = false;
+    return;
+  }
+  $("#mode-note").hidden = true;
   $("#tc-what").textContent = text;
   $("#tc-folder").textContent = state.folder || "this folder";
   api("/api/task-policy").then((policy) => {
@@ -517,7 +523,9 @@ function closeRunConfirm() {
 async function startTask() {
   const input = $("#input");
   const text = input.value.trim();
-  if (!text || state.busy) return;
+  // Nothing runs unless the strip is on screen: it is the one place the
+  // folder, lane, budgets and test policy are shown before a run.
+  if (!text || state.busy || $("#task-confirm").hidden) return;
   const minutes = Number($("#tc-time").value) || 30;
   const thousands = Number($("#tc-tokens").value) || 100;
   closeRunConfirm();

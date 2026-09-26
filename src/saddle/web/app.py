@@ -58,7 +58,7 @@ from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import compile_packet
 from saddle.sandbox import OutsideRootError, resolve_within
-from saddle.sessions import BUILTIN_PERSONAS, SessionStore
+from saddle.sessions import BUILTIN_PERSONAS, SESSION_MODES, SessionStore
 from saddle.titles import title_for
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for
 from saddle.undo import UndoLog
@@ -527,6 +527,12 @@ def build_app(
             body.setdefault("auto_title", False)
         if "temperature" in body:
             body["temperature"] = store.clamp_temperature(body["temperature"])
+        # `update` skips a None, so a bad mode must be refused here, before
+        # any other field in the same body is written.
+        if "mode" in body and body["mode"] not in SESSION_MODES:
+            return JSONResponse(
+                {"error": f"mode must be one of {', '.join(SESSION_MODES)}"}, status_code=400
+            )
         session = store.update(request.path_params["sid"], **body)
         # The Live is deliberately kept. It used to be dropped here "because
         # the workdir or persona may have moved", but a Live is not a cache of
@@ -870,6 +876,7 @@ def build_app(
                     persona=session.persona,
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
+                    mode=session.mode,
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
                     messages=history_for_display(
