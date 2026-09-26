@@ -1626,6 +1626,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop (reason 'audit unresolved') after N consecutive finish refusals on an "
         f"unchanged set of failing findings (default: {DEFAULT_FINISH_REFUSAL_CAP}).",
     )
+    auto.add_argument(
+        "--check-tool",
+        action="store_true",
+        help="Offer the model a `check` tool that runs audit tiers 0 and 1 on the current "
+        "tree before finish (arm E+A+F only; off by default).",
+    )
     auto.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     auto.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
@@ -1656,6 +1662,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
         sanctioned_test_rewrites=tuple(args.sanctioned_test_rewrite),
         finish_refusal_cap=args.finish_refusal_cap,
+        check_tool=args.check_tool,
     )
 
     def show(event: Event) -> None:

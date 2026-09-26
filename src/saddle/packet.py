@@ -46,6 +46,10 @@ from saddle.journal import (
 )
 from saddle.transcript import FEED_SPANS, start_field, tier_finding
 
+CHECK_SPAN: Final = "audit:check"
+"""A `check` call's record (`feed.CHECK_SPAN`); spelled here so the packet
+stays a reader of the ledger."""
+
 Status = Literal["proven", "failed", "observed", "absent", "not-proven", "narrative", "cost"]
 
 CLAIMS: Final = frozenset({"proven", "failed", "observed", "cost"})
@@ -623,6 +627,29 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                     ),
                 )
             )
+
+    # -- check (the model's pull, `--check-tool`) ---------------------------------
+    checks = [s for s in spans if s.name == CHECK_SPAN]
+    if checks:
+        last_check = checks[-1]
+        # `read_entries` above refuses a ledger whose sidecar does not hash,
+        # so a check record that reaches here is the sealed one.
+        record = _sidecar(journal, last_check) or {}
+        failing = sum(
+            f.get("verdict") in ("fail", "blocked") and f.get("reason") != "sanctioned"
+            for f in record.get("findings", [])
+        )
+        rows.append(
+            Row(
+                "check",
+                "Check",
+                "observed",
+                f"The model checked {_n(len(checks), 'time')}; last check: "
+                f"{_n(failing, 'failing finding')}. A check is tiers 0 and 1 only; "
+                "the finish audit is the verdict.",
+                tuple(c.record_hash for c in checks),
+            )
+        )
 
     # -- not proven -----------------------------------------------------------------
     gaps: list[str] = []

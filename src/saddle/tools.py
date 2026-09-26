@@ -160,6 +160,24 @@ FINISH_SCHEMA: Final[dict[str, Any]] = _tool(
     ["summary"],
 )
 
+CHECK_TOOL: Final = "check"
+"""The model's pull on the auditor (`saddle auto --check-tool`, `feed.AuditFeed.check`).
+
+Like `finish`, the engine handles it, and it is offered only when the run
+was started with the flag; without it the name is not in the tool list."""
+
+CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
+    CHECK_TOOL,
+    "Run the audit's fast checks (syntax, ruff and imports on each changed Python "
+    "file, then the tests, changed-line coverage, dead code, public deletions and "
+    "assertion preservation) on the tree as it is now, and return the findings "
+    "exactly as a refused finish would show them. finish runs these same checks "
+    "plus mutation testing, so a passing check does not guarantee finish passes. "
+    "A check on a tree unchanged since the last check is refused.",
+    {},
+    [],
+)
+
 REFUSED: Final = "error: refused by the tier-0 guard: "
 """Prefix of a result the tier-0 guard produced. Still an "error: " result,
 so the model reads it the way it reads every other failure; the engine

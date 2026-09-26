@@ -276,9 +276,10 @@ class SessionLine:
 AUDIT_TIER: Final = re.compile(r"audit-tier(\d+):(.+)")
 """The real auditor's per-finding span name (`auditor.Auditor._journal`)."""
 
-FEED_SPANS: Final = frozenset({"audit:delivered", "audit:withheld"})
+FEED_SPANS: Final = frozenset({"audit:delivered", "audit:withheld", "audit:check"})
 """The audit feed's delivery records (`feed.AuditFeed._journal`): one per
-completed audit, not a gate's verdict."""
+completed audit, not a gate's verdict; `audit:check` is a `check` call's
+(`feed.CHECK_SPAN`), delivered as that call's result."""
 
 
 @dataclass(frozen=True)
@@ -383,7 +384,10 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
     if name in FEED_SPANS:
         ok = entry.exit_code == 0
         point = entry.argv[1] if len(entry.argv) > 1 else "audit"
-        how = "delivered to the model" if name == "audit:delivered" else "withheld from the model"
+        how = {
+            "audit:delivered": "delivered to the model",
+            "audit:check": "returned by check",
+        }.get(name, "withheld from the model")
         body = entry.detail.splitlines()
         return SessionLine(
             "◆" if ok else "◇",
