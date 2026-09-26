@@ -260,6 +260,20 @@ class TaskEvent(Event):
 
 
 @dataclass(frozen=True)
+class TaskPhase(Event):
+    """What a run is doing now, read from its events and ledger (`tasks.phase_for`).
+
+    The card's head says `phase · round N · last event Xs ago`; the age is
+    the page's own clock, so this is sent only when the phase or round moves.
+    """
+
+    run_id: str
+    phase: str
+    round: int = 1
+    kind: str = "task.phase"
+
+
+@dataclass(frozen=True)
 class TaskLine(Event):
     """One sealed ledger entry of a run, as a session line (T5-6)."""
 

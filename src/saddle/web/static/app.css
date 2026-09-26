@@ -884,3 +884,32 @@ main { position: relative; }
   .act { flex: 1 1 auto; }
 }
 .act.act-merge.unproven:not(:disabled) { border-color: var(--ask); color: var(--ask); }
+
+/* ---- runs group (runs.js) ---- */
+#run-list { padding: 4px 8px 8px; border-bottom: 1px solid var(--line); max-height: 40%; overflow-y: auto; flex: none; }
+.run-group-head { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); padding: 6px 11px 4px; }
+.run-row { display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: "dot task time" "dot lane lane";
+  column-gap: 8px; width: 100%; text-align: left; background: none; border: none; color: var(--ink-dim);
+  font: inherit; padding: 6px 11px; border-radius: 12px; cursor: pointer; }
+.run-row:hover { background: var(--bg-raise); color: var(--ink); }
+.run-state-dot { grid-area: dot; font-size: 10px; line-height: 20px; }
+.run-task { grid-area: task; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.run-time { grid-area: time; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.run-lane { grid-area: lane; font-size: 11px; color: var(--ink-faint); text-transform: lowercase; }
+.run-state-dot.rs-running { color: var(--sky); }
+.run-state-dot.rs-needs_you { color: var(--peach); }
+.run-row.rs-needs_you .run-time { color: var(--peach); font-weight: 600; }
+.run-state-dot.rs-finished { color: var(--mint); }
+.run-state-dot.rs-stopped, .run-state-dot.rs-failed { color: var(--bad); }
+.run-state-dot.rs-interrupted { color: var(--ink-faint); }
+.task-card.flash { box-shadow: 0 0 0 2px var(--rose); transition: box-shadow .3s; }
+
+/* ---- delete undo toast ---- */
+.session .kill:focus-visible, .session:focus-within .kill { opacity: 1; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50;
+  display: flex; gap: 14px; align-items: center; padding: 10px 14px 10px 18px; border-radius: 14px;
+  background: var(--bg-raise); border: 1px solid var(--line); color: var(--ink); font-size: 14px;
+  box-shadow: 0 8px 28px #0008; max-width: calc(100vw - 32px); }
+.toast[hidden] { display: none; }
+.toast-undo { background: none; border: 1px solid var(--rose); color: var(--rose); border-radius: 10px;
+  padding: 4px 12px; font: inherit; cursor: pointer; }

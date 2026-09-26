@@ -22,6 +22,7 @@ import queue
 import secrets
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ from saddle.events import (
     Event,
     SessionInfo,
     SessionTitle,
+    TaskState,
     TerminalOutput,
 )
 from saddle.feed import Arm, default_auditor
@@ -59,13 +61,16 @@ from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import Packet, compile_packet, render_packet_text
 from saddle.sandbox import OutsideRootError, resolve_within
-from saddle.sessions import BUILTIN_PERSONAS, SESSION_MODES, SessionStore
-from saddle.titles import title_for
+from saddle.sessions import BUILTIN_PERSONAS, DEFAULT_TITLE, SESSION_MODES, SessionStore
+from saddle.titles import title_for, words_title
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
 from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
 from saddle.web import branch_actions, tasks
 from saddle.web.tasks import SMALL_LANE_TEST_EDITS, TaskRun
+
+MAX_RUN_ROWS = 20
+"""The Runs group lists this many, newest first."""
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -332,6 +337,9 @@ class ChatServer:
         """Builds the feed's auditor (`feed.default_auditor`: the real one)."""
         self.allow_test_edits = allow_test_edits
         """The confirm strip's default for "Allow test edits"; each run may override it."""
+        self.index_lock = threading.Lock()
+        self.indexed: dict[str, str] = {}
+        """run id -> the state last written to the run index."""
 
     def _live(self, session_id: str) -> Live:
         return self.live.setdefault(session_id, Live())
@@ -364,6 +372,44 @@ class ChatServer:
         except Exception:
             return
         live.publish(SessionTitle(session_id=session.id, title=title))
+
+    def _name_from_task(self, session_id: str, text: str) -> None:
+        """Name a still-unnamed session after the first task started in it.
+
+        Same rule as a chat turn's title: never over a name the user chose
+        (`auto_title` is false once they rename), and only once.
+        """
+        session = self.store.get(session_id)
+        # A session made with a name already has one; only the default is replaced.
+        if not session.auto_title or session.title != DEFAULT_TITLE:
+            return
+        title = words_title(text)
+        if not title:
+            return
+        self.store.update(session_id, title=title, auto_title=False)
+        self._live(session_id).publish(SessionTitle(session_id=session_id, title=title))
+
+    def _note_run(self, run: TaskRun) -> None:
+        """Write the run's row to its session's run index (survives a restart)."""
+        with self.index_lock:
+            last = self.indexed.get(run.run_id)
+            if last != run.state:
+                run.state_since = time.time()
+                if run.state in ("finished", "stopped", "failed"):
+                    run.ended = run.state_since
+                self.indexed[run.run_id] = run.state
+            try:
+                self.store.record_run(run.session_id, run.index_row())
+            except (OSError, ValueError):
+                pass  # a lost index row costs a sidebar entry, never the run
+
+    def _publisher(self, run: TaskRun, live: Live) -> Any:
+        def publish(event: Event | None) -> None:
+            if isinstance(event, TaskState):
+                self._note_run(run)
+            live.publish(event)
+
+        return publish
 
     # -- turn ------------------------------------------------------------
 
@@ -423,16 +469,17 @@ class ChatServer:
     def _run_task(self, session_id: str, run: TaskRun) -> None:
         """Run one chat-started task on `saddle auto`'s own path (T5-7)."""
         live = self._live(session_id)
+        publish = self._publisher(run, live)
         try:
             session = self.store.get(session_id)
-            live.publish(run.state_event())
+            publish(run.state_event())
             audit = self.auditor(run) if self.auditor is not None else None
             with self.client_factory() as client:
                 _verdict, recap = tasks.execute(
                     run,
                     workdir=Path(session.workdir),
                     client=client,
-                    publish=live.publish,
+                    publish=publish,
                     chat_journal=self.store.journal_path(session_id),
                     reasoning_effort=session.reasoning_effort,
                     audit=audit,
@@ -446,7 +493,7 @@ class ChatServer:
                 self.store.save_messages(session_id, messages)
         except Exception as exc:  # a dead run must not take the server with it
             run.state = "failed"
-            live.publish(run.state_event(f"{type(exc).__name__}: {exc}"))
+            publish(run.state_event(f"{type(exc).__name__}: {exc}"))
         finally:
             with live.lock:
                 live.busy = False
@@ -486,7 +533,7 @@ def build_app(
         and the page that names those URLs is never stored.
         """
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for name in ("app.css", "markdown.js", "tasks.js", "notify.js", "app.js"):
+        for name in ("app.css", "markdown.js", "tasks.js", "notify.js", "runs.js", "app.js"):
             try:
                 version = int((STATIC / name).stat().st_mtime)
             except OSError:
@@ -501,6 +548,7 @@ def build_app(
         one waiting on you, above all -- is still visible. Runs are kept in
         start order, so the last one seen for a session is its latest.
         """
+        store.purge_expired()
         latest: dict[str, TaskRun] = {}
         for run in list(server.tasks.values()):
             latest[run.session_id] = run
@@ -519,10 +567,39 @@ def build_app(
             rows.append(row)
         return JSONResponse(rows)
 
+    async def list_runs(_: Request) -> JSONResponse:
+        """Every run in every session, newest first: the sidebar's Runs group.
+
+        Read from each session's run index on disk, so runs outlive a server
+        restart, with this server's live runs laid over it. A run the index
+        says was still going but this server does not hold was cut off by a
+        restart: `live` is false and the page says so.
+        """
+        titles = {s.id: s.title for s in store.list()}
+        rows: dict[str, dict[str, Any]] = {}
+        for sid in titles:
+            for row in store.runs(sid):
+                if "run_id" in row:
+                    rows[str(row["run_id"])] = {**row, "session_id": sid, "live": False}
+        for run in list(server.tasks.values()):
+            if run.session_id in titles:
+                rows[run.run_id] = {
+                    **run.index_row(),
+                    "session_id": run.session_id,
+                    "live": True,
+                    "phase": run.phase,
+                }
+        out = []
+        for row in rows.values():
+            row["session_title"] = titles[row["session_id"]]
+            out.append(row)
+        out.sort(key=lambda r: float(r.get("started") or 0), reverse=True)
+        return JSONResponse({"now": time.time(), "runs": out[:MAX_RUN_ROWS]})
+
     async def create_session(request: Request) -> JSONResponse:
         body = await request.json() if await request.body() else {}
         session = store.create(
-            title=body.get("title") or "New session",
+            title=body.get("title") or DEFAULT_TITLE,
             workdir=body.get("workdir") or str(default_workdir),
             persona=body.get("persona"),
             reasoning_effort=body.get("reasoning_effort"),
@@ -592,9 +669,25 @@ def build_app(
         return JSONResponse(session.__dict__)
 
     async def delete_session(request: Request) -> JSONResponse:
-        store.delete(request.path_params["sid"])
-        server.live.pop(request.path_params["sid"], None)
+        """Hide the session; it is removed once the undo window has passed.
+
+        `?now=1` removes a session already hidden, which is what the page
+        sends when its undo toast runs out. A session that was never hidden
+        is never removed in one step.
+        """
+        sid = request.path_params["sid"]
+        if request.query_params.get("now") == "1":
+            if store.get(sid).deleted_at is None:
+                return JSONResponse({"error": "restore or delete it first"}, status_code=409)
+            store.delete(sid)
+            server.live.pop(sid, None)
+            return JSONResponse({"ok": True})
+        store.trash(sid)
+        server.live.pop(sid, None)
         return JSONResponse({"ok": True})
+
+    async def restore_session(request: Request) -> JSONResponse:
+        return JSONResponse(store.restore(request.path_params["sid"]).__dict__)
 
     async def get_messages(request: Request) -> JSONResponse:
         return JSONResponse(store.load_messages(request.path_params["sid"]))
@@ -766,6 +859,8 @@ def build_app(
             allow_test_edits=allow_test_edits,
         )
         server.tasks[run.run_id] = run
+        server._note_run(run)
+        server._name_from_task(sid, text)
         threading.Thread(target=server._run_task, args=(sid, run), daemon=True).start()
         return JSONResponse({"run_id": run.run_id})
 
@@ -1042,6 +1137,7 @@ def build_app(
                     if run.session_id != sid or run.state not in ("running", "needs_you"):
                         continue
                     yield f"data: {json.dumps(run.state_event().payload())}\n\n"
+                    yield f"data: {json.dumps(run.phase_event().payload())}\n\n"
                     for line in list(run.lines):
                         yield f"data: {json.dumps(line.payload())}\n\n"
                     if run.progress is not None:
@@ -1087,6 +1183,8 @@ def build_app(
             Route("/api/sessions", create_session, methods=["POST"]),
             Route("/api/sessions/{sid}", patch_session, methods=["PATCH"]),
             Route("/api/sessions/{sid}", delete_session, methods=["DELETE"]),
+            Route("/api/sessions/{sid}/restore", restore_session, methods=["POST"]),
+            Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/file", workdir_file),
             Route("/api/sessions/{sid}/upload", upload, methods=["POST"]),

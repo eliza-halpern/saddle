@@ -34,6 +34,14 @@ lot of blast radius for a default. A named folder is somewhere a session can
 make a mess without it mattering."""
 SETTINGS_FILE: Final = "settings.json"
 PERSONA_FILE: Final = "personas.json"
+DEFAULT_TITLE: Final = "New session"
+RUNS_FILE: Final = "runs.json"
+"""A session's run index: one small row per task started in it, beside its
+`session.json`. The ledger is the record of what a run did; this is only
+enough to list it in the sidebar after the server restarts."""
+UNDO_DELETE_S: Final = 10.0
+"""How long a deleted session can be brought back. Deleting marks the
+session; the directory goes only once this has passed."""
 DEFAULT_PERSONA: Final = "engineer"
 DEFAULT_EFFORT: Final = "xhigh"
 DEFAULT_TEMPERATURE: Final = CHAT_TEMPERATURE
@@ -75,6 +83,7 @@ BUILTIN_PERSONAS: Final[dict[str, str]] = {
 # `SessionStore.list` shadows the builtin for every annotation after it in
 # the class body, so the message list is named once here instead.
 type Messages = list[dict[str, Any]]
+type RunRows = list[dict[str, Any]]
 
 
 SESSION_MODES: tuple[str, ...] = ("ask", "edit", "task")
@@ -106,6 +115,8 @@ class Session:
     is never overwritten by the model."""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
+    deleted_at: float | None = None
+    """Set by `trash`; the session is hidden and purged after UNDO_DELETE_S."""
 
     def __post_init__(self) -> None:
         if self.mode not in SESSION_MODES:
@@ -281,7 +292,7 @@ class SessionStore:
     def create(
         self,
         *,
-        title: str = "New session",
+        title: str = DEFAULT_TITLE,
         workdir: str = ".",
         persona: str | None = None,
         reasoning_effort: str | None = None,
@@ -358,19 +369,69 @@ class SessionStore:
         self._save_meta(session)
         return session
 
-    def list(self) -> list[Session]:
+    def list(self, *, include_deleted: bool = False) -> list[Session]:
         out: list[Session] = []
         for directory in self.root.iterdir():
             meta = directory / "session.json"
             if meta.is_file():
                 try:
-                    out.append(Session(**json.loads(meta.read_text(encoding="utf-8"))))
+                    session = Session(**json.loads(meta.read_text(encoding="utf-8")))
                 except (ValueError, TypeError):
                     continue  # a half-written session must not break the list
+                if session.deleted_at is None or include_deleted:
+                    out.append(session)
         return sorted(out, key=lambda s: s.updated, reverse=True)
 
     def delete(self, session_id: str) -> None:
         shutil.rmtree(self._dir(session_id), ignore_errors=True)
+
+    def trash(self, session_id: str, *, now: float | None = None) -> Session:
+        """Hide a session, keeping it on disk so it can be restored."""
+        session = self.get(session_id)
+        session.deleted_at = time.time() if now is None else now
+        path = self._dir(session_id) / "session.json"
+        path.write_text(json.dumps(asdict(session), indent=1), encoding="utf-8")
+        return session
+
+    def restore(self, session_id: str) -> Session:
+        session = self.get(session_id)
+        session.deleted_at = None
+        path = self._dir(session_id) / "session.json"
+        path.write_text(json.dumps(asdict(session), indent=1), encoding="utf-8")
+        return session
+
+    def purge_expired(self, *, now: float | None = None) -> set[str]:
+        """Delete every trashed session whose undo window has passed."""
+        clock = time.time() if now is None else now
+        gone: set[str] = set()
+        for session in self.list(include_deleted=True):
+            if session.deleted_at is not None and clock - session.deleted_at >= UNDO_DELETE_S:
+                self.delete(session.id)
+                gone.add(session.id)
+        return gone
+
+    # -- runs --------------------------------------------------------------
+
+    def runs(self, session_id: str) -> RunRows:
+        try:
+            data = json.loads((self._dir(session_id) / RUNS_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+    def record_run(self, session_id: str, row: dict[str, Any]) -> None:
+        """Insert or update one run's row (keyed by `run_id`) in the index."""
+        rows = self.runs(session_id)
+        for i, old in enumerate(rows):
+            if old.get("run_id") == row["run_id"]:
+                rows[i] = {**old, **row}
+                break
+        else:
+            rows.append(dict(row))
+        path = self._dir(session_id) / RUNS_FILE
+        if not path.parent.is_dir():
+            return  # the session was purged while its run was still going
+        path.write_text(json.dumps(rows, indent=1, ensure_ascii=False), encoding="utf-8")
 
     # -- messages ----------------------------------------------------------
 

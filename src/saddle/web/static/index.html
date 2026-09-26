@@ -13,6 +13,7 @@
       <button id="settings" title="Settings and personas">⚙</button>
       <button id="new-session" title="New session">+</button>
     </div>
+    <div id="run-list" hidden></div>
     <div id="session-list"></div>
     <button id="notify-toggle" type="button" class="notify-toggle" aria-pressed="false">Notify me</button>
     <div class="side-foot">
@@ -35,6 +36,7 @@
       </label>
     </div>
   </aside>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <div id="run-live" class="sr-only" aria-live="polite" role="status"></div>
 
   <main>
@@ -174,4 +176,5 @@
 <script src="/static/markdown.js"></script>
 <script src="/static/tasks.js"></script>
 <script src="/static/notify.js"></script>
+<script src="/static/runs.js"></script>
 <script src="/static/app.js"></script>
