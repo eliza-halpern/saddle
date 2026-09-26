@@ -23,13 +23,19 @@ from typing import Any, cast
 import pytest
 
 from saddle import cli
+from saddle.anchor import anchor_issues
+from saddle.auditor import Finding, Findings
 from saddle.auto import AutoOptions, AutoResult, run_auto
+from saddle.events import AuditFinding, Event
 from saddle.journal import (
+    SpanRecord,
     append_span,
     attempt_sidecar_path,
     build_span,
+    run_audit_hashes,
     verify_journal,
 )
+from saddle.transcript import render_journal_transcript
 from saddle.vllm import ToolCall, VllmClient
 
 
@@ -343,3 +349,172 @@ def test_a_deleted_span_prints_no_ok_line_and_its_issue_names_the_span(repo: Pat
     issue = [line for line in text.splitlines() if line.startswith("span-missing@")]
     assert len(issue) == 1
     assert gone["record_hash"] in issue[0]
+
+
+# -- FIX-2: the transcript of an autonomous run reads its own outcome span -----
+
+
+def test_a_finished_runs_transcript_names_its_task_and_its_outcome(repo: Path) -> None:
+    """out/DOCS/report.md: verify printed `Task: (unknown)` / `Verdict: FAIL`
+    for a finished autonomous run. The task is the start span's; the verdict
+    is the outcome span's, never the slice rule's proof-and-gate count."""
+    code, text = verify_text(run(repo).journal)
+    assert code == 0
+    assert "- Task: make add add\n" in text
+    assert "- Verdict: FINISHED\n" in text
+
+
+def test_a_stopped_runs_transcript_says_stopped_with_its_reason(repo: Path) -> None:
+    client = Scripted([[call("read_file", "c1", path="calc.py")]])
+    options = AutoOptions(task="t2", repo=repo, run_id="s1", arm="E", token_budget=1)
+    journal = run_auto(options, cast(VllmClient, client)).journal
+    code, text = verify_text(journal)
+    assert code == 0
+    assert "- Task: t2\n" in text
+    assert "- Verdict: STOPPED (token budget" in text
+
+
+def test_an_in_flight_runs_transcript_has_no_outcome_verdict(repo: Path) -> None:
+    result = run(repo)
+    rows = lines(result.journal)
+    write(result.journal, rows[: index_of(rows, "auto:finished")])
+    code, text = verify_text(result.journal)
+    assert code == 0
+    assert "- Verdict: NO OUTCOME (no auto:finished or auto:stopped span)\n" in text
+
+
+def test_the_last_runs_outcome_is_the_verdict_when_a_journal_holds_two(repo: Path) -> None:
+    rows = lines(two_runs(repo))
+    first = index_of(rows, "auto:finished")
+    rows[first] = reseal({**rows[first], "name": "auto:stopped", "detail": "stopped: x"})
+    spans = [SpanRecord.model_validate(r) for r in rows if r["record_type"] == "span"]
+    first_run = spans[: len(spans) // 2]
+    assert "- Verdict: STOPPED (x)\n" in render_journal_transcript([], first_run, "j")
+    text = render_journal_transcript([], spans, "j")
+    assert "- Verdict: FINISHED\n" in text
+
+
+# -- FIX-5: audit records are held to a sealed list too ------------------------
+
+
+class PassingAuditor:
+    def tier1(self, tree: Path | None = None) -> Findings:
+        return Findings(1, "k1", (Finding("tests", 1, "pass", "code-wrong", "1 passed", ()),))
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        return Findings(2, "k2", (Finding("mutation", 2, "pass", "code-wrong", "1 of 1", ()),))
+
+
+def seam(name: str, _arguments: str, _result: str) -> list[Event]:
+    return [AuditFinding(gate="lint", ok=True, detail="clean")] if name == "read_file" else []
+
+
+def run_audited(repo: Path) -> AutoResult:
+    """The feed (tool-kind `audit:delivered`/`audit:withheld`) and the chat
+    seam (agent-kind `audit:lint`) both write audit records into the run."""
+    client = Scripted(
+        [
+            [call("edit_file", "c1", path="calc.py", old="a - b", new="(a + b)")],
+            [call("read_file", "c2", path="calc.py")],
+            [call("finish", "f1", summary="fixed add")],
+        ]
+    )
+    auditor = PassingAuditor()
+    options = AutoOptions(task="make add add", repo=repo, run_id="a1", arm="E+A+F",
+                          auditor_factory=lambda *a: auditor)  # fmt: skip
+    return run_auto(options, cast(VllmClient, client), audit=seam)
+
+
+def audit_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in rows if str(r.get("name", "")).startswith(("audit:", "audit-tier"))]
+
+
+def test_an_untouched_audited_run_verifies_and_seals_every_audit_record(repo: Path) -> None:
+    result = run_audited(repo)
+    rows = lines(result.journal)
+    audits = audit_rows(rows)
+    assert {r["name"] for r in audits} >= {"audit:lint", "audit:withheld"}
+    assert {r["kind"] for r in audits} == {"tool", "agent"}
+    _, _, path = outcome_and_sidecar(result)
+    listed = json.loads(path.read_text())["audit_span_hashes"]
+    assert sorted(listed) == sorted(r["record_hash"] for r in audits)
+    assert verify_journal(result.journal) == []
+
+
+@pytest.mark.parametrize("name", ["audit:lint", "audit:withheld"])
+def test_a_deleted_audit_record_fails_verify_naming_its_hash(repo: Path, name: str) -> None:
+    """out/DOCS/report.md finding 5: a deleted audit record went undetected."""
+    result = run_audited(repo)
+    rows = lines(result.journal)
+    gone = rows.pop(index_of(rows, name))
+    write(result.journal, rows)
+    found = codes(result.journal)
+    assert list(found) == ["audit-span-missing"]
+    assert gone["record_hash"] in found["audit-span-missing"]
+
+
+def test_an_inserted_audit_record_fails_verify_naming_it(repo: Path) -> None:
+    result = run_audited(repo)
+    rows = lines(result.journal)
+    extra = build_span(node_id="chat#1", argv=["audit", "lint"], duration_ms=0, exit_code=1,
+                       detail="E501", name="audit:lint").model_dump(exclude_unset=True)  # fmt: skip
+    rows.insert(index_of(rows, "auto:finished"), extra)
+    write(result.journal, rows)
+    found = codes(result.journal)
+    assert list(found) == ["audit-span-unlisted"]
+    assert extra["span_id"] in found["audit-span-unlisted"]
+
+
+def test_a_deleted_audit_record_resealed_out_of_the_list_is_caught_by_the_anchor(
+    repo: Path,
+) -> None:
+    """Rewriting the list means resealing the outcome, which moves its hash
+    off the branch's Saddle-Outcome trailer (ANCHOR)."""
+    result = run_audited(repo)
+    rows, at, path = outcome_and_sidecar(result)
+    gone = rows.pop(index_of(rows, "audit:lint"))
+    at = index_of(rows, "auto:finished")
+    evidence = json.loads(path.read_text())
+    evidence["audit_span_hashes"].remove(gone["record_hash"])
+    encoded = json.dumps(evidence, sort_keys=True, indent=1).encode()
+    path.write_bytes(encoded)
+    rows[at] = reseal({**rows[at], "attempt_hash": hashlib.sha256(encoded).hexdigest()})
+    write(result.journal, rows)
+    assert verify_journal(result.journal) == []  # CHAIN's documented limit, unchanged
+    assert [i.code for i in anchor_issues(result.journal, repo)] == ["anchor-mismatch"]
+
+
+def test_a_journal_sealed_before_the_audit_list_is_not_held_to_one() -> None:
+    """Compatibility, scope stated: an outcome with no `audit_span_hashes`
+    (every run sealed before FIX-5) is not judged on its audit records."""
+    rows = lines(PRE_CHAIN / "proofs.jsonl")
+    assert audit_rows(rows) == []
+    assert verify_journal(PRE_CHAIN / "proofs.jsonl") == []
+
+
+def test_the_sealed_audit_set_is_the_runs_own_and_its_reader_never_raises(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "j.jsonl"
+    assert run_audit_hashes(journal, "s") == []  # no journal yet
+
+    def span(name: str, parent: str | None = None, kind: str = "tool") -> SpanRecord:
+        built = build_span(node_id="n", argv=[name], duration_ms=0, exit_code=0, detail="",
+                           name=name, parent_id=parent, kind=kind)  # type: ignore[arg-type]  # fmt: skip
+        append_span(journal, built)
+        return built
+
+    before = span("audit-tier1:tests")  # before the start: another run's
+    start = span("auto:start", kind="agent")
+    cited = span("audit:lint", parent=start.span_id, kind="agent")
+    with journal.open("a") as handle:
+        handle.write('not json\n[1]\n{"record_type": "proof"}\n')
+    windowed = span("audit-tier1:coverage")  # no parent: in the window
+    span("read_file")  # not an audit record
+    span("auto:start", kind="agent")
+    after = span("audit:withheld")  # after the next start: not this run's
+    assert run_audit_hashes(journal, start.span_id) == [cited.record_hash, windowed.record_hash]
+    # A run whose start span this journal lacks keeps only what cites it.
+    assert run_audit_hashes(journal, "gone") == []
+    assert before.record_hash not in run_audit_hashes(journal, start.span_id)
+    assert after.record_hash not in run_audit_hashes(journal, start.span_id)

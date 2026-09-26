@@ -37,6 +37,7 @@ from typing import Any, Final, Literal
 
 from saddle.anchor import anchor_issues
 from saddle.journal import (
+    AUDIT_SPAN_PREFIXES,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
@@ -272,6 +273,10 @@ class _Audit:
     detail: str
     exit_code: int
     record_hash: str
+    verdict: str = ""
+    """An auditor finding's own verdict (pass, fail, blocked); "" for a seam span."""
+    body: str = ""
+    """An auditor finding's own detail, without the tier prefix."""
 
 
 def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
@@ -295,6 +300,8 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
                     f"tier {finding.tier}, {finding.verdict}: {finding.detail}",
                     span.exit_code,
                     span.record_hash,
+                    finding.verdict,
+                    finding.detail,
                 ),
             )
         elif span.name.startswith("audit:") and span.name not in FEED_SPANS:
@@ -392,13 +399,20 @@ def _needs_a_test(evidence: dict[str, Any]) -> bool:
     )
 
 
-def _anchor_text(journal: Path, repo: Path | None) -> str:
-    """The Reproduce row's sentence on the branch anchor, "" when it was not checked."""
+def _anchor_text(journal: Path, repo: Path | None, *, sealed: bool) -> str:
+    """The Reproduce row's sentence on the branch anchor, "" when it was not checked.
+
+    With no outcome sealed yet (a run in flight, as the web page reads it)
+    a clean check has nothing to match, so it says nothing; an anchor with
+    no outcome behind it is still reported (FIX-4).
+    """
     if repo is None:
         return ""
     found = anchor_issues(journal, repo)
     if not found:
-        return "Its outcome matches the Saddle-Outcome trailer on the run branch. "
+        return (
+            "Its outcome matches the Saddle-Outcome trailer on the run branch. " if sealed else ""
+        )
     return f"The branch anchor does not match: {', '.join(i.code for i in found)}. "
 
 
@@ -422,7 +436,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     outcome = next(
         (s for s in reversed(spans) if s.name in ("auto:finished", "auto:stopped")), None
     )
-    tools = [s for s in spans if s.kind == "tool"]
+    # The model's tool calls: audit records are journaled as `tool` spans too,
+    # but the auditor wrote them (FIX-1; the ledger's list excludes them alike).
+    tools = [s for s in spans if s.kind == "tool" and not s.name.startswith(AUDIT_SPAN_PREFIXES)]
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
     questions = [s for s in spans if s.name == "question"]
@@ -545,7 +561,14 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
 
     # -- mutation -------------------------------------------------------------------
     mutation = [a for a in audits if a.name == "audit:mutation"]
-    if mutation:
+    if mutation and mutation[-1].verdict == "blocked":
+        # Tier 2 never ran: tier 1 failed on that tree. There is no mutation
+        # result to call failed (FIX-3); the auditor's detail names the cause.
+        last = mutation[-1]
+        rows.append(
+            Row("mutation", "Mutation", "not-proven", f"blocked: {last.body}", (last.record_hash,))
+        )
+    elif mutation:
         last = mutation[-1]
         rows.append(
             Row(
@@ -713,7 +736,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             "observed" if anchor else "absent",
             f"The ledger verifies ({_n(len(entries), 'record')}, "
             f"{'no issues' if not issues else str(len(issues)) + ' issue(s)'}). "
-            f"{_anchor_text(journal, anchor_repo)}"
+            f"{_anchor_text(journal, anchor_repo, sealed=outcome is not None)}"
             "Re-check it, and read the change:",
             (anchor,) if anchor else (),
             (

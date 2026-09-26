@@ -406,7 +406,13 @@ class Auditor:
             if tier == 2:
                 first = self.tier1(copy)
                 if not first.passed:
-                    failed = ", ".join(f.gate for f in first.findings if f.verdict == "fail")
+                    # The cause is what failed tier 1: a sanctioned finding did not
+                    # (`Findings.passed`), so it is not named (FIX-3, M3F finding 6).
+                    failed = ", ".join(
+                        f.gate
+                        for f in first.findings
+                        if f.verdict == "fail" and f.reason != "sanctioned"
+                    )
                     blocked = _finding(
                         "mutation", 2, "blocked", f"tier 1 failed ({failed}); tier 2 not run", None
                     )

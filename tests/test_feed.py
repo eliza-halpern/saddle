@@ -901,3 +901,28 @@ def test_the_cli_passes_the_finish_refusal_cap(repo: Path, monkeypatch: pytest.M
         with pytest.raises(AttributeError):
             cli.run_auto_command(parser.parse_args(argv), cast(VllmClient, None), stdout=None)  # type: ignore[arg-type]
     assert got == [5, 3]
+
+
+@pytest.mark.parametrize(("sanctioned", "listed"), [(("test_f",), False), ((), True)])
+def test_a_blocked_tier_2_names_only_the_unsanctioned_tier_1_failures(
+    tmp_path: Path, sanctioned: tuple[str, ...], listed: bool
+) -> None:
+    """FIX-3 (out/M3F/report.md finding 6): the blocked detail listed a
+    sanctioned assertion-preservation finding as a cause. An uncovered new
+    function keeps tier 1 failing either way; the sanctioned rewrite is
+    named only when it is not sanctioned."""
+    from saddle.auditor import Auditor
+
+    tree = _rewrite_repo(tmp_path)
+    (tree / "n.py").write_text("def f():\n    return 2\n\n\ndef g():\n    return 3\n")
+    auditor = Auditor(tree, "HEAD", AuditorConfig(sanctioned_test_rewrites=sanctioned))
+    first = auditor.tier1(tree)
+    assert not first.passed
+    unsanctioned = [
+        f.gate for f in first.findings if f.verdict == "fail" and not f.reason == "sanctioned"
+    ]
+    assert "coverage" in unsanctioned
+    (blocked,) = auditor.tier2(tree).findings
+    assert blocked.verdict == "blocked"
+    assert blocked.detail == f"tier 1 failed ({', '.join(unsanctioned)}); tier 2 not run"
+    assert ("assertion-preservation" in blocked.detail) is listed

@@ -39,10 +39,12 @@ from saddle.events import (
     TurnStart,
 )
 from saddle.journal import (
+    AUDIT_SPAN_HASHES,
     append_record,
     append_span,
     build_record,
     build_span,
+    run_audit_hashes,
     write_attempt_sidecar,
 )
 from saddle.labels import label_for
@@ -943,6 +945,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "elapsed_s": round(auto.budget.elapsed(), 3),
         "time_budget_s": auto.budget.time_s,
         "tool_span_hashes": list(auto.span_hashes),
+        # FIX-5: every audit record the run's journal holds by now (the feed
+        # was closed above), so a deleted or inserted one fails verify.
+        AUDIT_SPAN_HASHES: run_audit_hashes(journal, auto.run_span),
         "arm": auto.arm,
         **auto.sealed,
         "finish_refusals": auto.finish_refusals,
