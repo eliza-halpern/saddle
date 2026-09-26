@@ -673,3 +673,116 @@ def test_rule_d_run_saddle_run_hands_no_hook_when_the_flag_is_off(
     assert cli.run_task(on, None, stdin=io.StringIO(), stdout=io.StringIO()) == 0  # type: ignore[arg-type]
     assert callable(handed[-1])
     assert len(loads) == 1
+
+
+# ---- run-level QUESTION verdict and exit code (HALT) ----
+
+
+def _run_span(journal: Path) -> Any:
+    return [s for s in read_spans(journal) if s.name == "run"][-1]
+
+
+def test_rule_d_run_a_question_halt_seals_the_run_as_question_with_exit_4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good: a run whose only failure is a rule D halt is QUESTION, not FAIL."""
+    result, _sidecars, repo = _slice(
+        tmp_path, BAND, rule_d_run.hook(load(_config(tmp_path))), monkeypatch
+    )
+    assert (result.passed, result.question) == (False, True)
+    assert "- Verdict: QUESTION\n" in result.transcript
+    run = _run_span(repo / "proofs.jsonl")
+    assert run.exit_code == slice_module.QUESTION_EXIT == 4
+    assert run.detail == "0 proven, 0 failed, 1 halted on a question, 0 undispatched"
+
+
+@pytest.mark.parametrize(
+    ("body", "passed", "verdict", "code"), [(WRONG, False, "FAIL", 1), (GOOD, True, "PASS", 0)]
+)
+def test_rule_d_run_a_refusal_stays_fail_1_and_an_accept_stays_pass_0(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+    passed: bool,
+    verdict: str,
+    code: int,
+) -> None:
+    """Known-bad: a refused tree (a gate failure) is not a question; a pass is unchanged."""
+    result, _sidecars, repo = _slice(
+        tmp_path, body, rule_d_run.hook(load(_config(tmp_path))), monkeypatch
+    )
+    assert (result.passed, result.question) == (passed, False)
+    assert f"- Verdict: {verdict}\n" in result.transcript
+    assert _run_span(repo / "proofs.jsonl").exit_code == code
+
+
+def _two_nodes() -> Dag:
+    node = _dag().nodes[0]
+    return Dag(nodes=[node, node.model_copy(update={"id": "n2"})])
+
+
+@pytest.mark.parametrize(
+    ("failures", "merge_exit", "deadline", "verdict", "code"),
+    [
+        ({"n1": "question"}, 0, False, "QUESTION", 4),
+        ({"n1": "question", "n2": "question"}, 0, False, "QUESTION", 4),
+        ({"n1": "question", "n2": "gate"}, 0, False, "FAIL", 1),
+        ({"n1": "question"}, 1, False, "FAIL", 1),
+        ({"n1": "question"}, 0, True, "FAIL", 3),
+        ({"n1": "gate"}, 0, False, "FAIL", 1),
+    ],
+)
+def test_rule_d_run_question_is_the_verdict_only_when_every_failure_is_a_question(
+    tmp_path: Path,
+    failures: dict[str, str],
+    merge_exit: int,
+    deadline: bool,
+    verdict: str,
+    code: int,
+) -> None:
+    """A gate failure beside the question, a red merge suite, or a deadline keeps its own code."""
+    journal = tmp_path / "proofs.jsonl"
+    ever_failed: dict[str, BaseException] = {
+        node: NodeQuestionError(node, "Q?")
+        if kind == "question"
+        else slice_module.NodeUnappliableError(node, "no diff")
+        for node, kind in failures.items()
+    }
+    result = slice_module._seal_run(
+        _two_nodes(),
+        journal_path=journal,
+        proofs={},
+        ever_failed=ever_failed,
+        replanned_from=set(),
+        run_span_id="r" * 16,
+        run_start=0.0,
+        merge_exit=merge_exit,
+        merge_ran=merge_exit != 0,
+        task="t",
+        started="s",
+        now=lambda: "f",
+        deadline_hit=deadline,
+    )
+    assert result.question is (verdict == "QUESTION")
+    assert result.passed is False
+    assert f"- Verdict: {verdict}\n" in result.transcript
+    assert _run_span(journal).exit_code == code
+
+
+@pytest.mark.parametrize(
+    ("result", "code"),
+    [
+        (slice_module.SliceResult(passed=False, transcript="", proofs={}, question=True), 4),
+        (slice_module.SliceResult(passed=False, transcript="", proofs={}), 1),
+        (slice_module.SliceResult(passed=True, transcript="", proofs={}), 0),
+    ],
+)
+def test_rule_d_run_saddle_run_exits_4_on_a_question_and_keeps_1_and_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: Any, code: int
+) -> None:
+    """The process exit code of `saddle run` follows the sealed verdict."""
+    _repo(tmp_path, GOOD)
+    monkeypatch.setattr(cli, "_emit_valid_dag", lambda *_a, **_k: _dag())
+    monkeypatch.setattr(cli, "run_slice", lambda *_a, **_k: result)
+    options = cli.RunOptions(task="t", repo=tmp_path, journal=tmp_path / "j", yes=True)
+    assert cli.run_task(options, None, stdin=io.StringIO(), stdout=io.StringIO()) == code  # type: ignore[arg-type]

@@ -168,6 +168,12 @@ MAX_RECOVERY_RETRIES: Final = 2
 # claimed proven that is not), not 1 (nothing failed), and the run span
 # carries the same verdict so `verify` can tell the two apart.
 DEADLINE_EXIT: Final = 3
+# Exit code of a run that halted on a rule D question (P2-3) and failed
+# nothing else: not 0 (nothing asked about is proven), not 1 (asking is not
+# a failure: the answer has to come from the user), not 2 (argparse's usage
+# error) and not 3 (the deadline). The run span and the transcript carry
+# the same verdict, QUESTION, so a caller needs neither to tell them apart.
+QUESTION_EXIT: Final = 4
 # Independent proposals drawn for the first attempt. Sequential retry
 # conditions each sample on the last rejection, which optimises against
 # whichever gate pushes back hardest: on T7 recovery drove the node from
@@ -244,6 +250,7 @@ class SliceResult:
     transcript: str
     proofs: dict[str, str]
     deadline_hit: bool = False
+    question: bool = False
 
 
 def _utcnow() -> str:
@@ -2244,10 +2251,19 @@ def _seal_run(
     failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
     undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
     passed = not failed_unexcused and not undispatched and merge_exit == 0
+    # QUESTION only when every unexcused failure is a rule D halt: a gate
+    # failure anywhere, or a red merge suite, keeps the run FAIL. Nodes left
+    # undispatched can only be waiting on the halted ones, since nothing
+    # else failed.
+    asked = {n for n in failed_unexcused if isinstance(ever_failed[n], NodeQuestionError)}
+    # A deadline outranks it, as it outranks FAIL: the run did not finish.
+    question = bool(asked) and asked == failed_unexcused and merge_exit == 0 and not deadline_hit
     if deadline_hit:
         exit_code = DEADLINE_EXIT
     elif passed:
         exit_code = 0
+    elif question:
+        exit_code = QUESTION_EXIT
     else:
         exit_code = 1
     append_span(
@@ -2260,8 +2276,9 @@ def _seal_run(
             started_at=started,
             detail=(
                 ("deadline: " if deadline_hit else "") + f"{len(proofs)} proven, "
-                f"{len(failed_unexcused)} failed, "
-                f"{len(undispatched)} undispatched"
+                f"{len(failed_unexcused) - len(asked)} failed, "
+                + (f"{len(asked)} halted on a question, " if asked else "")
+                + f"{len(undispatched)} undispatched"
                 + (f", merge exit {merge_exit}" if merge_ran else "")
             ),
             kind="agent",
@@ -2278,12 +2295,18 @@ def _seal_run(
             task=task,
             started=started,
             finished=now(),
-            verdict="PASS" if passed else "FAIL",
+            verdict="PASS" if passed else ("QUESTION" if question else "FAIL"),
             nodes=transcripts,
             journal_path=str(journal_path),
         )
     )
-    return SliceResult(passed=passed, transcript=text, proofs=proofs, deadline_hit=deadline_hit)
+    return SliceResult(
+        passed=passed,
+        transcript=text,
+        proofs=proofs,
+        deadline_hit=deadline_hit,
+        question=question,
+    )
 
 
 def run_slice(

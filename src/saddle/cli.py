@@ -64,6 +64,7 @@ from saddle.rule_d_run import load as rule_d_load
 from saddle.sessions import DEFAULT_WORKDIR
 from saddle.slice import (
     DEADLINE_EXIT,
+    QUESTION_EXIT,
     SURVIVOR_SAMPLES,
     TASK_FIRST_PREAMBLE,
     ReplanFailedError,
@@ -1098,6 +1099,8 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
     stdout.write(result.transcript)
     if result.deadline_hit:
         return DEADLINE_EXIT
+    if result.question:
+        return QUESTION_EXIT
     return 0 if result.passed else 1
 
 
