@@ -1,11 +1,11 @@
 """UI3: Chat and Task are modes a session is in, not a button beside Send.
 
-Known-good: a session starts in chat; PATCH mode=task persists and comes
+Known-good: a session starts in ask (LANECHIP; it was chat); PATCH mode=task persists and comes
 back on reconnect in `session.info`; in a real browser, Enter in Task mode
 opens the confirm strip and starts nothing, and a second Enter starts the
 run; the description under the composer names the selected mode.
 
-Known-bad: a mode other than chat/task is refused with 400 and the stored
+Known-bad: a mode other than ask/edit/task is refused with 400 and the stored
 mode is unchanged; a Task-mode Enter never sends a chat message.
 """
 
@@ -81,16 +81,16 @@ def _info(client: Any, sid: str) -> dict[str, Any]:
     raise AssertionError(message)  # pragma: no cover
 
 
-def test_the_modes_are_exactly_chat_and_task() -> None:
-    assert SESSION_MODES == ("chat", "task")
+def test_the_modes_are_exactly_ask_edit_and_task() -> None:
+    assert SESSION_MODES == ("ask", "edit", "task")
 
 
-def test_a_session_starts_in_chat_and_its_mode_persists(tmp_path: Path) -> None:
+def test_a_session_starts_in_ask_and_its_mode_persists(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "s")
     app = build_app(store, NoModel, default_workdir=tmp_path)
     with TestClient(app) as client:
         sid = client.post("/api/sessions", json={}).json()["id"]
-        assert store.get(sid).mode == "chat"
+        assert store.get(sid).mode == "ask"
         reply = client.patch(f"/api/sessions/{sid}", json={"mode": "task"})
         assert reply.status_code == 200
         assert reply.json()["mode"] == "task"
@@ -105,13 +105,13 @@ def test_the_mode_comes_back_in_session_info_on_reconnect(tmp_path: Path) -> Non
     app = build_app(store, NoModel, default_workdir=tmp_path)
     with serving(app) as base, httpx.Client(base_url=base, timeout=15) as client:
         sid = client.post("/api/sessions", json={}).json()["id"]
-        assert _info(client, sid)["mode"] == "chat"
+        assert _info(client, sid)["mode"] == "ask"
         client.patch(f"/api/sessions/{sid}", json={"mode": "task"})
         assert _info(client, sid)["mode"] == "task"
 
 
-@pytest.mark.parametrize("bad", ["auto", "", "TASK", 1, None, ["task"]])
-def test_a_mode_that_is_not_chat_or_task_is_refused(tmp_path: Path, bad: Any) -> None:
+@pytest.mark.parametrize("bad", ["auto", "", "TASK", "chat", 1, None, ["task"]])
+def test_a_mode_that_is_not_a_lane_is_refused(tmp_path: Path, bad: Any) -> None:
     store = SessionStore(tmp_path / "s")
     app = build_app(store, NoModel, default_workdir=tmp_path)
     with TestClient(app) as client:
@@ -123,14 +123,14 @@ def test_a_mode_that_is_not_chat_or_task_is_refused(tmp_path: Path, bad: Any) ->
         assert store.get(sid).title != "x"
 
 
-def test_a_session_saved_before_modes_existed_reads_as_chat(tmp_path: Path) -> None:
+def test_a_session_saved_before_modes_existed_reads_as_ask(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "s")
     sid = store.create(title="old", workdir=str(tmp_path)).id
     meta = tmp_path / "s" / sid / "session.json"
     data = json.loads(meta.read_text())
     del data["mode"]
     meta.write_text(json.dumps(data))
-    assert store.get(sid).mode == "chat"
+    assert store.get(sid).mode == "ask"
 
 
 # -- the browser --------------------------------------------------------------
@@ -195,7 +195,7 @@ def test_in_task_mode_enter_opens_the_strip_and_a_second_enter_starts(tmp_path: 
     assert first["stripVisible"] is True
     assert first["focus"] == "tc-start"
     assert first["taskPosts"] == 0
-    assert first["desc"].startswith("Give it a job.")
+    assert first["desc"].startswith("Task · Small:")
     assert first["chip"] == "task"
     assert second["taskPosts"] == 1
     assert second["stripVisible"] is False
@@ -206,26 +206,27 @@ def test_in_task_mode_enter_opens_the_strip_and_a_second_enter_starts(tmp_path: 
 
 
 @pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
-def test_in_chat_mode_enter_sends_and_the_switch_persists(tmp_path: Path) -> None:
+def test_in_edit_mode_enter_sends_and_the_switch_persists(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "s")
     app = build_app(store, NoModel, default_workdir=tmp_path)
     with _recording(app) as (_server, runs, chats), serving(app) as base:
         sid = store.create(title="t", workdir=str(tmp_path)).id
+        store.update(sid, mode="edit")
         got = _browser(base, sid, "chat")
         deadline = time.monotonic() + 5
         while not chats and time.monotonic() < deadline:
             time.sleep(0.05)
         mode_after = store.get(sid).mode
-    assert got["before"]["desc"].startswith("Talk with the model.")
-    assert got["before"]["chip"] == "chat"
+    assert got["before"]["desc"].startswith("Edit: unaudited, edits your folder.")
+    assert got["before"]["chip"] == "edit"
     assert got["afterEnter"]["stripVisible"] is False
     assert got["afterEnter"]["taskPosts"] == 0
     assert chats == ["hello there"]
     assert runs == []
-    assert got["afterSwitch"]["desc"].startswith("Give it a job.")
+    assert got["afterSwitch"]["desc"].startswith("Task · Small:")
     assert got["afterSwitch"]["chip"] == "task"
     assert got["afterReload"]["chip"] == "task"
-    assert got["afterReload"]["desc"].startswith("Give it a job.")
+    assert got["afterReload"]["desc"].startswith("Task · Small:")
     assert mode_after == "task"
 
 

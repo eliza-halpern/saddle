@@ -167,7 +167,9 @@ class SessionInfo(Event):
     persona: str
     reasoning_effort: str = "xhigh"
     temperature: float = 1.0
-    mode: str = "chat"
+    mode: str = "ask"
+    branch: str = ""
+    """The folder's git branch, or "" when it is not a git checkout."""
     context_used: int = 0
     context_limit: int = 175_000
     messages: list[dict[str, Any]] = field(default_factory=list)
