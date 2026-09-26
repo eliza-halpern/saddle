@@ -213,6 +213,19 @@ class StreamToken:
 
 
 @dataclass(frozen=True)
+class StreamUsage:
+    """The server's token accounting for one streamed completion.
+
+    Yielded last, and only when the server sent a usage object -- the
+    request asks for one with `stream_options.include_usage`, but a server
+    that ignores that option sends none, and the caller must then estimate.
+    """
+
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
 class ToolCall:
     """One complete tool call: id, function name, raw JSON arguments."""
 
@@ -352,6 +365,7 @@ def _build_chat_payload(
         "reasoning_effort": reasoning_effort,
         "include_reasoning": True,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
     if tools:
         payload["tools"] = [dict(tool) for tool in tools]
@@ -739,8 +753,8 @@ class VllmClient:
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
         tools: Sequence[Mapping[str, Any]] | None = None,
-    ) -> Iterator[StreamToken | ToolCall]:
-        """Stream one completion: token events, then any complete tool calls."""
+    ) -> Iterator[StreamToken | ToolCall | StreamUsage]:
+        """Stream one completion: tokens, then complete tool calls, then usage if sent."""
         if not messages:
             msg = "messages must not be empty"
             raise ValueError(msg)
@@ -766,6 +780,7 @@ class VllmClient:
                     msg = f"server returned HTTP {response.status_code}: {response.text[:200]}"
                     raise VllmRequestError(msg)
                 calls = _ToolCallAccumulator()
+                usage: dict[str, int] = {}
                 for line in response.iter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -777,10 +792,19 @@ class VllmClient:
                     except json.JSONDecodeError as exc:
                         msg = f"stream chunk is not valid JSON: {exc}"
                         raise VllmResponseError(msg) from exc
+                    if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+                        usage = _usage(data)
+                        if data.get("choices") == []:
+                            continue  # the include_usage chunk carries no delta
                     delta = _chunk_delta(data)
                     yield from _delta_tokens(delta)
                     calls.add(delta)
                 yield from calls.complete()
+                if "completion_tokens" in usage:
+                    yield StreamUsage(
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage["completion_tokens"],
+                    )
         except httpx.HTTPError as exc:
             msg = f"request failed: {exc}"
             raise VllmRequestError(msg) from exc

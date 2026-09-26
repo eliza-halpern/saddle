@@ -13,7 +13,7 @@ from rich.console import Console
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.timeline import Timeline
 from saddle.tools import TOOLS, ToolContext, execute_tool
-from saddle.vllm import ToolCall, VllmClient, VllmError
+from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
 
 MAX_TOOL_ROUNDS: Final = 10
 
@@ -49,6 +49,8 @@ def _stream_response(
     ):
         if isinstance(event, ToolCall):
             calls.append(event)
+        elif isinstance(event, StreamUsage):
+            continue
         elif event.stream == "reasoning":
             thoughts.append(event.text)
             display.token("reasoning", event.text)

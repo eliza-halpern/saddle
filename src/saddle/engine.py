@@ -42,7 +42,7 @@ from saddle.journal import (
 from saddle.labels import label_for
 from saddle.memory import CHARS_PER_TOKEN, compact, estimate_tokens
 from saddle.tools import FINISH_TOOL, REFUSED, TOOLS, ToolContext, execute_tool, preview_for
-from saddle.vllm import ToolCall, VllmClient, VllmError
+from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
 
 type TokenCounter = Callable[..., int | None]
 """`VllmClient.count_tokens`: the server's own tokeniser, or None if it has
@@ -68,10 +68,12 @@ as its outcome, so the run goes on until `finish` or a budget."""
 class RunBudget:
     """Wall time and generated tokens an autonomous run may spend.
 
-    Generated tokens are estimated from the streamed text (reasoning,
-    content and tool-call arguments, `CHARS_PER_TOKEN` per token) because
-    the streaming client reports no usage. The clock is injectable so a
-    test can exhaust time without waiting for it.
+    Generated tokens are the server's `completion_tokens` when the stream
+    reported usage. Only a round without usage is estimated from the
+    streamed text (reasoning, content and tool-call arguments,
+    `CHARS_PER_TOKEN` per token); `by_source` keeps the two apart so the
+    record never passes an estimate off as a measurement. The clock is
+    injectable so a test can exhaust time without waiting for it.
     """
 
     time_s: float
@@ -79,6 +81,7 @@ class RunBudget:
     clock: Callable[[], float] = monotonic
     started: float | None = None
     spent_tokens: int = 0
+    by_source: dict[str, int] = field(default_factory=lambda: {"usage": 0, "estimate": 0})
 
     def start(self) -> None:
         if self.started is None:
@@ -87,8 +90,20 @@ class RunBudget:
     def elapsed(self) -> float:
         return 0.0 if self.started is None else self.clock() - self.started
 
-    def charge(self, text_chars: int) -> None:
-        self.spent_tokens += max(1, text_chars // CHARS_PER_TOKEN)
+    def charge(self, text_chars: int, usage: StreamUsage | None = None) -> tuple[int, str]:
+        """Charge one round; return (tokens, "usage" | "estimate")."""
+        if usage is not None:
+            tokens, source = usage.completion_tokens, "usage"
+        else:
+            tokens, source = max(1, text_chars // CHARS_PER_TOKEN), "estimate"
+        self.spent_tokens += tokens
+        self.by_source[source] += tokens
+        return tokens, source
+
+    def source(self) -> str:
+        """What the total rests on: "usage", "estimate", "mixed", or "none"."""
+        used = [name for name, tokens in self.by_source.items() if tokens]
+        return used[0] if len(used) == 1 else ("mixed" if used else "none")
 
     def remaining_tokens(self) -> int:
         return max(self.tokens - self.spent_tokens, 0)
@@ -245,7 +260,7 @@ class TurnOptions:
 def _stream(
     client: VllmClient, messages: list[dict[str, Any]], options: TurnOptions
 ) -> Iterator[tuple[str, Any]]:
-    """Yield ('reasoning'|'content', text) or ('call', ToolCall)."""
+    """Yield ('reasoning'|'content', text), ('call', ToolCall) or ('usage', StreamUsage)."""
     cap = options.budget(messages, getattr(client, "count_tokens", None))
     if options.auto is not None:
         cap = max(min(cap, options.auto.budget.remaining_tokens()), 1)
@@ -258,6 +273,8 @@ def _stream(
     ):
         if isinstance(event, ToolCall):
             yield "call", event
+        elif isinstance(event, StreamUsage):
+            yield "usage", event
         elif event.stream == "reasoning":
             yield "reasoning", event.text
         else:
@@ -399,11 +416,14 @@ def run_turn(
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []
+            usage: StreamUsage | None = None
             for stream, item in _stream(client, messages, options):
                 if stop():
                     break
                 if stream == "call":
                     calls.append(item)
+                elif stream == "usage":
+                    usage = item
                 elif stream == "reasoning":
                     thoughts.append(item)
                     yield ReasoningDelta(text=item)
@@ -413,9 +433,7 @@ def run_turn(
             reply, reasoning = "".join(parts), "".join(thoughts)
             thinking.append(reasoning)
             if auto is not None:
-                auto.budget.charge(
-                    len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
-                )
+                _charge(options.journal, node_id, auto, reply, reasoning, calls, usage)
 
             if not calls:
                 messages.append({"role": "assistant", "content": reply})
@@ -518,6 +536,39 @@ def run_turn(
     yield TurnEnd(turn=turn, proof=proof)
 
 
+def _charge(
+    journal: Path,
+    node_id: str,
+    auto: AutoRun,
+    reply: str,
+    reasoning: str,
+    calls: list[ToolCall],
+    usage: StreamUsage | None,
+) -> None:
+    """Charge one round to the budget and seal the spend, naming its source."""
+    chars = len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
+    tokens, source = auto.budget.charge(chars, usage)
+    spend = {
+        "completion_tokens": tokens,
+        "prompt_tokens": usage.prompt_tokens if usage is not None else None,
+        "token_source": source,
+    }
+    append_span(
+        journal,
+        build_span(
+            node_id=node_id,
+            argv=["auto:spend", json.dumps(spend, sort_keys=True)],
+            duration_ms=0,
+            exit_code=0,
+            detail=f"{tokens} generated tokens ({source}); "
+            f"{auto.budget.spent_tokens} of {auto.budget.tokens} spent",
+            kind="agent",
+            name="auto:spend",
+            parent_id=auto.run_span,
+        ),
+    )
+
+
 def _finish(auto: AutoRun, arguments: str) -> str:
     """Record the model's `finish`: its narrative, labelled as narrative."""
     try:
@@ -570,7 +621,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "commands": commands,
         "rounds": len(rounds),
         "refusals": auto.refusals,
-        "tokens_spent_estimate": auto.budget.spent_tokens,
+        "tokens_spent": auto.budget.spent_tokens,
+        "token_source": auto.budget.source(),
+        "tokens_by_source": dict(auto.budget.by_source),
         "token_budget": auto.budget.tokens,
         "elapsed_s": round(auto.budget.elapsed(), 3),
         "time_budget_s": auto.budget.time_s,

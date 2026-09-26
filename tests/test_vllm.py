@@ -525,6 +525,7 @@ def test_stream_chat_yields_reasoning_and_content_in_order() -> None:
         "reasoning_effort": "medium",
         "include_reasoning": True,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
 
 
@@ -1060,6 +1061,7 @@ def test_server_version_asks_beside_the_api_root_not_under_it(base_url: str, exp
 
 # -- counting a prompt exactly ------------------------------------------------
 
+
 def test_count_tokens_asks_the_server_beside_the_api_root() -> None:
     """/tokenize is at the server root, not under /v1.
 
@@ -1123,9 +1125,9 @@ def test_count_tokens_only_steps_out_of_a_v1_api_root(base_url: str, expected: s
 @pytest.mark.parametrize(
     ("status", "payload"),
     [
-        (404, {"detail": "Not Found"}),      # an older vLLM with no endpoint
-        (200, {"count": "many"}),            # a count that is not a number
-        (200, {}),                           # no count at all
+        (404, {"detail": "Not Found"}),  # an older vLLM with no endpoint
+        (200, {"count": "many"}),  # a count that is not a number
+        (200, {}),  # no count at all
         (500, {"error": "boom"}),
     ],
 )

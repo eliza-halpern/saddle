@@ -154,7 +154,14 @@ def test_finished_run_leaves_a_branch_a_verified_ledger_and_the_checkout_untouch
     spans = read_spans(result.journal)
     start = spans[0]
     assert start.name == "auto:start"
-    assert [s.name for s in spans[1:]] == ["edit_file", "finish", "auto:finished"]
+    # each round's spend is sealed before its tool spans
+    assert [s.name for s in spans[1:]] == [
+        "auto:spend",
+        "edit_file",
+        "auto:spend",
+        "finish",
+        "auto:finished",
+    ]
     assert {s.parent_id for s in spans[1:]} == {start.span_id}
     (record,) = read_records(result.journal)
     assert record.kind == "auto-finished"
@@ -163,7 +170,7 @@ def test_finished_run_leaves_a_branch_a_verified_ledger_and_the_checkout_untouch
     assert evidence["narrative_label"] == "narrative, not evidence"
     assert evidence["narrative"] == "fixed add"
     assert evidence["files_changed"] == ["calc.py"]
-    assert evidence["tool_span_hashes"] == [s.record_hash for s in spans[1:3]]
+    assert evidence["tool_span_hashes"] == [s.record_hash for s in spans if s.kind == "tool"]
     assert "Narrative (model-written, not evidence):\nfixed add" in git(
         repo, "log", "-1", "--format=%B", result.branch
     )
@@ -295,7 +302,7 @@ def test_a_syntax_breaking_edit_is_refused_with_the_error(repo: Path) -> None:
     assert "SyntaxError" in tool_result
     assert "(line 2)" in tool_result
     assert git(repo, "show", f"{result.branch}:calc.py") == BUGGY
-    assert [s.name for s in read_spans(result.journal)][1] == "refused:edit_file"
+    assert [s.name for s in read_spans(result.journal)][1:3] == ["auto:spend", "refused:edit_file"]
 
 
 def test_syntax_guard_cases(tmp_path: Path) -> None:
