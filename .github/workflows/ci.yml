@@ -1,5 +1,14 @@
 name: ci
-on: [push, pull_request]
+# Private repo: Actions minutes are metered (2,000/month free). Branch pushes
+# are verified locally before they land, so CI runs only on main and on PRs
+# into main; the mutation job is manual (workflow_dispatch) because it bills
+# up to 15 minutes per run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -8,6 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: ./check.sh
   mutation:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
