@@ -19,11 +19,19 @@ about auditing (the engine imports no auditor):
   with feedback on, returned as text the engine appends to that tool result,
   so the model reads it at its next step. A pending audit is not waited for.
 - `final()` -- before `finish` is accepted: the pending checkpoint is
-  awaited, tier 1 (a cache hit if the tree has not changed since the last
+  awaited, then tier 0 (`Auditor.tier0` on every changed Python file, the
+  same `--diff-filter=AMR` set the post-hoc `Auditor.audit` sends it),
+  tier 1 (a cache hit if the tree has not changed since the last
   checkpoint) and tier 2 run synchronously on the finished tree. With
   feedback on, any `fail` or `blocked` finding refuses `finish` and the
   findings are its tool result; the run continues within its budgets
-  (tightened: a run cannot end finished with a failing audit).
+  (tightened: a run cannot end finished with a failing audit). Tier 0 at
+  finish is LINTFINISH (F21.81 finding 1, Rec 97): the M3 EAF-t5 trees all
+  finished with a passing in-run audit and were refused post hoc for
+  `ruff format --check` and B904/F401, because only tiers 1 and 2 ran
+  here. The contract now: a tree `finish` accepts is a tree the post-hoc
+  tier 0 accepts, on the changed files. Tier 0 runs at finish and on
+  `check`, never per edit (the edit guard stays syntax-only).
 - `check()` -- the model's **pull** (`--check-tool`, arm E+A+F only): tier 0
   (`Auditor.tier0` on every changed Python file) and tier 1 of the same
   auditor, synchronously, on the tree as it is now, rendered by the same
@@ -297,6 +305,10 @@ class AuditFeed:
     def _tier(self, tier: int, tree: Path) -> Findings:
         assert self.auditor is not None
         if tier == 0:
+            # The changed set is the post-hoc one (`Auditor.audit`): every
+            # added, modified or renamed Python file in the snapshot against
+            # the baseline. Tier 0 over anything else could refuse a tree the
+            # post-hoc audit accepts.
             changed = _git(
                 tree, "diff", "--cached", "--name-only", "--diff-filter=AMR", self.baseline
             ).split()
@@ -398,7 +410,7 @@ class AuditFeed:
         return text
 
     def final(self) -> tuple[bool, str]:
-        """Tier 1 and tier 2 on the tree `finish` is called on.
+        """Tiers 0, 1 and 2 on the tree `finish` is called on.
 
         Returns (accept finish, text for the model). With feedback off,
         finish is always accepted and the text is empty. A checkpoint audit
@@ -408,7 +420,7 @@ class AuditFeed:
         self._await()
         pending = self._take()
         scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))
-        result = self._audit("finish", (1, 2), self.worktree, scratch)
+        result = self._audit("finish", (0, 1, 2), self.worktree, scratch)
         assert result is not None
         with self._lock:
             self.results.append(result)

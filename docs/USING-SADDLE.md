@@ -118,7 +118,9 @@ closes the strip.
    in a background thread. The model does not wait for it. When that audit completes,
    its failures are appended to the model's next tool result, for example
    `[audit checkpoint 1 on tree …: FAIL] - coverage (tier 1): fail, evidence-thin: …`.
-5. **Finish audit.** When the model calls `finish`, tiers 1 and 2 run on the final tree.
+5. **Finish audit.** When the model calls `finish`, tier 0 (syntax, ruff, imports, on
+   each changed Python file: the same files the post-hoc `saddle audit --tiered` sends to
+   tier 0), tier 1 and tier 2 run on the final tree.
    If any finding is `fail` or `blocked` (and not `sanctioned`), `finish` is refused.
    The model gets the findings back and keeps working within its budgets.
 6. **Needs you: two questions.** A run can pause and ask you, once each, through

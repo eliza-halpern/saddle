@@ -170,7 +170,8 @@ def test_without_the_flag_the_tool_is_not_offered_and_a_check_call_audits_nothin
     assert all(CHECK_TOOL not in names for names in client.tools)
     assert CHECK_PROMPT not in client.system
     assert results(result, CHECK_TOOL) == ["error: unknown tool 'check'"]
-    assert 0 not in fake.tiers()
+    # nothing audited before the finish audit (tiers 0, 1, 2, once each)
+    assert fake.tiers() == [0, 1, 2]
     assert check_spans(result) == []
     record = outcome(result)
     assert "check_tool" not in record
@@ -221,9 +222,9 @@ def test_the_cli_flag_is_off_by_default_and_passes_through(
 def test_a_check_runs_tiers_zero_and_one_and_never_tier_two(repo: Path) -> None:
     client = Scripted([[edit("e", "a - b", "a + b")], [CHECK]])
     result, fake = run(repo, client)
-    finish_at = len(fake.calls) - 2  # the finish audit: tier 1 then tier 2
+    finish_at = len(fake.calls) - 3  # the finish audit: tiers 0, 1, 2
     assert fake.tiers()[:finish_at] == [0, 1]
-    assert fake.tiers()[finish_at:] == [1, 2]  # tier 2 still runs at finish
+    assert fake.tiers()[finish_at:] == [0, 1, 2]  # tier 2 still runs at finish
     assert result.outcome == "finished"
 
 

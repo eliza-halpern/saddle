@@ -5,9 +5,9 @@ The contract, each half both ways:
 - a checkpoint is the first non-edit tool call after a burst of edits, and
   its tier-1 audit runs off the model's critical path, arriving appended to
   a later tool result (E+A+F only);
-- `finish` is refused while the finish audit (tier 1 + tier 2) fails, in
-  E+A+F only; a budget that runs out first ends the run `stopped` with the
-  last findings in the outcome sidecar;
+- `finish` is refused while the finish audit (tier 0 on the changed files
+  + tier 1 + tier 2) fails, in E+A+F only; a budget that runs out first ends
+  the run `stopped` with the last findings in the outcome sidecar;
 - E+A delivers nothing and never refuses, but journals and records the
   verdict; E never constructs an auditor;
 - the arm is sealed, so the ledger alone tells the arms apart;
@@ -91,6 +91,11 @@ class FakeAuditor:
         gate = "tests" if tier == 1 else "mutation"
         found = Finding(gate, tier, verdict, "code-wrong", detail, ("fake",))  # type: ignore[arg-type]
         return Findings(tier=tier, key=f"k{tier}", findings=(found,))
+
+    def tier0(self, path: str, new_text: str) -> Findings:
+        self.calls.append((0, path))
+        found = Finding("ruff", 0, "pass", "code-wrong", "ruff clean", ("fake",))
+        return Findings(tier=0, key="k0", findings=(found,))
 
     def tier1(self, tree: Path | None = None) -> Findings:
         self.started.set()
@@ -191,7 +196,7 @@ def test_feedback_turns_the_same_script_from_a_recorded_fail_into_a_pass(repo: P
     record = sidecar(other)
     assert record["arm"] == "E+A"
     assert record["audit"]["passed"] is False
-    assert record["audit"]["findings"][0]["detail"] == "calc.py:3: return a - b"
+    assert record["audit"]["findings"][1]["detail"] == "calc.py:3: return a - b"
     assert "a - b" in (other.worktree / "calc.py").read_text()
 
 
@@ -434,7 +439,9 @@ def test_finish_is_refused_while_the_audit_fails_and_names_the_findings(repo: Pa
     assert all(s.exit_code == 1 for s in finishes)
     assert record["audit"]["passed"] is False
     assert record["audit"]["point"] == "finish"
-    assert record["audit"]["findings"][0]["verdict"] == "fail"
+    # tier 0 (ruff, passing here) precedes the failing tier-1 finding
+    assert [f["tier"] for f in record["audit"]["findings"]] == [0, 1, 2]
+    assert record["audit"]["findings"][1]["verdict"] == "fail"
     # tier 2 ran at finish, not only tier 1
     assert (2, fake.calls[-1][1]) in fake.calls
 
@@ -451,11 +458,11 @@ def test_the_finish_audit_runs_tier_two_and_a_tier_two_failure_refuses(repo: Pat
         [[call("edit_file", "e", path="calc.py", old="a - b", new="a + b")], [FINISH]]
     )
     result, _ = run(repo, client, "E+A+F", auditor=fake, token_budget=60)
-    assert [c[0] for c in fake.calls][:2] == [1, 2]
+    assert [c[0] for c in fake.calls][:3] == [0, 1, 2]
     assert result.outcome == "stopped"
     record = sidecar(result)
     assert record["audit"]["passed"] is False
-    assert [f["gate"] for f in record["audit"]["findings"]] == ["tests", "mutation"]
+    assert [f["gate"] for f in record["audit"]["findings"]] == ["ruff", "tests", "mutation"]
 
 
 def test_a_finished_run_records_the_tree_its_final_audit_saw(repo: Path) -> None:
@@ -588,7 +595,8 @@ def test_the_real_auditor_accepts_a_correct_fix(real_repo: Path) -> None:
     assert result.outcome == "finished", record["audit"]
     assert record["audit"]["passed"] is True
     gates = [f["gate"] for f in record["audit"]["findings"]]
-    assert gates[:2] == ["tests", "coverage"]
+    # tier 0 on the one changed file, then tier 1, then tier 2
+    assert gates[:5] == ["syntax", "ruff", "imports", "tests", "coverage"]
     assert "mutation" in gates
 
 
@@ -705,7 +713,7 @@ def test_an_unsanctioned_rewrite_still_refuses_finish(repo: Path) -> None:
     assert result.outcome == "stopped"
     record = sidecar(result)
     assert record["audit"]["passed"] is False
-    assert record["audit"]["findings"][0]["reason"] == "evidence-thin"
+    assert record["audit"]["findings"][1]["reason"] == "evidence-thin"
     note = next(e for e in events if isinstance(e, AuditNote)).text
     assert "- assertion-preservation (tier 1): fail, evidence-thin:" in note
 
@@ -833,6 +841,37 @@ def test_an_unchanged_refusal_stops_the_run_at_the_cap_as_audit_unresolved(repo:
     assert "saddle auto r1: stopped (audit unresolved)" in git(
         result.worktree, "log", "-1", "--format=%B"
     )
+
+
+def test_a_tier0_only_refusal_counts_toward_the_cap(repo: Path) -> None:
+    """LINTFINISH: a lint-only refusal is a refusal like any other. Tiers 1 and
+    2 pass (the fix is right), tier 0 fails on every finish, and the run stops
+    at the cap naming the ruff finding as unresolved."""
+
+    class Unformatted(FakeAuditor):
+        def tier0(self, path: str, new_text: str) -> Findings:
+            self.calls.append((0, path))
+            found = Finding(
+                "ruff", 0, "fail", "code-wrong", f"{path}: ruff format --check exited 1", ("fake",)
+            )
+            return Findings(tier=0, key="k0", findings=(found,))
+
+    client = KeepsFinishing(
+        [[call("edit_file", "e", path="calc.py", old="a - b", new="a + b")], [FINISH]]
+    )
+    result, _ = run(repo, client, "E+A+F", auditor=Unformatted(), token_budget=5000)
+    assert (result.outcome, result.reason) == ("stopped", "audit unresolved")
+    record = sidecar(result)
+    assert record["finish_refusals"] == record["unchanged_refusals"] == 3
+    assert record["unresolved_findings"] == [
+        {"gate": "ruff", "reason": "code-wrong", "cites": ["fake"]},
+    ]
+    finishes = [s for s in read_spans(result.journal) if s.argv[:1] == ["finish"]]
+    assert len(finishes) == 3  # the third refusal stops the run; the model sees two
+    refusals = [t for t in client.seen if t.startswith(FINISH_REFUSED)]
+    assert len(refusals) == 2
+    assert "- ruff (tier 0): fail, code-wrong: calc.py: ruff format --check exited 1" in refusals[0]
+    assert "(2 other check(s) passed or not applicable)" in refusals[0]
 
 
 def test_the_cap_is_configurable_and_one_stops_on_the_first_refusal(repo: Path) -> None:
