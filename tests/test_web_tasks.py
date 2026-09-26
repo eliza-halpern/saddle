@@ -116,7 +116,9 @@ def app_for(
     tail: list[Any] | None = None,
     auditor: Any = None,
 ) -> Iterator[tuple[TestClient, ChatServer]]:
-    app = build_app(store, lambda: Scripted(rounds, tail), default_workdir=repo, auditor=auditor)
+    app = build_app(
+        store, lambda: Scripted(rounds, tail), default_workdir=repo, auditor=auditor, arm="E"
+    )
     server = next(
         cell.cell_contents
         for route in app.routes  # type: ignore[attr-defined]
@@ -467,7 +469,7 @@ def test_a_reconnecting_page_gets_the_running_cards_state_lines_and_spend(
 ) -> None:
     import httpx
 
-    app = build_app(store, lambda: Scripted(FIX), default_workdir=repo, auditor=asking)
+    app = build_app(store, lambda: Scripted(FIX), default_workdir=repo, auditor=asking, arm="E")
     with serving(app) as base, httpx.Client(base_url=base, timeout=15) as client:
         sid = client.post("/api/sessions").json()["id"]
         other = client.post("/api/sessions", json={"reuse_unstarted": False}).json()["id"]

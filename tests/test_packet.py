@@ -94,7 +94,9 @@ FIX = [
 
 
 def run(repo: Path, rounds: list[list[Any]], **kwargs: Any) -> AutoResult:
-    options = AutoOptions(task="make add add", repo=repo, run_id="r1", **kwargs.pop("opts", {}))
+    options = AutoOptions(
+        task="make add add", repo=repo, run_id="r1", **{"arm": "E", **kwargs.pop("opts", {})}
+    )
     return run_auto(options, cast(VllmClient, Scripted(rounds, kwargs.pop("tail", None))), **kwargs)
 
 

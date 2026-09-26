@@ -81,7 +81,7 @@ def run(repo: Path, run_id: str = "r1") -> AutoResult:
             [call("finish", "f1", summary="fixed add")],
         ]
     )
-    options = AutoOptions(task="make add add", repo=repo, run_id=run_id)
+    options = AutoOptions(task="make add add", repo=repo, run_id=run_id, arm="E")
     return run_auto(options, cast(VllmClient, client))
 
 

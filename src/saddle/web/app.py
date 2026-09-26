@@ -52,6 +52,8 @@ from saddle.events import (
     SessionTitle,
     TerminalOutput,
 )
+from saddle.feed import Arm, default_auditor
+from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import compile_packet
@@ -289,6 +291,9 @@ class ChatServer:
         *,
         default_workdir: Path,
         auditor: tasks.AuditorFactory | None = None,
+        arm: Arm = "E+A+F",
+        feed_auditor: FeedAuditorFactory = default_auditor,
+        allow_test_edits: bool = False,
     ) -> None:
         self.store = store
         self.client_factory = client_factory
@@ -300,6 +305,12 @@ class ChatServer:
         """The auditor seam: given a run, the hook `run_auto` consults after
         each tool call. None until the auditor lane lands; tests and the
         screenshot harness pass a scripted one."""
+        self.arm: Arm = arm
+        """The Phase 2 arm a chat-started run uses; `saddle auto`'s default."""
+        self.feed_auditor = feed_auditor
+        """Builds the feed's auditor (`feed.default_auditor`: the real one)."""
+        self.allow_test_edits = allow_test_edits
+        """`saddle auto --allow-test-edits` for chat-started runs; off by default."""
 
     def _live(self, session_id: str) -> Live:
         return self.live.setdefault(session_id, Live())
@@ -404,6 +415,9 @@ class ChatServer:
                     chat_journal=self.store.journal_path(session_id),
                     reasoning_effort=session.reasoning_effort,
                     audit=audit,
+                    arm=self.arm,
+                    feed_auditor=self.feed_auditor,
+                    allow_test_edits=self.allow_test_edits,
                 )
             if recap is not None:
                 messages = self.store.load_messages(session_id)
@@ -425,8 +439,19 @@ def build_app(
     default_workdir: Path,
     token: str | None = None,
     auditor: tasks.AuditorFactory | None = None,
+    arm: Arm = "E+A+F",
+    feed_auditor: FeedAuditorFactory = default_auditor,
+    allow_test_edits: bool = False,
 ) -> ASGIApp:
-    server = ChatServer(store, client_factory, default_workdir=default_workdir, auditor=auditor)
+    server = ChatServer(
+        store,
+        client_factory,
+        default_workdir=default_workdir,
+        auditor=auditor,
+        arm=arm,
+        feed_auditor=feed_auditor,
+        allow_test_edits=allow_test_edits,
+    )
 
     async def index(_: Request) -> Response:
         """The page, with its asset URLs versioned by file mtime.

@@ -40,6 +40,8 @@ from saddle.events import (
     TaskLine,
     TaskState,
 )
+from saddle.feed import Arm, default_auditor
+from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.journal import SpanRecord, append_span, build_span, read_entries, read_spans
 from saddle.packet import compile_packet, render_packet_text
 from saddle.transcript import session_line
@@ -183,11 +185,18 @@ def execute(
     chat_journal: Path,
     reasoning_effort: str,
     audit: Audit | None,
+    arm: Arm = "E+A+F",
+    feed_auditor: FeedAuditorFactory = default_auditor,
+    allow_test_edits: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run the task to its end; return its ledger verdict and the recap message.
 
     The one call that does the work is `run_auto`, exactly as `saddle auto`
-    makes it; everything else here is watching.
+    makes it; everything else here is watching. `arm` defaults to
+    `saddle auto`'s own default, E+A+F: the audit feed (`feed.AuditFeed`,
+    the real `auditor.Auditor`) is the source of findings, and they reach
+    the card as the ledger's `audit-tier<N>:<gate>` and `audit:delivered`
+    lines. `audit` is the chat's question seam beside it.
     """
     try:
         root = repo_root(workdir)
@@ -220,6 +229,9 @@ def execute(
         time_budget_s=run.time_budget_s,
         token_budget=run.token_budget,
         reasoning_effort=reasoning_effort,
+        arm=arm,
+        auditor_factory=feed_auditor,
+        allow_test_edits=allow_test_edits,
     )
     try:
         run_auto(

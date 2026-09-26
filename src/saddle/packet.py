@@ -17,9 +17,12 @@ What the packet can and cannot say for an executor-only run (arm E):
 - It can say what the executor *did*: which commands it ran and the exit
   codes the tools saw, which edits the tier-0 guard refused, which files
   changed, what it cost. Those are `observed`: sealed facts about the run.
-- It cannot say the change is correct. Only an auditor verdict (an
-  `audit:<gate>` span) is `proven`, and none exists until the auditor lane
-  lands, so "finished" here never reads as "done".
+- It cannot say the change is correct. Only an auditor verdict is
+  `proven`: the real auditor's `audit-tier<N>:<gate>` finding spans (arms
+  E+A and E+A+F, via `feed.AuditFeed`; the latest per gate, i.e. the last
+  tree audited) or a chat seam's `audit:<gate>` span. The feed's
+  `audit:delivered`/`audit:withheld` records are deliveries, not verdicts.
+  With none, "finished" here never reads as "done".
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from saddle.journal import (
     read_entries,
     verify_journal,
 )
+from saddle.transcript import FEED_SPANS, start_field, tier_finding
 
 Status = Literal["proven", "failed", "observed", "absent", "not-proven", "narrative", "cost"]
 
@@ -252,6 +256,44 @@ def _unrecorded(run_id: str, why: str) -> Packet:
     )
 
 
+@dataclass(frozen=True)
+class _Audit:
+    """One auditor verdict as the rows read it, citing the span it came from."""
+
+    name: str
+    detail: str
+    exit_code: int
+    record_hash: str
+
+
+def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
+    """Every auditor verdict in the ledger, in ledger order.
+
+    A chat seam's `audit:<gate>` span is read as written. The real
+    auditor's `audit-tier<N>:<gate>` spans are read from their sealed
+    detail, and only the latest per gate is kept: each audit re-runs every
+    gate of its tier on a newer tree, so an earlier checkpoint's failure
+    that a later audit cleared is history, not a verdict on the change.
+    """
+    seam: list[tuple[int, _Audit]] = []
+    latest: dict[str, tuple[int, _Audit]] = {}
+    for order, span in enumerate(spans):
+        finding = tier_finding(span.name, span.detail)
+        if finding is not None:
+            latest[finding.gate] = (
+                order,
+                _Audit(
+                    f"audit:{finding.gate}",
+                    f"tier {finding.tier}, {finding.verdict}: {finding.detail}",
+                    span.exit_code,
+                    span.record_hash,
+                ),
+            )
+        elif span.name.startswith("audit:") and span.name not in FEED_SPANS:
+            seam.append((order, _Audit(span.name, span.detail, span.exit_code, span.record_hash)))
+    return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
+
+
 def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     """The packet for one run, from its ledger alone. No model call."""
     run_id = run_id or journal.parent.name
@@ -270,7 +312,7 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     )
     tools = [s for s in spans if s.kind == "tool"]
     refusals = [s for s in tools if s.name.startswith("refused:")]
-    audits = [s for s in spans if s.name.startswith("audit:")]
+    audits = _audits(spans)
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
@@ -529,9 +571,7 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
         rows.append(Row("cost", "Cost", "absent", "No sealed budget record yet."))
 
     # -- reproduce ----------------------------------------------------------------------
-    branch = ""
-    if start is not None and start.detail.startswith("branch "):
-        branch = start.detail.split(";")[0].removeprefix("branch ")
+    branch = start_field(start.detail, "branch") if start is not None else ""
     anchor = proofs[-1].record_hash if proofs else (start.record_hash if start else "")
     rows.append(
         Row(

@@ -93,7 +93,7 @@ def test_questions_findings_and_progress_through_the_seam(repo: Path) -> None:
         return "yes"
 
     client = Scripted()
-    options = AutoOptions(task="t", repo=repo, run_id="r1", time_budget_s=100, clock=clock)
+    options = AutoOptions(task="t", repo=repo, run_id="r1", arm="E", time_budget_s=100, clock=clock)
     result = run_auto(
         options, cast(VllmClient, client), on_event=events.append, audit=audit, answer=answer
     )
@@ -124,7 +124,7 @@ def test_questions_findings_and_progress_through_the_seam(repo: Path) -> None:
 
 
 def test_no_answer_stops_the_run_needing_you(repo: Path) -> None:
-    options = AutoOptions(task="t", repo=repo, run_id="r1")
+    options = AutoOptions(task="t", repo=repo, run_id="r1", arm="E")
     result = run_auto(options, cast(VllmClient, Scripted()), audit=audit, answer=lambda _q: None)
     assert result.outcome == "stopped"
     assert result.reason.startswith("needs you: Keep the name add?")
@@ -132,7 +132,7 @@ def test_no_answer_stops_the_run_needing_you(repo: Path) -> None:
 
 
 def test_a_question_with_no_answer_callback_stops_too(repo: Path) -> None:
-    options = AutoOptions(task="t", repo=repo, run_id="r1")
+    options = AutoOptions(task="t", repo=repo, run_id="r1", arm="E")
     result = run_auto(options, cast(VllmClient, Scripted()), audit=audit)
     assert result.outcome == "stopped"
 
@@ -150,7 +150,9 @@ def test_an_audit_event_of_another_kind_is_ignored(repo: Path) -> None:
         return [RunProgress(elapsed_s=0, time_budget_s=1, tokens=0, token_budget=1)]
 
     result = run_auto(
-        AutoOptions(task="t", repo=repo, run_id="r1"), cast(VllmClient, Scripted()), audit=other
+        AutoOptions(task="t", repo=repo, run_id="r1", arm="E"),
+        cast(VllmClient, Scripted()),
+        audit=other,
     )
     assert result.outcome == "finished"
     assert not any(s.name.startswith("audit:") for s in read_spans(result.journal))

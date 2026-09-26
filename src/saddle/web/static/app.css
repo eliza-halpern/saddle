@@ -610,7 +610,9 @@ main { position: relative; }
 .ask-send:disabled { opacity: .5; cursor: default; }
 
 /* ---- the packet ---- */
-.packet { border-top: 1px solid var(--line); padding: 16px 16px 14px; }
+/* The bottom padding is room for the "↓ newest" pill: scrolled to the end,
+   the packet's last row sits above it, never under it. */
+.packet { border-top: 1px solid var(--line); padding: 16px 16px 60px; }
 .verdict { margin-bottom: 14px; }
 .packet-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: var(--ink-faint); margin-bottom: 6px; }
@@ -688,7 +690,9 @@ main { position: relative; }
 @media (max-width: 760px) {
   .task-meters { grid-template-columns: 1fr; }
   .prow { grid-template-columns: 1fr; gap: 6px; }
-  .packet { padding: 14px 12px 12px; }
+  .packet { padding: 14px 12px 60px; }
+  /* On a phone the pill moves off the text column's centre to the edge. */
+  #jump { left: auto; right: 12px; transform: none; }
   .verdict-word { font-size: 21px; }
   #run { padding: 0 9px; }
   .tc-row .tc-spacer { display: none; }

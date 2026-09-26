@@ -7,6 +7,7 @@ what the machines checked.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -231,6 +232,56 @@ class SessionLine:
     cite: str
 
 
+AUDIT_TIER: Final = re.compile(r"audit-tier(\d+):(.+)")
+"""The real auditor's per-finding span name (`auditor.Auditor._journal`)."""
+
+FEED_SPANS: Final = frozenset({"audit:delivered", "audit:withheld"})
+"""The audit feed's delivery records (`feed.AuditFeed._journal`): one per
+completed audit, not a gate's verdict."""
+
+
+@dataclass(frozen=True)
+class TierFinding:
+    """One `audit-tier<N>:<gate>` span, read back from its sealed detail."""
+
+    gate: str
+    tier: int
+    verdict: str
+    detail: str
+
+
+def tier_finding(name: str, detail: str) -> TierFinding | None:
+    """The finding an auditor span seals, or None if `name` is not one.
+
+    The span's detail is the `auditor.Finding` as JSON; a detail that does
+    not parse still names its gate and tier, with the raw text as detail.
+    """
+    match = AUDIT_TIER.fullmatch(name)
+    if match is None:
+        return None
+    try:
+        body = json.loads(detail)
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        return TierFinding(match.group(2), int(match.group(1)), "unreadable", detail)
+    return TierFinding(
+        match.group(2),
+        int(match.group(1)),
+        str(body.get("verdict", "unreadable")),
+        str(body.get("detail", "")),
+    )
+
+
+def start_field(detail: str, key: str) -> str:
+    """One `key value` field of an `auto:start` span's `;`-separated detail."""
+    for part in detail.split(";"):
+        part = part.strip()
+        if part.startswith(f"{key} "):
+            return part.removeprefix(f"{key} ")
+    return ""
+
+
 def _first_line(text: str, limit: int = 140) -> str:
     line = text.strip().splitlines()[0] if text.strip() else ""
     return line if len(line) <= limit else line[: limit - 1] + "…"
@@ -255,10 +306,12 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
     cite = entry.record_hash
     name = entry.name
     if name == "auto:start":
-        branch, _, rest = entry.detail.partition(";")
-        tests = "tests read-only" if rest.endswith("refused") else "test edits allowed"
-        where = branch.removeprefix("branch ")
-        return SessionLine("▸", f"started on {where} · {tests}", "info", cite)
+        tests = "tests read-only" if entry.detail.endswith("refused") else "test edits allowed"
+        where = start_field(entry.detail, "branch")
+        arm = start_field(entry.detail, "arm")
+        return SessionLine(
+            "▸", f"started on {where}{f' · arm {arm}' if arm else ''} · {tests}", "info", cite
+        )
     if name.startswith("auto:"):
         outcome = name.removeprefix("auto:")
         return SessionLine(
@@ -272,6 +325,28 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             "⊘",
             f"refused by the tier-0 guard · {_first_line(entry.detail.split(': ', 2)[-1])}",
             "refused",
+            cite,
+        )
+    finding = tier_finding(name, entry.detail)
+    if finding is not None:
+        ok = entry.exit_code == 0
+        return SessionLine(
+            "◆" if ok else "◇",
+            f"audit tier {finding.tier} {finding.gate} {finding.verdict} · "
+            f"{_first_line(finding.detail)}",
+            "audit" if ok else "fail",
+            cite,
+        )
+    if name in FEED_SPANS:
+        ok = entry.exit_code == 0
+        point = entry.argv[1] if len(entry.argv) > 1 else "audit"
+        how = "delivered to the model" if name == "audit:delivered" else "withheld from the model"
+        body = entry.detail.splitlines()
+        return SessionLine(
+            "◆" if ok else "◇",
+            f"audit {point} {'passed' if ok else 'failed'}, {how}"
+            + (f" · {_first_line(body[1].removeprefix('- '))}" if len(body) > 1 else ""),
+            "audit" if ok else "fail",
             cite,
         )
     if name.startswith("audit:"):
