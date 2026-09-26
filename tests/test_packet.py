@@ -474,6 +474,9 @@ def test_suite_and_mutation_audits_fill_their_own_rows(repo: Path, ok: bool, sta
 class PassingAuditor:
     """The feed's auditor, passing every tree: the run still journals its audits."""
 
+    def tier0(self, path: str, new_text: str) -> Findings:
+        return Findings(0, "k0", (Finding("ruff", 0, "pass", "code-wrong", "ruff clean", ()),))
+
     def tier1(self, tree: Path | None = None) -> Findings:
         return Findings(1, "k1", (Finding("tests", 1, "pass", "code-wrong", "1 passed", ()),))
 
