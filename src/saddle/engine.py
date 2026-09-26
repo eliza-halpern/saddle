@@ -300,6 +300,11 @@ class TurnOptions:
     tools: list[dict[str, Any]] = field(default_factory=lambda: list(TOOLS))
     auto: AutoRun | None = None
     """Set for an autonomous run: no round cap, a budget, `finish`."""
+    keep_reasoning: bool = False
+    """Autonomous runs only: send each round's reasoning back on its
+    assistant message (field `reasoning`) for the rest of the turn, as the
+    untouched agent does (SPEED F-a). Off by default so arms E/E+A/E+A+F
+    send byte-identical requests; ignored in interactive chat."""
 
     def tool_tokens(self) -> int:
         """What the tool schemas cost, which they do on every single request.
@@ -540,8 +545,11 @@ def run_turn(
                 _charge(options.journal, node_id, auto, reply, reasoning, calls, usage, timing)
                 yield _progress(auto)
 
+            keep = options.keep_reasoning and auto is not None and bool(reasoning)
             if not calls:
-                messages.append({"role": "assistant", "content": reply})
+                messages.append(
+                    _assistant({"role": "assistant", "content": reply}, reasoning, keep)
+                )
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
                     nudge = AUTO_NUDGE
@@ -554,18 +562,22 @@ def run_turn(
                 break
 
             messages.append(
-                {
-                    "role": "assistant",
-                    "content": reply,
-                    "tool_calls": [
-                        {
-                            "id": c.id,
-                            "type": "function",
-                            "function": {"name": c.name, "arguments": c.arguments},
-                        }
-                        for c in calls
-                    ],
-                }
+                _assistant(
+                    {
+                        "role": "assistant",
+                        "content": reply,
+                        "tool_calls": [
+                            {
+                                "id": c.id,
+                                "type": "function",
+                                "function": {"name": c.name, "arguments": c.arguments},
+                            }
+                            for c in calls
+                        ],
+                    },
+                    reasoning,
+                    keep,
+                )
             )
             tools: list[dict[str, Any]] = []
             for call in calls:
@@ -659,6 +671,19 @@ def run_turn(
         kind=f"auto-{auto.outcome}" if auto is not None else "",
     )
     yield TurnEnd(turn=turn, proof=proof)
+
+
+def _assistant(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str, Any]:
+    """The assistant message as sent back, with its reasoning when `keep`.
+
+    The key is `reasoning`, what the server streams and what the untouched
+    agent (pi) sends back; vLLM hands it to the template's
+    `reasoning_content` (SPEED F-a: pi's prompt grew by the reasoning).
+    Appended last, so with `keep` off the message is exactly as before.
+    """
+    if keep:
+        message["reasoning"] = reasoning
+    return message
 
 
 def _progress(auto: AutoRun) -> RunProgress:

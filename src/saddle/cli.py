@@ -1619,6 +1619,12 @@ def build_parser() -> argparse.ArgumentParser:
         "finding is reported, not held against the run. Repeatable; sealed in the ledger.",
     )
     auto.add_argument(
+        "--keep-reasoning",
+        action="store_true",
+        help="Send each round's reasoning back to the model for the rest of the run "
+        "(off by default; sealed in the outcome as prompt_shape.keep_reasoning).",
+    )
+    auto.add_argument(
         "--finish-refusal-cap",
         type=int,
         default=DEFAULT_FINISH_REFUSAL_CAP,
@@ -1656,6 +1662,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
         sanctioned_test_rewrites=tuple(args.sanctioned_test_rewrite),
         finish_refusal_cap=args.finish_refusal_cap,
+        keep_reasoning=args.keep_reasoning,
     )
 
     def show(event: Event) -> None:
