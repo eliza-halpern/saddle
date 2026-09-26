@@ -515,9 +515,10 @@ function actionRow(card, packet) {
   const merge = actionButton("Merge", "act-merge");
   const discard = actionButton("Discard branch", "act-discard");
   const chat = actionButton("Continue in chat", "act-chat");
+  const download = actionButton("Download full report", "act-download");
   for (const b of [view, merge, discard]) b.disabled = true;
   const why = el("p", "act-why");
-  row.append(view, merge, discard, chat);
+  row.append(view, merge, discard, chat, download);
   wrap.append(row, why, panel);
 
   let info = null;
@@ -582,6 +583,16 @@ function actionRow(card, packet) {
           actionResult(panel, false, String(error.message || error), false);
         }
       });
+  };
+  // One markdown file, rendered fresh from the sealed ledger by the server
+  // (packet.md beside the run's proofs.jsonl); the click is in actions.log.
+  download.onclick = () => {
+    const a = document.createElement("a");
+    a.href = `/api/sessions/${state.sessionId}/tasks/${card.runId}/packet.md`;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
   chat.onclick = async () => {
     let recap = info && info.recap;

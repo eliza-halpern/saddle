@@ -223,7 +223,7 @@ The chat card does not show the rows above in table order (`static/tasks.js`,
 1. **Verdict**: Finished, Stopped or No outcome, the task, one sentence, and chips for
    the branch, files changed, test policy and ledger size.
 2. **Action row**: **View diff**, **Merge into <branch>**, **Discard branch**,
-   **Continue in chat**.
+   **Continue in chat**, **Download full report**.
    - View diff shows the run's changes per file (merge base to the run branch).
    - Merge is enabled only for a finished run with no failed row and at least one
      proven Tests, Mutation or Audit row (`web.branch_actions.merge_refusal`), and only
@@ -239,6 +239,11 @@ The chat card does not show the rows above in table order (`static/tasks.js`,
      ledger: each attempt is appended to the session's `actions.log`.
    - Continue in chat switches the session to Ask and puts the packet's text in the
      message box. It sends nothing.
+   - Download full report saves one markdown file, `saddle-packet-<id>.md`: the full
+     packet, rendered fresh from the sealed ledger (`render_packet_text`) by
+     `GET /api/sessions/<sid>/tasks/<id>/packet.md`. The same text is written beside
+     the run's ledger as `.saddle/runs/<id>/packet.md` on every render, so the file
+     never lags the ledger, and each download is appended to `actions.log`.
 3. **Summary band**: Tests, Mutation and Not proven, one line each with a glyph (✓
    proven, ✗ failed, ◐ observed, ○ no record, ! something unproven). Each line opens to
    its full row. The band is green only for a finished run whose three lines are all

@@ -252,3 +252,43 @@ def test_not_proven_names_a_missing_mutation_record(
     assert rows["not-proven"].text == text
     assert list(rows["not-proven"].items) == ([item] if item else [])
     assert rows["mutation"].status == ("proven" if kind == "mutated" else "absent")
+
+
+# Q10 -- "Download full report": GET .../tasks/<rid>/packet.md serves the full
+# packet as one markdown attachment, rendered fresh from the sealed ledger
+# through render_packet_text and written beside the ledger as packet.md, and
+# the click is logged in the session's actions.log. Known-bad: an unknown
+# run is a 404 and writes no file.
+
+
+def test_the_report_download_is_the_full_packet_text_written_beside_the_ledger(
+    tmp_path: Path,
+) -> None:
+    from packet_seed import make_repo, seed
+    from test_ui3_mode import NoModel
+
+    from saddle.auto import ledger_path
+    from saddle.packet import compile_packet, render_packet_text
+
+    calc = make_repo(tmp_path / "repo")
+    store = SessionStore(tmp_path / "s")
+    sid, rid, _branch = seed(store, calc, "audited")
+    journal = ledger_path(calc, rid)
+    expected = render_packet_text(compile_packet(journal, run_id=rid))
+    app = build_app(store, NoModel, default_workdir=calc)
+    with TestClient(app) as http:
+        got = http.get(f"/api/sessions/{sid}/tasks/{rid}/packet.md")
+        missing = http.get(f"/api/sessions/{sid}/tasks/{'0' * 12}/packet.md")
+        no_branch = http.get(f"/api/sessions/{sid}/tasks/{'0' * 12}/branch")
+    assert got.status_code == 200
+    assert got.content == expected.encode()
+    assert (
+        got.headers["content-disposition"] == f'attachment; filename="saddle-packet-{rid[:8]}.md"'
+    )
+    assert got.headers["content-type"].startswith("text/markdown")
+    assert (journal.parent / "packet.md").read_text(encoding="utf-8") == expected
+    log = (store.journal_path(sid).parent / "actions.log").read_text(encoding="utf-8")
+    assert f"\t{rid}\tdownload\t" in log
+    assert missing.status_code == no_branch.status_code == 404
+    assert not list((calc / ".saddle" / "runs").glob("000000000000*"))
+    assert [p.name for p in (calc / ".saddle" / "runs").rglob("packet.md")] == ["packet.md"]

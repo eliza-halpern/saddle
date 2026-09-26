@@ -818,6 +818,34 @@ def build_app(
         repo = Path(*parts[:-4]) if shaped else None
         return JSONResponse(compile_packet(journal, run_id=rid, anchor_repo=repo).payload())
 
+    def write_report(journal: Path, rid: str) -> tuple[Path, str]:
+        """The full packet as text, written beside the run's ledger (UXFIX2 Q10).
+
+        `packet.md` sits in `.saddle/runs/<id>/` next to `proofs.jsonl`: inside
+        the session's folder, so the Ask lane's read_file can open it when
+        asked, and rewritten on every read here so it never lags the ledger.
+        The bytes are `render_packet_text` of the packet, unchanged.
+        """
+        text = render_packet_text(compile_packet(journal, run_id=rid))
+        path = journal.parent / "packet.md"
+        path.write_text(text, encoding="utf-8")
+        return path, text
+
+    async def task_report(request: Request) -> Response:
+        """`packet.md` as a download: the full packet, fresh from the ledger."""
+        sid, rid = request.path_params["sid"], request.path_params["rid"]
+        journal = _journal(sid, rid)
+        if journal is None:
+            return JSONResponse({"error": "no such task in this session"}, status_code=404)
+        path, text = write_report(journal, rid)
+        log = store.journal_path(sid).parent / "actions.log"
+        branch_actions.log_action(log, rid, "download", str(path))
+        return PlainTextResponse(
+            text,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="saddle-packet-{rid[:8]}.md"'},
+        )
+
     def _branch_context(request: Request) -> tuple[str, Path, Packet, str]:
         """The run id, checkout root, packet and run branch an action works on."""
         sid, rid = request.path_params["sid"], request.path_params["rid"]
@@ -841,6 +869,9 @@ def build_app(
             _rid, root, packet, branch = _branch_context(request)
         except branch_actions.ActionRefusedError as exc:
             return _refused(exc)
+        journal = _journal(request.path_params["sid"], _rid)
+        assert journal is not None  # _branch_context found it
+        report, _text = write_report(journal, _rid)
         return JSONResponse(
             {
                 "branch": branch,
@@ -848,6 +879,7 @@ def build_app(
                 "target": branch_actions.current_branch(root),
                 "merge_refusal": branch_actions.merge_refusal(packet),
                 "recap": render_packet_text(packet),
+                "report": str(report),
                 "sealed": False,
                 "log": "actions.log",
             }
@@ -1066,6 +1098,7 @@ def build_app(
             Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
             Route("/api/sessions/{sid}/task", post_task, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/packet", task_packet),
+            Route("/api/sessions/{sid}/tasks/{rid}/packet.md", task_report),
             Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),

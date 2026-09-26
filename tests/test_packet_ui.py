@@ -101,6 +101,7 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     assert r["discard"]["disabled"] is False
     assert r["why"] == ""
     assert r["panel"] == ""  # no confirm is open until asked for
+    assert r["download"] == {"text": "Download full report", "disabled": False}
     assert branch.startswith("saddle/auto/")
 
 
