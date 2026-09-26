@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from saddle.anchor import anchor_issues
 from saddle.journal import (
     ProofRecord,
     SpanRecord,
@@ -381,8 +382,22 @@ def _needs_a_test(evidence: dict[str, Any]) -> bool:
     )
 
 
-def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
-    """The packet for one run, from its ledger alone. No model call."""
+def _anchor_text(journal: Path, repo: Path | None) -> str:
+    """The Reproduce row's sentence on the branch anchor, "" when it was not checked."""
+    if repo is None:
+        return ""
+    found = anchor_issues(journal, repo)
+    if not found:
+        return "Its outcome matches the Saddle-Outcome trailer on the run branch. "
+    return f"The branch anchor does not match: {', '.join(i.code for i in found)}. "
+
+
+def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None = None) -> Packet:
+    """The packet for one run, from its ledger alone. No model call.
+
+    With `anchor_repo`, the Reproduce row also reports the check of the
+    ledger's outcome against its branch's `Saddle-Outcome` trailer (ANCHOR).
+    """
     run_id = run_id or journal.parent.name
     if not journal.exists():
         return _unrecorded(run_id, "There is no ledger for this run yet.")
@@ -681,10 +696,11 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
             "observed" if anchor else "absent",
             f"The ledger verifies ({_n(len(entries), 'record')}, "
             f"{'no issues' if not issues else str(len(issues)) + ' issue(s)'}). "
+            f"{_anchor_text(journal, anchor_repo)}"
             "Re-check it, and read the change:",
             (anchor,) if anchor else (),
             (
-                f"saddle verify {_shown(journal)}",
+                f"saddle verify {_shown(journal)}{' --anchor' if anchor_repo is not None else ''}",
                 *((f"git log -p main..{branch}",) if branch else ()),
             ),
         )
