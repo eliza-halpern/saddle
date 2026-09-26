@@ -139,11 +139,13 @@ depends on.
 one small file,"* and `max_context_tokens` has a floor of 8000. I wrote that
 during the v2 fixes. It is wrong.
 
-**Finding:** attention follows a U-shaped curve across input position, with
+**Finding:** performance degrades as the input grows, with
 wrong or degraded answers **2× to 30× more often** as the context fills
 (arXiv 2605.12366, Martin & Roger); the Chroma report is cited for the
-direction only when the relevant content sits mid-context rather
-than at either end. Coding agents have the three properties that maximise the
+direction only. On position, the same paper finds detection worst when
+the target sits mid-transcript (§4.4, Fig. 4b), while Chroma found no
+notable variation across 11 needle positions on its needle-in-a-haystack
+task. Coding agents have the three properties that maximise the
 effect — accumulative context, high distractor density, long task horizons.
 One monitoring benchmark lost recall from 98.6% to 88% purely from
 prepending 800k benign tokens (arXiv 2605.12366, Martin & Roger; the Chroma report does not carry this figure).
@@ -340,7 +342,7 @@ Meanwhile [MAKER][maker] reaches zero errors across a million steps with
 with p>0.5 exact-match agreement required plus a red-flag parser that
 discards over-long or misformatted responses, and [Snell et al.][testtime]
 find sequential revision wins on easy problems (not re-verified),
-parallel resampling on hard ones, and little benefit from test-time compute
+a mix of sequential and parallel compute on harder ones (§6.2, Fig. 7), and little benefit from test-time compute
 on the hardest (√N appears only as an illustrative allocation and a beam
 width, not as the found optimum) — and compute-optimal scaling beating
 best-of-N at **4× less compute**.
@@ -383,7 +385,9 @@ spec artifact (D7). Every P1 item above is an instance of this, which is why
 they belong together.
 
 [Weaver][weaver] remains useful in its narrow place — weighted ensembles beat
-naive averaging by **+11.2pp**, and a distilled 400M cross-encoder retained
+naive averaging by **+11.2pp** (with weights learned from ~50k labelled
+pairs; the unsupervised model assumes conditionally independent
+verifiers), and a distilled 400M cross-encoder retained
 **98.7%** of full accuracy at **0.03%** of the compute — but for *ranking
 candidates*, not for sealing a proof. Keep the seal a strict AND.
 
@@ -603,7 +607,9 @@ not memorised `sortedcontainers`. Every task should get a perturbed twin.
 ### D25. Audit against a harness-flaw taxonomy
 
 [HarnessFix][harnessfix] reports **6.3–18.4 pp absolute** gains across GAIA,
-SWE-Bench Verified, AppWorld and Terminal-Bench from repairing the *harness
+SWE-Bench Verified, AppWorld and Terminal-Bench (the abstract's range,
+equal to GPT-5 mini's over the four benchmarks; over all five models,
+Table III runs 5.9–18.4) from repairing the *harness
 alone* (v2; 11.1 is the v2 Table III all-model average, §V.A). With GPT-5
 mini fixed, it also beats human-designed harnesses by 6.3 points on average
 (range 1.9–10.0; Table IV). Its ETCLOVG taxonomy (Execution,
@@ -711,7 +717,7 @@ artifact across T1–T7.
 [pgs]: https://arxiv.org/html/2506.18315v1 "Use Property-Based Testing to Bridge LLM Code Generation and Validation"
 [ach]: https://arxiv.org/html/2501.12862v1 "Mutation-Guided LLM-based Test Generation at Meta"
 [maker]: https://arxiv.org/pdf/2511.09030 "Solving a Million-Step LLM Task with Zero Errors"
-[crane]: https://arxiv.org/html/2502.09061v3 "CRANE: Reasoning with Constrained LLM Generation"
+[crane]: https://arxiv.org/html/2502.09061v4 "CRANE: Reasoning with Constrained LLM Generation"
 [testtime]: https://arxiv.org/pdf/2408.03314 "Scaling LLM Test-Time Compute Optimally"
 [weaver]: https://arxiv.org/html/2506.18203v1 "Shrinking the Generation-Verification Gap with Weak Verifiers"
 [selfrepair]: https://arxiv.org/abs/2306.09896v5 "Is Self-Repair a Silver Bullet for Code Generation?"
@@ -753,16 +759,16 @@ artifact across T1–T7.
 - [Variation in Verification][varver] — weak generators produce more detectable errors (TNR 0.68 → 0.17)
 - [SpecBench][specbench] — validation/held-out gap; longer search worsens reward hacking
 - [Who Tests the Tests][zylos] — correlated error; negative controls; discrimination evidence
-- [Property-Generated Solver][pgs] — 82.4% vs 62.4% property accuracy vs solving (Easy split); cycle of self-deception
+- [Property-Generated Solver][pgs] — 82.4% vs 62.4% property accuracy vs solving (Easy split) (v1; not in v2, not re-verified); v2: 87.0 vs 63.0 verification vs generation (hard 76.5 vs 32.4); cycle of self-deception
 - [ACH (Meta)][ach] — few targeted mutants; 49% of mutant-killing tests add no coverage
 - [MAKER][maker] — million-step zero-error via micro-decomposition + k=3 voting (k_min 3–29 across models)
 - [CRANE][crane] — constrained decoding confines to TC⁰; alternate constrained/unconstrained
-- [Snell et al.][testtime] — sequential vs parallel test-time compute; √N split
-- [Weaver][weaver] — weighted weak-verifier ensembles; 400M distillation
+- [Snell et al.][testtime] — sequential vs parallel test-time compute; the best split depends on difficulty (√N is only an illustration and a beam width)
+- [Weaver][weaver] — weighted weak-verifier ensembles (the +11.2pp uses weights learned from ~50k labelled pairs; the unsupervised model assumes conditionally independent verifiers); 400M distillation
 - [Olausson et al.][selfrepair] — self-repair bottlenecked by feedback quality (1.58×)
-- [Vericoding benchmark][vericoding] — 82/44/27% Dafny/Verus/Lean; "cheating" of weak specs
+- [Vericoding benchmark][vericoding] — 82/44/27% Dafny/Verus/Lean; weak specs admit valid solutions to a different task (cheating was caught by validation)
 - [traceSDD][tracesdd] — REQ citation discipline; orphan detection
-- [Don't Build Multi-Agents][cognition] — parallelise reads, single-thread writes
+- [Don't Build Multi-Agents][cognition] — share full context; actions carry implicit decisions
 - [VP-Control][vpcontrol] — evidence independence worth 3.6× model diversity
 - [Failure Independence][failind] — LLM implementations fail in correlated ways
 - [AlphaCode][alphacode] — behavioural clustering on generated inputs
@@ -770,7 +776,7 @@ artifact across T1–T7.
 - [AgentPRM][agentprm] — process reward over outcome reward
 - [EndWatch][endwatch] / [Halting][halting] — non-termination detection
 - [ChaosAPI][chaosapi] — flaky test detection via nondeterministic API control
-- [Context Rot][contextrot] — U-shaped position curve; magnitude per arXiv 2605.12366, not the Chroma post
+- [Context Rot][contextrot] — no notable variation across 11 needle positions; magnitude and the mid-context effect per arXiv 2605.12366, not the Chroma post
 - [Agentless][agentless] — deterministic pipeline beats agent loops
 - [Diff-XYZ][diffxyz] / [DebugHarness][debugharness] / [Why LLMs Fail][whyllmsfail] — patch format and repair
 - [InspectCoder][inspectcoder] / [TraceCoder][tracecoder] — runtime state as repair feedback

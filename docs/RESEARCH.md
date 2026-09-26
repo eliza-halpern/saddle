@@ -15,9 +15,12 @@ WORKPLAN table gives the corrected wording) and **UNVERIFIED-FROM-MEMORY**
 (named in conversation, not yet checked against the source; do not cite in
 a doc until checked).
 
-Where a source's number was corrected, the corrected wording is the one in
-`docs/WORKPLAN.md` "citation-correction" table (rows at lines ~460–488) and
-the audit §9 rows; this file summarises, it does not restate them.
+Where a source's number was corrected before 2026-09-25, the corrected
+wording is the one in `docs/WORKPLAN.md` "citation-correction" table (rows
+at lines ~460–488) and the audit §9 rows; this file summarises, it does not
+restate them. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
+and §5c, `../saddle-research/reports/Rule D question rate calibration.md`),
+the corrected wording now lives in this file's own rows.
 
 ## A. Sources behind the design notes (D1–D25)
 
@@ -57,7 +60,7 @@ the audit §9 rows; this file summarises, it does not restate them.
 | TraceCoder | arXiv 2602.06875 | D16 | Trace-driven multi-agent debugging | PUBLISHED |
 | SEDCoT | arXiv 2607.04092 | D17 (minimal failing input) | Minimal counterexamples improve repair without extra LLM calls (§3.4.2); delta debugging still costs executions | PUBLISHED |
 | ELFuzz | arXiv 2506.10323 | D9; D21 (coverage-guided input generation) | LLM-driven input synthesis | PUBLISHED; research track |
-| HarnessFix | arXiv 2606.06324 v2 | D25 (audit against a harness-flaw taxonomy) | ETCLOVG taxonomy; 6.3–18.4 pp absolute from repairing the harness alone | PUBLISHED-WITH-MEASUREMENT (v2). The audit's correction ("a misread; no human-harness comparison in the paper") was wrong for v2, and the original wording was supported: +11.1% average over the initial harness in 20 settings (§V.A); 6.3 points above human-designed harnesses with GPT-5 mini (range 1.9–10.0; Table IV) |
+| HarnessFix | arXiv 2606.06324 v2 | D25 (audit against a harness-flaw taxonomy) | ETCLOVG taxonomy; 6.3–18.4 pp absolute from repairing the harness alone (the abstract's range, equal to GPT-5 mini's over the four benchmarks; over all five models, Table III runs 5.9–18.4) | PUBLISHED-WITH-MEASUREMENT (v2). The audit's correction ("a misread; no human-harness comparison in the paper") was wrong for v2, and the original wording was supported: +11.1% average over the initial harness in 20 settings (§V.A); 6.3 points above human-designed harnesses with GPT-5 mini (range 1.9–10.0; Table IV) |
 | ReasoningBank | arXiv 2509.25140 | D23 (journal as experience memory) | Reasoning memory for self-evolving agents | PUBLISHED; research track |
 | "Learning When to Remember: Abstention-Aware Memory Retrieval" | arXiv 2604.27283 | D23 | When not to retrieve | PUBLISHED; research track |
 | "Quantifying and Mitigating Self-Preference Bias of LLM Judges" | arXiv 2604.22891 | "The tension with No LLM grading" | Self-preference bias measured with authorship unlabeled, on equal-quality pairs; a structured multi-dimensional evaluation strategy (cognitive-load decomposition) cuts it 31.5% on average | CORRECTED: "persists even when authorship is hidden" → "measured with authorship unlabeled" |
