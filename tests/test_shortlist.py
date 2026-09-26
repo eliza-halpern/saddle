@@ -654,3 +654,67 @@ def test_score_mode_still_fails_on_the_same_survivors(
     found = Auditor(tree).tier2()
     assert next(f.verdict for f in found.findings if f.gate == "mutation") == "fail"
     assert not found.passed
+
+
+# -- FEEDFIX (9): the packet reads a not-proven finding as not proven ------------
+
+
+def _mutation_row(tree: Path, tmp_path: Path) -> tuple[str, str]:
+    from saddle.packet import compile_packet
+
+    journal = tmp_path / "proofs.jsonl"
+    Auditor(tree, config=AuditorConfig(tier2="shortlist", journal=journal)).tier2()
+    rows = {r.key: r for r in compile_packet(journal).rows}
+    return rows["mutation"].status, rows["audit"].status
+
+
+def test_a_shortlist_ledger_with_an_open_survivor_packets_as_not_proven(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad: an open survivor journals exit 0 (`_JOURNAL_EXIT`), and
+    the Mutation row must still not say `proven`."""
+    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    assert _mutation_row(tree, tmp_path)[0] == "not-proven"
+
+
+def test_a_shortlist_ledger_with_every_mutant_killed_packets_as_proven(
+    tree: Path, tmp_path: Path
+) -> None:
+    """Known-good: the same ledger shape with no survivor renders proven."""
+    assert _mutation_row(tree, tmp_path) == ("proven", "proven")
+
+
+def test_a_not_proven_coverage_finding_makes_the_audit_row_not_proven(
+    uncovered: Path, tmp_path: Path
+) -> None:
+    from saddle.packet import compile_packet, render_packet_text
+
+    journal = tmp_path / "proofs.jsonl"
+    Auditor(uncovered, config=AuditorConfig(tier2="shortlist", journal=journal)).tier1()
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.status == "not-proven"
+    assert audit.text.endswith(", 1 not proven.")
+    assert any(item.startswith("? coverage: tier 1, not-proven:") for item in audit.items)
+    assert "Audit [not-proven]" in render_packet_text(packet)
+
+
+def test_a_finished_packet_with_a_not_proven_finding_does_not_say_every_finding_passed(
+    uncovered: Path, tmp_path: Path
+) -> None:
+    from saddle.journal import append_span, build_span
+    from saddle.packet import compile_packet
+
+    journal = tmp_path / "proofs.jsonl"
+    Auditor(uncovered, config=AuditorConfig(tier2="shortlist", journal=journal)).tier1()
+    append_span(
+        journal,
+        build_span(node_id="chat#1", argv=["auto:finished"], duration_ms=0, exit_code=0,
+                   detail="finished: finish called; arm E+A+F", kind="agent"),
+    )  # fmt: skip
+    packet = compile_packet(journal)
+    assert packet.verdict == "finished"
+    assert packet.verdict_text == (
+        "The executor called finish. No audit finding failed; 1 finding could not be "
+        "proven (they do not refuse finish)."
+    )

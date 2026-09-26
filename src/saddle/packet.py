@@ -412,6 +412,15 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
     return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
 
 
+def _status(audit: _Audit) -> Status:
+    """A finding's row status. Its verdict first: `not-proven` journals exit
+    0 like `pass` (`auditor._JOURNAL_EXIT`), so the exit code alone would
+    call an open shortlist survivor proven (FEEDFIX item 9, DOCS3)."""
+    if audit.verdict == "not-proven":
+        return "not-proven"
+    return "proven" if audit.exit_code == 0 else "failed"
+
+
 def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
     """A finished run's verdict line when audit findings failed or were blocked."""
     said = [f"{_n(len(failed), 'audit finding')} failed"] if failed else []
@@ -420,6 +429,8 @@ def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
         said.append(f"{_n(len(blocked), 'audit finding')} blocked (not run): {why}")
     return f"Finished, but {', and '.join(said)}."
 
+
+_MARK: Final[dict[str, str]] = {"proven": "✓", "failed": "✗", "not-proven": "?"}
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """FEEDCAP's stop reason (`engine.AUDIT_UNRESOLVED`): finish refused on an
@@ -604,6 +615,10 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             else "The executor called finish. No auditor verdict covers the change, "
             "so this is finished, not proven done."
             if not audits
+            else "The executor called finish. No audit finding failed; "
+            f"{_n(sum(a.verdict == 'not-proven' for a in audits), 'finding')} "
+            "could not be proven (they do not refuse finish)."
+            if any(a.verdict == "not-proven" for a in audits)
             else "The executor called finish, and every audit finding recorded passed."
         )
     else:
@@ -699,7 +714,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             Row(
                 "mutation",
                 "Mutation",
-                "proven" if last.exit_code == 0 else "failed",
+                _status(last),
                 last.detail,
                 (last.record_hash,),
                 summary=mutant_text.render_text(mutation_summary) if mutation_summary else "",
@@ -774,18 +789,19 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             else None
         )
         if other:
+            statuses = [_status(a) for a in other]
+            unproven = statuses.count("not-proven")
             rows.append(
                 Row(
                     "audit",
                     "Audit",
-                    "proven" if all(a.exit_code == 0 for a in other) else "failed",
-                    f"{sum(a.exit_code == 0 for a in other)} of "
-                    f"{_n(len(other), 'finding')} passed.",
+                    "failed" if "failed" in statuses else "not-proven" if unproven else "proven",
+                    f"{statuses.count('proven')} of {_n(len(other), 'finding')} passed"
+                    + (f", {unproven} not proven." if unproven else "."),
                     tuple(a.record_hash for a in other),
                     tuple(
-                        f"{'✓' if a.exit_code == 0 else '✗'} "
-                        f"{a.name.removeprefix('audit:')}: {a.detail}"
-                        for a in other
+                        f"{_MARK[st]} {a.name.removeprefix('audit:')}: {a.detail}"
+                        for a, st in zip(other, statuses, strict=True)
                     ),
                     summary=(
                         coverage_text.render_coverage(coverage_summary) if coverage_summary else ""
