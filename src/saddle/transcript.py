@@ -7,6 +7,7 @@ what the machines checked.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -20,6 +21,7 @@ from saddle.journal import (
     tool_spans_by_node,
     tool_spans_for_node,
 )
+from saddle.labels import label_for
 
 MAX_THOUGHT_EXCERPT_CHARS: Final = 200
 
@@ -211,4 +213,99 @@ def render_journal_transcript(
             nodes=nodes,
             journal_path=journal_path,
         )
+    )
+
+
+@dataclass(frozen=True)
+class SessionLine:
+    """One ledger entry of an autonomous run, as the chat's task card shows it.
+
+    `mark` carries the outcome at a glance and `tone` names it for styling
+    (ok, fail, refused, audit, ask, info); `cite` is the entry's record hash,
+    so every line on the card resolves to the record it was drawn from.
+    """
+
+    mark: str
+    text: str
+    tone: str
+    cite: str
+
+
+def _first_line(text: str, limit: int = 140) -> str:
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _seconds(duration_ms: int) -> str:
+    return f"{duration_ms}ms" if duration_ms < 1000 else f"{duration_ms / 1000:.1f}s"
+
+
+def session_line(entry: JournalEntry) -> SessionLine | None:
+    """An auto-run ledger entry as one session line, or None for a plan.
+
+    The words for a tool call are `labels.label_for`, the same the chat's
+    own tool rows use, so the card and the transcript say the same thing.
+    The pass mark is drawn only from a zero exit code.
+    """
+    if isinstance(entry, PlanRecord):
+        return None
+    if isinstance(entry, ProofRecord):
+        proof = entry.record_hash
+        return SessionLine("■", f"sealed turn proof {proof[:8]}", "info", proof)
+    cite = entry.record_hash
+    name = entry.name
+    if name == "auto:start":
+        branch, _, rest = entry.detail.partition(";")
+        tests = "tests read-only" if rest.endswith("refused") else "test edits allowed"
+        where = branch.removeprefix("branch ")
+        return SessionLine("▸", f"started on {where} · {tests}", "info", cite)
+    if name.startswith("auto:"):
+        outcome = name.removeprefix("auto:")
+        return SessionLine(
+            "✓" if entry.exit_code == 0 else "■",
+            f"{outcome} · {entry.detail}",
+            "ok" if entry.exit_code == 0 else "fail",
+            cite,
+        )
+    if name.startswith("refused:"):
+        return SessionLine(
+            "⊘",
+            f"refused by the tier-0 guard · {_first_line(entry.detail.split(': ', 2)[-1])}",
+            "refused",
+            cite,
+        )
+    if name.startswith("audit:"):
+        gate = name.removeprefix("audit:")
+        ok = entry.exit_code == 0
+        return SessionLine(
+            "◆" if ok else "◇",
+            f"audit {gate} {'passed' if ok else 'failed'} · {_first_line(entry.detail)}",
+            "audit" if ok else "fail",
+            cite,
+        )
+    if name == "question":
+        return SessionLine("?", f"asked you · {_first_line(entry.detail)}", "ask", cite)
+    if name == "answer":
+        return SessionLine("↳", f"you answered · {_first_line(entry.detail)}", "ask", cite)
+    if entry.kind == "tool" and len(entry.argv) == 2:
+        ok = entry.exit_code == 0
+        label = label_for(entry.argv[0], entry.argv[1], ok=ok)
+        # A command the tool ran is "ok" to the tool whatever it exited
+        # with; the command's own exit code is what a reader is looking for.
+        exited = re.match(r"exit (-?\d+)", entry.detail) if entry.argv[0] == "run_command" else None
+        if ok and exited is not None and exited.group(1) != "0":
+            took = _seconds(entry.duration_ms)
+            return SessionLine("✗", f"{label} · exit {exited.group(1)} · {took}", "fail", cite)
+        suffix = " · exit 0" if exited is not None else ""
+        return SessionLine(
+            "✓" if ok else "✗",
+            f"{label}{suffix} · {_seconds(entry.duration_ms)}",
+            "ok" if ok else "fail",
+            cite,
+        )
+    return SessionLine(
+        "✓" if entry.exit_code == 0 else "✗",
+        f"{name} · exit {entry.exit_code}",
+        "ok" if entry.exit_code == 0 else "fail",
+        cite,
     )
