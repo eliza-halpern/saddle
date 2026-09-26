@@ -8,6 +8,33 @@ Saddle is a deterministic execution harness that turns a non-deterministic local
 
 **Status:** vertical slice built and benchmarked (see docs/BENCHMARK-RECORD.md). Tier-1 gates, the Kahn scheduler, the proof journal and the CLI exist; Tier-2 merge gates, Phase -1/0 and Phase 4 are specified in docs/ARCHITECTURE.md and not yet built.
 
+## Phase 2: agent plus auditor
+
+Phase 2 adds:
+
+- `saddle auto`: one task, run autonomously in a git worktree, with a time and token
+  budget. The result is a branch.
+- A tiered auditor whose findings reach the model as tool results. `finish` is refused
+  while the audit fails.
+- The chat's Task mode, which starts the same run from the browser and shows an evidence
+  packet compiled from the ledger.
+- `saddle audit --tiered`, which runs the same battery on any diff.
+
+- [docs/USING-SADDLE.md](docs/USING-SADDLE.md): install, Chat vs Task mode, how runs
+  end, reading the packet, `saddle verify`.
+- [docs/AUDIT-TIERS.md](docs/AUDIT-TIERS.md): the gates by tier, reason classes,
+  caching.
+- [docs/CLI.md](docs/CLI.md): every flag and exit code.
+
+**Status as of 2026-09-26:**
+
+- **Measured:** the suite and contract mutants for each piece (see commit messages), and
+  runs against a scripted fake model.
+- **Not measured:** there is no live E+A+F result yet. Nothing yet shows that the
+  auditor lowers the false-done rate on real tasks, or what it costs in wall time.
+- **Not built:** only the Small lane exists. Contracts are not sealed before
+  implementation, and no shipped code asks the user a question mid-run.
+
 ## Layout
 
 - `docs/ARCHITECTURE.md` — full architecture specification.
