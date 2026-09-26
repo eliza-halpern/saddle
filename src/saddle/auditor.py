@@ -580,7 +580,7 @@ class Auditor:
                     sources=sources,
                 )
                 statuses["mutation"] = (
-                    "pass" if shortlisted.passed else "fail",
+                    "pass" if shortlisted.passed else "not-proven",
                     shortlisted.detail,
                     shortlisted.basis,
                 )

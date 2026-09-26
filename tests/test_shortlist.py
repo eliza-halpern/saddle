@@ -223,14 +223,15 @@ SHORTLIST = AuditorConfig(tier2="shortlist")
 SHOW3 = "--- n.py\n+++ n.py\n@@ -3 +3 @@\n-    return 2\n+    return 3\n"
 
 
-def test_tier2_fails_on_one_survivor_at_a_95_percent_score(
+def test_tier2_surfaces_one_survivor_at_a_95_percent_score_as_not_proven(
     tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     results = "\n".join([*(f"  k{i}: killed" for i in range(19)), "  s1: survived"])
     _stub(tmp_path, monkeypatch, results, SHOW3)
     found = Auditor(tree, config=SHORTLIST).tier2()
     mutation = next(f for f in found.findings if f.gate == "mutation")
-    assert mutation.verdict == "fail", mutation.detail
+    # flip (SHORTLIST-5): was "fail"; out/SHORTRESEARCH/report.md section 3.
+    assert mutation.verdict == "not-proven", mutation.detail
     assert "- n.py:3 `return 2`: mutant s1 (survived)" in mutation.detail
     assert mutation.cites == (
         "saddle.gates.check_mutation_shortlist",
@@ -242,7 +243,7 @@ def test_tier2_fails_on_one_survivor_at_a_95_percent_score(
     assert found.survivors[0].behaviour == "`f`: Return the answer."
     assert found.survivors[0].mutation == "-    return 2\n+    return 3"
     assert Findings.from_dict(found.to_dict()).survivors == found.survivors
-    assert not found.passed
+    assert found.passed  # flip (SHORTLIST-5): was `not found.passed`
 
 
 def test_tier2_passes_with_every_mutant_killed(tree: Path) -> None:
@@ -359,7 +360,7 @@ def test_saddle_audit_tier2_shortlist_implies_tiered(
         [*argv, "--tier2", "shortlist", "--mutant-shortlist", "1"], stdout=out, stderr=err
     )
     payload = json.loads(out.getvalue())
-    assert code == 1, err.getvalue()
+    assert code == 0, err.getvalue()  # flip (SHORTLIST-5): was 1; the survivor is surfaced
     mutation = next(f for t in payload["tiers"] for f in t["findings"] if f["gate"] == "mutation")
     assert "- n.py:3 `return 2`: mutant s1 (survived)" in mutation["detail"]
     out = io.StringIO()
@@ -594,14 +595,14 @@ def test_shortlist_coverage_is_not_proven_and_tier2_admits_when_nothing_survives
     assert second.passed
 
 
-def test_shortlist_with_uncovered_lines_still_refuses_a_behaviour_survivor(
+def test_shortlist_with_uncovered_lines_still_names_a_behaviour_survivor(
     uncovered: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad: the refusal comes from the shortlist and names the survivor."""
+    """Known-bad: the survivor is still named (surfaced, SHORTLIST-5)."""
     _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
     found = Auditor(uncovered, config=SHORTLIST).tier2()
     mutation = next(f for f in found.findings if f.gate == "mutation")
-    assert mutation.verdict == "fail"
+    assert mutation.verdict == "not-proven"  # flip (SHORTLIST-5): was "fail"
     assert "mutant s1 (survived)" in mutation.detail
 
 
@@ -616,3 +617,40 @@ def test_not_proven_renders_as_not_proven_and_does_not_refuse() -> None:
     text = render(result)
     assert "(not proven, does not refuse) coverage (tier 1): no test runs u.py:2" in text
     assert "passed or not applicable" not in text
+
+
+# -- SHORTLIST-5: an open survivor is surfaced (not-proven), never a refusal ----
+
+
+def test_open_survivors_are_surfaced_with_every_row_and_the_finish_is_accepted(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good: a tree with open survivors passes; known-bad: every
+    survivor still reaches the finding, the AuditResult and its render."""
+    from saddle.feed import AuditResult, failing, render
+
+    results = "\n".join(f"  s{i}: survived" for i in range(3))
+    _stub(tmp_path, monkeypatch, results, SHOW3)
+    found = Auditor(tree, config=AuditorConfig(tier2="shortlist", mutant_shortlist=1)).tier2()
+    mutation = next(f for f in found.findings if f.gate == "mutation")
+    assert mutation.verdict == "not-proven"
+    assert not failing(mutation)
+    assert found.passed
+    assert "mutant s0 (survived)" in mutation.detail
+    assert "(and 2 more)" in mutation.detail
+    assert [s.name for s in found.survivors] == ["s0", "s1", "s2"]
+    assert [n for n, _, _ in found.mutant_detail] == ["s0", "s1", "s2"]
+    result = AuditResult("finish", "t" * 12, found.findings, mutant_detail=found.mutant_detail)
+    assert result.passed
+    assert "(not proven, does not refuse) mutation (tier 2)" in render(result)
+    assert "mutant s0 (survived)" in render(result)
+    assert [d["name"] for d in result.to_dict()["mutant_detail"]] == ["s0", "s1", "s2"]
+
+
+def test_score_mode_still_fails_on_the_same_survivors(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(tmp_path, monkeypatch, "\n".join(f"  s{i}: survived" for i in range(3)), SHOW3)
+    found = Auditor(tree).tier2()
+    assert next(f.verdict for f in found.findings if f.gate == "mutation") == "fail"
+    assert not found.passed
