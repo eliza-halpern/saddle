@@ -275,6 +275,10 @@ class _Audit:
     detail: str
     exit_code: int
     record_hash: str
+    verdict: str = ""
+    """An auditor finding's own verdict (pass, fail, blocked); "" for a seam span."""
+    body: str = ""
+    """An auditor finding's own detail, without the tier prefix."""
 
 
 def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_Audit]:
@@ -303,11 +307,22 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
                     f"tier {finding.tier}, {finding.verdict}: {finding.detail}",
                     span.exit_code,
                     span.record_hash,
+                    finding.verdict,
+                    finding.detail,
                 ),
             )
         elif not edit_checks and span.name.startswith("audit:") and span.name not in FEED_SPANS:
             seam.append((order, _Audit(span.name, span.detail, span.exit_code, span.record_hash)))
     return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
+
+
+def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
+    """A finished run's verdict line when audit findings failed or were blocked."""
+    said = [f"{_n(len(failed), 'audit finding')} failed"] if failed else []
+    if blocked:
+        why = "; ".join(dict.fromkeys(a.body for a in blocked))
+        said.append(f"{_n(len(blocked), 'audit finding')} blocked (not run): {why}")
+    return f"Finished, but {', and '.join(said)}."
 
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
@@ -434,11 +449,15 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
             )
         )
     elif outcome.name == "auto:finished":
-        failed_audits = [a for a in audits if a.exit_code != 0]
+        # A blocked finding never ran (tier 2 after a tier-1 failure on that
+        # tree): it is reported as blocked, and only gates that ran and
+        # failed count as failed (PACKETFIX-2).
+        blocked = [a for a in audits if a.verdict == "blocked"]
+        failed_audits = [a for a in audits if a.exit_code != 0 and a.verdict != "blocked"]
         verdict = "finished"
         verdict_text = (
-            f"Finished, but {_n(len(failed_audits), 'audit finding')} failed."
-            if failed_audits
+            _finished_but(failed_audits, blocked)
+            if failed_audits or blocked
             else "The executor called finish. No auditor verdict covers the change, "
             "so this is finished, not proven done."
             if not audits

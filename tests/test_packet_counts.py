@@ -1,5 +1,10 @@
 """The packet's audit count: auditor verdicts only, each counted as what it was.
 
+PACKETFIX-2 (out/FIX/report.md, "Verdict line"): a finished run's verdict
+line counted a `blocked` finding (tier 2 not run because tier 1 failed on
+that tree) among "N audit findings failed". Blocked is reported as
+blocked; failures count only gates that ran and failed.
+
 PACKETFIX-1 (out/CHECK/report.md, DISPATCH 12:30): the real auditor's
 tier-0 findings (syntax, ruff, imports on one edited file) were counted as
 audit verdicts, so a run whose auditor issued 9 verdicts read "12 of 12".
@@ -16,9 +21,12 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from test_integ import repo as repo  # the E+A run's fixture
+from test_integ import run as integ_run
 
 from saddle.auditor import TIER0, Auditor, AuditorConfig
 from saddle.journal import append_span, build_span, read_spans, write_attempt_sidecar
@@ -39,8 +47,13 @@ def git(root: Path, *argv: str) -> None:
     )
 
 
-def audited_run(tmp_path: Path, test: str = TEST) -> Path:
-    """A finished run's ledger holding one real `Auditor.audit()` (tiers 0, 1, 2)."""
+def audited_run(
+    tmp_path: Path,
+    test: str = TEST,
+    audit: Callable[[Auditor, Path], object] = lambda auditor, _repo: auditor.audit(),
+) -> Path:
+    """A finished run's ledger holding the real auditor's records: by default
+    one `Auditor.audit()` (tiers 0, 1, 2)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "n.py").write_text(BASE)
@@ -60,7 +73,7 @@ def audited_run(tmp_path: Path, test: str = TEST) -> Path:
         kind="agent",
     )
     append_span(journal, start)
-    Auditor(repo, config=AuditorConfig(journal=journal)).audit()
+    audit(Auditor(repo, config=AuditorConfig(journal=journal)), repo)
     span_id = uuid.uuid4().hex
     evidence = {
         "outcome": "finished",
@@ -166,3 +179,53 @@ def test_every_count_row_cites_the_records_it_counts(tmp_path: Path, key: str) -
     by_hash = {s.record_hash: s for s in read_spans(journal)}
     tiers = {tier_finding(by_hash[c].name, by_hash[c].detail).tier for c in row.cites}  # type: ignore[union-attr]
     assert tiers == ({0} if key == "edit-checks" else {1, 2})
+
+
+# -- PACKETFIX-2: blocked is not failed ------------------------------------------
+
+
+BLOCKED = "tier 1 failed (coverage); tier 2 not run"
+
+
+def test_a_finished_run_with_a_blocked_tier_2_counts_it_blocked_not_failed(repo: Path) -> None:
+    """Known-good: arm E+A accepts finish over a coverage failure, and tier 2
+    is blocked. Known-bad: the old line, "2 audit findings failed"."""
+    result, _ = integ_run(repo, learns=False, arm="E+A")
+    assert result.outcome == "finished", result.reason
+    found = [
+        f for s in read_spans(result.journal) if (f := tier_finding(s.name, s.detail)) is not None
+    ]
+    assert [(f.gate, f.verdict) for f in found if f.tier == 2] == [("mutation", "blocked")]
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "finished"
+    assert packet.verdict_text == (
+        f"Finished, but 1 audit finding failed, and 1 audit finding blocked (not run): {BLOCKED}."
+    )
+    assert "2 audit findings failed" not in render_packet_text(packet)
+
+
+def _blocked_then_cleared(auditor: Auditor, repo: Path) -> None:
+    """Tier 2 blocked on a tree with an uncovered file; then that file goes
+    and a checkpoint's tier 1 passes on the newer tree, with no tier 2 after."""
+    (repo / "m.py").write_text("def g():\n    return 7\n")
+    assert auditor.tier2().findings[0].verdict == "blocked"
+    (repo / "m.py").unlink()
+    assert auditor.tier1().passed
+
+
+@pytest.mark.parametrize(
+    ("audit", "text"),
+    [
+        (_blocked_then_cleared, f"Finished, but 1 audit finding blocked (not run): {BLOCKED}."),
+        (
+            lambda auditor, _repo: auditor.tier2(),
+            "The executor called finish, and every audit finding recorded passed.",
+        ),
+    ],
+    ids=["blocked-only", "all-ran-and-passed"],
+)
+def test_the_verdict_line_names_a_blocked_finding_and_never_calls_it_failed_or_passed(
+    tmp_path: Path, audit: Callable[[Auditor, Path], object], text: str
+) -> None:
+    packet = compile_packet(audited_run(tmp_path, audit=audit))
+    assert packet.verdict_text == text
