@@ -8,6 +8,7 @@ made the way `auto.create_worktree` makes it.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import uuid
 from pathlib import Path
@@ -20,7 +21,11 @@ from saddle.packet import compile_packet, render_packet_text
 from saddle.sessions import SessionStore
 from saddle.web.tasks import RUN_REF, TaskRun, recap_message
 
-Kind = Literal["audited", "mutated", "unaudited", "stopped", "failed", "edit-checked"]
+FIXTURES = Path(__file__).parent / "fixtures"
+
+Kind = Literal[
+    "audited", "mutated", "summarised", "unaudited", "stopped", "failed", "edit-checked"
+]  # fmt: skip
 
 
 def git(repo: Path, *args: str) -> str:
@@ -81,6 +86,7 @@ def seed(
             ("audit:mutation", 0, "killed 2 of 2 changed-line mutants"),
             ("audit:coverage", 0, "covered"),
         ],
+        "summarised": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
         "unaudited": [],
         "stopped": [("audit:tests", 0, "2 passed"), ("audit:coverage", 1, "line 2 uncovered")],
         "failed": [("audit:tests", 1, "1 failed")],
@@ -97,6 +103,34 @@ def seed(
                 kind="agent",
                 name=name,
                 parent_id=start.span_id,
+            ),
+        )
+    if kind == "summarised":
+        # The real auditor's tier-2 mutation finding, with the MutationOutcome
+        # it was decided from sealed beside it (PACKETHOOK): the CALIB tree
+        # E-t5-s1's record, survivors and their diffs, verbatim.
+        fixture = json.loads((FIXTURES / "mutant_text" / "E-t5-s1.json").read_text())
+        outcome = {**fixture["outcome"], "survivor_detail": fixture["survivor_detail"]}
+        finding = {
+            "gate": "mutation",
+            "tier": 2,
+            "verdict": "fail",
+            "reason": "evidence-thin",
+            "detail": "killed 220 of 322 sampled mutants; 21 untested",
+            "cites": [],
+        }
+        mutation_id = uuid.uuid4().hex
+        append_span(
+            journal,
+            build_span(
+                node_id="chat#1",
+                argv=["saddle-audit", "tier2", "mutation", "k"],
+                duration_ms=0,
+                exit_code=1,
+                detail=json.dumps(finding, sort_keys=True),
+                name="audit-tier2:mutation",
+                span_id=mutation_id,
+                attempt_hash=write_attempt_sidecar(journal, mutation_id, outcome),
             ),
         )
     if kind == "edit-checked":

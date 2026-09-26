@@ -108,6 +108,20 @@ try {
   if (step === "read") {
     await toPacket();
     await shot("packet.png");
+  } else if (step === "mutation") {
+    // Open the band's Mutation line: the English summary sits inside that fold.
+    await js(`document.querySelector(".band-line.k-mutation").open = true`);
+    await sleep(300);
+    out.mutation = await js(`(() => {
+      const line = document.querySelector(".band-line.k-mutation");
+      const pre = line.querySelector(".prow-summary");
+      return { open: line.open, text: line.querySelector(".prow-text").textContent,
+        summary: pre ? pre.textContent : null,
+        summaryInFold: !!pre && line.contains(pre),
+        others: [...document.querySelectorAll(".prow-summary")].length };
+    })()`);
+    await toPacket(".band");
+    await shot("mutation-open.png");
   } else if (step === "diff") {
     await click(".act-diff");
     await until(`!!document.querySelector(".diff-file")`);

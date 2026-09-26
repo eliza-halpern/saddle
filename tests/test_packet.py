@@ -10,7 +10,9 @@ record is never shown finished.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import uuid
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -18,10 +20,18 @@ from typing import Any, cast
 
 import pytest
 
+from saddle import mutant_text
 from saddle.auditor import Finding, Findings
 from saddle.auto import AutoOptions, AutoResult, run_auto
 from saddle.events import AuditFinding, Event, Question
-from saddle.journal import SpanRecord, append_span, build_span, read_entries
+from saddle.journal import (
+    SpanRecord,
+    append_span,
+    attempt_sidecar_path,
+    build_span,
+    read_entries,
+    write_attempt_sidecar,
+)
 from saddle.packet import (
     NARRATIVE_LABEL,
     Packet,
@@ -502,13 +512,13 @@ def test_the_cost_row_counts_the_models_tool_calls_not_audit_records(repo: Path)
     assert "· 3 tool calls over" in cost.text
 
 
-def tier_span(tier: int, gate: str, verdict: str, detail: str) -> Any:
+def tier_span(tier: int, gate: str, verdict: str, detail: str, **sealed: str) -> Any:
     body = {"gate": gate, "tier": tier, "verdict": verdict, "reason": "evidence-thin",
             "detail": detail, "cites": []}  # fmt: skip
     exit_code = {"pass": 0, "fail": 1, "blocked": 2}[verdict]
     return build_span(node_id="n", argv=["saddle-audit", f"tier{tier}", gate, "k"],
                       duration_ms=0, exit_code=exit_code, detail=json.dumps(body),
-                      name=f"audit-tier{tier}:{gate}")  # fmt: skip
+                      name=f"audit-tier{tier}:{gate}", **sealed)  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -535,3 +545,354 @@ def test_a_blocked_tier_2_is_reported_blocked_not_failed(
     append_span(journal, span)
     row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
     assert (row.status, row.text, row.cites) == (status, text, (span.record_hash,))
+
+
+# -- the mutation row's English summary (PACKETHOOK) ---------------------------------
+
+MUTANT_FIXTURES = Path(__file__).parent / "fixtures" / "mutant_text"
+
+
+def mutation_outcome(name: str = "E-t5-s1") -> dict[str, Any]:
+    """A CALIB tree's sealed `MutationOutcome` plus its `survivor_detail`."""
+    data = json.loads((MUTANT_FIXTURES / f"{name}.json").read_text())
+    return {**data["outcome"], "survivor_detail": data["survivor_detail"]}
+
+
+def sealed_mutation_span(
+    journal: Path, verdict: str, detail: str, outcome: dict[str, Any] | None
+) -> SpanRecord:
+    """A tier-2 mutation finding span; with `outcome`, its sidecar is sealed in it."""
+    if outcome is None:
+        span = tier_span(2, "mutation", verdict, detail)
+        append_span(journal, span)
+        return span
+    span_id = uuid.uuid4().hex
+    digest = write_attempt_sidecar(journal, span_id, outcome)
+    span = tier_span(2, "mutation", verdict, detail, span_id=span_id, attempt_hash=digest)
+    append_span(journal, span)
+    return span
+
+
+def test_a_sealed_mutation_outcome_renders_the_grouped_english_beneath_the_count(
+    tmp_path: Path,
+) -> None:
+    """Known-good: the Mutation row keeps its count line; the sealed outcome's
+    English (MUTSUMMARY) sits beneath it, in the text recap and the payload."""
+    journal = tmp_path / "proofs.jsonl"
+    detail = "killed 220 of 322 sampled mutants; 21 untested"
+    span = sealed_mutation_span(journal, "fail", detail, mutation_outcome())
+    packet = compile_packet(journal)
+    row = next(r for r in packet.rows if r.key == "mutation")
+    assert (row.status, row.text) == ("failed", f"tier 2, fail: {detail}")
+    assert row.cites == (span.record_hash,)
+    assert row.summary.startswith(
+        "220 of 322 sampled mutants were caught by the suite [record: killed=220 total=322]\n"
+    )
+    assert "Left untested:\n  boundary:\n" in row.summary
+    assert (
+        "    - accounts.py Account.withdraw: `if debit > current:` -> `if debit >= current:`"
+        in row.summary
+    )
+    assert "[accounts.xǁAccountǁwithdraw__mutmut_18]" in row.summary
+    text = render_packet_text(packet)
+    assert f"Mutation [failed]: tier 2, fail: {detail}\n  220 of 322 sampled mutants" in text
+    # The recap prints the COMPACT form (PACKETHOOK-3: it must not scroll):
+    # survivors capped at 5, worst group first, "and N more in the packet".
+    # Each summary line sits two spaces under the row, so a bullet is "    - ".
+    assert "\n  Left untested:\n    - accounts.py Account.withdraw:" in text
+    assert "    boundary:\n" not in text
+    assert re.search(r"\n    and \d+ more in the packet\n", text)
+    assert text.count("\n    - ") == 5
+    assert row.recap == mutant_text.render_text(
+        mutant_text.describe_mutation(mutation_outcome()), compact=True
+    )
+    # The payload carries the FULL form for the web fold, and only that.
+    payload_row = next(r for r in packet.payload()["rows"] if r["key"] == "mutation")
+    assert payload_row["summary"] == row.summary
+    assert "recap" not in payload_row
+
+
+def test_killers_in_the_sealed_outcome_name_the_test_that_caught_a_mutant(tmp_path: Path) -> None:
+    """`killers` is threaded: a killed mutant reads "caught by <test>", whether
+    the record spells the map as a dict or as (name, test) pairs."""
+    show = "--- n.py\n+++ n.py\n@@ -2 +2 @@\n-    if a > b:\n+    if a >= b:\n"
+    detail = [{"name": "n.x_f__mutmut_1", "status": "killed", "show": show}]
+    base = {"killed": 1, "total": 1, "generated": 1, "survivors": [], "mutant_detail": detail}
+    as_map = {"n.x_f__mutmut_1": "test_n.py::test_f"}
+    as_pairs = [["n.x_f__mutmut_1", "test_n.py::test_f"]]
+    for killers in (as_map, as_pairs):
+        journal = tmp_path / type(killers).__name__ / "proofs.jsonl"
+        sealed_mutation_span(journal, "pass", "killed 1 of 1", {**base, "killers": killers})
+        row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
+        assert "Caught:\n  boundary:\n" in row.summary
+        assert "caught by test_n.py::test_f [n.x_f__mutmut_1]" in row.summary
+
+
+@pytest.mark.parametrize("verdict", ["blocked", "fail", "pass"])
+def test_a_mutation_record_without_a_sealed_outcome_adds_nothing(
+    tmp_path: Path, verdict: str
+) -> None:
+    """Known-bad: a blocked tier 2 (nothing ran), or a finding with no sidecar,
+    renders no summary, and the payload carries no `summary` key at all, so a
+    packet without one is byte-identical to before this hook."""
+    journal = tmp_path / "proofs.jsonl"
+    append_span(journal, tier_span(1, "coverage", "fail" if verdict == "blocked" else "pass", "x"))
+    sealed_mutation_span(journal, verdict, "tier 1 failed (coverage); tier 2 not run", None)
+    packet = compile_packet(journal)
+    row = next(r for r in packet.rows if r.key == "mutation")
+    assert row.summary == ""
+    assert all("summary" not in r for r in packet.payload()["rows"])
+    # The recap as it was before this hook: verdict, header, then each row's
+    # line and items, and nothing beneath any row.
+    expected = [f"verdict: {packet.verdict} — {packet.verdict_text}"]
+    expected += [f"  {h}" for h in packet.header]
+    for r in packet.rows:
+        if r.key != "narrative":
+            expected += [f"{r.title} [{r.status}]: {r.text}", *(f"  - {i}" for i in r.items)]
+    assert render_packet_text(packet).splitlines() == expected
+
+
+def test_a_blocked_tier_2_renders_no_summary_even_with_a_sidecar(tmp_path: Path) -> None:
+    """A blocked finding never ran the gate; a sidecar on it is not an outcome."""
+    journal = tmp_path / "proofs.jsonl"
+    append_span(journal, tier_span(1, "coverage", "fail", "x"))
+    blocked = "tier 1 failed (coverage); tier 2 not run"
+    sealed_mutation_span(journal, "blocked", blocked, mutation_outcome())
+    row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
+    assert (row.status, row.summary) == ("not-proven", "")
+
+
+def test_a_mutation_sidecar_that_does_not_hash_makes_the_ledger_unrecorded(tmp_path: Path) -> None:
+    """The sealed outcome is a sidecar like any other (T6-12): an edited one
+    fails `verify_journal`, and the packet says so instead of describing it."""
+    journal = tmp_path / "proofs.jsonl"
+    span = sealed_mutation_span(journal, "fail", "killed 220 of 322", mutation_outcome())
+    sidecar = attempt_sidecar_path(journal, span.span_id)
+    sidecar.write_text(sidecar.read_text().replace("220", "221", 1))
+    packet = compile_packet(journal)
+    assert packet.verdict == "unrecorded"
+    assert "attempt-sidecar" in packet.verdict_text
+    assert not any(r.summary for r in packet.rows)
+
+
+def test_a_seam_mutation_audit_has_no_summary_and_no_summary_key(repo: Path) -> None:
+    """A chat seam's `audit:mutation` span records a verdict, not an outcome."""
+
+    def audit(name: str, _a: str, _r: str) -> list[Event]:
+        if name == "run_command":
+            return [AuditFinding(gate="mutation", ok=True, detail="3 of 3 killed")]
+        return []
+
+    result = run(repo, FIX, audit=audit)
+    packet = compile_packet(result.journal)
+    row = next(r for r in packet.rows if r.key == "mutation")
+    assert (row.text, row.summary) == ("3 of 3 killed", "")
+    assert all("summary" not in r for r in packet.payload()["rows"])
+
+
+# -- the Audit row's coverage English (PACKETHOOK, COVTEXT) -------------------------
+
+COVERAGE_FIXTURE = Path(__file__).parent / "fixtures" / "coverage_text" / "E-t5-s1"
+
+
+def coverage_finding() -> dict[str, Any]:
+    return json.loads((COVERAGE_FIXTURE / "finding.json").read_text())
+
+
+def coverage_sources() -> dict[str, str]:
+    return {
+        p.name.removesuffix(".txt"): p.read_text() for p in (COVERAGE_FIXTURE / "tree").iterdir()
+    }
+
+
+def coverage_evidence(tmp_path: Path, sources: dict[str, str] | None = None) -> dict[str, Any]:
+    """What the auditor seals beside a failing coverage finding, for E-t5-s1."""
+    from saddle.evidence import changed_statements
+
+    tree = tmp_path / "tree"
+    tree.mkdir(exist_ok=True)
+    for name, text in coverage_sources().items():
+        (tree / name).write_text(text)
+    changed = changed_statements(tree, (COVERAGE_FIXTURE / "changes.diff").read_text())
+    relative = sorted((str(Path(p).relative_to(tree)), n) for p, n in changed)
+    named = coverage_sources() if sources is None else sources
+    return {
+        # The auditor's spelling: each file as its lines, under the sidecar's cap.
+        "sources": {name: text.splitlines() for name, text in named.items()},
+        "changed": [[p, n] for p, n in relative],
+    }
+
+
+def coverage_span(
+    journal: Path,
+    finding: dict[str, Any],
+    sealed: dict[str, Any] | None,
+    detail: str | None = None,
+) -> Any:
+    body = {**finding, "tier": 1}
+    exit_code = {"pass": 0, "fail": 1}[finding["verdict"]]
+    kwargs: dict[str, Any] = {}
+    if sealed is not None:
+        kwargs["span_id"] = uuid.uuid4().hex
+        kwargs["attempt_hash"] = write_attempt_sidecar(journal, kwargs["span_id"], sealed)
+    if detail is None:
+        detail = json.dumps(body, sort_keys=True)
+    span = build_span(node_id="n", argv=["saddle-audit", "tier1", "coverage", "k"], duration_ms=0,
+                      exit_code=exit_code, detail=detail, name="audit-tier1:coverage",
+                      **kwargs)  # fmt: skip
+    append_span(journal, span)
+    return span
+
+
+def test_a_failing_coverage_finding_with_sealed_sources_renders_its_english_under_audit(
+    tmp_path: Path,
+) -> None:
+    """Known-good: the Audit row keeps its count and items; beneath them, the
+    coverage English (COVTEXT) for E-t5-s1, linked to the mutation summary
+    sealed on the same ledger, with the uncovered lines' own text."""
+    journal = tmp_path / "proofs.jsonl"
+    span = coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
+    sealed_mutation_span(journal, "fail", "killed 220 of 322 sampled mutants", mutation_outcome())
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.text == "0 of 1 finding passed."
+    assert audit.items[0].startswith("✗ coverage: tier 1, fail: no test runs money.py:42,")
+    assert audit.cites == (span.record_hash,)
+    assert audit.summary.startswith(
+        "Not proven by any test: 19 changed lines no test runs [record: detail names 19 lines; "
+        "changed-lines=155 compelled-lines=5]\n"
+    )
+    assert (
+        "  - money.py convert: 10 of 16 changed lines never run -- nothing exercises convert "
+        '("Convert a Decimal amount from source to target."); and a mutant there survived '
+        "[lines 131, 132, 133, 134, 136, 137, 138, 139, 140, 141]\n"
+        '      131:     if source == "USD":\n'
+    ) in audit.summary
+    assert "not placed" not in audit.summary
+    text = render_packet_text(packet)
+    assert "\nAudit [failed]: 0 of 1 finding passed.\n  - ✗ coverage: tier 1, fail:" in text
+    assert "\n  Not proven by any test: 19 changed lines no test runs" in text
+    assert '\n        131:     if source == "USD":\n        132:         usd = value\n' in text
+    # Compact in the recap (PACKETHOOK-3), full in the payload for the web fold.
+    assert "\n        and 8 more lines\n" in text
+    assert "\n    and 1 more functions in the packet\n" in text
+    assert "store.py _from_record_v1" not in text
+    assert "store.py _from_record_v1" in audit.summary
+    assert "more functions in the packet" not in audit.summary
+    payload_row = next(r for r in packet.payload()["rows"] if r["key"] == "audit")
+    assert payload_row["summary"] == audit.summary
+    assert "recap" not in payload_row
+
+
+def test_coverage_english_without_a_mutation_record_has_no_mutant_link(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert "money.py convert: 10 of 16 changed lines never run" in audit.summary
+    assert "mutant there survived" not in audit.summary
+
+
+def test_a_source_missing_from_the_sealed_evidence_is_not_placed(tmp_path: Path) -> None:
+    """The module's path for a file the auditor could not read: the lines are
+    named and "not placed", the other file is still placed, no text invented."""
+    journal = tmp_path / "proofs.jsonl"
+    sources = {"money.py": coverage_sources()["money.py"]}
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path, sources))
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert (
+        "  - store.py:43: file not in the tree read; not placed [record: store.py:43]"
+        in audit.summary
+    )
+    assert "  - money.py convert:" in audit.summary
+    assert "store.py load_accounts" not in audit.summary
+
+
+@pytest.mark.parametrize("sealed", [False, True])
+def test_a_passing_coverage_finding_renders_no_english(tmp_path: Path, sealed: bool) -> None:
+    """Known-bad: a passing finding adds nothing, even with a sidecar on it."""
+    journal = tmp_path / "proofs.jsonl"
+    finding = {**coverage_finding(), "verdict": "pass", "detail": "every changed line is run"}
+    coverage_span(journal, finding, coverage_evidence(tmp_path) if sealed else None)
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert (audit.status, audit.summary) == ("proven", "")
+    assert all("summary" not in r for r in packet.payload()["rows"])
+
+
+def test_a_failing_coverage_finding_with_nothing_sealed_renders_no_english(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), None)
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.status == "failed"
+    assert audit.summary == ""
+    assert all("summary" not in r for r in packet.payload()["rows"])
+
+
+def test_a_ledger_with_no_coverage_finding_has_no_audit_summary(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    append_span(journal, tier_span(1, "dead-code", "fail", "x"))
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.summary == ""
+
+
+def test_a_source_sealed_as_one_string_over_the_sidecar_cap_is_not_placed(tmp_path: Path) -> None:
+    """Known-bad for the cap: `write_attempt_sidecar` cuts a string at 4000
+    characters. money.py sealed whole no longer parses; its lines are named
+    and "not placed", store.py (sealed as lines) is still placed, and the
+    packet does not crash."""
+    journal = tmp_path / "proofs.jsonl"
+    sealed = coverage_evidence(tmp_path)
+    assert len(coverage_sources()["money.py"]) > 4000
+    sealed["sources"]["money.py"] = coverage_sources()["money.py"]
+    coverage_span(journal, coverage_finding(), sealed)
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert (
+        "  - money.py:131: file not in the tree read; not placed [record: money.py:131]"
+        in audit.summary
+    )
+    assert "  - store.py load_accounts: 2 of 16 changed lines never run" in audit.summary
+    assert "money.py convert" not in audit.summary
+
+
+@pytest.mark.parametrize("detail", ["no test runs money.py:131", "[1, 2]"])
+def test_a_coverage_span_whose_detail_is_not_a_finding_renders_no_english(
+    tmp_path: Path, detail: str
+) -> None:
+    """Known-bad: a sealed sidecar beside a span whose detail is not the JSON
+    finding (a bare sentence, or JSON that is not an object) yields no
+    summary rather than a crash or invented text. The packet still compiles."""
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path), detail=detail)
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.summary == ""
+    assert audit.recap == ""
+
+
+def test_sources_sealed_as_anything_but_a_map_place_no_line(tmp_path: Path) -> None:
+    """Known-bad: `sources` sealed as a list (not the auditor's map of file to
+    lines) places nothing; every judged line is "not placed", none is
+    attributed to a function whose text was never read."""
+    journal = tmp_path / "proofs.jsonl"
+    sealed = coverage_evidence(tmp_path)
+    sealed["sources"] = list(sealed["sources"].values())
+    coverage_span(journal, coverage_finding(), sealed)
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert "not placed [record: money.py:131]" in audit.summary
+    assert "not placed [record: store.py:43]" in audit.summary
+    assert "changed lines never run" not in audit.summary
+
+
+def test_every_row_has_a_recap_exactly_when_it_has_a_summary(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
+    sealed_mutation_span(journal, "fail", "killed 220 of 322 sampled mutants", mutation_outcome())
+    packet = compile_packet(journal)
+    with_summary = {r.key for r in packet.rows if r.summary}
+    assert with_summary == {"mutation", "audit"}
+    assert {r.key for r in packet.rows if r.recap} == with_summary
+    for r in packet.rows:
+        if r.summary:
+            assert len(r.recap.splitlines()) < len(r.summary.splitlines())

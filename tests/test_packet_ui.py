@@ -215,3 +215,25 @@ def test_edit_checks_are_their_own_line_not_in_the_audit_count(tmp_path: Path) -
     assert r["firstRows"][2].startswith("prow s-observed k-edit-checks")
     assert "edit-checks" not in r["details"]["keys"]
     assert r["allRows"] == 10
+
+
+def test_the_mutation_line_opens_to_the_english_summary(tmp_path: Path) -> None:
+    """PACKETHOOK: a mutation finding with a sealed outcome shows its count
+    line as before and, inside the band's Mutation fold, the grouped English
+    (MUTSUMMARY) of what was left untested; the count line is not replaced."""
+    got, _repo, _branch = page(tmp_path, "summarised", "mutation")
+    m = got["mutation"]
+    assert m["open"] is True
+    assert m["text"] == "tier 2, fail: killed 220 of 322 sampled mutants; 21 untested"
+    assert m["summaryInFold"] is True
+    assert m["summary"].startswith("220 of 322 sampled mutants were caught by the suite")
+    assert "Left untested:\n  boundary:\n" in m["summary"]
+    assert "accounts.py Account.withdraw" in m["summary"]
+    assert m["others"] == 1
+
+
+def test_a_mutation_line_without_a_sealed_outcome_shows_no_summary_block(tmp_path: Path) -> None:
+    got, _repo, _branch = page(tmp_path, "mutated", "mutation")
+    m = got["mutation"]
+    assert m["text"] == "killed 2 of 2 changed-line mutants"
+    assert (m["summary"], m["others"]) == (None, 0)

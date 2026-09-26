@@ -21,6 +21,7 @@ from saddle.mutant_text import (
     mutant_sentence,
     parse_show,
     protects,
+    render_compact,
     render_text,
 )
 
@@ -385,3 +386,100 @@ def test_empty_record_renders_only_counts() -> None:
     assert render_text(describe_mutation({})) == (
         "0 of 0 sampled mutants were caught by the suite [record: killed=0 total=0]\n"
     )
+
+
+# -- the compact rendering: the recap must not scroll (PACKETHOOK-3) ---------------
+
+BOUNDARY = ("if a > b:", "if a >= b:")
+ACCUMULATION = ("total += x", "total = x")
+BRANCH = ("if a == b:", "if a != b:")
+ARGUMENT = ("f(a, b)", "f(a, )")
+TEXT = ('raise ValueError("x")', "raise ValueError(None)")
+
+
+def synthetic(survivors: list[tuple[str, str]], killed: list[tuple[str, str]] = ()) -> dict:
+    """An outcome whose every mutant is described: `survivors` and `killed` are
+    (before, after) pairs, one mutant each, in m.py functions f0, f1, ..."""
+    detail = []
+    for i, (before, after) in enumerate(survivors):
+        detail.append(show(f"m.x_f{i}__mutmut_1", "survived", "m.py", before, after))
+    for i, (before, after) in enumerate(killed):
+        detail.append(show(f"m.x_k{i}__mutmut_1", "killed", "m.py", before, after))
+    return {
+        "killed": len(killed),
+        "total": len(survivors) + len(killed),
+        "generated": len(survivors) + len(killed),
+        "survivors": [d["name"] for d in detail if d["status"] == "survived"],
+        "mutant_detail": detail,
+    }
+
+
+def bullets(text: str) -> list[str]:
+    return [line for line in text.splitlines() if line.startswith("  - ")]
+
+
+def test_compact_caps_survivors_at_five_and_counts_the_rest():
+    text = render_text(describe_mutation(synthetic([BOUNDARY] * 80)), compact=True)
+    assert len(bullets(text)) == 5
+    assert text.splitlines()[-1] == "  and 75 more in the packet"
+    assert text.splitlines()[1] == "Left untested:"
+    assert len(text.splitlines()) == 8
+
+
+def test_compact_lists_three_survivors_with_no_more_line():
+    text = render_text(describe_mutation(synthetic([BOUNDARY] * 3)), compact=True)
+    assert len(bullets(text)) == 3
+    assert "more in the packet" not in text
+    assert text == render_compact(describe_mutation(synthetic([BOUNDARY] * 3)))
+
+
+def test_compact_orders_survivors_worst_group_first():
+    text = render_text(
+        describe_mutation(synthetic([BRANCH, ARGUMENT, BOUNDARY, ACCUMULATION])), compact=True
+    )
+    names = [re.search(r"\[(m\.x_f\d)__mutmut_1\]", b).group(1) for b in bullets(text)]
+    # f2 boundary, f3 accumulation, f0 branch, f1 argument
+    assert names == ["m.x_f2", "m.x_f3", "m.x_f0", "m.x_f1"]
+    assert all(("a wrong edit here" in b) for b in bullets(text))
+
+
+def test_compact_counts_caught_mutants_on_one_line_never_listing_them():
+    text = render_text(
+        describe_mutation(synthetic([BOUNDARY], killed=[BOUNDARY, BRANCH, BOUNDARY])), compact=True
+    )
+    lines = text.splitlines()
+    assert lines[0].startswith("3 of 4 sampled mutants were caught by the suite")
+    assert lines[1] == "3 caught: 2 boundary, 1 branch"
+    assert "Caught:" not in text
+    assert "[m.x_k0__mutmut_1]" not in text
+    assert len(bullets(text)) == 1
+
+
+def test_compact_says_undescribed_caught_mutants_are_counted_not_described():
+    text = render_text(describe_mutation(load("E-t5-s1")), compact=True)
+    assert text.splitlines()[1] == "220 caught: no recorded diff, so counted, not described"
+
+
+def test_compact_omits_text_and_equivalent_survivors_entirely():
+    text = render_text(describe_mutation(synthetic([TEXT, BOUNDARY, TEXT])), compact=True)
+    assert len(bullets(text)) == 1
+    assert "[m.x_f1__mutmut_1]" in text
+    assert "only message or argument text changes" not in text
+    assert "Survived but not gaps" not in text
+    full = render_text(describe_mutation(synthetic([TEXT, BOUNDARY, TEXT])))
+    assert "Survived but not gaps (text or equivalent):" in full
+
+
+def test_compact_stays_within_its_line_budget_on_every_real_tree():
+    for tree in ("E-t5-s1", "EAF-t5-s3", "E-t8-s1", "U-t8-s1"):
+        summary = describe_mutation(load(tree))
+        compact = render_text(summary, compact=True)
+        assert len(compact.splitlines()) <= 9, tree
+        assert len(compact.splitlines()) <= len(render_text(summary).splitlines()), tree
+        assert compact.splitlines()[0] == render_text(summary).splitlines()[0], tree
+
+
+def test_full_rendering_is_the_default_and_unchanged_by_the_flag():
+    summary = describe_mutation(load("E-t5-s1"))
+    assert render_text(summary) == render_text(summary, compact=False)
+    assert "Left untested:\n  boundary:\n" in render_text(summary)

@@ -692,6 +692,8 @@ main { position: relative; }
 .prow-text { margin: 0; font-size: 14px; color: var(--ink); }
 .s-absent .prow-text { color: var(--ink-faint); font-style: italic; }
 .prow-note { margin: 7px 0 0; font-size: 12px; color: var(--ink-faint); }
+.prow-summary { margin: 8px 0 0; padding: 8px 10px; font: 12.5px/1.45 var(--mono); color: var(--ink-dim);
+  background: var(--bg-sunk); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .prow-items { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--ink-dim); }
 .prow-items li { margin: 2px 0; overflow-wrap: anywhere; }
 .prow-items li::marker { color: var(--s); }

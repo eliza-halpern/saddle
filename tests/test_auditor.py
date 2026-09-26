@@ -387,3 +387,142 @@ def test_cli_tiered_rev_mode_and_exit_codes(clean_tree: Path, tmp_path: Path) ->
     code, _out, err = _cli(clean_tree, "--baseline", "no-such-base")
     assert code == 2
     assert "no-such-base" in err
+
+
+# -- the mutation outcome is sealed beside its finding (PACKETHOOK) --------------
+
+
+def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `audit-tier2:mutation` span carries a hash-sealed sidecar holding
+    the `MutationOutcome` it was decided from, so the packet can describe the
+    mutants in English (mutant_text) instead of repeating the count. The
+    finding's own detail and verdict are unchanged."""
+    from saddle.journal import attempt_sidecar_path
+    from saddle.mutant_text import describe_mutation
+    from saddle.packet import compile_packet
+
+    _untested_mutmut(tmp_path, monkeypatch)
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier2()
+    mutation = next(f for f in result.findings if f.gate == "mutation")
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash
+    assert json.loads(span.detail)["detail"] == mutation.detail
+    sealed = json.loads(attempt_sidecar_path(journal, span.span_id).read_text())
+    assert (sealed["killed"], sealed["total"], sealed["untested"]) == (0, 5, 5)
+    assert sorted(sealed["survivors"]) == [f"m{i}" for i in range(1, 6)]
+    assert verify_journal(journal) == []
+    assert describe_mutation(sealed).untested == 5
+    # Every other finding of the tier is journaled as before: no sidecar.
+    others = [s for s in read_spans(journal) if s.name != "audit-tier2:mutation"]
+    assert others
+    assert all(not s.attempt_hash for s in others)
+    row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
+    assert "5 sampled mutants sit in code no test runs [record: untested=5]" in row.summary
+    assert "Survived with no recorded diff:\n  - survived; no diff recorded [m1]" in row.summary
+
+
+def test_a_blocked_tier2_seals_no_mutation_outcome(uncovered_tree: Path, tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(uncovered_tree, config=AuditorConfig(journal=journal)).tier2()
+    assert result.findings[0].verdict == "blocked"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash == ""
+    assert verify_journal(journal) == []
+
+
+def test_tier1_seals_sources_and_changed_lines_beside_a_failing_coverage_finding(
+    uncovered_tree: Path, tmp_path: Path
+) -> None:
+    """The `audit-tier1:coverage` finding that names uncovered lines carries a
+    sealed sidecar with the text of each file it names and the changed set the
+    gate judged (PACKETHOOK), so the packet can render COVTEXT's English. The
+    finding itself is unchanged."""
+    from saddle.journal import attempt_sidecar_path
+    from saddle.packet import compile_packet
+
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(uncovered_tree, config=AuditorConfig(journal=journal)).tier1()
+    coverage = next(f for f in result.findings if f.gate == "coverage")
+    assert coverage.verdict == "fail"
+    assert coverage.detail.startswith("no test runs m.py:")
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash
+    sealed = json.loads(attempt_sidecar_path(journal, span.span_id).read_text())
+    assert sealed["sources"] == {"m.py": ["def g():", "    return 7"]}
+    assert ["m.py", 1] in sealed["changed"]
+    assert ["n.py", 2] in sealed["changed"]
+    assert all(not p.startswith("/") for p, _ in sealed["changed"])
+    assert verify_journal(journal) == []
+    others = [s for s in read_spans(journal) if s.name != "audit-tier1:coverage"]
+    assert all(not s.attempt_hash for s in others)
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert (
+        "  - m.py g: 2 of 2 changed lines never run -- nothing exercises g [lines 1, 2]\n"
+        "      1: def g():\n"
+        "      2:     return 7\n"
+    ) in audit.summary
+
+
+def test_tier1_seals_nothing_beside_a_passing_coverage_finding(
+    clean_tree: Path, tmp_path: Path
+) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier1()
+    assert next(f for f in result.findings if f.gate == "coverage").verdict == "pass"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash == ""
+
+
+def test_coverage_evidence_is_none_for_a_detail_that_names_no_line(tmp_path: Path) -> None:
+    from saddle.auditor import coverage_evidence
+
+    assert coverage_evidence(tmp_path, "HEAD", "every changed line is run") is None
+
+
+def test_coverage_evidence_skips_a_named_file_it_cannot_read(uncovered_tree: Path) -> None:
+    """A finding may name a file that is gone from the copy (or unreadable);
+    its lines are left for the packet to report "not placed", the files that
+    are readable are still sealed, and the changed set is unaffected."""
+    from saddle.auditor import coverage_evidence
+
+    sealed = coverage_evidence(uncovered_tree, "HEAD", "no test runs gone.py:1, m.py:1")
+    assert sealed is not None
+    assert sorted(sealed["sources"]) == ["m.py"]
+    # The tree's own diff against HEAD (m.py is untracked here, so n.py is the change).
+    assert sealed["changed"] == [["n.py", 2]]
+
+
+def test_tier1_seals_nothing_when_the_coverage_detail_names_no_line(
+    uncovered_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing coverage finding whose detail is not the "no test runs" shape
+    (nothing to place) is journaled as before, with no sidecar."""
+    monkeypatch.setattr(auditor_mod, "coverage_evidence", lambda *a, **k: None)
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(uncovered_tree, config=AuditorConfig(journal=journal)).tier1()
+    assert next(f for f in result.findings if f.gate == "coverage").verdict == "fail"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash == ""
+    assert verify_journal(journal) == []
+
+
+def test_tier2_seals_nothing_when_the_gate_carries_no_outcome(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Tier1Result.mutation` is optional; a gate result without it journals
+    the tier as before and seals no sidecar."""
+    import dataclasses
+
+    _untested_mutmut(tmp_path, monkeypatch)
+    real = runner.run_node_gate
+    monkeypatch.setattr(
+        runner, "run_node_gate", lambda *a, **k: dataclasses.replace(real(*a, **k), mutation=None)
+    )
+    journal = tmp_path / "proofs.jsonl"
+    Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier2()
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash == ""
+    assert verify_journal(journal) == []

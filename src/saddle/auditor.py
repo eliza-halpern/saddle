@@ -42,12 +42,13 @@ import importlib.util
 import json
 import sys
 import tempfile
-from collections.abc import Sequence
+import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
-from saddle import runner
+from saddle import coverage_text, runner
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     AuditError,
@@ -58,9 +59,15 @@ from saddle.audit import (
     staged_copy,
 )
 from saddle.dag import Node
-from saddle.evidence import ruff_argv, ruff_findings, run_capture
+from saddle.evidence import (
+    changed_statements,
+    git_diff,
+    ruff_argv,
+    ruff_findings,
+    run_capture,
+)
 from saddle.gates import GateCheck, RuffFinding, check_ruff, check_syntax, introduced_findings
-from saddle.journal import append_span, build_span
+from saddle.journal import append_span, build_span, write_attempt_sidecar
 
 Verdict = Literal["pass", "fail", "not-applicable", "blocked"]
 Reason = Literal["code-wrong", "evidence-thin", "scope", "unknown", "sanctioned"]
@@ -230,6 +237,37 @@ def _reason(gate: str, verdict: Verdict, detail: str) -> Reason:
     return REASONS[gate]
 
 
+COVERAGE_GAP_PREFIX: Final = "no test runs"
+"""How `check_changed_line_coverage` begins a detail that names uncovered lines."""
+
+
+def coverage_evidence(copy: Path, baseline: str, detail: str) -> dict[str, Any] | None:
+    """What `coverage_text` needs beside a failing coverage finding (PACKETHOOK).
+
+    The text of every file the detail names, as it stood in the audited
+    tree, and the changed-statement set the gate judged, spelled relative
+    to the tree. None for a detail that names no uncovered line (a passing
+    finding, or the gate's other wordings): nothing is sealed then. A file
+    the detail names that cannot be read is left out, and `coverage_text`
+    lists its lines as "not placed".
+
+    Each file is sealed as a list of its lines, not one string:
+    `write_attempt_sidecar` caps every string at `MAX_THINKING_CHARS`
+    (4000), which cut a 141-line module at line 119 and left it unparsable.
+    """
+    if not detail.startswith(COVERAGE_GAP_PREFIX):
+        return None
+    sources: dict[str, list[str]] = {}
+    for rel in sorted({f for f, _ in coverage_text.uncovered_lines(detail)}):
+        try:
+            sources[rel] = (copy / rel).read_text().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+    changed = changed_statements(copy, git_diff(copy, baseline))
+    relative = sorted((str(Path(path).relative_to(copy)), line) for path, line in changed)
+    return {"sources": sources, "changed": [[path, line] for path, line in relative]}
+
+
 def _finding(gate: str, tier: int, verdict: Verdict, detail: str, basis: str | None) -> Finding:
     cites = (REUSES[gate],) if basis is None else (REUSES[gate], basis)
     return Finding(gate, tier, verdict, _reason(gate, verdict, detail), detail, cites)
@@ -326,20 +364,34 @@ class Auditor:
             return None
         return dataclasses.replace(hit, cached=True)
 
-    def _store(self, result: Findings) -> Findings:
+    def _store(
+        self, result: Findings, sidecars: Mapping[str, Mapping[str, Any]] | None = None
+    ) -> Findings:
         self._memory[result.key] = result
         if self.config.cache_dir is not None:
             self.config.cache_dir.mkdir(parents=True, exist_ok=True)
             (self.config.cache_dir / f"{result.key}.json").write_text(
                 json.dumps(result.to_dict(), sort_keys=True)
             )
-        self._journal(result)
+        self._journal(result, sidecars or {})
         return result
 
-    def _journal(self, result: Findings) -> None:
+    def _journal(self, result: Findings, sidecars: Mapping[str, Mapping[str, Any]]) -> None:
+        """One span per finding. `sidecars` maps a gate to evidence sealed as
+        that finding's sidecar (PACKETHOOK): the tier-2 mutation finding's
+        `MutationOutcome`, a failing tier-1 coverage finding's sources and
+        changed set (`coverage_evidence`), so the packet can say which
+        mutants survived and which lines no test runs, not only how many. A
+        blocked tier has no outcome and seals nothing. Verdicts and details
+        are unchanged: the sidecar is evidence beside the finding, not in it."""
         if self.config.journal is None:
             return
         for f in result.findings:
+            span_id = uuid.uuid4().hex
+            attempt_hash = ""
+            evidence = sidecars.get(f.gate)
+            if evidence is not None:
+                attempt_hash = write_attempt_sidecar(self.config.journal, span_id, evidence)
             append_span(
                 self.config.journal,
                 build_span(
@@ -349,6 +401,8 @@ class Auditor:
                     exit_code=_JOURNAL_EXIT[f.verdict],
                     detail=json.dumps(dataclasses.asdict(f), sort_keys=True),
                     name=f"audit-tier{f.tier}:{f.gate}",
+                    span_id=span_id,
+                    attempt_hash=attempt_hash,
                 ),
             )
 
@@ -426,13 +480,20 @@ class Auditor:
                     c.name: ("pass" if c.passed else "fail", c.detail, c.basis)
                     for c in gated.checks
                 }
+            sidecars: dict[str, Mapping[str, Any]] = {}
+            if gated.mutation is not None:
+                sidecars["mutation"] = dataclasses.asdict(gated.mutation)
+            if tier == 1 and statuses["coverage"][0] == "fail":
+                sealed = coverage_evidence(copy, resolved, statuses["coverage"][1])
+                if sealed is not None:
+                    sidecars["coverage"] = sealed
         wanted = TIER1 if tier == 1 else TIER2
         findings = []
         for gate in wanted:
             status, detail, basis = statuses["tests" if gate == "full-suite" else gate]
             found = _finding(gate, tier, status, detail, basis)  # type: ignore[arg-type]
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
-        return self._store(Findings(tier=tier, key=key, findings=tuple(findings)))
+        return self._store(Findings(tier=tier, key=key, findings=tuple(findings)), sidecars)
 
     def tier1(self, tree: Path | None = None) -> Findings:
         """The checkpoint tier over `tree` (default: the repo's working tree)."""

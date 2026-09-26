@@ -31,6 +31,7 @@ What the packet can and cannot say for an executor-only run (arm E):
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -39,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from saddle import coverage_text, mutant_text
 from saddle.anchor import anchor_issues
 from saddle.journal import (
     AUDIT_SPAN_PREFIXES,
@@ -87,6 +89,18 @@ class Row:
     text: str
     cites: tuple[str, ...] = ()
     items: tuple[str, ...] = ()
+    summary: str = ""
+    """Lines beneath the row's text, compiled from the record the row cites:
+    the Mutation row's English (`mutant_text.render_text`) when its finding
+    span seals a `MutationOutcome`, the Audit row's coverage English
+    (`coverage_text.render_coverage`) when a failing coverage finding seals
+    its sources; "" otherwise, and then left out of the payload, so a packet
+    without one is byte-identical to before (PACKETHOOK). This is the FULL
+    rendering: the web packet's fold shows it, and only the fold."""
+    recap: str = ""
+    """The same summary's COMPACT rendering (`compact=True`): what the
+    terminal recap and the chat pre-fill print, capped so the recap does not
+    scroll (user decision, 2026-09-26). "" exactly when `summary` is."""
 
 
 @dataclass(frozen=True)
@@ -128,6 +142,7 @@ class Packet:
                     "text": row.text,
                     "cites": list(row.cites),
                     "items": list(row.items),
+                    **({"summary": row.summary} if row.summary else {}),
                 }
                 for row in self.rows
             ],
@@ -199,6 +214,81 @@ def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any] | None:
     except ValueError:
         return None
     return loaded if isinstance(loaded, dict) else None
+
+
+def _killers(outcome: dict[str, Any]) -> dict[str, str] | None:
+    """The record's `killers` as `{mutant: test}`, spelled as a map or as pairs."""
+    killers = outcome.get("killers")
+    if isinstance(killers, dict):
+        return {str(k): str(v) for k, v in killers.items()}
+    if isinstance(killers, list):
+        pairs = [p for p in killers if isinstance(p, list | tuple) and len(p) == 2]
+        return {str(k): str(v) for k, v in pairs}
+    return None
+
+
+def _sealed(journal: Path, span: SpanRecord | None, *keys: str) -> dict[str, Any] | None:
+    """A finding span's sealed sidecar when it holds every one of `keys`, else None.
+
+    The auditor seals evidence beside a finding (`Auditor._journal`, PACKETHOOK):
+    `asdict(MutationOutcome)` on `audit-tier2:mutation`, `{"sources", "changed"}`
+    on a failing `audit-tier1:coverage`. `_sidecar` refuses one that does not
+    hash. A record with none (a seam span, a blocked tier, an older ledger)
+    yields None, and the row then reads exactly as before.
+    """
+    sealed = _sidecar(journal, span) if span is not None else None
+    if sealed is None or not set(keys) <= sealed.keys():
+        return None
+    return sealed
+
+
+def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.MutationSummary | None:
+    """The mutation finding's summary (MUTSUMMARY) from the outcome sealed in its span."""
+    outcome = _sealed(journal, span, "killed", "total")
+    if outcome is None:
+        return None
+    return mutant_text.describe_mutation(outcome, _killers(outcome))
+
+
+def _coverage_summary(
+    journal: Path, span: SpanRecord | None, mutation: mutant_text.MutationSummary | None
+) -> coverage_text.CoverageSummary | None:
+    """A failing coverage finding's summary (COVTEXT), from the sources and
+    changed set sealed in its span; None when nothing is sealed there."""
+    sealed = _sealed(journal, span, "sources", "changed")
+    if sealed is None or span is None:
+        return None
+    try:
+        finding = json.loads(span.detail)
+    except ValueError:
+        return None
+    if not isinstance(finding, dict):
+        return None
+    sources = _sealed_sources(sealed["sources"])
+    changed = [(str(f), int(n)) for f, n in sealed["changed"]]
+    return coverage_text.describe_coverage(finding, sources, changed, mutation)
+
+
+def _sealed_sources(raw: Any) -> dict[str, str]:
+    """Sealed sources as text, keeping only files that still parse.
+
+    The auditor seals each file as a list of lines (`coverage_evidence`),
+    because the sidecar writer caps a string at 4000 characters. A file
+    sealed some other way and cut by that cap does not parse; it is left
+    out here, and `coverage_text` lists its lines as "not placed" rather
+    than this module guessing or crashing on it.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    sources: dict[str, str] = {}
+    for name, value in raw.items():
+        text = "\n".join(str(x) for x in value) + "\n" if isinstance(value, list) else str(value)
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        sources[str(name)] = text
+    return sources
 
 
 def _display(entry: ProofRecord | SpanRecord) -> dict[str, Any]:
@@ -460,6 +550,15 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
     edit_checks = _audits(spans, edit_checks=True)
+    span_by_hash = {s.record_hash: s for s in spans}
+    # The mutation finding's sealed outcome, described once: the Mutation row
+    # renders it, and the coverage English says where a mutant also survived.
+    mutation = [a for a in audits if a.name == "audit:mutation"]
+    mutation_summary = (
+        _mutation_summary(journal, span_by_hash.get(mutation[-1].record_hash))
+        if mutation and mutation[-1].verdict != "blocked"
+        else None
+    )
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
@@ -583,7 +682,6 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         )
 
     # -- mutation -------------------------------------------------------------------
-    mutation = [a for a in audits if a.name == "audit:mutation"]
     if mutation and mutation[-1].verdict == "blocked":
         # Tier 2 never ran: tier 1 failed on that tree. There is no mutation
         # result to call failed (FIX-3); the auditor's detail names the cause.
@@ -600,6 +698,12 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "proven" if last.exit_code == 0 else "failed",
                 last.detail,
                 (last.record_hash,),
+                summary=mutant_text.render_text(mutation_summary) if mutation_summary else "",
+                recap=(
+                    mutant_text.render_text(mutation_summary, compact=True)
+                    if mutation_summary
+                    else ""
+                ),
             )
         )
     else:
@@ -647,6 +751,16 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     # -- audit (the seam) ---------------------------------------------------------
     if audits:
         other = [a for a in audits if a not in test_audits and a not in mutation]
+        # A failing coverage finding's English (COVTEXT), from what the auditor
+        # sealed beside it, beneath the Audit row's items (inside its fold on
+        # the web). A passing or absent finding, or one with nothing sealed,
+        # adds nothing; there is no Coverage row of its own.
+        coverage = next((a for a in other if a.name == "audit:coverage" and a.exit_code != 0), None)
+        coverage_summary = (
+            _coverage_summary(journal, span_by_hash.get(coverage.record_hash), mutation_summary)
+            if coverage is not None
+            else None
+        )
         if other:
             rows.append(
                 Row(
@@ -660,6 +774,14 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                         f"{'✓' if a.exit_code == 0 else '✗'} "
                         f"{a.name.removeprefix('audit:')}: {a.detail}"
                         for a in other
+                    ),
+                    summary=(
+                        coverage_text.render_coverage(coverage_summary) if coverage_summary else ""
+                    ),
+                    recap=(
+                        coverage_text.render_coverage(coverage_summary, compact=True)
+                        if coverage_summary
+                        else ""
                     ),
                 )
             )
@@ -834,7 +956,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
 def render_packet_text(packet: Packet) -> str:
     """The packet as plain text: the recap a chat's context gets (T5-7 (3), T5-9).
 
-    Deterministic, so the same ledger always gives the same bytes.
+    Deterministic, so the same ledger always gives the same bytes. A row's
+    summary is printed in its COMPACT form (`Row.recap`): the recap must not
+    scroll, and the full rendering is the web fold's.
     """
     lines = [f"verdict: {packet.verdict} — {packet.verdict_text}"]
     lines.extend(f"  {h}" for h in packet.header)
@@ -843,4 +967,5 @@ def render_packet_text(packet: Packet) -> str:
             continue
         lines.append(f"{row.title} [{row.status}]: {row.text}")
         lines.extend(f"  - {item}" for item in row.items)
+        lines.extend(f"  {line}" for line in row.recap.splitlines())
     return "\n".join(lines)
