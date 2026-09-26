@@ -37,6 +37,7 @@ from typing import Any, Final, Literal
 
 from saddle.anchor import anchor_issues
 from saddle.journal import (
+    AUDIT_SPAN_PREFIXES,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
@@ -412,7 +413,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     outcome = next(
         (s for s in reversed(spans) if s.name in ("auto:finished", "auto:stopped")), None
     )
-    tools = [s for s in spans if s.kind == "tool"]
+    # The model's tool calls: audit records are journaled as `tool` spans too,
+    # but the auditor wrote them (FIX-1; the ledger's list excludes them alike).
+    tools = [s for s in spans if s.kind == "tool" and not s.name.startswith(AUDIT_SPAN_PREFIXES)]
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
     questions = [s for s in spans if s.name == "question"]

@@ -18,9 +18,10 @@ from typing import Any, cast
 
 import pytest
 
+from saddle.auditor import Finding, Findings
 from saddle.auto import AutoOptions, AutoResult, run_auto
 from saddle.events import AuditFinding, Event, Question
-from saddle.journal import append_span, build_span, read_entries
+from saddle.journal import SpanRecord, append_span, build_span, read_entries
 from saddle.packet import (
     NARRATIVE_LABEL,
     Packet,
@@ -468,3 +469,34 @@ def test_suite_and_mutation_audits_fill_their_own_rows(repo: Path, ok: bool, sta
     assert rows["mutation"].status == status
     assert rows["mutation"].text == "3 of 3 killed"
     assert "audit" not in rows  # nothing left over for the seam row
+
+
+class PassingAuditor:
+    """The feed's auditor, passing every tree: the run still journals its audits."""
+
+    def tier1(self, tree: Path | None = None) -> Findings:
+        return Findings(1, "k1", (Finding("tests", 1, "pass", "code-wrong", "1 passed", ()),))
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        return Findings(2, "k2", (Finding("mutation", 2, "pass", "code-wrong", "1 of 1", ()),))
+
+
+def test_the_cost_row_counts_the_models_tool_calls_not_audit_records(repo: Path) -> None:
+    """FIX-1 (out/DOCS/report.md: a 4-tool-call run's Cost row said 18).
+
+    The feed journals its audit records as `tool` spans, but the model did
+    not make them. Three calls are scripted; a count that admits the audit
+    records reads more.
+    """
+    script = [
+        [call("edit_file", "c1", path="calc.py", old="a - b", new="(a + b)")],
+        [call("run_command", "c2", command="true")],
+        [call("finish", "c3", summary="done")],
+    ]
+    auditor = PassingAuditor()
+    result = run(repo, script, opts={"arm": "E+A+F", "auditor_factory": lambda *a: auditor})
+    spans = [e for e in read_entries(result.journal) if isinstance(e, SpanRecord)]
+    audit_tools = [s for s in spans if s.kind == "tool" and s.name.startswith("audit:")]
+    assert len(audit_tools) >= 1
+    cost = next(row for row in compile_packet(result.journal).rows if row.key == "cost")
+    assert "· 3 tool calls over" in cost.text
