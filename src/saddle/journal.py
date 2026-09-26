@@ -601,6 +601,9 @@ def _load_journal(
 AUTO_START: Final = "auto:start"
 AUTO_PROOF_PREFIX: Final = "auto-"
 TOOL_SPAN_HASHES: Final = "tool_span_hashes"
+AUDIT_SPAN_HASHES: Final = "audit_span_hashes"
+"""The outcome sidecar's list of the run's audit records (FIX-5), as a set:
+the auditor writes from the feed's thread, so their order is not the run's."""
 AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped")
 """A run's outcome span names (`engine._seal_outcome`). Not `auto:spend`,
 which USAGE seals under the start span once per round."""
@@ -637,8 +640,9 @@ def _auto_run_issues(
     The outcome is the run's `auto:finished`/`auto:stopped` span, by name
     (`AUTO_OUTCOMES`): the audit feed, the chat's question seam and USAGE's
     `auto:spend` also write agent spans under the start span. Audit records
-    (`AUDIT_SPAN_PREFIXES`) are not tool calls and are not held to the list
-    (scope narrowed, INTEG).
+    (`AUDIT_SPAN_PREFIXES`) are not tool calls and are not held to the
+    tool list (scope narrowed, INTEG); they are held, as a set, to the
+    sidecar's `audit_span_hashes` when it has one (FIX-5, tightened).
     """
     issues: list[JournalIssue] = []
     starts = [
@@ -700,6 +704,7 @@ def _auto_run_issues(
                 )
         if outcome_line in bad_sidecars:
             continue  # its list cannot be trusted; attempt-sidecar already fails it
+        issues.extend(_audit_list_issues(path, in_run, outcome_line, outcome))
         listed = _listed_span_hashes(path, outcome)
         if listed is None:
             issues.append(
@@ -749,6 +754,82 @@ def _auto_run_issues(
     return issues
 
 
+def _audit_list_issues(
+    path: Path,
+    in_run: Sequence[tuple[int, SpanRecord]],
+    outcome_line: int,
+    outcome: SpanRecord,
+) -> list[JournalIssue]:
+    """Hold a run's audit records before its outcome to the sealed set (FIX-5).
+
+    An outcome sealed before the list existed has none and is not judged
+    here (scope stated in the FIX-5 commit): rewriting a sealed sidecar to
+    drop the key reseals the outcome, which the branch anchor catches.
+    """
+    listed = _listed_hashes(path, outcome, AUDIT_SPAN_HASHES)
+    if listed is None:
+        return []
+    present = [
+        (number, span)
+        for number, span in in_run
+        if number < outcome_line and span.name.startswith(AUDIT_SPAN_PREFIXES)
+    ]
+    hashes = {span.record_hash for _, span in present}
+    issues = [
+        JournalIssue(
+            code="audit-span-missing",
+            line=outcome_line,
+            message=f"outcome span {outcome.span_id!r} lists audit record "
+            f"(record_hash {digest}) that is not in the journal",
+        )
+        for digest in listed
+        if digest not in hashes
+    ]
+    issues.extend(
+        JournalIssue(
+            code="audit-span-unlisted",
+            line=number,
+            message=f"audit record {span.span_id!r} ({span.name}) is not in the audit list "
+            f"of outcome span {outcome.span_id!r}",
+        )
+        for number, span in present
+        if span.record_hash not in listed
+    )
+    return issues
+
+
+def run_audit_hashes(path: Path, run_span: str) -> list[str]:
+    """The `record_hash` of every audit record in run `run_span`, in journal order.
+
+    The same membership `_auto_run_issues` judges: a span citing the start
+    span as parent, or any span after the start line and before the next
+    start line. Read by the engine when it seals the outcome (FIX-5), so it
+    never raises on a line it cannot read (verify reports those), and a run
+    whose start span is not in this journal keeps only the spans citing it.
+    """
+    spans: list[tuple[int, SpanRecord]] = []
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    for number, line in enumerate(text.splitlines(), start=1):
+        try:
+            raw = json.loads(line)
+            if isinstance(raw, dict) and raw.get("record_type") == "span":
+                spans.append((number, SpanRecord.model_validate(raw)))
+        except ValueError:  # pydantic's ValidationError is one
+            continue
+    start_line = next((n for n, s in spans if s.span_id == run_span), None)
+    starts = [n for n, s in spans if s.kind == "agent" and s.name == AUTO_START]
+    end_line = next((n for n in starts if start_line is not None and n > start_line), None)
+    return [
+        span.record_hash
+        for number, span in spans
+        if span.name.startswith(AUDIT_SPAN_PREFIXES)
+        and (
+            span.parent_id == run_span
+            or (start_line is not None and _within(number, start_line, end_line))
+        )
+    ]
+
+
 def _within(number: int, start_line: int, end_line: int | None) -> bool:
     """Whether journal line `number` lies after a run's start and before the next one."""
     return number > start_line and (end_line is None or number < end_line)
@@ -756,13 +837,18 @@ def _within(number: int, start_line: int, end_line: int | None) -> bool:
 
 def _listed_span_hashes(path: Path, outcome: SpanRecord) -> list[str] | None:
     """The outcome sidecar's `tool_span_hashes`, or None when it has no such list."""
+    return _listed_hashes(path, outcome, TOOL_SPAN_HASHES)
+
+
+def _listed_hashes(path: Path, outcome: SpanRecord, key: str) -> list[str] | None:
+    """The outcome sidecar's list under `key`, or None when it has no such list."""
     if not outcome.attempt_hash:
         return None
     try:
         evidence = json.loads(attempt_sidecar_path(path, outcome.span_id).read_bytes())
     except (OSError, ValueError):
         return None
-    listed = evidence.get(TOOL_SPAN_HASHES) if isinstance(evidence, dict) else None
+    listed = evidence.get(key) if isinstance(evidence, dict) else None
     if not isinstance(listed, list) or not all(isinstance(item, str) for item in listed):
         return None
     return listed
