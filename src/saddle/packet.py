@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from saddle import mutant_text
 from saddle.anchor import anchor_issues
 from saddle.journal import (
     AUDIT_SPAN_PREFIXES,
@@ -87,6 +88,11 @@ class Row:
     text: str
     cites: tuple[str, ...] = ()
     items: tuple[str, ...] = ()
+    summary: str = ""
+    """Lines beneath the row's text, compiled from the record the row cites:
+    the Mutation row's English (`mutant_text.render_text`) when its finding
+    span seals a `MutationOutcome`; "" otherwise, and then left out of the
+    payload, so a packet without one is byte-identical to before (PACKETHOOK)."""
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,7 @@ class Packet:
                     "text": row.text,
                     "cites": list(row.cites),
                     "items": list(row.items),
+                    **({"summary": row.summary} if row.summary else {}),
                 }
                 for row in self.rows
             ],
@@ -199,6 +206,31 @@ def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any] | None:
     except ValueError:
         return None
     return loaded if isinstance(loaded, dict) else None
+
+
+def _killers(outcome: dict[str, Any]) -> dict[str, str] | None:
+    """The record's `killers` as `{mutant: test}`, spelled as a map or as pairs."""
+    killers = outcome.get("killers")
+    if isinstance(killers, dict):
+        return {str(k): str(v) for k, v in killers.items()}
+    if isinstance(killers, list):
+        pairs = [p for p in killers if isinstance(p, list | tuple) and len(p) == 2]
+        return {str(k): str(v) for k, v in pairs}
+    return None
+
+
+def _mutation_summary(journal: Path, span: SpanRecord | None) -> str:
+    """The mutation finding's English (MUTSUMMARY), from the outcome sealed in its span.
+
+    The auditor seals `asdict(MutationOutcome)` beside its `audit-tier2:mutation`
+    finding (`Auditor._journal`); `_sidecar` refuses one that does not hash.
+    A record with no sealed outcome (a seam span, a blocked tier, an older
+    ledger) yields "", and the row then reads exactly as before.
+    """
+    outcome = _sidecar(journal, span) if span is not None else None
+    if outcome is None or not {"killed", "total"} <= outcome.keys():
+        return ""
+    return mutant_text.render_text(mutant_text.describe_mutation(outcome, _killers(outcome)))
 
 
 def _display(entry: ProofRecord | SpanRecord) -> dict[str, Any]:
@@ -460,6 +492,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
     edit_checks = _audits(spans, edit_checks=True)
+    span_by_hash = {s.record_hash: s for s in spans}
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
@@ -600,6 +633,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "proven" if last.exit_code == 0 else "failed",
                 last.detail,
                 (last.record_hash,),
+                summary=_mutation_summary(journal, span_by_hash.get(last.record_hash)),
             )
         )
     else:
@@ -839,4 +873,5 @@ def render_packet_text(packet: Packet) -> str:
             continue
         lines.append(f"{row.title} [{row.status}]: {row.text}")
         lines.extend(f"  - {item}" for item in row.items)
+        lines.extend(f"  {line}" for line in row.summary.splitlines())
     return "\n".join(lines)

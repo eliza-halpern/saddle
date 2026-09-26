@@ -387,3 +387,47 @@ def test_cli_tiered_rev_mode_and_exit_codes(clean_tree: Path, tmp_path: Path) ->
     code, _out, err = _cli(clean_tree, "--baseline", "no-such-base")
     assert code == 2
     assert "no-such-base" in err
+
+
+# -- the mutation outcome is sealed beside its finding (PACKETHOOK) --------------
+
+
+def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `audit-tier2:mutation` span carries a hash-sealed sidecar holding
+    the `MutationOutcome` it was decided from, so the packet can describe the
+    mutants in English (mutant_text) instead of repeating the count. The
+    finding's own detail and verdict are unchanged."""
+    from saddle.journal import attempt_sidecar_path
+    from saddle.mutant_text import describe_mutation
+    from saddle.packet import compile_packet
+
+    _untested_mutmut(tmp_path, monkeypatch)
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier2()
+    mutation = next(f for f in result.findings if f.gate == "mutation")
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash
+    assert json.loads(span.detail)["detail"] == mutation.detail
+    sealed = json.loads(attempt_sidecar_path(journal, span.span_id).read_text())
+    assert (sealed["killed"], sealed["total"], sealed["untested"]) == (0, 5, 5)
+    assert sorted(sealed["survivors"]) == [f"m{i}" for i in range(1, 6)]
+    assert verify_journal(journal) == []
+    assert describe_mutation(sealed).untested == 5
+    # Every other finding of the tier is journaled as before: no sidecar.
+    others = [s for s in read_spans(journal) if s.name != "audit-tier2:mutation"]
+    assert others
+    assert all(not s.attempt_hash for s in others)
+    row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
+    assert "5 sampled mutants sit in code no test runs [record: untested=5]" in row.summary
+    assert "Survived with no recorded diff:\n  - survived; no diff recorded [m1]" in row.summary
+
+
+def test_a_blocked_tier2_seals_no_mutation_outcome(uncovered_tree: Path, tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(uncovered_tree, config=AuditorConfig(journal=journal)).tier2()
+    assert result.findings[0].verdict == "blocked"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash == ""
+    assert verify_journal(journal) == []

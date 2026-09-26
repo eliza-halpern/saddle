@@ -426,6 +426,9 @@ function packetRow(row, packet) {
   } else {
     body.appendChild(codeSpans(el("p", "prow-text"), row.text));
   }
+  // The row's English, compiled from the record it cites (the Mutation
+  // row's mutant summary): beneath the count line, inside the row's fold.
+  if (row.summary) body.appendChild(el("pre", "prow-summary", row.summary));
   if (row.items.length) {
     const list = el("ul", "prow-items");
     for (const text of row.items) {

@@ -42,6 +42,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -58,9 +59,9 @@ from saddle.audit import (
     staged_copy,
 )
 from saddle.dag import Node
-from saddle.evidence import ruff_argv, ruff_findings, run_capture
+from saddle.evidence import MutationOutcome, ruff_argv, ruff_findings, run_capture
 from saddle.gates import GateCheck, RuffFinding, check_ruff, check_syntax, introduced_findings
-from saddle.journal import append_span, build_span
+from saddle.journal import append_span, build_span, write_attempt_sidecar
 
 Verdict = Literal["pass", "fail", "not-applicable", "blocked"]
 Reason = Literal["code-wrong", "evidence-thin", "scope", "unknown", "sanctioned"]
@@ -326,20 +327,31 @@ class Auditor:
             return None
         return dataclasses.replace(hit, cached=True)
 
-    def _store(self, result: Findings) -> Findings:
+    def _store(self, result: Findings, mutation: MutationOutcome | None = None) -> Findings:
         self._memory[result.key] = result
         if self.config.cache_dir is not None:
             self.config.cache_dir.mkdir(parents=True, exist_ok=True)
             (self.config.cache_dir / f"{result.key}.json").write_text(
                 json.dumps(result.to_dict(), sort_keys=True)
             )
-        self._journal(result)
+        self._journal(result, mutation)
         return result
 
-    def _journal(self, result: Findings) -> None:
+    def _journal(self, result: Findings, mutation: MutationOutcome | None = None) -> None:
+        """One span per finding. The tier-2 mutation finding also seals the
+        `MutationOutcome` it was decided from as its sidecar (PACKETHOOK), so
+        the packet can say which mutants survived, not only how many; a
+        blocked tier has no outcome and seals nothing. Verdicts and details
+        are unchanged: the sidecar is evidence beside the finding, not in it."""
         if self.config.journal is None:
             return
         for f in result.findings:
+            span_id = uuid.uuid4().hex
+            attempt_hash = ""
+            if f.gate == "mutation" and f.tier == 2 and mutation is not None:
+                attempt_hash = write_attempt_sidecar(
+                    self.config.journal, span_id, dataclasses.asdict(mutation)
+                )
             append_span(
                 self.config.journal,
                 build_span(
@@ -349,6 +361,8 @@ class Auditor:
                     exit_code=_JOURNAL_EXIT[f.verdict],
                     detail=json.dumps(dataclasses.asdict(f), sort_keys=True),
                     name=f"audit-tier{f.tier}:{f.gate}",
+                    span_id=span_id,
+                    attempt_hash=attempt_hash,
                 ),
             )
 
@@ -432,7 +446,7 @@ class Auditor:
             status, detail, basis = statuses["tests" if gate == "full-suite" else gate]
             found = _finding(gate, tier, status, detail, basis)  # type: ignore[arg-type]
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
-        return self._store(Findings(tier=tier, key=key, findings=tuple(findings)))
+        return self._store(Findings(tier=tier, key=key, findings=tuple(findings)), gated.mutation)
 
     def tier1(self, tree: Path | None = None) -> Findings:
         """The checkpoint tier over `tree` (default: the repo's working tree)."""
