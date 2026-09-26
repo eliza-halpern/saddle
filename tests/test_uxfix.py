@@ -216,3 +216,39 @@ def test_a_phone_shows_needs_you_outside_the_drawer(
     assert on_b["menu"]["afterWidth"] >= 6, on_b["menu"]
     assert "needs you" in (on_b["menu"]["label"] or "")
     assert on_b["pill"]["text"] == "idle"
+
+
+# Q4 (N6) -- a finished run with no mutation record said "Mutation ○ No
+# mutation record" and, two lines under it, "Not proven ✓ Nothing is left
+# unproven" (shots/19-merge-unproven-desktop.png). Contract: when an auditor
+# ran and no mutation record exists, Not proven carries an item saying the
+# changed lines were not mutation-tested. Known-good: a mutation record
+# present keeps "Nothing is left unproven."
+
+
+@pytest.mark.parametrize(
+    ("kind", "text", "item"),
+    [
+        ("mutated", "Nothing is left unproven.", None),
+        (
+            "audited",
+            "What this packet cannot vouch for:",
+            "Changed lines were not mutation-tested: no mutation record.",
+        ),
+    ],
+)
+def test_not_proven_names_a_missing_mutation_record(
+    tmp_path: Path, kind: str, text: str, item: str | None
+) -> None:
+    from packet_seed import make_repo, seed
+
+    from saddle.auto import ledger_path
+    from saddle.packet import compile_packet
+
+    calc = make_repo(tmp_path / "repo")
+    store = SessionStore(tmp_path / "s")
+    _sid, rid, _branch = seed(store, calc, kind)  # type: ignore[arg-type]
+    rows = {row.key: row for row in compile_packet(ledger_path(calc, rid), run_id=rid).rows}
+    assert rows["not-proven"].text == text
+    assert list(rows["not-proven"].items) == ([item] if item else [])
+    assert rows["mutation"].status == ("proven" if kind == "mutated" else "absent")

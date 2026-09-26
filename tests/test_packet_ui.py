@@ -72,9 +72,14 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     assert [(x["key"], x["tone"], x["glyph"]) for x in r["lines"]] == [
         ("tests", "ok", "✓"),
         ("mutation", "none", "○"),
-        ("not-proven", "ok", "✓"),
+        # flip (UXFIX2 Q4): was ("not-proven", "ok", "✓"). The old pin held
+        # "Nothing is left unproven" two lines under "No mutation record"
+        # (out/UXREVIEW2/shots/19-merge-unproven-desktop.png, N6): it pinned
+        # the contradiction, not a contract. The item is named below.
+        ("not-proven", "warn", "!"),
     ]
     assert r["lines"][0]["text"] == "The auditor ran the suite: 2 passed"
+    assert r["lines"][2]["items"] == ["Changed lines were not mutation-tested: no mutation record."]
     # Mutation has no record, so the band is not all-green: "partial".
     assert r["band"] == "partial"
     assert r["firstRows"][0].startswith("prow s-observed k-scope")
