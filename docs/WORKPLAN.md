@@ -479,7 +479,7 @@ Replace, verbatim:
 | DESIGN-NOTES:218 | `"specification hacking" — models exploiting weak formal specs` | `"cheating" (the paper's term) — models exploiting weak formal specs` | Vericoding |
 | DESIGN-NOTES:318 | `plus schema validation` | `plus a red-flag parser that discards over-long or misformatted responses` | arXiv 2511.09030 |
 | DESIGN-NOTES:382-383 | `same conclusion from practice: parallelise reads, keep writes single-threaded.` | `same conclusion from practice: its subtask agents only answer questions and never write code in parallel.` | Cognition post (the reads/writes wording is not in it) |
-| DESIGN-NOTES:576-577 | `**persists even when authorship is hidden**` | `**is measured with authorship unlabeled** (randomized unlabeled pairs; equal-quality pairs cut the bias by 31.5%)` | arXiv 2604.22891 |
+| DESIGN-NOTES:576-577 | `**persists even when authorship is hidden**` | `**is measured with authorship unlabeled** (randomized unlabeled pairs; equal-quality pairs are the measurement device, and a structured multi-dimensional evaluation strategy cuts the bias by 31.5%)` | arXiv 2604.22891 (the 31.5% attribution corrected 2026-09-25: it belongs to the evaluation strategy, not the pairs) |
 | DESIGN-NOTES:620 | `specification hacking shows weak specs get exploited even when formal.` | `"cheating" (their term) shows weak specs get exploited even when formal.` | Vericoding |
 | DESIGN-NOTES:695 | `83% property accuracy vs 62% solving` | `82.4% vs 62.4% property accuracy vs solving (Easy split)` | arXiv 2506.18315 |
 | DESIGN-NOTES:697 | `k=2–3 voting` | `k=3 voting (k_min 3–29 across models)` | arXiv 2511.09030 |
