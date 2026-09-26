@@ -1,9 +1,10 @@
 # Using saddle (Phase 2: agent plus auditor)
 
 This guide covers the Phase 2 features: autonomous runs with an auditor, the chat's
-Task mode, and the evidence packet. It describes branch `phase2-ui3` (d61cfea). Each
-behaviour below was checked against the code, its tests, or a run against a scripted
-fake model. Anything marked **(unverified)** was not checked.
+lanes (Ask, Edit, Task · Small), and the evidence packet. It describes branch
+`phase2-integ` after the anchor, UI3, notify, ask and lane-chip merges. Each behaviour
+below was checked against the code, its tests, or a run against a scripted fake model.
+Anything marked **(unverified)** was not checked.
 
 Related: [AUDIT-TIERS.md](AUDIT-TIERS.md) (what each check proves) and
 [CLI.md](CLI.md) (every flag).
@@ -38,38 +39,53 @@ This serves on `http://127.0.0.1:8777/` and opens a browser. New sessions start 
 `~/saddle-ranch` unless you pass `--workdir`. If you bind a non-loopback `--host`,
 saddle generates an access token and prints it in the URL (`web.app.chat_token`).
 
-## 3. Chat mode and Task mode
+## 3. Lanes: Ask, Edit and Task · Small
 
-Each session has a mode, set by the **Chat | Task** switch under the message box. The
-mode is saved with the session (`Session.mode`, default `chat`) and shown as a chip
-beside the session title.
+Each session has a lane, chosen with the **lane chip** inside the message box. The lane
+is saved with the session (`Session.mode`, one of `sessions.SESSION_MODES` =
+`ask`, `edit`, `task`) and shown as a chip beside the session title. The header also
+shows the session's folder name and git branch (`web.app.git_branch`).
 
-| | Chat | Task |
-|---|---|---|
-| Enter | sends a message | opens the Run strip; nothing runs yet |
-| Where it works | directly in your folder | a new git worktree of the folder |
-| Tools | read, write, edit, list, search, run commands | the same, plus `finish` |
-| Audited | no | yes (arm E+A+F) |
-| Result | the conversation | a branch and an evidence packet |
-| Temperature | 1.0 (`engine.CHAT_TEMPERATURE`) | 0.0 |
+| | Ask (default) | Edit | Task · Small |
+|---|---|---|---|
+| Enter | sends a message | sends a message | opens the Run strip; nothing runs yet |
+| Where it works | your folder, read-only | directly in your folder | a new git worktree of the folder |
+| Tools | `read_file`, `list_dir`, `search` only | read, write, edit, list, search, run commands | Edit's tools plus `finish` |
+| Audited | no (it cannot write) | **no** | yes (arm E+A+F) |
+| Result | the conversation | the conversation | a branch and an evidence packet |
+| Temperature | 1.0 (`engine.CHAT_TEMPERATURE`) | 1.0 | 0.0 |
 
-Chat mode edits your checkout directly. Nothing in it is audited and it produces no
-packet. Task mode needs a folder: with none, Enter shows "Pick a folder first" and
-starts nothing. If the folder is not inside a git repository, the run ends `failed`
-before it starts (`web.tasks.execute`, `auto.AutoError`). Shift+Enter inserts a newline
-in both modes.
+- **Ask is the default and cannot write.** A new session starts in Ask. Its turns are
+  offered only the read-only tools (`tools.READ_ONLY_TOOLS`), and `ToolContext.allowed`
+  refuses any other call before it runs, so a model that emits `edit_file` anyway gets a
+  tier-0 refusal and your folder is unchanged. A session stored with an unknown mode,
+  including the old `chat`, reads as Ask.
+- **Edit is opt-in and unaudited.** It is the old Chat mode: it edits your checkout
+  directly, nothing is audited and no packet is produced. `PATCH mode=chat` is now
+  refused with 400; use `edit`.
+- **Task · Small** starts an audited run (sections 4 to 7). It needs a folder: with none,
+  Enter shows "Pick a folder first" and starts nothing. If the folder is not inside a git
+  repository, the run ends `failed` before it starts (`web.tasks.execute`,
+  `auto.AutoError`).
+- The chip's menu also lists Feature, Breadth and Long, greyed and unselectable: those
+  lanes are not built.
+- **Shift+Tab** cycles the enabled lanes. A ghost hint ("looks like a task → Tab",
+  "looks like a question → Tab for Ask") may appear under the input; it never changes the
+  lane by itself. The placeholder and the line under the input state what the current
+  lane will do. Shift+Enter inserts a newline in every lane.
 
 ![Task mode](screenshots/task-mode.png)
+*(This shot predates the lane chip: it shows the old Chat | Task switch.)*
 
 ## 4. The Run strip
 
-In Task mode, Enter shows the strip. Enter or Ctrl+Enter starts the run; Escape
+In the Task · Small lane, Enter shows the strip. Enter or Ctrl+Enter starts the run; Escape
 closes the strip.
 
 ![Run strip](screenshots/run-strip.png)
 
-- **Lane.** The strip always says "Small lane". The Ask, Feature, Breadth and Long lanes
-  from the design are not built, and nothing chooses a lane automatically.
+- **Lane.** The strip always says "Small lane". Feature, Breadth and Long are not built,
+  and nothing chooses a lane automatically.
 - **Budgets.** Time is in minutes (default 30) and tokens in thousands (default 100k
   *generated* tokens; the prompt is not counted). The run stops when either one runs
   out.
@@ -105,11 +121,27 @@ closes the strip.
 5. **Finish audit.** When the model calls `finish`, tiers 1 and 2 run on the final tree.
    If any finding is `fail` or `blocked` (and not `sanctioned`), `finish` is refused.
    The model gets the findings back and keeps working within its budgets.
-6. **Needs you.** The engine can pause on a question and wait for your answer
-   (`engine._ask`). The card has a question box for this. However, `saddle chat` starts
-   its server with no question source (`web.app.serve` passes no `auditor`), and nothing
-   in `src/` creates a question. So today a real run never asks you anything. Only the
-   tests and the screenshot harness exercise this path.
+6. **Needs you: two questions.** A run can pause and ask you, once each, through
+   `engine._ask`. The card shows a question with its options, and the answer goes to
+   `POST /api/tasks/<id>/answer`.
+   - **Test edits.** When `finish` is refused, tests are read-only, and the last audit has
+     a failing coverage or evidence-thin finding, the run asks: "The auditor needs a test
+     that covers <file:line>. Tests are read-only in this run. Allow test edits for the
+     rest of this run?" [Allow, Keep read-only]. Allow lifts the test-path guard for the
+     rest of the run, seals `test_edits_granted: true` in the outcome sidecar, and reopens
+     the run if this refusal hit the cap. In the chat this only arises when you untick
+     **Allow test edits**, since the box is ticked by default.
+   - **Budget.** When generated tokens or wall time first reach 80% of the budget
+     (`engine.BUDGET_ASK_AT`) without finishing, the run asks whether to extend that
+     budget by the same amount again or stop at the limit [Extend, Stop at limit].
+     Extend doubles that budget once and seals `budget_extended`. A single round that
+     jumps from below 80% to past 100% is not asked.
+
+   The default (Keep read-only, Stop at limit) is the old behaviour. A run with no answer
+   channel (headless `saddle auto`, which prints the question and the default) or one
+   stopped while waiting never blocks: it seals "unanswered, default taken: …", and the
+   packet's Contract row says no answer came. A reply that is not one of the options
+   takes the default. Time spent waiting for you is not charged to the time budget.
 7. The run commits whatever it left, even an empty change, as
    `saddle auto <id>: <outcome> (<reason>)`. The model's summary goes in the commit body
    under "Narrative (model-written, not evidence)". Bytecode and `.saddle/` are never
@@ -117,6 +149,22 @@ closes the strip.
 
 ![A checkpoint finding delivered to the model](screenshots/live-finding.png)
 *(This shot predates UI3: the ▶ Run button in the composer is gone. Task mode replaced it.)*
+
+## 5a. Knowing a run's state from another tab
+
+You do not have to watch the card. The page reports each run's state (`static/notify.js`,
+fed by the active session's task events and a 3 s poll of `/api/sessions`, whose rows
+carry `run_state` and `run_task`):
+
+- **Tab title:** `● running · <task>`, `? needs you · <task>`, `✓ finished · <task>`,
+  `■ stopped · <task>`, `! no outcome · <task>`; the session title when idle. An ended
+  prefix clears when you come back to the tab.
+- **Favicon:** a coloured dot per state; a hollow ring when idle.
+- **Notification:** on needs-you and on an ended run, only while the tab is hidden, and
+  only if you turned on **Notify me** in the sidebar. The browser's permission prompt is
+  shown from that button, never on page load.
+- **Sidebar:** a state pill on every session row, including sessions not on screen.
+- **Screen readers:** a polite live region (`#run-live`) announces each transition.
 
 ## 6. How a run ends
 
@@ -161,7 +209,7 @@ ledger. Each row has a status:
 | Not proven | What the packet cannot vouch for: no auditor ran, the run stopped, an unanswered question, ledger issues, estimated token counts, unresolved findings. |
 | Narrative | The model's `finish` summary. **It is not evidence.** Sentences that pair a check word with a result word ("All tests pass") are struck through. This check is lexical English, so it misses some claims and flags some harmless sentences (`packet.flag_narrative`). |
 | Cost | Wall time against budget, and generated tokens, labelled *measured* only when the server reported usage (otherwise "estimated", chars/4). Then a tool-call count, which currently includes audit records (see caveat). |
-| Reproduce | The `saddle verify` command, and `git log -p main..saddle/auto/<id>`. |
+| Reproduce | The `saddle verify` command, and `git log -p main..saddle/auto/<id>`. When the packet was compiled with an anchor repo, it states the anchor result and the command gains `--anchor`. |
 
 ![Packet](screenshots/packet.png)
 
@@ -191,6 +239,30 @@ chain. What verify establishes:
 
 Audit records are not held to that list. An inserted or deleted audit record is
 therefore not caught; its own hash still is.
+
+### Anchoring the outcome in the branch
+
+The ledger alone can be resealed: delete a span, drop it from the outcome's list and
+recompute the hashes, and plain `verify` still passes. So every run's final commit on
+`saddle/auto/<run-id>` ends with a trailer paragraph:
+
+```
+Saddle-Outcome: <outcome span record_hash>
+Saddle-Ledger: .saddle/runs/<run-id>/proofs.jsonl
+```
+
+```bash
+saddle verify .saddle/runs/<run-id>/proofs.jsonl --anchor [REPO]
+```
+
+`--anchor` is opt-in; REPO defaults to the checkout the ledger sits in. It reads the
+newest commit on the run's branch carrying `Saddle-Outcome` (later commits of yours do
+not hide it) and adds three issue codes: `anchor-mismatch` (the ledger's outcome is not
+the one the branch recorded), `anchor-missing` (an outcome but no anchor or no branch),
+and `outcome-missing-anchored` (an anchor but no outcome). Neither outcome nor anchor
+means the run is still in flight. Limit: the anchor is only as strong as the branch
+history; rewriting both the ledger and the branch tip with a recomputed trailer still
+passes.
 
 Known quirk: the transcript printed after the OK line is the slice renderer's. For an
 autonomous run it shows `Task: (unknown)` and `Verdict: FAIL`, even for a finished run

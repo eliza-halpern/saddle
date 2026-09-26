@@ -78,6 +78,7 @@ The text output prints each tier as a header, then one line per finding in the f
 | Arg | Default |
 |---|---|
 | `JOURNAL` | `.saddle/proofs.jsonl` (a run's ledger is `.saddle/runs/<id>/proofs.jsonl`) |
+| `--anchor [REPO]` | off; with no REPO, the checkout the ledger sits in. Also checks each run's outcome against the `Saddle-Outcome` trailer on its branch (USING-SADDLE.md §8) |
 
 Exit 0 prints the `OK: … ledger verifies …` line and a transcript. Exit 1 prints one
 `code@line N: message` per issue. The codes are listed in USING-SADDLE.md §8.

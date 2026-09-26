@@ -16,12 +16,22 @@ Phase 2 adds:
   budget. The result is a branch.
 - A tiered auditor whose findings reach the model as tool results. `finish` is refused
   while the audit fails.
-- The chat's Task mode, which starts the same run from the browser and shows an evidence
-  packet compiled from the ledger.
+- A lane chip in the chat: **Ask** (the default, read-only: the model gets only read,
+  list and search tools), **Edit** (opt-in, edits your folder directly, unaudited) and
+  **Task · Small**, which starts the same audited run from the browser and shows an
+  evidence packet compiled from the ledger.
+- Run-state signals so a run finds you: tab title, favicon, an opt-in browser
+  notification, and a state pill per session in the sidebar.
+- Two questions a run can ask once each: whether tests may be edited when the auditor
+  needs a test, and whether to extend a budget at 80%. Unanswered, each takes the old
+  behaviour as its default.
+- `saddle verify --anchor`, which checks each run's outcome against the
+  `Saddle-Outcome` trailer on its branch.
 - `saddle audit --tiered`, which runs the same battery on any diff.
 
-- [docs/USING-SADDLE.md](docs/USING-SADDLE.md): install, Chat vs Task mode, how runs
-  end, reading the packet, `saddle verify`.
+- [docs/USING-SADDLE.md](docs/USING-SADDLE.md): install, the Ask / Edit / Task lanes,
+  run-state signals, the two questions, how runs end, reading the packet,
+  `saddle verify --anchor`.
 - [docs/AUDIT-TIERS.md](docs/AUDIT-TIERS.md): the gates by tier, reason classes,
   caching.
 - [docs/CLI.md](docs/CLI.md): every flag and exit code.
@@ -33,7 +43,7 @@ Phase 2 adds:
 - **Not measured:** there is no live E+A+F result yet. Nothing yet shows that the
   auditor lowers the false-done rate on real tasks, or what it costs in wall time.
 - **Not built:** only the Small lane exists. Contracts are not sealed before
-  implementation, and no shipped code asks the user a question mid-run.
+  implementation. The only questions a run asks are the two above.
 
 ## Layout
 
