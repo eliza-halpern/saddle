@@ -175,3 +175,18 @@ def test_a_run_with_a_proven_mutation_row_merges_under_a_plain_label(tmp_path: P
     assert r["band"] == "ok"
     assert r["merge"] == {"text": "Merge into main", "disabled": False}
     assert r["mergeClass"] == ""
+
+
+def test_edit_checks_are_their_own_line_not_in_the_audit_count(tmp_path: Path) -> None:
+    """PACKETFIX-1: the real auditor's three tier-0 records (syntax, ruff,
+    imports) were folded into Audit ("4 of 4 passed"); they are one line of
+    their own after it, and the Audit fold counts the one verdict it holds."""
+    got, _repo, _branch = page(tmp_path, "edit-checked", "read")
+    r = got["read"]
+    assert r["audit"]["summary"] == "Audit1 of 1 passed"
+    assert len(r["firstRows"]) == 3
+    assert r["firstRows"][0].startswith("prow s-observed k-scope")
+    assert r["firstRows"][1].startswith("audit-fold s-proven")
+    assert r["firstRows"][2].startswith("prow s-observed k-edit-checks")
+    assert "edit-checks" not in r["details"]["keys"]
+    assert r["allRows"] == 10

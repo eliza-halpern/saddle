@@ -23,6 +23,10 @@ What the packet can and cannot say for an executor-only run (arm E):
   tree audited) or a chat seam's `audit:<gate>` span. The feed's
   `audit:delivered`/`audit:withheld` records are deliveries, not verdicts.
   With none, "finished" here never reads as "done".
+- A tier-0 finding (`audit-tier0:<gate>`: syntax, ruff, imports on one
+  edited file) is an edit check, not an audit verdict. It is counted on its
+  own "Edit checks" row, never in the Audit row or the verdict line
+  (PACKETFIX-1: a run with 9 verdicts and 3 edit checks read "12 of 12").
 """
 
 from __future__ import annotations
@@ -279,7 +283,7 @@ class _Audit:
     """An auditor finding's own detail, without the tier prefix."""
 
 
-def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
+def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_Audit]:
     """Every auditor verdict in the ledger, in ledger order.
 
     A chat seam's `audit:<gate>` span is read as written. The real
@@ -287,12 +291,17 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
     detail, and only the latest per gate is kept: each audit re-runs every
     gate of its tier on a newer tree, so an earlier checkpoint's failure
     that a later audit cleared is history, not a verdict on the change.
+
+    Tier 0 checks one edited file at the edit and is not a verdict on the
+    change: it is left out, and `edit_checks=True` returns only it instead.
     """
     seam: list[tuple[int, _Audit]] = []
     latest: dict[str, tuple[int, _Audit]] = {}
     for order, span in enumerate(spans):
         finding = tier_finding(span.name, span.detail)
         if finding is not None:
+            if (finding.tier == 0) != edit_checks:
+                continue
             latest[finding.gate] = (
                 order,
                 _Audit(
@@ -304,9 +313,18 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
                     finding.detail,
                 ),
             )
-        elif span.name.startswith("audit:") and span.name not in FEED_SPANS:
+        elif not edit_checks and span.name.startswith("audit:") and span.name not in FEED_SPANS:
             seam.append((order, _Audit(span.name, span.detail, span.exit_code, span.record_hash)))
     return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
+
+
+def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
+    """A finished run's verdict line when audit findings failed or were blocked."""
+    said = [f"{_n(len(failed), 'audit finding')} failed"] if failed else []
+    if blocked:
+        why = "; ".join(dict.fromkeys(a.body for a in blocked))
+        said.append(f"{_n(len(blocked), 'audit finding')} blocked (not run): {why}")
+    return f"Finished, but {', and '.join(said)}."
 
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
@@ -441,6 +459,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     tools = [s for s in spans if s.kind == "tool" and not s.name.startswith(AUDIT_SPAN_PREFIXES)]
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
+    edit_checks = _audits(spans, edit_checks=True)
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
@@ -470,11 +489,15 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             )
         )
     elif outcome.name == "auto:finished":
-        failed_audits = [a for a in audits if a.exit_code != 0]
+        # A blocked finding never ran (tier 2 after a tier-1 failure on that
+        # tree): it is reported as blocked, and only gates that ran and
+        # failed count as failed (PACKETFIX-2).
+        blocked = [a for a in audits if a.verdict == "blocked"]
+        failed_audits = [a for a in audits if a.exit_code != 0 and a.verdict != "blocked"]
         verdict = "finished"
         verdict_text = (
-            f"Finished, but {_n(len(failed_audits), 'audit finding')} failed."
-            if failed_audits
+            _finished_but(failed_audits, blocked)
+            if failed_audits or blocked
             else "The executor called finish. No auditor verdict covers the change, "
             "so this is finished, not proven done."
             if not audits
@@ -640,6 +663,28 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                     ),
                 )
             )
+
+    # -- edit checks (tier 0: one edited file, at the edit; not a verdict) -------------
+    if edit_checks:
+        passed = sum(a.exit_code == 0 for a in edit_checks)
+        rows.append(
+            Row(
+                "edit-checks",
+                "Edit checks",
+                # Never "proven": an edit check is not an audit verdict. A
+                # failing one is still a failed record (and refuses a merge).
+                "observed" if passed == len(edit_checks) else "failed",
+                f"{passed} of {_n(len(edit_checks), 'edit check')} passed. Tier 0 checks "
+                "one edited file (syntax, ruff, imports) when it is written; it is not "
+                "an audit verdict and is not counted in Audit.",
+                tuple(a.record_hash for a in edit_checks),
+                tuple(
+                    f"{'✓' if a.exit_code == 0 else '✗'} "
+                    f"{a.name.removeprefix('audit:')}: {a.detail}"
+                    for a in edit_checks
+                ),
+            )
+        )
 
     # -- not proven -----------------------------------------------------------------
     gaps: list[str] = []
