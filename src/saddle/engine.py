@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -113,6 +114,14 @@ class RunBudget:
     def remaining_tokens(self) -> int:
         return max(self.tokens - self.spent_tokens, 0)
 
+    def near(self, fraction: float) -> str | None:
+        """ "token" or "time" once that budget is `fraction` spent but not gone."""
+        if self.tokens * fraction <= self.spent_tokens < self.tokens:
+            return "token"
+        if self.time_s * fraction <= self.elapsed() < self.time_s:
+            return "time"
+        return None
+
     def exhausted(self) -> str | None:
         """Which budget has run out, in words, or None if neither has."""
         if self.spent_tokens >= self.tokens:
@@ -152,6 +161,28 @@ marked finished."""
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The sealed stop reason when the finish refusal cap is reached."""
+
+TEST_CLOSES: Final = frozenset({"coverage", "evidence-thin"})
+"""A finding gate or reason that a new test is the repair for (`packet.TEST_CLOSES`)."""
+
+ALLOW_TEST_EDITS: Final = "Allow"
+KEEP_READ_ONLY: Final = "Keep read-only"
+"""The test-edit question's options; the second is the default."""
+
+UNANSWERED: Final = "unanswered"
+"""Third argv word of an `answer` span sealed without a reply: nobody could
+answer (a headless run) or the run was stopped while it waited, so the
+question's conservative default was taken."""
+
+EXTEND_BUDGET: Final = "Extend"
+STOP_AT_LIMIT: Final = "Stop at limit"
+"""The budget question's options; the second is the default."""
+
+BUDGET_ASK_AT: Final = 0.8
+"""The share of the time or token budget spent at which a running run asks,
+once, whether to extend it by the same amount again."""
+
+_CITE: Final = re.compile(r"[\w./-]+\.\w+:\d+")
 
 
 @dataclass
@@ -201,6 +232,8 @@ class AutoRun:
     copied into the outcome sidecar so a reader need not trust argv."""
     audit: Callable[[str, str, str], Sequence[Event]] | None = None
     answer: Callable[[Question], str | None] | None = None
+    asked: set[str] = field(default_factory=set)
+    """Which of the run's own questions ("test-edits", "budget") were put; each at most once."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -470,6 +503,8 @@ def run_turn(
                     auto.stop(spent)
                     yield ErrorEvent(message=f"stopped: {spent}")
                     break
+                if not stop():
+                    yield from _offer_budget(auto, options.journal, node_id)
             taken += 1
             parts: list[str] = []
             thoughts: list[str] = []
@@ -536,6 +571,8 @@ def run_turn(
                     auto.feed.before_tool(call.name)
                 if auto is not None and call.name == FINISH_TOOL:
                     result = _finish(auto, call.arguments)
+                    if result.startswith(FINISH_REFUSED):
+                        result += yield from _offer_test_edits(auto, options.journal, node_id, ctx)
                 else:
                     result = execute_tool(call, workdir=options.workdir, context=ctx)
                 duration_ms = int((perf_counter() - start) * 1000)
@@ -658,13 +695,18 @@ def _consult(
 
 
 def _ask(
-    auto: AutoRun, journal: Path, node_id: str, question: Question
+    auto: AutoRun, journal: Path, node_id: str, question: Question, default: str | None = None
 ) -> Generator[Event, None, str | None]:
     """Seal the question, wait for the user, seal the answer beside it.
 
     Time spent waiting is not charged to the time budget: the budget bounds
     the run's own work, and charging a person's reading time to it would
     stop a run for the user having been slow to reply.
+
+    With a `default`, a question nobody answers is not a stop: the answer
+    span is sealed as unanswered, naming the default taken and why, and the
+    default is returned. A reply that is not one of the options (compared
+    without case) also takes the default, sealed beside the words typed.
     """
     asked = build_span(
         node_id=node_id,
@@ -683,20 +725,110 @@ def _ask(
     if auto.budget.started is not None:
         auto.budget.started += auto.budget.clock() - waited_from
     if reply is None:
-        return None
+        if default is None:
+            return None
+        why = "no answer channel: a headless run" if auto.answer is None else "the run was stopped"
+        argv = ["answer", default, UNANSWERED]
+        detail = f"unanswered, default taken: {default} ({why})"
+        reply = default
+    else:
+        argv, detail = ["answer", reply], reply
+        if default is not None:
+            picked = next((o for o in question.options if o.lower() == reply.strip().lower()), None)
+            if picked is None:
+                detail = (
+                    f"{reply} (not one of {', '.join(question.options)}; default taken: {default})"
+                )
+                argv = ["answer", reply, "default", default]
+            reply = picked or default
     answered = build_span(
         node_id=node_id,
-        argv=["answer", reply],
+        argv=argv,
         duration_ms=0,
         exit_code=0,
-        detail=reply,
+        detail=detail,
         kind="agent",
         name="answer",
         parent_id=asked.span_id,
     )
     append_span(journal, answered)
-    yield Answered(id=question.id, text=reply, span_id=answered.span_id)
+    yield Answered(id=question.id, text=detail, span_id=answered.span_id)
     return reply
+
+
+def _offer_budget(auto: AutoRun, journal: Path, node_id: str) -> Generator[Event, None, None]:
+    """At BUDGET_ASK_AT of either budget, ask once whether to extend it.
+
+    Extend raises that budget once by its own size, sealed in the outcome
+    sidecar; Stop at limit (the default, and what a headless run takes)
+    leaves it, so the run stops where it always would have.
+    """
+    which = auto.budget.near(BUDGET_ASK_AT)
+    if which is None or "budget" in auto.asked:
+        return
+    auto.asked.add("budget")
+    budget = auto.budget
+    more = f"{budget.tokens} generated tokens" if which == "token" else f"{budget.time_s:.0f}s"
+    question = Question(
+        id="budget",
+        text=f"This run has used {BUDGET_ASK_AT:.0%} of its {which} budget and has not "
+        f"finished. Extend by {more} or stop at the limit?",
+        options=[EXTEND_BUDGET, STOP_AT_LIMIT],
+    )
+    choice = yield from _ask(auto, journal, node_id, question, default=STOP_AT_LIMIT)
+    if choice != EXTEND_BUDGET:
+        return
+    if which == "token":
+        auto.sealed["budget_extended"] = {"budget": which, "by": budget.tokens}
+        budget.tokens *= 2
+    else:
+        auto.sealed["budget_extended"] = {"budget": which, "by": budget.time_s}
+        budget.time_s *= 2
+    yield _progress(auto)
+
+
+def _needs_a_test(auto: AutoRun) -> str | None:
+    """Where the auditor wants a test, if a failing finding is one a test closes."""
+    last = auto.feed.last() if auto.feed is not None else None
+    findings = last.get("findings") if isinstance(last, dict) else None
+    for f in findings if isinstance(findings, list) else []:
+        if not isinstance(f, dict) or f.get("verdict") != "fail":
+            continue
+        if f.get("gate") in TEST_CLOSES or f.get("reason") in TEST_CLOSES:
+            where = _CITE.findall(str(f.get("detail", "")))
+            return ", ".join(where) or f"the {f.get('gate')} finding"
+    return None
+
+
+def _offer_test_edits(
+    auto: AutoRun, journal: Path, node_id: str, ctx: ToolContext
+) -> Generator[Event, None, str]:
+    """After a refused finish: ask once whether tests may be edited.
+
+    Asked only when tests are read-only and the audit wants a test. Allow
+    lifts the guard for the rest of the run and, if this refusal hit the
+    cap, reopens the run; Keep read-only (the default) leaves the cap path
+    as it was. Returns the text appended to `finish`'s result.
+    """
+    where = _needs_a_test(auto)
+    if ctx.protected_tests is None or where is None or "test-edits" in auto.asked:
+        return ""
+    auto.asked.add("test-edits")
+    question = Question(
+        id="test-edits",
+        text=f"The auditor needs a test that covers {where}. Tests are read-only in this "
+        "run. Allow test edits for the rest of this run?",
+        options=[ALLOW_TEST_EDITS, KEEP_READ_ONLY],
+    )
+    choice = yield from _ask(auto, journal, node_id, question, default=KEEP_READ_ONLY)
+    if choice != ALLOW_TEST_EDITS:
+        return "\n\nThe user kept tests read-only."
+    ctx.protected_tests = None
+    auto.sealed["test_edits_granted"] = True
+    if auto.reason == AUDIT_UNRESOLVED:
+        auto.outcome = auto.reason = ""
+        auto.unchanged_refusals = 0
+    return "\n\nThe user allowed test edits for the rest of this run: write the test it names."
 
 
 def _charge(
