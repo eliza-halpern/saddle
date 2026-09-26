@@ -118,7 +118,7 @@ class AuditResult:
             "baseline": self.baseline,
             "test_command": self.test_command,
             "checks": [asdict(check) for check in self.checks],
-            "mutation": asdict(self.mutation) if self.mutation is not None else None,
+            "mutation": _mutation_dict(self.mutation) if self.mutation is not None else None,
             "surface": self.surface,
             "cached": self.cached,
         }
@@ -138,6 +138,14 @@ class AuditResult:
             surface=data["surface"],
             cached=data["cached"],
         )
+
+
+def _mutation_dict(mutation: MutationOutcome) -> dict[str, Any]:
+    """`asdict(mutation)` without `survivor_details`: the shortlist's in-process
+    evidence (`--tier2 shortlist`), never part of the audit's JSON record."""
+    data = asdict(mutation)
+    del data["survivor_details"]
+    return data
 
 
 def _tuplify(value: Any) -> Any:
@@ -328,6 +336,10 @@ def _spelled_from_the_root(
             mutation,
             survivor_lines=tuple(
                 (os.path.relpath(path, copy), line) for path, line in mutation.survivor_lines
+            ),
+            survivor_details=tuple(
+                (name, status, os.path.relpath(path, copy), line, text, message)
+                for name, status, path, line, text, message in mutation.survivor_details
             ),
         )
     return checks, mutation

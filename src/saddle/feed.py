@@ -66,7 +66,8 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 
 from saddle.audit import AuditError
-from saddle.auditor import Auditor, AuditorConfig, Finding, Findings, sanction
+from saddle.auditor import Auditor, AuditorConfig, Finding, Findings, Tier2Mode, sanction
+from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.journal import append_span, build_span, write_attempt_sidecar
 from saddle.tools import CHECK_TOOL, FINISH_TOOL
 
@@ -213,6 +214,10 @@ class AuditFeed:
     factory: AuditorFactory = default_auditor
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten; see `auditor.sanction`."""
+    tier2: Tier2Mode = "score"
+    """`--tier2`; "shortlist" turns on this module's SHORTLIST behaviour too."""
+    mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
+    """How many survivors a mutation finding names (`--mutant-shortlist`)."""
     auditor: AuditorLike | None = None
     results: list[AuditResult] = field(default_factory=list)
     """Every completed audit, in completion order; the last is the verdict."""
@@ -230,7 +235,10 @@ class AuditFeed:
     def __post_init__(self) -> None:
         if self.auditor is None:
             config = AuditorConfig(
-                journal=self.journal, sanctioned_test_rewrites=self.sanctioned_test_rewrites
+                journal=self.journal,
+                sanctioned_test_rewrites=self.sanctioned_test_rewrites,
+                tier2=self.tier2,
+                mutant_shortlist=self.mutant_shortlist,
             )
             self.auditor = self.factory(self.worktree, self.baseline, config)
 

@@ -1,0 +1,37 @@
+[
+ {
+  "name": "stockbook.xǁInventoryǁadjust__mutmut_12",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁadjust__mutmut_12: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -8,6 +8,6 @@\n     line = self[sku]\n     new_qty = line.qty + delta\n     if new_qty < 0:\n-        raise ValueError(f\"adjust would take {sku!r} below zero: {new_qty}\")\n+        raise ValueError(None)\n     self._lines[sku] = line.with_qty(new_qty)\n     return self._lines[sku]\n"
+ },
+ {
+  "name": "stockbook.xǁInventoryǁfind_by_tag__mutmut_8",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁfind_by_tag__mutmut_8: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -9,7 +9,7 @@\n         returns an empty list.\n         \"\"\"\n     if match not in (\"any\", \"all\"):\n-        raise ValueError(f\"match must be 'any' or 'all', not {match!r}\")\n+        raise ValueError(None)\n     wanted = _check_tags(tags)\n     if not wanted:\n         return []\n"
+ },
+ {
+  "name": "stockbook.xǁInventoryǁpop__mutmut_3",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁpop__mutmut_3: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -7,6 +7,6 @@\n         \"\"\"\n     if sku not in self._lines:\n         if default is _MISSING:\n-            raise KeyError(sku)\n+            raise KeyError(None)\n         return default\n     return self._lines.pop(sku)\n"
+ },
+ {
+  "name": "stockbook.xǁInventoryǁscale_prices__mutmut_2",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁscale_prices__mutmut_2: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -5,7 +5,7 @@\n         whole cent (ROUND_HALF_UP). Returns how many lines changed\n         price; quantities, tags and order are unchanged.\n         \"\"\"\n-    _check_int(percent, \"percent\")\n+    _check_int(percent, None)\n     if percent < 0:\n         raise ValueError(f\"percent must be >= 0: {percent}\")\n     scale = Decimal(percent) / 100\n"
+ },
+ {
+  "name": "stockbook.xǁInventoryǁscale_prices__mutmut_26",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁscale_prices__mutmut_26: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -13,7 +13,7 @@\n     for sku, line in list(self._lines.items()):\n         new_cents = int(\n             (Decimal(line.unit_cents) * scale).quantize(\n-                Decimal(1), rounding=ROUND_HALF_UP\n+                Decimal(2), rounding=ROUND_HALF_UP\n             )\n         )\n         if new_cents != line.unit_cents:\n"
+ },
+ {
+  "name": "stockbook.xǁInventoryǁscale_prices__mutmut_9",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁscale_prices__mutmut_9: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -7,7 +7,7 @@\n         \"\"\"\n     _check_int(percent, \"percent\")\n     if percent < 0:\n-        raise ValueError(f\"percent must be >= 0: {percent}\")\n+        raise ValueError(None)\n     scale = Decimal(percent) / 100\n     changed = 0\n     for sku, line in list(self._lines.items()):\n"
+ },
+ {
+  "name": "stockbook.xǁInventoryǁset_price__mutmut_10",
+  "status": "survived",
+  "show": "# stockbook.xǁInventoryǁset_price__mutmut_10: survived\n--- stockbook.py\n+++ stockbook.py\n@@ -7,7 +7,7 @@\n     _check_int(unit_cents, \"unit_cents\")\n     old = self[sku]\n     if unit_cents < 0:\n-        raise ValueError(f\"unit_cents must be >= 0: {unit_cents}\")\n+        raise ValueError(None)\n     line = old.with_price(unit_cents)\n     self._lines[sku] = line\n     return line\n"
+ }
+]

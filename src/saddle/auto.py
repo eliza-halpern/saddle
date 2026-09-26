@@ -29,9 +29,11 @@ from time import monotonic
 from typing import Final
 
 from saddle.anchor import anchor_trailers, outcome_hash
+from saddle.auditor import Tier2Mode
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
+from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.journal import append_span, build_span
 from saddle.sandbox import Sandbox
 from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, TOOLS, ToolContext
@@ -118,6 +120,13 @@ class AutoOptions:
     assertion-preservation finding naming only these is classed `sanctioned`:
     reported as information, never delivered as a failure, never refusing
     `finish`. Sealed in the start span and the outcome sidecar."""
+    tier2: Tier2Mode = "score"
+    """`--tier2`: "score" (default) is the auditor as before SHORTLIST, byte for
+    byte; "shortlist" is the per-survivor gate (`auditor.AuditorConfig.tier2`).
+    Sealed in the outcome sidecar only when "shortlist"."""
+    mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
+    """`--mutant-shortlist N`: how many surviving mutants a finish refusal names
+    (`--tier2 shortlist` only). Sealed with it."""
     check_tool: bool = False
     """`--check-tool` (arm E+A+F only; scope widened): offer the model a
     `check` tool that runs audit tiers 0 and 1 on demand (`feed.AuditFeed.check`).
@@ -249,6 +258,8 @@ def run_auto(
             feedback=options.arm == "E+A+F",
             factory=options.auditor_factory,
             sanctioned_test_rewrites=options.sanctioned_test_rewrites,
+            tier2=options.tier2,
+            mutant_shortlist=options.mutant_shortlist,
         )
     )
     auto = AutoRun(
@@ -266,6 +277,11 @@ def run_auto(
             "allow_test_edits": options.allow_test_edits,
             "sanctioned_test_rewrites": list(options.sanctioned_test_rewrites),
             **({"check_tool": True} if options.check_tool else {}),
+            **(
+                {"tier2": "shortlist", "mutant_shortlist": options.mutant_shortlist}
+                if options.tier2 == "shortlist"
+                else {}
+            ),
         },
         audit=audit,
         answer=answer,
