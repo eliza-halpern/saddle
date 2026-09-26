@@ -39,4 +39,6 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
 
 ## License
 
+Copyright (C) 2026  Eliza H and Eryn Lipkowitz. See [AUTHORS](AUTHORS).
+
 Saddle is free software under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See [LICENSE](LICENSE).
