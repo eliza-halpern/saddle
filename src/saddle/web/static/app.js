@@ -238,7 +238,10 @@ function handle(event) {
       restampTurns();
       setStatus("idle");
       state.busy = false;
+      state.activeTask = null;
       break;
+    default:
+      handleTask(event);        // task.* events: the task card (tasks.js)
   }
   stickToBottom(was);
 }
@@ -271,6 +274,10 @@ function renderHistory(info) {
   }
   for (const message of shown) {
     const turn = el("div", "turn");
+    if (message.role === "user" && recapCard(turn, message.content)) {
+      t.appendChild(turn);
+      continue;
+    }
     if (message.role === "user") {
       turn.dataset.index = String(message.index);
       turn.appendChild(turnTools(message.index));
@@ -379,7 +386,8 @@ async function restampTurns() {
   if (turns.length !== asked.length) return;   // mid-stream; try again next idle
   turns.forEach((turn, position) => {
     turn.dataset.index = String(asked[position]);
-    if (!turn.querySelector(".turn-tools")) {
+    // A task's bubble stands for a run, not a question: no retry on it.
+    if (!turn.querySelector(".turn-tools") && !turn.querySelector(".task-ask-bubble")) {
       turn.insertBefore(turnTools(asked[position]), turn.firstChild);
     }
   });
@@ -490,7 +498,7 @@ function setStatus(kind, detail) {
   // While a turn runs the send button stops it: one control, two jobs, so
   // the thing you reach for is always under the cursor you just used.
   const send = $("#send");
-  const working = kind === "working";
+  const working = kind === "working" || kind === "needs";
   send.textContent = working ? "■" : "↑";
   send.title = working ? "Stop" : "Send";
   send.classList.toggle("stopping", working);
@@ -649,6 +657,10 @@ $("#folder-name-new").addEventListener("keydown", (event) => {
 
 $("#composer").addEventListener("submit", (event) => {
   event.preventDefault();
+  if (state.busy && state.activeTask) {
+    stopTask(state.activeTask);
+    return;
+  }
   if (state.busy) {
     fetch(`/api/sessions/${state.sessionId}/stop`, { method: "POST" });
     setStatus("working", "stopping…");
@@ -664,6 +676,9 @@ $("#input").addEventListener("input", (event) => {
   event.target.style.height = Math.min(event.target.scrollHeight, 220) + "px";
 });
 $("#attach").onclick = () => $("#file-input").click();
+$("#run").onclick = (event) => { event.preventDefault(); openRunConfirm(); };
+$("#tc-cancel").onclick = (event) => { event.preventDefault(); closeRunConfirm(); };
+$("#tc-start").onclick = (event) => { event.preventDefault(); startTask(); };
 $("#file-input").onchange = (event) => { upload(event.target.files); event.target.value = ""; };
 $("#transcript").addEventListener("dragover", (e) => e.preventDefault());
 $("#transcript").addEventListener("drop", (event) => {

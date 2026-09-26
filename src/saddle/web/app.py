@@ -42,6 +42,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET
 from saddle.engine import TurnOptions
 from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
 from saddle.events import (
@@ -53,12 +54,15 @@ from saddle.events import (
 )
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
+from saddle.packet import compile_packet
 from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import BUILTIN_PERSONAS, SessionStore
 from saddle.titles import title_for
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for
 from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
+from saddle.web import tasks
+from saddle.web.tasks import TaskRun
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -278,12 +282,24 @@ class Live:
 
 
 class ChatServer:
-    def __init__(self, store: SessionStore, client_factory: Any, *, default_workdir: Path) -> None:
+    def __init__(
+        self,
+        store: SessionStore,
+        client_factory: Any,
+        *,
+        default_workdir: Path,
+        auditor: tasks.AuditorFactory | None = None,
+    ) -> None:
         self.store = store
         self.client_factory = client_factory
         self.default_workdir = default_workdir
         self.live: dict[str, Live] = {}
         self.window: int | None = None
+        self.tasks: dict[str, TaskRun] = {}
+        self.auditor = auditor
+        """The auditor seam: given a run, the hook `run_auto` consults after
+        each tool call. None until the auditor lane lands; tests and the
+        screenshot harness pass a scripted one."""
 
     def _live(self, session_id: str) -> Live:
         return self.live.setdefault(session_id, Live())
@@ -370,6 +386,37 @@ class ChatServer:
                 live.busy = False
             live.publish(None)
 
+    # -- task -----------------------------------------------------------
+
+    def _run_task(self, session_id: str, run: TaskRun) -> None:
+        """Run one chat-started task on `saddle auto`'s own path (T5-7)."""
+        live = self._live(session_id)
+        try:
+            session = self.store.get(session_id)
+            live.publish(run.state_event())
+            audit = self.auditor(run) if self.auditor is not None else None
+            with self.client_factory() as client:
+                _verdict, recap = tasks.execute(
+                    run,
+                    workdir=Path(session.workdir),
+                    client=client,
+                    publish=live.publish,
+                    chat_journal=self.store.journal_path(session_id),
+                    reasoning_effort=session.reasoning_effort,
+                    audit=audit,
+                )
+            if recap is not None:
+                messages = self.store.load_messages(session_id)
+                messages.append(recap)
+                self.store.save_messages(session_id, messages)
+        except Exception as exc:  # a dead run must not take the server with it
+            run.state = "failed"
+            live.publish(run.state_event(f"{type(exc).__name__}: {exc}"))
+        finally:
+            with live.lock:
+                live.busy = False
+            live.publish(None)
+
 
 def build_app(
     store: SessionStore,
@@ -377,8 +424,9 @@ def build_app(
     *,
     default_workdir: Path,
     token: str | None = None,
+    auditor: tasks.AuditorFactory | None = None,
 ) -> ASGIApp:
-    server = ChatServer(store, client_factory, default_workdir=default_workdir)
+    server = ChatServer(store, client_factory, default_workdir=default_workdir, auditor=auditor)
 
     async def index(_: Request) -> Response:
         """The page, with its asset URLs versioned by file mtime.
@@ -392,7 +440,7 @@ def build_app(
         and the page that names those URLs is never stored.
         """
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for name in ("app.css", "markdown.js", "app.js"):
+        for name in ("app.css", "markdown.js", "tasks.js", "app.js"):
             try:
                 version = int((STATIC / name).stat().st_mtime)
             except OSError:
@@ -610,6 +658,75 @@ def build_app(
         threading.Thread(target=server._run, args=(sid, text, images), daemon=True).start()
         return JSONResponse({"ok": True})
 
+    async def post_task(request: Request) -> JSONResponse:
+        """Start `saddle auto` on this session's folder with the message as its task."""
+        sid = request.path_params["sid"]
+        body = await request.json()
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "a task needs words"}, status_code=400)
+        try:
+            time_s = float(body.get("time_budget_s") or DEFAULT_TIME_BUDGET_S)
+            token_budget = int(body.get("token_budget") or DEFAULT_TOKEN_BUDGET)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "budgets must be numbers"}, status_code=400)
+        if time_s <= 0 or token_budget <= 0:
+            return JSONResponse({"error": "budgets must be positive"}, status_code=400)
+        store.get(sid)
+        live = server._live(sid)
+        with live.lock:
+            if live.busy:
+                return JSONResponse({"error": "a turn is already running"}, status_code=409)
+            live.busy = True
+        run = TaskRun(
+            run_id=tasks.new_run_id(),
+            session_id=sid,
+            task=text,
+            time_budget_s=time_s,
+            token_budget=token_budget,
+        )
+        server.tasks[run.run_id] = run
+        threading.Thread(target=server._run_task, args=(sid, run), daemon=True).start()
+        return JSONResponse({"run_id": run.run_id})
+
+    def _task(request: Request) -> TaskRun | None:
+        return server.tasks.get(request.path_params["rid"])
+
+    async def answer_task(request: Request) -> JSONResponse:
+        """The user's answer to a run's question. The engine seals it in the ledger."""
+        run = _task(request)
+        if run is None:
+            return JSONResponse({"error": "no such task"}, status_code=404)
+        body = await request.json()
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "an answer needs words"}, status_code=400)
+        if run.state != "needs_you":
+            return JSONResponse({"error": "this task is not waiting on you"}, status_code=409)
+        run.answers.put(text)
+        return JSONResponse({"ok": True})
+
+    async def stop_task(request: Request) -> JSONResponse:
+        """Stop a run at its next safe point; it ends `stopped`, sealed."""
+        run = _task(request)
+        if run is None:
+            return JSONResponse({"error": "no such task"}, status_code=404)
+        run.cancelled = True
+        return JSONResponse({"stopping": run.state in ("running", "needs_you")})
+
+    async def task_packet(request: Request) -> JSONResponse:
+        """The run's evidence packet, compiled from its ledger on every read."""
+        sid, rid = request.path_params["sid"], request.path_params["rid"]
+        run = server.tasks.get(rid)
+        journal = (
+            run.journal
+            if run is not None and run.session_id == sid
+            else tasks.journal_for(store.journal_path(sid), rid)
+        )
+        if journal is None:
+            return JSONResponse({"error": "no such task in this session"}, status_code=404)
+        return JSONResponse(compile_packet(journal, run_id=rid).payload())
+
     def _rewind_target(sid: str, index: int) -> tuple[list[dict[str, Any]], str] | None:
         """The stored messages and the question at `index`, if one is there.
 
@@ -729,6 +846,16 @@ def build_app(
                     ),
                 )
                 yield f"data: {json.dumps(info.payload())}\n\n"
+                # A run still going when the page (re)connects gets its card
+                # back: its state and every session line so far.
+                for run in list(server.tasks.values()):
+                    if run.session_id != sid or run.state not in ("running", "needs_you"):
+                        continue
+                    yield f"data: {json.dumps(run.state_event().payload())}\n\n"
+                    for line in list(run.lines):
+                        yield f"data: {json.dumps(line.payload())}\n\n"
+                    if run.progress is not None:
+                        yield f"data: {json.dumps(run.progress.payload())}\n\n"
                 while True:
                     if await request.is_disconnected():
                         return
@@ -776,6 +903,10 @@ def build_app(
             Route("/api/sessions/{sid}/rewind", rewind_preview),
             Route("/api/sessions/{sid}/rewind", rewind, methods=["POST"]),
             Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
+            Route("/api/sessions/{sid}/task", post_task, methods=["POST"]),
+            Route("/api/sessions/{sid}/tasks/{rid}/packet", task_packet),
+            Route("/api/tasks/{rid}/answer", answer_task, methods=["POST"]),
+            Route("/api/tasks/{rid}/stop", stop_task, methods=["POST"]),
             Route("/api/sessions/{sid}/events", events),
             Mount("/static", StaticFiles(directory=str(STATIC)), name="static"),
         ]

@@ -14,20 +14,24 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
-from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Generator, Iterator, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import monotonic, perf_counter
 from typing import Any, Final, Protocol
 
 from saddle.events import (
+    Answered,
+    AuditFinding,
     AuditNote,
     Compaction,
     ContentDelta,
     Context,
     ErrorEvent,
     Event,
+    Question,
     ReasoningDelta,
+    RunProgress,
     ToolEnd,
     ToolStart,
     TurnEnd,
@@ -135,7 +139,15 @@ class AutoRun:
 
     `feed`, when set (arms E+A and E+A+F), is called before and after each
     tool, its completed audits are appended to the next tool result, and it
-    decides whether `finish` is accepted (`feed.AuditFeed`).
+    decides whether `finish` is accepted (`feed.AuditFeed`). It is the
+    source of audit findings.
+
+    The auditor seam: `audit`, if set, is called with each tool call's
+    name, arguments and result, and returns `AuditFinding` or `Question`
+    events. Each is sealed in the ledger, shown to the caller, and appended
+    to the tool result the model reads. A `Question` halts the run until
+    `answer` returns the user's reply; with no `answer`, or a None reply,
+    the run stops "needs you" rather than guessing (rule D).
     """
 
     budget: RunBudget
@@ -155,6 +167,8 @@ class AutoRun:
     sealed: dict[str, object] = field(default_factory=dict)
     """The run's settings (sampling, test-edit policy, sanctioned rewrites),
     copied into the outcome sidecar so a reader need not trust argv."""
+    audit: Callable[[str, str, str], Sequence[Event]] | None = None
+    answer: Callable[[Question], str | None] | None = None
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -443,6 +457,7 @@ def run_turn(
                 auto.budget.charge(
                     len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
                 )
+                yield _progress(auto)
 
             if not calls:
                 messages.append({"role": "assistant", "content": reply})
@@ -527,10 +542,12 @@ def run_turn(
                     if heard:
                         yield AuditNote(text=heard)
                         seen = f"{result}\n\n{heard}"
+                if auto is not None and auto.audit is not None:
+                    seen += yield from _consult(auto, options.journal, node_id, call, seen)
                 tools.append({"name": call.name, "arguments": call.arguments, "result": seen})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": seen})
             rounds.append({"reply": reply, "tools": tools})
-            if stop() or (auto is not None and auto.outcome == "finished"):
+            if stop() or (auto is not None and auto.outcome):
                 break
     except VllmError as exc:
         yield ErrorEvent(message=str(exc))
@@ -559,6 +576,92 @@ def run_turn(
         kind=f"auto-{auto.outcome}" if auto is not None else "",
     )
     yield TurnEnd(turn=turn, proof=proof)
+
+
+def _progress(auto: AutoRun) -> RunProgress:
+    return RunProgress(
+        elapsed_s=round(auto.budget.elapsed(), 3),
+        time_budget_s=auto.budget.time_s,
+        tokens=auto.budget.spent_tokens,
+        token_budget=auto.budget.tokens,
+    )
+
+
+def _consult(
+    auto: AutoRun, journal: Path, node_id: str, call: ToolCall, result: str
+) -> Generator[Event, None, str]:
+    """Ask the auditor about one tool result; seal and yield what it says.
+
+    Returns the text appended to the tool result, so the model reads the
+    finding or the user's answer at its next step, as a tool result.
+    """
+    assert auto.audit is not None
+    extra: list[str] = []
+    for note in auto.audit(call.name, call.arguments, result):
+        if isinstance(note, AuditFinding):
+            span = build_span(
+                node_id=node_id,
+                argv=["audit", note.gate],
+                duration_ms=0,
+                exit_code=0 if note.ok else 1,
+                detail=note.detail,
+                kind="agent",
+                name=f"audit:{note.gate}",
+                parent_id=auto.run_span,
+            )
+            append_span(journal, span)
+            yield replace(note, span_id=span.span_id)
+            extra.append(f"[audit {note.gate}: {'pass' if note.ok else 'FAIL'}] {note.detail}")
+        elif isinstance(note, Question):
+            reply = yield from _ask(auto, journal, node_id, note)
+            if reply is None:
+                auto.stop(f"needs you: {note.text}")
+                extra.append(f"[question] {note.text}\n[no answer: the run stops here]")
+                break
+            extra.append(f"[question] {note.text}\n[the user answered] {reply}")
+    return "".join(f"\n\n{line}" for line in extra)
+
+
+def _ask(
+    auto: AutoRun, journal: Path, node_id: str, question: Question
+) -> Generator[Event, None, str | None]:
+    """Seal the question, wait for the user, seal the answer beside it.
+
+    Time spent waiting is not charged to the time budget: the budget bounds
+    the run's own work, and charging a person's reading time to it would
+    stop a run for the user having been slow to reply.
+    """
+    asked = build_span(
+        node_id=node_id,
+        argv=["question", question.text, *question.options],
+        duration_ms=0,
+        exit_code=4,
+        detail=question.text,
+        kind="agent",
+        name="question",
+        parent_id=auto.run_span,
+    )
+    append_span(journal, asked)
+    yield replace(question, span_id=asked.span_id)
+    waited_from = auto.budget.clock()
+    reply = auto.answer(question) if auto.answer is not None else None
+    if auto.budget.started is not None:
+        auto.budget.started += auto.budget.clock() - waited_from
+    if reply is None:
+        return None
+    answered = build_span(
+        node_id=node_id,
+        argv=["answer", reply],
+        duration_ms=0,
+        exit_code=0,
+        detail=reply,
+        kind="agent",
+        name="answer",
+        parent_id=asked.span_id,
+    )
+    append_span(journal, answered)
+    yield Answered(id=question.id, text=reply, span_id=answered.span_id)
+    return reply
 
 
 def _finish(auto: AutoRun, arguments: str) -> str:
