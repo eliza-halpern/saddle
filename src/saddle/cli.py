@@ -22,6 +22,7 @@ from rich.console import Console
 
 from saddle import __version__, audit
 from saddle.audit import AuditError, AuditResult, audit_tree
+from saddle.auditor import Auditor, AuditorConfig, Findings
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
@@ -1286,9 +1287,10 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     """
     cache = None if args.no_cache else Path(args.cache).expanduser()
     rev: str | None = args.rev
+    audit_one = _tiered_audit if args.tiered else audit_tree
     try:
         if rev is None:
-            result = audit_tree(
+            result = audit_one(
                 Path(args.repo),
                 args.baseline or "HEAD",
                 test_command=args.test_command,
@@ -1314,7 +1316,7 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
                     rev,
                     what=f"cannot check out revision {rev!r}",
                 )
-                result = audit_tree(
+                result = audit_one(
                     clone,
                     args.baseline or f"{rev}^",
                     test_command=args.test_command,
@@ -1323,11 +1325,43 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     except AuditError as exc:
         print(f"error: {exc}", file=stderr)
         return AUDIT_COULD_NOT_AUDIT
+    if isinstance(result, tuple):
+        return _report_tiered(result, args.json, stdout)
     if args.json:
         stdout.write(json.dumps(result.to_dict(), indent=2) + "\n")
     else:
         _render_audit(result, stdout)
     return AUDIT_EXIT_CODES[result.verdict]
+
+
+def _tiered_audit(
+    tree: Path, baseline: str, *, test_command: str, cache: Path | None
+) -> tuple[Findings, ...] | AuditResult:
+    """`saddle audit --tiered`: tiers 0-2 (`saddle.auditor`) over the same tree
+    `audit_tree` would gate; an unchanged tree is `nothing-to-audit` as there."""
+    auditor = Auditor(tree, baseline, AuditorConfig(test_command=test_command, cache_dir=cache))
+    try:
+        return auditor.audit()
+    except AuditError as exc:
+        if not str(exc).startswith("nothing to audit"):
+            raise
+        return audit_tree(tree, baseline, test_command=test_command, cache=None)
+
+
+def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]) -> int:
+    """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`."""
+    verdict = "accept" if all(r.passed for r in results) else "refuse"
+    if as_json:
+        payload = {"verdict": verdict, "tiers": [r.to_dict() for r in results]}
+        stdout.write(json.dumps(payload, indent=2) + "\n")
+    else:
+        for r in results:
+            freshness = "cached" if r.cached else "fresh"
+            stdout.write(f"tier {r.tier} {r.key[:12]} {freshness}\n")
+            for f in r.findings:
+                stdout.write(f"{f.verdict:<14} {f.gate:<22} [{f.reason}] {f.detail}\n")
+        stdout.write(f"verdict: {verdict}\n")
+    return AUDIT_EXIT_CODES[verdict]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1407,6 +1441,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_cmd.add_argument(
         "--no-cache", action="store_true", help="Neither read nor write the verdict cache."
+    )
+    audit_cmd.add_argument(
+        "--tiered",
+        action="store_true",
+        help="Run the tiered battery (tier 0 per changed file, tier 1, tier 2).",
     )
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")

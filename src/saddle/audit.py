@@ -22,8 +22,8 @@ out tools' versions) all match a stored key exactly. Any other file state --
 a missing file, unparseable JSON, a mismatched key -- is a miss, never a
 verdict and never an exception. `nothing-to-audit` is never cached.
 
-Layering: this module imports `dag`, `evidence` and `runner`; nothing imports
-it except the CLI (P1-5).
+Layering: this module imports `dag`, `evidence`, `gates` and `runner`; only the
+CLI (P1-5) and `saddle.auditor` (Phase 2) import it.
 """
 
 from __future__ import annotations
@@ -37,13 +37,15 @@ import os
 import platform
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal, cast
 
 from saddle.dag import Node
 from saddle.evidence import MutationOutcome, run_capture
+from saddle.gates import GateCheck
 from saddle.journal import SpanRecorder
 from saddle.runner import run_node_gate
 
@@ -56,6 +58,7 @@ DEFAULT_AUDIT_CACHE: Final = Path("~/.cache/saddle/audit")
 # to, in the order `gate_surface()` hashes them.
 SURFACE_MODULES: Final[tuple[str, ...]] = (
     "saddle.audit",
+    "saddle.auditor",
     "saddle.runner",
     "saddle.gates",
     "saddle.evidence",
@@ -330,6 +333,59 @@ def _spelled_from_the_root(
     return checks, mutation
 
 
+@contextmanager
+def staged_copy(tree: Path, baseline: str) -> Iterator[tuple[Path, str, str]]:
+    """A scratch copy of `tree` with everything staged: `(copy, staged, resolved)`.
+
+    `staged` is the copy's `git write-tree`, the key every audit verdict is
+    stored under; `resolved` is the 40-hex commit `baseline` names. The
+    copy is deleted on exit, so `tree` -- its files and `.git/index` -- is
+    never written to. Shared by `audit_tree` and `saddle.auditor`.
+    """
+    # A linked worktree's `.git` is a file naming a gitdir outside the tree: a
+    # copy of it would still write to that original, and `git add -A` changes
+    # the index even when no source byte moves.
+    if not (tree / ".git").is_dir():
+        msg = f"{tree} is not a git repository (no .git directory)"
+        raise AuditError(msg)
+    with tempfile.TemporaryDirectory() as scratch:
+        copy = Path(scratch) / "tree"
+        shutil.copytree(tree, copy, ignore=_audit_ignore(tree))
+        # Untracked files must be staged: `git diff <ref>` sees tracked files
+        # only, so a new module would be invisible to every gate.
+        _git(copy, "add", "-A")
+        try:
+            resolved = _git(copy, "rev-parse", "--verify", f"{baseline}^{{commit}}")
+        except AuditError as exc:
+            msg = f"cannot resolve baseline {baseline!r}: {exc}"
+            raise AuditError(msg) from exc
+        yield copy, _git(copy, "write-tree"), resolved
+
+
+def baseline_tree(copy: Path, resolved: str) -> str:
+    """The tree id of commit `resolved`, read in `copy`."""
+    return _git(copy, "rev-parse", f"{resolved}^{{tree}}")
+
+
+def audit_checks(
+    gate_checks: Sequence[GateCheck], mutation: MutationOutcome | None, copy: Path
+) -> tuple[tuple[AuditCheck, ...], MutationOutcome | None]:
+    """Gate checks as audit checks: plan-relative ones `not-applicable`, paths
+    spelled from the tree's root rather than the scratch `copy`."""
+    checks = tuple(
+        AuditCheck(
+            name=check.name,
+            status="not-applicable"
+            if check.name in NOT_APPLICABLE
+            else ("pass" if check.passed else "fail"),
+            detail=NOT_APPLICABLE.get(check.name, check.detail),
+            basis=check.basis,
+        )
+        for check in gate_checks
+    )
+    return _spelled_from_the_root(checks, mutation, copy)
+
+
 def audit_tree(
     tree: Path,
     baseline: str = "HEAD",
@@ -344,26 +400,9 @@ def audit_tree(
     the result. With a directory, a stored result is served only on a key hit
     (see the module docstring); `nothing-to-audit` is never cached.
     """
-    # A linked worktree's `.git` is a file naming a gitdir outside the tree: a
-    # copy of it would still write to that original, and `git add -A` changes
-    # the index even when no source byte moves.
-    if not (tree / ".git").is_dir():
-        msg = f"{tree} is not a git repository (no .git directory)"
-        raise AuditError(msg)
     surface = gate_surface()
-    with tempfile.TemporaryDirectory() as scratch:
-        copy = Path(scratch) / "tree"
-        shutil.copytree(tree, copy, ignore=_audit_ignore(tree))
-        # Untracked files must be staged: `git diff <ref>` sees tracked files
-        # only, so a new module would be invisible to every gate.
-        _git(copy, "add", "-A")
-        try:
-            resolved = _git(copy, "rev-parse", "--verify", f"{baseline}^{{commit}}")
-        except AuditError as exc:
-            msg = f"cannot resolve baseline {baseline!r}: {exc}"
-            raise AuditError(msg) from exc
-        staged = _git(copy, "write-tree")
-        if staged == _git(copy, "rev-parse", f"{resolved}^{{tree}}"):
+    with staged_copy(tree, baseline) as (copy, staged, resolved):
+        if staged == baseline_tree(copy, resolved):
             return AuditResult(
                 verdict="nothing-to-audit",
                 tree=staged,
@@ -381,18 +420,7 @@ def audit_tree(
             if hit is not None:
                 return hit
         gated = run_node_gate(audit_node(test_command), copy, baseline=resolved, recorder=recorder)
-    checks = tuple(
-        AuditCheck(
-            name=check.name,
-            status="not-applicable"
-            if check.name in NOT_APPLICABLE
-            else ("pass" if check.passed else "fail"),
-            detail=NOT_APPLICABLE.get(check.name, check.detail),
-            basis=check.basis,
-        )
-        for check in gated.checks
-    )
-    checks, mutation = _spelled_from_the_root(checks, gated.mutation, copy)
+        checks, mutation = audit_checks(gated.checks, gated.mutation, copy)
     result = AuditResult(
         verdict="refuse" if any(check.status == "fail" for check in checks) else "accept",
         tree=staged,
