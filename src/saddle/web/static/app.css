@@ -498,20 +498,38 @@ main { position: relative; }
   --wash-halt: #ff9aa214;
 }
 
-/* ---- composer: the mode switch (chat / task) and what it means ---- */
-.mode-bar { max-width: 820px; margin: 8px auto 0; display: flex; align-items: flex-start; gap: 11px; }
-#mode-switch { display: inline-flex; flex: none; border: 1px solid var(--line);
-  border-radius: 11px; padding: 2px; background: var(--bg-sunk); }
-#mode-switch button { background: none; border: none; color: var(--ink-dim); cursor: pointer;
-  font: inherit; font-size: 12.5px; font-weight: 600; padding: 3px 12px; border-radius: 9px;
-  transition: color .14s, background .14s; }
-#mode-switch button:hover { color: var(--ink); }
-#mode-switch button[aria-pressed="true"][data-mode="chat"] { background: var(--bg-raise); color: var(--rose); }
-#mode-switch button[aria-pressed="true"][data-mode="task"] { background: var(--wash-run); color: var(--run); }
+/* ---- composer: the lane chip (ask / edit / task) and what it means ---- */
+.mode-bar { max-width: 820px; margin: 7px auto 0; display: flex; align-items: flex-start; gap: 11px; }
+.lane { position: relative; flex: none; align-self: flex-end; }
+#lane-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 5px 10px;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--bg-sunk); color: var(--rose);
+  transition: color .14s, background .14s, border-color .14s; }
+#lane-chip:hover { border-color: currentColor; }
+#lane-chip[data-lane="edit"] { color: var(--ask); background: var(--wash-ask); border-color: var(--ask); }
+#lane-chip[data-lane="task"] { color: var(--run); background: var(--wash-run); border-color: var(--run); }
+.lane-caret { font-size: 10px; opacity: .7; }
+#lane-menu { position: absolute; bottom: calc(100% + 10px); left: -6px; z-index: 30; margin: 0;
+  padding: 5px; list-style: none; width: min(360px, calc(100vw - 32px)); background: var(--bg-raise);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px #0006; outline: none; }
+#lane-menu li { display: grid; gap: 1px; padding: 7px 10px; border-radius: 10px; cursor: pointer; }
+#lane-menu li b { font-size: 13px; color: var(--ink); }
+#lane-menu li span { font-size: 12px; color: var(--ink-dim); line-height: 1.4; }
+#lane-menu li:hover, #lane-menu li.active { background: var(--bg-sunk); }
+#lane-menu li[aria-selected="true"] b::after { content: "  ✓"; color: var(--rose); }
+#lane-menu li[aria-disabled="true"] { cursor: not-allowed; opacity: .45; }
+#lane-menu li[aria-disabled="true"]:hover { background: none; }
+#lane-hint { margin: 2px 0 0 auto; flex: none; display: flex; gap: 10px; color: var(--ink-faint);
+  font-size: 12px; white-space: nowrap; }
+#lane-suggest { color: var(--sky); font-style: italic; }
+.where { flex: none; display: inline-flex; gap: 6px; font-size: 12px; color: var(--ink-dim);
+  max-width: 34vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#where-branch:not(:empty)::before { content: "⎇ "; color: var(--ink-faint); }
 #mode-desc { margin: 2px 0 0; min-width: 0; color: var(--ink-faint); font-size: 12.5px; line-height: 1.45; }
 .mode-note { max-width: 820px; margin: 7px auto 0; color: var(--ask); font-size: 12.5px; }
 .mode-chip { flex: none; font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
   border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--ink-dim); }
+.mode-chip[data-mode="edit"] { color: var(--ask); border-color: var(--ask); background: var(--wash-ask); }
 .mode-chip[data-mode="task"] { color: var(--run); border-color: var(--run); background: var(--wash-run); }
 #task-confirm { max-width: 820px; margin: 0 auto 10px; padding: 13px 15px 12px;
   background: var(--bg-raise); border: 1px solid var(--run); border-radius: 16px;
@@ -709,6 +727,9 @@ main { position: relative; }
   #jump { left: auto; right: 12px; transform: none; }
   .verdict-word { font-size: 21px; }
   .mode-bar { flex-direction: column; gap: 5px; }
+  #lane-hint { margin-left: 0; }
+  .lane-keys { display: none; }
+  .where { max-width: 28vw; font-size: 11px; }
   .tc-row .tc-spacer { display: none; }
   .tc-row button { flex: 1; }
 }

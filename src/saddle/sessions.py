@@ -77,9 +77,12 @@ BUILTIN_PERSONAS: Final[dict[str, str]] = {
 type Messages = list[dict[str, Any]]
 
 
-SESSION_MODES: tuple[str, ...] = ("chat", "task")
-"""What Enter does in a session. chat: a conversation turn in the folder.
-task: open the Run strip for an audited `saddle auto` episode."""
+SESSION_MODES: tuple[str, ...] = ("ask", "edit", "task")
+"""The session's lane: what Enter does. ask: a conversation turn with
+read-only tools. edit: a conversation turn that may write files and run
+commands in the folder, unaudited. task: open the Run strip for an audited
+`saddle auto` episode. A stored mode outside this set (the pre-lane "chat",
+which was the default, not a choice) reads as ask: nothing was opted in."""
 
 
 @dataclass
@@ -94,14 +97,19 @@ class Session:
     """0 is greedy and reproducible; higher samples more widely. Per session,
     because one conversation wanting a deterministic answer and the next
     wanting range is normal."""
-    mode: str = "chat"
+    mode: str = "ask"
     """One of SESSION_MODES. A setting of the session like its persona, so a
-    reload comes back in the mode it was left in."""
+    reload comes back in the mode it was left in. "ask" (read-only tools) is
+    the default; "edit" writes into the folder unaudited and is opt-in."""
     auto_title: bool = True
     """False once someone renames the session by hand: a title the user chose
     is never overwritten by the model."""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        if self.mode not in SESSION_MODES:
+            self.mode = "ask"
 
     def prompt_text(self, personas: Mapping[str, str] | None = None) -> str:
         """The system prompt actually sent: an override, else the persona.

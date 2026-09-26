@@ -143,6 +143,24 @@ TOOLS: Final[list[dict[str, Any]]] = [
     ),
 ]
 
+READ_ONLY_TOOLS: Final = ("read_file", "list_dir", "search")
+"""What the Ask lane may call: nothing that writes a file or runs a command.
+
+`run_command` is out entirely rather than filtered: a shell can write
+anywhere the sandbox can, and no read-only subset of it is checkable here.
+The terminal tools go with it, since only `run_command` starts a terminal."""
+
+ASK_TOOLS: Final[list[dict[str, Any]]] = [
+    tool for tool in TOOLS if tool["function"]["name"] in READ_ONLY_TOOLS
+]
+"""The schemas an Ask turn offers the model."""
+
+
+def tools_for_mode(mode: str) -> list[dict[str, Any]]:
+    """The tool schemas a chat turn in `mode` offers: read-only unless Edit."""
+    return list(TOOLS) if mode == "edit" else list(ASK_TOOLS)
+
+
 FINISH_TOOL: Final = "finish"
 """The only way an autonomous run ends "finished" (engine.AutoRun).
 
@@ -222,6 +240,11 @@ class ToolContext:
         """Record the file as this call left it, for the transcript to show."""
         if self.undo is not None:
             self.undo.after_write(path, self.call_id)
+
+    allowed: tuple[str, ...] | None = None
+    """When set, a call to any tool not named here is refused before it runs
+    (the Ask lane). Offering fewer schemas is not enough on its own: a model
+    can still emit a call to a tool it was not offered. None allows all."""
 
     protected_tests: tuple[str, ...] | None = None
     """Tier-0 guard (the page's "test files read-only during
@@ -487,6 +510,13 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
     """Run one tool call; every failure becomes an "error: ..." string."""
     ctx = context or ToolContext(workdir=workdir)
     handler = _HANDLERS.get(call.name)
+    if handler is not None and ctx.allowed is not None and call.name not in ctx.allowed:
+        return (
+            f"{REFUSED}{call.name!r} is not available in the Ask lane, which is "
+            "read-only (read_file, list_dir, search). Nothing was run and the folder was "
+            "not changed. Answer from what you can read, or tell the user to switch "
+            "the lane to Edit or Task if the job needs changes."
+        )
     if handler is None:
         return f"error: unknown tool {call.name!r}"
     try:

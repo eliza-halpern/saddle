@@ -41,7 +41,8 @@
     <header id="topbar">
       <button id="menu" type="button" title="Sessions" aria-label="Sessions">☰</button>
       <input id="title" spellcheck="false" aria-label="Session title">
-      <span id="mode-chip" class="mode-chip" title="This session's mode: what Enter does"></span>
+      <span id="where" class="where" title="The session's folder and its git branch"><span id="where-folder"></span><span id="where-branch"></span></span>
+      <span id="mode-chip" class="mode-chip" title="This session's lane: what Enter does"></span>
       <span id="meter" title="context used"><i></i><b></b></span>
       <span id="status" class="status idle">idle</span>
     </header>
@@ -71,17 +72,27 @@
         </div>
       </div>
       <div class="composer-row">
+        <div class="lane">
+          <button type="button" id="lane-chip" aria-haspopup="listbox" aria-expanded="false"
+                  aria-controls="lane-menu" title="Lane: what Enter does (Shift+Tab cycles)">
+            <span id="lane-name">Ask</span><span class="lane-caret" aria-hidden="true">▾</span></button>
+          <ul id="lane-menu" role="listbox" aria-label="Lane" tabindex="-1" hidden>
+            <li role="option" data-lane="ask"><b>Ask</b><span>Read-only. Reads and searches your folder, then answers. Cannot edit or run anything.</span></li>
+            <li role="option" data-lane="edit"><b>Edit</b><span>Unaudited, edits your folder. Writes files and runs commands directly; nothing checks the work.</span></li>
+            <li role="option" data-lane="task"><b>Task · Small</b><span>Audited run on a new branch in a copy of your folder. Ends in an evidence packet.</span></li>
+            <li role="option" data-lane="feature" aria-disabled="true"><b>Feature</b><span>Later. A planned change with a written contract.</span></li>
+            <li role="option" data-lane="breadth" aria-disabled="true"><b>Breadth</b><span>Later. One change fanned out over many items.</span></li>
+            <li role="option" data-lane="long" aria-disabled="true"><b>Long</b><span>Later. A run of hours, not minutes.</span></li>
+          </ul>
+        </div>
         <button type="button" id="attach" title="Attach files or images">＋</button>
-        <textarea id="input" rows="1" placeholder="what are we making today?"
+        <textarea id="input" rows="1" placeholder="ask about this folder (read-only)"
                   spellcheck="false"></textarea>
         <button type="submit" id="send" title="Send">↑</button>
       </div>
       <div class="mode-bar">
-        <div id="mode-switch" role="group" aria-label="Mode">
-          <button type="button" data-mode="chat" aria-pressed="true">Chat</button>
-          <button type="button" data-mode="task" aria-pressed="false">Task</button>
-        </div>
         <p id="mode-desc"></p>
+        <p id="lane-hint"><span id="lane-suggest" hidden></span><span class="lane-keys">⇧Tab lane · ⇧⏎ newline</span></p>
       </div>
       <p id="mode-note" class="mode-note" role="alert" hidden></p>
       <input type="file" id="file-input" multiple hidden>
