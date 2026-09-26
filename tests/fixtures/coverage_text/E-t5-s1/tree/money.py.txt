@@ -1,0 +1,141 @@
+"""Shared money primitives: currencies, Decimal amounts, rounding.
+
+Every module in this ledger stores and returns money as
+``decimal.Decimal``. Amounts are accepted as ``int``, ``str``,
+``Decimal`` or ``float`` (floats are converted via ``str`` so they
+never pick up binary representation error) and quantized with
+``ROUND_HALF_UP`` to the currency's decimals: two for USD and EUR,
+zero for JPY.
+
+The supported currencies are exactly USD, EUR and JPY. The pinned
+exchange rates route every conversion through USD, applied left to
+right at default ``Decimal`` precision:
+
+    1 EUR = 1.08 USD      1 USD = 155 JPY
+
+so EUR -> JPY multiplies by 1.08 then by 155, and JPY -> EUR divides
+by 155 then by 1.08.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+#: The supported currencies, in display order.
+CURRENCIES = ("USD", "EUR", "JPY")
+
+#: Number of decimal places per currency (2 for USD/EUR, 0 for JPY).
+PLACES = {"USD": 2, "EUR": 2, "JPY": 0}
+
+#: Pinned exchange rates. ``RATES["EUR"]`` is USD per EUR;
+#: ``RATES["JPY"]`` is JPY per USD. USD is the pivot.
+RATES = {
+    "USD": Decimal("1"),
+    "EUR": Decimal("1.08"),  # 1 EUR = 1.08 USD
+    "JPY": Decimal("155"),  # 1 USD = 155 JPY
+}
+
+_ZERO = {currency: Decimal(0).scaleb(-places) for currency, places in PLACES.items()}
+
+
+def _currency_error(currency):
+    return "unsupported currency %r (supported: USD, EUR, JPY)" % (currency,)
+
+
+def check_currency(currency):
+    """Validate a currency code; returns it unchanged.
+
+    Raises ``ValueError`` naming the supported currencies for anything
+    other than USD, EUR or JPY.
+    """
+    if currency not in PLACES:
+        raise ValueError(_currency_error(currency))
+    return currency
+
+
+def _coerce(value, currency):
+    """Coerce ``value`` to a ``Decimal`` quantized to ``currency``.
+
+    Accepts ``int``, ``str``, ``Decimal`` and ``float`` (floats via
+    ``str``); any other type raises ``TypeError``. A string that is
+    not a valid decimal raises ``ValueError`` (preserving the old
+    ``float()`` behavior). No positivity check is performed here.
+    """
+    check_currency(currency)
+    if isinstance(value, bool):
+        raise TypeError(
+            "amount must be an int, str, Decimal, or float, got %r"
+            % type(value).__name__
+        )
+    if isinstance(value, float):
+        raw = Decimal(str(value))
+    elif isinstance(value, Decimal):
+        raw = value
+    elif isinstance(value, (int, str)):
+        try:
+            raw = Decimal(value)
+        except (InvalidOperation, ValueError):
+            raise ValueError("invalid amount: %r" % (value,))
+    else:
+        raise TypeError(
+            "amount must be an int, str, Decimal, or float, got %r"
+            % type(value).__name__
+        )
+    return raw.quantize(_ZERO[currency], rounding=ROUND_HALF_UP)
+
+
+def quantize(value, currency="USD"):
+    """Coerce ``value`` to a ``Decimal`` in ``currency`` and quantize
+    it with ``ROUND_HALF_UP`` to the currency's decimals. No
+    positivity check is performed."""
+    return _coerce(value, currency)
+
+
+def to_decimal(value, currency="USD"):
+    """Coerce and quantize ``value`` in ``currency``; the result must
+    be positive, otherwise ``ValueError`` is raised (order: convert ->
+    quantize -> validate)."""
+    result = _coerce(value, currency)
+    if result <= 0:
+        raise ValueError(
+            "amount must be positive in %s, got %s" % (currency, result)
+        )
+    return result
+
+
+def coerce_nonnegative(value, currency="USD"):
+    """Coerce and quantize ``value`` in ``currency``; the result must
+    be non-negative, otherwise ``ValueError`` is raised. Used for
+    opening balances, which may be zero."""
+    result = _coerce(value, currency)
+    if result < 0:
+        raise ValueError(
+            "amount must be >= 0 in %s, got %s" % (currency, result)
+        )
+    return result
+
+
+def convert(amount, source, target):
+    """Convert a ``Decimal`` amount from ``source`` to ``target``.
+
+    Conversions route through USD, applied left to right at default
+    ``Decimal`` precision: EUR -> JPY multiplies by 1.08 then by 155;
+    JPY -> EUR divides by 155 then by 1.08. The result is not
+    quantized; the caller quantizes it to the target's decimals.
+    """
+    check_currency(source)
+    check_currency(target)
+    value = Decimal(amount)
+    if source == target:
+        return value
+    if source == "USD":
+        usd = value
+    elif source == "EUR":
+        usd = value * RATES["EUR"]
+    else:
+        usd = value / RATES["JPY"]
+    if target == "USD":
+        return usd
+    if target == "EUR":
+        return usd / RATES["EUR"]
+    return usd * RATES["JPY"]

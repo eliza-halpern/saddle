@@ -1,0 +1,93 @@
+"""JSON persistence for multi-currency accounts.
+
+On-disk schema (version 2):
+
+    {"version": 2,
+     "accounts": [{"owner": str,
+                   "balances": {currency: "decimal-string"}}]}
+
+Each balance is the ``str()`` of its ``Decimal`` (e.g. ``"10.00"``
+or ``"500"``); a currency appears only once an amount in it has been
+stored. Old version-1 files (``{"version": 1, "accounts":
+[{"owner", "balance": number}]}``, where a missing ``version`` also
+means 1) are still readable: the old ``balance`` number is mapped to
+USD.
+"""
+
+from __future__ import annotations
+
+import json
+
+from accounts import Account
+from money import check_currency
+
+SCHEMA_VERSION = 2
+
+
+def _to_record(account):
+    """Serialize one account to its version-2 storage record."""
+    return {
+        "owner": account.owner,
+        "balances": {currency: str(value) for currency, value in account.balances.items()},
+    }
+
+
+def _from_record(record):
+    """Rebuild one account from a version-2 storage record."""
+    return Account.from_dict(record)
+
+
+def _from_record_v1(record):
+    """Rebuild one account from an old version-1 storage record,
+    mapping its single ``balance`` number to USD."""
+    return Account(record["owner"], record.get("balance", 0.0))
+
+
+def save_accounts(accounts, path):
+    """Write accounts to path as version-2 JSON. Returns the path."""
+    payload = {
+        "version": SCHEMA_VERSION,
+        "accounts": [_to_record(acc) for acc in accounts],
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    return path
+
+
+def append_account(account, path):
+    """Append one account to the JSON file at path.
+
+    Creates a new version-2 file when none exists yet.
+    """
+    try:
+        accounts = load_accounts(path)
+    except FileNotFoundError:
+        accounts = []
+    accounts.append(account)
+    save_accounts(accounts, path)
+    return account
+
+
+def load_accounts(path):
+    """Read accounts back from a version-2 (or old version-1) JSON
+    file.
+
+    Any version other than 1 or 2, and any record naming an
+    unsupported currency, raise ``ValueError``.
+    """
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    version = payload.get("version", 1)
+    if version == 2:
+        from_record = _from_record
+    elif version == 1:
+        from_record = _from_record_v1
+    else:
+        raise ValueError("unsupported schema version: %r" % (version,))
+    accounts = []
+    for record in payload.get("accounts", []):
+        if version == 2:
+            for currency in record.get("balances", {}):
+                check_currency(currency)
+        accounts.append(from_record(record))
+    return accounts
