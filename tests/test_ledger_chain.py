@@ -398,6 +398,9 @@ def test_the_last_runs_outcome_is_the_verdict_when_a_journal_holds_two(repo: Pat
 
 
 class PassingAuditor:
+    def tier0(self, path: str, new_text: str) -> Findings:
+        return Findings(0, "k0", (Finding("ruff", 0, "pass", "code-wrong", "ruff clean", ()),))
+
     def tier1(self, tree: Path | None = None) -> Findings:
         return Findings(1, "k1", (Finding("tests", 1, "pass", "code-wrong", "1 passed", ()),))
 
