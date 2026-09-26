@@ -193,21 +193,61 @@ def line_text(g: FunctionGap) -> list[str]:
     return [f"      {n}: {text}" for n, text in g.text]
 
 
-def render_coverage(summary: CoverageSummary, *, text: bool = True) -> str:
+COMPACT_CAP = 5
+"""Functions listed in the compact rendering before "and N more functions in the packet"."""
+COMPACT_LINES = 2
+"""Uncovered lines' text shown per function in the compact rendering."""
+
+
+def _headline(s: CoverageSummary) -> str:
+    basis = " ".join(s.cites)
+    return (
+        f"{HEADING}: {s.detail_lines} changed lines no test runs "
+        f"[record: detail names {s.detail_lines} lines{'; ' + basis if basis else ''}]"
+    )
+
+
+def render_compact(summary: CoverageSummary, *, text: bool = True) -> str:
+    """The coverage row for the recap, which must not scroll.
+
+    The headline; the functions with the most uncovered lines first, capped
+    at `COMPACT_CAP` with "and N more functions in the packet"; under each,
+    at most `COMPACT_LINES` of its uncovered lines' text, then "and N more
+    lines"; unplaced lines as one count. Same sentences and tags as the full
+    rendering.
+    """
+    s = summary
+    if not s.detail_lines:
+        return ""
+    out = [_headline(s)]
+    gaps = sorted(s.gaps, key=lambda g: -len(g.uncovered))
+    for g in gaps[:COMPACT_CAP]:
+        out.append(f"  - {gap_sentence(g)}")
+        if text:
+            out.extend(line_text(g)[:COMPACT_LINES])
+            if len(g.text) > COMPACT_LINES:
+                out.append(f"      and {len(g.text) - COMPACT_LINES} more lines")
+    if len(gaps) > COMPACT_CAP:
+        out.append(f"  and {len(gaps) - COMPACT_CAP} more functions in the packet")
+    if s.unplaced:
+        out.append(f"  {len(s.unplaced)} lines not placed (file not in the tree read)")
+    return "\n".join(out) + "\n"
+
+
+def render_coverage(summary: CoverageSummary, *, text: bool = True, compact: bool = False) -> str:
     """The coverage row as lines of English, each backed by the finding.
 
     With `text` (the default) each function bullet is followed by the text
     of its uncovered lines, read from the same source the function was
     placed in; a file the tree did not hold is "not placed" and has none.
+    `compact` is the recap's rendering (`render_compact`).
     """
+    if compact:
+        return render_compact(summary, text=text)
     s = summary
     if not s.detail_lines:
         return ""
-    basis = " ".join(s.cites)
-    out = [
-        f"{HEADING}: {s.detail_lines} changed lines no test runs "
-        f"[record: detail names {s.detail_lines} lines{'; ' + basis if basis else ''}]"
-    ]
+    out = [_headline(s)]
     for g in s.gaps:
         out.append(f"  - {gap_sentence(g)}")
         if text:

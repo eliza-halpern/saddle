@@ -92,8 +92,15 @@ class Row:
     summary: str = ""
     """Lines beneath the row's text, compiled from the record the row cites:
     the Mutation row's English (`mutant_text.render_text`) when its finding
-    span seals a `MutationOutcome`; "" otherwise, and then left out of the
-    payload, so a packet without one is byte-identical to before (PACKETHOOK)."""
+    span seals a `MutationOutcome`, the Audit row's coverage English
+    (`coverage_text.render_coverage`) when a failing coverage finding seals
+    its sources; "" otherwise, and then left out of the payload, so a packet
+    without one is byte-identical to before (PACKETHOOK). This is the FULL
+    rendering: the web packet's fold shows it, and only the fold."""
+    recap: str = ""
+    """The same summary's COMPACT rendering (`compact=True`): what the
+    terminal recap and the chat pre-fill print, capped so the recap does not
+    scroll (user decision, 2026-09-26). "" exactly when `summary` is."""
 
 
 @dataclass(frozen=True)
@@ -245,22 +252,21 @@ def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.Mut
 
 def _coverage_summary(
     journal: Path, span: SpanRecord | None, mutation: mutant_text.MutationSummary | None
-) -> str:
-    """A failing coverage finding's English (COVTEXT), from the sources and
-    changed set sealed in its span; "" when nothing is sealed there."""
+) -> coverage_text.CoverageSummary | None:
+    """A failing coverage finding's summary (COVTEXT), from the sources and
+    changed set sealed in its span; None when nothing is sealed there."""
     sealed = _sealed(journal, span, "sources", "changed")
     if sealed is None or span is None:
-        return ""
+        return None
     try:
         finding = json.loads(span.detail)
     except ValueError:
-        return ""
+        return None
     if not isinstance(finding, dict):
-        return ""
+        return None
     sources = _sealed_sources(sealed["sources"])
     changed = [(str(f), int(n)) for f, n in sealed["changed"]]
-    summary = coverage_text.describe_coverage(finding, sources, changed, mutation)
-    return coverage_text.render_coverage(summary)
+    return coverage_text.describe_coverage(finding, sources, changed, mutation)
 
 
 def _sealed_sources(raw: Any) -> dict[str, str]:
@@ -693,6 +699,11 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 last.detail,
                 (last.record_hash,),
                 summary=mutant_text.render_text(mutation_summary) if mutation_summary else "",
+                recap=(
+                    mutant_text.render_text(mutation_summary, compact=True)
+                    if mutation_summary
+                    else ""
+                ),
             )
         )
     else:
@@ -748,7 +759,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         coverage_summary = (
             _coverage_summary(journal, span_by_hash.get(coverage.record_hash), mutation_summary)
             if coverage is not None
-            else ""
+            else None
         )
         if other:
             rows.append(
@@ -764,7 +775,14 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                         f"{a.name.removeprefix('audit:')}: {a.detail}"
                         for a in other
                     ),
-                    summary=coverage_summary,
+                    summary=(
+                        coverage_text.render_coverage(coverage_summary) if coverage_summary else ""
+                    ),
+                    recap=(
+                        coverage_text.render_coverage(coverage_summary, compact=True)
+                        if coverage_summary
+                        else ""
+                    ),
                 )
             )
 
@@ -934,7 +952,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
 def render_packet_text(packet: Packet) -> str:
     """The packet as plain text: the recap a chat's context gets (T5-7 (3), T5-9).
 
-    Deterministic, so the same ledger always gives the same bytes.
+    Deterministic, so the same ledger always gives the same bytes. A row's
+    summary is printed in its COMPACT form (`Row.recap`): the recap must not
+    scroll, and the full rendering is the web fold's.
     """
     lines = [f"verdict: {packet.verdict} — {packet.verdict_text}"]
     lines.extend(f"  {h}" for h in packet.header)
@@ -943,5 +963,5 @@ def render_packet_text(packet: Packet) -> str:
             continue
         lines.append(f"{row.title} [{row.status}]: {row.text}")
         lines.extend(f"  - {item}" for item in row.items)
-        lines.extend(f"  {line}" for line in row.summary.splitlines())
+        lines.extend(f"  {line}" for line in row.recap.splitlines())
     return "\n".join(lines)

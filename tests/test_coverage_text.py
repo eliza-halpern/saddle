@@ -267,3 +267,46 @@ def test_a_missing_source_is_not_placed_and_prints_no_line_text():
     assert "      2: y = 2" in text
     assert "      5:" not in text
     assert [g.text for g in s.gaps] == [((2, "y = 2"),)]
+
+
+# -- the compact rendering: the recap must not scroll (PACKETHOOK-3) ---------------
+
+
+def test_compact_caps_functions_at_five_with_two_lines_each(t5_changed):
+    s = describe_coverage(t5_finding(), t5_sources(), t5_changed)
+    assert len(s.gaps) == 6
+    text = render_coverage(s, compact=True)
+    lines = text.splitlines()
+    bullets = [x for x in lines if x.startswith("  - ")]
+    assert len(bullets) == 5
+    assert bullets[0].startswith("  - money.py convert: 10 of 16")  # most uncovered first
+    assert lines[-1] == "  and 1 more functions in the packet"
+    # The one left out is the last 1-line function in record order.
+    assert "store.py _from_record_v1" not in text
+    assert "store.py _from_record_v1" in render_coverage(s)
+    convert = lines.index(bullets[0])
+    assert lines[convert + 1 : convert + 4] == [
+        '      131:     if source == "USD":',
+        "      132:         usd = value",
+        "      and 8 more lines",
+    ]
+    assert lines[convert + 4].startswith("  - ")
+    assert len(lines) <= 20
+
+
+def test_compact_with_few_functions_has_no_more_lines():
+    s = toy("no test runs t.py:2, t.py:10")
+    text = render_coverage(s, compact=True)
+    assert "more functions" not in text
+    assert "more lines" not in text
+    assert [x for x in text.splitlines() if x.startswith("  - ")] == [
+        x for x in render_coverage(s).splitlines() if x.startswith("  - ")
+    ]
+
+
+def test_compact_counts_unplaced_lines_on_one_line():
+    s = describe_coverage({"detail": "no test runs gone.py:5, gone.py:6", "cites": []}, {})
+    text = render_coverage(s, compact=True)
+    assert text.splitlines()[-1] == "  2 lines not placed (file not in the tree read)"
+    assert "not placed [record:" not in text
+    assert render_coverage(s, compact=True, text=False) == text

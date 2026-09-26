@@ -10,6 +10,7 @@ record is never shown finished.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import uuid
 from collections.abc import Iterator
@@ -19,6 +20,7 @@ from typing import Any, cast
 
 import pytest
 
+from saddle import mutant_text
 from saddle.auditor import Finding, Findings
 from saddle.auto import AutoOptions, AutoResult, run_auto
 from saddle.events import AuditFinding, Event, Question
@@ -594,9 +596,20 @@ def test_a_sealed_mutation_outcome_renders_the_grouped_english_beneath_the_count
     assert "[accounts.xǁAccountǁwithdraw__mutmut_18]" in row.summary
     text = render_packet_text(packet)
     assert f"Mutation [failed]: tier 2, fail: {detail}\n  220 of 322 sampled mutants" in text
-    assert "\n  Left untested:\n    boundary:\n" in text
+    # The recap prints the COMPACT form (PACKETHOOK-3: it must not scroll):
+    # survivors capped at 5, worst group first, "and N more in the packet".
+    # Each summary line sits two spaces under the row, so a bullet is "    - ".
+    assert "\n  Left untested:\n    - accounts.py Account.withdraw:" in text
+    assert "    boundary:\n" not in text
+    assert re.search(r"\n    and \d+ more in the packet\n", text)
+    assert text.count("\n    - ") == 5
+    assert row.recap == mutant_text.render_text(
+        mutant_text.describe_mutation(mutation_outcome()), compact=True
+    )
+    # The payload carries the FULL form for the web fold, and only that.
     payload_row = next(r for r in packet.payload()["rows"] if r["key"] == "mutation")
     assert payload_row["summary"] == row.summary
+    assert "recap" not in payload_row
 
 
 def test_killers_in_the_sealed_outcome_name_the_test_that_caught_a_mutant(tmp_path: Path) -> None:
@@ -752,9 +765,16 @@ def test_a_failing_coverage_finding_with_sealed_sources_renders_its_english_unde
     text = render_packet_text(packet)
     assert "\nAudit [failed]: 0 of 1 finding passed.\n  - ✗ coverage: tier 1, fail:" in text
     assert "\n  Not proven by any test: 19 changed lines no test runs" in text
-    assert '\n        131:     if source == "USD":\n' in text
+    assert '\n        131:     if source == "USD":\n        132:         usd = value\n' in text
+    # Compact in the recap (PACKETHOOK-3), full in the payload for the web fold.
+    assert "\n        and 8 more lines\n" in text
+    assert "\n    and 1 more functions in the packet\n" in text
+    assert "store.py _from_record_v1" not in text
+    assert "store.py _from_record_v1" in audit.summary
+    assert "more functions in the packet" not in audit.summary
     payload_row = next(r for r in packet.payload()["rows"] if r["key"] == "audit")
     assert payload_row["summary"] == audit.summary
+    assert "recap" not in payload_row
 
 
 def test_coverage_english_without_a_mutation_record_has_no_mutant_link(tmp_path: Path) -> None:
@@ -827,3 +847,16 @@ def test_a_source_sealed_as_one_string_over_the_sidecar_cap_is_not_placed(tmp_pa
     )
     assert "  - store.py load_accounts: 2 of 16 changed lines never run" in audit.summary
     assert "money.py convert" not in audit.summary
+
+
+def test_every_row_has_a_recap_exactly_when_it_has_a_summary(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
+    sealed_mutation_span(journal, "fail", "killed 220 of 322 sampled mutants", mutation_outcome())
+    packet = compile_packet(journal)
+    with_summary = {r.key for r in packet.rows if r.summary}
+    assert with_summary == {"mutation", "audit"}
+    assert {r.key for r in packet.rows if r.recap} == with_summary
+    for r in packet.rows:
+        if r.summary:
+            assert len(r.recap.splitlines()) < len(r.summary.splitlines())

@@ -308,13 +308,77 @@ def _grouped(title: str, mutants: tuple[MutantLine, ...]) -> list[str]:
     return out
 
 
-def render_text(summary: MutationSummary) -> str:
-    """The mutation row as lines of English, each backed by a mutant or a record field."""
-    s = summary
-    out = [
+# The recap must not scroll (user decision, 2026-09-26): the terminal recap and
+# the chat pre-fill get COMPACT; only the web packet's fold gets FULL.
+SEVERITY = (
+    "boundary",
+    "accumulation",
+    "equality",
+    "version",
+    "default",
+    "branch",
+    "argument",
+    "other",
+)
+"""Survivor order in the compact rendering: what a wrong edit there costs most."""
+COMPACT_CAP = 5
+"""Survivors listed in the compact rendering before "and N more in the packet"."""
+
+
+def _headline(s: MutationSummary) -> str:
+    return (
         f"{s.killed} of {s.total} sampled mutants were caught by the suite "
-        f"[record: killed={s.killed} total={s.total}]",
-    ]
+        f"[record: killed={s.killed} total={s.total}]"
+    )
+
+
+def _severity(m: MutantLine) -> int:
+    return SEVERITY.index(m.protects) if m.protects in SEVERITY else len(SEVERITY)
+
+
+def render_compact(summary: MutationSummary) -> str:
+    """The mutation row in at most `COMPACT_CAP + 4` lines, for the recap.
+
+    The headline; the caught mutants as one line of counts by group, never
+    listed; the surviving behaviour and untested mutants, worst group first
+    (`SEVERITY`), capped at `COMPACT_CAP` with "and N more in the packet";
+    text and equivalent survivors left out entirely. Every line still names
+    its record: the same sentences and tags `render_text` writes.
+    """
+    s = summary
+    out = [_headline(s)]
+    if s.killed:
+        counts: dict[str, int] = {}
+        for m in s.caught:
+            label = m.protects or m.kind
+            counts[label] = counts.get(label, 0) + 1
+        if counts:
+            order = sorted(
+                counts, key=lambda g: SEVERITY.index(g) if g in SEVERITY else len(SEVERITY)
+            )
+            out.append(f"{s.killed} caught: " + ", ".join(f"{counts[g]} {g}" for g in order))
+        else:
+            out.append(f"{s.killed} caught: no recorded diff, so counted, not described")
+    survivors = [mutant_sentence(m) for m in sorted(s.gaps, key=_severity)]
+    survivors += [f"survived; no diff recorded [{n}]" for n in s.undescribed]
+    if survivors:
+        out.append("Left untested:")
+        out.extend(f"  - {line}" for line in survivors[:COMPACT_CAP])
+        if len(survivors) > COMPACT_CAP:
+            out.append(f"  and {len(survivors) - COMPACT_CAP} more in the packet")
+    return "\n".join(out) + "\n"
+
+
+def render_text(summary: MutationSummary, *, compact: bool = False) -> str:
+    """The mutation row as lines of English, each backed by a mutant or a record field.
+
+    `compact` is the recap's rendering (`render_compact`); the default lists
+    every mutant, grouped, for the web packet's fold.
+    """
+    if compact:
+        return render_compact(summary)
+    s = summary
+    out = [_headline(s)]
     if s.text_only:
         out.append(
             f"{s.text_only} message-only mutants were set aside before scoring "
