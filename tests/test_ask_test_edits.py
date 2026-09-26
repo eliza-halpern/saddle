@@ -255,7 +255,9 @@ class Feed:
         return ""
 
     def final(self) -> tuple[bool, str]:
-        return self.ok, "coverage FAIL"
+        # An accepted finish returns no text unless it surfaces findings
+        # (FEEDFIX 7); this fake surfaces none.
+        return self.ok, "" if self.ok else "coverage FAIL"
 
     def unresolved(self) -> list[dict[str, object]]:
         return [{"gate": "coverage", "reason": "evidence-thin", "cites": []}]

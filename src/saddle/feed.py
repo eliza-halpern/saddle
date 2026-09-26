@@ -249,6 +249,9 @@ class AuditFeed:
     checks: list[AuditResult] = field(default_factory=list)
     """Every `check` the model ran, in order. Not in `results`: a check is
     never the run's verdict, and `unresolved` must read the finish audit."""
+    surfaced_tree: str | None = None
+    """The tree of the accepted finish whose not-proven findings were
+    delivered (`final`); None until one is."""
     _checked_tree: str | None = None
     _dirty: bool = False
     _pending: Future[AuditResult] | None = None
@@ -416,6 +419,15 @@ class AuditFeed:
         finish is always accepted and the text is empty. A checkpoint audit
         still undelivered is shown with a refusal, and journaled as withheld
         when finish is accepted (the model never reads that result).
+
+        An accepted finish returns its audit's text once per run, the first
+        time that audit carries a `not-proven` finding (FEEDFIX item 7;
+        EAFSPREP ADDENDUM-2 §4.6, option (c)): the surviving mutants and
+        uncovered lines the shortlist surfaces reach the model as feedback,
+        journaled `audit:delivered`. The verdict is not changed by it: the
+        finish is accepted, nothing counts as a refusal, and the engine
+        lets the model read it (`engine.FINISH_SURFACED`). Every later
+        accepted finish returns "" as before.
         """
         self._await()
         pending = self._take()
@@ -425,11 +437,36 @@ class AuditFeed:
         with self._lock:
             self.results.append(result)
         refuse = self.feedback and not result.passed
+        # FEEDFIX (7): the first accepted finish that carries not-proven
+        # findings delivers them; the accept itself is unchanged.
+        surface = (
+            self.feedback
+            and result.passed
+            and self.surfaced_tree is None
+            and any(f.verdict == "not-proven" for f in result.findings)
+        )
+        if surface:
+            self.surfaced_tree = result.tree
         before = self._record(pending, delivered=refuse)
-        text = self._record([result], delivered=refuse)
+        text = self._record([result], delivered=refuse or surface)
+        if surface:
+            return True, text
         if not refuse:
             return True, ""
         return False, "\n\n".join(t for t in (before, text) if t)
+
+    def accepted_unchanged(self) -> bool:
+        """True when a finish was accepted with surfaced findings (`final`)
+        and the worktree is still the tree that finish audit accepted."""
+        if not self.surfaced_tree:
+            return False
+        scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))
+        try:
+            return snapshot(self.worktree, self.worktree, scratch / "tree") == self.surfaced_tree
+        except AuditError:
+            return False
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def unresolved(self) -> list[dict[str, object]]:
         """The last audit's failing findings as (gate, reason, cites), sorted.

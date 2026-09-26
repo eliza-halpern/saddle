@@ -161,10 +161,21 @@ class AuditHooks(Protocol):
     def unresolved(self) -> list[dict[str, object]]: ...
     def close(self) -> None: ...
     def last(self) -> dict[str, object] | None: ...
+    def accepted_unchanged(self) -> bool: ...
 
 
 FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
 """Prefix of `finish`'s result when the audit refuses it (arm E+A+F)."""
+
+FINISH_SURFACED: Final = (
+    "finish accepted: the audit passed and refuses nothing, but it could not prove "
+    "what follows. Read it before you end the run: write tests that prove these "
+    "behaviours if you can, then call finish again. Calling finish again with no "
+    "change ends the run finished.\n\n"
+)
+"""Prefix of `finish`'s result when the audit accepts it and surfaces
+not-proven findings (`feed.AuditFeed.final`, FEEDFIX item 7). Not an
+error and not a refusal: `finish_refusals` and the cap are untouched."""
 
 DEFAULT_FINISH_REFUSAL_CAP: Final = 3
 """Consecutive `finish` refusals on an unchanged failing finding set before
@@ -250,6 +261,10 @@ class AutoRun:
     and 1). Off, the tool is not offered and a `check` call is an unknown tool."""
     asked: set[str] = field(default_factory=set)
     """Which of the run's own questions ("test-edits", "budget") were put; each at most once."""
+    surfaced: str | None = None
+    """The summary of the finish that was accepted with surfaced not-proven
+    findings (`FINISH_SURFACED`); None until one is. A run that then stops
+    on that same tree ends finished with it."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -679,6 +694,18 @@ def run_turn(
         auto.stop("the loop ended without finish")  # a no-op once outcome is set
         if auto.feed is not None:
             auto.feed.close()
+            if (
+                auto.outcome == "stopped"
+                and auto.surfaced is not None
+                and auto.feed.accepted_unchanged()
+            ):
+                # The accept stands: the tree the finish audit accepted is the
+                # tree the run ends on; surfacing its findings never loses it.
+                auto.outcome, auto.narrative = "finished", auto.surfaced
+                auto.reason = (
+                    f"finish accepted with not-proven findings; the run then ended "
+                    f"({auto.reason}) with the tree unchanged"
+                )
         _seal_outcome(options.journal, node_id, auto, rounds)
 
     yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
@@ -973,6 +1000,11 @@ def _finish(auto: AutoRun, arguments: str) -> str:
                     f"({AUDIT_UNRESOLVED}).\n\n{findings}"
                 )
             return f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
+        if findings:
+            # Accepted, with not-proven findings the model has not read: it
+            # reads them in its next round; a later finish ends the run.
+            auto.surfaced = summary
+            return f"{FINISH_SURFACED}{findings}"
     auto.finish(summary)
     return "finished. Your summary is recorded as narrative, not as evidence."
 
@@ -1041,6 +1073,10 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         # was audited before the run ended.
         "audit": auto.feed.last() if auto.feed is not None else None,
     }
+    if auto.surfaced is not None:
+        # FEEDFIX (7): only when an accepted finish surfaced not-proven
+        # findings, so every other run seals the same keys as before.
+        evidence["finish_surfaced"] = True
     if auto.check_tool and auto.feed is not None:
         # Only with the flag, so a run without it seals the same keys as before.
         evidence["checks"] = len(auto.feed.checks)

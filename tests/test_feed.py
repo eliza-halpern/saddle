@@ -28,14 +28,14 @@ from typing import Any, cast
 
 import pytest
 
-from saddle import cli, feed
+from saddle import cli, engine, feed
 from saddle.auditor import AuditorConfig, Finding, Findings, sanction
 from saddle.auto import AutoError, AutoOptions, AutoResult, run_auto
 from saddle.engine import FINISH_REFUSED
 from saddle.events import AuditNote, Event
 from saddle.feed import AuditFeed, AuditResult, render, snapshot
 from saddle.journal import attempt_sidecar_path, read_spans, verify_journal
-from saddle.vllm import ToolCall, VllmClient
+from saddle.vllm import ToolCall, VllmClient, VllmError
 
 BUGGY = "def add(a, b):\n    return a - b\n"
 TEST = "from calc import add\n\n\ndef test_add():\n    assert add(2, 2) == 4\n"
@@ -995,3 +995,119 @@ def test_the_finish_audit_record_carries_every_scored_mutants_detail(repo: Path)
 
 def test_an_audit_with_no_mutants_carries_no_mutant_detail_key() -> None:
     assert "mutant_detail" not in AuditResult("finish", "t", ()).to_dict()
+
+
+# -- FEEDFIX (7): an accepted finish delivers its not-proven findings once -------
+
+ROWS = tuple(
+    f"- calc.py:{n}: `return a + b`: mutant calc.x_add__mutmut_{n} (survived)" for n in (1, 2, 3)
+)
+
+
+def finish_results(result: AutoResult) -> list[str]:
+    return [s.detail for s in read_spans(result.journal) if s.argv and s.argv[0] == "finish"]
+
+
+class Surfaces(FakeAuditor):
+    """Passes every gate; tier 2's mutation finding is not-proven with 3 rows."""
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        self.calls.append((2, "surface"))
+        detail = "3 surviving mutant(s) on changed lines:\n" + "\n".join(ROWS)
+        found = Finding("mutation", 2, "not-proven", "evidence-thin", detail, ("fake",))
+        return Findings(tier=2, key="k2", findings=(found,))
+
+
+def test_an_accepted_finish_shows_the_model_its_three_surviving_mutants(repo: Path) -> None:
+    """Known-good: the finish is accepted, and the model's next request
+    carries all three rows; nothing is counted as a refusal."""
+    fix = call("edit_file", "e1", path="calc.py", old="a - b", new="a + b")
+    client = Reactive([[fix], [FINISH]])
+    result, _ = run(repo, client, auditor=Surfaces())
+    assert result.outcome == "finished"
+    assert result.reason == "finish called"
+    assert client.round == 3
+    read = [m["content"] for m in client.messages if m.get("role") == "tool"]
+    assert read[-1].startswith(engine.FINISH_SURFACED)
+    assert all(row in read[-1] for row in ROWS)
+    assert finish_results(result)[-1].startswith("finished.")
+    record = sidecar(result)
+    assert record["finish_refusals"] == 0
+    assert record["finish_surfaced"] is True
+    assert record["audit"]["passed"] is True
+    spans = [s for s in read_spans(result.journal) if s.name.startswith("audit:")]
+    finish = [s for s in spans if s.argv[:2] == ["audit", "finish"]]
+    assert [s.name for s in finish] == ["audit:delivered", "audit:withheld"]
+    assert all(row in finish[0].detail for row in ROWS)
+    assert verify_journal(result.journal) == []
+
+
+def test_a_finish_with_nothing_unproven_ends_at_once_and_seals_no_surfacing(repo: Path) -> None:
+    """Known-bad for the delivery: an all-pass finish is not held open."""
+    fix = call("edit_file", "e1", path="calc.py", old="a - b", new="a + b")
+    client = Reactive([[fix], [FINISH]])
+    result, _ = run(repo, client)
+    assert result.outcome == "finished"
+    assert client.round == 2
+    assert "finish_surfaced" not in sidecar(result)
+
+
+def test_a_refused_finish_is_unchanged_by_surfacing(repo: Path) -> None:
+    """Refusal path: a failing finish audit still refuses, not-proven or not."""
+
+    class FailsAndSurfaces(Surfaces):
+        def tier1(self, tree: Path | None = None) -> Findings:
+            return self._findings(1, tree)
+
+    client = Reactive([[FINISH]], tail=[])
+    result, _ = run(repo, client, auditor=FailsAndSurfaces(), finish_refusal_cap=1)
+    assert result.outcome == "stopped"
+    assert finish_results(result)[0].startswith(FINISH_REFUSED)
+    assert "finish_surfaced" not in sidecar(result)
+
+
+class StopsAfter(Reactive):
+    """Replays `script`, then the model errors (the run stops, no finish)."""
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+        if not self.script:
+            self.messages = list(messages)
+            msg = "gone"
+            raise VllmError(msg)
+        return super().stream_chat(messages, **kwargs)
+
+
+def test_a_run_that_stops_on_the_accepted_tree_still_ends_finished(repo: Path) -> None:
+    fix = call("edit_file", "e1", path="calc.py", old="a - b", new="a + b")
+    client = StopsAfter([[fix], [FINISH]])
+    result, _ = run(repo, client, auditor=Surfaces())
+    assert result.outcome == "finished"
+    assert result.reason.startswith("finish accepted with not-proven findings")
+    assert "model error" in result.reason
+    assert sidecar(result)["narrative"] == "done"
+
+
+def test_a_run_that_stops_after_changing_the_accepted_tree_ends_stopped(repo: Path) -> None:
+    fix = call("edit_file", "e1", path="calc.py", old="a - b", new="a + b")
+    more = call("edit_file", "e2", path="calc.py", old="def add", new="# more\ndef add")
+    client = StopsAfter([[fix], [FINISH], [more]])
+    result, _ = run(repo, client, auditor=Surfaces())
+    assert result.outcome == "stopped"
+    assert "model error" in result.reason
+
+
+def test_accepted_unchanged_is_false_before_any_surfacing_and_when_no_snapshot_can_be_taken(
+    unit: tuple[AuditFeed, FakeAuditor], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fed, _ = unit
+    assert fed.accepted_unchanged() is False
+    fed.surfaced_tree = "t" * 40
+
+    def broken(*args: object) -> str:
+        from saddle.audit import AuditError
+
+        msg = "git clone failed"
+        raise AuditError(msg)
+
+    monkeypatch.setattr(feed, "snapshot", broken)
+    assert fed.accepted_unchanged() is False
