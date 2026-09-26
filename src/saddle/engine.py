@@ -162,6 +162,7 @@ class AuditHooks(Protocol):
     def close(self) -> None: ...
     def last(self) -> dict[str, object] | None: ...
     def accepted_unchanged(self) -> bool: ...
+    def unchanged(self) -> bool: ...
 
 
 FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
@@ -182,6 +183,18 @@ DEFAULT_FINISH_REFUSAL_CAP: Final = 3
 the run stops (M3F: a correct T5 tree was refused 7,244 times until the
 token budget ran out). Tightened: the loop is bounded; the tree is never
 marked finished."""
+
+UNCHANGED: Final = "unchanged"
+"""The third ending (FEEDFIX item 5): `finish` on a tree equal to the
+baseline. Not accepted (not `finished`), not a refusal (no count, no cap),
+sealed as `auto:unchanged`."""
+
+FINISH_UNCHANGED: Final = (
+    "unchanged: the tree equals the baseline, so there is nothing to audit. "
+    "The run ends `unchanged`: not finished, and not a refusal. Your summary is "
+    "recorded as narrative, not as evidence."
+)
+"""`finish`'s result when the run ends `unchanged`."""
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The sealed stop reason when the finish refusal cap is reached."""
@@ -214,8 +227,10 @@ class AutoRun:
     """What makes a turn an autonomous run, and what it ended as.
 
     The engine fills `outcome`: "finished" only when the model called
-    `finish`; "stopped" for a budget, a model error or a cancel. There is
-    no third ending, and a stop never reads as done.
+    `finish`; "stopped" for a budget, a model error or a cancel; and, with
+    an auditor, "unchanged" when `finish` is called on a tree equal to the
+    baseline (FEEDFIX item 5). A stop never reads as done, and neither
+    does an unchanged tree.
 
     `feed`, when set (arms E+A and E+A+F), is called before and after each
     tool, its completed audits are appended to the next tool result, and it
@@ -273,6 +288,11 @@ class AutoRun:
     def finish(self, narrative: str) -> None:
         if not self.outcome:
             self.outcome, self.reason, self.narrative = "finished", "finish called", narrative
+
+    def end_unchanged(self, narrative: str) -> None:
+        if not self.outcome:
+            self.outcome, self.narrative = UNCHANGED, narrative
+            self.reason = "finish called on a tree equal to the baseline; no change was made"
 
 
 OUTPUT_MARGIN: Final = 2048
@@ -986,6 +1006,10 @@ def _finish(auto: AutoRun, arguments: str) -> str:
         return "error: finish needs a string summary argument"
     if auto.feed is not None:
         accepted, findings = auto.feed.final()
+        if auto.feed.unchanged():
+            # Nothing to audit is no verdict: neither an accept nor a refusal.
+            auto.end_unchanged(summary)
+            return FINISH_UNCHANGED
         if not accepted:
             auto.finish_refusals += 1
             unresolved = auto.feed.unresolved()

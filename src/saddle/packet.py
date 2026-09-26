@@ -44,6 +44,7 @@ from saddle import coverage_text, mutant_text
 from saddle.anchor import anchor_issues
 from saddle.journal import (
     AUDIT_SPAN_PREFIXES,
+    AUTO_OUTCOMES,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
@@ -118,7 +119,7 @@ class Packet:
     run_id: str
     task: str
     verdict: str
-    """finished, stopped, needs_you, or unrecorded: from the outcome span only."""
+    """finished, stopped, unchanged, needs_you, or unrecorded: from the outcome span only."""
     verdict_text: str
     header: tuple[str, ...]
     rows: tuple[Row, ...]
@@ -556,9 +557,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     spans = [e for e in entries if isinstance(e, SpanRecord)]
     proofs = [e for e in entries if isinstance(e, ProofRecord)]
     start = next((s for s in spans if s.name == "auto:start"), None)
-    outcome = next(
-        (s for s in reversed(spans) if s.name in ("auto:finished", "auto:stopped")), None
-    )
+    outcome = next((s for s in reversed(spans) if s.name in AUTO_OUTCOMES), None)
     # The model's tool calls: audit records are journaled as `tool` spans too,
     # but the auditor wrote them (FIX-1; the ledger's list excludes them alike).
     tools = [s for s in spans if s.kind == "tool" and not s.name.startswith(AUDIT_SPAN_PREFIXES)]
@@ -620,6 +619,12 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             "could not be proven (they do not refuse finish)."
             if any(a.verdict == "not-proven" for a in audits)
             else "The executor called finish, and every audit finding recorded passed."
+        )
+    elif outcome.name == "auto:unchanged":
+        verdict = "unchanged"
+        verdict_text = (
+            "Unchanged: finish was called on a tree equal to the baseline, so there was "
+            "nothing to audit. No change was made; this is not finished and not a refusal."
         )
     else:
         verdict = "stopped"
@@ -876,6 +881,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             "The run stopped before finishing: "
             f"{outcome.detail.split(';')[0].removeprefix('stopped: ')}."
         )
+        gap_cites.append(outcome.record_hash)
+    if outcome is not None and outcome.name == "auto:unchanged":
+        gaps.append("No change was made: the tree equals the baseline, so nothing was audited.")
         gap_cites.append(outcome.record_hash)
     for q in unanswered:
         gaps.append(f"Unanswered question: {q.detail}")

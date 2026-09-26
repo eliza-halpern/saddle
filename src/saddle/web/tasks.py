@@ -9,7 +9,7 @@ what that run does into things the chat can show:
 - the run's ledger, tailed and rendered as `TaskLine` session lines (T5-6),
   so every line on the card is a sealed record with a hash to cite;
 - `TaskState` whenever the card's state changes: running, needs_you,
-  finished, stopped, failed.
+  finished, stopped, unchanged, failed.
 
 The final state is read from the ledger's outcome span by the packet
 compiler, never from the thread that ran it, so the chat cannot show a
@@ -246,12 +246,16 @@ def recap_message(run: TaskRun, recap: str) -> dict[str, Any]:
     }
 
 
+ENDED_VERDICTS: Final = ("finished", "stopped", "unchanged")
+"""Packet verdicts a card shows as they are; anything else is "failed"."""
+
+
 def run_ref_span(run: TaskRun, verdict: str, detail: str, run_span: str) -> SpanRecord:
     return build_span(
         node_id=f"task:{run.run_id}",
         argv=[RUN_REF, run.run_id, run.task, str(run.journal), run_span],
         duration_ms=0,
-        exit_code={"finished": 0, "stopped": 3}.get(verdict, 1),
+        exit_code={"finished": 0, "stopped": 3, "unchanged": 3}.get(verdict, 1),
         detail=f"{verdict}: {detail}",
         kind="agent",
         name=RUN_REF,
@@ -278,7 +282,7 @@ def latest_run_ref(chat_journal: Path) -> tuple[str, str] | None:
     The sidebar's memory of a run (`ChatServer.tasks`) dies with the process;
     the chat journal does not. A run that ended sealed a run-ref whose
     detail opens with its ledger verdict, so a restarted server shows the
-    run as it ended. A verdict outside finished/stopped reads as "failed"
+    run as it ended. A verdict outside `ENDED_VERDICTS` reads as "failed"
     (the card's "no outcome"), the same as `execute` would have published.
     A run that never ended -- no run-ref -- is not shown: nothing here can
     vouch for a state the ledger never sealed.
@@ -289,7 +293,7 @@ def latest_run_ref(chat_journal: Path) -> tuple[str, str] | None:
     for span in read_spans(chat_journal):
         if span.name == RUN_REF and len(span.argv) >= 3:
             verdict = span.detail.split(":", 1)[0]
-            state = verdict if verdict in ("finished", "stopped") else "failed"
+            state = verdict if verdict in ENDED_VERDICTS else "failed"
             found = (state, span.argv[2])
     return found
 
@@ -381,7 +385,7 @@ def execute(
     for line in run.new_lines():
         publish(line)
     packet = compile_packet(run.journal, run_id=run.run_id)
-    run.state = packet.verdict if packet.verdict in ("finished", "stopped") else "failed"
+    run.state = packet.verdict if packet.verdict in ENDED_VERDICTS else "failed"
     start = next((s for s in read_spans(run.journal) if s.name == "auto:start"), None)
     append_span(
         chat_journal,

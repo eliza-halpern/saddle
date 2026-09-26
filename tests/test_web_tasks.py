@@ -521,3 +521,18 @@ def test_the_web_packet_reports_the_branch_anchor_check(store: SessionStore, rep
     row = next(r for r in packet["rows"] if r["key"] == "reproduce")
     assert "Its outcome matches the Saddle-Outcome trailer on the run branch." in row["text"]
     assert row["items"][0].endswith(" --anchor")
+
+
+def test_an_unchanged_run_keeps_its_state_across_a_restart(tmp_path: Path) -> None:
+    """FEEDFIX (5): `unchanged` is an ended state of its own, not "failed"."""
+    from saddle.journal import append_span
+
+    chat = tmp_path / "chat.jsonl"
+    run = TaskRun(run_id="r1", session_id="s", task="t", time_budget_s=1, token_budget=1)
+    run.journal = tmp_path / "r1.jsonl"
+    span = tasks.run_ref_span(run, "unchanged", "no change was made", "")
+    assert span.exit_code == 3
+    append_span(chat, span)
+    assert tasks.latest_run_ref(chat) == ("unchanged", "t")
+    append_span(chat, tasks.run_ref_span(run, "unrecorded", "none", ""))
+    assert tasks.latest_run_ref(chat) == ("failed", "t")

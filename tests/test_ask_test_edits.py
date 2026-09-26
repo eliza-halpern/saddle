@@ -259,6 +259,9 @@ class Feed:
         # (FEEDFIX 7); this fake surfaces none.
         return self.ok, "" if self.ok else "coverage FAIL"
 
+    def unchanged(self) -> bool:
+        return False
+
     def unresolved(self) -> list[dict[str, object]]:
         return [{"gate": "coverage", "reason": "evidence-thin", "cites": []}]
 

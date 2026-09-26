@@ -35,6 +35,7 @@ from saddle.engine import FINISH_REFUSED
 from saddle.events import AuditNote, Event
 from saddle.feed import AuditFeed, AuditResult, render, snapshot
 from saddle.journal import attempt_sidecar_path, read_spans, verify_journal
+from saddle.packet import compile_packet
 from saddle.vllm import ToolCall, VllmClient, VllmError
 
 BUGGY = "def add(a, b):\n    return a - b\n"
@@ -476,19 +477,59 @@ def test_a_finished_run_records_the_tree_its_final_audit_saw(repo: Path) -> None
     assert record["audit"]["passed"] is True
 
 
-def test_an_unchanged_tree_is_nothing_to_audit_and_does_not_block_finish(repo: Path) -> None:
-    class Real(FakeAuditor):
-        def tier1(self, tree: Path | None = None) -> Findings:
-            from saddle.audit import AuditError
+class NothingToAudit(FakeAuditor):
+    def tier1(self, tree: Path | None = None) -> Findings:
+        from saddle.audit import AuditError
 
-            msg = "nothing to audit: the tree equals baseline 0123"
-            raise AuditError(msg)
+        msg = "nothing to audit: the tree equals baseline 0123"
+        raise AuditError(msg)
 
-    result, _ = run(repo, Reactive([[FINISH]]), "E+A+F", auditor=Real())
-    assert result.outcome == "finished"
+
+@pytest.mark.parametrize("arm", ["E+A+F", "E+A"])
+def test_an_unchanged_tree_is_nothing_to_audit_and_ends_unchanged_not_finished(
+    repo: Path, arm: str
+) -> None:
+    """flip (FEEDFIX 5): was `outcome == "finished"`. Not accepted and not a
+    refusal: no refusal counted, no cap, the note sealed, ends `unchanged`."""
+    result, _ = run(repo, Reactive([[FINISH]]), arm, auditor=NothingToAudit(), finish_refusal_cap=1)
+    assert result.outcome == "unchanged"
+    assert "no change was made" in result.reason
     record = sidecar(result)
+    assert record["outcome"] == "unchanged"
+    assert record["finish_refusals"] == 0
+    assert record["unchanged_refusals"] == 0
     assert record["audit"]["findings"] == []
     assert record["audit"]["note"].startswith("nothing to audit")
+    assert finish_results(result) == [engine.FINISH_UNCHANGED]
+    assert verify_journal(result.journal) == []
+    end = [s for s in read_spans(result.journal) if s.name.startswith("auto:")][-1]
+    assert (end.name, end.exit_code) == ("auto:unchanged", 3)
+
+
+def test_the_real_auditor_does_not_accept_an_unchanged_tree(real_repo: Path) -> None:
+    """Known-bad (SANCTIONS construct/nothing_to_audit_probe.py): the finish
+    audit of a tree equal to its baseline must not accept it."""
+    fed = AuditFeed(real_repo, "HEAD", real_repo.parent / "j.jsonl", "probe")
+    assert fed.final() == (False, "")
+    assert fed.unchanged()
+    client = Reactive([[FINISH]])
+    result = run_auto(
+        AutoOptions(task="make f return 2", repo=real_repo, run_id="u"), cast(VllmClient, client)
+    )
+    assert result.outcome == "unchanged"
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "unchanged"
+    assert packet.verdict_text.startswith("Unchanged: finish was called on a tree equal")
+    gaps = {r.key: r for r in packet.rows}["not-proven"].items
+    assert "No change was made: the tree equals the baseline, so nothing was audited." in gaps
+    assert transcript_verdict(result.journal)[1].startswith("UNCHANGED")
+
+
+def test_a_changed_tree_still_finishes_and_unchanged_is_false(repo: Path) -> None:
+    """Known-good: a real change is audited and accepted as before."""
+    fix = call("edit_file", "e1", path="calc.py", old="a - b", new="a + b")
+    result, _ = run(repo, Reactive([[fix], [FINISH]]))
+    assert result.outcome == "finished"
 
 
 def test_an_audit_that_crashes_is_blocked_and_refuses_finish(repo: Path) -> None:
@@ -1152,3 +1193,11 @@ def test_each_audit_span_seals_its_own_mutant_rows(repo: Path, tmp_path: Path) -
     assert [r["status"] for r in rows[1]] == ["killed", "killed"]
     # The run span "s" is not in this bare journal; every sidecar still hashes.
     assert {i.code for i in verify_journal(journal)} == {"orphan-span"}
+
+
+def transcript_verdict(journal: Path) -> tuple[str, str]:
+    from saddle.transcript import _auto_verdict
+
+    spans = read_spans(journal)
+    start = next(s for s in spans if s.name == "auto:start")
+    return _auto_verdict(start, spans)

@@ -255,6 +255,8 @@ def _auto_verdict(start: SpanRecord, spans: Sequence[SpanRecord]) -> tuple[str, 
         return task, "NO OUTCOME (no auto:finished or auto:stopped span)"
     if outcome.name == "auto:finished":
         return task, "FINISHED"
+    if outcome.name == "auto:unchanged":
+        return task, "UNCHANGED (finish on a tree equal to the baseline; nothing audited)"
     return task, f"STOPPED ({outcome.detail.split(';')[0].removeprefix('stopped: ')})"
 
 

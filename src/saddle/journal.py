@@ -604,8 +604,9 @@ TOOL_SPAN_HASHES: Final = "tool_span_hashes"
 AUDIT_SPAN_HASHES: Final = "audit_span_hashes"
 """The outcome sidecar's list of the run's audit records (FIX-5), as a set:
 the auditor writes from the feed's thread, so their order is not the run's."""
-AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped")
-"""A run's outcome span names (`engine._seal_outcome`). Not `auto:spend`,
+AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
+"""A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
+FEEDFIX item 5's third ending (finish on a tree equal to the baseline). Not `auto:spend`,
 which USAGE seals under the start span once per round."""
 AUDIT_SPAN_PREFIXES: Final = ("audit:", "audit-tier")
 """Audit records a run's journal also holds: the feed's `audit:delivered` /

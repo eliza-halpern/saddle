@@ -23,7 +23,7 @@ const RUN_LOOK = {
   failed:    { glyph: "!", word: "no outcome", color: "#e8697a" },
 };
 const RUN_LIVE = new Set(["running", "needs_you"]);
-const RUN_ENDED = new Set(["finished", "stopped", "failed"]);
+const RUN_ENDED = new Set(["finished", "stopped", "unchanged", "failed"]);
 const NOTIFY_KEY = "saddle.notify";
 
 const runWatch = {

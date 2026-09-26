@@ -581,6 +581,7 @@ main { position: relative; }
 .task-card[data-state="needs_you"] { --tone: var(--ask); --wash: var(--wash-ask); }
 .task-card[data-state="finished"]  { --tone: var(--done); --wash: var(--wash-done); }
 .task-card[data-state="stopped"],
+.task-card[data-state="unchanged"],
 .task-card[data-state="failed"]    { --tone: var(--halt); --wash: var(--wash-halt); }
 .task-card[data-state="loading"]   { --tone: var(--line); }
 

@@ -395,7 +395,7 @@ class ChatServer:
             last = self.indexed.get(run.run_id)
             if last != run.state:
                 run.state_since = time.time()
-                if run.state in ("finished", "stopped", "failed"):
+                if run.state in ("finished", "stopped", "unchanged", "failed"):
                     run.ended = run.state_since
                 self.indexed[run.run_id] = run.state
             try:

@@ -16,10 +16,11 @@ const TASK_STATES = {
   needs_you: { word: "needs you", glyph: "?" },
   finished:  { word: "finished",  glyph: "✓" },
   stopped:   { word: "stopped",   glyph: "■" },
+  unchanged: { word: "unchanged", glyph: "=" },
   failed:    { word: "no outcome", glyph: "!" },
   loading:   { word: "loading",   glyph: "…" },
 };
-const ENDED = new Set(["finished", "stopped", "failed"]);
+const ENDED = new Set(["finished", "stopped", "unchanged", "failed"]);
 
 const tasks = new Map();
 
@@ -307,7 +308,7 @@ function renderPacket(card, packet) {
 
   const verdict = el("div", `verdict v-${packet.verdict}`);
   const word = {
-    finished: "Finished", stopped: "Stopped", needs_you: "Needs you", unrecorded: "No outcome",
+    finished: "Finished", stopped: "Stopped", unchanged: "Unchanged", needs_you: "Needs you", unrecorded: "No outcome",
   }[packet.verdict] || packet.verdict;
   const top = el("div", "verdict-top");
   top.appendChild(el("span", "verdict-word", word));
@@ -769,7 +770,7 @@ function recapCard(turn, content) {
   loadPacket(card).then(() => {
     const verdict = card.packet.querySelector(".verdict");
     const cls = verdict ? [...verdict.classList].find((c) => c.startsWith("v-")) : null;
-    card.state = cls ? { "v-finished": "finished", "v-stopped": "stopped" }[cls] || "failed" : "failed";
+    card.state = cls ? { "v-finished": "finished", "v-stopped": "stopped", "v-unchanged": "unchanged" }[cls] || "failed" : "failed";
     paintState(card);
   });
   return true;

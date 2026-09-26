@@ -97,6 +97,9 @@ CHECK_UNCHANGED: Final = "error: check refused: the tree is unchanged since chec
 """Prefix of a refused `check`. Not the tier-0 guard's `REFUSED`, so it is
 not counted among the run's guard refusals, and not a finish refusal."""
 
+NOTHING_TO_AUDIT: Final = "nothing to audit"
+"""How `Auditor` begins the error for a tree equal to its baseline."""
+
 DETAIL_CHARS: Final = 1200
 """Per finding, in the text the model reads. The journal keeps it whole."""
 
@@ -297,7 +300,7 @@ class AuditFeed:
                 detail = detail or got.mutant_detail
             return AuditResult(point, tree, tuple(found), mutant_detail=detail)
         except AuditError as exc:
-            if str(exc).startswith("nothing to audit"):
+            if str(exc).startswith(NOTHING_TO_AUDIT):
                 return AuditResult(point, "", (), note=str(exc))
             return AuditResult(point, "", (_blocked(str(exc)),))
         except Exception as exc:  # an audit that crashed decided nothing
@@ -428,6 +431,11 @@ class AuditFeed:
         finish is accepted, nothing counts as a refusal, and the engine
         lets the model read it (`engine.FINISH_SURFACED`). Every later
         accepted finish returns "" as before.
+
+        A tree equal to the baseline ("nothing to audit") is never accepted,
+        in either arm: it returns (False, "") and `unchanged()` is True, so
+        the engine ends the run `unchanged` rather than refusing (FEEDFIX
+        item 5; SANCTIONS S10, `construct/nothing_to_audit_probe.py`).
         """
         self._await()
         pending = self._take()
@@ -436,6 +444,12 @@ class AuditFeed:
         assert result is not None
         with self._lock:
             self.results.append(result)
+        if result.note.startswith(NOTHING_TO_AUDIT):
+            # FEEDFIX (5): no verdict, so no accept; `engine._finish` ends the
+            # run `unchanged` (read off `unchanged()`), never as a refusal.
+            self._record(pending, delivered=False)
+            self._record([result], delivered=False)
+            return False, ""
         refuse = self.feedback and not result.passed
         # FEEDFIX (7): the first accepted finish that carries not-proven
         # findings delivers them; the accept itself is unchanged.
@@ -467,6 +481,15 @@ class AuditFeed:
             return False
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    def unchanged(self) -> bool:
+        """The last audit found nothing to audit: the tree equals the baseline.
+
+        `engine._finish` ends such a run `unchanged` (FEEDFIX item 5): not
+        accepted, not a refusal. Before, the empty finding set passed
+        vacuously and the run ended `finished` (SANCTIONS S10).
+        """
+        return bool(self.results) and self.results[-1].note.startswith(NOTHING_TO_AUDIT)
 
     def unresolved(self) -> list[dict[str, object]]:
         """The last audit's failing findings as (gate, reason, cites), sorted.
