@@ -2068,13 +2068,16 @@ def test_verify_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> No
     with pytest.raises(SystemExit, match=r"^0$"):
         main(["verify", "--help"])
     assert capsys.readouterr().out == (
-        "usage: saddle verify [-h] [journal]\n"
+        "usage: saddle verify [-h] [--anchor [REPO]] [journal]\n"
         "\n"
         "positional arguments:\n"
-        "  journal     Journal path (default: .saddle/proofs.jsonl).\n"
+        "  journal          Journal path (default: .saddle/proofs.jsonl).\n"
         "\n"
         "options:\n"
-        "  -h, --help  show this help message and exit\n"
+        "  -h, --help       show this help message and exit\n"
+        "  --anchor [REPO]  Also check each autonomous run's outcome against the\n"
+        "                   Saddle-Outcome trailer on its branch in REPO (default: the\n"
+        "                   checkout the ledger sits in; write the journal first).\n"
     )
 
 

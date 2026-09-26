@@ -1,0 +1,227 @@
+{
+ "tree": "EAF-t5-s3",
+ "source": "saddle-notes/parallel/out/CALIB/results/EAF-t5-s3.unblocked.json",
+ "outcome": {
+  "killed": 269,
+  "total": 291,
+  "generated": 291,
+  "survivors": [
+   "accounts.x_transfer__mutmut_10",
+   "accounts.x_transfer__mutmut_14",
+   "accounts.xǁAccountǁ__init____mutmut_18",
+   "accounts.xǁAccountǁ__init____mutmut_19",
+   "accounts.xǁAccountǁwithdraw__mutmut_15",
+   "fees.x_apply_fee__mutmut_8",
+   "fees.x_apply_fee__mutmut_9",
+   "fees.x_fee_for__mutmut_8",
+   "fees.x_fee_for__mutmut_9",
+   "money.x_positive__mutmut_10",
+   "money.x_positive__mutmut_4",
+   "money.x_positive__mutmut_7",
+   "money.x_quantize__mutmut_17",
+   "money.x_quantize__mutmut_19",
+   "money.x_quantize__mutmut_7",
+   "money.x_to_decimal__mutmut_1",
+   "money.x_to_decimal__mutmut_10",
+   "money.x_to_decimal__mutmut_14",
+   "money.x_to_decimal__mutmut_9",
+   "report.x_monthly_summary__mutmut_47",
+   "store.x_load_accounts__mutmut_26",
+   "store.x_load_accounts__mutmut_28"
+  ],
+  "text_only": 21,
+  "survivor_lines": [
+   [
+    "/tmp/tmp00c6zohz/tree/accounts.py",
+    32
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/accounts.py",
+    70
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/accounts.py",
+    116
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/accounts.py",
+    117
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/fees.py",
+    36
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/fees.py",
+    37
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/fees.py",
+    55
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/fees.py",
+    56
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    61
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    70
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    87
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    89
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    93
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    103
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/money.py",
+    105
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/report.py",
+    74
+   ],
+   [
+    "/tmp/tmp00c6zohz/tree/store.py",
+    85
+   ]
+  ],
+  "untested": 0,
+  "statuses": [
+   [
+    "killed",
+    269
+   ],
+   [
+    "survived",
+    22
+   ]
+  ]
+ },
+ "survivor_detail": [
+  {
+   "name": "accounts.x_transfer__mutmut_10",
+   "status": "survived",
+   "show": "# accounts.x_transfer__mutmut_10: survived\n--- accounts.py\n+++ accounts.py\n@@ -5,6 +5,6 @@\n     \"\"\"\n     check_currency(currency)\n     moved = positive(amount, currency)\n-    source.withdraw(moved, currency)\n+    source.withdraw(moved, )\n     target.deposit(moved, currency)\n     return moved\n"
+  },
+  {
+   "name": "accounts.x_transfer__mutmut_14",
+   "status": "survived",
+   "show": "# accounts.x_transfer__mutmut_14: survived\n--- accounts.py\n+++ accounts.py\n@@ -6,5 +6,5 @@\n     check_currency(currency)\n     moved = positive(amount, currency)\n     source.withdraw(moved, currency)\n-    target.deposit(moved, currency)\n+    target.deposit(moved, )\n     return moved\n"
+  },
+  {
+   "name": "accounts.xǁAccountǁ__init____mutmut_18",
+   "status": "survived",
+   "show": "# accounts.xǁAccountǁ__init____mutmut_18: survived\n--- accounts.py\n+++ accounts.py\n@@ -8,5 +8,5 @@\n     opening = quantize(balance, DEFAULT_CURRENCY)\n     if opening < 0:\n         raise ValueError(\"opening balance must be >= 0\")\n-    if opening > 0:\n+    if opening >= 0:\n         self._set_balance(DEFAULT_CURRENCY, opening)\n"
+  },
+  {
+   "name": "accounts.xǁAccountǁ__init____mutmut_19",
+   "status": "survived",
+   "show": "# accounts.xǁAccountǁ__init____mutmut_19: survived\n--- accounts.py\n+++ accounts.py\n@@ -8,5 +8,5 @@\n     opening = quantize(balance, DEFAULT_CURRENCY)\n     if opening < 0:\n         raise ValueError(\"opening balance must be >= 0\")\n-    if opening > 0:\n+    if opening > 1:\n         self._set_balance(DEFAULT_CURRENCY, opening)\n"
+  },
+  {
+   "name": "accounts.xǁAccountǁwithdraw__mutmut_15",
+   "status": "survived",
+   "show": "# accounts.xǁAccountǁwithdraw__mutmut_15: survived\n--- accounts.py\n+++ accounts.py\n@@ -5,8 +5,7 @@\n     current = self._balances.get(currency, Decimal(\"0.00\"))\n     if debit > current:\n         raise ValueError(\n-            \"insufficient funds: %s has %s, cannot withdraw %s\"\n-            % (currency, current, debit)\n+            None\n         )\n     new_balance = quantize(current - debit, currency)\n     self._set_balance(currency, new_balance)\n"
+  },
+  {
+   "name": "fees.x_apply_fee__mutmut_8",
+   "status": "survived",
+   "show": "# fees.x_apply_fee__mutmut_8: survived\n--- fees.py\n+++ fees.py\n@@ -9,7 +9,7 @@\n     check_currency(currency)\n     fee = FEES[currency]\n     value = quantize(amount, currency)\n-    if value < fee:\n+    if value <= fee:\n         raise ValueError(\n             \"amount %s %s is below the fee %s %s\"\n             % (value, currency, fee, currency)\n"
+  },
+  {
+   "name": "fees.x_apply_fee__mutmut_9",
+   "status": "survived",
+   "show": "# fees.x_apply_fee__mutmut_9: survived\n--- fees.py\n+++ fees.py\n@@ -11,7 +11,6 @@\n     value = quantize(amount, currency)\n     if value < fee:\n         raise ValueError(\n-            \"amount %s %s is below the fee %s %s\"\n-            % (value, currency, fee, currency)\n+            None\n         )\n     return quantize(value - fee, currency)\n"
+  },
+  {
+   "name": "fees.x_fee_for__mutmut_8",
+   "status": "survived",
+   "show": "# fees.x_fee_for__mutmut_8: survived\n--- fees.py\n+++ fees.py\n@@ -9,7 +9,7 @@\n     check_currency(currency)\n     fee = FEES[currency]\n     value = quantize(amount, currency)\n-    if value < fee:\n+    if value <= fee:\n         raise ValueError(\n             \"amount %s %s is below the fee %s %s\"\n             % (value, currency, fee, currency)\n"
+  },
+  {
+   "name": "fees.x_fee_for__mutmut_9",
+   "status": "survived",
+   "show": "# fees.x_fee_for__mutmut_9: survived\n--- fees.py\n+++ fees.py\n@@ -11,7 +11,6 @@\n     value = quantize(amount, currency)\n     if value < fee:\n         raise ValueError(\n-            \"amount %s %s is below the fee %s %s\"\n-            % (value, currency, fee, currency)\n+            None\n         )\n     return fee\n"
+  },
+  {
+   "name": "money.x_positive__mutmut_10",
+   "status": "survived",
+   "show": "# money.x_positive__mutmut_10: survived\n--- money.py\n+++ money.py\n@@ -7,5 +7,5 @@\n     \"\"\"\n     value = quantize(amount, currency, places)\n     if value <= 0:\n-        raise ValueError(\"amount must be positive: %s\" % value)\n+        raise ValueError(None)\n     return value\n"
+  },
+  {
+   "name": "money.x_positive__mutmut_4",
+   "status": "survived",
+   "show": "# money.x_positive__mutmut_4: survived\n--- money.py\n+++ money.py\n@@ -5,7 +5,7 @@\n     the quantized value is checked, so amounts that round to zero\n     (e.g. ``\"0.001\"`` USD, ``\"0.4\"`` JPY) raise ``ValueError``.\n     \"\"\"\n-    value = quantize(amount, currency, places)\n+    value = quantize(amount, currency, None)\n     if value <= 0:\n         raise ValueError(\"amount must be positive: %s\" % value)\n     return value\n"
+  },
+  {
+   "name": "money.x_positive__mutmut_7",
+   "status": "survived",
+   "show": "# money.x_positive__mutmut_7: survived\n--- money.py\n+++ money.py\n@@ -5,7 +5,7 @@\n     the quantized value is checked, so amounts that round to zero\n     (e.g. ``\"0.001\"`` USD, ``\"0.4\"`` JPY) raise ``ValueError``.\n     \"\"\"\n-    value = quantize(amount, currency, places)\n+    value = quantize(amount, currency, )\n     if value <= 0:\n         raise ValueError(\"amount must be positive: %s\" % value)\n     return value\n"
+  },
+  {
+   "name": "money.x_quantize__mutmut_17",
+   "status": "survived",
+   "show": "# money.x_quantize__mutmut_17: survived\n--- money.py\n+++ money.py\n@@ -12,7 +12,7 @@\n         raise ValueError(\"amount must be finite: %s\" % value)\n     try:\n         return value.quantize(\n-            Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP\n+            Decimal(2).scaleb(-places), rounding=ROUND_HALF_UP\n         )\n     except ArithmeticError as exc:\n         raise ValueError(\"amount must be finite: %r\" % (amount,)) from exc\n"
+  },
+  {
+   "name": "money.x_quantize__mutmut_19",
+   "status": "survived",
+   "show": "# money.x_quantize__mutmut_19: survived\n--- money.py\n+++ money.py\n@@ -15,4 +15,4 @@\n             Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP\n         )\n     except ArithmeticError as exc:\n-        raise ValueError(\"amount must be finite: %r\" % (amount,)) from exc\n+        raise ValueError(None) from exc\n"
+  },
+  {
+   "name": "money.x_quantize__mutmut_7",
+   "status": "survived",
+   "show": "# money.x_quantize__mutmut_7: survived\n--- money.py\n+++ money.py\n@@ -9,7 +9,7 @@\n         places = DECIMAL_PLACES[currency]\n     value = to_decimal(amount)\n     if not value.is_finite():\n-        raise ValueError(\"amount must be finite: %s\" % value)\n+        raise ValueError(None)\n     try:\n         return value.quantize(\n             Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP\n"
+  },
+  {
+   "name": "money.x_to_decimal__mutmut_1",
+   "status": "survived",
+   "show": "# money.x_to_decimal__mutmut_1: survived\n--- money.py\n+++ money.py\n@@ -6,7 +6,7 @@\n     (including ``bool``) raises ``TypeError``.\n     \"\"\"\n     if isinstance(value, bool):\n-        raise TypeError(\"amount must be an int, str, float, or Decimal, got bool\")\n+        raise TypeError(None)\n     if isinstance(value, Decimal):\n         return value\n     if isinstance(value, int):\n"
+  },
+  {
+   "name": "money.x_to_decimal__mutmut_10",
+   "status": "survived",
+   "show": "# money.x_to_decimal__mutmut_10: survived\n--- money.py\n+++ money.py\n@@ -16,6 +16,5 @@\n     if isinstance(value, float):\n         return Decimal(str(value))\n     raise TypeError(\n-        \"amount must be an int, str, float, or Decimal, got %r\"\n-        % type(value).__name__\n+        \"amount must be an int, str, float, or Decimal, got %r\" / type(value).__name__\n     )\n"
+  },
+  {
+   "name": "money.x_to_decimal__mutmut_14",
+   "status": "survived",
+   "show": "# money.x_to_decimal__mutmut_14: survived\n--- money.py\n+++ money.py\n@@ -17,5 +17,5 @@\n         return Decimal(str(value))\n     raise TypeError(\n         \"amount must be an int, str, float, or Decimal, got %r\"\n-        % type(value).__name__\n+        % type(None).__name__\n     )\n"
+  },
+  {
+   "name": "money.x_to_decimal__mutmut_9",
+   "status": "survived",
+   "show": "# money.x_to_decimal__mutmut_9: survived\n--- money.py\n+++ money.py\n@@ -16,6 +16,5 @@\n     if isinstance(value, float):\n         return Decimal(str(value))\n     raise TypeError(\n-        \"amount must be an int, str, float, or Decimal, got %r\"\n-        % type(value).__name__\n+        None\n     )\n"
+  },
+  {
+   "name": "report.x_monthly_summary__mutmut_47",
+   "status": "survived",
+   "show": "# report.x_monthly_summary__mutmut_47: survived\n--- report.py\n+++ report.py\n@@ -24,7 +24,7 @@\n         if txn[\"kind\"] == \"credit\":\n             credits += line\n         else:\n-            debits += line\n+            debits = line\n     credits = quantize(credits, target)\n     debits = quantize(debits, target)\n     return {\n"
+  },
+  {
+   "name": "store.x_load_accounts__mutmut_26",
+   "status": "survived",
+   "show": "# store.x_load_accounts__mutmut_26: survived\n--- store.py\n+++ store.py\n@@ -5,4 +5,4 @@\n     version = payload.get(\"version\", LEGACY_VERSION)\n     if version not in (LEGACY_VERSION, SCHEMA_VERSION):\n         raise ValueError(\"unsupported schema version: %r\" % (version,))\n-    return [_from_record(record, version) for record in payload.get(\"accounts\", [])]\n+    return [_from_record(record, version) for record in payload.get(\"accounts\", None)]\n"
+  },
+  {
+   "name": "store.x_load_accounts__mutmut_28",
+   "status": "survived",
+   "show": "# store.x_load_accounts__mutmut_28: survived\n--- store.py\n+++ store.py\n@@ -5,4 +5,4 @@\n     version = payload.get(\"version\", LEGACY_VERSION)\n     if version not in (LEGACY_VERSION, SCHEMA_VERSION):\n         raise ValueError(\"unsupported schema version: %r\" % (version,))\n-    return [_from_record(record, version) for record in payload.get(\"accounts\", [])]\n+    return [_from_record(record, version) for record in payload.get(\"accounts\", )]\n"
+  }
+ ]
+}

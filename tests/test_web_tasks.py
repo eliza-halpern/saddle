@@ -507,3 +507,17 @@ def test_a_reconnecting_page_gets_the_running_cards_state_lines_and_spend(
     assert frames[-1]["kind"] == "task.state"
     assert frames[-1]["state"] == "running"
     assert first["kind"] == "session.info"  # another session's card is not replayed
+
+
+def test_the_web_packet_reports_the_branch_anchor_check(store: SessionStore, repo: Path) -> None:
+    """FIX-4 (out/ANCHOR/report.md limits): the web packet never passed the
+    repo, so its Reproduce row could not show the anchor check. A web run
+    has a branch, so the served packet reports the check and its command."""
+    with app_for(store, repo, FIX) as (client, server):
+        sid = client.post("/api/sessions").json()["id"]
+        rid = client.post(f"/api/sessions/{sid}/task", json={"text": "t"}).json()["run_id"]
+        wait_for(lambda: idle(server, sid))
+        packet = client.get(f"/api/sessions/{sid}/tasks/{rid}/packet").json()
+    row = next(r for r in packet["rows"] if r["key"] == "reproduce")
+    assert "Its outcome matches the Saddle-Outcome trailer on the run branch." in row["text"]
+    assert row["items"][0].endswith(" --anchor")

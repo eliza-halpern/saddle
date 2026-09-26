@@ -39,7 +39,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
+from saddle.anchor import anchor_issues
 from saddle.journal import (
+    AUDIT_SPAN_PREFIXES,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
@@ -397,6 +399,16 @@ def _test_edits(start: SpanRecord | None) -> bool | None:
     return {"allowed": True, "refused": False}.get(word)
 
 
+UNANSWERED: Final = "unanswered"
+"""`engine.UNANSWERED`: an answer span sealed with no reply, its default taken."""
+
+
+def _decided(question: SpanRecord, answer: SpanRecord) -> str:
+    if answer.argv[2:3] == [UNANSWERED]:
+        return f"You were asked: {question.detail} → no answer came: {answer.detail}"
+    return f"You were asked: {question.detail} → you answered: {answer.detail}"
+
+
 def _needs_a_test(evidence: dict[str, Any]) -> bool:
     found = evidence.get("unresolved_findings")
     return any(
@@ -405,8 +417,29 @@ def _needs_a_test(evidence: dict[str, Any]) -> bool:
     )
 
 
-def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
-    """The packet for one run, from its ledger alone. No model call."""
+def _anchor_text(journal: Path, repo: Path | None, *, sealed: bool) -> str:
+    """The Reproduce row's sentence on the branch anchor, "" when it was not checked.
+
+    With no outcome sealed yet (a run in flight, as the web page reads it)
+    a clean check has nothing to match, so it says nothing; an anchor with
+    no outcome behind it is still reported (FIX-4).
+    """
+    if repo is None:
+        return ""
+    found = anchor_issues(journal, repo)
+    if not found:
+        return (
+            "Its outcome matches the Saddle-Outcome trailer on the run branch. " if sealed else ""
+        )
+    return f"The branch anchor does not match: {', '.join(i.code for i in found)}. "
+
+
+def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None = None) -> Packet:
+    """The packet for one run, from its ledger alone. No model call.
+
+    With `anchor_repo`, the Reproduce row also reports the check of the
+    ledger's outcome against its branch's `Saddle-Outcome` trailer (ANCHOR).
+    """
     run_id = run_id or journal.parent.name
     if not journal.exists():
         return _unrecorded(run_id, "There is no ledger for this run yet.")
@@ -421,7 +454,9 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     outcome = next(
         (s for s in reversed(spans) if s.name in ("auto:finished", "auto:stopped")), None
     )
-    tools = [s for s in spans if s.kind == "tool"]
+    # The model's tool calls: audit records are journaled as `tool` spans too,
+    # but the auditor wrote them (FIX-1; the ledger's list excludes them alike).
+    tools = [s for s in spans if s.kind == "tool" and not s.name.startswith(AUDIT_SPAN_PREFIXES)]
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
     edit_checks = _audits(spans, edit_checks=True)
@@ -433,8 +468,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     unresolved = _unresolved(evidence) if capped and evidence is not None else []
     task = start.argv[1] if start is not None and len(start.argv) > 1 else ""
     test_edits = _test_edits(start)
+    granted = evidence is not None and evidence.get("test_edits_granted") is True
     offer_test_edits = (
-        capped and test_edits is False and evidence is not None and _needs_a_test(evidence)
+        capped
+        and test_edits is False
+        and not granted
+        and evidence is not None
+        and _needs_a_test(evidence)
     )
 
     # -- verdict: from the outcome span, and nothing else ---------------------
@@ -473,11 +513,7 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     rows: list[Row] = []
 
     # -- contract ---------------------------------------------------------------
-    decided = tuple(
-        f"You were asked: {q.detail} → you answered: {answers[q.span_id].detail}"
-        for q in questions
-        if q.span_id in answers
-    )
+    decided = tuple(_decided(q, answers[q.span_id]) for q in questions if q.span_id in answers)
     if decided:
         rows.append(
             Row(
@@ -548,7 +584,14 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
 
     # -- mutation -------------------------------------------------------------------
     mutation = [a for a in audits if a.name == "audit:mutation"]
-    if mutation:
+    if mutation and mutation[-1].verdict == "blocked":
+        # Tier 2 never ran: tier 1 failed on that tree. There is no mutation
+        # result to call failed (FIX-3); the auditor's detail names the cause.
+        last = mutation[-1]
+        rows.append(
+            Row("mutation", "Mutation", "not-proven", f"blocked: {last.body}", (last.record_hash,))
+        )
+    elif mutation:
         last = mutation[-1]
         rows.append(
             Row(
@@ -579,7 +622,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
             else " The tier-0 guard refused nothing."
         )
         if test_edits is not None:
-            refused_text += " Tests were editable." if test_edits else " Tests were read-only."
+            refused_text += (
+                " Tests were editable."
+                if test_edits
+                else " Tests were read-only until you allowed edits during the run."
+                if granted
+                else " Tests were read-only."
+            )
         rows.append(
             Row(
                 "scope",
@@ -732,10 +781,11 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
             "observed" if anchor else "absent",
             f"The ledger verifies ({_n(len(entries), 'record')}, "
             f"{'no issues' if not issues else str(len(issues)) + ' issue(s)'}). "
+            f"{_anchor_text(journal, anchor_repo, sealed=outcome is not None)}"
             "Re-check it, and read the change:",
             (anchor,) if anchor else (),
             (
-                f"saddle verify {_shown(journal)}",
+                f"saddle verify {_shown(journal)}{' --anchor' if anchor_repo is not None else ''}",
                 *((f"git log -p main..{branch}",) if branch else ()),
             ),
         )
@@ -749,7 +799,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     if evidence is not None:
         header.append(f"{_n(len(files), 'file')} changed")
     if test_edits is not None:
-        header.append("tests editable" if test_edits else "tests read-only")
+        header.append(
+            "tests editable"
+            if test_edits
+            else "tests editable after you allowed it"
+            if granted
+            else "tests read-only"
+        )
     header.append(f"{_n(len(proofs), 'proof')} · {_n(len(entries), 'ledger record')}")
     packet = Packet(
         run_id=run_id,

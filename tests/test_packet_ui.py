@@ -34,11 +34,19 @@ pytestmark = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrom
 
 
 def page(
-    tmp_path: Path, kind: str, step: str, *, dirty: bool = False, width: int = 1200
+    tmp_path: Path,
+    kind: str,
+    step: str,
+    *,
+    dirty: bool = False,
+    width: int = 1200,
+    mode: str | None = None,
 ) -> tuple[dict[str, Any], Path, str]:
     repo = make_repo(tmp_path / "repo")
     store = SessionStore(tmp_path / "s")
     _sid, _rid, branch = seed(store, repo, kind)  # type: ignore[arg-type]
+    if mode is not None:
+        store.update(_sid, mode=mode)
     if dirty:
         (repo / "README").write_text("edited, not committed\n")
     app = build_app(store, NoModel, default_workdir=repo)
@@ -150,10 +158,13 @@ def test_discard_confirms_then_deletes_the_branch(tmp_path: Path) -> None:
 
 
 def test_continue_in_chat_seeds_the_composer_with_the_recap(tmp_path: Path) -> None:
-    got, _repo, _branch = page(tmp_path, "audited", "chat")
+    # The session starts in Task, so the lane switch is what is under test:
+    # "Continue in chat" must leave Task (where Enter opens the Run strip) for
+    # Ask, the read-only talk lane, and never opt into unaudited Edit.
+    got, _repo, _branch = page(tmp_path, "audited", "chat", mode="task")
     assert got["input"].startswith('About the run "make add add":\n\nverdict: finished')
     assert "Tests [proven]: The auditor ran the suite: 2 passed" in got["input"]
-    assert got["mode"] == "chat"
+    assert got["mode"] == "ask"
     assert got["focused"] == "input"
 
 

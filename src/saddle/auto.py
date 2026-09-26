@@ -28,6 +28,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Final
 
+from saddle.anchor import anchor_trailers, outcome_hash
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
@@ -284,6 +285,9 @@ def run_auto(
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
+    # ANCHOR: the outcome span's hash, outside the ledger, as the last paragraph.
+    ledger = journal.relative_to(root).as_posix()
+    message += f"\n\n{anchor_trailers(outcome_hash(journal, start.span_id), ledger)}"
     _git(worktree, "commit", "-q", "--allow-empty", "--no-verify", "-m", message)
     commit = _git(worktree, "rev-parse", "HEAD").strip()
     return AutoResult(

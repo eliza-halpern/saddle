@@ -1802,6 +1802,7 @@ def test_a_retry_puts_back_the_file_the_first_attempt_wrote(
         client, app
     ):
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"mode": "edit"})  # writes need Edit (LANECHIP)
         _server_of(app)._run(sid, "change the file")
         assert target.read_text() == "first attempt"
 
@@ -1836,6 +1837,7 @@ def test_a_retry_deletes_a_file_the_first_attempt_invented(
 
     with engine_app(store, tmp_path, _writes("invented.txt", "x")) as (client, app):
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"mode": "edit"})  # writes need Edit (LANECHIP)
         _server_of(app)._run(sid, "make something")
         assert invented.exists()
 
@@ -1859,6 +1861,7 @@ def test_an_edit_replaces_the_question_and_still_cleans_up(
         client, app
     ):
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"mode": "edit"})  # writes need Edit (LANECHIP)
         _server_of(app)._run(sid, "the first wording")
         asked = next(
             i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
@@ -2022,6 +2025,7 @@ def test_an_edited_image_keeps_each_messages_own_version(
 
     with engine_app(store, tmp_path, write("<svg>plain</svg>", "c1")) as (client, app):
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
+        client.patch(f"/api/sessions/{sid}", json={"mode": "edit"})  # writes need Edit (LANECHIP)
         _server_of(app)._run(sid, "draw a frog")
 
         ScriptedClient.rounds = write("<svg>blushing</svg>", "c2")

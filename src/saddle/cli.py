@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from saddle import __version__, audit
+from saddle.anchor import anchor_issues, default_anchor_repo
 from saddle.audit import AuditError, AuditResult, audit_tree
 from saddle.auditor import Auditor, AuditorConfig, Findings
 from saddle.auto import (
@@ -34,7 +35,7 @@ from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP
-from saddle.events import AuditNote, ErrorEvent, Event, ToolEnd
+from saddle.events import Answered, AuditNote, ErrorEvent, Event, Question, ToolEnd
 from saddle.evidence import (
     RUFF_RULES,
     SADDLE_COMMIT_IDENTITY,
@@ -1125,9 +1126,15 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
     return 0
 
 
-def run_verify(journal: Path, *, stdout: IO[str]) -> int:
-    """Audit one journal: hashes, links and outcome span lists, then its transcript."""
+def run_verify(journal: Path, *, stdout: IO[str], anchor: Path | None = None) -> int:
+    """Audit one journal: hashes, links and outcome span lists, then its transcript.
+
+    With `anchor` (a repo), also hold each autonomous run's outcome span to
+    the `Saddle-Outcome` trailer on its branch there (ANCHOR).
+    """
     issues = verify_journal(journal)
+    if anchor is not None:
+        issues += anchor_issues(journal, anchor)
     if issues:
         for issue in issues:
             stdout.write(f"{issue.code}@line {issue.line}: {issue.message}\n")
@@ -1146,9 +1153,10 @@ def run_verify(journal: Path, *, stdout: IO[str]) -> int:
         if runs
         else "no outcome span list (no autonomous run)"
     )
+    anchored = f", anchored in {anchor}" if anchor is not None and runs else ""
     stdout.write(
         f"OK: {journal}: ledger verifies: {total} records ({len(records)} proof(s), "
-        f"{len(spans)} span(s), {len(plans)} plan(s)), {lists}\n"
+        f"{len(spans)} span(s), {len(plans)} plan(s)), {lists}{anchored}\n"
     )
     for plan in plans:
         stdout.write("".join(f"{line}\n" for line in render_plan(plan)))
@@ -1426,6 +1434,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=".saddle/proofs.jsonl",
         help="Journal path (default: .saddle/proofs.jsonl).",
     )
+    verify.add_argument(
+        "--anchor",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="REPO",
+        help="Also check each autonomous run's outcome against the Saddle-Outcome trailer "
+        "on its branch in REPO (default: the checkout the ledger sits in; write the journal "
+        "first).",
+    )
     explain = sub.add_parser("explain", help="Explain a run from its journal (T6-27).")
     explain.add_argument(
         "journal",
@@ -1647,6 +1665,9 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
             stdout.write(f"  {event.label}\n")
         elif isinstance(event, ErrorEvent):
             stdout.write(f"  {event.message}\n")
+        elif isinstance(event, Question | Answered):
+            # No one can answer here: the run seals the question's default.
+            stdout.write(f"  {'asked' if isinstance(event, Question) else '→'}: {event.text}\n")
 
     try:
         result = run_auto(options, client, on_event=show)
@@ -1735,7 +1756,15 @@ def main(
     ):
         return 0
     if args.command == "verify":
-        return run_verify(Path(args.journal), stdout=stdout or sys.stdout)
+        journal = Path(args.journal)
+        anchor = (
+            None
+            if args.anchor is None
+            else Path(args.anchor)
+            if args.anchor
+            else default_anchor_repo(journal)
+        )
+        return run_verify(journal, stdout=stdout or sys.stdout, anchor=anchor)
     if args.command == "explain":
         return run_explain(Path(args.journal), attempt=args.attempt, stdout=stdout or sys.stdout)
     if args.command == "tail":

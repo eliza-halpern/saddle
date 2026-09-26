@@ -591,7 +591,8 @@ function actionRow(card, packet) {
     if (!recap) {
       recap = `verdict: ${packet.verdict} — ${packet.verdict_text}`;
     }
-    if (typeof setMode === "function" && state.mode !== "chat") await setMode("chat");
+    // Leave Task for the read-only talk lane; Edit stays an explicit choice (LANECHIP).
+    if (typeof setMode === "function" && state.mode !== "ask") await setMode("ask");
     const input = document.querySelector("#input");
     input.value = `About the run "${packet.task}":\n\n${recap}\n\n`;
     input.dispatchEvent(new Event("input"));
@@ -657,6 +658,7 @@ function handleTask(event) {
       paintState(card);
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
+      runState(state.sessionId, event.state, event.task);  // notify.js: tab, dot, live region
       if (event.state === "needs_you") {
         setStatus("needs", "needs you");
       } else if (event.state === "running") {

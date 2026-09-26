@@ -1,16 +1,16 @@
 // Drives the chat page in headless Chrome over the DevTools Protocol, with
 // real key events, and prints one JSON line of what it saw. Used by
-// tests/test_ui3_mode.py; no dependencies beyond node >= 22 and Chrome.
+// tests/test_lanechip.py; no dependencies beyond node >= 22 and Chrome.
 //
-// usage: node ui3_mode_cdp.mjs <base-url> <session-id> <task|chat|nofolder> [shot-dir]
+// usage: node lanechip_cdp.mjs <base-url> <session-id> <step> [shot-dir] [light|dark] [prefix]
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const [base, sid, step, shots] = process.argv.slice(2);
+const [base, sid, step, shots, scheme, prefix = ""] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
-const prof = mkdtempSync(join(tmpdir(), "cdp-ui3-"));
+const prof = mkdtempSync(join(tmpdir(), "cdp-lane-"));
 const chrome = spawn("google-chrome", [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
   `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
@@ -53,7 +53,7 @@ try {
     return r.result?.result?.value;
   };
   const key = async (k, modifiers = 0) => {
-    const code = { Enter: 13, Escape: 27 }[k];
+    const code = { Enter: 13, Escape: 27, Tab: 9, ArrowDown: 40 }[k];
     const text = k === "Enter" ? "\r" : undefined;
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k,
       windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers, text });
@@ -69,12 +69,19 @@ try {
   const shot = async (name) => {
     if (!shots) return;
     const s = await send("Page.captureScreenshot", { format: "png" });
-    writeFileSync(join(shots, name), Buffer.from(s.result.data, "base64"));
+    writeFileSync(join(shots, prefix + name), Buffer.from(s.result.data, "base64"));
   };
   const look = () => js(`(() => ({
     stripVisible: !document.querySelector("#task-confirm").hidden,
     focus: document.activeElement && document.activeElement.id,
     desc: document.querySelector("#mode-desc").textContent.trim(),
+    lane: state.mode,
+    chipText: document.querySelector("#lane-name").textContent.trim(),
+    placeholder: document.querySelector("#input").placeholder,
+    suggest: document.querySelector("#lane-suggest").hidden ? "" : document.querySelector("#lane-suggest").textContent,
+    menuOpen: !document.querySelector("#lane-menu").hidden,
+    where: document.querySelector("#where").textContent.trim(),
+    patches: window.__patches || [],
     chip: document.querySelector("#mode-chip").textContent.trim(),
     note: document.querySelector("#mode-note").hidden ? "" : document.querySelector("#mode-note").textContent,
     taskPosts: window.__taskPosts || 0,
@@ -96,6 +103,7 @@ try {
         const u = String(url);
         if (u.endsWith("/task") && opts && opts.method === "POST") window.__taskPosts = (window.__taskPosts || 0) + 1;
         if (u.endsWith("/message") && opts && opts.method === "POST") window.__chatPosts = (window.__chatPosts || 0) + 1;
+        if (opts && opts.method === "PATCH" && opts.body && JSON.parse(opts.body).mode) (window.__patches = window.__patches || []).push(JSON.parse(opts.body).mode);
         return real(url, opts);
       };
     })()`);
@@ -103,38 +111,85 @@ try {
 
   const [w, h, mobile] = step === "phone" ? [390, 844, true] : [1200, 800, false];
   await send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 2, mobile });
+  if (scheme) await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme }] });
   await send("Page.enable");
   await send("Runtime.enable");
   await load();
   const out = {};
-  if (step === "task" || step === "phone") {
+  const options = () => js(`[...document.querySelectorAll("#lane-menu li")].map((li) => ({
+    lane: li.dataset.lane, label: li.querySelector("b").textContent,
+    desc: li.querySelector("span").textContent, disabled: li.getAttribute("aria-disabled") === "true" }))`);
+  if (step === "chip") {
     out.before = await look();
-    await type("make add add");
-    await shot(step === "phone" ? "4-phone-task-mode.png" : "2-task-mode.png");
-    await key("Enter");
-    out.afterFirstEnter = await look();
-    await shot(step === "phone" ? "5-phone-strip.png" : "3-strip-opened-by-enter.png");
+    await shot("chip-ask.png");
+    await js(`document.querySelector("#lane-chip").click()`);
+    await sleep(200);
+    out.open = await look();
+    out.options = await options();
+    await shot("chip-menu-open.png");
+    // A greyed lane is not chosen by a click on it.
+    for (const lane of ["feature", "breadth", "long"]) {
+      await js(`document.querySelector('#lane-menu li[data-lane="${lane}"]').click()`);
+      await sleep(150);
+    }
+    out.afterDisabledClicks = await look();
     await key("Escape");
-    out.afterEscape = await look();
-    await key("Enter");
-    await key("Enter");
-    out.afterSecondEnter = await look();
-  } else if (step === "chat") {
-    out.before = await look();
-    await type("hello there");
-    await shot("1-chat-mode.png");
+    // Shift+Tab from the input walks the enabled lanes and wraps.
+    await js(`document.querySelector("#input").focus()`);
+    out.cycle = [];
+    for (let i = 0; i < 4; i++) {
+      await key("Tab", 8);
+      const seen = await look();
+      out.cycle.push(seen.lane);
+      if (i === 0) await shot("chip-edit.png");
+      if (i === 1) await shot("chip-task.png");
+    }
+    await sleep(300);
+    out.after = await look();
+  } else if (step === "menu-pick") {
+    await js(`document.querySelector("#lane-chip").click()`);
+    await sleep(150);
+    await key("ArrowDown");
     await key("Enter");
     out.afterEnter = await look();
-    await js(`document.querySelector("#lane-chip").click(); document.querySelector('#lane-menu li[data-lane="task"]').click()`);
-    await sleep(500);
-    out.afterSwitch = await look();
     await load();
     out.afterReload = await look();
-  } else if (step === "nofolder") {
-    await js(`state.folder = null`);
-    await type("make add add");
+  } else if (step === "heuristic") {
+    out.before = await look();
+    await type("fix the rounding in calc.py");
+    await sleep(600);
+    out.taskish = await look();
+    await shot("suggest-task.png");
+    await js(`document.querySelector("#input").value = ""`);
+    await type("what does add return?");
+    await sleep(600);
+    out.question = await look();
+    await js(`document.querySelector("#input").value = ""`);
+    await type("fix the rounding in calc.py");
+    await key("Tab");
+    out.afterTab = await look();
+  } else if (step === "ask-edit") {
+    out.before = await look();
+    await type("why does add subtract?");
     await key("Enter");
-    Object.assign(out, await look());
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      if (await js(`!state.busy && document.querySelectorAll("details.tool:not(.running)").length > 0`)) break;
+    }
+    await sleep(400);
+    await js(`document.querySelectorAll(".tool, .tool summary, details").forEach((d) => { if (d.tagName === "DETAILS") d.open = true; })`);
+    await sleep(200);
+    await shot("ask-refused-edit.png");
+    out.after = await look();
+    out.tool = await js(`(() => { const t = document.querySelector("details.tool");
+      return t ? { failed: t.classList.contains("failed"), open: t.open, text: t.textContent } : null; })()`);
+  } else if (step === "task-strip") {
+    await type("make add add in calc.py");
+    await key("Enter");
+    out.strip = await look();
+    await shot("task-strip.png");
+    await key("Escape");
+    out.afterEscape = await look();
   }
   console.log(JSON.stringify(out));
   await finish(0);

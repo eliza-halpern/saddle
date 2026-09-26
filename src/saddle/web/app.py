@@ -20,6 +20,7 @@ import mimetypes
 import os
 import queue
 import secrets
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,7 +61,7 @@ from saddle.packet import Packet, compile_packet, render_packet_text
 from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import BUILTIN_PERSONAS, SESSION_MODES, SessionStore
 from saddle.titles import title_for
-from saddle.tools import PREVIEWABLE, ToolContext, preview_for
+from saddle.tools import PREVIEWABLE, ToolContext, preview_for, tools_for_mode
 from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
 from saddle.web import branch_actions, tasks
@@ -75,6 +76,26 @@ which holds the vLLM key -- this file is never read for that purpose."""
 
 TOKEN_COOKIE = "saddle_token"
 TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 365  # one year
+
+
+def git_branch(folder: Path) -> str:
+    """The folder's checked-out branch for the header, or "" if it has none.
+
+    Display only: a detached HEAD, a folder outside git, or git missing all
+    show nothing rather than an error, since the header is not the place to
+    report them."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(folder), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    name = out.stdout.strip()
+    return name if out.returncode == 0 and name != "HEAD" else ""
 
 
 def needs_token(host: str) -> bool:
@@ -362,6 +383,9 @@ class ChatServer:
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
                 )
+            # Set every turn: the context outlives a lane change.
+            tools = tools_for_mode(session.mode)
+            live.context.allowed = tuple(t["function"]["name"] for t in tools)
             live.turn += 1
             with self.client_factory() as client:
                 options = TurnOptions(
@@ -371,6 +395,7 @@ class ChatServer:
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
                     context_tokens=self._context_window(client),
+                    tools=tools,
                 )
                 for event in run_turn(
                     client,
@@ -463,7 +488,7 @@ def build_app(
         and the page that names those URLs is never stored.
         """
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for name in ("app.css", "markdown.js", "tasks.js", "app.js"):
+        for name in ("app.css", "markdown.js", "tasks.js", "notify.js", "app.js"):
             try:
                 version = int((STATIC / name).stat().st_mtime)
             except OSError:
@@ -472,7 +497,23 @@ def build_app(
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def list_sessions(_: Request) -> JSONResponse:
-        return JSONResponse([s.__dict__ for s in store.list()])
+        """Every session, with its latest run's state and task (None if none).
+
+        The sidebar reads this so a run in a session that is not on screen --
+        one waiting on you, above all -- is still visible. Runs are kept in
+        start order, so the last one seen for a session is its latest.
+        """
+        latest: dict[str, TaskRun] = {}
+        for run in list(server.tasks.values()):
+            latest[run.session_id] = run
+        rows = []
+        for session in store.list():
+            newest = latest.get(session.id)
+            row = dict(session.__dict__)
+            row["run_state"] = newest.state if newest is not None else None
+            row["run_task"] = newest.task if newest is not None else None
+            rows.append(row)
+        return JSONResponse(rows)
 
     async def create_session(request: Request) -> JSONResponse:
         body = await request.json() if await request.body() else {}
@@ -763,7 +804,13 @@ def build_app(
         journal = _journal(sid, rid)
         if journal is None:
             return JSONResponse({"error": "no such task in this session"}, status_code=404)
-        return JSONResponse(compile_packet(journal, run_id=rid).payload())
+        # The run's repo, so the Reproduce row reports the branch anchor check
+        # (FIX-4). A web run's ledger is `auto.ledger_path(repo, rid)`; a path
+        # of any other shape names no repo, and the check is left out.
+        parts = journal.parts
+        shaped = len(parts) >= 4 and parts[-4:-2] == (".saddle", "runs")
+        repo = Path(*parts[:-4]) if shaped else None
+        return JSONResponse(compile_packet(journal, run_id=rid, anchor_repo=repo).payload())
 
     def _branch_context(request: Request) -> tuple[str, Path, Packet, str]:
         """The run id, checkout root, packet and run branch an action works on."""
@@ -943,6 +990,7 @@ def build_app(
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
                     mode=session.mode,
+                    branch=git_branch(Path(session.workdir)),
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
                     messages=history_for_display(
