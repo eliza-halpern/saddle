@@ -139,11 +139,13 @@ depends on.
 one small file,"* and `max_context_tokens` has a floor of 8000. I wrote that
 during the v2 fixes. It is wrong.
 
-**Finding:** attention follows a U-shaped curve across input position, with
+**Finding:** performance degrades as the input grows, with
 wrong or degraded answers **2× to 30× more often** as the context fills
 (arXiv 2605.12366, Martin & Roger); the Chroma report is cited for the
-direction only when the relevant content sits mid-context rather
-than at either end. Coding agents have the three properties that maximise the
+direction only. On position, the same paper finds detection worst when
+the target sits mid-transcript (§4.4, Fig. 4b), while Chroma found no
+notable variation across 11 needle positions on its needle-in-a-haystack
+task. Coding agents have the three properties that maximise the
 effect — accumulative context, high distractor density, long task horizons.
 One monitoring benchmark lost recall from 98.6% to 88% purely from
 prepending 800k benign tokens (arXiv 2605.12366, Martin & Roger; the Chroma report does not carry this figure).
@@ -191,7 +193,8 @@ specification stage doesn't get an independent second look; it gets encoded
 twice." The measurement is arXiv 2603.23443: across **22,374 mutated
 CodeNet variants** and 8 models, **>99%** of failing single-shot LLM tests
 passed on the original program while executing the changed region
-(per-model pass rates 40.7%–82.9%, so a ~27B model sits near **41%**; this
+(per-model pass rates 40.7%–82.9%; the 40.7% model is Nemotron-3-Nano, listed
+as 30B, so placing a ~27B model near **41%** is an extrapolation; this
 measures single-shot test generation, not agent loops) — tests aligned with
 old behaviour, not with intent.
 [PGS][pgs] names the same thing the "cycle of self-deception": flawed code
@@ -275,11 +278,13 @@ it is a gate.
 split (Medium 62.8/17.5, Hard 48.9/1.1; v1 Table IV); v2 (May 2026,
 retitled "Effective LLM Code Refinement via Property-Oriented and
 Structurally Minimal Feedback") reports 87.0 vs 63.0 overall with
-DeepSeek-R1-32B on 100 LiveCodeBench problems the same hard problems.
+DeepSeek-R1-32B on 100 LiveCodeBench problems (76.5 vs 32.4 on the hard
+ones). The v1 figures do not appear in v2 and were not re-verified.
 Defining correctness is materially more tractable than implementing it —
 that is the asymmetry the whole architecture needs, and saddle is not using
-it. PGS validates each candidate property two ways: it must hold on known-
-good outputs, and it must detect known-bad versions.
+it. In v2, PGS validates each candidate property against the problem's
+public test cases and discards any that contradicts them (§4.2); a two-way
+check (hold on known-good outputs, detect known-bad versions) is not in v2.
 
 This is also the systematic version of the `from_regex` idea. The fuzzing
 literature states the underlying problem bluntly: LLMs "generate ordinary
@@ -306,8 +311,12 @@ it.
 
 **Finding:** [AlphaCode][alphacode] executes surviving candidates on
 *generated* inputs, clusters by output behaviour, and submits from the
-largest clusters — filtering removes **the large majority** of the candidate pool (the >99% figure was not verified against the paper) before
-any judgement is applied. The virtue for saddle is specific: **it never
+largest clusters — filtering on the example tests removes **approximately
+99%** of model samples (§4.5, p13) before any judgement is applied.
+Separately, the paper's dataset keeps a generated test only when 30 correct
+solutions agree on its output; with a problem-coverage filter, that cut the
+false-positive rate from 62% to 4% (§3.2.1, Table 2). The virtue for saddle
+is specific: **it never
 consults the worker's own tests.** It is an independent evidence channel
 obtained purely by execution.
 
@@ -333,13 +342,16 @@ Meanwhile [MAKER][maker] reaches zero errors across a million steps with
 with p>0.5 exact-match agreement required plus a red-flag parser that
 discards over-long or misformatted responses, and [Snell et al.][testtime]
 find sequential revision wins on easy problems (not re-verified),
-parallel resampling on hard ones, with the compute-optimal split near √N
-each — and compute-optimal scaling beating best-of-N at **4× less compute**.
+a mix of sequential and parallel compute on harder ones (§6.2, Fig. 7), and little benefit from test-time compute
+on the hardest (√N appears only as an illustrative allocation and a beam
+width, not as the found optimum) — and compute-optimal scaling beating
+best-of-N at **4× less compute**.
 
 **The critical qualifier, which downgrades naive voting:** LLM
 implementations fail in *correlated* ways. [Failure Independence in
-LLM-Generated Code][failind] finds "seemingly diverse implementations often
-fail on the same inputs," so majority voting can amplify a shared mistake
+LLM-Generated Code][failind] finds that even implementations from different
+models, which differ more, fail on the same tests far more often than
+independence predicts, so majority voting can amplify a shared mistake
 rather than cancel it. The [Six Sigma Agent][sixsigma] carries an explicit
 correlation penalty ρ for this reason, and MAKER's result quietly depends on
 near-independence per step.
@@ -373,7 +385,9 @@ spec artifact (D7). Every P1 item above is an instance of this, which is why
 they belong together.
 
 [Weaver][weaver] remains useful in its narrow place — weighted ensembles beat
-naive averaging by **+11.2pp**, and a distilled 400M cross-encoder retained
+naive averaging by **+11.2pp** (with weights learned from ~50k labelled
+pairs; the unsupervised model assumes conditionally independent
+verifiers), and a distilled 400M cross-encoder retained
 **98.7%** of full accuracy at **0.03%** of the compute — but for *ranking
 candidates*, not for sealing a proof. Keep the seal a strict AND.
 
@@ -441,7 +455,10 @@ an LLM to **TC⁰**, unable to express certain reasoning, and measures up to
 **8pp** loss from strict constrained decoding (DeepSeek-R1-Distill-Llama-8B;
 QwQ-32B 5pp) on GSM-Symbolic, which CRANE recovers; the TC⁰ result (Prop.
 3.1) is for finite-output grammars — a diff grammar is infinite and falls
-under Prop. 3.3. The 27pp figure was not verified.
+under Prop. 3.3. The 27pp figure was not verified. The 8pp and 5pp losses
+are against unconstrained chain-of-thought (Table 1: 13 vs 21 and 38 vs
+43); against unconstrained decoding without chain-of-thought, constrained
+decoding is within one point or better on all nine models.
 benchmarks under strict format constraints.
 
 That is why F9 has never leaked: the DAG is emitted *after* reasoning.
@@ -590,9 +607,12 @@ not memorised `sortedcontainers`. Every task should get a perturbed twin.
 ### D25. Audit against a harness-flaw taxonomy
 
 [HarnessFix][harnessfix] reports **6.3–18.4 pp absolute** gains across GAIA,
-SWE-Bench Verified, AppWorld and Terminal-Bench from repairing the *harness
-alone* (v2; 11.1 is the v2 Table III all-model average). The paper does not
-compare against human-designed harnesses. Its ETCLOVG taxonomy (Execution,
+SWE-Bench Verified, AppWorld and Terminal-Bench (the abstract's range,
+equal to GPT-5 mini's over the four benchmarks; over all five models,
+Table III runs 5.9–18.4) from repairing the *harness
+alone* (v2; 11.1 is the v2 Table III all-model average, §V.A). With GPT-5
+mini fixed, it also beats human-designed harnesses by 6.3 points on average
+(range 1.9–10.0; Table IV). Its ETCLOVG taxonomy (Execution,
 Tool, Context, Lifecycle, Observability, Verification, Governance) names
 anti-patterns that map onto saddle's recorded bugs one-to-one:
 
@@ -618,8 +638,9 @@ appear to violate it. They do not, but the line needs drawing precisely.
 The commitment that survives — and should be strengthened, not weakened — is
 **no model grades its own work**. [Self-preference bias][selfpref] scales
 with model size and post-training and **is measured with authorship
-unlabeled** (randomized unlabeled pairs; equal-quality pairs cut the bias by
-31.5%), so this is well-founded.
+unlabeled** (randomized unlabeled pairs; equal-quality pairs are the
+measurement device, and a structured multi-dimensional evaluation strategy
+cuts the bias by 31.5%), so this is well-founded.
 
 What the literature adds is that *model-assisted candidate generation* is a
 different activity from grading, and it is where the leverage is:
@@ -627,7 +648,7 @@ different activity from grading, and it is where the leverage is:
 - ACH uses an LLM to **propose** mutants and judge equivalence; the mutants
   are then executed. Judgement is mechanical, proposal is not.
 - PGS uses an LLM to **propose** properties, which are then validated
-  against known-good and known-bad versions before being trusted.
+  against the problem's public test cases before being trusted (v2 §4.2).
 - Daikon+LLM uses an LLM to **filter** inferred invariants; inference is
   dynamic.
 
@@ -696,7 +717,7 @@ artifact across T1–T7.
 [pgs]: https://arxiv.org/html/2506.18315v1 "Use Property-Based Testing to Bridge LLM Code Generation and Validation"
 [ach]: https://arxiv.org/html/2501.12862v1 "Mutation-Guided LLM-based Test Generation at Meta"
 [maker]: https://arxiv.org/pdf/2511.09030 "Solving a Million-Step LLM Task with Zero Errors"
-[crane]: https://arxiv.org/html/2502.09061v3 "CRANE: Reasoning with Constrained LLM Generation"
+[crane]: https://arxiv.org/html/2502.09061v4 "CRANE: Reasoning with Constrained LLM Generation"
 [testtime]: https://arxiv.org/pdf/2408.03314 "Scaling LLM Test-Time Compute Optimally"
 [weaver]: https://arxiv.org/html/2506.18203v1 "Shrinking the Generation-Verification Gap with Weak Verifiers"
 [selfrepair]: https://arxiv.org/abs/2306.09896v5 "Is Self-Repair a Silver Bullet for Code Generation?"
@@ -738,16 +759,16 @@ artifact across T1–T7.
 - [Variation in Verification][varver] — weak generators produce more detectable errors (TNR 0.68 → 0.17)
 - [SpecBench][specbench] — validation/held-out gap; longer search worsens reward hacking
 - [Who Tests the Tests][zylos] — correlated error; negative controls; discrimination evidence
-- [Property-Generated Solver][pgs] — 82.4% vs 62.4% property accuracy vs solving (Easy split); cycle of self-deception
+- [Property-Generated Solver][pgs] — 82.4% vs 62.4% property accuracy vs solving (Easy split) (v1; not in v2, not re-verified); v2: 87.0 vs 63.0 verification vs generation (hard 76.5 vs 32.4); cycle of self-deception
 - [ACH (Meta)][ach] — few targeted mutants; 49% of mutant-killing tests add no coverage
 - [MAKER][maker] — million-step zero-error via micro-decomposition + k=3 voting (k_min 3–29 across models)
 - [CRANE][crane] — constrained decoding confines to TC⁰; alternate constrained/unconstrained
-- [Snell et al.][testtime] — sequential vs parallel test-time compute; √N split
-- [Weaver][weaver] — weighted weak-verifier ensembles; 400M distillation
+- [Snell et al.][testtime] — sequential vs parallel test-time compute; the best split depends on difficulty (√N is only an illustration and a beam width)
+- [Weaver][weaver] — weighted weak-verifier ensembles (the +11.2pp uses weights learned from ~50k labelled pairs; the unsupervised model assumes conditionally independent verifiers); 400M distillation
 - [Olausson et al.][selfrepair] — self-repair bottlenecked by feedback quality (1.58×)
-- [Vericoding benchmark][vericoding] — 82/44/27% Dafny/Verus/Lean; "cheating" of weak specs
+- [Vericoding benchmark][vericoding] — 82/44/27% Dafny/Verus/Lean; weak specs admit valid solutions to a different task (cheating was caught by validation)
 - [traceSDD][tracesdd] — REQ citation discipline; orphan detection
-- [Don't Build Multi-Agents][cognition] — parallelise reads, single-thread writes
+- [Don't Build Multi-Agents][cognition] — share full context; actions carry implicit decisions
 - [VP-Control][vpcontrol] — evidence independence worth 3.6× model diversity
 - [Failure Independence][failind] — LLM implementations fail in correlated ways
 - [AlphaCode][alphacode] — behavioural clustering on generated inputs
@@ -755,11 +776,11 @@ artifact across T1–T7.
 - [AgentPRM][agentprm] — process reward over outcome reward
 - [EndWatch][endwatch] / [Halting][halting] — non-termination detection
 - [ChaosAPI][chaosapi] — flaky test detection via nondeterministic API control
-- [Context Rot][contextrot] — U-shaped position curve; magnitude per arXiv 2605.12366, not the Chroma post
+- [Context Rot][contextrot] — no notable variation across 11 needle positions; magnitude and the mid-context effect per arXiv 2605.12366, not the Chroma post
 - [Agentless][agentless] — deterministic pipeline beats agent loops
 - [Diff-XYZ][diffxyz] / [DebugHarness][debugharness] / [Why LLMs Fail][whyllmsfail] — patch format and repair
 - [InspectCoder][inspectcoder] / [TraceCoder][tracecoder] — runtime state as repair feedback
-- [SEDCoT][sedcot] — minimal counterexamples improve repair at no extra cost
+- [SEDCoT][sedcot] — minimal counterexamples improve repair without extra LLM calls
 - [ELFuzz][elfuzz] — coverage-guided input generation
 - [HarnessFix][harnessfix] — ETCLOVG taxonomy; 6.3–18.4 pp absolute from harness repair alone (v2)
 - [ReasoningBank][reasoningbank] / [Memory retrieval][memretrieval] — journal as experience corpus
