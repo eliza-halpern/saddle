@@ -61,6 +61,8 @@ from saddle.rule_d_run import (
 from saddle.rule_d_run import census as rule_d_census
 from saddle.rule_d_run import hook as rule_d_hook
 from saddle.rule_d_run import load as rule_d_load
+from saddle.rule_d_run import plan_record as rule_d_plan_record
+from saddle.rule_d_run import seal_plan as rule_d_seal_plan
 from saddle.sessions import DEFAULT_WORKDIR
 from saddle.slice import (
     DEADLINE_EXIT,
@@ -243,11 +245,15 @@ def rule_d_config(args: argparse.Namespace) -> RuleDConfig | None:
     )
 
 
-def rule_d_plan(config: RuleDConfig, *, stdout: IO[str]) -> Loaded | None:
+def rule_d_plan(
+    config: RuleDConfig, *, stdout: IO[str], journal: Path | None = None
+) -> Loaded | None:
     """Plan time: load, print every census question, and stop (None) over budget.
 
     Runs before the planner is called, so an over-budget census costs no
-    model call; a question is never dropped to fit the budget.
+    model call; a question is never dropped to fit the budget. With a
+    journal, the census and the book's identity are sealed beside it
+    (`rule_d_run.PLAN_RECORD`) before the budget is applied.
     """
     try:
         loaded = rule_d_load(config)
@@ -256,6 +262,9 @@ def rule_d_plan(config: RuleDConfig, *, stdout: IO[str]) -> Loaded | None:
         stdout.write(f"error: rule D: {exc}\n")
         return None
     stdout.write(render_census(classes, config.census_budget))
+    if journal is not None:
+        sealed = rule_d_seal_plan(journal, rule_d_plan_record(loaded, classes))
+        stdout.write(f"rule D: plan sealed in {sealed}\n")
     if len(classes) > config.census_budget:
         stdout.write(
             f"rule D: {len(classes)} census question(s) exceed the budget of "
@@ -958,7 +967,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
     """Drive one task: emit, confirm, schedule, gate, seal, transcribe."""
     rule_d_check = None
     if options.rule_d is not None:
-        loaded = rule_d_plan(options.rule_d, stdout=stdout)
+        loaded = rule_d_plan(options.rule_d, stdout=stdout, journal=options.journal)
         if loaded is None:
             return 1
         rule_d_check = rule_d_hook(loaded)

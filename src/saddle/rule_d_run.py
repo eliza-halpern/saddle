@@ -22,6 +22,7 @@ sits beside `runner`, above `gates`; `rule_d` and `answer_book` stay pure.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -34,6 +35,7 @@ from typing import Any, Final
 from saddle import answer_book as ab
 from saddle import rule_d
 from saddle.evidence import TEST_MEMORY_LIMIT_BYTES, CapturedRun, run_capture
+from saddle.journal import redact_secrets
 from saddle.refstore import ReferenceSet, load_reference_set
 
 CENSUS_BUDGET: Final = 50
@@ -342,7 +344,104 @@ def sealed_fields(result: rule_d.DifferentialResult, loaded: Loaded) -> dict[str
             if result.tree_unusable is None
             else [result.tree_unusable.reason, result.tree_unusable.detail]
         ),
+        **asked_inputs(result),
     }
+
+
+def asked_inputs(result: rule_d.DifferentialResult) -> dict[str, Any]:
+    """Every asked class with its channel's inputs and each input's provenance (P2-3 seal).
+
+    `band` (a question: the references agree, the tree does not) carries every input with the
+    tree's and the references' answers; `questions` (split, spec-silent) carries every input
+    with the tree's answer, "" when the tree gave none. `source` is that input's
+    `Provenance.source` and is looked up, never defaulted: an asked input with no provenance
+    raises KeyError here rather than sealing a record that would pass M1-J 4b vacuously.
+    `asks` stays the bare class ids; these two lists say which channel each came from.
+    """
+    src = {p.input: p.source for p in result.provenance}
+    band = [
+        {
+            "cls": b.cls,
+            "inputs": [
+                {"input": x, "got": _show(g), "expected": _show(e), "source": src[x]}
+                for x, g, e in zip(b.inputs, b.got, b.expected, strict=True)
+            ],
+        }
+        for b in result.band
+    ]
+    questions = [
+        {
+            "cls": q.cls,
+            "inputs": [
+                {"input": x, "got": _show(g) if g is not None else "", "source": src[x]}
+                for x, g in zip(q.inputs, q.got or (None,) * len(q.inputs), strict=True)
+            ],
+        }
+        for q in result.questions
+    ]
+    return {"band": band, "questions": questions}
+
+
+BOOK_SHA256_DEFINITION: Final = (
+    "book_sha256 = sha256 of the answer book file's bytes as read at plan time "
+    '("" when no book file exists); book_head = record_hash of its last record '
+    '("" for an empty book). Both are sealed: the bytes pin the file, the head pins the chain '
+    "every attempt sidecar's rule_d.book_head must equal."
+)
+
+PLAN_RECORD: Final = "rule_d_plan.jsonl"
+"""Beside the journal: one line per `saddle run --rule-d` plan step, appended, never rewritten."""
+
+
+def book_sha256(config: RuleDConfig) -> str:
+    """sha256 of the book file's bytes, "" when there is no book file (an empty book)."""
+    if config.book is None or not config.book.exists():
+        return ""
+    return hashlib.sha256(config.book.read_bytes()).hexdigest()
+
+
+def plan_record(loaded: Loaded, classes: Sequence[CensusClass]) -> dict[str, Any]:
+    """The run-level seal: the plan-time census and the book's identity (file bytes + head)."""
+    live, _suspended = loaded.book._class_keys(loaded.callable_, loaded.ctx)
+    return {
+        "schema": "saddle-rule-d-plan/1",
+        "reference_set_id": loaded.refset.set_id,
+        "table": loaded.config.table,
+        "callable": loaded.callable_,
+        "panel_sha": loaded.ctx.panel_sha,
+        "book_path": "" if loaded.config.book is None else str(loaded.config.book),
+        "book_sha256": book_sha256(loaded.config),
+        "book_head": loaded.book.head(),
+        "book_sha256_definition": BOOK_SHA256_DEFINITION,
+        "book_classes": sorted(live),
+        "census_budget": loaded.config.census_budget,
+        "over_budget": len(classes) > loaded.config.census_budget,
+        "census": {
+            "split": [
+                {"cls": c.key, "members": list(c.members), "signatures": list(c.signatures)}
+                for c in classes
+            ],
+        },
+    }
+
+
+def _redacted(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, Mapping):
+        return {k: _redacted(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_redacted(v) for v in value]
+    return value
+
+
+def seal_plan(journal_path: Path, record: Mapping[str, Any]) -> Path:
+    """Append the plan record, secrets redacted as in a sidecar, beside the journal."""
+    path = journal_path.parent / PLAN_RECORD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_redacted(record), sort_keys=True) + "\n")
+    return path
 
 
 def verdict(loaded: Loaded, workdir: Path, *, runner: Runner = run_capture) -> RuleDDecision:

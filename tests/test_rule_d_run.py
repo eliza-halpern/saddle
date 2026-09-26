@@ -7,6 +7,8 @@ loaded through its sealed id; every tree is real code run in a subprocess.
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import hashlib
 import io
 import json
 import os
@@ -21,9 +23,10 @@ from saddle import slice as slice_module
 from saddle.answer_book import Book
 from saddle.dag import Dag
 from saddle.evidence import TEST_MEMORY_LIMIT_BYTES, CapturedRun, run_argv
-from saddle.journal import attempt_sidecar_path, read_records, read_spans
+from saddle.journal import attempt_sidecar_path, read_records, read_spans, redact_secrets
 from saddle.refstore import AnswerTable, Reference, Stamp, write_reference_set
 from saddle.rule_d_run import (
+    PLAN_RECORD,
     CensusClass,
     RuleDConfig,
     RuleDDecision,
@@ -31,6 +34,7 @@ from saddle.rule_d_run import (
     census,
     load,
     render_census,
+    seal_plan,
     tree_answers,
     verdict,
 )
@@ -786,3 +790,149 @@ def test_rule_d_run_saddle_run_exits_4_on_a_question_and_keeps_1_and_0(
     monkeypatch.setattr(cli, "run_slice", lambda *_a, **_k: result)
     options = cli.RunOptions(task="t", repo=tmp_path, journal=tmp_path / "j", yes=True)
     assert cli.run_task(options, None, stdin=io.StringIO(), stdout=io.StringIO()) == code  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------------------ the seal M1-J's scorer reads
+
+
+def test_seal_a_band_question_carries_channel_inputs_and_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = load(_config(tmp_path))
+    _result, sidecars, _repo = _slice(tmp_path, BAND, rule_d_run.hook(loaded), monkeypatch)
+    d = sidecars[-1]["rule_d"]
+    assert (sidecars[-1]["exit_code"], d["verdict"]) == (2, "question")
+    assert d["asks"] == [d["band"][0]["cls"]]
+    assert d["band"] == [
+        {
+            "cls": d["asks"][0],
+            "inputs": [{"input": "n0", "got": "true", "expected": "false", "source": "references"}],
+        }
+    ]
+    assert d["questions"] == []
+
+
+def test_seal_a_split_ask_carries_its_class_and_input_under_questions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = load(_config(tmp_path, book=False))
+    _result, sidecars, _repo = _slice(tmp_path, GOOD, rule_d_run.hook(loaded), monkeypatch)
+    d = sidecars[-1]["rule_d"]
+    assert d["verdict"] == "route"
+    assert d["band"] == []
+    assert d["questions"] == [
+        {"cls": d["asks"][0], "inputs": [{"input": SPLIT, "got": "false", "source": "split"}]}
+    ]
+
+
+def test_seal_an_unusable_tree_seals_its_split_inputs_with_no_answer(tmp_path: Path) -> None:
+    d = verdict(
+        load(_config(tmp_path, book=False)), _tree(tmp_path, "pass\nimport no_such_module_xyz")
+    )
+    assert d.verdict == "refuse"
+    assert d.evidence["tree_unusable"][0] == "import-error"
+    assert d.evidence["questions"][0]["inputs"] == [{"input": SPLIT, "got": "", "source": "split"}]
+
+
+def test_seal_an_accepted_tree_seals_empty_channels(tmp_path: Path) -> None:
+    d = verdict(load(_config(tmp_path)), _tree(tmp_path, GOOD))
+    assert (d.evidence["asks"], d.evidence["band"], d.evidence["questions"]) == ([], [], [])
+
+
+def test_seal_an_asked_input_without_provenance_raises_not_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad: an empty source would let M1-J 4b pass vacuously, so the seal refuses."""
+    real = rule_d.consensus_verdict
+
+    def stripped(*a: Any, **k: Any) -> rule_d.DifferentialResult:
+        return dataclasses.replace(real(*a, **k), provenance=())
+
+    monkeypatch.setattr(rule_d, "consensus_verdict", stripped)
+    with pytest.raises(KeyError, match="n0"):
+        verdict(load(_config(tmp_path)), _tree(tmp_path, BAND))
+
+
+def test_seal_the_plan_records_the_census_and_both_book_identities(tmp_path: Path) -> None:
+    config = _config(tmp_path, book=False, census_budget=0)
+    journal = tmp_path / "run" / ".saddle" / "proofs.jsonl"
+    out = io.StringIO()
+    assert cli.rule_d_plan(config, stdout=out, journal=journal) is None  # over budget
+    lines = (journal.parent / PLAN_RECORD).read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["census"]["split"][0]["members"] == [SPLIT]
+    assert rec["census"]["split"][0]["signatures"] == ["TTTTFFFF"]
+    assert (rec["over_budget"], rec["census_budget"]) == (True, 0)
+    assert (rec["book_sha256"], rec["book_head"], rec["book_classes"]) == ("", "", [])
+    assert f"plan sealed in {journal.parent / PLAN_RECORD}" in out.getvalue()
+
+    booked = _config(tmp_path / "b")
+    assert booked.book is not None
+    loaded = cli.rule_d_plan(booked, stdout=io.StringIO(), journal=journal)
+    assert loaded is not None
+    rec = json.loads((journal.parent / PLAN_RECORD).read_text().splitlines()[1])
+    assert rec["book_sha256"] == hashlib.sha256(booked.book.read_bytes()).hexdigest()
+    assert rec["book_head"] == loaded.book.head() != ""
+    assert (
+        rec["book_classes"] == []
+    )  # the fixture book pins SPLIT exactly; an exact pin is no class
+    assert rec["census"]["split"] == []
+    assert rec["reference_set_id"] == loaded.refset.set_id
+    assert "file's bytes" in rec["book_sha256_definition"]
+
+
+def test_seal_saddle_run_seals_the_plan_beside_its_journal(tmp_path: Path) -> None:
+    options = cli.RunOptions(
+        task="t",
+        repo=tmp_path,
+        journal=tmp_path / "j" / "proofs.jsonl",
+        rule_d=_config(tmp_path, book=False, census_budget=0),
+    )
+    assert cli.run_task(options, None, stdin=io.StringIO(), stdout=io.StringIO()) == 1  # type: ignore[arg-type]
+    rec = json.loads((tmp_path / "j" / PLAN_RECORD).read_text())
+    assert [c["members"] for c in rec["census"]["split"]] == [[SPLIT]]
+
+
+def test_seal_an_ordinary_input_round_trips_through_redaction(tmp_path: Path) -> None:
+    rec = {"census": {"split": [{"members": [SPLIT, "a@b.c", 'x"y@z']}]}}
+    path = seal_plan(tmp_path / "proofs.jsonl", rec)
+    assert json.loads(path.read_text()) == rec
+
+
+def test_seal_an_input_that_looks_like_a_secret_is_redacted_in_the_seal(tmp_path: Path) -> None:
+    """Known-bad, documented: the seal is not verbatim for secret-shaped inputs.
+
+    `password=hunter2@x.com` is sealed as `password=***`; the scorer would see a different
+    input than the tree was asked. ADAPT measured 0 of 2000 fix8 inputs altered.
+    """
+    bad = "password=hunter2@x.com"
+    assert redact_secrets(bad) == "password=***"
+    path = seal_plan(tmp_path / "proofs.jsonl", {"members": [bad, "sk-abcdefgh1234"]})
+    assert json.loads(path.read_text()) == {"members": ["password=***", "***"]}
+
+
+def test_seal_the_plan_lists_a_class_the_book_answers(tmp_path: Path) -> None:
+    """Known-good for `book_classes`: a saved class is listed and leaves the census."""
+    config = _config(tmp_path, book=False)
+    book_path = _book(tmp_path / "book.jsonl", answer=None)
+    loaded = load(dataclasses.replace(config, book=book_path))
+    book = loaded.book
+    anchors = {SPLIT: "reject"}
+    pv = book.preview(FN, "reject", anchors, [SPLIT], loaded.ctx)
+    book.save_class(
+        FN, "reject", anchors, pv, confirmed_preview=True, by="eliza", at=T0, question="q",
+        tree_hash="0" * 64, ask_point="plan", run_id="run-1", ctx=loaded.ctx,
+    )  # fmt: skip
+    book.dump(book_path)
+    loaded = load(dataclasses.replace(config, book=book_path))
+    rec = rule_d_run.plan_record(loaded, rule_d_run.census(loaded))
+    assert rec["book_classes"] == [loaded.key(SPLIT)]
+    assert rec["census"]["split"] == []
+
+
+def test_seal_the_plan_without_a_journal_seals_nothing(tmp_path: Path) -> None:
+    out = io.StringIO()
+    assert cli.rule_d_plan(_config(tmp_path), stdout=out) is not None
+    assert "plan sealed" not in out.getvalue()
+    assert list(tmp_path.rglob(PLAN_RECORD)) == []
