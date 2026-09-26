@@ -294,6 +294,68 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
     return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
 
 
+AUDIT_UNRESOLVED: Final = "audit unresolved"
+"""FEEDCAP's stop reason (`engine.AUDIT_UNRESOLVED`): finish refused on an
+unchanged finding set until the cap. Spelled here, not imported, to keep
+the packet a reader of the ledger rather than of the engine."""
+
+
+@dataclass(frozen=True)
+class _Spend:
+    text: str
+    estimated: bool
+    gap: str
+
+
+def _spend(evidence: dict[str, Any]) -> _Spend | None:
+    """The run's token spend, saying whether it was measured.
+
+    USAGE's sidecar has `tokens_spent` with `token_source` ("usage",
+    "estimate", "mixed", "none") and `tokens_by_source`. A sidecar written
+    before it has only `tokens_spent_estimate`: that is an estimate, and a
+    missing count is "not recorded", never a measured 0.
+    """
+    source = evidence.get("token_source")
+    spent = evidence.get("tokens_spent")
+    if not isinstance(spent, int | float) or source not in ("usage", "estimate", "mixed", "none"):
+        old = evidence.get("tokens_spent_estimate")
+        if not isinstance(old, int | float):
+            return None
+        return _Spend(
+            f"~{_tokens(float(old))} estimated",
+            True,
+            "Token counts are estimates (characters / 4): this run predates usage metering.",
+        )
+    if source == "usage":
+        return _Spend(f"{_tokens(float(spent))} measured", False, "")
+    if source == "mixed":
+        by = evidence.get("tokens_by_source") or {}
+        measured = by.get("usage", 0) if isinstance(by, dict) else 0
+        return _Spend(
+            f"{_tokens(float(spent))} ({_tokens(float(measured))} measured, rest estimated)",
+            True,
+            "Some rounds' token counts are estimates (characters / 4): the server "
+            "reported no usage for them.",
+        )
+    if source == "none":
+        return _Spend("0 (no model round)", False, "")
+    return _Spend(
+        f"~{_tokens(float(spent))} estimated",
+        True,
+        "Token counts are estimates (characters / 4): the server reported no usage.",
+    )
+
+
+def _unresolved(evidence: dict[str, Any]) -> list[str]:
+    """FEEDCAP's `unresolved_findings` as "gate (reason)", skipping malformed entries."""
+    found = evidence.get("unresolved_findings")
+    return [
+        f"{f.get('gate', '?')} ({f.get('reason', '?')})"
+        for f in (found if isinstance(found, list) else [])
+        if isinstance(f, dict)
+    ]
+
+
 def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     """The packet for one run, from its ledger alone. No model call."""
     run_id = run_id or journal.parent.name
@@ -316,6 +378,9 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
+    # The list is the last refusal's; only FEEDCAP's stop makes it the verdict.
+    capped = outcome is not None and outcome.detail.startswith(f"stopped: {AUDIT_UNRESOLVED}")
+    unresolved = _unresolved(evidence) if capped and evidence is not None else []
     task = start.argv[1] if start is not None and len(start.argv) > 1 else ""
 
     # -- verdict: from the outcome span, and nothing else ---------------------
@@ -343,6 +408,8 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     else:
         verdict = "stopped"
         reason = outcome.detail.split(";")[0].removeprefix("stopped: ")
+        if unresolved:
+            reason += f" (finish refused on the same findings: {', '.join(unresolved)})"
         verdict_text = f"Stopped: {reason}. It did not finish, and nothing here says it did."
 
     rows: list[Row] = []
@@ -513,10 +580,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
         gap_cites.append(outcome.record_hash)
     if issues:
         gaps.append(f"The ledger reports: {', '.join(sorted(set(issues)))}.")
-    if evidence is not None:
-        gaps.append(
-            "Token counts are estimates (characters / 4): the streaming client reports no usage."
-        )
+    spend = _spend(evidence) if evidence is not None else None
+    if spend is not None and spend.estimated:
+        gaps.append(spend.gap)
+    for item in unresolved:
+        gaps.append(f"Unresolved at finish: {item}.")
+    if unresolved and outcome is not None:
+        gap_cites.append(outcome.record_hash)
     rows.append(
         Row(
             "not-proven",
@@ -560,7 +630,7 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
                 "cost",
                 f"{_minutes(float(evidence.get('elapsed_s', 0)))} of "
                 f"{_minutes(float(evidence.get('time_budget_s', 0)))} "
-                f"· ~{_tokens(float(evidence.get('tokens_spent_estimate', 0)))} of "
+                f"· {spend.text if spend is not None else 'no spend recorded'} of "
                 f"{_tokens(float(evidence.get('token_budget', 0)))} generated tokens "
                 f"· {_n(len(tools), 'tool call')} over "
                 f"{_n(int(evidence.get('rounds', 0)), 'round')}",

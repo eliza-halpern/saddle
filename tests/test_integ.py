@@ -12,6 +12,7 @@ a line these trees do not change and would report no mutants.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -21,10 +22,10 @@ import pytest
 from test_evidence import _without_stubbed_mutmut
 
 from saddle.auto import AutoOptions, AutoResult, run_auto
-from saddle.journal import read_entries, read_spans, verify_journal
-from saddle.packet import compile_packet
+from saddle.journal import attempt_sidecar_path, read_entries, read_spans, verify_journal
+from saddle.packet import _spend, _unresolved, compile_packet
 from saddle.transcript import session_line, start_field, tier_finding
-from saddle.vllm import ToolCall, VllmClient
+from saddle.vllm import StreamUsage, ToolCall, VllmClient
 
 BASE = "def f(x):\n    return x\n"
 TEST = "from n import f\n\n\ndef test_f():\n    assert f(2) == 2\n"
@@ -62,8 +63,9 @@ class Scripted:
     """Map None to 0 (leaving `return 0` uncovered), check, wait for the
     checkpoint's finding, then -- if `learns` -- add the covering test."""
 
-    def __init__(self, journal: Path, *, learns: bool) -> None:
+    def __init__(self, journal: Path, *, learns: bool, usage: int | None = None) -> None:
         self.journal = journal
+        self.usage = usage
         self.learns = learns
         self.round = 0
         self.fixed = False
@@ -72,7 +74,13 @@ class Scripted:
     def _audited(self) -> bool:
         return self.journal.is_file() and "audit-tier1:coverage" in self.journal.read_text()
 
-    def stream_chat(self, messages: Any, **_: Any) -> Any:
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+        items = list(self._round(messages))
+        if self.usage is not None:  # a server that reports usage, as vLLM does
+            items.append(StreamUsage(prompt_tokens=100, completion_tokens=self.usage))
+        return iter(items)
+
+    def _round(self, messages: Any) -> Any:
         self.round += 1
         content = str(messages[-1].get("content") or "")
         self.heard.append(content)
@@ -96,9 +104,12 @@ class Scripted:
         return iter([call("finish", f"f{self.round}", summary="Clamped. All tests pass now.")])
 
 
-def run(repo: Path, *, learns: bool, **kw: Any) -> tuple[AutoResult, Scripted]:
+def run(
+    repo: Path, *, learns: bool, usage: int | None = None, **kw: Any
+) -> tuple[AutoResult, Scripted]:
     run_id = "learns" if learns else "stubborn"
-    client = Scripted(repo / ".saddle" / "runs" / run_id / "proofs.jsonl", learns=learns)
+    journal = repo / ".saddle" / "runs" / run_id / "proofs.jsonl"
+    client = Scripted(journal, learns=learns, usage=usage)
     options = AutoOptions(
         task="f(None) should be 0", repo=repo, run_id=run_id, allow_test_edits=True, **kw
     )
@@ -191,3 +202,104 @@ def test_start_fields_are_read_by_key_not_position() -> None:
     assert start_field(feed, "branch") == "saddle/auto/x"
     assert start_field("branch saddle/auto/y; budgets 1s", "branch") == "saddle/auto/y"
     assert start_field(feed, "missing") == ""
+
+
+# -- cost: measured vs estimated (USAGE's sidecar fields) -----------------------
+
+
+def test_the_cost_row_says_measured_when_the_server_reported_usage(repo: Path) -> None:
+    result, _ = run(repo, learns=True, usage=7)
+    rows = {row.key: row for row in compile_packet(result.journal).rows}
+    spent = sidecar(result)
+    assert spent["token_source"] == "usage"
+    assert f"{spent['tokens_spent']} measured of " in rows["cost"].text
+    assert "~" not in rows["cost"].text
+    assert not any("estimate" in item for item in rows["not-proven"].items)
+
+
+def test_the_cost_row_says_estimate_when_no_usage_came(repo: Path) -> None:
+    result, _ = run(repo, learns=True)
+    rows = {row.key: row for row in compile_packet(result.journal).rows}
+    spent = sidecar(result)
+    assert spent["token_source"] == "estimate"
+    assert f"~{spent['tokens_spent']} estimated of " in rows["cost"].text
+    assert any("estimate" in item for item in rows["not-proven"].items)
+
+
+def test_an_old_sidecar_is_never_read_as_zero_measured_tokens(tmp_path: Path) -> None:
+    """Known-bad: a sidecar written before USAGE has only `tokens_spent_estimate`."""
+    runs = tmp_path / "old"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "auto_pre_chain", runs)
+    rows = {row.key: row for row in compile_packet(runs / "proofs.jsonl").rows}
+    assert "measured" not in rows["cost"].text
+    assert "~33 estimated of " in rows["cost"].text
+    assert any("estimate" in item for item in rows["not-proven"].items)
+
+
+# -- the finish-refusal cap (FEEDCAP): "audit unresolved" --------------------------
+
+
+def test_an_unresolved_audit_stop_names_its_findings_on_the_card_and_packet(
+    repo: Path,
+) -> None:
+    result, _ = run(repo, learns=False)  # default cap: 3 unchanged refusals
+    assert (result.outcome, result.reason) == ("stopped", "audit unresolved")
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "stopped"
+    assert "audit unresolved" in packet.verdict_text
+    assert "coverage (evidence-thin)" in packet.verdict_text
+    gaps = {row.key: row for row in packet.rows}["not-proven"].items
+    assert any(g.startswith("Unresolved at finish: coverage (evidence-thin)") for g in gaps), gaps
+    texts = [line.text for e in read_entries(result.journal) if (line := session_line(e))]
+    assert any("unresolved findings: coverage (evidence-thin)" in t for t in texts), texts
+
+
+def sidecar(result: AutoResult) -> dict[str, Any]:
+    span = [s for s in read_spans(result.journal) if s.name == f"auto:{result.outcome}"][-1]
+    return cast(
+        dict[str, Any], json.loads(attempt_sidecar_path(result.journal, span.span_id).read_bytes())
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence", "text", "estimated"),
+    [
+        ({"tokens_spent": 1500, "token_source": "usage"}, "1.5k measured", False),
+        ({"tokens_spent": 40, "token_source": "estimate"}, "~40 estimated", True),
+        (
+            {"tokens_spent": 50, "token_source": "mixed", "tokens_by_source": {"usage": 30}},
+            "50 (30 measured, rest estimated)",
+            True,
+        ),
+        (
+            {"tokens_spent": 50, "token_source": "mixed", "tokens_by_source": None},
+            "50 (0 measured, rest estimated)",
+            True,
+        ),
+        ({"tokens_spent": 0, "token_source": "none"}, "0 (no model round)", False),
+        ({"tokens_spent_estimate": 33}, "~33 estimated", True),
+        # known-bad: a source this reader does not know is not trusted as measured
+        (
+            {"tokens_spent": 9, "token_source": "guess", "tokens_spent_estimate": 9},
+            "~9 estimated",
+            True,
+        ),
+    ],
+)
+def test_spend_says_measured_only_for_usage(
+    evidence: dict[str, Any], text: str, estimated: bool
+) -> None:
+    spend = _spend(evidence)
+    assert spend is not None
+    assert (spend.text, spend.estimated) == (text, estimated)
+    assert bool(spend.gap) == estimated
+
+
+def test_no_spend_record_is_not_a_zero() -> None:
+    assert _spend({}) is None
+    assert _spend({"tokens_spent": "12", "token_source": "usage"}) is None
+
+
+def test_malformed_unresolved_entries_are_skipped() -> None:
+    assert _unresolved({"unresolved_findings": [{"gate": "coverage"}, "junk"]}) == ["coverage (?)"]
+    assert _unresolved({"unresolved_findings": "junk"}) == []
