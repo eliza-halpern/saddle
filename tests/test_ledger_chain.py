@@ -115,6 +115,8 @@ def test_an_untouched_run_verifies_and_its_list_is_every_tool_span_in_order(repo
     result = run(repo)
     rows = lines(result.journal)
     names = [row.get("name") for row in rows if row["record_type"] == "span"]
+    assert names.count("auto:spend") == 4  # USAGE: one agent span per round, never listed
+    names = [name for name in names if name != "auto:spend"]
     assert names == ["auto:start", "edit_file", "refused:edit_file", "read_file", "finish",
                      "auto:finished"]  # fmt: skip
     code, text = verify_text(result.journal)

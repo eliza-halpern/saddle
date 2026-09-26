@@ -601,6 +601,9 @@ def _load_journal(
 AUTO_START: Final = "auto:start"
 AUTO_PROOF_PREFIX: Final = "auto-"
 TOOL_SPAN_HASHES: Final = "tool_span_hashes"
+AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped")
+"""A run's outcome span names (`engine._seal_outcome`). Not `auto:spend`,
+which USAGE seals under the start span once per round."""
 AUDIT_SPAN_PREFIXES: Final = ("audit:", "audit-tier")
 """Audit records a run's journal also holds: the feed's `audit:delivered` /
 `audit:withheld`, the chat seam's `audit:<gate>`, and the auditor's own
@@ -631,10 +634,11 @@ def _auto_run_issues(
     (an inserted span need not cite the parent honestly). A journal with
     no `auto:start` span -- chat, slice runs -- is not judged here.
 
-    The outcome is the run's `auto:<outcome>` span, by name: the audit feed
-    and the chat's question seam also write agent spans under the start
-    span. Audit records (`AUDIT_SPAN_PREFIXES`) are not tool calls and are
-    not held to the list (scope narrowed, INTEG).
+    The outcome is the run's `auto:finished`/`auto:stopped` span, by name
+    (`AUTO_OUTCOMES`): the audit feed, the chat's question seam and USAGE's
+    `auto:spend` also write agent spans under the start span. Audit records
+    (`AUDIT_SPAN_PREFIXES`) are not tool calls and are not held to the list
+    (scope narrowed, INTEG).
     """
     issues: list[JournalIssue] = []
     starts = [
@@ -655,7 +659,7 @@ def _auto_run_issues(
             for number, span in in_run
             if span.kind == "agent"
             and span.parent_id == start.span_id
-            and span.name.startswith("auto:")
+            and span.name in AUTO_OUTCOMES
         ]
         tools = [
             (number, span)

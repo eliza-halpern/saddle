@@ -292,7 +292,7 @@ def _seconds(duration_ms: int) -> str:
 
 
 def session_line(entry: JournalEntry) -> SessionLine | None:
-    """An auto-run ledger entry as one session line, or None for a plan.
+    """An auto-run ledger entry as one session line, or None for a plan or a spend.
 
     The words for a tool call are `labels.label_for`, the same the chat's
     own tool rows use, so the card and the transcript say the same thing.
@@ -312,6 +312,8 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
         return SessionLine(
             "▸", f"started on {where}{f' · arm {arm}' if arm else ''} · {tests}", "info", cite
         )
+    if name == "auto:spend":
+        return None  # a round's spend: the card's meters show it, not a line
     if name.startswith("auto:"):
         outcome = name.removeprefix("auto:")
         return SessionLine(
