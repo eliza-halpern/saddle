@@ -67,12 +67,13 @@ import subprocess
 import tempfile
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal, Protocol
 
+from saddle import coverage_text
 from saddle.audit import AuditError
 from saddle.auditor import (
     Auditor,
@@ -80,6 +81,7 @@ from saddle.auditor import (
     Finding,
     Findings,
     Tier2Mode,
+    coverage_evidence,
     rewritten,
     sanction,
 )
@@ -137,6 +139,11 @@ class AuditResult:
     mutant_detail: tuple[tuple[str, str, str], ...] = ()
     """Tier 2's (name, status, show) for every scored mutant; sealed in the
     audit span's sidecar under `mutant_detail` when non-empty."""
+    coverage: str = ""
+    """A failing or not-proven coverage finding in `coverage_text`'s words
+    (function, its docstring's first line, the lines), read off the audited
+    snapshot; what `render` shows the model in place of the bare line list.
+    Sealed under `coverage_text` when non-empty (FEEDFIX item 2)."""
 
     @property
     def passed(self) -> bool:
@@ -158,6 +165,7 @@ class AuditResult:
                 if self.mutant_detail
                 else {}
             ),
+            **({"coverage_text": self.coverage} if self.coverage else {}),
         }
 
 
@@ -189,6 +197,36 @@ def waivers(result: AuditResult) -> list[str]:
     return out
 
 
+def _worded(result: AuditResult, finding: Finding) -> str:
+    """A finding's detail as the model reads it, capped at `DETAIL_CHARS`.
+
+    The coverage finding reads in `coverage_text`'s words when the audit
+    could place its lines (`AuditResult.coverage`): which function each
+    uncovered line is in and what that function is for, then the lines,
+    rather than "no test runs money.py:131, money.py:132, ..." (DETECT16-LIB
+    C2; FEEDFIX item 2). Every other finding, and a coverage finding with
+    nothing placed, reads its detail as before.
+    """
+    text = result.coverage if finding.gate == "coverage" and result.coverage else finding.detail
+    return text if len(text) <= DETAIL_CHARS else text[:DETAIL_CHARS] + " ..."
+
+
+def _coverage_words(tree: Path, baseline: str, findings: Sequence[Finding]) -> str:
+    """`coverage_text`'s rendering of the failing or not-proven coverage
+    finding among `findings`, over the snapshot it judged; "" if none."""
+    found = next(
+        (f for f in findings if f.gate == "coverage" and f.verdict in ("fail", "not-proven")),
+        None,
+    )
+    sealed = coverage_evidence(tree, baseline, found.detail) if found is not None else None
+    if found is None or sealed is None:
+        return ""
+    sources = {name: "\n".join(lines) + "\n" for name, lines in sealed["sources"].items()}
+    changed = [(str(path), int(line)) for path, line in sealed["changed"]]
+    summary = coverage_text.describe_coverage(dataclasses.asdict(found), sources, changed)
+    return coverage_text.render_coverage(summary, text=False).rstrip("\n")
+
+
 def render(result: AuditResult) -> str:
     """The compact text the model reads: failures in full, passes counted."""
     head = (
@@ -199,14 +237,14 @@ def render(result: AuditResult) -> str:
         lines.append(result.note)
     bad = [f for f in result.findings if failing(f)]
     for f in bad:
-        detail = f.detail if len(f.detail) <= DETAIL_CHARS else f.detail[:DETAIL_CHARS] + " ..."
+        detail = _worded(result, f)
         lines.append(f"- {f.gate} (tier {f.tier}): {f.verdict}, {f.reason}: {detail}")
     allowed = [f for f in result.findings if f.reason == "sanctioned" and f.verdict in FAILING]
     for f in allowed:
         lines.append(f"(info) {f.gate} (tier {f.tier}): {f.detail}")
     unproven = [f for f in result.findings if f.verdict == "not-proven"]
     for f in unproven:
-        detail = f.detail if len(f.detail) <= DETAIL_CHARS else f.detail[:DETAIL_CHARS] + " ..."
+        detail = _worded(result, f)
         lines.append(f"(not proven, does not refuse) {f.gate} (tier {f.tier}): {detail}")
     passed = len(result.findings) - len(bad) - len(allowed) - len(unproven)
     if passed:
@@ -329,7 +367,8 @@ class AuditFeed:
                 got = self._tier(tier, scratch / "tree")
                 found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
                 detail = detail or got.mutant_detail
-            return AuditResult(point, tree, tuple(found), mutant_detail=detail)
+            words = _coverage_words(scratch / "tree", self.baseline, found)
+            return AuditResult(point, tree, tuple(found), mutant_detail=detail, coverage=words)
         except AuditError as exc:
             if str(exc).startswith(NOTHING_TO_AUDIT):
                 return AuditResult(point, "", (), note=str(exc))
