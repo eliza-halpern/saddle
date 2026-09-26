@@ -408,6 +408,7 @@ function handleTask(event) {
       paintState(card);
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
+      runState(state.sessionId, event.state, event.task);  // notify.js: tab, dot, live region
       if (event.state === "needs_you") {
         setStatus("needs", "needs you");
       } else if (event.state === "running") {

@@ -519,6 +519,7 @@ async function loadSessions() {
   list.textContent = "";
   for (const session of sessions) {
     const row = el("div", `session${session.id === state.sessionId ? " active" : ""}`);
+    row.dataset.sid = session.id;
     row.appendChild(el("span", "name", session.title));
     const kill = el("button", "kill", "×");
     kill.title = "Delete session";
@@ -532,6 +533,7 @@ async function loadSessions() {
     row.onclick = () => select(session.id);
     list.appendChild(row);
   }
+  noteSessions(sessions);
   return sessions;
 }
 
@@ -542,6 +544,7 @@ function select(sessionId) {
   state.tools.clear();
   state.terminals.clear();
   localStorage.setItem("saddle.session", sessionId);
+  runSelected(sessionId);
   loadSessions();
   connect(sessionId);
 }

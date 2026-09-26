@@ -465,7 +465,7 @@ def build_app(
         and the page that names those URLs is never stored.
         """
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for name in ("app.css", "markdown.js", "tasks.js", "app.js"):
+        for name in ("app.css", "markdown.js", "tasks.js", "notify.js", "app.js"):
             try:
                 version = int((STATIC / name).stat().st_mtime)
             except OSError:
@@ -474,7 +474,23 @@ def build_app(
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def list_sessions(_: Request) -> JSONResponse:
-        return JSONResponse([s.__dict__ for s in store.list()])
+        """Every session, with its latest run's state and task (None if none).
+
+        The sidebar reads this so a run in a session that is not on screen --
+        one waiting on you, above all -- is still visible. Runs are kept in
+        start order, so the last one seen for a session is its latest.
+        """
+        latest: dict[str, TaskRun] = {}
+        for run in list(server.tasks.values()):
+            latest[run.session_id] = run
+        rows = []
+        for session in store.list():
+            newest = latest.get(session.id)
+            row = dict(session.__dict__)
+            row["run_state"] = newest.state if newest is not None else None
+            row["run_task"] = newest.task if newest is not None else None
+            rows.append(row)
+        return JSONResponse(rows)
 
     async def create_session(request: Request) -> JSONResponse:
         body = await request.json() if await request.body() else {}

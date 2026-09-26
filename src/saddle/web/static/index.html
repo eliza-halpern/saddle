@@ -3,6 +3,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>saddle</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/app.css">
 <div id="app">
   <div id="scrim" hidden></div>
@@ -13,6 +14,7 @@
       <button id="new-session" title="New session">+</button>
     </div>
     <div id="session-list"></div>
+    <button id="notify-toggle" type="button" class="notify-toggle" aria-pressed="false">Notify me</button>
     <div class="side-foot">
       <label>Persona
         <select id="persona"></select>
@@ -33,6 +35,7 @@
       </label>
     </div>
   </aside>
+  <div id="run-live" class="sr-only" aria-live="polite" role="status"></div>
 
   <main>
     <header id="topbar">
@@ -158,4 +161,5 @@
 </dialog>
 <script src="/static/markdown.js"></script>
 <script src="/static/tasks.js"></script>
+<script src="/static/notify.js"></script>
 <script src="/static/app.js"></script>
