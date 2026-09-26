@@ -464,6 +464,11 @@ function openRunConfirm() {
   }
   $("#tc-what").textContent = text;
   $("#tc-folder").textContent = state.folder || "this folder";
+  api("/api/task-policy").then((policy) => {
+    $("#tc-tests").textContent = policy.test_edits
+      ? "it may edit test files (this server allows it)"
+      : "test files are read-only to it";
+  }).catch(() => {});
   $("#task-confirm").hidden = false;
   $("#tc-start").focus();
 }

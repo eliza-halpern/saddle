@@ -494,6 +494,10 @@ def build_app(
     async def get_settings(_: Request) -> JSONResponse:
         return JSONResponse(store.settings())
 
+    async def task_policy(_: Request) -> JSONResponse:
+        """What a chat-started run may do, so the confirm strip says it truly."""
+        return JSONResponse({"test_edits": server.allow_test_edits})
+
     async def patch_settings(request: Request) -> JSONResponse:
         return JSONResponse(store.update_settings(**await request.json()))
 
@@ -915,6 +919,7 @@ def build_app(
             Route("/api/personas/{name}", delete_persona, methods=["DELETE"]),
             Route("/api/settings", get_settings),
             Route("/api/settings", patch_settings, methods=["PATCH"]),
+            Route("/api/task-policy", task_policy),
             Route("/api/browse", browse),
             Route("/api/browse", make_folder, methods=["POST"]),
             Route("/api/sessions", list_sessions, methods=["GET"]),

@@ -303,3 +303,19 @@ def test_no_spend_record_is_not_a_zero() -> None:
 def test_malformed_unresolved_entries_are_skipped() -> None:
     assert _unresolved({"unresolved_findings": [{"gate": "coverage"}, "junk"]}) == ["coverage (?)"]
     assert _unresolved({"unresolved_findings": "junk"}) == []
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_the_confirm_strip_is_told_the_servers_test_edit_policy(
+    tmp_path: Path, allowed: bool
+) -> None:
+    from starlette.testclient import TestClient
+
+    from saddle.sessions import SessionStore
+    from saddle.web.app import build_app
+
+    app = build_app(
+        SessionStore(tmp_path), object, default_workdir=tmp_path, allow_test_edits=allowed
+    )
+    with TestClient(app) as client:
+        assert client.get("/api/task-policy").json() == {"test_edits": allowed}
