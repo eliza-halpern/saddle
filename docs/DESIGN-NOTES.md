@@ -191,7 +191,8 @@ specification stage doesn't get an independent second look; it gets encoded
 twice." The measurement is arXiv 2603.23443: across **22,374 mutated
 CodeNet variants** and 8 models, **>99%** of failing single-shot LLM tests
 passed on the original program while executing the changed region
-(per-model pass rates 40.7%–82.9%, so a ~27B model sits near **41%**; this
+(per-model pass rates 40.7%–82.9%; the 40.7% model is Nemotron-3-Nano, listed
+as 30B, so placing a ~27B model near **41%** is an extrapolation; this
 measures single-shot test generation, not agent loops) — tests aligned with
 old behaviour, not with intent.
 [PGS][pgs] names the same thing the "cycle of self-deception": flawed code
@@ -275,11 +276,13 @@ it is a gate.
 split (Medium 62.8/17.5, Hard 48.9/1.1; v1 Table IV); v2 (May 2026,
 retitled "Effective LLM Code Refinement via Property-Oriented and
 Structurally Minimal Feedback") reports 87.0 vs 63.0 overall with
-DeepSeek-R1-32B on 100 LiveCodeBench problems the same hard problems.
+DeepSeek-R1-32B on 100 LiveCodeBench problems (76.5 vs 32.4 on the hard
+ones). The v1 figures do not appear in v2 and were not re-verified.
 Defining correctness is materially more tractable than implementing it —
 that is the asymmetry the whole architecture needs, and saddle is not using
-it. PGS validates each candidate property two ways: it must hold on known-
-good outputs, and it must detect known-bad versions.
+it. In v2, PGS validates each candidate property against the problem's
+public test cases and discards any that contradicts them (§4.2); a two-way
+check (hold on known-good outputs, detect known-bad versions) is not in v2.
 
 This is also the systematic version of the `from_regex` idea. The fuzzing
 literature states the underlying problem bluntly: LLMs "generate ordinary
@@ -306,8 +309,12 @@ it.
 
 **Finding:** [AlphaCode][alphacode] executes surviving candidates on
 *generated* inputs, clusters by output behaviour, and submits from the
-largest clusters — filtering removes **the large majority** of the candidate pool (the >99% figure was not verified against the paper) before
-any judgement is applied. The virtue for saddle is specific: **it never
+largest clusters — filtering on the example tests removes **approximately
+99%** of model samples (§4.5, p13) before any judgement is applied.
+Separately, the paper's dataset keeps a generated test only when 30 correct
+solutions agree on its output; with a problem-coverage filter, that cut the
+false-positive rate from 62% to 4% (§3.2.1, Table 2). The virtue for saddle
+is specific: **it never
 consults the worker's own tests.** It is an independent evidence channel
 obtained purely by execution.
 
@@ -333,13 +340,16 @@ Meanwhile [MAKER][maker] reaches zero errors across a million steps with
 with p>0.5 exact-match agreement required plus a red-flag parser that
 discards over-long or misformatted responses, and [Snell et al.][testtime]
 find sequential revision wins on easy problems (not re-verified),
-parallel resampling on hard ones, with the compute-optimal split near √N
-each — and compute-optimal scaling beating best-of-N at **4× less compute**.
+parallel resampling on hard ones, and little benefit from test-time compute
+on the hardest (√N appears only as an illustrative allocation and a beam
+width, not as the found optimum) — and compute-optimal scaling beating
+best-of-N at **4× less compute**.
 
 **The critical qualifier, which downgrades naive voting:** LLM
 implementations fail in *correlated* ways. [Failure Independence in
-LLM-Generated Code][failind] finds "seemingly diverse implementations often
-fail on the same inputs," so majority voting can amplify a shared mistake
+LLM-Generated Code][failind] finds that even implementations from different
+models, which differ more, fail on the same tests far more often than
+independence predicts, so majority voting can amplify a shared mistake
 rather than cancel it. The [Six Sigma Agent][sixsigma] carries an explicit
 correlation penalty ρ for this reason, and MAKER's result quietly depends on
 near-independence per step.
@@ -441,7 +451,10 @@ an LLM to **TC⁰**, unable to express certain reasoning, and measures up to
 **8pp** loss from strict constrained decoding (DeepSeek-R1-Distill-Llama-8B;
 QwQ-32B 5pp) on GSM-Symbolic, which CRANE recovers; the TC⁰ result (Prop.
 3.1) is for finite-output grammars — a diff grammar is infinite and falls
-under Prop. 3.3. The 27pp figure was not verified.
+under Prop. 3.3. The 27pp figure was not verified. The 8pp and 5pp losses
+are against unconstrained chain-of-thought (Table 1: 13 vs 21 and 38 vs
+43); against unconstrained decoding without chain-of-thought, constrained
+decoding is within one point or better on all nine models.
 benchmarks under strict format constraints.
 
 That is why F9 has never leaked: the DAG is emitted *after* reasoning.
@@ -591,8 +604,9 @@ not memorised `sortedcontainers`. Every task should get a perturbed twin.
 
 [HarnessFix][harnessfix] reports **6.3–18.4 pp absolute** gains across GAIA,
 SWE-Bench Verified, AppWorld and Terminal-Bench from repairing the *harness
-alone* (v2; 11.1 is the v2 Table III all-model average). The paper does not
-compare against human-designed harnesses. Its ETCLOVG taxonomy (Execution,
+alone* (v2; 11.1 is the v2 Table III all-model average, §V.A). With GPT-5
+mini fixed, it also beats human-designed harnesses by 6.3 points on average
+(range 1.9–10.0; Table IV). Its ETCLOVG taxonomy (Execution,
 Tool, Context, Lifecycle, Observability, Verification, Governance) names
 anti-patterns that map onto saddle's recorded bugs one-to-one:
 
@@ -618,8 +632,9 @@ appear to violate it. They do not, but the line needs drawing precisely.
 The commitment that survives — and should be strengthened, not weakened — is
 **no model grades its own work**. [Self-preference bias][selfpref] scales
 with model size and post-training and **is measured with authorship
-unlabeled** (randomized unlabeled pairs; equal-quality pairs cut the bias by
-31.5%), so this is well-founded.
+unlabeled** (randomized unlabeled pairs; equal-quality pairs are the
+measurement device, and a structured multi-dimensional evaluation strategy
+cuts the bias by 31.5%), so this is well-founded.
 
 What the literature adds is that *model-assisted candidate generation* is a
 different activity from grading, and it is where the leverage is:
@@ -627,7 +642,7 @@ different activity from grading, and it is where the leverage is:
 - ACH uses an LLM to **propose** mutants and judge equivalence; the mutants
   are then executed. Judgement is mechanical, proposal is not.
 - PGS uses an LLM to **propose** properties, which are then validated
-  against known-good and known-bad versions before being trusted.
+  against the problem's public test cases before being trusted (v2 §4.2).
 - Daikon+LLM uses an LLM to **filter** inferred invariants; inference is
   dynamic.
 
@@ -759,7 +774,7 @@ artifact across T1–T7.
 - [Agentless][agentless] — deterministic pipeline beats agent loops
 - [Diff-XYZ][diffxyz] / [DebugHarness][debugharness] / [Why LLMs Fail][whyllmsfail] — patch format and repair
 - [InspectCoder][inspectcoder] / [TraceCoder][tracecoder] — runtime state as repair feedback
-- [SEDCoT][sedcot] — minimal counterexamples improve repair at no extra cost
+- [SEDCoT][sedcot] — minimal counterexamples improve repair without extra LLM calls
 - [ELFuzz][elfuzz] — coverage-guided input generation
 - [HarnessFix][harnessfix] — ETCLOVG taxonomy; 6.3–18.4 pp absolute from harness repair alone (v2)
 - [ReasoningBank][reasoningbank] / [Memory retrieval][memretrieval] — journal as experience corpus
