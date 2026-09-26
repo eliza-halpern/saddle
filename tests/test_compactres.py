@@ -187,11 +187,18 @@ def _pairing_errors(messages: list[dict[str, Any]]) -> list[str]:
 
 def test_d4_no_orphan_tool_message_after_compaction() -> None:
     # odd pressure: a limit that makes stage 2 stop between a call and its result
-    for rounds in range(3, 10):
-        for limit in range(4000, 40000, 997):
-            messages = _auto_history(rounds)
-            compact(messages, limit_tokens=limit)
-            assert _pairing_errors(messages) == [], (rounds, limit)
+    for heavy in (False, True):
+        for rounds in range(3, 10):
+            for limit in range(4000, 40000, 997):
+                messages = _auto_history(rounds)
+                if heavy:  # a long reply beside a short result: dropping the call alone fits
+                    for m in messages:
+                        if m["role"] == "assistant":
+                            m["content"] = BIG[:12000]
+                        elif m["role"] == "tool":
+                            m["content"] = "ok"
+                compact(messages, limit_tokens=limit)
+                assert _pairing_errors(messages) == [], (heavy, rounds, limit)
 
 
 def test_d4_compacted_request_renders_under_the_served_template(tmp_path: Path) -> None:
