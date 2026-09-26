@@ -32,6 +32,7 @@ from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOp
 from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.journal import append_span, build_span
+from saddle.sandbox import Sandbox
 from saddle.tools import FINISH_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
 
@@ -55,6 +56,23 @@ SYSTEM_PROMPT: Final = (
     "changed and why. If it cannot be done honestly, call finish and say so. "
     "Your account is recorded as narrative; it does not count as proof."
 )
+
+COMMAND_ENV: Final = {"PYTHONDONTWRITEBYTECODE": "1"}
+"""No command the run starts writes bytecode. Python trusts a `.pyc` whose
+recorded source mtime (one-second resolution) and size match, so a
+same-length edit followed by a run in the same second would execute the
+old code and fail a correct fix (CLAUDE.md, harness rule 3). The worktree
+is a fresh checkout, so with nothing written there is nothing stale."""
+
+UNSTAGED: Final = (
+    ".",
+    ":(exclude,glob)**/*.pyc",
+    ":(exclude,glob).saddle/**",
+)
+"""Pathspec for what a run may list or commit: never bytecode (`*.pyc`,
+which is all `__pycache__/` holds) or saddle's own state, whether or not
+the repo has a `.gitignore` that says so. A worktree's `info/exclude` is
+shared with the user's repo, so it is not used."""
 
 GIT_IDENTITY: Final = ("-c", "user.name=saddle", "-c", "user.email=saddle@localhost")
 
@@ -159,7 +177,7 @@ def repo_root(repo: Path) -> Path:
 
 def changed_files(worktree: Path) -> list[str]:
     """Paths the run changed, added or deleted, relative to the worktree."""
-    out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "-z")
+    out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "-z", "--", *UNSTAGED)
     return sorted({entry[3:] for entry in out.split("\0") if len(entry) > 3})
 
 
@@ -250,14 +268,19 @@ def run_auto(
         tools=[*TOOLS, FINISH_SCHEMA],
         auto=auto,
     )
-    context = ToolContext(workdir=worktree, protected_tests=roots, syntax_guard=True)
+    context = ToolContext(
+        workdir=worktree,
+        sandbox=Sandbox.for_workdir(worktree, env=COMMAND_ENV),
+        protected_tests=roots,
+        syntax_guard=True,
+    )
     events: Iterator[Event] = run_turn(
         client, [], options.task, turn_options, turn=1, context=context, cancel=cancel
     )
     for event in events:
         if on_event is not None:
             on_event(event)
-    _git(worktree, "add", "-A")
+    _git(worktree, "add", "-A", "--", *UNSTAGED)
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"

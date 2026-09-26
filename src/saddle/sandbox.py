@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
@@ -107,6 +107,8 @@ class Sandbox:
     isolation: Literal["bwrap", "none"] = "none"
     terminals: dict[str, Terminal] = field(default_factory=dict)
     on_output: Callable[[str, str], None] | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
+    """Extra environment for every command, over the caller's own."""
 
     @classmethod
     def for_workdir(
@@ -115,12 +117,14 @@ class Sandbox:
         *,
         prefer_bwrap: bool = True,
         on_output: Callable[[str, str], None] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> Sandbox:
         available = prefer_bwrap and shutil.which("bwrap") is not None
         return cls(
             root=root.resolve(),
             isolation="bwrap" if available else "none",
             on_output=on_output,
+            env=dict(env or {}),
         )
 
     def _argv(self, command: str) -> list[str]:
@@ -171,7 +175,7 @@ class Sandbox:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                env={**os.environ, "TERM": "dumb", "NO_COLOR": "1"},
+                env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", **self.env},
             )
         except OSError as exc:
             terminal.exit_code = 127
