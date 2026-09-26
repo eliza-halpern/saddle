@@ -1,0 +1,1140 @@
+"""An in-memory stock ledger.
+
+`Inventory` holds one `Line` per SKU, in insertion order. A line records
+how many units are on hand, the unit price in integer cents, and a set
+of free-form tags. Lines are immutable values; every change to an
+inventory replaces a line rather than mutating it, so a `Line` handed
+out earlier never changes under its holder.
+
+Money is always an `int` number of cents. Quantities are non-negative
+`int`s. `bool` is rejected wherever an `int` is expected, because
+`True` is an `int` in Python and a stray flag must not become a unit.
+
+Several operations take a second inventory as input (`merge`, `union`,
+`intersection`, `difference`, `copy_from`, `extend`, `absorb`,
+`transfer_to`, the comparison methods and the operators). Each of them
+is defined for the case where the second inventory is the same object
+as the first, and each documents what happens then.
+
+The module is deterministic and does no I/O.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Self
+
+__all__ = ["SORT_KEYS", "Inventory", "Line"]
+
+SORT_KEYS = ("sku", "qty", "price", "value")
+
+_MISSING = object()
+
+
+# --------------------------------------------------------------------------
+# validation helpers
+# --------------------------------------------------------------------------
+
+
+def _check_sku(sku: object) -> str:
+    """Return `sku` if it is a non-empty string without surrounding space.
+
+    Raises `TypeError` for a non-string and `ValueError` for an empty or
+    padded one.
+    """
+    if not isinstance(sku, str):
+        raise TypeError(f"sku must be a str, not {type(sku).__name__}")
+    if not sku or sku != sku.strip():
+        raise ValueError(f"sku must be non-empty and unpadded: {sku!r}")
+    return sku
+
+
+def _check_int(value: object, what: str) -> int:
+    """Return `value` if it is an `int` that is not a `bool`."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{what} must be an int, not {type(value).__name__}")
+    return value
+
+
+def _check_qty(qty: object) -> int:
+    """Return `qty` if it is a non-negative int."""
+    qty = _check_int(qty, "qty")
+    if qty < 0:
+        raise ValueError(f"qty must be >= 0: {qty}")
+    return qty
+
+
+def _check_cents(cents: object) -> int:
+    """Return `cents` if it is a non-negative int."""
+    cents = _check_int(cents, "unit_cents")
+    if cents < 0:
+        raise ValueError(f"unit_cents must be >= 0: {cents}")
+    return cents
+
+
+def _check_tags(tags: Iterable[object]) -> frozenset[str]:
+    """Return `tags` as a frozenset of non-empty strings."""
+    if isinstance(tags, str):
+        raise TypeError("tags must be an iterable of str, not a single str")
+    out = set()
+    for tag in tags:
+        if not isinstance(tag, str):
+            raise TypeError(f"tag must be a str, not {type(tag).__name__}")
+        if not tag:
+            raise ValueError("tag must be non-empty")
+        out.add(tag)
+    return frozenset(out)
+
+
+def _check_inventory(other: object) -> Inventory:
+    """Return `other` if it is an `Inventory`, else raise `TypeError`."""
+    if not isinstance(other, Inventory):
+        raise TypeError(f"expected an Inventory, not {type(other).__name__}")
+    return other
+
+
+# --------------------------------------------------------------------------
+# Line
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Line:
+    """One SKU's stock: units on hand, unit price in cents, and tags."""
+
+    sku: str
+    qty: int
+    unit_cents: int
+    tags: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        _check_sku(self.sku)
+        _check_qty(self.qty)
+        _check_cents(self.unit_cents)
+        object.__setattr__(self, "tags", _check_tags(self.tags))
+
+    def value_cents(self) -> int:
+        """Units on hand times the unit price."""
+        return self.qty * self.unit_cents
+
+    def with_qty(self, qty: int) -> Line:
+        """A copy of this line with `qty` units."""
+        return Line(self.sku, qty, self.unit_cents, self.tags)
+
+    def with_price(self, unit_cents: int) -> Line:
+        """A copy of this line priced at `unit_cents`."""
+        return Line(self.sku, self.qty, unit_cents, self.tags)
+
+    def with_tags(self, tags: Iterable[str]) -> Line:
+        """A copy of this line carrying exactly `tags`."""
+        return Line(self.sku, self.qty, self.unit_cents, frozenset(tags))
+
+    def renamed(self, sku: str) -> Line:
+        """A copy of this line under a different SKU."""
+        return Line(sku, self.qty, self.unit_cents, self.tags)
+
+    def to_dict(self) -> dict:
+        """A plain-data form of this line; tags are sorted."""
+        return {
+            "sku": self.sku,
+            "qty": self.qty,
+            "unit_cents": self.unit_cents,
+            "tags": sorted(self.tags),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Line:
+        """Build a line from the form `to_dict` produces."""
+        if not isinstance(data, dict):
+            raise TypeError(f"expected a dict, not {type(data).__name__}")
+        missing = [k for k in ("sku", "qty", "unit_cents") if k not in data]
+        if missing:
+            raise ValueError(f"line record is missing {missing}")
+        return cls(
+            data["sku"],
+            data["qty"],
+            data["unit_cents"],
+            frozenset(data.get("tags", ())),
+        )
+
+
+# --------------------------------------------------------------------------
+# Inventory
+# --------------------------------------------------------------------------
+
+
+class Inventory:
+    """An ordered collection of `Line`s keyed by SKU.
+
+    Iteration yields SKUs in insertion order. A line keeps its position
+    when it is updated in place; a line that is removed and added again
+    moves to the end.
+    """
+
+    __hash__ = None  # mutable; equality is by content
+
+    def __init__(self, lines: Iterable[Line] = (), name: str = "stock") -> None:
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"name must be a non-empty str: {name!r}")
+        self.name = name
+        self._lines: dict[str, Line] = {}
+        for line in lines:
+            if not isinstance(line, Line):
+                raise TypeError(f"expected a Line, not {type(line).__name__}")
+            if line.sku in self._lines:
+                raise ValueError(f"duplicate sku: {line.sku!r}")
+            self._lines[line.sku] = line
+
+    # ---------------------------------------------------------- construction
+
+    @classmethod
+    def from_pairs(
+        cls,
+        pairs: Iterable[tuple[str, int]],
+        unit_cents: int = 0,
+        name: str = "stock",
+    ) -> Inventory:
+        """Build an inventory from `(sku, qty)` pairs at one price.
+
+        A SKU that appears twice has its quantities summed.
+        """
+        inv = cls(name=name)
+        for sku, qty in pairs:
+            inv.add(sku, qty, unit_cents)
+        return inv
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Inventory:
+        """Build an inventory from the form `to_dict` produces."""
+        if not isinstance(data, dict):
+            raise TypeError(f"expected a dict, not {type(data).__name__}")
+        lines = [Line.from_dict(rec) for rec in data.get("lines", [])]
+        return cls(lines, name=data.get("name", "stock"))
+
+    @classmethod
+    def from_rows(
+        cls, rows: Iterable[tuple[str, int, int]], name: str = "stock"
+    ) -> Inventory:
+        """Build an inventory from `(sku, qty, unit_cents)` rows.
+
+        A SKU that appears twice raises `ValueError`, like the
+        constructor.
+        """
+        return cls((Line(sku, qty, cents) for sku, qty, cents in rows), name=name)
+
+    def to_dict(self) -> dict:
+        """A plain-data form of the inventory, lines in insertion order."""
+        return {
+            "name": self.name,
+            "lines": [line.to_dict() for line in self._lines.values()],
+        }
+
+    def copy(self) -> Inventory:
+        """A new inventory with the same name and lines, in the same order."""
+        return Inventory(self._lines.values(), name=self.name)
+
+    # ---------------------------------------------------------- container
+
+    def __len__(self) -> int:
+        return len(self._lines)
+
+    def __contains__(self, sku: object) -> bool:
+        return sku in self._lines
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(list(self._lines))
+
+    def __getitem__(self, sku: str) -> Line:
+        try:
+            return self._lines[sku]
+        except KeyError:
+            raise KeyError(sku) from None
+
+    def __repr__(self) -> str:
+        return f"Inventory(name={self.name!r}, skus={len(self._lines)})"
+
+    def __eq__(self, other: object) -> bool:
+        """Equal when both hold the same lines; order and name are ignored."""
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self._lines == other._lines
+
+    def get(self, sku: str, default: object = None) -> object:
+        """The line for `sku`, or `default` when there is none."""
+        return self._lines.get(sku, default)
+
+    def skus(self) -> list[str]:
+        """Every SKU, in insertion order."""
+        return list(self._lines)
+
+    def lines(self) -> list[Line]:
+        """Every line, in insertion order."""
+        return list(self._lines.values())
+
+    def quantities(self) -> dict[str, int]:
+        """A new dict of SKU to units on hand, in insertion order."""
+        return {sku: line.qty for sku, line in self._lines.items()}
+
+    def prices(self) -> dict[str, int]:
+        """A new dict of SKU to unit price in cents, in insertion order."""
+        return {sku: line.unit_cents for sku, line in self._lines.items()}
+
+    # ---------------------------------------------------------- single lines
+
+    def add(
+        self,
+        sku: str,
+        qty: int,
+        unit_cents: int,
+        tags: Iterable[str] = (),
+    ) -> Line:
+        """Add `qty` units of `sku` and return the resulting line.
+
+        A new SKU is appended. For an existing SKU the units are added to
+        what is on hand, the price becomes `unit_cents`, and `tags` are
+        added to the line's tags. The line keeps its position.
+        """
+        _check_sku(sku)
+        _check_qty(qty)
+        _check_cents(unit_cents)
+        new_tags = _check_tags(tags)
+        old = self._lines.get(sku)
+        if old is None:
+            line = Line(sku, qty, unit_cents, new_tags)
+        else:
+            line = Line(sku, old.qty + qty, unit_cents, old.tags | new_tags)
+        self._lines[sku] = line
+        return line
+
+    def remove(self, sku: str) -> Line:
+        """Remove `sku` and return its line; `KeyError` if absent."""
+        if sku not in self._lines:
+            raise KeyError(sku)
+        return self._lines.pop(sku)
+
+    def discard(self, sku: str) -> bool:
+        """Remove `sku` if present. Return whether anything was removed."""
+        return self._lines.pop(sku, None) is not None
+
+    def pop(self, sku: str, default: object = _MISSING) -> object:
+        """Remove `sku` and return its line.
+
+        When `sku` is absent and `default` was passed, return that
+        default and leave the inventory unchanged; otherwise raise
+        `KeyError`.
+        """
+        if sku not in self._lines:
+            if default is _MISSING:
+                raise KeyError(sku)
+            return default
+        return self._lines.pop(sku)
+
+    def popitem(self) -> Line:
+        """Remove and return the most recently inserted line."""
+        if not self._lines:
+            raise KeyError("popitem(): inventory is empty")
+        _, line = self._lines.popitem()
+        return line
+
+    def clear(self) -> None:
+        """Remove every line. The name is kept."""
+        self._lines.clear()
+
+    def set_qty(self, sku: str, qty: int) -> Line:
+        """Set the units on hand for an existing `sku`."""
+        _check_qty(qty)
+        line = self[sku].with_qty(qty)
+        self._lines[sku] = line
+        return line
+
+    def adjust(self, sku: str, delta: int) -> Line:
+        """Change the units on hand of `sku` by `delta`.
+
+        A result below zero raises `ValueError` and leaves the inventory
+        unchanged; a result of exactly zero is allowed.
+        """
+        _check_int(delta, "delta")
+        line = self[sku]
+        new_qty = line.qty + delta
+        if new_qty < 0:
+            raise ValueError(f"adjust would take {sku!r} below zero: {new_qty}")
+        self._lines[sku] = line.with_qty(new_qty)
+        return self._lines[sku]
+
+    def restock(self, sku: str, qty: int) -> Line:
+        """Add `qty` (> 0) units to an existing `sku`."""
+        _check_qty(qty)
+        if qty == 0:
+            raise ValueError("restock qty must be > 0")
+        line = self[sku]
+        line = line.with_qty(line.qty + qty)
+        self._lines[sku] = line
+        return line
+
+    def set_price(self, sku: str, unit_cents: int) -> Line:
+        """Set the unit price of an existing `sku`.
+
+        A negative `unit_cents` raises `ValueError` and leaves the
+        inventory unchanged.
+        """
+        _check_int(unit_cents, "unit_cents")
+        old = self[sku]
+        if unit_cents < 0:
+            raise ValueError(f"unit_cents must be >= 0: {unit_cents}")
+        line = old.with_price(unit_cents)
+        self._lines[sku] = line
+        return line
+
+    def tag(self, sku: str, *tags: str) -> Line:
+        """Add `tags` to the line for `sku`."""
+        line = self[sku]
+        line = line.with_tags(line.tags | _check_tags(tags))
+        self._lines[sku] = line
+        return line
+
+    def untag(self, sku: str, *tags: str) -> Line:
+        """Remove `tags` from the line for `sku`; absent tags are ignored."""
+        line = self[sku]
+        line = line.with_tags(line.tags - _check_tags(tags))
+        self._lines[sku] = line
+        return line
+
+    def tags_of(self, sku: str) -> frozenset[str]:
+        """The tags of the line for `sku`."""
+        return self[sku].tags
+
+    def rename_sku(self, old: str, new: str) -> Line:
+        """Rename `old` to `new`, keeping the line's position.
+
+        Raises `KeyError` if `old` is absent and `ValueError` if `new`
+        is already present. Renaming a SKU to itself is a no-op.
+        """
+        _check_sku(new)
+        line = self[old]
+        if new == old:
+            return line
+        if new in self._lines:
+            raise ValueError(f"sku already present: {new!r}")
+        renamed = line.renamed(new)
+        self._lines = {
+            (new if sku == old else sku): (renamed if sku == old else ln)
+            for sku, ln in self._lines.items()
+        }
+        return renamed
+
+    def value_of(self, sku: str) -> int:
+        """Value in cents of the stock held for `sku`."""
+        return self[sku].value_cents()
+
+    # ---------------------------------------------------------- aggregates
+
+    def total_units(self) -> int:
+        """Units on hand across every line."""
+        return sum(line.qty for line in self._lines.values())
+
+    def total_value_cents(self, tag: str | None = None) -> int:
+        """Value in cents of every line, or of the lines carrying `tag`."""
+        if tag is None:
+            return sum(line.value_cents() for line in self._lines.values())
+        return sum(
+            line.value_cents() for line in self._lines.values() if tag in line.tags
+        )
+
+    def average_unit_cents(self) -> Decimal:
+        """Unit price averaged over units on hand, to 0.01 cent, half up.
+
+        An inventory with no units averages `Decimal("0.00")`.
+        """
+        units = self.total_units()
+        if units == 0:
+            return Decimal("0.00")
+        raw = Decimal(self.total_value_cents()) / Decimal(units)
+        return raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def all_tags(self) -> list[str]:
+        """Every tag used by any line, sorted."""
+        found: set[str] = set()
+        for line in self._lines.values():
+            found |= line.tags
+        return sorted(found)
+
+    def summary(self) -> dict:
+        """Headline numbers for the inventory."""
+        return {
+            "name": self.name,
+            "skus": len(self._lines),
+            "units": self.total_units(),
+            "value_cents": self.total_value_cents(),
+            "empty_skus": len(self.out_of_stock()),
+            "distinct_tags": len(self.all_tags()),
+        }
+
+    def to_rows(self) -> list[tuple[str, int, int, int]]:
+        """`(sku, qty, unit_cents, value_cents)` per line, insertion order."""
+        return [
+            (line.sku, line.qty, line.unit_cents, line.value_cents())
+            for line in self._lines.values()
+        ]
+
+    def validate(self) -> list[str]:
+        """Problems with the inventory's internal state; empty when sound."""
+        problems = []
+        for sku, line in self._lines.items():
+            if not isinstance(line, Line):
+                problems.append(f"{sku!r}: not a Line")
+                continue
+            if line.sku != sku:
+                problems.append(f"{sku!r}: keyed under the wrong sku {line.sku!r}")
+            if line.unit_cents < 0:
+                problems.append(f"{sku!r}: negative unit price {line.unit_cents}")
+        return problems
+
+    # ---------------------------------------------------------- queries
+
+    def find_by_tag(self, *tags: str, match: str = "any") -> list[str]:
+        """SKUs matched by `tags`, in insertion order.
+
+        With `match="any"` (the default) a line matches when it carries
+        at least one of `tags`; with `match="all"` it must carry every
+        one. Any other `match` raises `ValueError`. With no tags,
+        returns an empty list.
+        """
+        if match not in ("any", "all"):
+            raise ValueError(f"match must be 'any' or 'all', not {match!r}")
+        wanted = _check_tags(tags)
+        if not wanted:
+            return []
+        if match == "all":
+            return [sku for sku, line in self._lines.items() if wanted <= line.tags]
+        return [sku for sku, line in self._lines.items() if line.tags & wanted]
+
+    def filter(self, predicate: Callable[[Line], bool]) -> Inventory:
+        """A new inventory, same name, of the lines `predicate` accepts."""
+        return Inventory(
+            (line for line in self._lines.values() if predicate(line)),
+            name=self.name,
+        )
+
+    def split(self, predicate: Callable[[Line], bool]) -> tuple[Inventory, Inventory]:
+        """Two new inventories: the lines `predicate` accepts, and the rest.
+
+        Both carry `self.name`, keep this inventory's order, and are
+        new objects; this inventory is unchanged.
+        """
+        accepted, rejected = [], []
+        for line in self._lines.values():
+            (accepted if predicate(line) else rejected).append(line)
+        return Inventory(accepted, name=self.name), Inventory(rejected, name=self.name)
+
+    def take(self, skus: Iterable[str]) -> Inventory:
+        """A new inventory, same name, of the named SKUs in the order named.
+
+        An absent SKU raises `KeyError`; a SKU named twice raises
+        `ValueError`.
+        """
+        names = list(skus)
+        if len(set(names)) != len(names):
+            raise ValueError("take names a sku twice")
+        return Inventory([self[sku] for sku in names], name=self.name)
+
+    def without(self, skus: Iterable[str]) -> Inventory:
+        """A new inventory, same name, lacking the named SKUs.
+
+        Absent SKUs are ignored. The remaining lines keep their order.
+        """
+        dropped = set(skus)
+        return Inventory(
+            (ln for sku, ln in self._lines.items() if sku not in dropped),
+            name=self.name,
+        )
+
+    def max_qty(self) -> int:
+        """The largest quantity on any line; 0 when empty."""
+        return max((line.qty for line in self._lines.values()), default=0)
+
+    def min_qty(self) -> int:
+        """The smallest quantity on any line; 0 when empty."""
+        return min((line.qty for line in self._lines.values()), default=0)
+
+    def __str__(self) -> str:
+        return self.render()
+
+    def _sort_key(self, key: str) -> Callable[[Line], object]:
+        if key == "sku":
+            return lambda line: line.sku
+        if key == "qty":
+            return lambda line: line.qty
+        if key == "price":
+            return lambda line: line.unit_cents
+        if key == "value":
+            return lambda line: line.value_cents()
+        raise ValueError(f"unknown sort key {key!r}; expected one of {SORT_KEYS}")
+
+    def sorted_by(self, key: str = "sku", reverse: bool = False) -> list[str]:
+        """SKUs ordered by `key`; ties keep insertion order."""
+        fn = self._sort_key(key)
+        ordered = sorted(self._lines.values(), key=fn, reverse=reverse)
+        return [line.sku for line in ordered]
+
+    def top_n(self, n: int, key: str = "value") -> list[str]:
+        """The `n` SKUs with the largest `key`, largest first.
+
+        Equal `key` values are ordered by SKU ascending.
+        """
+        _check_int(n, "n")
+        if n < 0:
+            raise ValueError(f"n must be >= 0: {n}")
+        fn = self._sort_key(key)
+        by_sku = sorted(self._lines.values(), key=lambda line: line.sku)
+        ordered = sorted(by_sku, key=fn, reverse=True)
+        return [line.sku for line in ordered[:n]]
+
+    def low_stock(self, threshold: int) -> list[str]:
+        """SKUs with fewer than `threshold` units, in insertion order."""
+        _check_int(threshold, "threshold")
+        return [sku for sku, line in self._lines.items() if line.qty < threshold]
+
+    def out_of_stock(self) -> list[str]:
+        """SKUs with zero units, in insertion order."""
+        return [sku for sku, line in self._lines.items() if line.qty == 0]
+
+    def prune_empty(self) -> int:
+        """Remove every zero-unit line; return how many were removed."""
+        empty = self.out_of_stock()
+        for sku in empty:
+            del self._lines[sku]
+        return len(empty)
+
+    def reorder(self, skus: Iterable[str]) -> None:
+        """Put the named SKUs first, in the given order.
+
+        SKUs not named keep their relative order after them. Naming an
+        absent SKU raises `KeyError`; naming one twice raises
+        `ValueError`. Nothing changes when either is raised.
+        """
+        head = list(skus)
+        if len(set(head)) != len(head):
+            raise ValueError("reorder names a sku twice")
+        for sku in head:
+            if sku not in self._lines:
+                raise KeyError(sku)
+        rest = [sku for sku in self._lines if sku not in set(head)]
+        self._lines = {sku: self._lines[sku] for sku in head + rest}
+
+    def snapshot(self) -> tuple[Line, ...]:
+        """An immutable record of every line, for `restore`."""
+        return tuple(self._lines.values())
+
+    def restore(self, snapshot: tuple[Line, ...]) -> None:
+        """Replace the contents with a `snapshot`. The name is kept."""
+        lines = list(snapshot)
+        rebuilt = Inventory(lines, name=self.name)
+        self._lines = rebuilt._lines
+
+    def index_of(self, sku: str) -> int:
+        """Zero-based position of `sku` in insertion order; `KeyError` if absent."""
+        for i, key in enumerate(self._lines):
+            if key == sku:
+                return i
+        raise KeyError(sku)
+
+    def move_to_end(self, sku: str, last: bool = True) -> None:
+        """Move `sku` to the end (or, with `last=False`, the start)."""
+        line = self[sku]
+        if last:
+            del self._lines[sku]
+            self._lines[sku] = line
+        else:
+            rest = {k: v for k, v in self._lines.items() if k != sku}
+            self._lines = {sku: line, **rest}
+
+    def head(self, n: int) -> list[str]:
+        """The first `n` SKUs in insertion order (all of them if fewer)."""
+        _check_int(n, "n")
+        if n < 0:
+            raise ValueError(f"n must be >= 0: {n}")
+        return list(self._lines)[:n]
+
+    def tail(self, n: int) -> list[str]:
+        """The last `n` SKUs in insertion order (all of them if fewer)."""
+        _check_int(n, "n")
+        if n < 0:
+            raise ValueError(f"n must be >= 0: {n}")
+        if n == 0:
+            return []
+        return list(self._lines)[-n:]
+
+    def setdefault(self, sku: str, unit_cents: int = 0) -> Line:
+        """The line for `sku`, adding an empty one at `unit_cents` if absent."""
+        line = self._lines.get(sku)
+        if line is None:
+            line = Line(_check_sku(sku), 0, _check_cents(unit_cents))
+            self._lines[sku] = line
+        return line
+
+    def bulk_set_prices(self, prices: dict[str, int]) -> int:
+        """Set several prices at once; return how many changed.
+
+        Every SKU must exist and every price must be a non-negative int;
+        otherwise nothing changes and the first problem is raised.
+        """
+        for sku, cents in prices.items():
+            if sku not in self._lines:
+                raise KeyError(sku)
+            _check_cents(cents)
+        changed = 0
+        for sku, cents in prices.items():
+            line = self._lines[sku]
+            if line.unit_cents != cents:
+                self._lines[sku] = line.with_price(cents)
+                changed += 1
+        return changed
+
+    def scale_quantities(self, factor: int) -> None:
+        """Multiply every line's units by the non-negative int `factor`."""
+        _check_qty(factor)
+        for sku, line in list(self._lines.items()):
+            self._lines[sku] = line.with_qty(line.qty * factor)
+
+    def scale_prices(self, percent: int) -> int:
+        """In place, set every unit price to `percent` percent of its value.
+
+        Each price becomes `unit_cents * percent / 100` rounded to a
+        whole cent (ROUND_HALF_UP). Returns how many lines changed
+        price; quantities, tags and order are unchanged.
+        """
+        _check_int(percent, "percent")
+        if percent < 0:
+            raise ValueError(f"percent must be >= 0: {percent}")
+        scale = Decimal(percent) / 100
+        changed = 0
+        for sku, line in list(self._lines.items()):
+            new_cents = int(
+                (Decimal(line.unit_cents) * scale).quantize(
+                    Decimal(1), rounding=ROUND_HALF_UP
+                )
+            )
+            if new_cents != line.unit_cents:
+                self._lines[sku] = line.with_price(new_cents)
+                changed += 1
+        return changed
+
+    def retag(self, old: str, new: str) -> int:
+        """Replace tag `old` with `new` on every line; return lines changed."""
+        _check_tags([old, new])
+        changed = 0
+        for sku, line in list(self._lines.items()):
+            if old in line.tags:
+                self._lines[sku] = line.with_tags((line.tags - {old}) | {new})
+                changed += 1
+        return changed
+
+    def tag_counts(self) -> dict[str, int]:
+        """How many lines carry each tag, sorted by tag."""
+        counts: dict[str, int] = {}
+        for line in self._lines.values():
+            for tag in line.tags:
+                counts[tag] = counts.get(tag, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def group_by_tag(self) -> dict[str, list[str]]:
+        """SKUs per tag, tags sorted, SKUs in insertion order.
+
+        A line with several tags appears under each; untagged lines
+        appear under no key.
+        """
+        groups: dict[str, list[str]] = {tag: [] for tag in self.all_tags()}
+        for sku, line in self._lines.items():
+            for tag in sorted(line.tags):
+                groups[tag].append(sku)
+        return groups
+
+    def units_by_tag(self) -> dict[str, int]:
+        """Units on hand per tag, tags sorted."""
+        units = {tag: 0 for tag in self.all_tags()}
+        for line in self._lines.values():
+            for tag in line.tags:
+                units[tag] += line.qty
+        return units
+
+    def price_band(self, low: int, high: int) -> list[str]:
+        """SKUs priced from `low` to `high` cents inclusive, insertion order."""
+        _check_int(low, "low")
+        _check_int(high, "high")
+        if low > high:
+            raise ValueError(f"empty band: {low} > {high}")
+        return [
+            sku for sku, line in self._lines.items() if low <= line.unit_cents <= high
+        ]
+
+    def cheapest(self) -> str | None:
+        """The SKU with the lowest price (first inserted wins a tie), or None."""
+        best = None
+        for line in self._lines.values():
+            if best is None or line.unit_cents < best.unit_cents:
+                best = line
+        return None if best is None else best.sku
+
+    def most_valuable(self) -> str | None:
+        """The SKU holding the most value (first inserted wins a tie), or None."""
+        best = None
+        for line in self._lines.values():
+            if best is None or line.value_cents() > best.value_cents():
+                best = line
+        return None if best is None else best.sku
+
+    def render(self) -> str:
+        """A fixed-width text table of the lines, one per row, then a total."""
+        rows = [f"{'sku':<12} {'qty':>6} {'unit':>8} {'value':>10}"]
+        for sku, qty, unit, value in self.to_rows():
+            rows.append(f"{sku:<12} {qty:>6} {unit:>8} {value:>10}")
+        total = sum(line.value_cents() for line in self._lines.values())
+        rows.append(f"{'total':<12} {'':>6} {'':>8} {total:>10}")
+        return "\n".join(rows)
+
+    # ---------------------------------------------------------- two inventories
+
+    def merge(self, other: Inventory) -> Inventory:
+        """Add every line of `other` into this inventory, in place.
+
+        For a SKU present in both, the units are summed, this
+        inventory's price is kept and the tags are unioned. SKUs only in
+        `other` are appended in `other`'s order. Returns `self`.
+
+        `inv.merge(inv)` doubles every quantity.
+        """
+        _check_inventory(other)
+        incoming = list(other._lines.values())
+        for line in incoming:
+            mine = self._lines.get(line.sku)
+            if mine is None:
+                self._lines[line.sku] = line
+            else:
+                self._lines[line.sku] = Line(
+                    mine.sku,
+                    mine.qty + line.qty,
+                    mine.unit_cents,
+                    mine.tags | line.tags,
+                )
+        return self
+
+    def union(self, other: Inventory) -> Inventory:
+        """A new inventory: a copy of this one with `other` merged in.
+
+        The result is always a new object, named after this inventory.
+        Neither input changes.
+        """
+        _check_inventory(other)
+        result = self.copy()
+        result.merge(other)
+        return result
+
+    def intersection(self, other: Inventory) -> Inventory:
+        """A new inventory of the SKUs present in both.
+
+        Each line keeps this inventory's price and tags, with the smaller
+        of the two quantities, in this inventory's order.
+        """
+        _check_inventory(other)
+        kept = []
+        for sku, line in self._lines.items():
+            theirs = other._lines.get(sku)
+            if theirs is not None:
+                kept.append(line.with_qty(min(line.qty, theirs.qty)))
+        return Inventory(kept, name=self.name)
+
+    def difference(self, other: Inventory) -> Inventory:
+        """A new inventory: this one's units less `other`'s, per SKU.
+
+        A line whose units fall to zero or below is left out. SKUs not in
+        `other` are kept whole. `inv.difference(inv)` is empty.
+        """
+        _check_inventory(other)
+        kept = []
+        for sku, line in self._lines.items():
+            theirs = other._lines.get(sku)
+            left = line.qty - (theirs.qty if theirs is not None else 0)
+            if left > 0:
+                kept.append(line.with_qty(left))
+        return Inventory(kept, name=self.name)
+
+    def symmetric_difference(self, other: Inventory) -> Inventory:
+        """A new inventory of the SKUs in exactly one of the two.
+
+        This inventory's lines come first, then `other`'s, each in its
+        own order. `inv.symmetric_difference(inv)` is empty.
+        """
+        _check_inventory(other)
+        mine = [ln for sku, ln in self._lines.items() if sku not in other._lines]
+        theirs = [ln for sku, ln in other._lines.items() if sku not in self._lines]
+        return Inventory(mine + theirs, name=self.name)
+
+    def difference_update(self, other: Inventory) -> Inventory:
+        """In place: subtract `other`'s units per SKU; drop lines at zero.
+
+        Returns `self`. `inv.difference_update(inv)` empties `inv`.
+        """
+        _check_inventory(other)
+        theirs = {sku: line.qty for sku, line in other._lines.items()}
+        rebuilt = {}
+        for sku, line in self._lines.items():
+            left = line.qty - theirs.get(sku, 0)
+            if left > 0:
+                rebuilt[sku] = line.with_qty(left)
+        self._lines = rebuilt
+        return self
+
+    def intersection_update(self, other: Inventory) -> Inventory:
+        """In place: keep only SKUs also in `other`, at the smaller quantity.
+
+        Returns `self`. `inv.intersection_update(inv)` changes nothing.
+        """
+        _check_inventory(other)
+        theirs = {sku: line.qty for sku, line in other._lines.items()}
+        rebuilt = {}
+        for sku, line in self._lines.items():
+            if sku in theirs:
+                rebuilt[sku] = line.with_qty(min(line.qty, theirs[sku]))
+        self._lines = rebuilt
+        return self
+
+    def copy_from(self, other: Inventory) -> Inventory:
+        """Replace this inventory's lines with `other`'s, in `other`'s order.
+
+        The name is kept. Returns `self`. `inv.copy_from(inv)` changes
+        nothing.
+        """
+        _check_inventory(other)
+        incoming = list(other._lines.values())
+        self._lines = {line.sku: line for line in incoming}
+        return self
+
+    def extend(self, other: Inventory) -> int:
+        """Append `other`'s lines whose SKU this inventory lacks.
+
+        Lines already present are left exactly as they are. Returns the
+        number of lines appended; `inv.extend(inv)` appends none.
+        """
+        _check_inventory(other)
+        added = 0
+        for line in list(other._lines.values()):
+            if line.sku not in self._lines:
+                self._lines[line.sku] = line
+                added += 1
+        return added
+
+    def absorb(self, other: Inventory) -> Inventory:
+        """Merge `other` into this inventory, then empty `other`.
+
+        Returns `self`. When `other` is this inventory, nothing changes:
+        stock cannot be moved into the place it already is.
+        """
+        _check_inventory(other)
+        if other is self:
+            return self
+        self.merge(other)
+        other.clear()
+        return self
+
+    def transfer_to(self, other: Inventory, sku: str, qty: int) -> None:
+        """Move `qty` units of `sku` from this inventory into `other`.
+
+        The receiving line takes this inventory's price and tags if it
+        is new, and keeps its own price (gaining the tags) if it exists.
+        Raises `KeyError` if `sku` is absent here and `ValueError` if
+        fewer than `qty` units are on hand; nothing changes then. A
+        transfer to the same inventory checks the same things and then
+        changes nothing. The source line stays, even at zero units.
+        """
+        _check_inventory(other)
+        _check_qty(qty)
+        line = self[sku]
+        if line.qty < qty:
+            raise ValueError(f"only {line.qty} of {sku!r} on hand, cannot move {qty}")
+        if other is self:
+            return
+        self._lines[sku] = line.with_qty(line.qty - qty)
+        theirs = other._lines.get(sku)
+        if theirs is None:
+            other._lines[sku] = line.with_qty(qty)
+        else:
+            other._lines[sku] = Line(
+                sku, theirs.qty + qty, theirs.unit_cents, theirs.tags | line.tags
+            )
+
+    def update_prices_from(self, other: Inventory) -> int:
+        """Copy `other`'s price onto every SKU present in both.
+
+        Returns how many prices actually changed.
+        """
+        _check_inventory(other)
+        changed = 0
+        for sku, line in list(self._lines.items()):
+            theirs = other._lines.get(sku)
+            if theirs is not None and theirs.unit_cents != line.unit_cents:
+                self._lines[sku] = line.with_price(theirs.unit_cents)
+                changed += 1
+        return changed
+
+    def common_skus(self, other: Inventory) -> list[str]:
+        """SKUs present in both, in this inventory's order."""
+        _check_inventory(other)
+        return [sku for sku in self._lines if sku in other._lines]
+
+    def overlap_value_cents(self, other: Inventory) -> int:
+        """Value in cents of the stock both inventories hold in common.
+
+        Sums, over every SKU present in both, the smaller quantity
+        times this inventory's unit price. Neither inventory changes;
+        `inv.overlap_value_cents(inv)` equals `inv.total_value_cents()`.
+        """
+        _check_inventory(other)
+        return sum(
+            min(line.qty, other._lines[sku].qty) * line.unit_cents
+            for sku, line in self._lines.items()
+            if sku in other._lines
+        )
+
+    def compare(self, other: Inventory) -> dict:
+        """What differs between this inventory and `other`.
+
+        Returns a dict with `only_self` and `only_other` (SKU lists, each
+        in its own inventory's order), and `qty_changed` and
+        `price_changed` (dicts of SKU to `(mine, theirs)` for SKUs in
+        both, in this inventory's order).
+        """
+        _check_inventory(other)
+        qty_changed = {}
+        price_changed = {}
+        for sku, line in self._lines.items():
+            theirs = other._lines.get(sku)
+            if theirs is None:
+                continue
+            if theirs.qty != line.qty:
+                qty_changed[sku] = (line.qty, theirs.qty)
+            if theirs.unit_cents != line.unit_cents:
+                price_changed[sku] = (line.unit_cents, theirs.unit_cents)
+        return {
+            "only_self": [s for s in self._lines if s not in other._lines],
+            "only_other": [s for s in other._lines if s not in self._lines],
+            "qty_changed": qty_changed,
+            "price_changed": price_changed,
+        }
+
+    def issubset(self, other: Inventory) -> bool:
+        """True when every SKU here is in `other` with at least as many units."""
+        _check_inventory(other)
+        for sku, line in self._lines.items():
+            theirs = other._lines.get(sku)
+            if theirs is None or theirs.qty < line.qty:
+                return False
+        return True
+
+    def issuperset(self, other: Inventory) -> bool:
+        """True when `other` is a subset of this inventory."""
+        _check_inventory(other)
+        return other.issubset(self)
+
+    def isdisjoint(self, other: Inventory) -> bool:
+        """True when no SKU is in both. An empty inventory is disjoint from itself."""
+        _check_inventory(other)
+        return not any(sku in other._lines for sku in self._lines)
+
+    def replace_from(self, other: Inventory, skus: Iterable[str]) -> int:
+        """Overwrite the named SKUs with `other`'s lines for them.
+
+        A named SKU present here keeps its position; one absent here is
+        appended. Every named SKU must be in `other` (`KeyError`
+        otherwise, and nothing changes). Returns the number of SKUs
+        written. With `other` this inventory, nothing changes.
+        """
+        _check_inventory(other)
+        names = list(skus)
+        for sku in names:
+            if sku not in other._lines:
+                raise KeyError(sku)
+        incoming = [other._lines[sku] for sku in names]
+        for line in incoming:
+            self._lines[line.sku] = line
+        return len(incoming)
+
+    def reconcile(self, other: Inventory) -> dict[str, int]:
+        """Quantity changes that would turn this inventory's units into `other`'s.
+
+        Returns SKU to signed delta, for every SKU in either inventory
+        whose units differ (a SKU absent on one side counts as zero
+        units there). Keys follow this inventory's order, then SKUs only
+        in `other` in its order. Nothing changes.
+        """
+        _check_inventory(other)
+        deltas: dict[str, int] = {}
+        for sku, line in self._lines.items():
+            theirs = other._lines.get(sku)
+            delta = (theirs.qty if theirs is not None else 0) - line.qty
+            if delta:
+                deltas[sku] = delta
+        for sku, line in other._lines.items():
+            if sku not in self._lines and line.qty:
+                deltas[sku] = line.qty
+        return deltas
+
+    def same_order(self, other: Inventory) -> bool:
+        """True when both hold the same SKUs in the same order."""
+        _check_inventory(other)
+        return list(self._lines) == list(other._lines)
+
+    def equals(self, other: Inventory, check_name: bool = False) -> bool:
+        """Content equality, optionally also requiring the same name."""
+        _check_inventory(other)
+        if check_name and self.name != other.name:
+            return False
+        return self._lines == other._lines
+
+    # ---------------------------------------------------------- operators
+
+    def __add__(self, other: object) -> Inventory:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.union(other)
+
+    def __or__(self, other: object) -> Inventory:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.union(other)
+
+    def __and__(self, other: object) -> Inventory:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.intersection(other)
+
+    def __sub__(self, other: object) -> Inventory:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.difference(other)
+
+    def __xor__(self, other: object) -> Inventory:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.symmetric_difference(other)
+
+    def __iadd__(self, other: object) -> Self:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.merge(other)
+
+    def __isub__(self, other: object) -> Self:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.difference_update(other)
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.issubset(other)
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, Inventory):
+            return NotImplemented
+        return self.issuperset(other)

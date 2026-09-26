@@ -7,6 +7,8 @@ bounded recompile, plan confirmation, then the schedule-gate-seal path.
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import functools
 import json
 import os
 import sys
@@ -23,7 +25,7 @@ from rich.console import Console
 from saddle import __version__, audit
 from saddle.anchor import anchor_issues, default_anchor_repo
 from saddle.audit import AuditError, AuditResult, audit_tree
-from saddle.auditor import Auditor, AuditorConfig, Findings
+from saddle.auditor import TIER2_MODES, Auditor, AuditorConfig, Findings, Tier2Mode
 from saddle.auto import (
     DEFAULT_TIME_BUDGET_S,
     DEFAULT_TOKEN_BUDGET,
@@ -45,6 +47,7 @@ from saddle.evidence import (
     run_capture,
 )
 from saddle.gates import (
+    DEFAULT_MUTANT_SHORTLIST,
     plan_prescribes_deletion,
     plan_restates_the_gate,
     plan_retargets_reserved_files,
@@ -1317,7 +1320,14 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     """
     cache = None if args.no_cache else Path(args.cache).expanduser()
     rev: str | None = args.rev
-    audit_one = _tiered_audit if args.tiered else audit_tree
+    shortlist = args.tier2 == "shortlist"
+    audit_one = (
+        functools.partial(_tiered_audit, tier2="shortlist", mutant_shortlist=args.mutant_shortlist)
+        if shortlist
+        else _tiered_audit
+        if args.tiered
+        else audit_tree
+    )
     try:
         if rev is None:
             result = audit_one(
@@ -1365,11 +1375,21 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
 
 
 def _tiered_audit(
-    tree: Path, baseline: str, *, test_command: str, cache: Path | None
+    tree: Path,
+    baseline: str,
+    *,
+    test_command: str,
+    cache: Path | None,
+    tier2: Tier2Mode = "score",
+    mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST,
 ) -> tuple[Findings, ...] | AuditResult:
     """`saddle audit --tiered`: tiers 0-2 (`saddle.auditor`) over the same tree
-    `audit_tree` would gate; an unchanged tree is `nothing-to-audit` as there."""
-    auditor = Auditor(tree, baseline, AuditorConfig(test_command=test_command, cache_dir=cache))
+    `audit_tree` would gate; an unchanged tree is `nothing-to-audit` as there.
+    `--tier2 shortlist` implies `--tiered`."""
+    config = AuditorConfig(test_command=test_command, cache_dir=cache)
+    if tier2 == "shortlist":
+        config = dataclasses.replace(config, tier2=tier2, mutant_shortlist=mutant_shortlist)
+    auditor = Auditor(tree, baseline, config)
     try:
         return auditor.audit()
     except AuditError as exc:
@@ -1382,7 +1402,10 @@ def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]
     """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`."""
     verdict = "accept" if all(r.passed for r in results) else "refuse"
     if as_json:
-        payload = {"verdict": verdict, "tiers": [r.to_dict() for r in results]}
+        # mutant_detail is the audit span's record (MUTSUMMARY), not the CLI's:
+        # dropped so `--json` stays byte-identical to what it was before it.
+        tiers = [{k: v for k, v in r.to_dict().items() if k != "mutant_detail"} for r in results]
+        payload = {"verdict": verdict, "tiers": tiers}
         stdout.write(json.dumps(payload, indent=2) + "\n")
     else:
         for r in results:
@@ -1392,6 +1415,17 @@ def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]
                 stdout.write(f"{f.verdict:<14} {f.gate:<22} [{f.reason}] {f.detail}\n")
         stdout.write(f"verdict: {verdict}\n")
     return AUDIT_EXIT_CODES[verdict]
+
+
+def _add_tier2(sub: argparse.ArgumentParser) -> None:
+    sub.add_argument(
+        "--tier2",
+        choices=list(TIER2_MODES),
+        default="score",
+        help="Tier-2 mutation verdict: 'score' (default) is the 85%% kill-rate bar, "
+        "unchanged; 'shortlist' refuses on any surviving changed-line mutant without "
+        "a checked reason and names them, with coverage as a locator only.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1486,6 +1520,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--tiered",
         action="store_true",
         help="Run the tiered battery (tier 0 per changed file, tier 1, tier 2).",
+    )
+    _add_tier2(audit_cmd)
+    audit_cmd.add_argument(
+        "--mutant-shortlist",
+        type=int,
+        default=DEFAULT_MUTANT_SHORTLIST,
+        metavar="N",
+        help="With --tier2 shortlist (which implies --tiered): how many surviving "
+        f"mutants the mutation finding names (default: {DEFAULT_MUTANT_SHORTLIST}).",
     )
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
@@ -1640,6 +1683,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop (reason 'audit unresolved') after N consecutive finish refusals on an "
         f"unchanged set of failing findings (default: {DEFAULT_FINISH_REFUSAL_CAP}).",
     )
+    _add_tier2(auto)
+    auto.add_argument(
+        "--mutant-shortlist",
+        type=int,
+        default=DEFAULT_MUTANT_SHORTLIST,
+        metavar="N",
+        help="With --tier2 shortlist: how many surviving mutants a refused finish names, "
+        f"one per changed line first (default: {DEFAULT_MUTANT_SHORTLIST}).",
+    )
+    auto.add_argument(
+        "--check-tool",
+        action="store_true",
+        help="Offer the model a `check` tool that runs audit tiers 0 and 1 on the current "
+        "tree before finish (arm E+A+F only; off by default).",
+    )
     auto.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     auto.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
@@ -1671,6 +1729,9 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         sanctioned_test_rewrites=tuple(args.sanctioned_test_rewrite),
         finish_refusal_cap=args.finish_refusal_cap,
         keep_reasoning=args.keep_reasoning,
+        check_tool=args.check_tool,
+        tier2=args.tier2,
+        mutant_shortlist=args.mutant_shortlist,
     )
 
     def show(event: Event) -> None:

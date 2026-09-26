@@ -49,7 +49,15 @@ from saddle.journal import (
 )
 from saddle.labels import label_for
 from saddle.memory import CHARS_PER_TOKEN, compact, estimate_tokens
-from saddle.tools import FINISH_TOOL, REFUSED, TOOLS, ToolContext, execute_tool, preview_for
+from saddle.tools import (
+    CHECK_TOOL,
+    FINISH_TOOL,
+    REFUSED,
+    TOOLS,
+    ToolContext,
+    execute_tool,
+    preview_for,
+)
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
 
 type TokenCounter = Callable[..., int | None]
@@ -147,6 +155,9 @@ class AuditHooks(Protocol):
     def after_tool(self, name: str, ok: bool) -> None: ...
     def collect(self) -> str: ...
     def final(self) -> tuple[bool, str]: ...
+    def check(self) -> str: ...
+    @property
+    def checks(self) -> Sequence[object]: ...
     def unresolved(self) -> list[dict[str, object]]: ...
     def close(self) -> None: ...
     def last(self) -> dict[str, object] | None: ...
@@ -234,6 +245,9 @@ class AutoRun:
     copied into the outcome sidecar so a reader need not trust argv."""
     audit: Callable[[str, str, str], Sequence[Event]] | None = None
     answer: Callable[[Question], str | None] | None = None
+    check_tool: bool = False
+    """`saddle auto --check-tool`: a `check` call runs `feed.check()` (tiers 0
+    and 1). Off, the tool is not offered and a `check` call is an unknown tool."""
     asked: set[str] = field(default_factory=set)
     """Which of the run's own questions ("test-edits", "budget") were put; each at most once."""
 
@@ -596,6 +610,13 @@ def run_turn(
                     result = _finish(auto, call.arguments)
                     if result.startswith(FINISH_REFUSED):
                         result += yield from _offer_test_edits(auto, options.journal, node_id, ctx)
+                elif (
+                    auto is not None
+                    and auto.check_tool
+                    and auto.feed is not None
+                    and call.name == CHECK_TOOL
+                ):
+                    result = auto.feed.check()
                 else:
                     result = execute_tool(call, workdir=options.workdir, context=ctx)
                 duration_ms = int((perf_counter() - start) * 1000)
@@ -1020,6 +1041,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         # was audited before the run ended.
         "audit": auto.feed.last() if auto.feed is not None else None,
     }
+    if auto.check_tool and auto.feed is not None:
+        # Only with the flag, so a run without it seals the same keys as before.
+        evidence["checks"] = len(auto.feed.checks)
     digest = write_attempt_sidecar(journal, span.span_id, evidence)
     span = build_span(
         node_id=node_id,

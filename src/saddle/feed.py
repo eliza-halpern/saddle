@@ -24,6 +24,13 @@ about auditing (the engine imports no auditor):
   feedback on, any `fail` or `blocked` finding refuses `finish` and the
   findings are its tool result; the run continues within its budgets
   (tightened: a run cannot end finished with a failing audit).
+- `check()` -- the model's **pull** (`--check-tool`, arm E+A+F only): tier 0
+  (`Auditor.tier0` on every changed Python file) and tier 1 of the same
+  auditor, synchronously, on the tree as it is now, rendered by the same
+  `render` a finish refusal uses. Never tier 2, never a finish refusal, and
+  refused (no audit run) while the tree is unchanged since the last check.
+  Each check that runs is journaled as a `CHECK_SPAN` span whose sidecar
+  holds its findings. The finish audit is unaffected by it.
 - `close()` -- at the end of the run; waits for a pending checkpoint so the
   outcome sidecar carries the last findings even on a budget stop.
 
@@ -51,6 +58,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -58,9 +66,10 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 
 from saddle.audit import AuditError
-from saddle.auditor import Auditor, AuditorConfig, Finding, Findings, sanction
-from saddle.journal import append_span, build_span
-from saddle.tools import FINISH_TOOL
+from saddle.auditor import Auditor, AuditorConfig, Finding, Findings, Tier2Mode, sanction
+from saddle.gates import DEFAULT_MUTANT_SHORTLIST
+from saddle.journal import append_span, build_span, write_attempt_sidecar
+from saddle.tools import CHECK_TOOL, FINISH_TOOL
 
 Arm = Literal["E", "E+A", "E+A+F"]
 ARMS: Final[tuple[Arm, ...]] = ("E", "E+A", "E+A+F")
@@ -71,11 +80,21 @@ files is not counted as an edit; the finish audit still sees its result."""
 
 FAILING: Final = frozenset({"fail", "blocked"})
 
+CHECK_SPAN: Final = "audit:check"
+"""A `check` call's audit record: the rendered text as detail, the findings
+(`AuditResult.to_dict`) in the span's attempt sidecar. Its `audit:` prefix
+puts it in the outcome's sealed audit list (FIX-5)."""
+
+CHECK_UNCHANGED: Final = "error: check refused: the tree is unchanged since check "
+"""Prefix of a refused `check`. Not the tier-0 guard's `REFUSED`, so it is
+not counted among the run's guard refusals, and not a finish refusal."""
+
 DETAIL_CHARS: Final = 1200
 """Per finding, in the text the model reads. The journal keeps it whole."""
 
 
 class AuditorLike(Protocol):
+    def tier0(self, path: str, new_text: str) -> Findings: ...
     def tier1(self, tree: Path | None = None) -> Findings: ...
     def tier2(self, tree: Path | None = None) -> Findings: ...
 
@@ -96,6 +115,9 @@ class AuditResult:
     tree: str
     findings: tuple[Finding, ...]
     note: str = ""
+    mutant_detail: tuple[tuple[str, str, str], ...] = ()
+    """Tier 2's (name, status, show) for every scored mutant; sealed in the
+    audit span's sidecar under `mutant_detail` when non-empty."""
 
     @property
     def passed(self) -> bool:
@@ -108,6 +130,15 @@ class AuditResult:
             "passed": self.passed,
             "note": self.note,
             "findings": [dataclasses.asdict(f) for f in self.findings],
+            **(
+                {
+                    "mutant_detail": [
+                        {"name": n, "status": s, "show": t} for n, s, t in self.mutant_detail
+                    ]
+                }
+                if self.mutant_detail
+                else {}
+            ),
         }
 
 
@@ -131,7 +162,11 @@ def render(result: AuditResult) -> str:
     allowed = [f for f in result.findings if f.reason == "sanctioned" and f.verdict in FAILING]
     for f in allowed:
         lines.append(f"(info) {f.gate} (tier {f.tier}): {f.detail}")
-    passed = len(result.findings) - len(bad) - len(allowed)
+    unproven = [f for f in result.findings if f.verdict == "not-proven"]
+    for f in unproven:
+        detail = f.detail if len(f.detail) <= DETAIL_CHARS else f.detail[:DETAIL_CHARS] + " ..."
+        lines.append(f"(not proven, does not refuse) {f.gate} (tier {f.tier}): {detail}")
+    passed = len(result.findings) - len(bad) - len(allowed) - len(unproven)
     if passed:
         lines.append(f"({passed} other check(s) passed or not applicable)")
     return "\n".join(lines)
@@ -195,10 +230,18 @@ class AuditFeed:
     factory: AuditorFactory = default_auditor
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten; see `auditor.sanction`."""
+    tier2: Tier2Mode = "score"
+    """`--tier2`; "shortlist" turns on this module's SHORTLIST behaviour too."""
+    mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
+    """How many survivors a mutation finding names (`--mutant-shortlist`)."""
     auditor: AuditorLike | None = None
     results: list[AuditResult] = field(default_factory=list)
     """Every completed audit, in completion order; the last is the verdict."""
     checkpoints: int = 0
+    checks: list[AuditResult] = field(default_factory=list)
+    """Every `check` the model ran, in order. Not in `results`: a check is
+    never the run's verdict, and `unresolved` must read the finish audit."""
+    _checked_tree: str | None = None
     _dirty: bool = False
     _pending: Future[AuditResult] | None = None
     _ready: list[AuditResult] = field(default_factory=list)
@@ -208,24 +251,40 @@ class AuditFeed:
     def __post_init__(self) -> None:
         if self.auditor is None:
             config = AuditorConfig(
-                journal=self.journal, sanctioned_test_rewrites=self.sanctioned_test_rewrites
+                journal=self.journal,
+                sanctioned_test_rewrites=self.sanctioned_test_rewrites,
+                tier2=self.tier2,
+                mutant_shortlist=self.mutant_shortlist,
             )
             self.auditor = self.factory(self.worktree, self.baseline, config)
 
     # -- the audit itself ------------------------------------------------------
 
-    def _audit(self, point: str, tiers: tuple[int, ...], files: Path, scratch: Path) -> AuditResult:
+    def _audit(
+        self,
+        point: str,
+        tiers: tuple[int, ...],
+        files: Path,
+        scratch: Path,
+        *,
+        check: bool = False,
+    ) -> AuditResult | None:
+        """The audit of `files` at `tiers`. For a `check`, None (nothing run)
+        when the tree is the one the last check audited."""
         assert self.auditor is not None
         try:
             tree = snapshot(self.worktree, files, scratch / "tree")
+            if check:
+                if tree == self._checked_tree:
+                    return None
+                self._checked_tree = tree
             found: list[Finding] = []
+            detail: tuple[tuple[str, str, str], ...] = ()
             for tier in tiers:
-                run = self.auditor.tier1 if tier == 1 else self.auditor.tier2
-                found.extend(
-                    sanction(f, self.sanctioned_test_rewrites)
-                    for f in run(scratch / "tree").findings
-                )
-            return AuditResult(point, tree, tuple(found))
+                got = self._tier(tier, scratch / "tree")
+                found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
+                detail = detail or got.mutant_detail
+            return AuditResult(point, tree, tuple(found), mutant_detail=detail)
         except AuditError as exc:
             if str(exc).startswith("nothing to audit"):
                 return AuditResult(point, "", (), note=str(exc))
@@ -235,8 +294,23 @@ class AuditFeed:
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def _tier(self, tier: int, tree: Path) -> Findings:
+        assert self.auditor is not None
+        if tier == 0:
+            changed = _git(
+                tree, "diff", "--cached", "--name-only", "--diff-filter=AMR", self.baseline
+            ).split()
+            found = [
+                f
+                for name in sorted(n for n in changed if n.endswith(".py"))
+                for f in self.auditor.tier0(name, (tree / name).read_text()).findings
+            ]
+            return Findings(tier=0, key="", findings=tuple(found))
+        return self.auditor.tier1(tree) if tier == 1 else self.auditor.tier2(tree)
+
     def _checkpoint(self, point: str, scratch: Path) -> AuditResult:
         result = self._audit(point, (1,), scratch / "frozen", scratch)
+        assert result is not None
         with self._lock:
             self._ready.append(result)
             self.results.append(result)
@@ -248,8 +322,8 @@ class AuditFeed:
         """Start a checkpoint audit if `name` ends a burst of edits."""
         if name in EDIT_TOOLS or not self._dirty:
             return
-        if name == FINISH_TOOL:
-            return  # `final` audits this tree at both tiers; no checkpoint too
+        if name in (FINISH_TOOL, CHECK_TOOL):
+            return  # `final` / `check` audit this tree themselves; no checkpoint too
         self._dirty = False
         self._await()  # one checkpoint in flight at a time; the auditor is not shared
         self.checkpoints += 1
@@ -283,6 +357,46 @@ class AuditFeed:
         text = self._record(self._take(), delivered=self.feedback)
         return text if self.feedback else ""
 
+    def check(self) -> str:
+        """The model's pull: tiers 0 and 1 on the tree as it is now.
+
+        Rendered exactly as a finish refusal renders its audit (`render`), so
+        a finding reads the same whichever way it arrives. Tier 2 is never
+        run here. On a tree unchanged since the last check nothing runs and
+        the call is refused. A check never touches the finish refusal count
+        and never shortens the finish audit.
+        """
+        self._await()  # the auditor is not shared with a pending checkpoint
+        scratch = Path(tempfile.mkdtemp(prefix="saddle-check-"))
+        result = self._audit(
+            f"check {len(self.checks) + 1}", (0, 1), self.worktree, scratch, check=True
+        )
+        if result is None:
+            return (
+                f"{CHECK_UNCHANGED}{len(self.checks)}; edit a file before checking again. "
+                "That check's findings still stand."
+            )
+        self._dirty = False  # this tree is audited; no checkpoint of it too
+        self.checks.append(result)
+        text = render(result)
+        span_id = uuid.uuid4().hex
+        digest = write_attempt_sidecar(self.journal, span_id, result.to_dict())
+        append_span(
+            self.journal,
+            build_span(
+                node_id="chat#1",
+                argv=["check", result.point, result.tree],
+                duration_ms=0,
+                exit_code=0 if result.passed else 1,
+                detail=text,
+                name=CHECK_SPAN,
+                parent_id=self.run_span,
+                span_id=span_id,
+                attempt_hash=digest,
+            ),
+        )
+        return text
+
     def final(self) -> tuple[bool, str]:
         """Tier 1 and tier 2 on the tree `finish` is called on.
 
@@ -295,6 +409,7 @@ class AuditFeed:
         pending = self._take()
         scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))
         result = self._audit("finish", (1, 2), self.worktree, scratch)
+        assert result is not None
         with self._lock:
             self.results.append(result)
         refuse = self.feedback and not result.passed
