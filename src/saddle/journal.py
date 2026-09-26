@@ -5,6 +5,11 @@ Verification is recomputation (sha256 over canonical JSON) plus
 parent-linkage checks — no trust, no PKI. A missing journal is a fresh
 journal; only an unterminated tail line is tolerated (crash-torn write),
 everything else fails strict.
+
+Spans are self-hashed, not chained. An autonomous run is held whole by
+its outcome span instead: the sealed sidecar lists every tool span's hash
+in order, and verification requires exactly those spans, in that order,
+with none after the outcome (`_auto_run_issues`).
 """
 
 from __future__ import annotations
@@ -495,6 +500,7 @@ def _load_journal(
     seen: set[str] = set()
     planned_hashes: set[str] = set()
     proof_lines: list[tuple[int, ProofRecord]] = []
+    auto_proofs: list[tuple[int, ProofRecord]] = []
     for number, line in enumerate(lines, start=1):
         try:
             raw = json.loads(line)
@@ -561,6 +567,8 @@ def _load_journal(
         records.append(entry)
         ordered.append(entry)
         seen.add(entry.record_hash)
+        if entry.kind.startswith(AUTO_PROOF_PREFIX):
+            auto_proofs.append((number, entry))
         # Only a proof sealed after a plan record is judged against plans:
         # earlier proofs predate T6-13 or were resumed from a journal that
         # never had one.
@@ -575,6 +583,7 @@ def _load_journal(
                     message=f"proof for node {record.node_id!r} matches no plan record",
                 )
             )
+    issues.extend(_auto_run_issues(path, span_entries, auto_proofs, issues))
     spans = [entry for _, entry in span_entries]
     known = {entry.span_id for entry in spans}
     for number, entry in span_entries:
@@ -587,6 +596,155 @@ def _load_journal(
                 )
             )
     return (records, spans, issues, ordered)
+
+
+AUTO_START: Final = "auto:start"
+AUTO_PROOF_PREFIX: Final = "auto-"
+TOOL_SPAN_HASHES: Final = "tool_span_hashes"
+
+
+def _auto_run_issues(
+    path: Path,
+    span_entries: Sequence[tuple[int, SpanRecord]],
+    auto_proofs: Sequence[tuple[int, ProofRecord]],
+    found: Sequence[JournalIssue],
+) -> list[JournalIssue]:
+    """Hold an autonomous run's tool spans to its outcome's list (CHAIN).
+
+    Spans are hashed one by one, so deleting, reordering or appending a
+    whole line leaves every remaining hash intact. The outcome span's
+    sidecar (`engine._seal_outcome`) lists every tool span's
+    `record_hash` in the order they ran, and the sidecar is sealed by the
+    outcome span's `attempt_hash`. So, per `auto:start` span: the run's
+    tool spans before its outcome must be exactly that list, in order;
+    none may follow the outcome; there is one outcome; and once an
+    `auto-*` proof is sealed for the node, the outcome must exist.
+
+    A run's tool spans are those citing the start span as parent, plus
+    any tool span after the start line and before the next start line
+    (an inserted span need not cite the parent honestly). A journal with
+    no `auto:start` span -- chat, slice runs -- is not judged here.
+    """
+    issues: list[JournalIssue] = []
+    starts = [
+        (number, span)
+        for number, span in span_entries
+        if span.kind == "agent" and span.name == AUTO_START
+    ]
+    bad_sidecars = {issue.line for issue in found if issue.code == "attempt-sidecar"}
+    for index, (start_line, start) in enumerate(starts):
+        end_line = starts[index + 1][0] if index + 1 < len(starts) else None
+        in_run = [
+            (number, span)
+            for number, span in span_entries
+            if span.parent_id == start.span_id or _within(number, start_line, end_line)
+        ]
+        outcomes = [
+            (number, span)
+            for number, span in in_run
+            if span.kind == "agent" and span.parent_id == start.span_id
+        ]
+        tools = [(number, span) for number, span in in_run if span.kind == "tool"]
+        if not outcomes:
+            for number, proof in auto_proofs:
+                if proof.node_id == start.node_id and _within(number, start_line, end_line):
+                    issues.append(
+                        JournalIssue(
+                            code="outcome-missing",
+                            line=number,
+                            message=f"proof for node {proof.node_id!r} ({proof.kind}) has no "
+                            f"outcome span for run {start.span_id!r}",
+                        )
+                    )
+            continue
+        if len(outcomes) > 1:
+            issues.append(
+                JournalIssue(
+                    code="outcome-duplicate",
+                    line=outcomes[1][0],
+                    message=f"run {start.span_id!r} has a second outcome span "
+                    f"{outcomes[1][1].span_id!r}",
+                )
+            )
+        outcome_line, outcome = outcomes[0]
+        for number, span in tools:
+            if number > outcome_line:
+                issues.append(
+                    JournalIssue(
+                        code="span-after-outcome",
+                        line=number,
+                        message=f"span {span.span_id!r} ({span.name}) follows the outcome "
+                        f"span {outcome.span_id!r}",
+                    )
+                )
+        if outcome_line in bad_sidecars:
+            continue  # its list cannot be trusted; attempt-sidecar already fails it
+        listed = _listed_span_hashes(path, outcome)
+        if listed is None:
+            issues.append(
+                JournalIssue(
+                    code="outcome-list",
+                    line=outcome_line,
+                    message=f"outcome span {outcome.span_id!r} has no {TOOL_SPAN_HASHES} list",
+                )
+            )
+            continue
+        present = [(number, span) for number, span in tools if number < outcome_line]
+        present_hashes = [span.record_hash for _, span in present]
+        for position, digest in enumerate(listed):
+            if digest not in present_hashes:
+                issues.append(
+                    JournalIssue(
+                        code="span-missing",
+                        line=outcome_line,
+                        message=f"outcome span {outcome.span_id!r} lists tool span #{position + 1} "
+                        f"(record_hash {digest}) that is not in the journal",
+                    )
+                )
+        for number, span in present:
+            if span.record_hash not in listed:
+                issues.append(
+                    JournalIssue(
+                        code="span-unlisted",
+                        line=number,
+                        message=f"span {span.span_id!r} ({span.name}) is not in the tool span "
+                        f"list of outcome span {outcome.span_id!r}",
+                    )
+                )
+        common = [digest for digest in listed if digest in present_hashes]
+        for (number, span), digest in zip(
+            [(n, s) for n, s in present if s.record_hash in listed], common, strict=False
+        ):
+            if span.record_hash != digest:
+                issues.append(
+                    JournalIssue(
+                        code="span-order",
+                        line=number,
+                        message=f"span {span.span_id!r} ({span.name}) is out of the order "
+                        f"outcome span {outcome.span_id!r} lists",
+                    )
+                )
+                break
+    return issues
+
+
+def _within(number: int, start_line: int, end_line: int | None) -> bool:
+    """Whether journal line `number` lies after a run's start and before the next one."""
+    return number > start_line and (end_line is None or number < end_line)
+
+
+def _listed_span_hashes(path: Path, outcome: SpanRecord) -> list[str] | None:
+    """The outcome sidecar's `tool_span_hashes`, or None when it has no such list."""
+    if not outcome.attempt_hash:
+        return None
+    try:
+        evidence = json.loads(attempt_sidecar_path(path, outcome.span_id).read_bytes())
+    except (OSError, ValueError):
+        return None
+    listed = evidence.get(TOOL_SPAN_HASHES) if isinstance(evidence, dict) else None
+    if not isinstance(listed, list) or not all(isinstance(item, str) for item in listed):
+        return None
+    return listed
 
 
 def _sidecar_diff_mismatch(sidecar: Path) -> bool:
