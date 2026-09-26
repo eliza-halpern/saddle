@@ -601,3 +601,38 @@ def test_a_same_length_edit_in_the_same_second_runs_the_new_code(
     assert "ADD 0" in results[0]  # the buggy code ran first
     assert "ADD 4" in results[2], results[2]  # and the fixed code ran second
     assert result.outcome == "finished"
+
+
+# -- bytecode and saddle state never reach the run branch ---------------------
+
+
+def test_bytecode_is_neither_listed_nor_committed_without_a_gitignore(repo: Path) -> None:
+    import shlex
+    import sys
+
+    assert not (repo / ".gitignore").exists()
+    py = shlex.quote(sys.executable)
+    # cached bytecode under __pycache__, plus a legacy .pyc beside its source
+    compile_all = (
+        f"{py} -m py_compile calc.py tests/test_calc.py && "
+        f"{py} -c \"import py_compile; py_compile.compile('calc.py', cfile='calc.pyc')\""
+    )
+    client = Scripted(
+        [
+            [call("run_command", "c1", command=compile_all)],
+            [call("edit_file", "c2", path="calc.py", old="a - b", new="a + b")],
+            [call("run_command", "c3", command="mkdir -p .saddle && echo x > .saddle/s")],
+            finish(),
+        ]
+    )
+    result = auto(repo, client)
+
+    wt = result.worktree
+    assert (wt / "calc.pyc").exists()
+    assert list(wt.rglob("__pycache__/*.pyc"))
+    assert (wt / ".saddle" / "s").exists()
+    tree = git(repo, "ls-tree", "-r", "--name-only", result.branch).split()
+    assert sorted(tree) == ["calc.py", "tests/test_calc.py"]
+    assert changed_files(wt) == []  # committed; bytecode and .saddle/ still unlisted
+    assert sidecar(result)["files_changed"] == ["calc.py"]
+    assert git(repo, "show", f"{result.branch}:calc.py") == FIXED

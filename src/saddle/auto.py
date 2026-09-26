@@ -61,6 +61,16 @@ same-length edit followed by a run in the same second would execute the
 old code and fail a correct fix (CLAUDE.md, harness rule 3). The worktree
 is a fresh checkout, so with nothing written there is nothing stale."""
 
+UNSTAGED: Final = (
+    ".",
+    ":(exclude,glob)**/*.pyc",
+    ":(exclude,glob).saddle/**",
+)
+"""Pathspec for what a run may list or commit: never bytecode (`*.pyc`,
+which is all `__pycache__/` holds) or saddle's own state, whether or not
+the repo has a `.gitignore` that says so. A worktree's `info/exclude` is
+shared with the user's repo, so it is not used."""
+
 GIT_IDENTITY: Final = ("-c", "user.name=saddle", "-c", "user.email=saddle@localhost")
 
 
@@ -140,7 +150,7 @@ def create_worktree(repo: Path, run_id: str) -> tuple[Path, str]:
 
 def changed_files(worktree: Path) -> list[str]:
     """Paths the run changed, added or deleted, relative to the worktree."""
-    out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "-z")
+    out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "-z", "--", *UNSTAGED)
     return sorted({entry[3:] for entry in out.split("\0") if len(entry) > 3})
 
 
@@ -203,7 +213,7 @@ def run_auto(
     for event in events:
         if on_event is not None:
             on_event(event)
-    _git(worktree, "add", "-A")
+    _git(worktree, "add", "-A", "--", *UNSTAGED)
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
