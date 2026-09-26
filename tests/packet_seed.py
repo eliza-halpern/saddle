@@ -1,0 +1,157 @@
+"""Seed a run's branch, ledger and chat reference without a model (PACKET tests).
+
+The ledger is built from the same `build_span`/`write_attempt_sidecar`
+calls the engine seals with, so `compile_packet` reads it exactly as it
+reads a real run's; the branch is a real `saddle/auto/<id>` worktree branch
+made the way `auto.create_worktree` makes it.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Literal
+
+from saddle.auto import create_worktree, ledger_path
+from saddle.journal import append_span, build_span, write_attempt_sidecar
+from saddle.packet import compile_packet, render_packet_text
+from saddle.sessions import SessionStore
+from saddle.web.tasks import RUN_REF, TaskRun, recap_message
+
+Kind = Literal["audited", "mutated", "unaudited", "stopped", "failed"]
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def make_repo(root: Path) -> Path:
+    (root / "tests").mkdir(parents=True)
+    (root / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+    (root / "tests" / "test_calc.py").write_text(
+        "from calc import add\n\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+    )
+    (root / "README").write_text("calc\n")
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    return root
+
+
+def seed(
+    store: SessionStore,
+    repo: Path,
+    kind: Kind,
+    *,
+    sid: str | None = None,
+    task: str = "make add add",
+) -> tuple[str, str, str]:
+    """A run of `kind` on `repo`, referenced from session `sid`: (sid, rid, branch)."""
+    sid = sid or store.create(title="calc work", workdir=str(repo)).id
+    rid = uuid.uuid4().hex[:12]
+    worktree, branch = create_worktree(repo, rid)
+    (worktree / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    (worktree / "tests" / "test_zero.py").write_text(
+        "from calc import add\n\n\ndef test_zero():\n    assert add(0, 0) == 0\n"
+    )
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-q", "-m", f"saddle auto {rid}")
+    journal = ledger_path(repo, rid)
+    start = build_span(
+        node_id="chat#1",
+        argv=["auto:start", task],
+        duration_ms=0,
+        exit_code=0,
+        detail=f"arm E+A+F; branch {branch}; test edits allowed",
+        kind="agent",
+    )
+    append_span(journal, start)
+    audits = {
+        "audited": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
+        "mutated": [
+            ("audit:tests", 0, "2 passed"),
+            ("audit:mutation", 0, "killed 2 of 2 changed-line mutants"),
+            ("audit:coverage", 0, "covered"),
+        ],
+        "unaudited": [],
+        "stopped": [("audit:tests", 0, "2 passed"), ("audit:coverage", 1, "line 2 uncovered")],
+        "failed": [("audit:tests", 1, "1 failed")],
+    }[kind]
+    for name, code, detail in audits:
+        append_span(
+            journal,
+            build_span(
+                node_id="chat#1",
+                argv=[name],
+                duration_ms=0,
+                exit_code=code,
+                detail=detail,
+                kind="agent",
+                name=name,
+                parent_id=start.span_id,
+            ),
+        )
+    outcome = "stopped" if kind == "stopped" else "finished"
+    reason = "audit unresolved" if kind == "stopped" else "finish called"
+    evidence = {
+        "outcome": outcome,
+        "reason": reason,
+        "narrative": "Tests pass now. add adds.",
+        "files_changed": ["calc.py", "tests/test_zero.py"],
+        "rounds": 3,
+        "tool_span_hashes": [],
+        "tokens_spent": 1200,
+        "token_source": "usage",
+        "token_budget": 100000,
+        "elapsed_s": 42.0,
+        "time_budget_s": 600,
+        "unresolved_findings": (
+            [{"gate": "coverage", "reason": "evidence-thin"}] if kind == "stopped" else []
+        ),
+    }
+    span_id = uuid.uuid4().hex
+    digest = write_attempt_sidecar(journal, span_id, evidence)
+    append_span(
+        journal,
+        build_span(
+            node_id="chat#1",
+            argv=[f"auto:{outcome}"],
+            duration_ms=42000,
+            exit_code=0 if outcome == "finished" else 3,
+            detail=f"{outcome}: {reason}; arm E+A+F",
+            kind="agent",
+            parent_id=start.span_id,
+            span_id=span_id,
+            attempt_hash=digest,
+        ),
+    )
+    run = TaskRun(
+        run_id=rid,
+        session_id=sid,
+        task=task,
+        time_budget_s=600,
+        token_budget=100000,
+        journal=journal,
+    )
+    append_span(
+        store.journal_path(sid),
+        build_span(
+            node_id=f"task:{rid}",
+            argv=[RUN_REF, rid, task, str(journal), start.span_id],
+            duration_ms=0,
+            exit_code=0,
+            detail=f"{outcome}: seeded",
+            kind="agent",
+            name=RUN_REF,
+        ),
+    )
+    messages = store.load_messages(sid)
+    messages.append(recap_message(run, render_packet_text(compile_packet(journal, run_id=rid))))
+    store.save_messages(sid, messages)
+    return sid, rid, branch
