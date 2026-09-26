@@ -68,6 +68,7 @@ from saddle.gates import (
     check_ruff,
     check_syntax,
     introduced_findings,
+    set_aside_kind,
     shortlist_order,
 )
 from saddle.journal import append_span, build_span
@@ -352,7 +353,7 @@ def behaviour_at(source: str, line: int) -> str:
 
 def _survivors(outcome: MutationOutcome, sources: dict[str, str]) -> tuple[Survivor, ...]:
     found = []
-    judged = [d for d in outcome.survivor_details if not d[5]]
+    judged = [d for d in outcome.survivor_details if not d[5] and set_aside_kind(d) is None]
     for name, status, path, line, text, _ in shortlist_order(judged):
         source = sources.get(path, "")
         lines = source.splitlines()

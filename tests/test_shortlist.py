@@ -31,7 +31,12 @@ from saddle.evidence import (
     mutation_text,
     run_argv,
 )
-from saddle.gates import check_mutation, check_mutation_shortlist, shortlist_order
+from saddle.gates import (
+    check_mutation,
+    check_mutation_shortlist,
+    set_aside_kind,
+    shortlist_order,
+)
 from saddle.journal import attempt_sidecar_path, read_spans
 from saddle.vllm import ToolCall
 
@@ -497,3 +502,58 @@ def test_tiered_json_leaves_mutant_detail_out(
     tiers = json.loads(out.getvalue())["tiers"]
     assert tiers[-1]["tier"] == 2
     assert "mutant_detail" not in out.getvalue()
+
+
+# -- SHORTLIST-3: statically equivalent / text survivors are set aside ---------
+
+
+def _fixture_details() -> list[SurvivorDetail]:
+    source = (FIXTURES / "stockbook_e_t8_s5.py.txt").read_text()
+    survivors = json.loads((FIXTURES / "e_t8_s5_survivors.json").read_text())
+    return [
+        (
+            s["name"],
+            s["status"],
+            "stockbook.py",
+            i + 1,
+            mutation_text(s["show"]),
+            message_only_mutant(s["show"], source, s["name"]),
+        )
+        for i, s in enumerate(survivors)
+    ]
+
+
+def test_e_t8_s5_is_admitted_once_equivalent_and_text_survivors_are_set_aside() -> None:
+    """Known-good: a correct CALIB T8 tree whose only non-message survivors are
+    the `_check_int` field-name swap (text) and the quantize `Decimal(1)` ->
+    `Decimal(2)` (equivalent) passes, and the finding names both with the rule."""
+    details = _fixture_details()
+    kinds = {d[0].rsplit("ǁ", 1)[1]: set_aside_kind(d) for d in details if not d[5]}
+    assert kinds == {"scale_prices__mutmut_2": "text", "scale_prices__mutmut_26": "equivalent"}
+    got = check_mutation_shortlist(_outcome(101, details), 85.0)
+    assert got.passed, got.detail
+    assert "; 2 set aside by a static rule" in got.detail
+    assert (
+        "mutant stockbook.xǁInventoryǁscale_prices__mutmut_26 (equivalent: no behaviour can change"
+        in got.detail
+    )
+    assert "(text: only message or argument text changes)" in got.detail
+
+
+def test_a_behaviour_survivor_beside_set_aside_ones_stays_open() -> None:
+    """Known-bad: a comparison-operator survivor is behaviour, never set aside."""
+    boundary = ("m.x_f__mutmut_1", "survived", "m.py", 3, "-    if p < 0:\n+    if p <= 0:", False)
+    untested = (
+        "m.x_f__mutmut_2",
+        "no tests",
+        "m.py",
+        4,
+        "-    x = Decimal(1)\n+    x = Decimal(2)",
+        False,
+    )
+    assert set_aside_kind(boundary) is None
+    assert set_aside_kind(untested) is None
+    got = check_mutation_shortlist(_outcome(10, [*_fixture_details(), boundary, untested]), 85.0)
+    assert not got.passed
+    assert got.detail.startswith("2 surviving mutant(s)")
+    assert "mutant m.x_f__mutmut_1 (survived)" in got.detail

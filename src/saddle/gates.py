@@ -18,6 +18,7 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Final
 
 from saddle.dag import Node
+from saddle.mutant_text import PHRASES, classify, function_of, parse_show
 
 if TYPE_CHECKING:
     from saddle.evidence import MutationOutcome, SurvivorDetail
@@ -1914,6 +1915,19 @@ def shortlist_order(details: Sequence[SurvivorDetail]) -> list[SurvivorDetail]:
     return first + rest
 
 
+SET_ASIDE_KINDS: Final = ("equivalent", "text")
+"""`mutant_text.classify` kinds the shortlist sets aside by static rule (SHORTLIST-3)."""
+
+
+def set_aside_kind(detail: SurvivorDetail) -> str | None:
+    """`equivalent` or `text` when `mutant_text.classify` puts this survivor
+    there, else None. A static rule over the mutant's own diff, never a
+    claim: `untested` and `behaviour` survivors are never set aside."""
+    _, before, after = parse_show(detail[4])
+    kind = classify(detail[1], function_of(detail[0]), before, after)
+    return kind if kind in SET_ASIDE_KINDS else None
+
+
 def check_mutation_shortlist(
     outcome: MutationOutcome,
     threshold: float,
@@ -1952,7 +1966,9 @@ def check_mutation_shortlist(
     )
     allowed = set(accepted)
     messages = [d for d in outcome.survivor_details if d[5]]
-    judged = [d for d in outcome.survivor_details if not d[5]]
+    aside = [(d, k) for d in outcome.survivor_details if not d[5] if (k := set_aside_kind(d))]
+    set_names = {d[0] for d, _ in aside}
+    judged = [d for d in outcome.survivor_details if not d[5] and d[0] not in set_names]
     open_ = [d for d in shortlist_order(judged) if (d[2], d[3]) not in allowed]
     waived = len(judged) - len(open_)
     note = f"; {len(messages)} message-only survivor(s) excluded" if messages else ""
@@ -1961,13 +1977,19 @@ def check_mutation_shortlist(
     untested = sum(1 for d in open_ if d[1] == "no tests")
     if untested:
         note += f"; {untested} untested (no test runs the mutated function)"
+    if aside:
+        note += f"; {len(aside)} set aside by a static rule"
+    aside_rows = "".join(
+        f"\n- set aside: {d[2]}:{d[3]} mutant {d[0]} ({k}: {PHRASES[k]})"
+        for d, k in sorted(aside, key=lambda x: (x[0][2], x[0][3], x[0][0]))
+    )
     if not open_:
         return GateCheck(
             name="mutation",
             passed=True,
             detail=(
                 f"killed {outcome.killed} of {outcome.total} changed-line mutants; "
-                f"no survivor without an accepted reason{note}"
+                f"no survivor without an accepted reason{note}" + aside_rows
             ),
             basis=basis,
         )
@@ -1988,6 +2010,7 @@ def check_mutation_shortlist(
             f"(killed {outcome.killed} of {outcome.total}){note}; shortlist:\n"
             + "\n".join(rows)
             + more
+            + aside_rows
         ),
         basis=basis,
     )
