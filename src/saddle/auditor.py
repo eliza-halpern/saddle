@@ -41,11 +41,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
+import shutil
 import sys
 import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal
 
@@ -61,6 +64,8 @@ from saddle.audit import (
 )
 from saddle.dag import Node
 from saddle.evidence import (
+    DEFAULT_TEST_TIMEOUT_S,
+    TEST_MEMORY_LIMIT_BYTES,
     MutationOutcome,
     changed_statements,
     git_diff,
@@ -280,11 +285,28 @@ class AuditorConfig:
 _REWROTE: Final = " rewrote assertions in: "
 """`gates.check_assertion_preservation`'s wording before the test names."""
 
+GREEN_ON_BASELINE: Final = "; not sanctioned: green on the baseline sources: "
+"""Appended to a sanctionable finding whose rewritten test(s) pass against
+the baseline's sources (`green_on_baseline`). `sanction` never reclasses a
+finding carrying it, so the feed cannot re-sanction what the auditor refused."""
+
+
+def rewritten(detail: str) -> set[str]:
+    """The test names an assertion-preservation detail says were rewritten."""
+    _, sep, names = detail.partition(_REWROTE)
+    return {n.strip() for n in names.split(",") if n.strip()} if sep else set()
+
 
 def sanction(finding: Finding, sanctioned: Sequence[str]) -> Finding:
     """Reclass a failing assertion-preservation finding that names only
-    sanctioned tests; every other finding is returned unchanged."""
+    sanctioned tests; every other finding is returned unchanged.
+
+    A finding the auditor marked `GREEN_ON_BASELINE` is never reclassed:
+    a sanctioned rewrite is accepted only if it is red on the baseline's
+    sources (FEEDFIX item 4)."""
     if finding.gate != "assertion-preservation" or finding.verdict != "fail":
+        return finding
+    if GREEN_ON_BASELINE in finding.detail:
         return finding
     _, sep, names = finding.detail.partition(_REWROTE)
     named = {n.strip() for n in names.split(",") if n.strip()}
@@ -294,6 +316,77 @@ def sanction(finding: Finding, sanctioned: Sequence[str]) -> Finding:
         finding,
         reason="sanctioned",
         detail=f"{finding.detail} (all sanctioned by the task)",
+    )
+
+
+_TEST_NAMES: Final = ("test_*.py", "*_test.py", "conftest.py")
+_TEST_DIRS: Final = frozenset({"tests", "test"})
+_BASELINE_IGNORE: Final = shutil.ignore_patterns(
+    ".git", "__pycache__", ".pytest_cache", ".coverage*", "mutants", ".saddle"
+)
+
+
+def _test_side(path: str) -> bool:
+    """A file the test suite owns: a test module, a conftest, or anything
+    under a `tests`/`test` directory. Everything else is a source."""
+    parts = PurePosixPath(path).parts
+    return any(fnmatch(parts[-1], p) for p in _TEST_NAMES) or bool(_TEST_DIRS & set(parts[:-1]))
+
+
+def green_on_baseline(
+    copy: Path, resolved: str, names: Sequence[str], test_command: str
+) -> list[str]:
+    """Which of the rewritten tests `names` PASS with the baseline's sources.
+
+    The negative control SANCTIONS-LIB (1)(b) recommends: a sanctioned
+    rewrite is the task's order to assert the *redefined* behaviour, so it
+    must fail on the code before the change. One that passes there did not
+    assert it (`construct/vacuous`: `assert True`; or it kept the old
+    value). The audited tree is copied, every changed non-test file is put
+    back as the baseline has it (added ones removed, deleted ones restored),
+    and the named tests run there under the test command's limits. A name
+    is green when every test node it names passed; a name that did not
+    collect or did not run on the baseline is red (it cannot pass there).
+    """
+    changed = run_capture(
+        ["git", "diff", "--cached", "--name-status", "--no-renames", resolved], copy
+    ).stdout.splitlines()
+    with tempfile.TemporaryDirectory(prefix="saddle-baseline-") as scratch:
+        base = Path(scratch) / "tree"
+        shutil.copytree(copy, base, ignore=_BASELINE_IGNORE)
+        for line in changed:
+            status, _, path = line.partition("\t")
+            if not path or _test_side(path):
+                continue
+            if status == "A":
+                (base / path).unlink(missing_ok=True)
+                continue
+            shown = run_capture(["git", "show", f"{resolved}:{path}"], copy)
+            (base / path).parent.mkdir(parents=True, exist_ok=True)
+            (base / path).write_text(shown.stdout)
+        argv = shlex.split(test_command)
+        listed = run_capture(
+            [*argv, "--collect-only", "--verbosity=-1", "-p", "no:cacheprovider"],
+            base,
+            timeout=DEFAULT_TEST_TIMEOUT_S,
+            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+        ).stdout.splitlines()
+        wanted = set(names)
+        nodes = [n for n in listed if "::" in n and n.rsplit("::", 1)[1].split("[")[0] in wanted]
+        if not nodes:
+            return []
+        ran = run_capture(
+            [*argv, "--verbosity=-1", "-rA", "-p", "no:cacheprovider", *nodes],
+            base,
+            timeout=DEFAULT_TEST_TIMEOUT_S,
+            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+        ).stdout.splitlines()
+    passed = {line.split(" ", 1)[1].split(" ")[0] for line in ran if line.startswith("PASSED ")}
+    return sorted(
+        name
+        for name in wanted
+        if (mine := [n for n in nodes if n.rsplit("::", 1)[1].split("[")[0] == name])
+        and all(n in passed for n in mine)
     )
 
 
@@ -655,6 +748,23 @@ class Auditor:
                         for n, s, t in gated.mutation.mutant_detail
                     ],
                 }
+            rewrote = statuses.get("assertion-preservation")
+            sanctioned = set(self.config.sanctioned_test_rewrites)
+            if (
+                tier == 1
+                and rewrote is not None
+                and rewrote[0] == "fail"
+                and (named := rewritten(rewrote[1]))
+                and named <= sanctioned
+            ):
+                # FEEDFIX (4): a sanctioned rewrite must be red on the baseline.
+                green = green_on_baseline(copy, resolved, sorted(named), self.config.test_command)
+                if green:
+                    statuses["assertion-preservation"] = (
+                        "fail",
+                        f"{rewrote[1]}{GREEN_ON_BASELINE}{', '.join(green)}",
+                        rewrote[2],
+                    )
             if tier == 1 and statuses["coverage"][0] in ("fail", "not-proven"):
                 # A not-proven coverage finding (SHORTLIST-4) names the same
                 # lines; its sidecar is what COVTEXT renders (FEEDFIX item 8).
