@@ -759,6 +759,80 @@ def test_an_unsanctioned_rewrite_still_refuses_finish(repo: Path) -> None:
     assert "- assertion-preservation (tier 1): fail, evidence-thin:" in note
 
 
+# -- FEEDFIX (6): an accepted finish seals the waivers it stood on -----------
+
+
+def test_a_sanctioned_accept_seals_the_names_it_stood_on(repo: Path) -> None:
+    # known-bad for the field: the accept stood on a sanctioned rewrite, so
+    # the sidecar names each test (SANCTIONSLIB (3); EAF-t5-s2-0's four).
+    client = Reactive([[EDIT_COMMENT], [CHECK], [FINISH]])
+    result, _ = run(
+        repo,
+        client,
+        "E+A+F",
+        auditor=RewritesTests(),
+        sanctioned_test_rewrites=("test_b", "test_a"),
+    )
+    assert result.outcome == "finished"
+    assert sidecar(result)["waivers"] == [
+        "sanctioned test rewrite: test_a",
+        "sanctioned test rewrite: test_b",
+    ]
+
+
+@pytest.mark.parametrize("arm", ["E+A+F", "E+A"])
+def test_an_accept_on_no_waiver_seals_an_empty_list(repo: Path, arm: str) -> None:
+    # known-good: a plain accept (EAF-t8's reference shape) seals [].
+    client = Reactive(
+        [[call("edit_file", "e", path="calc.py", old="a - b", new="a + b")], [FINISH]]
+    )
+    result, _ = run(repo, client, arm)
+    assert result.outcome == "finished"
+    assert sidecar(result)["waivers"] == []
+
+
+def test_a_run_with_no_accepted_finish_seals_no_waivers(repo: Path) -> None:
+    refused = run(
+        repo,
+        Reactive([[EDIT_COMMENT], [CHECK], [FINISH]]),
+        "E+A+F",
+        auditor=RewritesTests(),
+        sanctioned_test_rewrites=("test_a",),
+        token_budget=40,
+    )[0]
+    assert refused.outcome == "stopped"
+    assert "waivers" not in sidecar(refused)
+
+
+def test_arm_e_has_no_audit_and_seals_no_waivers(repo: Path) -> None:
+    plain = run(repo, Reactive([[EDIT_COMMENT], [FINISH]]), "E")[0]
+    assert plain.outcome == "finished"
+    assert "waivers" not in sidecar(plain)
+
+
+def test_waivers_name_sanctioned_tests_once_and_the_nothing_to_audit_note() -> None:
+    from saddle.feed import AuditResult, waivers
+
+    twice = sanction(REWROTE, ("test_a", "test_b"))
+    passed = Finding("tests", 1, "pass", "code-wrong", "1 passed", ("fake",))
+    result = AuditResult("finish", "t" * 40, (twice, passed, twice))
+    assert waivers(result) == ["sanctioned test rewrite: test_a", "sanctioned test rewrite: test_b"]
+    # a failing rewrite the task did not sanction is not a waiver
+    assert waivers(AuditResult("finish", "t" * 40, (REWROTE, passed))) == []
+    # the names are read before any suffix: sanction's, or the baseline check's
+    from saddle.auditor import GREEN_ON_BASELINE, rewritten
+
+    assert rewritten(twice.detail) == {"test_a", "test_b"}
+    assert rewritten(f"{REWROTE.detail}{GREEN_ON_BASELINE}test_b") == {"test_a", "test_b"}
+    note = "nothing to audit: the tree equals baseline abc"
+    assert waivers(AuditResult("finish", "t" * 40, (), note)) == [note]
+
+
+def test_the_feed_has_no_waivers_before_any_audit(unit: tuple[AuditFeed, FakeAuditor]) -> None:
+    feed, _ = unit
+    assert feed.waivers() == []
+
+
 def test_feedback_and_the_finish_gate_are_the_same_with_test_edits_allowed(repo: Path) -> None:
     edit_test = call(
         "edit_file", "t1", path="tests/test_calc.py", old="add(2, 2) == 4", new="add(2, 3) == 5"

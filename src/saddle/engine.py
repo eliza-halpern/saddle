@@ -163,6 +163,7 @@ class AuditHooks(Protocol):
     def last(self) -> dict[str, object] | None: ...
     def accepted_unchanged(self) -> bool: ...
     def unchanged(self) -> bool: ...
+    def waivers(self) -> list[str]: ...
 
 
 FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
@@ -280,6 +281,9 @@ class AutoRun:
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
     on that same tree ends finished with it."""
+    waivers: list[str] | None = None
+    """`feed.waivers` of the last accepted finish audit; None until one is.
+    Sealed on a finished run with an auditor (FEEDFIX item 6)."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -1024,6 +1028,7 @@ def _finish(auto: AutoRun, arguments: str) -> str:
                     f"({AUDIT_UNRESOLVED}).\n\n{findings}"
                 )
             return f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
+        auto.waivers = auto.feed.waivers()
         if findings:
             # Accepted, with not-proven findings the model has not read: it
             # reads them in its next round; a later finish ends the run.
@@ -1097,6 +1102,10 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         # was audited before the run ended.
         "audit": auto.feed.last() if auto.feed is not None else None,
     }
+    if auto.outcome == "finished" and auto.waivers is not None:
+        # FEEDFIX (6): every accepted finish seals what it stood on, [] if
+        # nothing; arm E and ended-unaccepted runs seal the keys as before.
+        evidence["waivers"] = auto.waivers
     if auto.surfaced is not None:
         # FEEDFIX (7): only when an accepted finish surfaced not-proven
         # findings, so every other run seals the same keys as before.

@@ -74,7 +74,15 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 
 from saddle.audit import AuditError
-from saddle.auditor import Auditor, AuditorConfig, Finding, Findings, Tier2Mode, sanction
+from saddle.auditor import (
+    Auditor,
+    AuditorConfig,
+    Finding,
+    Findings,
+    Tier2Mode,
+    rewritten,
+    sanction,
+)
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.journal import append_span, build_span, write_attempt_sidecar
 from saddle.tools import CHECK_TOOL, FINISH_TOOL
@@ -156,6 +164,29 @@ class AuditResult:
 def failing(finding: Finding) -> bool:
     """A finding that refuses `finish`: fail or blocked, and not sanctioned."""
     return finding.verdict in FAILING and finding.reason != "sanctioned"
+
+
+SANCTIONED_REWRITE: Final = "sanctioned test rewrite: "
+"""How `waivers` names one test a sanctioned finding let through."""
+
+
+def waivers(result: AuditResult) -> list[str]:
+    """What let `result` pass that a plain audit would not have (SANCTIONSLIB (3)).
+
+    One entry per test a `sanctioned` finding names (a rewrite the task
+    ordered, `auditor.sanction`), sorted, and the "nothing to audit" note
+    if the audit carried one. Sealed on every accepted finish so an accept
+    that stood on a waiver says so in the ledger; an accept with none
+    seals []. The engine never ends an unchanged tree finished (FEEDFIX
+    item 5), so the note reaches the field only from a hand-built result.
+    """
+    names = sorted(
+        {n for f in result.findings if f.reason == "sanctioned" for n in rewritten(f.detail)}
+    )
+    out = [f"{SANCTIONED_REWRITE}{n}" for n in names]
+    if result.note.startswith(NOTHING_TO_AUDIT):
+        out.append(result.note)
+    return out
 
 
 def render(result: AuditResult) -> str:
@@ -515,6 +546,10 @@ class AuditFeed:
         if self._pending is not None:
             self._pending.result()
             self._pending = None
+
+    def waivers(self) -> list[str]:
+        """`waivers` of the last completed audit; [] before any."""
+        return waivers(self.results[-1]) if self.results else []
 
     def last(self) -> dict[str, object] | None:
         return self.results[-1].to_dict() if self.results else None

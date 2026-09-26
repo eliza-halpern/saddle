@@ -291,8 +291,14 @@ the baseline's sources (`green_on_baseline`). `sanction` never reclasses a
 finding carrying it, so the feed cannot re-sanction what the auditor refused."""
 
 
+SANCTIONED_SUFFIX: Final = " (all sanctioned by the task)"
+"""What `sanction` appends to a finding it reclasses."""
+
+
 def rewritten(detail: str) -> set[str]:
-    """The test names an assertion-preservation detail says were rewritten."""
+    """The test names an assertion-preservation detail says were rewritten,
+    read before any suffix `sanction` or the baseline check appended."""
+    detail = detail.split(SANCTIONED_SUFFIX, 1)[0].split(GREEN_ON_BASELINE, 1)[0]
     _, sep, names = detail.partition(_REWROTE)
     return {n.strip() for n in names.split(",") if n.strip()} if sep else set()
 
@@ -308,14 +314,13 @@ def sanction(finding: Finding, sanctioned: Sequence[str]) -> Finding:
         return finding
     if GREEN_ON_BASELINE in finding.detail:
         return finding
-    _, sep, names = finding.detail.partition(_REWROTE)
-    named = {n.strip() for n in names.split(",") if n.strip()}
-    if not sep or not named or not named <= set(sanctioned):
+    named = rewritten(finding.detail)
+    if not named or not named <= set(sanctioned):
         return finding
     return dataclasses.replace(
         finding,
         reason="sanctioned",
-        detail=f"{finding.detail} (all sanctioned by the task)",
+        detail=f"{finding.detail}{SANCTIONED_SUFFIX}",
     )
 
 

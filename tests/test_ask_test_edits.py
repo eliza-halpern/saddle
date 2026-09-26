@@ -259,6 +259,9 @@ class Feed:
         # (FEEDFIX 7); this fake surfaces none.
         return self.ok, "" if self.ok else "coverage FAIL"
 
+    def waivers(self) -> list[str]:
+        return []
+
     def unchanged(self) -> bool:
         return False
 
