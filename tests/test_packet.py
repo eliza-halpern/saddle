@@ -675,3 +675,155 @@ def test_a_seam_mutation_audit_has_no_summary_and_no_summary_key(repo: Path) -> 
     row = next(r for r in packet.rows if r.key == "mutation")
     assert (row.text, row.summary) == ("3 of 3 killed", "")
     assert all("summary" not in r for r in packet.payload()["rows"])
+
+
+# -- the Audit row's coverage English (PACKETHOOK, COVTEXT) -------------------------
+
+COVERAGE_FIXTURE = Path(__file__).parent / "fixtures" / "coverage_text" / "E-t5-s1"
+
+
+def coverage_finding() -> dict[str, Any]:
+    return json.loads((COVERAGE_FIXTURE / "finding.json").read_text())
+
+
+def coverage_sources() -> dict[str, str]:
+    return {
+        p.name.removesuffix(".txt"): p.read_text() for p in (COVERAGE_FIXTURE / "tree").iterdir()
+    }
+
+
+def coverage_evidence(tmp_path: Path, sources: dict[str, str] | None = None) -> dict[str, Any]:
+    """What the auditor seals beside a failing coverage finding, for E-t5-s1."""
+    from saddle.evidence import changed_statements
+
+    tree = tmp_path / "tree"
+    tree.mkdir(exist_ok=True)
+    for name, text in coverage_sources().items():
+        (tree / name).write_text(text)
+    changed = changed_statements(tree, (COVERAGE_FIXTURE / "changes.diff").read_text())
+    relative = sorted((str(Path(p).relative_to(tree)), n) for p, n in changed)
+    named = coverage_sources() if sources is None else sources
+    return {
+        # The auditor's spelling: each file as its lines, under the sidecar's cap.
+        "sources": {name: text.splitlines() for name, text in named.items()},
+        "changed": [[p, n] for p, n in relative],
+    }
+
+
+def coverage_span(journal: Path, finding: dict[str, Any], sealed: dict[str, Any] | None) -> Any:
+    body = {**finding, "tier": 1}
+    exit_code = {"pass": 0, "fail": 1}[finding["verdict"]]
+    kwargs: dict[str, Any] = {}
+    if sealed is not None:
+        kwargs["span_id"] = uuid.uuid4().hex
+        kwargs["attempt_hash"] = write_attempt_sidecar(journal, kwargs["span_id"], sealed)
+    span = build_span(node_id="n", argv=["saddle-audit", "tier1", "coverage", "k"], duration_ms=0,
+                      exit_code=exit_code, detail=json.dumps(body, sort_keys=True),
+                      name="audit-tier1:coverage", **kwargs)  # fmt: skip
+    append_span(journal, span)
+    return span
+
+
+def test_a_failing_coverage_finding_with_sealed_sources_renders_its_english_under_audit(
+    tmp_path: Path,
+) -> None:
+    """Known-good: the Audit row keeps its count and items; beneath them, the
+    coverage English (COVTEXT) for E-t5-s1, linked to the mutation summary
+    sealed on the same ledger, with the uncovered lines' own text."""
+    journal = tmp_path / "proofs.jsonl"
+    span = coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
+    sealed_mutation_span(journal, "fail", "killed 220 of 322 sampled mutants", mutation_outcome())
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.text == "0 of 1 finding passed."
+    assert audit.items[0].startswith("✗ coverage: tier 1, fail: no test runs money.py:42,")
+    assert audit.cites == (span.record_hash,)
+    assert audit.summary.startswith(
+        "Not proven by any test: 19 changed lines no test runs [record: detail names 19 lines; "
+        "changed-lines=155 compelled-lines=5]\n"
+    )
+    assert (
+        "  - money.py convert: 10 of 16 changed lines never run -- nothing exercises convert "
+        '("Convert a Decimal amount from source to target."); and a mutant there survived '
+        "[lines 131, 132, 133, 134, 136, 137, 138, 139, 140, 141]\n"
+        '      131:     if source == "USD":\n'
+    ) in audit.summary
+    assert "not placed" not in audit.summary
+    text = render_packet_text(packet)
+    assert "\nAudit [failed]: 0 of 1 finding passed.\n  - ✗ coverage: tier 1, fail:" in text
+    assert "\n  Not proven by any test: 19 changed lines no test runs" in text
+    assert '\n        131:     if source == "USD":\n' in text
+    payload_row = next(r for r in packet.payload()["rows"] if r["key"] == "audit")
+    assert payload_row["summary"] == audit.summary
+
+
+def test_coverage_english_without_a_mutation_record_has_no_mutant_link(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert "money.py convert: 10 of 16 changed lines never run" in audit.summary
+    assert "mutant there survived" not in audit.summary
+
+
+def test_a_source_missing_from_the_sealed_evidence_is_not_placed(tmp_path: Path) -> None:
+    """The module's path for a file the auditor could not read: the lines are
+    named and "not placed", the other file is still placed, no text invented."""
+    journal = tmp_path / "proofs.jsonl"
+    sources = {"money.py": coverage_sources()["money.py"]}
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path, sources))
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert (
+        "  - store.py:43: file not in the tree read; not placed [record: store.py:43]"
+        in audit.summary
+    )
+    assert "  - money.py convert:" in audit.summary
+    assert "store.py load_accounts" not in audit.summary
+
+
+@pytest.mark.parametrize("sealed", [False, True])
+def test_a_passing_coverage_finding_renders_no_english(tmp_path: Path, sealed: bool) -> None:
+    """Known-bad: a passing finding adds nothing, even with a sidecar on it."""
+    journal = tmp_path / "proofs.jsonl"
+    finding = {**coverage_finding(), "verdict": "pass", "detail": "every changed line is run"}
+    coverage_span(journal, finding, coverage_evidence(tmp_path) if sealed else None)
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert (audit.status, audit.summary) == ("proven", "")
+    assert all("summary" not in r for r in packet.payload()["rows"])
+
+
+def test_a_failing_coverage_finding_with_nothing_sealed_renders_no_english(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), None)
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.status == "failed"
+    assert audit.summary == ""
+    assert all("summary" not in r for r in packet.payload()["rows"])
+
+
+def test_a_ledger_with_no_coverage_finding_has_no_audit_summary(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    append_span(journal, tier_span(1, "dead-code", "fail", "x"))
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.summary == ""
+
+
+def test_a_source_sealed_as_one_string_over_the_sidecar_cap_is_not_placed(tmp_path: Path) -> None:
+    """Known-bad for the cap: `write_attempt_sidecar` cuts a string at 4000
+    characters. money.py sealed whole no longer parses; its lines are named
+    and "not placed", store.py (sealed as lines) is still placed, and the
+    packet does not crash."""
+    journal = tmp_path / "proofs.jsonl"
+    sealed = coverage_evidence(tmp_path)
+    assert len(coverage_sources()["money.py"]) > 4000
+    sealed["sources"]["money.py"] = coverage_sources()["money.py"]
+    coverage_span(journal, coverage_finding(), sealed)
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert (
+        "  - money.py:131: file not in the tree read; not placed [record: money.py:131]"
+        in audit.summary
+    )
+    assert "  - store.py load_accounts: 2 of 16 changed lines never run" in audit.summary
+    assert "money.py convert" not in audit.summary

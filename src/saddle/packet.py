@@ -31,6 +31,7 @@ What the packet can and cannot say for an executor-only run (arm E):
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -39,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from saddle import mutant_text
+from saddle import coverage_text, mutant_text
 from saddle.anchor import anchor_issues
 from saddle.journal import (
     AUDIT_SPAN_PREFIXES,
@@ -219,18 +220,69 @@ def _killers(outcome: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
-def _mutation_summary(journal: Path, span: SpanRecord | None) -> str:
-    """The mutation finding's English (MUTSUMMARY), from the outcome sealed in its span.
+def _sealed(journal: Path, span: SpanRecord | None, *keys: str) -> dict[str, Any] | None:
+    """A finding span's sealed sidecar when it holds every one of `keys`, else None.
 
-    The auditor seals `asdict(MutationOutcome)` beside its `audit-tier2:mutation`
-    finding (`Auditor._journal`); `_sidecar` refuses one that does not hash.
-    A record with no sealed outcome (a seam span, a blocked tier, an older
-    ledger) yields "", and the row then reads exactly as before.
+    The auditor seals evidence beside a finding (`Auditor._journal`, PACKETHOOK):
+    `asdict(MutationOutcome)` on `audit-tier2:mutation`, `{"sources", "changed"}`
+    on a failing `audit-tier1:coverage`. `_sidecar` refuses one that does not
+    hash. A record with none (a seam span, a blocked tier, an older ledger)
+    yields None, and the row then reads exactly as before.
     """
-    outcome = _sidecar(journal, span) if span is not None else None
-    if outcome is None or not {"killed", "total"} <= outcome.keys():
+    sealed = _sidecar(journal, span) if span is not None else None
+    if sealed is None or not set(keys) <= sealed.keys():
+        return None
+    return sealed
+
+
+def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.MutationSummary | None:
+    """The mutation finding's summary (MUTSUMMARY) from the outcome sealed in its span."""
+    outcome = _sealed(journal, span, "killed", "total")
+    if outcome is None:
+        return None
+    return mutant_text.describe_mutation(outcome, _killers(outcome))
+
+
+def _coverage_summary(
+    journal: Path, span: SpanRecord | None, mutation: mutant_text.MutationSummary | None
+) -> str:
+    """A failing coverage finding's English (COVTEXT), from the sources and
+    changed set sealed in its span; "" when nothing is sealed there."""
+    sealed = _sealed(journal, span, "sources", "changed")
+    if sealed is None or span is None:
         return ""
-    return mutant_text.render_text(mutant_text.describe_mutation(outcome, _killers(outcome)))
+    try:
+        finding = json.loads(span.detail)
+    except ValueError:
+        return ""
+    if not isinstance(finding, dict):
+        return ""
+    sources = _sealed_sources(sealed["sources"])
+    changed = [(str(f), int(n)) for f, n in sealed["changed"]]
+    summary = coverage_text.describe_coverage(finding, sources, changed, mutation)
+    return coverage_text.render_coverage(summary)
+
+
+def _sealed_sources(raw: Any) -> dict[str, str]:
+    """Sealed sources as text, keeping only files that still parse.
+
+    The auditor seals each file as a list of lines (`coverage_evidence`),
+    because the sidecar writer caps a string at 4000 characters. A file
+    sealed some other way and cut by that cap does not parse; it is left
+    out here, and `coverage_text` lists its lines as "not placed" rather
+    than this module guessing or crashing on it.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    sources: dict[str, str] = {}
+    for name, value in raw.items():
+        text = "\n".join(str(x) for x in value) + "\n" if isinstance(value, list) else str(value)
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        sources[str(name)] = text
+    return sources
 
 
 def _display(entry: ProofRecord | SpanRecord) -> dict[str, Any]:
@@ -493,6 +545,14 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     audits = _audits(spans)
     edit_checks = _audits(spans, edit_checks=True)
     span_by_hash = {s.record_hash: s for s in spans}
+    # The mutation finding's sealed outcome, described once: the Mutation row
+    # renders it, and the coverage English says where a mutant also survived.
+    mutation = [a for a in audits if a.name == "audit:mutation"]
+    mutation_summary = (
+        _mutation_summary(journal, span_by_hash.get(mutation[-1].record_hash))
+        if mutation and mutation[-1].verdict != "blocked"
+        else None
+    )
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
@@ -616,7 +676,6 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         )
 
     # -- mutation -------------------------------------------------------------------
-    mutation = [a for a in audits if a.name == "audit:mutation"]
     if mutation and mutation[-1].verdict == "blocked":
         # Tier 2 never ran: tier 1 failed on that tree. There is no mutation
         # result to call failed (FIX-3); the auditor's detail names the cause.
@@ -633,7 +692,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "proven" if last.exit_code == 0 else "failed",
                 last.detail,
                 (last.record_hash,),
-                summary=_mutation_summary(journal, span_by_hash.get(last.record_hash)),
+                summary=mutant_text.render_text(mutation_summary) if mutation_summary else "",
             )
         )
     else:
@@ -681,6 +740,16 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     # -- audit (the seam) ---------------------------------------------------------
     if audits:
         other = [a for a in audits if a not in test_audits and a not in mutation]
+        # A failing coverage finding's English (COVTEXT), from what the auditor
+        # sealed beside it, beneath the Audit row's items (inside its fold on
+        # the web). A passing or absent finding, or one with nothing sealed,
+        # adds nothing; there is no Coverage row of its own.
+        coverage = next((a for a in other if a.name == "audit:coverage" and a.exit_code != 0), None)
+        coverage_summary = (
+            _coverage_summary(journal, span_by_hash.get(coverage.record_hash), mutation_summary)
+            if coverage is not None
+            else ""
+        )
         if other:
             rows.append(
                 Row(
@@ -695,6 +764,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                         f"{a.name.removeprefix('audit:')}: {a.detail}"
                         for a in other
                     ),
+                    summary=coverage_summary,
                 )
             )
 

@@ -95,6 +95,10 @@ class FunctionGap:
     uncovered: tuple[int, ...]
     changed: int | None
     mutant_survived: bool = False
+    # The uncovered lines' own text, rstripped, from the same source the
+    # function was placed in: only the lines the gate judged, never the
+    # whole function. Empty for a file the tree did not hold.
+    text: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,8 @@ def describe_coverage(
         spans[key] = scope
     gaps = []
     for (file, func), nums in grouped.items():
+        source_lines = sources[file].splitlines()
+        text = tuple((n, source_lines[n - 1].rstrip()) for n in nums if 1 <= n <= len(source_lines))
         count = None
         if changed is not None:
             scope = spans[(file, func)]
@@ -157,6 +163,7 @@ def describe_coverage(
                 tuple(nums),
                 count,
                 (file, func) in survived,
+                text,
             )
         )
     raw = finding.get("cites")
@@ -181,8 +188,18 @@ def gap_sentence(g: FunctionGap) -> str:
     )
 
 
-def render_coverage(summary: CoverageSummary) -> str:
-    """The coverage row as lines of English, each backed by the finding."""
+def line_text(g: FunctionGap) -> list[str]:
+    """The uncovered lines themselves, one per line, `<number>: <text>`, under the bullet."""
+    return [f"      {n}: {text}" for n, text in g.text]
+
+
+def render_coverage(summary: CoverageSummary, *, text: bool = True) -> str:
+    """The coverage row as lines of English, each backed by the finding.
+
+    With `text` (the default) each function bullet is followed by the text
+    of its uncovered lines, read from the same source the function was
+    placed in; a file the tree did not hold is "not placed" and has none.
+    """
     s = summary
     if not s.detail_lines:
         return ""
@@ -191,7 +208,10 @@ def render_coverage(summary: CoverageSummary) -> str:
         f"{HEADING}: {s.detail_lines} changed lines no test runs "
         f"[record: detail names {s.detail_lines} lines{'; ' + basis if basis else ''}]"
     ]
-    out.extend(f"  - {gap_sentence(g)}" for g in s.gaps)
+    for g in s.gaps:
+        out.append(f"  - {gap_sentence(g)}")
+        if text:
+            out.extend(line_text(g))
     out.extend(
         f"  - {f}:{n}: file not in the tree read; not placed [record: {f}:{n}]"
         for f, n in s.unplaced

@@ -431,3 +431,52 @@ def test_a_blocked_tier2_seals_no_mutation_outcome(uncovered_tree: Path, tmp_pat
     span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
     assert span.attempt_hash == ""
     assert verify_journal(journal) == []
+
+
+def test_tier1_seals_sources_and_changed_lines_beside_a_failing_coverage_finding(
+    uncovered_tree: Path, tmp_path: Path
+) -> None:
+    """The `audit-tier1:coverage` finding that names uncovered lines carries a
+    sealed sidecar with the text of each file it names and the changed set the
+    gate judged (PACKETHOOK), so the packet can render COVTEXT's English. The
+    finding itself is unchanged."""
+    from saddle.journal import attempt_sidecar_path
+    from saddle.packet import compile_packet
+
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(uncovered_tree, config=AuditorConfig(journal=journal)).tier1()
+    coverage = next(f for f in result.findings if f.gate == "coverage")
+    assert coverage.verdict == "fail"
+    assert coverage.detail.startswith("no test runs m.py:")
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash
+    sealed = json.loads(attempt_sidecar_path(journal, span.span_id).read_text())
+    assert sealed["sources"] == {"m.py": ["def g():", "    return 7"]}
+    assert ["m.py", 1] in sealed["changed"]
+    assert ["n.py", 2] in sealed["changed"]
+    assert all(not p.startswith("/") for p, _ in sealed["changed"])
+    assert verify_journal(journal) == []
+    others = [s for s in read_spans(journal) if s.name != "audit-tier1:coverage"]
+    assert all(not s.attempt_hash for s in others)
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert (
+        "  - m.py g: 2 of 2 changed lines never run -- nothing exercises g [lines 1, 2]\n"
+        "      1: def g():\n"
+        "      2:     return 7\n"
+    ) in audit.summary
+
+
+def test_tier1_seals_nothing_beside_a_passing_coverage_finding(
+    clean_tree: Path, tmp_path: Path
+) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier1()
+    assert next(f for f in result.findings if f.gate == "coverage").verdict == "pass"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash == ""
+
+
+def test_coverage_evidence_is_none_for_a_detail_that_names_no_line(tmp_path: Path) -> None:
+    from saddle.auditor import coverage_evidence
+
+    assert coverage_evidence(tmp_path, "HEAD", "every changed line is run") is None

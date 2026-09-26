@@ -224,3 +224,46 @@ def test_blank_docstring_is_no_docstring():
     src = 'def f():\n    """ """\n    return 1\n'
     (g,) = describe_coverage({"detail": "no test runs a.py:3"}, {"a.py": src}).gaps
     assert g.doc is None
+
+
+# -- the uncovered lines' own text under each bullet (PACKETHOOK) ---------------
+
+
+def test_t5_convert_bullet_is_followed_by_the_text_of_its_uncovered_lines(t5_changed):
+    """Known-good: exactly the lines the gate judged in `convert`, numbered,
+    rstripped, read from the same money.py the function was placed in."""
+    source = t5_sources()["money.py"].splitlines()
+    text = render_coverage(describe_coverage(t5_finding(), t5_sources(), t5_changed))
+    lines = text.splitlines()
+    bullet = next(i for i, line in enumerate(lines) if line.startswith("  - money.py convert:"))
+    wanted = [131, 132, 133, 134, 136, 137, 138, 139, 140, 141]
+    got = lines[bullet + 1 : bullet + 1 + len(wanted)]
+    assert got == [f"      {n}: {source[n - 1].rstrip()}" for n in wanted]
+    assert got[0] == '      131:     if source == "USD":'
+    assert got[-1] == '      141:     return usd * RATES["JPY"]'
+    assert all(line.startswith("      ") and not line.startswith("      -") for line in got)
+    # The line after the block is the next bullet, not more of convert.
+    assert lines[bullet + 1 + len(wanted)].startswith("  - store.py")
+    # Only judged lines: 135 was covered and is not printed.
+    assert not any(line.startswith("      135:") for line in lines)
+
+
+def test_line_text_is_an_option_and_off_prints_bullets_only(t5_changed):
+    summary = describe_coverage(t5_finding(), t5_sources(), t5_changed)
+    full = render_coverage(summary)
+    plain = render_coverage(summary, text=False)
+    assert plain.splitlines() == [x for x in full.splitlines() if not x.startswith("      ")]
+    assert len(full.splitlines()) - len(plain.splitlines()) == 19  # one per uncovered line
+
+
+def test_a_missing_source_is_not_placed_and_prints_no_line_text():
+    """Known-bad: a file the tree did not hold keeps COVTEXT's "not placed"
+    line and no text is invented for it."""
+    s = describe_coverage({"detail": "no test runs gone.py:5, here.py:2", "cites": []},
+                          {"here.py": "x = 1\ny = 2\n"})  # fmt: skip
+    assert s.unplaced == (("gone.py", 5),)
+    text = render_coverage(s)
+    assert "  - gone.py:5: file not in the tree read; not placed [record: gone.py:5]" in text
+    assert "      2: y = 2" in text
+    assert "      5:" not in text
+    assert [g.text for g in s.gaps] == [((2, "y = 2"),)]
