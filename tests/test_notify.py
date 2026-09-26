@@ -188,3 +188,12 @@ def test_the_notify_control_asks_once_and_remembers(
     # A second click toggles the remembered choice; it never asks again.
     assert got["afterSecond"]["requests"] == 1
     assert got["afterSecond"]["control"] == second
+
+
+@needs_browser
+def test_keyboard_focus_is_visible_on_every_input(tmp_path: Path) -> None:
+    rings = _page(tmp_path, "focus")["rings"]
+    assert set(rings) == {"#title", "#input", "#temp", "#tc-time", "#notify-toggle"}
+    for sel, ring in rings.items():
+        assert ring["style"] != "none", sel
+        assert ring["width"] >= 2, sel

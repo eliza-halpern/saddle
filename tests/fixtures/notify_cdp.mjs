@@ -158,6 +158,16 @@ try {
       await sleep(200);
       await shot(`sidebar-two-states-${scheme}.png`);
     }
+  } else if (step === "focus") {
+    // Keyboard focus on each control the review found with outline: none.
+    out.rings = {};
+    await send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    await js(`document.querySelector("#task-confirm").hidden = false`);
+    for (const sel of ["#title", "#input", "#temp", "#tc-time", "#notify-toggle"]) {
+      out.rings[sel] = await js(`(() => { const n = document.querySelector(${JSON.stringify(sel)}); if (!n) return null;
+        n.focus({ focusVisible: true }); const c = getComputedStyle(n);
+        return { style: c.outlineStyle, width: parseFloat(c.outlineWidth) }; })()`);
+    }
   } else if (step === "control") {
     await js(`document.querySelector("#notify-toggle").click()`);
     await sleep(200);
