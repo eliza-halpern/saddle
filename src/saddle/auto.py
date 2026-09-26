@@ -105,6 +105,10 @@ class AutoOptions:
     finish_refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP
     """Consecutive `finish` refusals on an unchanged failing finding set before
     an honest stop, reason `audit unresolved` (`engine.AutoRun`)."""
+    keep_reasoning: bool = False
+    """`--keep-reasoning`: send each round's reasoning back within the run
+    (engine.TurnOptions.keep_reasoning). Loosened prompt shape, default off;
+    sealed as `prompt_shape.keep_reasoning` either way."""
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten (T5 rule 8). A failing
     assertion-preservation finding naming only these is classed `sanctioned`:
@@ -248,6 +252,7 @@ def run_auto(
             "reasoning_effort": options.reasoning_effort,
             "allow_test_edits": options.allow_test_edits,
             "sanctioned_test_rewrites": list(options.sanctioned_test_rewrites),
+            "prompt_shape": {"keep_reasoning": options.keep_reasoning},
         },
         audit=audit,
         answer=answer,
@@ -268,6 +273,7 @@ def run_auto(
         context_tokens=options.context_tokens,
         tools=[*TOOLS, FINISH_SCHEMA],
         auto=auto,
+        keep_reasoning=options.keep_reasoning,
     )
     context = ToolContext(
         workdir=worktree,

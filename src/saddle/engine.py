@@ -300,6 +300,11 @@ class TurnOptions:
     tools: list[dict[str, Any]] = field(default_factory=lambda: list(TOOLS))
     auto: AutoRun | None = None
     """Set for an autonomous run: no round cap, a budget, `finish`."""
+    keep_reasoning: bool = False
+    """Autonomous runs only: send each round's reasoning back on its
+    assistant message (field `reasoning`) for the rest of the turn, as the
+    untouched agent does (SPEED F-a). Off by default so arms E/E+A/E+A+F
+    send byte-identical requests; ignored in interactive chat."""
 
     def tool_tokens(self) -> int:
         """What the tool schemas cost, which they do on every single request.
@@ -512,7 +517,11 @@ def run_turn(
             thoughts: list[str] = []
             calls: list[ToolCall] = []
             usage: StreamUsage | None = None
+            sent = perf_counter()
+            first: float | None = None
             for stream, item in _stream(client, messages, options):
+                if first is None:
+                    first = perf_counter()
                 if stop():
                     break
                 if stream == "call":
@@ -525,14 +534,22 @@ def run_turn(
                 else:
                     parts.append(item)
                     yield ContentDelta(text=item)
+            done = perf_counter()
+            timing = _RoundTiming(
+                model_ms=int((done - sent) * 1000),
+                ttft_ms=int(((first if first is not None else done) - sent) * 1000),
+            )
             reply, reasoning = "".join(parts), "".join(thoughts)
             thinking.append(reasoning)
             if auto is not None:
-                _charge(options.journal, node_id, auto, reply, reasoning, calls, usage)
+                _charge(options.journal, node_id, auto, reply, reasoning, calls, usage, timing)
                 yield _progress(auto)
 
+            keep = options.keep_reasoning and auto is not None and bool(reasoning)
             if not calls:
-                messages.append({"role": "assistant", "content": reply})
+                messages.append(
+                    _assistant({"role": "assistant", "content": reply}, reasoning, keep)
+                )
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
                     nudge = AUTO_NUDGE
@@ -545,18 +562,22 @@ def run_turn(
                 break
 
             messages.append(
-                {
-                    "role": "assistant",
-                    "content": reply,
-                    "tool_calls": [
-                        {
-                            "id": c.id,
-                            "type": "function",
-                            "function": {"name": c.name, "arguments": c.arguments},
-                        }
-                        for c in calls
-                    ],
-                }
+                _assistant(
+                    {
+                        "role": "assistant",
+                        "content": reply,
+                        "tool_calls": [
+                            {
+                                "id": c.id,
+                                "type": "function",
+                                "function": {"name": c.name, "arguments": c.arguments},
+                            }
+                            for c in calls
+                        ],
+                    },
+                    reasoning,
+                    keep,
+                )
             )
             tools: list[dict[str, Any]] = []
             for call in calls:
@@ -650,6 +671,21 @@ def run_turn(
         kind=f"auto-{auto.outcome}" if auto is not None else "",
     )
     yield TurnEnd(turn=turn, proof=proof)
+
+
+def _assistant(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str, Any]:
+    """The assistant message as sent back, with its reasoning when `keep`.
+
+    Sent under both keys: `reasoning_content`, the only one the served
+    Qwen3.8 template reads, and `reasoning`, what the server streams and
+    the untouched agent (pi) sends back. Relying on the server to map one
+    to the other would leave the flag inert if it does not. Appended last,
+    so with `keep` off the message is exactly as before.
+    """
+    if keep:
+        message["reasoning_content"] = reasoning
+        message["reasoning"] = reasoning
+    return message
 
 
 def _progress(auto: AutoRun) -> RunProgress:
@@ -833,6 +869,14 @@ def _offer_test_edits(
     return "\n\nThe user allowed test edits for the rest of this run: write the test it names."
 
 
+@dataclass(frozen=True)
+class _RoundTiming:
+    """One round's request timing, in whole milliseconds."""
+
+    model_ms: int
+    ttft_ms: int
+
+
 def _charge(
     journal: Path,
     node_id: str,
@@ -841,14 +885,31 @@ def _charge(
     reasoning: str,
     calls: list[ToolCall],
     usage: StreamUsage | None,
+    timing: _RoundTiming | None = None,
 ) -> None:
-    """Charge one round to the budget and seal the spend, naming its source."""
+    """Charge one round to the budget and seal the spend, naming its source.
+
+    Also records what the round cost in time and reasoning (SPEED, F-a):
+    `reasoning_tokens` is the server's count when its usage carried one,
+    else the reasoning text at `CHARS_PER_TOKEN` (0 for none, never
+    missing), with `reasoning_source` saying which; `model_ms` is the
+    request round-trip and `ttft_ms` the wait for the first streamed
+    event. `duration_ms` stays 0 as before; the new fields are additive.
+    """
     chars = len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
     tokens, source = auto.budget.charge(chars, usage)
+    if usage is not None and usage.reasoning_tokens is not None:
+        reasoning_tokens, reasoning_source = usage.reasoning_tokens, "usage"
+    else:
+        reasoning_tokens, reasoning_source = len(reasoning) // CHARS_PER_TOKEN, "estimate"
     spend = {
         "completion_tokens": tokens,
         "prompt_tokens": usage.prompt_tokens if usage is not None else None,
         "token_source": source,
+        "reasoning_tokens": reasoning_tokens,
+        "reasoning_source": reasoning_source,
+        "model_ms": timing.model_ms if timing is not None else 0,
+        "ttft_ms": timing.ttft_ms if timing is not None else 0,
     }
     append_span(
         journal,

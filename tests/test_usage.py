@@ -9,6 +9,7 @@ no usage chunk falls back to characters / 4 and is sealed "estimate".
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -166,7 +167,10 @@ def test_a_run_with_usage_is_charged_and_sealed_as_usage(repo: Path) -> None:  #
     result = _run(repo, server)
     assert server.payloads[0]["stream_options"] == {"include_usage": True}
     evidence, spends = _sealed(result)
-    assert spends == [{"completion_tokens": 321, "prompt_tokens": 1234, "token_source": "usage"}]
+    old = ("completion_tokens", "prompt_tokens", "token_source")
+    assert [{k: sp[k] for k in old} for sp in spends] == [
+        {"completion_tokens": 321, "prompt_tokens": 1234, "token_source": "usage"}
+    ]
     assert evidence["tokens_spent"] == 321
     assert evidence["token_source"] == "usage"
     assert evidence["tokens_by_source"] == {"usage": 321, "estimate": 0}
@@ -178,7 +182,8 @@ def test_a_run_without_usage_falls_back_and_is_sealed_as_estimate(repo: Path) ->
     result = _run(repo, server)
     evidence, spends = _sealed(result)
     estimate = max(1, len(json.dumps({"summary": "done"})) // 4)
-    assert spends == [
+    old = ("completion_tokens", "prompt_tokens", "token_source")
+    assert [{k: sp[k] for k in old} for sp in spends] == [
         {"completion_tokens": estimate, "prompt_tokens": None, "token_source": "estimate"}
     ]
     assert evidence["tokens_spent"] == estimate
@@ -200,3 +205,66 @@ def test_without_usage_the_same_run_is_not_stopped_by_tokens(repo: Path) -> None
     result = _run(repo, server, tokens=1000)
     assert result.outcome == "finished"
     assert len(server.payloads) == 2
+
+
+# -- what each round spent (SPEED F-a; REASON commit A) -----------------------
+
+
+class SlowServer(FakeServer):
+    """A FakeServer that takes `delay_s` to answer, so round-trip time is real."""
+
+    def __init__(self, bodies: list[str], delay_s: float) -> None:
+        super().__init__(bodies)
+        self.delay_s = delay_s
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat/completions"):
+            time.sleep(self.delay_s)
+        return super().__call__(request)
+
+
+def _usage_with_reasoning(prompt: int, completion: int, reasoning: int) -> dict[str, Any]:
+    chunk = _usage_chunk(prompt, completion)
+    chunk["usage"]["completion_tokens_details"] = {"reasoning_tokens": reasoning}
+    return chunk
+
+
+def test_stream_usage_carries_the_servers_reasoning_count() -> None:
+    server = FakeServer([_sse(_delta({"content": "hi"}), _usage_with_reasoning(40, 7, 5))])
+    events = list(server.client().stream_chat([{"role": "user", "content": "q"}]))
+    assert events[-1] == StreamUsage(prompt_tokens=40, completion_tokens=7, reasoning_tokens=5)
+
+
+def test_a_spend_records_reasoning_from_usage_and_the_round_trip(repo: Path) -> None:  # noqa: F811
+    # The reasoning text is 40 chars (10 estimated tokens); the server says 23.
+    # Only the usage source gives 23, and the 50 ms answer must show in model_ms.
+    thought = "x" * 40
+    body = _sse(_delta({"reasoning": thought}), _finish_call(), _usage_with_reasoning(99, 60, 23))
+    result = _run(repo, SlowServer([body], delay_s=0.05))
+    _, spends = _sealed(result)
+    (spend,) = spends
+    assert (spend["reasoning_tokens"], spend["reasoning_source"]) == (23, "usage")
+    assert (spend["completion_tokens"], spend["prompt_tokens"]) == (60, 99)
+    assert spend["model_ms"] >= 50
+    assert 0 <= spend["ttft_ms"] <= spend["model_ms"]
+    assert spend["ttft_ms"] >= 50
+    assert verify_journal(result.journal) == []
+
+
+def test_without_usage_reasoning_is_the_texts_token_count(repo: Path) -> None:  # noqa: F811
+    thought = "y" * 48  # 12 tokens at CHARS_PER_TOKEN=4
+    result = _run(repo, FakeServer([_sse(_delta({"reasoning": thought}), _finish_call())]))
+    _, spends = _sealed(result)
+    assert (spends[0]["reasoning_tokens"], spends[0]["reasoning_source"]) == (12, "estimate")
+
+
+@pytest.mark.parametrize("with_usage", [False, True])
+def test_a_round_with_no_reasoning_records_zero_not_missing(
+    repo: Path,  # noqa: F811
+    with_usage: bool,
+) -> None:
+    tail = [_usage_chunk(5, 4)] if with_usage else []
+    (spend,) = _sealed(_run(repo, FakeServer([_sse(_finish_call(), *tail)])))[1]
+    assert spend["reasoning_tokens"] == 0
+    assert isinstance(spend["model_ms"], int)
+    assert isinstance(spend["ttft_ms"], int)

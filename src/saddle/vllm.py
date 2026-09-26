@@ -223,6 +223,9 @@ class StreamUsage:
 
     prompt_tokens: int
     completion_tokens: int
+    reasoning_tokens: int | None = None
+    """`usage.completion_tokens_details.reasoning_tokens` when the server
+    sent it, else None: the caller estimates from the reasoning text."""
 
 
 @dataclass(frozen=True)
@@ -804,6 +807,7 @@ class VllmClient:
                     yield StreamUsage(
                         prompt_tokens=usage.get("prompt_tokens", 0),
                         completion_tokens=usage["completion_tokens"],
+                        reasoning_tokens=usage.get("reasoning_tokens"),
                     )
         except httpx.HTTPError as exc:
             msg = f"request failed: {exc}"
