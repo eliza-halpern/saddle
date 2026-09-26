@@ -29,6 +29,7 @@ from typing import Final
 from saddle.engine import AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event
 from saddle.journal import append_span, build_span
+from saddle.sandbox import Sandbox
 from saddle.tools import FINISH_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
 
@@ -52,6 +53,13 @@ SYSTEM_PROMPT: Final = (
     "changed and why. If it cannot be done honestly, call finish and say so. "
     "Your account is recorded as narrative; it does not count as proof."
 )
+
+COMMAND_ENV: Final = {"PYTHONDONTWRITEBYTECODE": "1"}
+"""No command the run starts writes bytecode. Python trusts a `.pyc` whose
+recorded source mtime (one-second resolution) and size match, so a
+same-length edit followed by a run in the same second would execute the
+old code and fail a correct fix (CLAUDE.md, harness rule 3). The worktree
+is a fresh checkout, so with nothing written there is nothing stale."""
 
 GIT_IDENTITY: Final = ("-c", "user.name=saddle", "-c", "user.email=saddle@localhost")
 
@@ -183,7 +191,12 @@ def run_auto(
         tools=[*TOOLS, FINISH_SCHEMA],
         auto=auto,
     )
-    context = ToolContext(workdir=worktree, protected_tests=roots, syntax_guard=True)
+    context = ToolContext(
+        workdir=worktree,
+        sandbox=Sandbox.for_workdir(worktree, env=COMMAND_ENV),
+        protected_tests=roots,
+        syntax_guard=True,
+    )
     events: Iterator[Event] = run_turn(
         client, [], options.task, turn_options, turn=1, context=context
     )

@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -545,3 +546,58 @@ def test_main_dispatches_auto(
 
 
 _: Callable[..., object] = run_turn
+
+
+# -- stale bytecode: a same-length edit inside one mtime second ---------------
+
+
+class _Hooked(Scripted):
+    """Scripted, plus a callable run just before round `i` is served."""
+
+    def __init__(self, rounds: list[list[Any] | BaseException], hooks: dict[int, Any]):
+        super().__init__(rounds)
+        self.hooks = hooks
+        self.served = 0
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Iterator[Any]:
+        hook = self.hooks.get(self.served)
+        if hook is not None:
+            hook()
+        self.served += 1
+        return super().stream_chat(messages, **kwargs)
+
+
+def test_a_same_length_edit_in_the_same_second_runs_the_new_code(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The hazard needs bytecode writes on, whatever the outer run sets.
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    import shlex
+    import sys
+
+    py = shlex.quote(sys.executable)
+    calc = repo / ".saddle" / "worktrees" / "r1" / "calc.py"
+    saved: list[int] = []
+
+    def remember() -> None:  # after the first import, before the edit
+        saved.append(calc.stat().st_mtime_ns)
+
+    def rewind() -> None:  # after the edit: same size, same mtime as the old source
+        os.utime(calc, ns=(saved[0], saved[0]))
+
+    probe = f"{py} -c 'import calc; print(\"ADD\", calc.add(2, 2))'"
+    client = _Hooked(
+        [
+            [call("run_command", "c1", command=probe)],
+            [call("edit_file", "c2", path="calc.py", old="a - b", new="a + b")],
+            [call("run_command", "c3", command=probe)],
+            finish(),
+        ],
+        hooks={1: remember, 2: rewind},
+    )
+    result = auto(repo, client)
+
+    results = [m["content"] for m in client.asked[3]["messages"] if m.get("role") == "tool"]
+    assert "ADD 0" in results[0]  # the buggy code ran first
+    assert "ADD 4" in results[2], results[2]  # and the fixed code ran second
+    assert result.outcome == "finished"
