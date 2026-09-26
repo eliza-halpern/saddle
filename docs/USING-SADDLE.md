@@ -2,7 +2,8 @@
 
 This guide covers the Phase 2 features: autonomous runs with an auditor, the chat's
 lanes (Ask, Edit, Task · Small), and the evidence packet. It describes branch
-`phase2-integ` after the anchor, UI3, notify, ask and lane-chip merges. Each behaviour
+`phase2-integ` after the anchor, UI3, notify, ask, lane-chip, fix and packet merges,
+plus the UXREVIEW2 fixes. Each behaviour
 below was checked against the code, its tests, or a run against a scripted fake model.
 Anything marked **(unverified)** was not checked.
 
@@ -208,18 +209,47 @@ ledger. Each row has a status:
 | Audit | Every other gate's latest finding, ✓ or ✗. Only the latest finding per gate counts, so a failure that a later audit cleared is history. |
 | Not proven | What the packet cannot vouch for: no auditor ran, the run stopped, an unanswered question, ledger issues, estimated token counts, unresolved findings. |
 | Narrative | The model's `finish` summary. **It is not evidence.** Sentences that pair a check word with a result word ("All tests pass") are struck through. This check is lexical English, so it misses some claims and flags some harmless sentences (`packet.flag_narrative`). |
-| Cost | Wall time against budget, and generated tokens, labelled *measured* only when the server reported usage (otherwise "estimated", chars/4). Then a tool-call count, which currently includes audit records (see caveat). |
+| Cost | Wall time against budget, and generated tokens against the budget the run ended with (doubled if you answered Extend), labelled *measured* only when the server reported usage (otherwise "estimated", chars/4). Then the model's tool-call count; audit records are not counted (`journal.AUDIT_SPAN_PREFIXES`). |
 | Reproduce | The `saddle verify` command, and `git log -p main..saddle/auto/<id>`. When the packet was compiled with an anchor repo, it states the anchor result and the command gains `--anchor`. |
 
 ![Packet](screenshots/packet.png)
+*(This shot predates the summary band and the action row described below.)*
 
-Caveats found while writing this guide:
+### How the chat lays the packet out
 
-- The Cost row counts every `kind == "tool"` span as a tool call, including
-  `audit:*` and `audit-tier*` records. A run with 4 model tool calls reported "18 tool
-  calls".
-- The Reproduce command always says `main`. If your default branch has another name,
-  substitute it.
+The chat card does not show the rows above in table order (`static/tasks.js`,
+`renderPacket`). From the top:
+
+1. **Verdict**: Finished, Stopped or No outcome, the task, one sentence, and chips for
+   the branch, files changed, test policy and ledger size.
+2. **Action row**: **View diff**, **Merge into <branch>**, **Discard branch**,
+   **Continue in chat**.
+   - View diff shows the run's changes per file (merge base to the run branch).
+   - Merge is enabled only for a finished run with no failed row and at least one
+     proven Tests, Mutation or Audit row (`web.branch_actions.merge_refusal`), and only
+     on a clean checkout that is on a branch. When the Mutation row is not proven, the
+     button reads "Merge into main (mutation unproven)" in amber: the merge is allowed,
+     and the label says what it goes without. When merge is off, the reason is shown
+     under the row, for example "Merge is off: The run is stopped, not finished; only a
+     finished, audited run merges."
+   - Merge and Discard each ask you in the page first, naming the branch and the
+     target. Merge fast-forwards if it can, otherwise cherry-picks the run's commits,
+     and aborts cleanly on a conflict. Discard deletes the branch and its
+     `.saddle/worktrees/<id>` worktree; the ledger is kept. Neither is sealed in the
+     ledger: each attempt is appended to the session's `actions.log`.
+   - Continue in chat switches the session to Ask and puts the packet's text in the
+     message box. It sends nothing.
+3. **Summary band**: Tests, Mutation and Not proven, one line each with a glyph (✓
+   proven, ✗ failed, ◐ observed, ○ no record, ! something unproven). Each line opens to
+   its full row. The band is green only for a finished run whose three lines are all
+   ✓, blue ("partial") for a finished run with any other line (a missing mutation
+   record is the common case), red with a ✗, and amber for any stop, which lists its
+   unresolved findings in the band itself.
+4. **Scope**, then **Audit** folded to "N of M passed".
+5. **Details** (folded): Contract, Narrative, Cost and Reproduce.
+
+Caveat found while writing this guide: the Reproduce command always says `main`. If
+your default branch has another name, substitute it.
 
 ## 8. Verifying a ledger by hand
 
@@ -235,10 +265,11 @@ chain. What verify establishes:
 - each record's own hash;
 - that its parent links resolve;
 - for an autonomous run, that the tool spans match the list sealed in the outcome's
-  sidecar, in order.
-
-Audit records are not held to that list. An inserted or deleted audit record is
-therefore not caught; its own hash still is.
+  sidecar, in order;
+- for a run sealed with an audit list (`audit_span_hashes`, every run since the
+  phase2-fix merge), that its audit records match that list. A deleted audit record
+  gives `audit-span-missing`, an inserted one `audit-span-unlisted`. Outcomes sealed
+  before that have no list, and their audit records are not judged.
 
 ### Anchoring the outcome in the branch
 
@@ -264,10 +295,10 @@ means the run is still in flight. Limit: the anchor is only as strong as the bra
 history; rewriting both the ledger and the branch tip with a recomputed trailer still
 passes.
 
-Known quirk: the transcript printed after the OK line is the slice renderer's. For an
-autonomous run it shows `Task: (unknown)` and `Verdict: FAIL`, even for a finished run
-whose audit passed. Read the outcome from the packet or the `auto:*` span, not from
-that line.
+The transcript printed after the OK line takes the task from the run's `auto:start`
+span and the verdict from its own outcome span: `FINISHED`, `STOPPED (<reason>)` or
+`NO OUTCOME (...)`. It lists the model's tool calls in full, arguments included, and
+does not summarise the audit; for that, read the packet.
 
 On failure, verify prints one `code@line N: message` per issue and exits 1:
 
@@ -289,6 +320,8 @@ On failure, verify prints one `code@line N: message` per issue and exits 1:
 | `span-missing` | a listed tool span is not in the journal (deleted) |
 | `span-unlisted` | a tool span is not in the list (inserted) |
 | `span-order` | tool spans are out of the listed order |
+| `audit-span-missing` | an audit record in the outcome's audit list is not in the journal |
+| `audit-span-unlisted` | an audit record of the run is not in the outcome's audit list |
 
 Two of these were checked by tampering with a real run: deleting a `run_command` line
 gave `span-missing`, and editing exit codes gave `bad-hash`.
@@ -303,5 +336,6 @@ git merge saddle/auto/<run-id>            # or cherry-pick, or open a PR from it
 git worktree remove .saddle/worktrees/<run-id>   # when done
 ```
 
-Saddle never merges or pushes. It also never removes its worktrees; that is left to
-you (no removal code found in `auto.py`).
+In the chat, the packet's **Merge** and **Discard branch** buttons do the same from the
+page (section 7). Saddle never pushes, and it never merges or deletes anything without
+that confirm step; `saddle auto` itself leaves the branch and its worktree for you.

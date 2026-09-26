@@ -457,8 +457,11 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
 .tool-detail .created-body { display: block; white-space: pre; font: inherit; }
 
 /* Shown only once you have scrolled away, so there is a way back. */
+/* Inside the composer, above its top edge: the composer's height varies
+   (the Run strip, a two-line lane note on a phone), a fixed offset did not. */
+#composer { position: relative; }
 #jump { position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: 96px; z-index: 5; background: var(--bg-raise); color: var(--ink-dim);
+  bottom: calc(100% + 10px); z-index: 5; background: var(--bg-raise); color: var(--ink-dim);
   border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
   font: inherit; font-size: 12.5px; cursor: pointer;
   box-shadow: 0 6px 20px #0008; animation: rise .2s cubic-bezier(.34,1.3,.64,1); }

@@ -109,6 +109,7 @@ try {
     return row ? { status: [...row.classList].find((c) => c.startsWith("s-")),
       items: [...row.querySelectorAll(".prow-items li")].map((li) => li.textContent),
       cites: row.querySelectorAll(".cites .cite").length } : null; })()`);
+  out.meter = await js(`document.querySelectorAll(".task-card .tmeter-value")[1].textContent`);
   out.askHidden = await js(`document.querySelector(".task-ask").hidden`);
   await js(`document.querySelector(".prow.k-contract").scrollIntoView({ block: "center" })`);
   await sleep(300);
