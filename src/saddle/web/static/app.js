@@ -679,6 +679,7 @@ $("#attach").onclick = () => $("#file-input").click();
 $("#run").onclick = (event) => { event.preventDefault(); openRunConfirm(); };
 $("#tc-cancel").onclick = (event) => { event.preventDefault(); closeRunConfirm(); };
 $("#tc-start").onclick = (event) => { event.preventDefault(); startTask(); };
+$("#tc-test-edits").onchange = paintTestPolicy;
 $("#file-input").onchange = (event) => { upload(event.target.files); event.target.value = ""; };
 $("#transcript").addEventListener("dragover", (e) => e.preventDefault());
 $("#transcript").addEventListener("drop", (event) => {

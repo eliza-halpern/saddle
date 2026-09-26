@@ -67,6 +67,9 @@ function taskCard(runId, task, turnNode) {
   head.appendChild(pill);
   const title = el("span", "task-id", `task ${runId}`);
   head.appendChild(title);
+  const testsChip = el("span", "task-tests");
+  testsChip.hidden = true;
+  head.appendChild(testsChip);
   const stop = el("button", "task-stop", "Stop");
   stop.type = "button";
   stop.title = "Stop at the next safe point. The run ends stopped, and what it did is kept.";
@@ -102,13 +105,20 @@ function taskCard(runId, task, turnNode) {
 
   (turnNode || state.turnNode || $("#transcript")).appendChild(node);
   const card = {
-    runId, task, node, pill, stop, time, tokens, now, log, logSummary, lines, ask, packet,
+    runId, task, node, pill, stop, testsChip, time, tokens, now, log, logSummary, lines, ask, packet,
     state: "running", elapsed: 0, elapsedAt: Date.now(), timeBudget: 0, tokenBudget: 0,
     spent: 0, timer: 0, count: 0,
   };
   tasks.set(runId, card);
   paintState(card);
   return card;
+}
+
+function paintTests(card, editable) {
+  if (editable === null || editable === undefined) return;
+  card.testsChip.hidden = false;
+  card.testsChip.textContent = editable ? "tests editable" : "tests read-only";
+  card.testsChip.classList.toggle("ro", !editable);
 }
 
 function paintState(card) {
@@ -293,6 +303,8 @@ function renderPacket(card, packet) {
   verdict.appendChild(top);
   if (packet.task) verdict.appendChild(el("p", "verdict-task", packet.task));
   verdict.appendChild(el("p", "verdict-text", packet.verdict_text));
+  paintTests(card, packet.test_edits);
+  if (packet.offer_test_edits) verdict.appendChild(testEditOffer(card, packet));
   if (packet.header.length) {
     const meta = el("div", "verdict-meta");
     for (const item of packet.header) meta.appendChild(el("span", null, item));
@@ -339,6 +351,25 @@ function renderPacket(card, packet) {
   if (card.count) card.log.open = false;
 }
 
+/* A run that stopped "audit unresolved" with tests read-only, on a finding a
+   new test closes, may be right and merely unable to prove it. Say so, and
+   offer the same task again with test edits allowed. */
+function testEditOffer(card, packet) {
+  const box = el("div", "offer");
+  box.appendChild(el("p", "offer-text",
+    "Tests were read-only, so it could not write the test the auditor asked for. "
+    + "The change may be correct; this run cannot show it."));
+  const again = el("button", "offer-run primary", "Run again with test edits allowed");
+  again.type = "button";
+  again.onclick = (event) => {
+    event.preventDefault();
+    again.disabled = true;
+    launchTask(packet.task, card.timeBudget, card.tokenBudget, true);
+  };
+  box.appendChild(again);
+  return box;
+}
+
 async function loadPacket(card) {
   try {
     const packet = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/packet`);
@@ -368,6 +399,7 @@ function handleTask(event) {
       const was = card.state;
       if (event.time_budget_s) card.timeBudget = event.time_budget_s;
       if (event.token_budget) card.tokenBudget = event.token_budget;
+      paintTests(card, event.test_edits);
       if (was === "running" && event.state !== "running") {
         card.elapsed += (Date.now() - card.elapsedAt) / 1000;
       }
@@ -465,12 +497,17 @@ function openRunConfirm() {
   $("#tc-what").textContent = text;
   $("#tc-folder").textContent = state.folder || "this folder";
   api("/api/task-policy").then((policy) => {
-    $("#tc-tests").textContent = policy.test_edits
-      ? "it may edit test files (this server allows it)"
-      : "test files are read-only to it";
+    $("#tc-test-edits").checked = !!policy.test_edits;
+    paintTestPolicy();
   }).catch(() => {});
   $("#task-confirm").hidden = false;
   $("#tc-start").focus();
+}
+
+function paintTestPolicy() {
+  $("#tc-tests").textContent = $("#tc-test-edits").checked
+    ? "it may edit test files"
+    : "test files are read-only to it";
 }
 
 function closeRunConfirm() {
@@ -484,17 +521,24 @@ async function startTask() {
   const minutes = Number($("#tc-time").value) || 30;
   const thousands = Number($("#tc-tokens").value) || 100;
   closeRunConfirm();
-  state.pendingTaskTurn = taskTurn(text);
-  followBottom();
   input.value = "";
   input.style.height = "auto";
+  await launchTask(text, Math.round(minutes * 60), Math.round(thousands * 1000),
+                   $("#tc-test-edits").checked);
+}
+
+async function launchTask(text, timeBudget, tokenBudget, allowTestEdits) {
+  if (state.busy) return;
+  state.pendingTaskTurn = taskTurn(text);
+  followBottom();
   state.busy = true;
   setStatus("working", "starting task");
   try {
     await api(`/api/sessions/${state.sessionId}/task`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text, time_budget_s: Math.round(minutes * 60), token_budget: Math.round(thousands * 1000),
+        text, time_budget_s: timeBudget || 1800, token_budget: tokenBudget || 100000,
+        allow_test_edits: allowTestEdits,
       }),
     });
   } catch (error) {

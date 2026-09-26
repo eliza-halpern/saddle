@@ -55,7 +55,9 @@
         <p class="tc-what" id="tc-what"></p>
         <p class="tc-how">It works alone in a fresh git worktree of
           <b id="tc-folder">this folder</b>; your checkout is not touched and
-          <span id="tc-tests">test files are read-only to it</span>. You get a branch and an evidence packet.</p>
+          <span id="tc-tests">it may edit test files</span>. You get a branch and an evidence packet.</p>
+        <label class="tc-toggle"><input type="checkbox" id="tc-test-edits" checked> Allow test edits
+          <span class="tc-toggle-note">so it can write the test the auditor asks for. Finish is still refused if it weakens an assertion that was already there.</span></label>
         <div class="tc-row">
           <label>Time <input id="tc-time" type="number" min="1" max="240" value="30"> min</label>
           <label>Tokens <input id="tc-tokens" type="number" min="1" max="1000" value="100"> k</label>

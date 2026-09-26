@@ -731,3 +731,18 @@ main { position: relative; }
   .k-narrative { background: linear-gradient(90deg, #6a45b80a, transparent 60%); }
   .task-pill b, .tc-row button.primary, .ask-send.primary, .ask-option.picked, .status.needs { color: #fff; }
 }
+
+/* ---- UI2: test-edit policy on the strip, the card, and the offer ---- */
+.tc-toggle { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: -4px 0 10px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-dim); cursor: pointer; }
+.tc-toggle input { accent-color: var(--run); transform: translateY(1px); }
+.tc-toggle-note { font-weight: 400; color: var(--ink-faint); }
+.task-tests { font: 11px var(--sans); color: var(--done); border: 1px solid currentColor;
+  border-radius: 999px; padding: 0 8px; line-height: 17px; }
+.task-tests.ro { color: var(--ink-faint); }
+.offer { margin: 4px 0 8px; padding: 10px 12px; border: 1px dashed var(--halt); border-radius: 12px;
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.offer-text { margin: 0; flex: 1 1 260px; font-size: 13px; color: var(--ink); }
+.offer-run { background: var(--run); color: var(--bg); border: 0; border-radius: 11px;
+  padding: 7px 14px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.offer-run:disabled { opacity: .5; cursor: default; }

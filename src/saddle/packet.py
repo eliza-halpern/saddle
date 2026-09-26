@@ -101,6 +101,11 @@ class Packet:
     narrative: tuple[Sentence, ...] = ()
     records: dict[str, dict[str, Any]] = field(default_factory=dict)
     """Every cited record, by hash, as display fields: what a cite opens."""
+    test_edits: bool | None = None
+    """Whether the run could edit tests, from its `auto:start` span; None if unrecorded."""
+    offer_test_edits: bool = False
+    """Stopped "audit unresolved" with tests read-only on a finding a test
+    closes: the card offers the same task again with test edits allowed."""
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -123,6 +128,8 @@ class Packet:
             "narrative": [{"text": s.text, "flagged": s.flagged} for s in self.narrative],
             "narrative_label": NARRATIVE_LABEL,
             "records": self.records,
+            "test_edits": self.test_edits,
+            "offer_test_edits": self.offer_test_edits,
         }
 
 
@@ -356,6 +363,24 @@ def _unresolved(evidence: dict[str, Any]) -> list[str]:
     ]
 
 
+TEST_CLOSES: Final = frozenset({"coverage", "evidence-thin"})
+"""A finding gate or reason that a new test is the repair for."""
+
+
+def _test_edits(start: SpanRecord | None) -> bool | None:
+    """The run's test-edit policy as its `auto:start` span sealed it."""
+    word = start_field(start.detail, "test edits") if start is not None else ""
+    return {"allowed": True, "refused": False}.get(word)
+
+
+def _needs_a_test(evidence: dict[str, Any]) -> bool:
+    found = evidence.get("unresolved_findings")
+    return any(
+        isinstance(f, dict) and (f.get("gate") in TEST_CLOSES or f.get("reason") in TEST_CLOSES)
+        for f in (found if isinstance(found, list) else [])
+    )
+
+
 def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     """The packet for one run, from its ledger alone. No model call."""
     run_id = run_id or journal.parent.name
@@ -382,6 +407,10 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     capped = outcome is not None and outcome.detail.startswith(f"stopped: {AUDIT_UNRESOLVED}")
     unresolved = _unresolved(evidence) if capped and evidence is not None else []
     task = start.argv[1] if start is not None and len(start.argv) > 1 else ""
+    test_edits = _test_edits(start)
+    offer_test_edits = (
+        capped and test_edits is False and evidence is not None and _needs_a_test(evidence)
+    )
 
     # -- verdict: from the outcome span, and nothing else ---------------------
     unanswered = [q for q in questions if q.span_id not in answers]
@@ -520,6 +549,8 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
             if refusals
             else " The tier-0 guard refused nothing."
         )
+        if test_edits is not None:
+            refused_text += " Tests were editable." if test_edits else " Tests were read-only."
         rows.append(
             Row(
                 "scope",
@@ -666,6 +697,8 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
         header.append(f"branch {branch}")
     if evidence is not None:
         header.append(f"{_n(len(files), 'file')} changed")
+    if test_edits is not None:
+        header.append("tests editable" if test_edits else "tests read-only")
     header.append(f"{_n(len(proofs), 'proof')} · {_n(len(entries), 'ledger record')}")
     packet = Packet(
         run_id=run_id,
@@ -675,6 +708,8 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
         header=tuple(header),
         rows=tuple(rows),
         narrative=sentences,
+        test_edits=test_edits,
+        offer_test_edits=offer_test_edits,
         records={
             h: _display(e)
             for h in cited

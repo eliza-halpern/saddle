@@ -64,7 +64,7 @@ from saddle.tools import PREVIEWABLE, ToolContext, preview_for
 from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
 from saddle.web import tasks
-from saddle.web.tasks import TaskRun
+from saddle.web.tasks import SMALL_LANE_TEST_EDITS, TaskRun
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -293,7 +293,7 @@ class ChatServer:
         auditor: tasks.AuditorFactory | None = None,
         arm: Arm = "E+A+F",
         feed_auditor: FeedAuditorFactory = default_auditor,
-        allow_test_edits: bool = False,
+        allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
     ) -> None:
         self.store = store
         self.client_factory = client_factory
@@ -310,7 +310,7 @@ class ChatServer:
         self.feed_auditor = feed_auditor
         """Builds the feed's auditor (`feed.default_auditor`: the real one)."""
         self.allow_test_edits = allow_test_edits
-        """`saddle auto --allow-test-edits` for chat-started runs; off by default."""
+        """The confirm strip's default for "Allow test edits"; each run may override it."""
 
     def _live(self, session_id: str) -> Live:
         return self.live.setdefault(session_id, Live())
@@ -417,7 +417,7 @@ class ChatServer:
                     audit=audit,
                     arm=self.arm,
                     feed_auditor=self.feed_auditor,
-                    allow_test_edits=self.allow_test_edits,
+                    allow_test_edits=run.allow_test_edits,
                 )
             if recap is not None:
                 messages = self.store.load_messages(session_id)
@@ -441,7 +441,7 @@ def build_app(
     auditor: tasks.AuditorFactory | None = None,
     arm: Arm = "E+A+F",
     feed_auditor: FeedAuditorFactory = default_auditor,
-    allow_test_edits: bool = False,
+    allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
 ) -> ASGIApp:
     server = ChatServer(
         store,
@@ -701,6 +701,9 @@ def build_app(
             return JSONResponse({"error": "budgets must be numbers"}, status_code=400)
         if time_s <= 0 or token_budget <= 0:
             return JSONResponse({"error": "budgets must be positive"}, status_code=400)
+        allow_test_edits = body.get("allow_test_edits", server.allow_test_edits)
+        if not isinstance(allow_test_edits, bool):
+            return JSONResponse({"error": "allow_test_edits must be a boolean"}, status_code=400)
         store.get(sid)
         live = server._live(sid)
         with live.lock:
@@ -713,6 +716,7 @@ def build_app(
             task=text,
             time_budget_s=time_s,
             token_budget=token_budget,
+            allow_test_edits=allow_test_edits,
         )
         server.tasks[run.run_id] = run
         threading.Thread(target=server._run_task, args=(sid, run), daemon=True).start()
