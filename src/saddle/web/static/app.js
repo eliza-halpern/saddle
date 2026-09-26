@@ -545,6 +545,12 @@ function select(sessionId) {
   state.tools.clear();
   state.terminals.clear();
   localStorage.setItem("saddle.session", sessionId);
+  // Busy, the live task and the header pill belong to the session on
+  // screen: the new session's stream replays its own live run (app.events),
+  // so nothing of the last one -- not its stop button -- is carried over.
+  state.busy = false;
+  state.activeTask = null;
+  setStatus("idle");
   runSelected(sessionId);
   loadSessions();
   connect(sessionId);
