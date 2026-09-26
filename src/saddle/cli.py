@@ -49,6 +49,7 @@ from saddle.gates import (
     plan_retargets_reserved_files,
 )
 from saddle.journal import (
+    AUTO_START,
     JournalIssue,
     SpanRecord,
     attempt_sidecar_path,
@@ -1125,7 +1126,7 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
 
 
 def run_verify(journal: Path, *, stdout: IO[str]) -> int:
-    """Audit one journal: chain plus orphan rule, then its transcript."""
+    """Audit one journal: hashes, links and outcome span lists, then its transcript."""
     issues = verify_journal(journal)
     if issues:
         for issue in issues:
@@ -1134,9 +1135,20 @@ def run_verify(journal: Path, *, stdout: IO[str]) -> int:
     records = read_records(journal)
     spans = read_spans(journal)
     plans = read_plans(journal)
+    # Records are self-hashed, not chained (CHAIN, bb5b7e1): what verify
+    # establishes is every record's own hash, its parent links and, for an
+    # autonomous run, that its tool spans are exactly the list its outcome
+    # span seals. Say that, with the counts, rather than "chain verifies".
+    runs = sum(1 for span in spans if span.kind == "agent" and span.name == AUTO_START)
+    total = len(records) + len(spans) + len(plans)
+    lists = (
+        f"outcome span list intact ({runs} autonomous run(s))"
+        if runs
+        else "no outcome span list (no autonomous run)"
+    )
     stdout.write(
-        f"OK: {journal}: {len(records)} proof(s), {len(spans)} span(s), "
-        f"{len(plans)} plan(s), chain verifies\n"
+        f"OK: {journal}: ledger verifies: {total} records ({len(records)} proof(s), "
+        f"{len(spans)} span(s), {len(plans)} plan(s)), {lists}\n"
     )
     for plan in plans:
         stdout.write("".join(f"{line}\n" for line in render_plan(plan)))

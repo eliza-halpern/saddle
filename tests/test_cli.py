@@ -1984,7 +1984,10 @@ def test_run_verify_reports_ok_with_rerendered_transcript(tmp_path: Path) -> Non
     out = io.StringIO()
     assert run_verify(journal, stdout=out) == 0
     body = out.getvalue()
-    assert body.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), 0 plan(s), chain verifies\n\n")
+    assert body.startswith(
+        f"OK: {journal}: ledger verifies: 2 records (1 proof(s), 1 span(s), 0 plan(s)), "
+        "no outcome span list (no autonomous run)\n\n"
+    )
     assert "# Saddle slice transcript\n" in body
     assert "- Verdict: PASS\n" in body
     assert "## Node n1\n" in body
@@ -1998,7 +2001,8 @@ def test_run_verify_missing_journal_is_fresh(tmp_path: Path) -> None:
     out = io.StringIO()
     assert run_verify(journal, stdout=out) == 0
     assert out.getvalue().startswith(
-        f"OK: {journal}: 0 proof(s), 0 span(s), 0 plan(s), chain verifies\n\n"
+        f"OK: {journal}: ledger verifies: 0 records (0 proof(s), 0 span(s), 0 plan(s)), "
+        "no outcome span list (no autonomous run)\n\n"
     )
     assert "- Proven nodes: 0\n" in out.getvalue()
 
@@ -2041,7 +2045,10 @@ def test_main_verify_needs_no_key(
     monkeypatch.delenv("VLLM_API_KEY", raising=False)
     assert main(["verify", str(journal)]) == 0
     out = capsys.readouterr().out
-    assert out.startswith(f"OK: {journal}: 1 proof(s), 1 span(s), 0 plan(s), chain verifies\n\n")
+    assert out.startswith(
+        f"OK: {journal}: ledger verifies: 2 records (1 proof(s), 1 span(s), 0 plan(s)), "
+        "no outcome span list (no autonomous run)\n\n"
+    )
 
 
 def test_main_verify_defaults_to_repo_journal(
@@ -2052,7 +2059,9 @@ def test_main_verify_defaults_to_repo_journal(
     monkeypatch.chdir(tmp_path)
     out = io.StringIO()
     assert main(["verify"], stdout=out) == 0
-    assert out.getvalue().startswith("OK: .saddle/proofs.jsonl: 1 proof(s)")
+    assert out.getvalue().startswith(
+        "OK: .saddle/proofs.jsonl: ledger verifies: 2 records (1 proof(s)"
+    )
 
 
 def test_verify_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
@@ -3117,7 +3126,7 @@ def test_run_verify_prints_the_plan_a_run_sealed(tmp_path: Path) -> None:
     assert run_verify(tmp_path / "proofs.jsonl", stdout=out) == 0
     body = out.getvalue()
     assert "1 proof(s), " in body
-    assert ", 1 plan(s), chain verifies\n" in body
+    assert ", 1 plan(s)), no outcome span list (no autonomous run)\n" in body
     assert "plan: 1 node(s)\n  n1  impl  budget=low  ctx=8000  targets: n.py\n" in body
 
 

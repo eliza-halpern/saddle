@@ -121,7 +121,14 @@ def test_an_untouched_run_verifies_and_its_list_is_every_tool_span_in_order(repo
                      "auto:finished"]  # fmt: skip
     code, text = verify_text(result.journal)
     assert (code, verify_journal(result.journal)) == (0, [])
-    assert "chain verifies" in text
+    proofs = sum(1 for row in rows if row["record_type"] == "proof")
+    # INTEG-4: 6 listed spans + USAGE's 4 unlisted auto:spend spans = 10; plus 1 proof.
+    assert (proofs, len(rows)) == (1, 11)
+    assert text.startswith(
+        f"OK: {result.journal}: ledger verifies: 11 records (1 proof(s), "
+        "10 span(s), 0 plan(s)), outcome span list intact (1 autonomous run(s))\n"
+    )
+    assert "chain verifies" not in text
 
 
 def two_runs(repo: Path) -> Path:
@@ -312,3 +319,27 @@ def test_a_journal_written_before_the_check_is_held_to_its_list(tmp_path: Path) 
     found = codes(copy / "proofs.jsonl")
     assert list(found) == ["span-missing"]
     assert gone["record_hash"] in found["span-missing"]
+
+
+def test_verify_counts_every_record_and_every_autonomous_run(repo: Path) -> None:
+    """POLISH-1: the OK line's counts are the journal's, not constants."""
+    journal = two_runs(repo)
+    code, text = verify_text(journal)
+    total = len(lines(journal))
+    assert code == 0
+    assert f": ledger verifies: {total} records (" in text
+    assert "outcome span list intact (2 autonomous run(s))\n" in text
+
+
+def test_a_deleted_span_prints_no_ok_line_and_its_issue_names_the_span(repo: Path) -> None:
+    """POLISH-1 known-bad: the issue line leads with the code and names the hash."""
+    result = run(repo)
+    rows = lines(result.journal)
+    gone = rows.pop(index_of(rows, "read_file"))
+    write(result.journal, rows)
+    code, text = verify_text(result.journal)
+    assert code == 1
+    assert "verifies" not in text
+    issue = [line for line in text.splitlines() if line.startswith("span-missing@")]
+    assert len(issue) == 1
+    assert gone["record_hash"] in issue[0]

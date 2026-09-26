@@ -21,3 +21,4 @@ dist/
 .proofs/
 *.jsonl
 !tests/fixtures/*.jsonl
+!tests/fixtures/question_run/*.jsonl

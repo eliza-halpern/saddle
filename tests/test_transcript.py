@@ -53,7 +53,7 @@ def test_render_pass_transcript_golden() -> None:
         "\n"
         "- Path: /tmp/proofs.jsonl\n"
         "- Proven nodes: 1\n"
-        "- Issues: none (chain verifies)\n"
+        "- Issues: none (ledger verifies)\n"
     )
 
 
@@ -115,7 +115,7 @@ def test_render_journal_transcript_carries_record_attempts() -> None:
     )
     text = render_journal_transcript([record], [], "/tmp/proofs.jsonl")
     assert "- Attempts: 2\n" in text
-    assert "- Issues: none (chain verifies)\n" in text
+    assert "- Issues: none (ledger verifies)\n" in text
 
 
 def _sealed(node_id: str, passed: bool, parents: list[str], thinking: str = "") -> ProofRecord:
@@ -178,7 +178,7 @@ def test_render_journal_transcript_golden() -> None:
         "\n"
         "- Path: /tmp/proofs.jsonl\n"
         "- Proven nodes: 2\n"
-        "- Issues: none (chain verifies)\n"
+        "- Issues: none (ledger verifies)\n"
     )
 
 
@@ -244,7 +244,7 @@ def test_render_timeline_golden() -> None:
         "\n"
         "- Path: j\n"
         "- Proven nodes: 1\n"
-        "- Issues: none (chain verifies)\n"
+        "- Issues: none (ledger verifies)\n"
     )
 
 
