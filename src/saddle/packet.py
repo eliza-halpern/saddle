@@ -373,6 +373,16 @@ def _test_edits(start: SpanRecord | None) -> bool | None:
     return {"allowed": True, "refused": False}.get(word)
 
 
+UNANSWERED: Final = "unanswered"
+"""`engine.UNANSWERED`: an answer span sealed with no reply, its default taken."""
+
+
+def _decided(question: SpanRecord, answer: SpanRecord) -> str:
+    if answer.argv[2:3] == [UNANSWERED]:
+        return f"You were asked: {question.detail} → no answer came: {answer.detail}"
+    return f"You were asked: {question.detail} → you answered: {answer.detail}"
+
+
 def _needs_a_test(evidence: dict[str, Any]) -> bool:
     found = evidence.get("unresolved_findings")
     return any(
@@ -408,8 +418,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     unresolved = _unresolved(evidence) if capped and evidence is not None else []
     task = start.argv[1] if start is not None and len(start.argv) > 1 else ""
     test_edits = _test_edits(start)
+    granted = evidence is not None and evidence.get("test_edits_granted") is True
     offer_test_edits = (
-        capped and test_edits is False and evidence is not None and _needs_a_test(evidence)
+        capped
+        and test_edits is False
+        and not granted
+        and evidence is not None
+        and _needs_a_test(evidence)
     )
 
     # -- verdict: from the outcome span, and nothing else ---------------------
@@ -444,11 +459,7 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     rows: list[Row] = []
 
     # -- contract ---------------------------------------------------------------
-    decided = tuple(
-        f"You were asked: {q.detail} → you answered: {answers[q.span_id].detail}"
-        for q in questions
-        if q.span_id in answers
-    )
+    decided = tuple(_decided(q, answers[q.span_id]) for q in questions if q.span_id in answers)
     if decided:
         rows.append(
             Row(
@@ -550,7 +561,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
             else " The tier-0 guard refused nothing."
         )
         if test_edits is not None:
-            refused_text += " Tests were editable." if test_edits else " Tests were read-only."
+            refused_text += (
+                " Tests were editable."
+                if test_edits
+                else " Tests were read-only until you allowed edits during the run."
+                if granted
+                else " Tests were read-only."
+            )
         rows.append(
             Row(
                 "scope",
@@ -698,7 +715,13 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     if evidence is not None:
         header.append(f"{_n(len(files), 'file')} changed")
     if test_edits is not None:
-        header.append("tests editable" if test_edits else "tests read-only")
+        header.append(
+            "tests editable"
+            if test_edits
+            else "tests editable after you allowed it"
+            if granted
+            else "tests read-only"
+        )
     header.append(f"{_n(len(proofs), 'proof')} · {_n(len(entries), 'ledger record')}")
     packet = Packet(
         run_id=run_id,
