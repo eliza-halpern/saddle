@@ -7,6 +7,7 @@ bounded recompile, plan confirmation, then the schedule-gate-seal path.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import sys
@@ -14,6 +15,7 @@ import tempfile
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import IO, Final
 
@@ -34,6 +36,7 @@ from saddle.evidence import (
     run_capture,
 )
 from saddle.gates import (
+    TEST_FILE_PATTERNS,
     plan_prescribes_deletion,
     plan_restates_the_gate,
     plan_retargets_reserved_files,
@@ -53,6 +56,7 @@ from saddle.slice import (
     DEADLINE_EXIT,
     SURVIVOR_SAMPLES,
     TASK_FIRST_PREAMBLE,
+    TEST_SIGNATURES_HEADER,
     ReplanFailedError,
     TestDrawer,
     run_slice,
@@ -506,11 +510,98 @@ def _shown_files(files: Sequence[str]) -> str:
     return shown
 
 
-def _file_context(node: Node, contents: Mapping[str, str]) -> str:
-    """File contents truncated to the node's own context ceiling (T3-4 binding)."""
+def _is_test_path(name: str) -> bool:
+    """True when pytest would collect `name` (the gates' own TEST_FILE_PATTERNS)."""
+    base = name.rsplit("/", 1)[-1]
+    return any(fnmatch(base, pattern) for pattern in TEST_FILE_PATTERNS)
+
+
+def _decorator_line(decorator: ast.expr) -> str:
+    """A decorator by name only; a parametrize keeps its argnames, ids and case count.
+
+    Arguments are dropped: they are where a test file keeps its literal data
+    (`from_regex(r"...")`, parametrize values), which P2-2a withholds.
+    """
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    name = ast.unparse(target)
+    if not (isinstance(decorator, ast.Call) and name.endswith("parametrize")):
+        return f"@{name}"
+    args = decorator.args
+    argnames = args[0].value if args and isinstance(args[0], ast.Constant) else "?"
+    cases = args[1] if len(args) > 1 else None
+    count = len(cases.elts) if isinstance(cases, ast.List | ast.Tuple) else "?"
+    line = f"@{name}({argnames!r}, <{count} cases>"
+    for keyword in decorator.keywords:
+        if keyword.arg != "ids":
+            continue
+        ids = keyword.value
+        if isinstance(ids, ast.List | ast.Tuple) and all(
+            isinstance(item, ast.Constant) and isinstance(item.value, str) for item in ids.elts
+        ):
+            line += f", ids={[item.value for item in ids.elts]!r}"
+    return line + ")"
+
+
+def _test_signature(function: ast.FunctionDef | ast.AsyncFunctionDef, indent: str) -> str:
+    """One test: decorators by name, `def name(params)`, and how many asserts it makes."""
+    params = [arg.arg for arg in (*function.args.posonlyargs, *function.args.args)]
+    if function.args.vararg:
+        params.append("*" + function.args.vararg.arg)
+    params.extend(arg.arg for arg in function.args.kwonlyargs)
+    if function.args.kwarg:
+        params.append("**" + function.args.kwarg.arg)
+    asserts = sum(isinstance(node, ast.Assert) for node in ast.walk(function))
+    lines = [indent + _decorator_line(item) for item in function.decorator_list]
+    prefix = "async def" if isinstance(function, ast.AsyncFunctionDef) else "def"
+    signature = f"{prefix} {function.name}({', '.join(params)})"
+    lines.append(f"{indent}{signature}: ...  # {asserts} assert(s)")
+    return "\n".join(lines)
+
+
+def render_test_signatures(source: str) -> str:
+    """A test module reduced to what it asks for, without how (P2-2a).
+
+    Kept: imports (they name the code under test), each `test_*` function
+    and `Test*` class method with its parameter names, its decorators by
+    name, a parametrize's argnames, ids and case count, and its assert
+    count. Dropped: bodies, docstrings, parameter defaults and annotations,
+    decorator arguments, module-level data. M2-A: 13 of 18 first drafts
+    copied the visible test's `from_regex` pattern into the validator.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return f"{TEST_SIGNATURES_HEADER}\n(test file did not parse; nothing shown)"
+    lines = [TEST_SIGNATURES_HEADER]
+    for statement in tree.body:
+        if isinstance(statement, ast.Import | ast.ImportFrom):
+            lines.append(ast.unparse(statement))
+        elif isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            if statement.name.startswith("test"):
+                lines.append(_test_signature(statement, ""))
+        elif isinstance(statement, ast.ClassDef) and statement.name.startswith("Test"):
+            lines.append(f"class {statement.name}:")
+            lines.extend(
+                _test_signature(item, "    ")
+                for item in statement.body
+                if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+                and item.name.startswith("test")
+            )
+    return "\n".join(lines)
+
+
+def _file_context(node: Node, contents: Mapping[str, str], *, test_bodies: bool = True) -> str:
+    """File contents truncated to the node's own context ceiling (T3-4 binding).
+
+    With `test_bodies=False` each test file shows only `render_test_signatures` (P2-2a).
+    """
     if "read_file" not in node.execution_constraints.allowed_tools:
         return CONTENTS_WITHHELD
-    context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
+    context = "\n\n".join(
+        f"--- {name} ---\n"
+        + (text if test_bodies or not _is_test_path(name) else render_test_signatures(text))
+        for name, text in contents.items()
+    )
     budget = min(node.execution_constraints.max_context_tokens * CHARS_PER_TOKEN, MAX_CONTEXT_CHARS)
     if len(context) > budget:
         context = context[:budget] + "\n[file context truncated]"
@@ -544,6 +635,8 @@ def build_task_first_prompt(
     that sentence back to seal the attempt's `prompt_shape`. No
     requirement ids, literals, gate command or working rules: those are
     the retry prompt's, where a gate has already said what was wrong.
+    Test files show their names and signatures, not their bodies (P2-2a):
+    a visible `from_regex` pattern was copied into 13 of 18 M2-A drafts.
     """
     rules = EDIT_RULES if emission == "edit" else WHOLE_FILE_RULES
     return f"""{TASK_FIRST_PREAMBLE}
@@ -556,7 +649,7 @@ Repo files:
 {_shown_files(files)}
 
 File contents:
-{_file_context(node, contents)}
+{_file_context(node, contents, test_bodies=False)}
 
 {rules}{_scope_line(node)}
 Output ONLY the file sections, no commentary.

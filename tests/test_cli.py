@@ -46,6 +46,7 @@ from saddle.cli import (
     diff_budget,
     main,
     render_dag_plan,
+    render_test_signatures,
     run_dag,
     run_doctor,
     run_explain,
@@ -78,7 +79,9 @@ from saddle.slice import (
     PROPOSAL_SAMPLES,
     SURVIVOR_SAMPLES,
     TASK_FIRST_PREAMBLE,
+    TEST_SIGNATURES_HEADER,
     format_attempt_failure,
+    prompt_shape,
 )
 from saddle.vllm import (
     DEFAULT_BASE_URL,
@@ -4111,6 +4114,139 @@ def test_task_first_prompt_withholds_contents_without_read_file() -> None:
     assert "(no tracked files)" in bare
 
 
+P2_2A_TEST_FILE: Final = '''"""Covers REQ-001: DOCSTRING-LITERAL-777."""
+
+import pytest
+from hypothesis import given
+from hypothesis.strategies import from_regex
+
+from validators import is_valid_code
+
+SAMPLES = ["MODULE-DATA-555"]
+
+
+def test_accepts_three_digits():
+    """REQ-001: '123' shall return True."""
+    assert is_valid_code("LITERAL-123") is True
+    assert is_valid_code("LITERAL-456") is True
+
+
+@pytest.mark.parametrize(
+    "text", ["PARAM-DATA-1", "PARAM-DATA-2", "PARAM-DATA-3"], ids=["short", "alpha", "blank"]
+)
+def test_rejects(text, flag="DEFAULT-DATA-9"):
+    assert is_valid_code(text) is False
+
+
+@given(code=from_regex(r"[0-9]{3}REGEX-LITERAL", fullmatch=True))
+def test_property_accepts(code):
+    assert is_valid_code(code) is True
+
+
+class TestEdges:
+    def test_empty(self):
+        assert not is_valid_code("")
+'''
+# Every piece of literal data the file carries: bodies, docstrings,
+# module data, parametrize values, parameter defaults, decorator arguments.
+P2_2A_LITERALS: Final = (
+    "DOCSTRING-LITERAL-777",
+    "MODULE-DATA-555",
+    "LITERAL-123",
+    "LITERAL-456",
+    "PARAM-DATA-1",
+    "DEFAULT-DATA-9",
+    "REGEX-LITERAL",
+    "[0-9]{3}",
+    "is True",
+)
+
+
+def _p2_2a_kwargs(failure: str | None = None) -> dict[str, Any]:
+    return {
+        "task": P2_1_TASK,
+        "node": _p2_1_node(),
+        "files": ["validators.py", "test_validators.py"],
+        "contents": {"validators.py": P2_1_BODY, "test_validators.py": P2_2A_TEST_FILE},
+        "failure": failure,
+    }
+
+
+def test_first_impl_prompt_shows_test_signatures_not_bodies() -> None:
+    """P2-2a known-good: the first impl attempt names every red test with
+    its parameters, parametrize ids and case count, and assert count, and
+    carries none of the test file's literal data (M2-A: 13/18 drafts copied
+    the visible `from_regex` pattern). The source file's body stays whole.
+    Known-bad is the next test: the retry prompt shows the body."""
+    prompt = build_worker_prompt(**_p2_2a_kwargs())
+    for present in (
+        "--- test_validators.py ---\n" + TEST_SIGNATURES_HEADER + "\n",
+        "from validators import is_valid_code",
+        "def test_accepts_three_digits(): ...  # 2 assert(s)",
+        "@pytest.mark.parametrize('text', <3 cases>, ids=['short', 'alpha', 'blank'])",
+        "def test_rejects(text, flag): ...  # 1 assert(s)",
+        "@given\ndef test_property_accepts(code): ...  # 1 assert(s)",
+        "class TestEdges:\n    def test_empty(self): ...  # 1 assert(s)",
+        "--- validators.py ---\n" + P2_1_BODY,
+    ):
+        assert present in prompt, present
+    for absent in P2_2A_LITERALS:
+        assert absent not in prompt, absent
+    assert prompt_shape(prompt) == "task-first/sigs"
+
+
+def test_retry_prompts_still_show_test_bodies() -> None:
+    """P2-2a known-bad for the test above: retries are unchanged, so the
+    retry, repair and recovery prompts carry every literal the first
+    attempt withheld, and none is sealed as task-first/sigs."""
+    retry = build_worker_prompt(**_p2_2a_kwargs("FAILURE-TEXT-9"))
+    kwargs = _p2_2a_kwargs("FAILURE-TEXT-9")
+    repair = build_repair_prompt(**kwargs, plan="1. fix")
+    recovery = build_recovery_plan_prompt(**kwargs)
+    for prompt in (retry, repair, recovery):
+        for present in P2_2A_LITERALS:
+            assert present in prompt, present
+        assert TEST_SIGNATURES_HEADER not in prompt
+        assert prompt_shape(prompt) == "structured"
+
+
+def test_test_signatures_edge_shapes_leak_nothing() -> None:
+    """Signature rendering over the shapes the fixture above does not use:
+    ids that are not a literal string list, other parametrize keywords,
+    star parameters, async tests, and non-test helpers (dropped whole)."""
+    source = (
+        "import pytest\n"
+        "def helper():\n    return 'HELPER-DATA'\n"
+        "@pytest.mark.parametrize('x', CASES, indirect=True, ids=str)\n"
+        "@pytest.mark.parametrize('y', [1, 2], ids=[1, 2])\n"
+        "def test_star(*args, k='KW-DATA', **kwargs):\n    assert 1\n"
+        "async def test_async():\n    pass\n"
+        "class TestX:\n    def setup_method(self):\n        self.v = 'SETUP-DATA'\n"
+    )
+    shown = render_test_signatures(source)
+    assert shown.splitlines() == [
+        TEST_SIGNATURES_HEADER,
+        "import pytest",
+        "@pytest.mark.parametrize('x', <? cases>)",
+        "@pytest.mark.parametrize('y', <2 cases>)",
+        "def test_star(*args, k, **kwargs): ...  # 1 assert(s)",
+        "async def test_async(): ...  # 0 assert(s)",
+        "class TestX:",
+    ]
+
+
+def test_test_signatures_survive_an_unparsable_test_file() -> None:
+    """A test file that does not parse shows nothing of itself, not its body."""
+    prompt = build_worker_prompt(
+        task="T",
+        node=_p2_1_node(),
+        files=["test_v.py"],
+        contents={"test_v.py": "def test_x(:\n    SECRET-BODY\n"},
+    )
+    assert "SECRET-BODY" not in prompt
+    assert "(test file did not parse; nothing shown)" in prompt
+
+
 def test_run_seals_prompt_shape_per_attempt(tmp_path: Path) -> None:
     """P2-1 Contract D through the real caller: `saddle run`'s propose sends
     the task-first prompt on attempt 1 of an impl node and the structured
@@ -4135,4 +4271,9 @@ def test_run_seals_prompt_shape_per_attempt(tmp_path: Path) -> None:
     journal = tmp_path / "proofs.jsonl"
     agents = [s for s in read_spans(journal) if s.kind == "agent" and s.name == "worker:n1"]
     shapes = [_sidecar(journal, span)["prompt_shape"] for span in agents]
-    assert shapes == ["task-first", "structured"]
+    assert shapes == ["task-first/sigs", "structured"]
+    # P2-2a through the real caller: test_n.py's body is withheld on
+    # attempt 1 and shown again on the repair attempt.
+    assert "assert f() == 2" not in _prompt(diff_calls[0])
+    assert "def test_f_returns_two(): ...  # 1 assert(s)" in _prompt(diff_calls[0])
+    assert "assert f() == 2" in _prompt(diff_calls[-1])

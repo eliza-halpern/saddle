@@ -5119,3 +5119,14 @@ def test_prompt_shape_is_read_off_the_prompt_start() -> None:
         "structured"
     )
     assert slice_module.prompt_shape("") == "structured"
+
+
+def test_prompt_shape_reads_task_first_sigs_off_a_test_file_entry() -> None:
+    """P2-2a: a task-first prompt whose test file entry opens with the
+    signatures header is task-first/sigs. Known-bad: the header outside a
+    file entry, or in a prompt without the preamble, does not count."""
+    head = slice_module.TASK_FIRST_PREAMBLE + "\n\nFile contents:\n"
+    header = slice_module.TEST_SIGNATURES_HEADER
+    assert slice_module.prompt_shape(head + f"--- test_v.py ---\n{header}\n") == ("task-first/sigs")
+    assert slice_module.prompt_shape(head + f"{header}\n") == "task-first"
+    assert slice_module.prompt_shape(f"Task: x\n--- test_v.py ---\n{header}\n") == "structured"

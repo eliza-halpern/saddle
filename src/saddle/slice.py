@@ -824,13 +824,27 @@ TASK_FIRST_PREAMBLE: Final = (
 """The opening line of the task-first worker prompt (P2-1), and its mark."""
 
 
+TEST_SIGNATURES_HEADER: Final = "[test bodies withheld: names, signatures and assert counts only]"
+"""The first line of a test file's entry in the task-first/sigs prompt (P2-2a), and its mark."""
+
+
 def prompt_shape(prompt: str) -> str:
     """Which worker prompt a draw came from, read off the prompt itself (P2-1).
 
     Read from the text the call sent, not from the caller's intent, so the
-    sealed field cannot say "task-first" about a draw that was not.
+    sealed field cannot say "task-first" about a draw that was not. A
+    task-first prompt that replaced a test file's body with its signatures
+    carries the header directly under that file's `--- name ---` line, and
+    reads "task-first/sigs" (P2-2a); one that showed every body reads
+    "task-first". The slash is load-bearing: the sidecar passes through
+    `journal.redact_secrets`, whose `sk-[A-Za-z0-9_-]{8,}` rule turns
+    "task-first-sigs" into "ta***".
     """
-    return "task-first" if prompt.startswith(TASK_FIRST_PREAMBLE) else "structured"
+    if not prompt.startswith(TASK_FIRST_PREAMBLE):
+        return "structured"
+    if f" ---\n{TEST_SIGNATURES_HEADER}\n" in prompt:
+        return "task-first/sigs"
+    return "task-first"
 
 
 def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
