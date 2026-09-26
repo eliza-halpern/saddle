@@ -1,6 +1,6 @@
 // Drives the chat page in headless Chrome over CDP to read a finished run's
 // packet card: the summary band, the folds, and the action row (View diff,
-// Merge, Discard, Continue in chat). Used by tests/test_packet_ui.py; node
+// Merge, Discard, Ask about this run). Used by tests/test_packet_ui.py; node
 // >= 22 and Chrome only. No model: the run is seeded by the test.
 //
 // usage: node packet_cdp.mjs <base> <sid> <read|diff|merge|merge-cancel|discard|chat> [shot-dir] [shot-prefix] [width]
