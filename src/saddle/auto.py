@@ -20,14 +20,14 @@ from __future__ import annotations
 import subprocess
 import tomllib
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Final
 
 from saddle.engine import AutoRun, RunBudget, TurnOptions, run_turn
-from saddle.events import Event
+from saddle.events import Event, Question
 from saddle.journal import append_span, build_span
 from saddle.tools import FINISH_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
@@ -130,6 +130,16 @@ def create_worktree(repo: Path, run_id: str) -> tuple[Path, str]:
     return worktree, branch
 
 
+def ledger_path(root: Path, run_id: str) -> Path:
+    """Where a run's ledger lives: outside its worktree, beside the others."""
+    return root / ".saddle" / "runs" / run_id / "proofs.jsonl"
+
+
+def repo_root(repo: Path) -> Path:
+    """The top of the git checkout `repo` is in (an `AutoError` if none)."""
+    return Path(_git(repo.resolve(), "rev-parse", "--show-toplevel").strip())
+
+
 def changed_files(worktree: Path) -> list[str]:
     """Paths the run changed, added or deleted, relative to the worktree."""
     out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "-z")
@@ -141,13 +151,20 @@ def run_auto(
     client: VllmClient,
     *,
     on_event: Callable[[Event], None] | None = None,
+    audit: Callable[[str, str, str], Sequence[Event]] | None = None,
+    answer: Callable[[Question], str | None] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> AutoResult:
-    """Run one task to `finish` or a budget, then commit what it left."""
+    """Run one task to `finish` or a budget, then commit what it left.
+
+    `audit` and `answer` are the auditor seam (`engine.AutoRun`); `cancel`
+    is the chat's stop button. The CLI passes none of them.
+    """
     repo = options.repo.resolve()
     run_id = options.run_id or uuid.uuid4().hex[:12]
     worktree, branch = create_worktree(repo, run_id)
     root = worktree.parent.parent.parent
-    journal = root / ".saddle" / "runs" / run_id / "proofs.jsonl"
+    journal = ledger_path(root, run_id)
     start = build_span(
         node_id="chat#1",
         argv=["auto:start", options.task],
@@ -165,6 +182,8 @@ def run_auto(
         ),
         run_span=start.span_id,
         changed_files=lambda: changed_files(worktree),
+        audit=audit,
+        answer=answer,
     )
     roots = None if options.allow_test_edits else guarded_test_roots(worktree)
     tests = (
@@ -185,7 +204,7 @@ def run_auto(
     )
     context = ToolContext(workdir=worktree, protected_tests=roots, syntax_guard=True)
     events: Iterator[Event] = run_turn(
-        client, [], options.task, turn_options, turn=1, context=context
+        client, [], options.task, turn_options, turn=1, context=context, cancel=cancel
     )
     for event in events:
         if on_event is not None:

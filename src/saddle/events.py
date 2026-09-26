@@ -154,3 +154,96 @@ class SessionInfo(Event):
     context_limit: int = 175_000
     messages: list[dict[str, Any]] = field(default_factory=list)
     kind: str = "session.info"
+
+
+# -- an autonomous run, seen from the chat ------------------------------------
+#
+# The four below are what the engine and an auditor emit *during* a run, and
+# what the chat's task card is drawn from. None of them is evidence: every one
+# that matters is also sealed in the run's ledger, and the packet is compiled
+# from the ledger, never from these.
+
+
+@dataclass(frozen=True)
+class RunProgress(Event):
+    """What an autonomous run has spent so far, after each round."""
+
+    elapsed_s: float
+    time_budget_s: float
+    tokens: int
+    token_budget: int
+    kind: str = "run.progress"
+
+
+@dataclass(frozen=True)
+class AuditFinding(Event):
+    """One auditor verdict on the tree, sealed as an `audit:<gate>` span.
+
+    The seam for the auditor lane: nothing in this branch computes one; an
+    auditor hook passed to `run_auto` may return them after any tool call.
+    """
+
+    gate: str
+    ok: bool
+    detail: str
+    span_id: str = ""
+    kind: str = "audit.finding"
+
+
+@dataclass(frozen=True)
+class Question(Event):
+    """The run halts on something only the user can decide (rule D)."""
+
+    id: str
+    text: str
+    options: list[str] = field(default_factory=list)
+    span_id: str = ""
+    kind: str = "question"
+
+
+@dataclass(frozen=True)
+class Answered(Event):
+    """The user's answer, sealed as an `answer` span chained to its question."""
+
+    id: str
+    text: str
+    span_id: str = ""
+    kind: str = "question.answered"
+
+
+# -- the chat's envelope around a run -----------------------------------------
+
+
+@dataclass(frozen=True)
+class TaskState(Event):
+    """A task card's state: running, needs_you, finished, stopped, failed."""
+
+    run_id: str
+    state: str
+    task: str = ""
+    detail: str = ""
+    time_budget_s: float = 0.0
+    token_budget: int = 0
+    question: dict[str, Any] | None = None
+    kind: str = "task.state"
+
+
+@dataclass(frozen=True)
+class TaskEvent(Event):
+    """One engine event of a run, wrapped so the chat's own turn ignores it."""
+
+    run_id: str
+    event: dict[str, Any]
+    kind: str = "task.event"
+
+
+@dataclass(frozen=True)
+class TaskLine(Event):
+    """One sealed ledger entry of a run, as a session line (T5-6)."""
+
+    run_id: str
+    mark: str
+    text: str
+    cite: str
+    tone: str = ""
+    kind: str = "task.line"
