@@ -48,7 +48,7 @@ from saddle.journal import (
     write_attempt_sidecar,
 )
 from saddle.labels import label_for
-from saddle.memory import CHARS_PER_TOKEN, compact, estimate_tokens
+from saddle.memory import ASK_USER, CHARS_PER_TOKEN, REREAD, compact, estimate_tokens
 from saddle.tools import (
     CHECK_TOOL,
     FINISH_TOOL,
@@ -500,10 +500,6 @@ def run_turn(
         # no turn to undo.
         ctx.undo.begin(turn, _last_user_index(messages))
 
-    dropped, summary = compact(messages, limit_tokens=options.compaction_limit())
-    if dropped:
-        yield Compaction(dropped_messages=dropped, kept_messages=len(messages), summary=summary)
-
     node_id = f"chat#{turn}"
     auto = options.auto
     if auto is not None:
@@ -527,6 +523,16 @@ def run_turn(
                 if not stop():
                     yield from _offer_budget(auto, options.journal, node_id)
             taken += 1
+            dropped, summary = compact(
+                messages,
+                limit_tokens=options.compaction_limit(),
+                pin_task=auto is not None,
+                ask_hint=REREAD if auto is not None else ASK_USER,
+            )
+            if dropped:
+                yield Compaction(
+                    dropped_messages=dropped, kept_messages=len(messages), summary=summary
+                )
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []
