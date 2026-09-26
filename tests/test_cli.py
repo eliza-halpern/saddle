@@ -1693,6 +1693,14 @@ def test_run_parser_defaults_and_overrides() -> None:
         "survivor_samples": SURVIVOR_SAMPLES,
         "emission": "whole-file",
         "yes": False,
+        "rule_d": False,
+        "rule_d_store": None,
+        "rule_d_set_id": None,
+        "rule_d_table": "fix8",
+        "rule_d_book": None,
+        "rule_d_census_budget": 50,
+        "rule_d_verdict_budget": 5,
+        "rule_d_retry": False,
     }
     full = parser.parse_args(
         [
@@ -1740,6 +1748,14 @@ def test_run_parser_defaults_and_overrides() -> None:
         "survivor_samples": SURVIVOR_SAMPLES,
         "emission": "edit",
         "yes": True,
+        "rule_d": False,
+        "rule_d_store": None,
+        "rule_d_set_id": None,
+        "rule_d_table": "fix8",
+        "rule_d_book": None,
+        "rule_d_census_budget": 50,
+        "rule_d_verdict_budget": 5,
+        "rule_d_retry": False,
     }
 
 
@@ -1763,7 +1779,13 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                  [--worker-effort {none,low,medium,xhigh}]\n"
         "                  [--deadline DEADLINE]\n"
         "                  [--survivor-effort {none,low,medium,xhigh}]\n"
-        "                  [--survivor-samples SURVIVOR_SAMPLES] [--yes]\n"
+        "                  [--survivor-samples SURVIVOR_SAMPLES] [--yes] [--rule-d]\n"
+        "                  [--rule-d-store RULE_D_STORE]\n"
+        "                  [--rule-d-set-id RULE_D_SET_ID]\n"
+        "                  [--rule-d-table RULE_D_TABLE] [--rule-d-book RULE_D_BOOK]\n"
+        "                  [--rule-d-census-budget RULE_D_CENSUS_BUDGET]\n"
+        "                  [--rule-d-verdict-budget RULE_D_VERDICT_BUDGET]\n"
+        "                  [--rule-d-retry]\n"
         "                  task\n"
         "\n"
         "positional arguments:\n"
@@ -1803,6 +1825,22 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --survivor-samples SURVIVOR_SAMPLES\n"
         "                        Candidate test draws per survivor round.\n"
         "  --yes                 Skip the plan confirmation.\n"
+        "  --rule-d              Judge each impl tree with rule D against a sealed\n"
+        "                        reference store (default off).\n"
+        "  --rule-d-store RULE_D_STORE\n"
+        "                        Reference store directory (S1-c format).\n"
+        "  --rule-d-set-id RULE_D_SET_ID\n"
+        "                        The store's sealed set id (sha256 of SHA256SUMS).\n"
+        "  --rule-d-table RULE_D_TABLE\n"
+        "                        Answers table whose inputs rule D checks.\n"
+        "  --rule-d-book RULE_D_BOOK\n"
+        "                        Answer book (JSON lines); default: an empty book.\n"
+        "  --rule-d-census-budget RULE_D_CENSUS_BUDGET\n"
+        "                        Plan-time split classes allowed before the run stops.\n"
+        "  --rule-d-verdict-budget RULE_D_VERDICT_BUDGET\n"
+        "                        Asks per tree allowed before the node halts.\n"
+        "  --rule-d-retry        Retry a refused tree with its misses in the repair\n"
+        "                        prompt (default: the node fails).\n"
     )
 
 

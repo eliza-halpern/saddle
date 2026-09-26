@@ -24,6 +24,7 @@ from rich.console import Console
 
 from saddle import __version__, audit
 from saddle.anchor import anchor_issues, default_anchor_repo
+from saddle.answer_book import AnswersError
 from saddle.audit import AuditError, AuditResult, audit_tree
 from saddle.auditor import TIER2_MODES, Auditor, AuditorConfig, Findings, Tier2Mode
 from saddle.auto import (
@@ -64,9 +65,24 @@ from saddle.journal import (
     verify_journal,
 )
 from saddle.packet import compile_packet, render_packet_text
+from saddle.refstore import ReferenceSetError
+from saddle.rule_d_run import (
+    CENSUS_BUDGET,
+    VERDICT_BUDGET,
+    Loaded,
+    RuleDConfig,
+    RuleDError,
+    render_census,
+)
+from saddle.rule_d_run import census as rule_d_census
+from saddle.rule_d_run import hook as rule_d_hook
+from saddle.rule_d_run import load as rule_d_load
+from saddle.rule_d_run import plan_record as rule_d_plan_record
+from saddle.rule_d_run import seal_plan as rule_d_seal_plan
 from saddle.sessions import DEFAULT_WORKDIR
 from saddle.slice import (
     DEADLINE_EXIT,
+    QUESTION_EXIT,
     SURVIVOR_SAMPLES,
     TASK_FIRST_PREAMBLE,
     ReplanFailedError,
@@ -222,6 +238,57 @@ class RunOptions:
     # costs one line. The prompt and the grammar have to agree, so both are
     # chosen from this single field rather than set independently.
     emission: str = "whole-file"
+    # Rule D (P2-3): off unless `--rule-d`. When off, nothing below reads a
+    # store, prints a census or calls rule D, so the run is the run it was.
+    rule_d: RuleDConfig | None = None
+
+
+def rule_d_config(args: argparse.Namespace) -> RuleDConfig | None:
+    """`--rule-d` and its options as a config; None when the flag is off."""
+    if not args.rule_d:
+        return None
+    if not args.rule_d_store or not args.rule_d_set_id:
+        msg = "--rule-d needs --rule-d-store and --rule-d-set-id"
+        raise RunError(msg)
+    return RuleDConfig(
+        store=Path(args.rule_d_store),
+        set_id=args.rule_d_set_id,
+        table=args.rule_d_table,
+        book=Path(args.rule_d_book) if args.rule_d_book else None,
+        census_budget=args.rule_d_census_budget,
+        verdict_budget=args.rule_d_verdict_budget,
+        retry=args.rule_d_retry,
+    )
+
+
+def rule_d_plan(
+    config: RuleDConfig, *, stdout: IO[str], journal: Path | None = None
+) -> Loaded | None:
+    """Plan time: load, print every census question, and stop (None) over budget.
+
+    Runs before the planner is called, so an over-budget census costs no
+    model call; a question is never dropped to fit the budget. With a
+    journal, the census and the book's identity are sealed beside it
+    (`rule_d_run.PLAN_RECORD`) before the budget is applied.
+    """
+    try:
+        loaded = rule_d_load(config)
+        classes = rule_d_census(loaded)
+    except (RuleDError, ReferenceSetError, AnswersError, OSError) as exc:
+        stdout.write(f"error: rule D: {exc}\n")
+        return None
+    stdout.write(render_census(classes, config.census_budget))
+    if journal is not None:
+        sealed = rule_d_seal_plan(journal, rule_d_plan_record(loaded, classes))
+        stdout.write(f"rule D: plan sealed in {sealed}\n")
+    if len(classes) > config.census_budget:
+        stdout.write(
+            f"rule D: {len(classes)} census question(s) exceed the budget of "
+            f"{config.census_budget}; stopping before any model call "
+            "(answer them in the book, or raise the budget: loosened)\n"
+        )
+        return None
+    return loaded
 
 
 def survivor_drawer(client: VllmClient, options: RunOptions) -> TestDrawer:
@@ -914,6 +981,12 @@ def check_server(client: VllmClient, *, base_url: str, model: str) -> list[str]:
 
 def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout: IO[str]) -> int:
     """Drive one task: emit, confirm, schedule, gate, seal, transcribe."""
+    rule_d_check = None
+    if options.rule_d is not None:
+        loaded = rule_d_plan(options.rule_d, stdout=stdout, journal=options.journal)
+        if loaded is None:
+            return 1
+        rule_d_check = rule_d_hook(loaded)
     try:
         if _ensure_repo(options.repo):
             stdout.write(f"created baseline commit in {str(options.repo)!r}\n")
@@ -1043,6 +1116,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
             settings=settings,
             survivor_draw=survivor_drawer(client, options),
             survivor_samples=options.survivor_samples,
+            rule_d=rule_d_check,
         )
     except (ValueError, RuntimeError) as exc:
         stdout.write(f"error: {exc}\n")
@@ -1050,6 +1124,8 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
     stdout.write(result.transcript)
     if result.deadline_hit:
         return DEADLINE_EXIT
+    if result.question:
+        return QUESTION_EXIT
     return 0 if result.passed else 1
 
 
@@ -1592,6 +1668,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Candidate test draws per survivor round.",
     )
     run.add_argument("--yes", action="store_true", help="Skip the plan confirmation.")
+    run.add_argument(
+        "--rule-d",
+        action="store_true",
+        help="Judge each impl tree with rule D against a sealed reference store (default off).",
+    )
+    run.add_argument("--rule-d-store", help="Reference store directory (S1-c format).")
+    run.add_argument("--rule-d-set-id", help="The store's sealed set id (sha256 of SHA256SUMS).")
+    run.add_argument(
+        "--rule-d-table", default="fix8", help="Answers table whose inputs rule D checks."
+    )
+    run.add_argument("--rule-d-book", help="Answer book (JSON lines); default: an empty book.")
+    run.add_argument(
+        "--rule-d-census-budget",
+        type=int,
+        default=CENSUS_BUDGET,
+        help="Plan-time split classes allowed before the run stops.",
+    )
+    run.add_argument(
+        "--rule-d-verdict-budget",
+        type=int,
+        default=VERDICT_BUDGET,
+        help="Asks per tree allowed before the node halts.",
+    )
+    run.add_argument(
+        "--rule-d-retry",
+        action="store_true",
+        help="Retry a refused tree with its misses in the repair prompt (default: the node fails).",
+    )
     web = sub.add_parser("chat", aliases=["web"], help="Open the chat UI in a browser.")
     web.add_argument(
         "--workdir",
@@ -1929,6 +2033,11 @@ def main(
                 stdin=stdin or sys.stdin,
                 console=Console(file=stdout or sys.stdout),
             )
+    try:
+        rule_d = rule_d_config(args)
+    except RunError as exc:
+        print(f"error: {exc}", file=stderr or sys.stderr)
+        return 1
     repo = Path(args.repo).resolve()
     journal = Path(args.journal) if args.journal else repo / ".saddle" / "proofs.jsonl"
     with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
@@ -1955,6 +2064,7 @@ def main(
             server_version=served_version(client),
             survivor_effort=args.survivor_effort,
             survivor_samples=args.survivor_samples,
+            rule_d=rule_d,
         )
         return run_task(
             options,

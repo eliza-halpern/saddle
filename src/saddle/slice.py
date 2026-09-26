@@ -20,7 +20,7 @@ import tempfile
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from statistics import median
@@ -78,6 +78,7 @@ from saddle.journal import (
     verify_journal,
     write_attempt_sidecar,
 )
+from saddle.rule_d_run import RuleDDecision
 from saddle.runner import read_sources, run_node_gate
 from saddle.scheduler import Proof, schedule
 from saddle.survivors import (
@@ -131,6 +132,24 @@ class NodeUnappliableError(RuntimeError):
         self.failure = failure
 
 
+class NodeQuestionError(Exception):
+    """Rule D asked instead of deciding (P2-3): the node halts with the question.
+
+    Not a gate failure, so neither a survivor round nor a replan takes it up:
+    the answer has to come from the user, and a redraw cannot supply one.
+    """
+
+    def __init__(self, node_id: str, question: str, attempts: int = 1) -> None:
+        super().__init__(f"node {node_id!r} halted on a rule D question:\n{question}")
+        self.node_id = node_id
+        self.question = question
+        self.attempts = attempts
+
+
+RuleDCheck = Callable[[str, Path], RuleDDecision | None]
+"""The verdict step after the gates: node kind and tree in, a decision or None out."""
+
+
 class ReplanFailedError(Exception):
     """A replan attempt produced nothing schedulable; the node stays failed."""
 
@@ -149,6 +168,12 @@ MAX_RECOVERY_RETRIES: Final = 2
 # claimed proven that is not), not 1 (nothing failed), and the run span
 # carries the same verdict so `verify` can tell the two apart.
 DEADLINE_EXIT: Final = 3
+# Exit code of a run that halted on a rule D question (P2-3) and failed
+# nothing else: not 0 (nothing asked about is proven), not 1 (asking is not
+# a failure: the answer has to come from the user), not 2 (argparse's usage
+# error) and not 3 (the deadline). The run span and the transcript carry
+# the same verdict, QUESTION, so a caller needs neither to tell them apart.
+QUESTION_EXIT: Final = 4
 # Independent proposals drawn for the first attempt. Sequential retry
 # conditions each sample on the last rejection, which optimises against
 # whichever gate pushes back hardest: on T7 recovery drove the node from
@@ -225,6 +250,7 @@ class SliceResult:
     transcript: str
     proofs: dict[str, str]
     deadline_hit: bool = False
+    question: bool = False
 
 
 def _utcnow() -> str:
@@ -1121,6 +1147,7 @@ async def _run_node(
     *,
     task_hash: str,
     deadline: _Deadline | None = None,
+    rule_d: RuleDCheck | None = None,
 ) -> Proof:
     """Execute one node: propose, apply, gate, seal — with bounded recovery.
 
@@ -1269,6 +1296,32 @@ async def _run_node(
                 planned_requirements=planned,
                 owed_tests=owed,
             )
+            # Rule D after the gates (P2-3), only with `--rule-d` and only on a
+            # tree every gate passed: the gates judge the diff, rule D the
+            # function's answers against the references and the answer book.
+            decision = rule_d(node.kind, workdir) if rule_d is not None and result.passed else None
+            if decision is not None and decision.halt:
+                _seal_attempt(
+                    journal_path,
+                    node.id,
+                    run_span_id,
+                    ctx,
+                    2,
+                    f"attempt {attempt}/{max_attempts}: halted on a rule D question",
+                    {
+                        **_proposal_evidence(proposal),
+                        "samples": samples,
+                        "tree": gated_tree,
+                        "rule_d": dict(decision.evidence),
+                    },
+                )
+                raise NodeQuestionError(node.id, decision.detail, attempt)
+            if decision is not None and decision.refuse:
+                result = replace(
+                    result,
+                    passed=False,
+                    checks=(*result.checks, GateCheck("rule-d", False, decision.detail)),
+                )
             if result.passed:
                 # The tree the gate just passed on, sealed into the record
                 # and kept at its own ref (T3-10): a later resume has to
@@ -1297,7 +1350,12 @@ async def _run_node(
                     ctx,
                     0,
                     detail,
-                    {**_proposal_evidence(proposal), "samples": samples, "tree": gated_tree},
+                    {
+                        **_proposal_evidence(proposal),
+                        "samples": samples,
+                        "tree": gated_tree,
+                        **({"rule_d": dict(decision.evidence)} if decision is not None else {}),
+                    },
                 )
                 return Proof(node_id=node.id)
             last_result = result
@@ -1330,8 +1388,16 @@ async def _run_node(
                         {"name": check.name, "passed": check.passed, "detail": check.detail}
                         for check in result.checks
                     ],
+                    **({"rule_d": dict(decision.evidence)} if decision is not None else {}),
                 },
             )
+            # A refusal is the tree's one verdict unless the run opted into
+            # repair (`--rule-d-retry`): no second attempt, the node fails.
+            if decision is not None and decision.refuse and not decision.retry:
+                break
+        except NodeQuestionError:
+            _abandon(workdir, baseline, applied, recorder)
+            raise
         except _HaltRecoveryError as exc:
             _abandon(workdir, baseline, applied, recorder)
             if exc.result is None:
@@ -1494,6 +1560,9 @@ def _transcribe(
         attempts = failure.attempts
     elif isinstance(failure, NodeUnappliableError):
         checks = ()
+        attempts = failure.attempts
+    elif isinstance(failure, NodeQuestionError):
+        checks = (GateCheck("rule-d", False, failure.question),)
         attempts = failure.attempts
     else:
         checks = ()
@@ -1933,6 +2002,7 @@ def _schedule_until_done(
     deadline: _Deadline | None = None,
     survivor_draw: TestDrawer | None = None,
     survivor_samples: int = SURVIVOR_SAMPLES,
+    rule_d: RuleDCheck | None = None,
 ) -> tuple[Dag, dict[str, BaseException], set[str], bool]:
     """Run the schedule/replan loop until no node can progress further.
 
@@ -1986,6 +2056,7 @@ def _schedule_until_done(
                 owed,
                 task_hash=task_hash,
                 deadline=deadline,
+                rule_d=rule_d,
             )
         finally:
             if deadline is not None:
@@ -2180,10 +2251,19 @@ def _seal_run(
     failed_unexcused = {node_id for node_id in ever_failed if node_id not in replanned_from}
     undispatched = {node.id for node in remaining.nodes} - set(proofs) - set(ever_failed)
     passed = not failed_unexcused and not undispatched and merge_exit == 0
+    # QUESTION only when every unexcused failure is a rule D halt: a gate
+    # failure anywhere, or a red merge suite, keeps the run FAIL. Nodes left
+    # undispatched can only be waiting on the halted ones, since nothing
+    # else failed.
+    asked = {n for n in failed_unexcused if isinstance(ever_failed[n], NodeQuestionError)}
+    # A deadline outranks it, as it outranks FAIL: the run did not finish.
+    question = bool(asked) and asked == failed_unexcused and merge_exit == 0 and not deadline_hit
     if deadline_hit:
         exit_code = DEADLINE_EXIT
     elif passed:
         exit_code = 0
+    elif question:
+        exit_code = QUESTION_EXIT
     else:
         exit_code = 1
     append_span(
@@ -2196,8 +2276,9 @@ def _seal_run(
             started_at=started,
             detail=(
                 ("deadline: " if deadline_hit else "") + f"{len(proofs)} proven, "
-                f"{len(failed_unexcused)} failed, "
-                f"{len(undispatched)} undispatched"
+                f"{len(failed_unexcused) - len(asked)} failed, "
+                + (f"{len(asked)} halted on a question, " if asked else "")
+                + f"{len(undispatched)} undispatched"
                 + (f", merge exit {merge_exit}" if merge_ran else "")
             ),
             kind="agent",
@@ -2214,12 +2295,18 @@ def _seal_run(
             task=task,
             started=started,
             finished=now(),
-            verdict="PASS" if passed else "FAIL",
+            verdict="PASS" if passed else ("QUESTION" if question else "FAIL"),
             nodes=transcripts,
             journal_path=str(journal_path),
         )
     )
-    return SliceResult(passed=passed, transcript=text, proofs=proofs, deadline_hit=deadline_hit)
+    return SliceResult(
+        passed=passed,
+        transcript=text,
+        proofs=proofs,
+        deadline_hit=deadline_hit,
+        question=question,
+    )
 
 
 def run_slice(
@@ -2237,6 +2324,7 @@ def run_slice(
     settings: Mapping[str, str] | None = None,
     survivor_draw: TestDrawer | None = None,
     survivor_samples: int = SURVIVOR_SAMPLES,
+    rule_d: RuleDCheck | None = None,
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
@@ -2337,6 +2425,7 @@ def run_slice(
         deadline=deadline,
         survivor_draw=survivor_draw,
         survivor_samples=survivor_samples,
+        rule_d=rule_d,
     )
     merge_exit, merge_ran = _merge_gate(
         merge_command,

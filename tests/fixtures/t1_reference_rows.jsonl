@@ -1,0 +1,2009 @@
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validation helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gmail.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user @domain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolocal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"a@b.io","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@-domain.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"address","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"   ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@456.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@domain.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user_name@sub.domain.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Zuser@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examaple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us9er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"%user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"user@exam9ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam.ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usAer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examZple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"-user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"us%er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam0ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us0er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".user@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"us.er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usZer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us+er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam-ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examzple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam%ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"_user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"+user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"uszer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usaer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auser@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us_er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam_ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examAple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us-er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"zuser@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"9user@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"quote\"@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space)@example.com","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalid@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"value","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.123","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"UPPER@EXAMPLE.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@ domain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-leading-hyphen.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":" user@example.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@missing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailing-hyphen-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@com","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.example.net","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example.com ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.cc","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"plainaddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user.name@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_%40special@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.example.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-example.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user123@example.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first-last@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"[a-zA-Z0-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@b.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@do_main.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@domain.c\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user..name@domain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user@dom-ain-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":".user@domain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user@.domain.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@domain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user@my-domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@domain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@localhost","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"123@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-name@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@domain .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com\n","panel_vote":"F,F,F,F","signature":"TTTFFTTTTTTT"}
+{"input":"a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user.@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user@255.255.255.255.255","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@example-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user123@example123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@Example.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-domain.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exa_mple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%encoded@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Tests for is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@example.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"userexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%name@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-name@my-domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@mail.subdomain.example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-123@example.io","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @example.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user @example .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@my-domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\t","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"caf\u00e9@x.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"\u00e9","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain_1.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@[192.168.1.1]","panel_vote":"T,T,T,F","signature":"FFFFFFFFFFFF"}
+{"input":"-user@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\p.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0#-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[\u0003a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a\u0082-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]\u000b+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\u0600","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$_%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$^[a-zA-Z0-9.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` loks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks liike a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True whe|n `address` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when! `address` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when \u0001`address` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Retur\u0080n True when `address` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `addre\fss` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email addre\u0600ss.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Retu\ufffern True when `address` looks like a valid email address.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".Return True when `address` looks like a valid email address","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email vlidation helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validation  helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validation he_lpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validati\"on helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validati\u0002on helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"E\u0081mail validation helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email\f validation helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email valida\u0601tion helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Ema\ufffeil validation helpers.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validation helpers..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".Email validation helpers","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validation helpers","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Email validation helpers.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domaain..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domaUin..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use#r@domain..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain\u0001..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do\u0080main..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.\t.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0601@domain..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufffeser@domain..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..@domain..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain..user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain...","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"ser+tag@gmail.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uuser+tag@gmail.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user+tag@Tgmail.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user+tag@gma!il.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gm\u0003ail.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gmail.\u0082com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gmail.\tcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gm\u00adail.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gmail.c\ufeffom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gmail.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser+tag@gmail","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@gmail.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user+tag@gmail.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user+tag@gmail..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use @domain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @doomain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain.coHm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain#.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain.com\u0002","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0080 @domain.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u000buser @domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @dom\u00adain.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\ufeffr @domain.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain.com@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.comuser ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user @domain.last@domain.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolcal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolocal.coom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolo)cal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"#@nolocal.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"@\u0003nolocal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolocal.\u0080com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nol\focal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@no\u0601local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@\ufeffnolocal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolocal.com@nolocal.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolocal.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@nolocal.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@255.255.255.255.255","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"ser@domain-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@domain--.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@domain-.coPm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@domain-.c!om","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-.\u0003com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-\u0081.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-.co\u000bm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-.c\u00adom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-\ufeff.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-.com.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":".comuser@domain-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain-.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@domain-.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"a@.io","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aa@b.io","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@b.iZo","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"!a@b.io","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"a@b\u0001.io","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.\u0082io","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\fa@b.io","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.io\u0600","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.\ufffeio","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.io.io","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".ioa@b","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.ioo","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@b.i","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"a@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@-doman.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@--domain.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"\"user@-domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"#user@-domain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-\u0001domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-doma\u0080in.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-domain.\u000bcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-do\u0601main.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufffeser@-domain.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-domain.com@-domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@-domain.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-domain.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-domain.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"adress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"adddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"addressU","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"add#ress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"addres\u0001s","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\u0080ddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"addre\u000bss","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\u00adddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"addre\ufffess","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"addresss","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"addres","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.s_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid__email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for va;lidators.is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid_emai!l.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid_emai\u0001l.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_va\u0080lid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\fTests for validators.is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validator\u0601s.is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Te\ufffests for validators.is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid_email..is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".is_valid_email.Tests for validators","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid_email..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.is_valid_email","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for validators.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uuser@domain..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@domaibn..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@domain..com!","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0003er@domain..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..com\u0080","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..\fcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u00adr@domain..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\ufffe@domain..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..com@domain..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain..comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain..comm","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@domain..co","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.ccom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.c6om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.co#m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003user@.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.co\u0080m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.c\fom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0600.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufffeser@.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.com@.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"issing-at-sign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-siign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-asign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"m\"issing-at-sign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-\u0001sign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign.\u0081com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign\t.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing\u00ad-at-sign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-a\ufffet-sign.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign.com.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".commissing-at-sign","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"missing-at-sign.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"firstlast@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"firrst.last@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"fBirst.last@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first\".last@domain.org","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"first.last@domain.or\u0001g","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"firs\u0082t.last@domain.org","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"f\u000birst.last@domain.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@do\u0600main.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@\ufffedomain.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@domain.org.last@domain.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".last@domain.orgfirst","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"first.last@domain.orgg","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.last@domain.or","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.last@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"ser@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uuser@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@w","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"us#er@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003user@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0081er@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\tr@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u00adser@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ufffeer@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"  ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"3   ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"  \" ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"  \u0001 ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" \u0082  ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" \t  ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"  \u0601 ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"   \ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain coom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domai@n com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@d\"omain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@d\u0001omain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0080user@domain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do\u000bmain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain com\u0601","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma\ufeffin com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain com@domain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examplee.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@ex0ample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example.co\"m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\u0001ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exampl\u0082e.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u000buser@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\u0600mple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\ufffe@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.om","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@456.coom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@456.com~","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.co\"m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@45\u00026.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.\u0081com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"1\f23@456.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.c\u0601om","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.co\ufeffm","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.com@456.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@456.com123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@456.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@456.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@domain..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"usr@domain.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@ddomain.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"usesr@domain.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@domai\"n.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma\u0002in.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0081@domain.c","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@do\fmain.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u00aduser@domain.c","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@dom\ufffeain.c","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.c@domain.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.cuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.cc","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_nae@sub.domain.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@sub.dommain.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@sub.domain.cou.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_!name@sub.domain.co.uk","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user_name@sub.domain.co.uk\u0001","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name\u0081@sub.domain.co.uk","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\u000b_name@sub.domain.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@sub.domai\u0601n.co.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ufeffer_name@sub.domain.co.uk","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user_name@sub.domain.co.uk@sub.domain.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@sub.domain.co.ukuser_name","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@sub.domain.co.ukk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@sub.domain.co.u","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user_name@sub.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Zuser@example.cm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Zuser@example.coom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Zuser@exavmple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Zuser@examp\"le.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Zuser@exa\u0002mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Zuser@examp\u0081le.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Zuser@example.c\tom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Zuser\u00ad@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"Zuser@exa\ufeffmple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Zuser@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comZuser@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"Zuser@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Zuser@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examaple.cm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examaple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examaOple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examaple.#com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0003examaple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examaple\u0081.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examaple\t.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\u0600aple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\ufeff@examaple.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@examaple.com@examaple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@examaple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examaple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us9r@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uss9er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"u/s9er@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"us9er@example\".com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u00029er@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us9er@exam\u0080ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us9er@example\u000b.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us9er@example.co\u0600m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us9er\ufffe@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us9er@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comus9er@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"us9er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us9er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us9er@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"%userexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"%user@example.coom","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"%user@example.como","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"%user@exa\"mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"%user@\u0003example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081%user@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"%us\fer@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"%user@exampl\u0601e.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"%user\ufffe@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"%user@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":".com%user@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"%user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"%user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"user@exam9ple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"userr@exam9ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam9ple.=com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam9p\"le.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\u0001m9ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0082@exam9ple.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@exam\u000b9ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam9\u00adple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam9ple.com\ufeff","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam9ple.com@exam9ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exam9ple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam9ple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam.le.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam.ple.ccom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam.ple.c?om","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\".ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0003r@exam.ple.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@\u0081exam.ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\tm.ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0600ser@exam.ple.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\ufffe@exam.ple.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@exam.ple.com@exam.ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exam.ple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam.ple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam.ple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usAer@xample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usAeer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usAer@examp-le.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usAer!@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"usAer@e\u0003xample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0080sAer@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"usAe\tr@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usAer@e\u00adxample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usAer@ex\ufeffample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usAer@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comusAer@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"usAer@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usAer@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examZple.cm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examZple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examhZple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam#Zple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0003@examZple.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@examZple.co\u0082m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\tr@examZple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examZple.com\u00ad","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e\ufffexamZple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examZple.com@examZple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@examZple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examZple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"-user@xample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"-user@examplle.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"-user@examp/le.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-user@example\".com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-user@\u0001example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-u\u0082ser@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"-user@\texample.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-user@exa\u00admple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-use\ufffer@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"-user@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":".com-user@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"-user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"-user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"us%er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us%er@example..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"us%er@examp;le.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us%er@examp\"le.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us%er@example.\u0003com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us%er\u0081@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us%er@\texample.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us%er@example.\u00adcom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us%er@exam\ufeffple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us%er@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comus%er@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"us%er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@example.om","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@examplee.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@exampFle.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@example.\"com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"auser\u0003@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"auser@example.com\u0080","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"auser@example\f.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aus\u0600er@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"auser@ex\ufeffample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"auser@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comauser@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"auser@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"auser@domain.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@exam0pl.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam00ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam0ple.ycom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"use!r@exam0ple.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@exam0pl\u0003e.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\u0080m0ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam0p\u000ble.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam0ple.\u0601com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam0ple.c\ufeffom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam0ple.com@exam0ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exam0ple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam0ple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam0ple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam0ple.com ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@example.om","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us0er@exaample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us0er@example1.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us0er@exam#ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@example.\u0002com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@example.com\u0082","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0e\tr@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@e\u00adxample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@example.com\ufffe","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comus0er","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us0er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us0er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".user@example.om","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"..user@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":".user@Oexample.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"\".user@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":".user@example.\u0003com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@example\u0081.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\f.user@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".use\u0601r@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@example.com\ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.com.user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@example.comm","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":".user@example.co","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":".com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u.er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us.er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us.er@exPample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us.er@e!xample.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0002us.er@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us\u0081.er@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us.er@ex\fample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us.er@example\u0601.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ufffe.er@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us.er@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comus.er","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us.er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us.er@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usZer@exaple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usZerr@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usZer@exa_mple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"!usZer@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"usZer@example.co\u0002m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usZer@example.\u0081com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usZer@example\f.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usZer@e\u0600xample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usZer@example\ufeff.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usZer@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comusZer@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"usZer@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usZer@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usZer@255.255.255.255.255","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"us+r@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us+er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us+er@exaZmple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"u#s+er@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"u\u0001s+er@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us+er@example.com\u0080","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us+er@examp\u000ble.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us+e\u0600r@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us+er@example.\ufffecom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us+er@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comus+er","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us+er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@xam-ple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam-plle.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam-(ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"@exam-ple.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@exam\u0003-ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam-pl\u0082e.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam-ple.co\tm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\u00ad-ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ex\ufffeam-ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam-ple.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser@exam-ple","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam-ple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam-ple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam-ple.domain.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exxamzple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examzple.[com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"@examzple.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@e\u0001xamzple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examzpl\u0082e.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examzple.co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examzple.\u0601com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examzple.co\ufffem","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examzple.com@examzple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@examzple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examzple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examzple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exam%pple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam%p4le.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use!r@exam%ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\u0001%ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam%ple.\u0082com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u000b@exam%ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e\u0600xam%ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam%ple.co\ufeffm","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam%ple.com@exam%ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exam%ple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam%ple.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam%ple.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0ser@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"0user@exxample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"0user@example1.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"0user@example.com#","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0user@ex\u0001ample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0user@exampl\u0080e.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0user@ex\tample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0user@exampl\u0600e.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"0user\ufeff@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"0user@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".com0user@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"0user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"0user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"_user@example.om","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"_user@example.coom","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"_user@e(xample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_user@exam#ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_u\u0002ser@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"_user@example.\u0081com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_\fuser@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_user@example.com\u00ad","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_user@example\ufeff.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_user@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":".com_user@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"_user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"_user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"_%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"+user@eample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"+user@examplle.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"+usWer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"+user@exampl\"e.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"+user@example\u0002.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"+user@e\u0082xample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"+user@e\txample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"+user@example.c\u0600om","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"+user\ufeff@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"+user@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":".com+user@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"+user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"+user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTFFTT"}
+{"input":"uszer@exmple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uszzer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uszber@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us!zer@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"usze\u0002r@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"uszer@ex\u0082ample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uszer@example.co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usze\u0600r@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"usze\ufffer@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"uszer@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuszer","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uszer@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uszer@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usae@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usaaer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usaer@example.com^","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usaer!@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"usaer@exam\u0003ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usaer@ex\u0081ample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usa\fer@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usae\u0601r@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"usaer@exa\ufffemple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usaer@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comusaer","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usaer@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usaer@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auser@exampe.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auseer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auser@examplxe.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auser@example\".com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Auser@example.co\u0001m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Aus\u0081er@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"Auser@example\t.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Auser\u00ad@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"Auser@exampl\ufffee.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Auser@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comAuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Auser@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auser@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Auser@dom-ain-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"s_er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us_er@example.coom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us_er@Uexample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us_er@examp\"le.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us_er@example.c\u0001om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0080s_er@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us_er@example.c\fom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us_er@examp\u00adle.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us_er@example.c\ufffeom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us_er@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comus_er@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"us_er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us_er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us_er@example.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_plecom","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exxam_ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Duser@exam_ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use#r@exam_ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_ple\u0001.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\u0081m_ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_ple.com\t","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u00adexam_ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufffeser@exam_ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_ple.com_ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_ple.comuser@exam","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_ple.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_ple.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam_ple.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+pe.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple.ccom","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e]xam+ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\"+ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0001@exam+ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple\u0080.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\fuser@exam+ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple.\u0600com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\ufeff@exam+ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple.com.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".comuser@exam+ple","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam+ple.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examAple.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exaamAple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us8er@examAple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examAp#le.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0003r@examAple.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@examAple.com\u0080","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examAple.co\tm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examAple\u00ad.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\ufeffmAple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examAple.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser@examAple","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@examAple.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"s-er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us-eer@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uFs-er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us-er@example.!com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us-\u0002er@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us-er@example\u0081.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\fs-er@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us-er@example.co\u00adm","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\ufeffus-er@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us-er@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comus-er@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"us-er@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us-er@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us-er@example.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"zusr@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"zzuser@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"zus8er@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"!zuser@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"z\u0002user@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"zuser\u0082@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"zuser@\fexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"zuser@example.com\u0600","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"zuser@e\ufffexample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"zuser@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comzuser@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"zuser@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"zuser@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"zuser@example..name@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"9user@exampl.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"9user@example.ccom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"9user@exampJle.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"9user@#example.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"9user@ex\u0003ample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"9user\u0082@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"9user@e\fxample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"9us\u00ader@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"9user@exam\ufeffple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"9user@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.com9user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"9user@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"9user@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"9user@example.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-z-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z00-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0\"-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-#]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9]\u0002)?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{\u00822,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a\u000b-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[\u0601a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]\ufeff*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$^[a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9.168.1.1]","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexample.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exxample.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@exampale.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"us!er@example.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@ex\u0003ample.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0082er@example.c","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@e\u000bxample.c","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.\u00adc","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e\ufffexample.c","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.c.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":".cuser@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.cc","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usr@..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@...com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@..<com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@..co#m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0001er@..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.\u0082.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\fser@..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@..com\u0601","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@..\ufeffcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@..com@..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@..comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@..comm","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@..co","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@@domain.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@pdomain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@domain.c#om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0001@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@domain.com\u0080","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\t@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0600user@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\ufffe@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@domain.com@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@@domain.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@domain.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usr\"quote\"@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\"quuote\"@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\"quotPe\"@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"use!r\"quote\"@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\"quote\"@example.c\u0002om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"quote\"@e\u0080xample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\fuser\"quote\"@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"quote\"@example\u0600.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"quote\"@example.com\ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"quote\"@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser\"quote\"","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\"quote\"@example.comm","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\"quote\"@example.co","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"uer(space)@example.com","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"usser(space)@example.com","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space)@example.Hcom","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space#)@example.com","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space)@example\u0002.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user(s\u0081pace)@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us\u000ber(space)@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user(space)@example.c\u00adom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user(space)\ufeff@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space)@example.com.com","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":".comuser(space)@example","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user(space)@example.comm","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space)@example.co","panel_vote":"T,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user(space)@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userinvalid@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user!invalid@exxample.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalidH@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalid@example.c\"om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user!\u0003invalid@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalid@e\u0081xample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user!invalid@example.co\tm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user!in\u0601valid@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalid@example.\ufeffcom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user!invalid@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser!invalid","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user!invalid@example.comm","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalid@example.co","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user!invalid@exam%ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"vale","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"valuue","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"va>lue","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"val#ue","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"val\u0002ue","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081value","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"va\tlue","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"valu\u00ade","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"val\ufffeue","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"valuee","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"valu","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example123","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"uuser@example.123","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@example.12K3","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@ex\"ample.123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam\u0003ple.123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0082@example.123","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@example.1\u000b23","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u00ad@example.123","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@exam\ufffeple.123","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.123@example.123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.123user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.1233","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@example.12","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"PPER@EXAMPLE.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"UPPER@EXAMPLE..COM","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"UP4PER@EXAMPLE.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"UPPER@EXAMPLE.C#OM","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"UPP\u0002ER@EXAMPLE.COM","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"UPPER@\u0080EXAMPLE.COM","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"UPPER@EXAMPLE\u000b.COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"UPPER@EXAMPLE.CO\u0601M","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"UPPE\ufffeR@EXAMPLE.COM","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"UPPER@EXAMPLE.COM@EXAMPLE.COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@EXAMPLE.COMUPPER","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"UPPER@EXAMPLE.COMM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"UPPER@EXAMPLE.CO","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"UPPER@EXAMPLE.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ doman.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ doomain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@6 domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ #domain.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ domain.com\u0003","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0080@ domain.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\fer@ domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ domain.\u00adcom","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ domain.co\ufeffm","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ domain.com@ domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@ domain.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ domain.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ domain.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"ser@-leading-hyphen.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-leadinng-hyphen.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"tuser@-leading-hyphen.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"u\"ser@-leading-hyphen.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-leading-hyphe\u0001n.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-lead\u0082ing-hyphen.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\tuser@-leading-hyphen.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u00ader@-leading-hyphen.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ufffeer@-leading-hyphen.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-leading-hyphen.com.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":".comuser@-leading-hyphen","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-leading-hyphen.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-leading-hyphen.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":" use@example.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@example.ccom","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" userG@example.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@exa\"mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@example.com\u0001","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@exam\u0082ple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@ex\fample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@example\u0600.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\ufffe user@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.com user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@example.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@example.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":" user@sub.domain.co.uk","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@mssing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@miissing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@missing-local.com5","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@miss#ing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@mis\u0001sing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@missing\u0080-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@m\tissing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@\u0600missing-local.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@missing-local\ufffe.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@missing-local.com.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".com@missing-local","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"@missing-local.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@missing-local.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usertrailing-hyphen-.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailinng-hyphen-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@trailing-8hyphen-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@trailing-hyphen-.\"com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003user@trailing-hyphen-.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailing-hyp\u0080hen-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailing-hyphen-.c\tom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0600trailing-hyphen-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailing-hyphe\ufffen-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailing-hyphen-.com.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":".comuser@trailing-hyphen-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@trailing-hyphen-.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@trailing-hyphen-.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@om","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@ccom","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"u+ser@com","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"!user@com","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0001com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0081@com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u00ader@com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\ufffeuser@com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@com@com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@comm","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@co","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.examle.net","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-123@my-host.exaample.net","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-123@my-host.example.Gnet","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-12\"3@my-host.example.net","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"use\u0001r-123@my-host.example.net","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user-123@my-host.exam\u0082ple.net","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.e\fxample.net","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.e\u00adxample.net","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.exampl\ufffee.net","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.example.net@my-host.example.net","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@my-host.example.netuser-123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-123@my-host.example.nett","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-123@my-host.example.ne","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examplecom ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exaample.com ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exampele.com ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use!r@example.com ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0003r@example.com ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0080@example.com ","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com \f","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examp\u0600le.com ","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufffeser@example.com ","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com @example.com ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com  ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.c","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"a@b.ccc","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@b.^cc","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.\"cc","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@b\u0003.cc","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081a@b.cc","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"a\f@b.cc","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\u00ad@b.cc","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"a\ufffe@b.cc","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"a@b.cc.cc","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".cca@b","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"a@@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plainadress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plainaddreess","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"pllainaddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plaina!ddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"p\u0003lainaddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plainad\u0081dress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"pl\u000bainaddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"p\u00adlainaddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plai\ufeffnaddress","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plainaddresss","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"plainaddres","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts th common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts tthe common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` look=s like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and reje\"cts\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical\u0003 heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `addre\u0082ss` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email add\fress.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC\u00ad 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as m\ufffeissing ``@``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n    @``, missing domain,\n    or spaces in the local part.\n    ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@``, missing domain,\n    or spaces in the local part.\n    Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n     ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.\n\n    This is a practical heuristic (not a full RFC 5322 parser).\n    It accepts the common forms seen in the wild and rejects\n    obvious malformations such as missing ``@``, missing domain,\n    or spaces in the local part.\n   ","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Return True when `address` looks like a valid email address.168.1.1]","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user nameexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@eexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Cuser name@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.c!om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@ex\u0001ample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.\u0080com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user na\tme@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.c\u00adom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@\ufeffexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser name","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user name@example.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usr@example.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exammple.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exampl|e.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.#com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.c\u0001om.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.co\u0082m.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\fuser@example.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0601example.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examp\ufeffle.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com.@example.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.com..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.exampe.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.domain.exaample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.domain.example.@com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u#ser@sub.domain.example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@sub.domain.exampl\u0001e.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0082r@sub.domain.example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@sub.domain.example\u000b.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.do\u0600main.example.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.examp\ufeffle.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.com@sub.domain.example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@sub.domain.example.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.domain.example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user.name@examplecom","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user.name@exaample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user.naqme@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user.name@examp#le.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.na\u0003me@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user.name@\u0081example.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.nam\fe@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0600.name@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user.name@ex\ufffeample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.name@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser.name","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.name@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user.name@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user.name@domain..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user_%40special@domai.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_%%40special@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"useDr_%40special@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_%4!0special@domain.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user_%40special@domain.c\u0003om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_\u0081%40special@domain.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user_%40special@domain\u000b.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_%40spec\u0600ial@domain.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user_%40special@dom\ufffeain.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_%40special@domain.com@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.comuser_%40special","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_%40special@domain.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_%40special@domain.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_%40special@.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@examle.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@eexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@example.comO","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\"ser@@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@example.\u0003com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@exam\u0081ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@exampl\te.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0600@@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@exam\ufeffple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@example.com@@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@@example.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@example.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@@example.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@b.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"userexam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userr@exam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"useQr@exam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e#xam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0002user@exam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e\u0080xam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam ple.com\u000b","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam pl\u00ade.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\ufffer@exam ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam ple.com.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".comuser@exam ple","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam ple.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam ple.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use@example..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@example...com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@eWxample..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@example!..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examp\u0002le..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0081@example..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example..\fcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u00adexample..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example..\ufeffcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example..com@example..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example..comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example..comm","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@example..co","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"ser@.example.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"uuser@.example.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"use1r@.example.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.e\"xample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.\u0002example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0080.example.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.example.c\fom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u00ad.example.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.e\ufffexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.example.com.example.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":".example.comuser@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.example.comm","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.example.co","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exampleV.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.co#m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"@example.c\u0080om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.com\f","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.c\u0600om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example\ufffe.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.com.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".com@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"@example.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use+tag@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user+ttag@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"u$ser+tag@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user+tag@example.#com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@example.com\u0001","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+\u0081tag@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user+tag\u000b@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@example.com\u0600","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@exa\ufffemple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser+tag","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user+tag@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user+tag@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"ser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usHer","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user#","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0001r","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0082","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\fuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0600user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufeffser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userr","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-exmple.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-eexample.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-ex9ample.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-ex#ample.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-example.com\u0001","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0082ser@-example.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u000b-example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u00ader@-example.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-e\ufffexample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-example.com@-example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@-example.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@-example.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@-example.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user123@exampleco.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@example.cco.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@exa?mple.co.uk","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@example.co#.uk","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@exa\u0002mple.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@example.\u0082co.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@example\t.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user12\u00ad3@example.co.uk","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"us\ufffeer123@example.co.uk","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user123@example.co.uk.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".co.ukuser123@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user123@example.co.ukk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@example.co.u","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"first-lst@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first-last@domain..org","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"f#irst-last@domain.org","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"first-last@domain.o#rg","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first-last@doma\u0003in.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"f\u0082irst-last@domain.org","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"first-last@do\fmain.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first-la\u0601st@domain.org","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"first-last@domain\ufeff.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first-last@domain.org@domain.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.orgfirst-last","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first-last@domain.orgg","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first-last@domain.or","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first-last@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"[a-zA-Z0-9\\-+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9\\--]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0e-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA\"-Z0-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-\u0002zA-Z0-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0\u0082-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0\u000b-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-z\u00adA-Z0-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a\ufffe-zA-Z0-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9\\-]+-zA-Z0-9\\-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-zA-Z0-9\\-]+[a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9\\-]++","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9\\-]","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"j@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@!","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@\u0003","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0082@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\t@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0601@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@\ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"--","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-^","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\"-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0002-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0080-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\f-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0601-","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-\ufeff","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".#","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".\u0002","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".\u0082","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".\u000b","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".\u00ad","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".\ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"...","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Q..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"..\"","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".\u0080.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"..\t","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0601..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"..\ufffe","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"....","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.ast@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.last@example.ccom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.l8ast@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.last@exam!ple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@exampl\u0002e.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"fir\u0080st.last@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"first.last@ex\tample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@example\u0601.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@examp\ufeffle.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@example.com.last@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".last@example.comfirst","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"first.last@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.last@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"first.last@domain com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@@b.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a@0b.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@b.!co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003a@b.co","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"\u0080a@b.co","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"a\f@b.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0601a@b.co","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"\ufffea@b.co","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"a@b.co.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".coa@b","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"a@b.coo","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@localhost","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_min.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.ccom","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.coym","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@#do_main.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do\u0002_main.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0081do_main.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.\u0600com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@d\ufeffo_main.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.com@do_main.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@do_main.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do_main.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_nme@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"userr_name@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_namez@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@example.c\"om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@\u0001example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@e\u0081xample.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u000b_name@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_na\u0600me@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user_name\ufeff@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user_name@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser_name","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@domain.cm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"useer@domain.c\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.c3\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.c\u00f6\"m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003user@domain.c\u00f6m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain\u0081.c\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domai\fn.c\u00f6m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0601ser@domain.c\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@dom\ufeffain.c\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.c\u00f6m.c\u00f6m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".c\u00f6muser@domain","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.c\u00f6mm","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.c\u00f6","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usr@123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uuser@123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@123.coms","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@123.\"com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0002er@123.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user\u0080@123.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@123.\tcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@123.com\u0601","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufeffser@123.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@123.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser@123","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@123.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@123.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user..name@domin.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"useer..name@domain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user6..name@domain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user..n\"ame@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@domai\u0002n.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@domain.com\u0082","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..n\fame@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@domain.\u00adcom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@domain\ufffe.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@domain.com..name@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"..name@domain.comuser","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user..name@domain.comm","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user..name@domain.co","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user@dom-ai-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@doom-ain-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"use\"r@dom-ain-.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@dom-ain-.\u0002com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@dom-ain-.co\u0082m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ter@dom-ain-.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u00adser@dom-ain-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@d\ufffeom-ain-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@dom-ain-.com-ain-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"-ain-.comuser@dom","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@dom-ain-.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@dom-ain-.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":".user@omain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":".user@domain..com","panel_vote":"F,F,F,F","signature":"TFTFFFTTFFTF"}
+{"input":".?user@domain.com","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":".user\"@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@domain.co\u0003m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".use\u0081r@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@domain.co\u000bm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@domain.com\u0601","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@domain.com\ufeff","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@domain.com.user@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".user@domain.comm","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":".user@domain.co","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":".COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uuser@.domain.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.doBmain.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.domain.co!m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.d\u0002omain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081user@.domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.\fdomain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0600@.domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.do\ufeffmain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.domain.com.domain.com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":".domain.comuser@","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@.domain.comm","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@.domain.co","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"@domain.cm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domaYin.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.\"com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain\u0003.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain\u0082.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domai\tn.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domai\u00adn.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain\ufeff.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.com@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"ser.@domain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@domaain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@ddomain.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"\"user.@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0003.@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@domain.\u0082com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@domain.co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0601er.@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.\ufeff@domain.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user.@domain.com@domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.comuser.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@domain.comm","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@domain.co","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.example.net","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"uer@my-domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-dommain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-domain.Gcom","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-domain.c#om","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-\u0002domain.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081user@my-domain.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@my-domain.c\tom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-domai\u00adn.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\ufffer@my-domain.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@my-domain.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser@my-domain","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-domain.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-domain.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@dommain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domaiQn.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.co!m.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@dom\u0002ain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do\u0080main.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u000buser@domain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0600@domain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ufeffer@domain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com.@domain.com.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.com.user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use@localhost","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@loocalhost","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@localhosBt","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@loc!alhost","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0002ser@localhost","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0081@localhost","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@loc\falhost","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@localh\u0601ost","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@loc\ufeffalhost","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@localhost@localhost","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@localhostuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@localhostt","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@localhos","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"123@domain.og","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@dommain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"8123@domain.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@#domain.org","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123\u0001@domain.org","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"12\u00803@domain.org","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"123@domain\t.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@\u0601domain.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"12\ufffe3@domain.org","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"123@domain.org@domain.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.org123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"123@domain.orgg","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@domain.or","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-name@eample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-name@example..com","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"u?ser-name@example.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user-name@exa\"mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-\u0002name@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user-name@example.co\u0081m","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-name@example.co\u000bm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0601r-name@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user-name@example.co\ufffem","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-name@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser-name@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user-name@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-name@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user-name@examaple.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"uuser@domain .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domai.n .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain #.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0001er@domain .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0082ser@domain .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u000bdomain .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain .c\u0600om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain\ufffe .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain .com@domain .com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain .comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain .comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain .co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@dma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma iin.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doSma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user#@doma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@do\u0002ma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma in\u0081.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma \u000bin.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0601user@doma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\ufffe@doma in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma in.com.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".comuser@doma in","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma in.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma in.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma in.domain.example.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.om\n","panel_vote":"F,F,F,F","signature":"TTTFFTTTTTTT"}
+{"input":"user@domaiin.com\n","panel_vote":"F,F,F,F","signature":"TTTFFTTTTTTT"}
+{"input":"us}er@domain.com\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com\n\"","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0001ser@domain.com\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@doma\u0081in.com\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domai\fn.com\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain\u0601.com\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.\ufeffcom\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com\n@domain.com\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@domain.com\nuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@domain.com\n\n","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"~a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"#a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0002a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\u000b","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u00ada","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\ufeff","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aa+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"!aa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0002aa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0081aa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\ta","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0600aa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"a\ufffea","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aaaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"4aaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aaa\"","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0001aaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aaa\u0082","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\taaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"aaa\u00ad","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\ufffeaaa","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zAA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z=0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0!-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9\u0003-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[\u0080a-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u000b[a-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0600[a-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\ufeff[a-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9-]+-zA-Z0-9-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-zA-Z0-9-]+[a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9-]++","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9-]","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-ZZ]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[8a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-#Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z]{2\u0001,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z\u0082]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[\u000ba-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[\u0601a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-\ufffeZ]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z]{2,}-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-zA-Z]{2,}[a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z]{2,}}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z]{2,","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-]++","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-59._%+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%!+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-]+\u0002","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-z\u0081A-Z0-9._%+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-\t9._%+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+\u00ad-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-\ufeff]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-]+_%+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_%+-]+[a-zA-Z0-9.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"[a-zA-Z0-9._%+-]","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]^+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z#]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a\u0001-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-\u0082Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9\t._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-\u0601zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z\ufffe0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$_%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$^[a-zA-Z0-9.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9._%+\\-]+@examZple.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-A-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z00-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-T]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\")*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-\u0003]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-z\u0080A-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[\u000ba-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?\u0601:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-\ufffeZ0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$^[a","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}$$","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*\\.[a-zA-Z]{2,}","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examle","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"userr@example","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@exam4ple","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@exampl!e","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\u0001mple","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0081example","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u000b@example","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example\u0600","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\ufeffser@example","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example@example","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exampleuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@examplee","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@exampl","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"uer..name@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user..name@examplle.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user..name@exadmple.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user..n\"ame@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@e\u0001xample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@exam\u0080ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@ex\u000bample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@example.co\u0600m","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@example.\ufffecom","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user..name@example.com..name@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"..name@example.comuser","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user..name@example.comm","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user..name@example.co","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
+{"input":"user.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@example.co","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@example.ccom","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@example.como","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@#example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0003user.@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0081ser.@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\tuser.@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@example.c\u0601om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\ufffeer.@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user.@example.com.@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".@example.comuser","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user.@example.comm","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"user@25.255.255.255.255","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@2555.255.255.255.255","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@255n.255.255.255.255","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@255.255.2\"55.255.255","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@255.255.255\u0003.255.255","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u0080user@255.255.255.255.255","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"u\u000bser@255.255.255.255.255","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@255.\u0600255.255.255.255","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\ufeff@255.255.255.255.255","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@255.255.255.255.255@255.255.255.255.255","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@255.255.255.255.255user","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@255.255.255.255.2555","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@255.255.255.255.25","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@255.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examle-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@example--.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@example-.Xcom","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@example-!.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\u0001@example-.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@\u0082example-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example-.co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e\u00adxample-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exampl\ufeffe-.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example-.com-.com","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"-.comuser@example","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@example-.comm","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@example-.co","panel_vote":"T,T,F,F","signature":"TFTFFFTTFFTT"}
+{"input":"user@example-.com ","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user13@example123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"useer123@example123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@example123.c1om","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user123@!example123.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@exam\u0002ple123.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0080ser123@example123.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user1\f23@example123.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\u00aduser123@example123.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user123@exa\ufeffmple123.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@example123.com@example123.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example123.comuser123","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user123@example123.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@example123.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user123@example.io","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@Examle.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@Exaample.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@ExDample.COM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@Example.\"COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Exa\u0003mple.COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Example\u0081.COM","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Ex\u000bample.COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Example.\u0601COM","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Exa\ufffemple.COM","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Example.COM@Example.COM","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@Example.COMUser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"User@Example.COMM","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@Example.CO","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"User@456.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-domain.co.k","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@@my-domain.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@:my-domain.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\"er@my-domain.co.uk","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@my-domain.co.\u0002uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-do\u0081main.co.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u000ber@my-domain.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-domain.\u0600co.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-domain.co\ufffe.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-domain.co.uk.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".co.ukuser@my-domain","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@my-domain.co.ukk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@my-domain.co.u","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"use@exa_mple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_mple..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_mp.le.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa!_mple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@e\u0003xa_mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_\u0081mple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_mple\f.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_\u0600mple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ex\ufeffa_mple.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_mple.com_mple.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_mple.comuser@exa","panel_vote":"T,T,T,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_mple.comm","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_mple.co","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa_main.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%ecoded@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%%encoded@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%encoded@exHample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"u\"ser%encoded@example.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user%encoded@example\u0002.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%enco\u0080ded@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user%encoded@exa\fmple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%encoded@example.c\u0600om","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%enc\ufeffoded@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user%encoded@example.com@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.comuser%encoded","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%encoded@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%encoded@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"Tess for is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"TTests for is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_valid_ewmail.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_valid\"_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for\u0001 is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_\u0082valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Test\fs for is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is\u0600_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests \ufffefor is_valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_valid_email._valid_email.","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"_valid_email.Tests for is","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_valid_email..","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_valid_email","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"Tests for is_valid_email.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.om","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exxa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usLer@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user#@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.\u0001com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0080er@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.co\fm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ex\u00ada mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\ufeffr@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.com@exa mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@exa mple.comuser","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa mple.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.og","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.domain.example..org","panel_vote":"F,F,F,F","signature":"TFTFFTTTFFTF"}
+{"input":"user@suvb.domain.example.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.domain#.example.org","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u0002ser@sub.domain.example.org","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@sub.domain\u0082.example.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.e\fxample.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.\u0600org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.exampl\ufeffe.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.org.domain.example.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".domain.example.orguser@sub","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@sub.domain.example.orgg","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@sub.domain.example.or","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@example.og","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usser_name@example.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@Kexample.org","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@exam#ple.org","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@exa\u0001mple.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.or\u0082g","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\fr_name@example.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.org\u0600","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@examp\ufffele.org","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.org@example.org","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"@example.orguser_name","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user_name@example.orgg","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@example.or","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user_name@123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usrexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexample..com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexampEle.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use#rexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userex\u0003ample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us\u0082erexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexamp\tle.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexam\u0600ple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"usere\ufffexample.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexample.com.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".comuserexample","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexample.comm","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexample.co","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"userexample.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exxample.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"userE@example.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@examp#le.co.uk","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example\u0002.co.uk","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@exa\u0082mple.co.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user\t@example.co.uk","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@ex\u00adample.co.uk","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"\ufeffuser@example.co.uk","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@example.co.uk.co.uk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".co.ukuser@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@example.co.ukk","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example.co.u","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@example12.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@exampple123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"usker@example123.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"use#r@example123.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user@example123.com\u0003","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"use\u0082r@example123.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user@example123\t.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example12\u00ad3.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example123\ufffe.com","panel_vote":"F,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user@example123.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser@example123","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user@example123.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user@example123.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%nae@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%name@@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%Ename@example.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%name@ex!ample.com","panel_vote":"T,T,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%name@exa\u0003mple.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user%na\u0081me@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"use\u000br%name@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"u\u00adser%name@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user%na\ufeffme@example.com","panel_vote":"F,T,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user%name@example.com.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":".comuser%name@example","panel_vote":"F,F,F,T","signature":"FFFFFFFFFFFF"}
+{"input":"user%name@example.comm","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%name@example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"user%name@example._%+-]+","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"user-name@my-domin.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"useer-name@my-domain.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"us`er-name@my-domain.com","panel_vote":"T,T,T,T","signature":"FFFTFFFFFFFF"}
+{"input":"user-n\"ame@my-domain.com","panel_vote":"F,F,F,F","signature":"FFFTFFFFFFFF"}
+{"input":"user-name@my-doma\u0002in.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"first.last@mail.example.co","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"u+tag@example.io","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"123@ex.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a-b@ex-ample.com","panel_vote":"T,T,T,T","signature":"TTTTTTTTTTTT"}
+{"input":"a@b@c.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":"us er@example.com","panel_vote":"F,F,F,F","signature":"FFFFFFFFFFFF"}
+{"input":".u@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"u.@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFFTF"}
+{"input":"u..x@example.com","panel_vote":"F,F,F,T","signature":"TTTFFFTTFTTF"}
