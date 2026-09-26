@@ -415,13 +415,24 @@ def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
     assert sorted(sealed["survivors"]) == [f"m{i}" for i in range(1, 6)]
     assert verify_journal(journal) == []
     assert describe_mutation(sealed).untested == 5
+    # SHORTLIST-2's per-mutant rows are sealed in the record shape the
+    # Findings and AuditResult dicts use, so describe_mutation places them.
+    assert [(m["name"], m["status"]) for m in sealed["mutant_detail"]] == [
+        (f"m{i}", "no tests") for i in range(1, 6)
+    ]
+    assert all(m["show"].startswith("--- n.py") for m in sealed["mutant_detail"])
+    assert [m.name for m in describe_mutation(sealed).mutants] == [f"m{i}" for i in range(1, 6)]
     # Every other finding of the tier is journaled as before: no sidecar.
     others = [s for s in read_spans(journal) if s.name != "audit-tier2:mutation"]
     assert others
     assert all(not s.attempt_hash for s in others)
     row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
     assert "5 sampled mutants sit in code no test runs [record: untested=5]" in row.summary
-    assert "Survived with no recorded diff:\n  - survived; no diff recorded [m1]" in row.summary
+    # With SHORTLIST-2's rows sealed, each survivor is described from its own
+    # diff; the "no recorded diff" fallback no longer applies to any of them.
+    assert "m1: `return 2` -> `return 3`" in row.summary
+    assert "survived: nothing tests this [m1]" in row.summary
+    assert "no recorded diff" not in row.summary
 
 
 def test_a_blocked_tier2_seals_no_mutation_outcome(uncovered_tree: Path, tmp_path: Path) -> None:

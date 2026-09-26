@@ -644,7 +644,17 @@ class Auditor:
                     survivors = _survivors(outcome, sources)
             sidecars: dict[str, Mapping[str, Any]] = {}
             if gated.mutation is not None:
-                sidecars["mutation"] = dataclasses.asdict(gated.mutation)
+                # SHORTLIST-2 records `mutant_detail` as (name, status, show)
+                # tuples; the sidecar seals the record shape Findings.to_dict
+                # and feed.AuditResult.to_dict already use, which is what
+                # mutant_text.describe_mutation reads (INTEG3 semantic merge).
+                sidecars["mutation"] = {
+                    **dataclasses.asdict(gated.mutation),
+                    "mutant_detail": [
+                        {"name": n, "status": s, "show": t}
+                        for n, s, t in gated.mutation.mutant_detail
+                    ],
+                }
             if tier == 1 and statuses["coverage"][0] == "fail":
                 sealed = coverage_evidence(copy, resolved, statuses["coverage"][1])
                 if sealed is not None:
