@@ -588,7 +588,8 @@ function actionRow(card, packet) {
     if (!recap) {
       recap = `verdict: ${packet.verdict} — ${packet.verdict_text}`;
     }
-    if (typeof setMode === "function" && state.mode !== "chat") await setMode("chat");
+    // Leave Task for the read-only talk lane; Edit stays an explicit choice (LANECHIP).
+    if (typeof setMode === "function" && state.mode !== "ask") await setMode("ask");
     const input = document.querySelector("#input");
     input.value = `About the run "${packet.task}":\n\n${recap}\n\n`;
     input.dispatchEvent(new Event("input"));
