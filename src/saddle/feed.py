@@ -162,7 +162,11 @@ def render(result: AuditResult) -> str:
     allowed = [f for f in result.findings if f.reason == "sanctioned" and f.verdict in FAILING]
     for f in allowed:
         lines.append(f"(info) {f.gate} (tier {f.tier}): {f.detail}")
-    passed = len(result.findings) - len(bad) - len(allowed)
+    unproven = [f for f in result.findings if f.verdict == "not-proven"]
+    for f in unproven:
+        detail = f.detail if len(f.detail) <= DETAIL_CHARS else f.detail[:DETAIL_CHARS] + " ..."
+        lines.append(f"(not proven, does not refuse) {f.gate} (tier {f.tier}): {detail}")
+    passed = len(result.findings) - len(bad) - len(allowed) - len(unproven)
     if passed:
         lines.append(f"({passed} other check(s) passed or not applicable)")
     return "\n".join(lines)

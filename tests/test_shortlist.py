@@ -557,3 +557,62 @@ def test_a_behaviour_survivor_beside_set_aside_ones_stays_open() -> None:
     assert not got.passed
     assert got.detail.startswith("2 surviving mutant(s)")
     assert "mutant m.x_f__mutmut_1 (survived)" in got.detail
+
+
+# -- SHORTLIST-4: coverage is a locator (not-proven) under --tier2 shortlist ---
+
+
+@pytest.fixture
+def uncovered(tree: Path) -> Path:
+    """`tree` plus an untested changed module: coverage fails in score mode."""
+    (tree / "u.py").write_text("def g():\n    return 7\n")
+    return tree
+
+
+def _gate(found: Findings, gate: str) -> str:
+    return next(f.verdict for f in found.findings if f.gate == gate)
+
+
+def test_score_mode_still_fails_coverage_and_blocks_tier2(uncovered: Path) -> None:
+    auditor = Auditor(uncovered)
+    assert _gate(auditor.tier1(), "coverage") == "fail"
+    assert _gate(auditor.tier2(), "mutation") == "blocked"
+
+
+def test_shortlist_coverage_is_not_proven_and_tier2_admits_when_nothing_survives(
+    uncovered: Path,
+) -> None:
+    """Known-good: coverage fails, every mutant is killed; the audit passes."""
+    auditor = Auditor(uncovered, config=SHORTLIST)
+    first = auditor.tier1()
+    coverage = next(f for f in first.findings if f.gate == "coverage")
+    assert coverage.verdict == "not-proven"
+    assert "u.py:2" in coverage.detail
+    assert first.passed
+    second = auditor.tier2()
+    assert _gate(second, "mutation") == "pass"
+    assert second.passed
+
+
+def test_shortlist_with_uncovered_lines_still_refuses_a_behaviour_survivor(
+    uncovered: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad: the refusal comes from the shortlist and names the survivor."""
+    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    found = Auditor(uncovered, config=SHORTLIST).tier2()
+    mutation = next(f for f in found.findings if f.gate == "mutation")
+    assert mutation.verdict == "fail"
+    assert "mutant s1 (survived)" in mutation.detail
+
+
+def test_not_proven_renders_as_not_proven_and_does_not_refuse() -> None:
+    from saddle.auditor import Finding
+    from saddle.feed import AuditResult, failing, render
+
+    f = Finding("coverage", 1, "not-proven", "evidence-thin", "no test runs u.py:2", ("c",))
+    result = AuditResult("finish", "t" * 12, (f,))
+    assert not failing(f)
+    assert result.passed
+    text = render(result)
+    assert "(not proven, does not refuse) coverage (tier 1): no test runs u.py:2" in text
+    assert "passed or not applicable" not in text

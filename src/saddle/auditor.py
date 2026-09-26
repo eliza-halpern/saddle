@@ -73,7 +73,7 @@ from saddle.gates import (
 )
 from saddle.journal import append_span, build_span
 
-Verdict = Literal["pass", "fail", "not-applicable", "blocked"]
+Verdict = Literal["pass", "fail", "not-applicable", "blocked", "not-proven"]
 Tier2Mode = Literal["score", "shortlist"]
 TIER2_MODES: Final[tuple[Tier2Mode, ...]] = ("score", "shortlist")
 Reason = Literal["code-wrong", "evidence-thin", "scope", "unknown", "sanctioned"]
@@ -151,6 +151,7 @@ _JOURNAL_EXIT: Final[dict[Verdict, int]] = {
     "fail": 1,
     "not-applicable": 0,
     "blocked": 2,
+    "not-proven": 0,
 }
 
 
@@ -202,7 +203,7 @@ class Findings:
     @property
     def passed(self) -> bool:
         return all(
-            f.verdict in ("pass", "not-applicable") or f.reason == "sanctioned"
+            f.verdict in ("pass", "not-applicable", "not-proven") or f.reason == "sanctioned"
             for f in self.findings
         )
 
@@ -561,6 +562,10 @@ class Auditor:
                     c.name: ("pass" if c.passed else "fail", c.detail, c.basis)
                     for c in gated.checks
                 }
+            if self.config.tier2 == "shortlist" and statuses.get("coverage", ("",))[0] == "fail":
+                # SHORTLIST-4: coverage is a locator. An uncovered changed line is
+                # "not proven", never a refusal; the detail keeps its lines.
+                statuses["coverage"] = ("not-proven", *statuses["coverage"][1:])  # type: ignore[assignment]
             survivors: tuple[Survivor, ...] = ()
             scored = gated.mutation.mutant_detail if gated.mutation is not None else ()
             cites: dict[str, str] = {}
