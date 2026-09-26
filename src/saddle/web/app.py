@@ -758,7 +758,13 @@ def build_app(
         )
         if journal is None:
             return JSONResponse({"error": "no such task in this session"}, status_code=404)
-        return JSONResponse(compile_packet(journal, run_id=rid).payload())
+        # The run's repo, so the Reproduce row reports the branch anchor check
+        # (FIX-4). A web run's ledger is `auto.ledger_path(repo, rid)`; a path
+        # of any other shape names no repo, and the check is left out.
+        parts = journal.parts
+        shaped = len(parts) >= 4 and parts[-4:-2] == (".saddle", "runs")
+        repo = Path(*parts[:-4]) if shaped else None
+        return JSONResponse(compile_packet(journal, run_id=rid, anchor_repo=repo).payload())
 
     def _rewind_target(sid: str, index: int) -> tuple[list[dict[str, Any]], str] | None:
         """The stored messages and the question at `index`, if one is there.

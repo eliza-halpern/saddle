@@ -389,13 +389,20 @@ def _needs_a_test(evidence: dict[str, Any]) -> bool:
     )
 
 
-def _anchor_text(journal: Path, repo: Path | None) -> str:
-    """The Reproduce row's sentence on the branch anchor, "" when it was not checked."""
+def _anchor_text(journal: Path, repo: Path | None, *, sealed: bool) -> str:
+    """The Reproduce row's sentence on the branch anchor, "" when it was not checked.
+
+    With no outcome sealed yet (a run in flight, as the web page reads it)
+    a clean check has nothing to match, so it says nothing; an anchor with
+    no outcome behind it is still reported (FIX-4).
+    """
     if repo is None:
         return ""
     found = anchor_issues(journal, repo)
     if not found:
-        return "Its outcome matches the Saddle-Outcome trailer on the run branch. "
+        return (
+            "Its outcome matches the Saddle-Outcome trailer on the run branch. " if sealed else ""
+        )
     return f"The branch anchor does not match: {', '.join(i.code for i in found)}. "
 
 
@@ -712,7 +719,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             "observed" if anchor else "absent",
             f"The ledger verifies ({_n(len(entries), 'record')}, "
             f"{'no issues' if not issues else str(len(issues)) + ' issue(s)'}). "
-            f"{_anchor_text(journal, anchor_repo)}"
+            f"{_anchor_text(journal, anchor_repo, sealed=outcome is not None)}"
             "Re-check it, and read the change:",
             (anchor,) if anchor else (),
             (

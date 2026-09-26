@@ -300,3 +300,32 @@ def test_the_packet_reports_the_anchor_check_only_when_it_ran(repo: Path) -> Non
     forge(result)
     text, _ = reproduce(result.journal, repo)
     assert "The branch anchor does not match: anchor-mismatch." in text
+
+
+def in_flight(result: AutoResult) -> None:
+    rows = [
+        r
+        for r in lines(result.journal)
+        if r["record_type"] != "proof" and r.get("name") != "auto:finished"
+    ]
+    write(result.journal, rows)
+
+
+def test_the_packet_claims_no_match_for_a_run_in_flight(repo: Path) -> None:
+    """FIX-4: the web page reads packets mid-run. With no outcome sealed, a
+    clean anchor check has nothing to match; an anchor with no outcome
+    behind it is still reported."""
+    result = run(repo)
+    git(result.worktree, "reset", "-q", "--hard", "HEAD~1")
+    in_flight(result)
+    text, items = reproduce(result.journal, repo)
+    assert "Saddle-Outcome" not in text
+    assert "anchor" not in text.lower()
+    assert items[0].endswith(" --anchor")
+
+
+def test_the_packet_reports_an_anchor_with_no_outcome_behind_it(repo: Path) -> None:
+    anchored = run(repo)
+    in_flight(anchored)
+    text, _ = reproduce(anchored.journal, repo)
+    assert "The branch anchor does not match: outcome-missing-anchored." in text
