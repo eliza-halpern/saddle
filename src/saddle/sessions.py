@@ -77,6 +77,11 @@ BUILTIN_PERSONAS: Final[dict[str, str]] = {
 type Messages = list[dict[str, Any]]
 
 
+SESSION_MODES: tuple[str, ...] = ("chat", "task")
+"""What Enter does in a session. chat: a conversation turn in the folder.
+task: open the Run strip for an audited `saddle auto` episode."""
+
+
 @dataclass
 class Session:
     id: str
@@ -89,6 +94,9 @@ class Session:
     """0 is greedy and reproducible; higher samples more widely. Per session,
     because one conversation wanting a deterministic answer and the next
     wanting range is normal."""
+    mode: str = "chat"
+    """One of SESSION_MODES. A setting of the session like its persona, so a
+    reload comes back in the mode it was left in."""
     auto_title: bool = True
     """False once someone renames the session by hand: a title the user chose
     is never overwritten by the model."""

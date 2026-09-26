@@ -19,7 +19,7 @@ const $ = (sel) => document.querySelector(sel);
 const state = {
   sessionId: null, stream: null, busy: false,
   turnNode: null, assistantNode: null, reasoningNode: null, reasoningBody: null,
-  tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null,
+  tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null, mode: "chat",
 };
 
 
@@ -253,6 +253,7 @@ function renderHistory(info) {
   $("#persona").value = info.persona;
   if (info.reasoning_effort) $("#effort").value = info.reasoning_effort;
   if (info.temperature !== undefined) showTemperature(info.temperature);
+  showMode(info.mode);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
     handle({ kind: "context", used: info.context_used || 0, limit: info.context_limit });
@@ -559,6 +560,51 @@ async function boot() {
 
 /* ---------- composer ---------- */
 
+/* Two modes, per session: what Enter does. The words are what the code
+   does -- chat turns run the file and shell tools in the folder itself, with
+   no auditor; a task runs `saddle auto` in a worktree and ends in a packet. */
+const MODES = {
+  chat: {
+    desc: "Talk with the model. It can read, edit and run commands in your folder directly. Nothing is audited and there is no packet.",
+    placeholder: "what are we making today?",
+  },
+  task: {
+    desc: "Give it a job. It works alone on a new branch in a copy of your folder, the auditor checks its work as it goes, and you get an evidence packet. Enter shows the run before it starts.",
+    placeholder: "describe the job, then press Enter",
+  },
+};
+
+function showMode(mode) {
+  state.mode = MODES[mode] ? mode : "chat";
+  for (const button of document.querySelectorAll("#mode-switch button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.mode === state.mode));
+  }
+  $("#mode-desc").textContent = MODES[state.mode].desc;
+  $("#mode-chip").textContent = state.mode;
+  $("#mode-chip").dataset.mode = state.mode;
+  $("#input").placeholder = MODES[state.mode].placeholder;
+  $("#mode-note").hidden = true;
+  if (state.mode === "chat") closeRunConfirm();
+}
+
+async function setMode(mode) {
+  showMode(mode);
+  $("#input").focus();
+  try {
+    await api(`/api/sessions/${state.sessionId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: state.mode }),
+    });
+  } catch (error) {
+    notice(String(error.message || error), "error");
+  }
+}
+
+function submitComposer() {
+  if (state.mode === "task") openRunConfirm();
+  else send();
+}
+
 async function send() {
   const input = $("#input");
   const text = input.value.trim();
@@ -666,17 +712,31 @@ $("#composer").addEventListener("submit", (event) => {
     setStatus("working", "stopping…");
     return;
   }
-  send();
+  submitComposer();
 });
 $("#input").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitComposer(); }
+  if (event.key === "Escape" && !$("#task-confirm").hidden) { event.preventDefault(); closeRunConfirm(); }
 });
+$("#task-confirm").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRunConfirm();
+    $("#input").focus();
+  } else if (event.key === "Enter" && !event.shiftKey && event.target.id !== "tc-cancel") {
+    // Enter or Ctrl+Enter anywhere in the strip starts; Cancel keeps its own Enter.
+    event.preventDefault();
+    startTask();
+  }
+});
+for (const button of document.querySelectorAll("#mode-switch button")) {
+  button.onclick = (event) => { event.preventDefault(); setMode(button.dataset.mode); };
+}
 $("#input").addEventListener("input", (event) => {
   event.target.style.height = "auto";
   event.target.style.height = Math.min(event.target.scrollHeight, 220) + "px";
 });
 $("#attach").onclick = () => $("#file-input").click();
-$("#run").onclick = (event) => { event.preventDefault(); openRunConfirm(); };
 $("#tc-cancel").onclick = (event) => { event.preventDefault(); closeRunConfirm(); };
 $("#tc-start").onclick = (event) => { event.preventDefault(); startTask(); };
 $("#tc-test-edits").onchange = paintTestPolicy;
