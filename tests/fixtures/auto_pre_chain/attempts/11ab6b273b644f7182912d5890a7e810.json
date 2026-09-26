@@ -1,0 +1,21 @@
+{
+ "commands": [],
+ "elapsed_s": 0.004,
+ "files_changed": [
+  "calc.py"
+ ],
+ "narrative": "fixed add",
+ "narrative_label": "narrative, not evidence",
+ "outcome": "finished",
+ "reason": "finish called",
+ "refusals": 1,
+ "rounds": 3,
+ "time_budget_s": 1800,
+ "token_budget": 100000,
+ "tokens_spent_estimate": 33,
+ "tool_span_hashes": [
+  "3dde9d4b1eefab469326eee60112f0b87f7565335f67238812d60fbec196de97",
+  "0ecf7ac799c3f7137bda3ebb0a708b3aea9481abbe108e9be5fd61efd026ca3b",
+  "262e7c255e85e705f7a54264d7e018543181f931e004d74e48f2c43a9a154c8b"
+ ]
+}
