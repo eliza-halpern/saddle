@@ -96,3 +96,31 @@ def test_switching_sessions_leaves_the_other_runs_state_behind(
     assert still_asking, "submitting in session b reached session a's run"
     assert got["backOnA"]["status"] == "needs you"
     assert got["backOnA"]["send"] == "■"
+
+
+# F3 -- the "↓ newest" pill sat on the composer. Contract: when shown, the
+# pill is wholly above the composer and inside the viewport, at 400 px and
+# at desktop width. It was placed at a fixed `bottom: 96px` of <main>, and
+# the composer is taller than that (shots/04-question-card-400.png: the pill
+# covers the placeholder beside the send button).
+
+
+@pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
+def test_the_newest_pill_sits_above_the_composer(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "s")
+    sid = store.create(title="long", workdir=str(tmp_path)).id
+    words = "a line of an answer long enough to wrap on a phone screen. " * 6
+    messages = []
+    for i in range(20):
+        messages.append({"role": "user", "content": f"question {i}"})
+        messages.append({"role": "assistant", "content": f"{words}\n\n{words}"})
+    store.save_messages(sid, messages)
+    app = build_app(store, lambda: Reader(13), default_workdir=tmp_path)
+    with serving(app) as base:
+        got = cdp(base, "jump", sid)
+    for width in ("400", "1280"):
+        pill = got[width]
+        assert pill["hidden"] is False, width
+        assert pill["jumpBottom"] <= pill["composerTop"], (width, pill)
+        assert pill["jumpTop"] >= 0, (width, pill)
+        assert pill["jumpRight"] <= pill["viewport"], (width, pill)
