@@ -273,6 +273,10 @@ class _Audit:
     detail: str
     exit_code: int
     record_hash: str
+    verdict: str = ""
+    """An auditor finding's own verdict (pass, fail, blocked); "" for a seam span."""
+    body: str = ""
+    """An auditor finding's own detail, without the tier prefix."""
 
 
 def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
@@ -296,6 +300,8 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
                     f"tier {finding.tier}, {finding.verdict}: {finding.detail}",
                     span.exit_code,
                     span.record_hash,
+                    finding.verdict,
+                    finding.detail,
                 ),
             )
         elif span.name.startswith("audit:") and span.name not in FEED_SPANS:
@@ -537,7 +543,14 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
 
     # -- mutation -------------------------------------------------------------------
     mutation = [a for a in audits if a.name == "audit:mutation"]
-    if mutation:
+    if mutation and mutation[-1].verdict == "blocked":
+        # Tier 2 never ran: tier 1 failed on that tree. There is no mutation
+        # result to call failed (FIX-3); the auditor's detail names the cause.
+        last = mutation[-1]
+        rows.append(
+            Row("mutation", "Mutation", "not-proven", f"blocked: {last.body}", (last.record_hash,))
+        )
+    elif mutation:
         last = mutation[-1]
         rows.append(
             Row(

@@ -160,8 +160,11 @@ def test_a_refused_finish_reads_failed_on_the_packet(repo: Path) -> None:
     assert packet.verdict == "stopped"
     assert rows["audit"].status == "failed"
     assert any(i.startswith("✗ coverage: tier 1, fail") for i in rows["audit"].items)
-    assert rows["mutation"].status == "failed"  # blocked by tier 1: a verdict, not absent
-    assert "blocked" in rows["mutation"].text
+    # flip (FIX-3): blocked by tier 1 is not a failed mutation result, which
+    # would not exist; it is still recorded and cited, never absent.
+    assert rows["mutation"].status == "not-proven"
+    assert rows["mutation"].text.startswith("blocked: tier 1 failed (")
+    assert rows["mutation"].cites
 
 
 def test_only_the_latest_finding_per_gate_is_a_verdict(repo: Path) -> None:
