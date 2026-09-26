@@ -315,7 +315,8 @@ function renderPacket(card, packet) {
   box.appendChild(actionRow(card, packet));
   box.appendChild(summaryBand(packet));
 
-  // First screen: the band, then Scope, then Audit folded to its count.
+  // First screen: the band, then Scope, then Audit folded to its count,
+  // then the edit checks (tier 0) on their own line.
   // Everything else is under Details. A row this layout does not know goes
   // to Details too, so no row the packet compiles is ever dropped.
   const byKey = new Map(packet.rows.map((row) => [row.key, row]));
@@ -331,10 +332,12 @@ function renderPacket(card, packet) {
     fold.appendChild(packetRow(audit, packet));
     rows.appendChild(fold);
   }
+  // Tier-0 edit checks: their own line beside Audit, never in its count.
+  if (byKey.has("edit-checks")) rows.appendChild(packetRow(byKey.get("edit-checks"), packet));
   box.appendChild(rows);
   const details = el("details", "packet-details");
   details.appendChild(el("summary", "details-summary", "Details"));
-  const placed = new Set(["tests", "mutation", "not-proven", "scope", "audit"]);
+  const placed = new Set(["tests", "mutation", "not-proven", "scope", "audit", "edit-checks"]);
   for (const key of DETAIL_ORDER) {
     if (byKey.has(key)) details.appendChild(packetRow(byKey.get(key), packet));
   }

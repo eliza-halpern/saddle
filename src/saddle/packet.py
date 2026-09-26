@@ -23,6 +23,10 @@ What the packet can and cannot say for an executor-only run (arm E):
   tree audited) or a chat seam's `audit:<gate>` span. The feed's
   `audit:delivered`/`audit:withheld` records are deliveries, not verdicts.
   With none, "finished" here never reads as "done".
+- A tier-0 finding (`audit-tier0:<gate>`: syntax, ruff, imports on one
+  edited file) is an edit check, not an audit verdict. It is counted on its
+  own "Edit checks" row, never in the Audit row or the verdict line
+  (PACKETFIX-1: a run with 9 verdicts and 3 edit checks read "12 of 12").
 """
 
 from __future__ import annotations
@@ -273,7 +277,7 @@ class _Audit:
     record_hash: str
 
 
-def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
+def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_Audit]:
     """Every auditor verdict in the ledger, in ledger order.
 
     A chat seam's `audit:<gate>` span is read as written. The real
@@ -281,12 +285,17 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
     detail, and only the latest per gate is kept: each audit re-runs every
     gate of its tier on a newer tree, so an earlier checkpoint's failure
     that a later audit cleared is history, not a verdict on the change.
+
+    Tier 0 checks one edited file at the edit and is not a verdict on the
+    change: it is left out, and `edit_checks=True` returns only it instead.
     """
     seam: list[tuple[int, _Audit]] = []
     latest: dict[str, tuple[int, _Audit]] = {}
     for order, span in enumerate(spans):
         finding = tier_finding(span.name, span.detail)
         if finding is not None:
+            if (finding.tier == 0) != edit_checks:
+                continue
             latest[finding.gate] = (
                 order,
                 _Audit(
@@ -296,7 +305,7 @@ def _audits(spans: Iterable[SpanRecord]) -> list[_Audit]:
                     span.record_hash,
                 ),
             )
-        elif span.name.startswith("audit:") and span.name not in FEED_SPANS:
+        elif not edit_checks and span.name.startswith("audit:") and span.name not in FEED_SPANS:
             seam.append((order, _Audit(span.name, span.detail, span.exit_code, span.record_hash)))
     return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
 
@@ -400,6 +409,7 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
     tools = [s for s in spans if s.kind == "tool"]
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
+    edit_checks = _audits(spans, edit_checks=True)
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
@@ -585,6 +595,28 @@ def compile_packet(journal: Path, *, run_id: str = "") -> Packet:
                     ),
                 )
             )
+
+    # -- edit checks (tier 0: one edited file, at the edit; not a verdict) -------------
+    if edit_checks:
+        passed = sum(a.exit_code == 0 for a in edit_checks)
+        rows.append(
+            Row(
+                "edit-checks",
+                "Edit checks",
+                # Never "proven": an edit check is not an audit verdict. A
+                # failing one is still a failed record (and refuses a merge).
+                "observed" if passed == len(edit_checks) else "failed",
+                f"{passed} of {_n(len(edit_checks), 'edit check')} passed. Tier 0 checks "
+                "one edited file (syntax, ruff, imports) when it is written; it is not "
+                "an audit verdict and is not counted in Audit.",
+                tuple(a.record_hash for a in edit_checks),
+                tuple(
+                    f"{'✓' if a.exit_code == 0 else '✗'} "
+                    f"{a.name.removeprefix('audit:')}: {a.detail}"
+                    for a in edit_checks
+                ),
+            )
+        )
 
     # -- not proven -----------------------------------------------------------------
     gaps: list[str] = []

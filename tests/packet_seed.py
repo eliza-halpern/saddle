@@ -13,13 +13,14 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
+from saddle.auditor import Auditor, AuditorConfig
 from saddle.auto import create_worktree, ledger_path
 from saddle.journal import append_span, build_span, write_attempt_sidecar
 from saddle.packet import compile_packet, render_packet_text
 from saddle.sessions import SessionStore
 from saddle.web.tasks import RUN_REF, TaskRun, recap_message
 
-Kind = Literal["audited", "mutated", "unaudited", "stopped", "failed"]
+Kind = Literal["audited", "mutated", "unaudited", "stopped", "failed", "edit-checked"]
 
 
 def git(repo: Path, *args: str) -> str:
@@ -74,6 +75,7 @@ def seed(
     append_span(journal, start)
     audits = {
         "audited": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
+        "edit-checked": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
         "mutated": [
             ("audit:tests", 0, "2 passed"),
             ("audit:mutation", 0, "killed 2 of 2 changed-line mutants"),
@@ -97,6 +99,10 @@ def seed(
                 parent_id=start.span_id,
             ),
         )
+    if kind == "edit-checked":
+        # The real auditor's tier-0 records (syntax, ruff, imports) on the edit.
+        config = AuditorConfig(journal=journal)
+        Auditor(worktree, config=config).tier0("calc.py", (worktree / "calc.py").read_text())
     outcome = "stopped" if kind == "stopped" else "finished"
     reason = "audit unresolved" if kind == "stopped" else "finish called"
     evidence = {
