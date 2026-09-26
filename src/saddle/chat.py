@@ -12,7 +12,7 @@ from rich.console import Console
 
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.timeline import Timeline
-from saddle.tools import TOOLS, ToolContext, execute_tool
+from saddle.tools import ToolContext, execute_tool, scope_turn
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
 
 MAX_TOOL_ROUNDS: Final = 10
@@ -27,6 +27,10 @@ class ChatOptions:
     max_tokens: int = 8192
     temperature: float = 0.0
     reasoning_effort: str = "medium"
+    mode: str = "ask"
+    """The lane, as in the web chat's `Session.mode`: "ask" offers read-only
+    tools and refuses any other call; "edit" may write files and run
+    commands in `workdir`, unaudited. Ask is the default in both chats."""
 
 
 def _stream_response(
@@ -35,8 +39,11 @@ def _stream_response(
     options: ChatOptions,
     *,
     display: Timeline,
+    tools: list[dict[str, Any]],
 ) -> tuple[str, str, list[ToolCall]]:
-    """Stream one response to the timeline; return text, reasoning, calls."""
+    """Stream one response to the timeline; return text, reasoning, calls.
+
+    `tools` is what the model is offered: the turn's `scope_turn` list."""
     parts: list[str] = []
     thoughts: list[str] = []
     calls: list[ToolCall] = []
@@ -45,7 +52,7 @@ def _stream_response(
         max_tokens=options.max_tokens,
         temperature=options.temperature,
         reasoning_effort=options.reasoning_effort,
-        tools=TOOLS,
+        tools=tools,
     ):
         if isinstance(event, ToolCall):
             calls.append(event)
@@ -106,11 +113,14 @@ def _run_turn(
     """
     node_id = f"chat#{turn}"
     ctx = context or ToolContext(workdir=options.workdir)
+    offered = scope_turn(ctx, options.mode)
     messages.append({"role": "user", "content": text})
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     for _ in range(MAX_TOOL_ROUNDS):
-        reply, reasoning, calls = _stream_response(client, messages, options, display=display)
+        reply, reasoning, calls = _stream_response(
+            client, messages, options, display=display, tools=offered
+        )
         thinking.append(reasoning)
         if not calls:
             messages.append({"role": "assistant", "content": reply})

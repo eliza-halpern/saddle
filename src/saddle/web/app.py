@@ -61,7 +61,7 @@ from saddle.packet import Packet, compile_packet, render_packet_text
 from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import BUILTIN_PERSONAS, SESSION_MODES, SessionStore
 from saddle.titles import title_for
-from saddle.tools import PREVIEWABLE, ToolContext, preview_for, tools_for_mode
+from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
 from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
 from saddle.web import branch_actions, tasks
@@ -383,9 +383,7 @@ class ChatServer:
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
                 )
-            # Set every turn: the context outlives a lane change.
-            tools = tools_for_mode(session.mode)
-            live.context.allowed = tuple(t["function"]["name"] for t in tools)
+            tools = scope_turn(live.context, session.mode)
             live.turn += 1
             with self.client_factory() as client:
                 options = TurnOptions(

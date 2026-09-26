@@ -120,7 +120,11 @@ def test_an_empty_choices_chunk_without_usage_is_still_malformed() -> None:
 def test_chat_repl_ignores_usage_events() -> None:
     server = FakeServer([_sse(_delta({"content": "hi"}), _usage_chunk(4, 1))])
     reply, reasoning, calls = _stream_response(
-        server.client(), [{"role": "user", "content": "q"}], ChatOptions(), display=MagicMock()
+        server.client(),
+        [{"role": "user", "content": "q"}],
+        ChatOptions(),
+        display=MagicMock(),
+        tools=[],
     )
     assert (reply, reasoning, calls) == ("hi", "", [])
 
