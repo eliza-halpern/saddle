@@ -512,7 +512,11 @@ def run_turn(
             thoughts: list[str] = []
             calls: list[ToolCall] = []
             usage: StreamUsage | None = None
+            sent = perf_counter()
+            first: float | None = None
             for stream, item in _stream(client, messages, options):
+                if first is None:
+                    first = perf_counter()
                 if stop():
                     break
                 if stream == "call":
@@ -525,10 +529,15 @@ def run_turn(
                 else:
                     parts.append(item)
                     yield ContentDelta(text=item)
+            done = perf_counter()
+            timing = _RoundTiming(
+                model_ms=int((done - sent) * 1000),
+                ttft_ms=int(((first if first is not None else done) - sent) * 1000),
+            )
             reply, reasoning = "".join(parts), "".join(thoughts)
             thinking.append(reasoning)
             if auto is not None:
-                _charge(options.journal, node_id, auto, reply, reasoning, calls, usage)
+                _charge(options.journal, node_id, auto, reply, reasoning, calls, usage, timing)
                 yield _progress(auto)
 
             if not calls:
@@ -833,6 +842,14 @@ def _offer_test_edits(
     return "\n\nThe user allowed test edits for the rest of this run: write the test it names."
 
 
+@dataclass(frozen=True)
+class _RoundTiming:
+    """One round's request timing, in whole milliseconds."""
+
+    model_ms: int
+    ttft_ms: int
+
+
 def _charge(
     journal: Path,
     node_id: str,
@@ -841,14 +858,31 @@ def _charge(
     reasoning: str,
     calls: list[ToolCall],
     usage: StreamUsage | None,
+    timing: _RoundTiming | None = None,
 ) -> None:
-    """Charge one round to the budget and seal the spend, naming its source."""
+    """Charge one round to the budget and seal the spend, naming its source.
+
+    Also records what the round cost in time and reasoning (SPEED, F-a):
+    `reasoning_tokens` is the server's count when its usage carried one,
+    else the reasoning text at `CHARS_PER_TOKEN` (0 for none, never
+    missing), with `reasoning_source` saying which; `model_ms` is the
+    request round-trip and `ttft_ms` the wait for the first streamed
+    event. `duration_ms` stays 0 as before; the new fields are additive.
+    """
     chars = len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
     tokens, source = auto.budget.charge(chars, usage)
+    if usage is not None and usage.reasoning_tokens is not None:
+        reasoning_tokens, reasoning_source = usage.reasoning_tokens, "usage"
+    else:
+        reasoning_tokens, reasoning_source = len(reasoning) // CHARS_PER_TOKEN, "estimate"
     spend = {
         "completion_tokens": tokens,
         "prompt_tokens": usage.prompt_tokens if usage is not None else None,
         "token_source": source,
+        "reasoning_tokens": reasoning_tokens,
+        "reasoning_source": reasoning_source,
+        "model_ms": timing.model_ms if timing is not None else 0,
+        "ttft_ms": timing.ttft_ms if timing is not None else 0,
     }
     append_span(
         journal,
