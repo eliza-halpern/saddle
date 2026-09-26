@@ -1111,3 +1111,44 @@ def test_accepted_unchanged_is_false_before_any_surfacing_and_when_no_snapshot_c
 
     monkeypatch.setattr(feed, "snapshot", broken)
     assert fed.accepted_unchanged() is False
+
+
+# -- FEEDFIX (8): every audit span seals its whole result ---------------------------
+
+
+class Killing(DetailAuditor):
+    """Tier 2's second audit has killed the mutant the first left alive."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.audits = 0
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        self.audits += 1
+        status = "survived" if self.audits == 1 else "killed"
+        found = self._findings(2, tree)
+        detail = (("m1", "killed", "a"), ("m2", status, "b"))
+        return Findings(
+            tier=2, key=f"k{self.audits}", findings=found.findings, mutant_detail=detail
+        )
+
+
+def test_each_audit_span_seals_its_own_mutant_rows(repo: Path, tmp_path: Path) -> None:
+    """Known-good: two finish audits, a survivor killed between them, both
+    readable from the ledger; known-bad: the rows are not the same record."""
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    journal = tmp_path / "j.jsonl"
+    fed = AuditFeed(repo, "HEAD", journal, "s", factory=lambda *a: Killing())
+    fed.final()
+    (repo / "calc.py").write_text("def add(a, b):\n    return b + a\n")
+    fed.final()
+    spans = [s for s in read_spans(journal) if s.name.startswith("audit:")]
+    assert len(spans) == 2
+    rows = [
+        json.loads(attempt_sidecar_path(journal, s.span_id).read_text())["mutant_detail"]
+        for s in spans
+    ]
+    assert [r["status"] for r in rows[0]] == ["killed", "survived"]
+    assert [r["status"] for r in rows[1]] == ["killed", "killed"]
+    # The run span "s" is not in this bare journal; every sidecar still hashes.
+    assert {i.code for i in verify_journal(journal)} == {"orphan-span"}

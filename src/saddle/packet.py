@@ -759,7 +759,15 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         # sealed beside it, beneath the Audit row's items (inside its fold on
         # the web). A passing or absent finding, or one with nothing sealed,
         # adds nothing; there is no Coverage row of its own.
-        coverage = next((a for a in other if a.name == "audit:coverage" and a.exit_code != 0), None)
+        # A not-proven one (`--tier2 shortlist`, exit 0) names the same lines.
+        coverage = next(
+            (
+                a
+                for a in other
+                if a.name == "audit:coverage" and (a.exit_code != 0 or a.verdict == "not-proven")
+            ),
+            None,
+        )
         coverage_summary = (
             _coverage_summary(journal, span_by_hash.get(coverage.record_hash), mutation_summary)
             if coverage is not None

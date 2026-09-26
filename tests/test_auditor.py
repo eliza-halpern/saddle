@@ -537,3 +537,23 @@ def test_tier2_seals_nothing_when_the_gate_carries_no_outcome(
     span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
     assert span.attempt_hash == ""
     assert verify_journal(journal) == []
+
+
+def test_tier1_seals_a_not_proven_coverage_finding_under_shortlist_so_its_english_renders(
+    uncovered_tree: Path, tmp_path: Path
+) -> None:
+    """FEEDFIX (8): under `--tier2 shortlist` coverage is `not-proven`
+    (SHORTLIST-4), and it seals the same sidecar a failing one does, so the
+    packet renders COVTEXT's English for it."""
+    from saddle.packet import compile_packet
+
+    journal = tmp_path / "proofs.jsonl"
+    config = AuditorConfig(journal=journal, tier2="shortlist")
+    result = Auditor(uncovered_tree, config=config).tier1()
+    coverage = next(f for f in result.findings if f.gate == "coverage")
+    assert coverage.verdict == "not-proven"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash
+    assert verify_journal(journal) == []
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert "  - m.py g: 2 of 2 changed lines never run -- nothing exercises g" in audit.summary

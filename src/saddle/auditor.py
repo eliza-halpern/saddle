@@ -655,7 +655,9 @@ class Auditor:
                         for n, s, t in gated.mutation.mutant_detail
                     ],
                 }
-            if tier == 1 and statuses["coverage"][0] == "fail":
+            if tier == 1 and statuses["coverage"][0] in ("fail", "not-proven"):
+                # A not-proven coverage finding (SHORTLIST-4) names the same
+                # lines; its sidecar is what COVTEXT renders (FEEDFIX item 8).
                 sealed = coverage_evidence(copy, resolved, statuses["coverage"][1])
                 if sealed is not None:
                     sidecars["coverage"] = sealed

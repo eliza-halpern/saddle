@@ -497,6 +497,17 @@ class AuditFeed:
         return self.results[-1].to_dict() if self.results else None
 
     def _journal(self, result: AuditResult, text: str, *, delivered: bool) -> None:
+        """One span per completed audit, delivered or withheld.
+
+        Its sidecar seals the whole result (`AuditResult.to_dict`): every
+        finding in full and, for an audit that ran tier 2, every scored
+        mutant's (name, status, show). The span's detail is capped at 500
+        characters in the journal, so without it only the final audit's
+        rows survived (EAFSPREP ADDENDUM-2 §4.1-2); with it a reader can
+        count the survivors killed between two audits (FEEDFIX item 8).
+        """
+        span_id = uuid.uuid4().hex
+        digest = write_attempt_sidecar(self.journal, span_id, result.to_dict())
         append_span(
             self.journal,
             build_span(
@@ -507,6 +518,8 @@ class AuditFeed:
                 detail=text,
                 name=f"audit:{'delivered' if delivered else 'withheld'}",
                 parent_id=self.run_span,
+                span_id=span_id,
+                attempt_hash=digest,
             ),
         )
 
