@@ -122,6 +122,23 @@ class ErrorEvent(Event):
 
 
 @dataclass(frozen=True)
+class AuditNote(Event):
+    """Audit findings an autonomous run delivered to the model (arm E+A+F).
+
+    `text` is exactly what was appended to the model's next tool result (or
+    its nudge): one block per completed audit, headed
+    `[audit <checkpoint n|finish> on tree <id>: PASS|FAIL]`, then one line
+    per failing finding (`- gate (tier t): verdict, reason: detail`). A UI
+    can render it as-is beside the tool call it arrived with. Findings that
+    were withheld (arm E+A) are journaled but never emitted as this event;
+    a refused `finish` shows its findings in that call's `ToolEnd` detail.
+    """
+
+    text: str
+    kind: str = "audit"
+
+
+@dataclass(frozen=True)
 class Compaction(Event):
     """Older turns were summarised to fit the window (see memory.py)."""
 

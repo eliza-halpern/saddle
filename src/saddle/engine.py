@@ -18,9 +18,10 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic, perf_counter
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from saddle.events import (
+    AuditNote,
     Compaction,
     ContentDelta,
     Context,
@@ -106,6 +107,24 @@ class RunBudget:
         return None
 
 
+class AuditHooks(Protocol):
+    """What the engine calls on an autonomous run's auditor (`feed.AuditFeed`).
+
+    The engine imports no auditor; it only knows these four points.
+    """
+
+    def before_tool(self, name: str) -> None: ...
+    def after_tool(self, name: str, ok: bool) -> None: ...
+    def collect(self) -> str: ...
+    def final(self) -> tuple[bool, str]: ...
+    def close(self) -> None: ...
+    def last(self) -> dict[str, object] | None: ...
+
+
+FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
+"""Prefix of `finish`'s result when the audit refuses it (arm E+A+F)."""
+
+
 @dataclass
 class AutoRun:
     """What makes a turn an autonomous run, and what it ended as.
@@ -114,9 +133,9 @@ class AutoRun:
     `finish`; "stopped" for a budget, a model error or a cancel. There is
     no third ending, and a stop never reads as done.
 
-    Seam for the auditor lanes (not implemented here): every tool result
-    passes through `run_turn` beside `ToolEnd`, where an auditor's event
-    could be appended to the result the model sees.
+    `feed`, when set (arms E+A and E+A+F), is called before and after each
+    tool, its completed audits are appended to the next tool result, and it
+    decides whether `finish` is accepted (`feed.AuditFeed`).
     """
 
     budget: RunBudget
@@ -128,6 +147,14 @@ class AutoRun:
     narrative: str = ""
     span_hashes: list[str] = field(default_factory=list)
     refusals: int = 0
+    feed: AuditHooks | None = None
+    finish_refusals: int = 0
+    arm: str = "E"
+    """Which Phase 2 arm this run is ("E", "E+A", "E+A+F"); sealed in the
+    outcome sidecar so the ledger alone tells the arms apart."""
+    sealed: dict[str, object] = field(default_factory=dict)
+    """The run's settings (sampling, test-edit policy, sanctioned rewrites),
+    copied into the outcome sidecar so a reader need not trust argv."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -421,7 +448,12 @@ def run_turn(
                 messages.append({"role": "assistant", "content": reply})
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
-                    messages.append({"role": "user", "content": AUTO_NUDGE})
+                    nudge = AUTO_NUDGE
+                    heard = auto.feed.collect() if auto.feed is not None else ""
+                    if heard:
+                        yield AuditNote(text=heard)
+                        nudge = f"{nudge}\n\n{heard}"
+                    messages.append({"role": "user", "content": nudge})
                     continue
                 break
 
@@ -450,6 +482,8 @@ def run_turn(
                     present=label_for(call.name, call.arguments, ok=None),
                 )
                 start = perf_counter()
+                if auto is not None and auto.feed is not None:
+                    auto.feed.before_tool(call.name)
                 if auto is not None and call.name == FINISH_TOOL:
                     result = _finish(auto, call.arguments)
                 else:
@@ -486,8 +520,15 @@ def run_turn(
                 if auto is not None:
                     auto.span_hashes.append(span.record_hash)
                     auto.refusals += refused
-                tools.append({"name": call.name, "arguments": call.arguments, "result": result})
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+                seen = result
+                if auto is not None and auto.feed is not None:
+                    auto.feed.after_tool(call.name, ok)
+                    heard = auto.feed.collect()
+                    if heard:
+                        yield AuditNote(text=heard)
+                        seen = f"{result}\n\n{heard}"
+                tools.append({"name": call.name, "arguments": call.arguments, "result": seen})
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": seen})
             rounds.append({"reply": reply, "tools": tools})
             if stop() or (auto is not None and auto.outcome == "finished"):
                 break
@@ -503,6 +544,8 @@ def run_turn(
             auto.stop("cancelled")
     if auto is not None:
         auto.stop("the loop ended without finish")  # a no-op once outcome is set
+        if auto.feed is not None:
+            auto.feed.close()
         _seal_outcome(options.journal, node_id, auto, rounds)
 
     yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
@@ -527,6 +570,11 @@ def _finish(auto: AutoRun, arguments: str) -> str:
     summary = args.get("summary") if isinstance(args, dict) else None
     if not isinstance(summary, str):
         return "error: finish needs a string summary argument"
+    if auto.feed is not None:
+        accepted, findings = auto.feed.final()
+        if not accepted:
+            auto.finish_refusals += 1
+            return f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
     auto.finish(summary)
     return "finished. Your summary is recorded as narrative, not as evidence."
 
@@ -549,7 +597,8 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         if t["name"] == "run_command" and _is_object(t["arguments"])
     ]
     detail = (
-        f"{auto.outcome}: {auto.reason}; files changed: {', '.join(files) or 'none'}; "
+        f"{auto.outcome}: {auto.reason}; arm {auto.arm}; "
+        f"files changed: {', '.join(files) or 'none'}; "
         f"commands run: {len(commands)}; refusals: {auto.refusals}"
     )
     span = build_span(
@@ -575,6 +624,13 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "elapsed_s": round(auto.budget.elapsed(), 3),
         "time_budget_s": auto.budget.time_s,
         "tool_span_hashes": list(auto.span_hashes),
+        "arm": auto.arm,
+        **auto.sealed,
+        "finish_refusals": auto.finish_refusals,
+        # The last completed audit (the finish audit if finish was called):
+        # its tree id, findings and verdict. None for arm E, or when nothing
+        # was audited before the run ended.
+        "audit": auto.feed.last() if auto.feed is not None else None,
     }
     digest = write_attempt_sidecar(journal, span.span_id, evidence)
     span = build_span(

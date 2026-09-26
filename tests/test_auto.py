@@ -115,6 +115,7 @@ def finish(text: str = "fixed add", call_id: str = "f1") -> list[Any]:
 
 
 def auto(repo: Path, client: Scripted, **kwargs: Any) -> AutoResult:
+    kwargs.setdefault("arm", "E")  # arm E's contract; the audited arms are test_feed.py's
     options = AutoOptions(task="make add add", repo=repo, run_id="r1", **kwargs)
     return run_auto(options, cast(VllmClient, client))
 
@@ -177,7 +178,8 @@ def test_finished_run_leaves_a_branch_a_verified_ledger_and_the_checkout_untouch
 def test_a_second_run_gets_its_own_worktree_and_branch(repo: Path) -> None:
     first = auto(repo, Scripted([finish()]))
     second = run_auto(
-        AutoOptions(task="again", repo=repo, run_id="r2"), cast(VllmClient, Scripted([finish()]))
+        AutoOptions(task="again", repo=repo, run_id="r2", arm="E"),
+        cast(VllmClient, Scripted([finish()])),
     )
     assert first.worktree != second.worktree
     assert git(repo, "branch", "--list", "--format=%(refname:short)", "saddle/auto/*").split() == [
@@ -188,7 +190,9 @@ def test_a_second_run_gets_its_own_worktree_and_branch(repo: Path) -> None:
 
 
 def test_an_unnamed_run_gets_a_generated_id(repo: Path) -> None:
-    result = run_auto(AutoOptions(task="t", repo=repo), cast(VllmClient, Scripted([finish()])))
+    result = run_auto(
+        AutoOptions(task="t", repo=repo, arm="E"), cast(VllmClient, Scripted([finish()]))
+    )
     assert len(result.run_id) == 12
     assert result.branch == f"saddle/auto/{result.run_id}"
 
@@ -214,7 +218,7 @@ def test_finish_without_a_string_summary_does_not_finish(repo: Path) -> None:
 
 def test_events_reach_the_caller(repo: Path) -> None:
     seen: list[Event] = []
-    options = AutoOptions(task="t", repo=repo, run_id="r1")
+    options = AutoOptions(task="t", repo=repo, run_id="r1", arm="E")
     run_auto(options, cast(VllmClient, Scripted([finish()])), on_event=seen.append)
     assert seen[0].kind == "turn.start"
     assert seen[-1].kind == "turn.end"
@@ -490,7 +494,7 @@ def test_changed_files_lists_edits_additions_and_deletions(repo: Path) -> None:
 
 
 def namespace(repo: Path, **extra: Any) -> argparse.Namespace:
-    args = cli.build_parser().parse_args(["auto", "fix add", "--repo", str(repo)])
+    args = cli.build_parser().parse_args(["auto", "fix add", "--repo", str(repo), "--no-audit"])
     for key, value in extra.items():
         setattr(args, key, value)
     return args
@@ -539,7 +543,7 @@ def test_main_dispatches_auto(
 ) -> None:
     monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
     monkeypatch.setattr("saddle.cli.VllmClient", MainClient)
-    assert cli.main(["auto", "t", "--repo", str(repo), "--time-budget", "60"]) == 0
+    assert cli.main(["auto", "t", "--repo", str(repo), "--time-budget", "60", "--no-audit"]) == 0
     assert "finished" in capsys.readouterr().out
     assert MainClient.made[-1]["api_key"] == "k"
 

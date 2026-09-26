@@ -1,9 +1,10 @@
 """Autonomous runs: a task string and a repo in, a branch and a ledger out.
 
-This is arm E of Phase 2: saddle's own executor, `engine.run_turn`, run
-with no human turn and no auditor. It is not a second tool loop (T5-7,
-clause 2): it sets up a worktree, turns on the tier-0 guards and a budget,
-and hands one turn to the same engine the chat uses.
+This is Phase 2's executor, `engine.run_turn`, run with no human turn.
+Arm E runs it with no auditor; arms E+A and E+A+F (the default) attach a
+`feed.AuditFeed` that audits each checkpoint and the finished tree.
+It is not a second tool loop (T5-7, clause 2): it sets up a worktree,
+turns on the tier-0 guards and a budget, and hands one turn to the same engine the chat uses.
 
 - The run happens in a fresh `git worktree` under
   `.saddle/worktrees/<run-id>/` on branch `saddle/auto/<run-id>`, never in
@@ -11,8 +12,9 @@ and hands one turn to the same engine the chat uses.
 - The ledger is `.saddle/runs/<run-id>/proofs.jsonl`, outside the
   worktree, so the tools cannot reach it; `saddle verify` reads it.
 - It ends `finished` only when the model calls `finish`, and otherwise
-  `stopped`, naming the budget or error. Neither is a claim that the change
-  works: no gate runs here.
+  `stopped`, naming the budget or error. In arm E+A+F `finish` is refused
+  while the audit of the tree fails; in E and E+A a `finished` outcome is
+  no claim that the change works (E+A records the audit verdict beside it).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from typing import Final
 
 from saddle.engine import AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event
+from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.journal import append_span, build_span
 from saddle.tools import FINISH_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
@@ -74,6 +77,17 @@ class AutoOptions:
     context_tokens: int = 175_000
     run_id: str = ""
     clock: Callable[[], float] = monotonic
+    arm: Arm = "E+A+F"
+    """E+A+F (default): audits at checkpoints and at finish, delivered as
+    tool results, and a failing finish audit refuses `finish`. E+A
+    (`--no-feedback`): the same audits, journaled, never delivered, never
+    refusing. E (`--no-audit`): no auditor at all."""
+    auditor_factory: AuditorFactory = default_auditor
+    sanctioned_test_rewrites: tuple[str, ...] = ()
+    """Test functions the task orders rewritten (T5 rule 8). A failing
+    assertion-preservation finding naming only these is classed `sanctioned`:
+    reported as information, never delivered as a failure, never refusing
+    `finish`. Sealed in the start span and the outcome sidecar."""
 
 
 @dataclass(frozen=True)
@@ -143,6 +157,9 @@ def run_auto(
     on_event: Callable[[Event], None] | None = None,
 ) -> AutoResult:
     """Run one task to `finish` or a budget, then commit what it left."""
+    if options.arm not in ARMS:
+        msg = f"unknown arm {options.arm!r}; expected one of {', '.join(ARMS)}"
+        raise AutoError(msg)
     repo = options.repo.resolve()
     run_id = options.run_id or uuid.uuid4().hex[:12]
     worktree, branch = create_worktree(repo, run_id)
@@ -153,18 +170,42 @@ def run_auto(
         argv=["auto:start", options.task],
         duration_ms=0,
         exit_code=0,
-        detail=f"branch {branch}; budgets {options.time_budget_s:.0f}s, "
+        detail=f"arm {options.arm}; temperature {options.temperature}; "
+        f"effort {options.reasoning_effort}; sanctioned test rewrites "
+        f"{','.join(options.sanctioned_test_rewrites) or 'none'}; branch {branch}; "
+        f"budgets {options.time_budget_s:.0f}s, "
         f"{options.token_budget} generated tokens; test edits "
         f"{'allowed' if options.allow_test_edits else 'refused'}",
         kind="agent",
     )
     append_span(journal, start)
+    feed = (
+        None
+        if options.arm == "E"
+        else AuditFeed(
+            worktree=worktree,
+            baseline=_git(worktree, "rev-parse", "HEAD").strip(),
+            journal=journal,
+            run_span=start.span_id,
+            feedback=options.arm == "E+A+F",
+            factory=options.auditor_factory,
+            sanctioned_test_rewrites=options.sanctioned_test_rewrites,
+        )
+    )
     auto = AutoRun(
         budget=RunBudget(
             time_s=options.time_budget_s, tokens=options.token_budget, clock=options.clock
         ),
         run_span=start.span_id,
         changed_files=lambda: changed_files(worktree),
+        feed=feed,
+        arm=options.arm,
+        sealed={
+            "temperature": options.temperature,
+            "reasoning_effort": options.reasoning_effort,
+            "allow_test_edits": options.allow_test_edits,
+            "sanctioned_test_rewrites": list(options.sanctioned_test_rewrites),
+        },
     )
     roots = None if options.allow_test_edits else guarded_test_roots(worktree)
     tests = (

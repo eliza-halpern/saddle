@@ -33,7 +33,7 @@ from saddle.auto import (
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
-from saddle.events import ErrorEvent, Event, ToolEnd
+from saddle.events import AuditNote, ErrorEvent, Event, ToolEnd
 from saddle.evidence import (
     RUFF_RULES,
     SADDLE_COMMIT_IDENTITY,
@@ -1572,6 +1572,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Let the run edit test files (refused by default).",
     )
+    arms = auto.add_mutually_exclusive_group()
+    arms.add_argument(
+        "--no-feedback",
+        action="store_true",
+        help="Arm E+A: audit and journal, but deliver nothing and never refuse finish.",
+    )
+    arms.add_argument("--no-audit", action="store_true", help="Arm E: run no auditor at all.")
+    auto.add_argument(
+        "--sanctioned-test-rewrite",
+        action="append",
+        default=[],
+        metavar="TEST_NAME",
+        help="A test function the task orders rewritten; its assertion-preservation "
+        "finding is reported, not held against the run. Repeatable; sealed in the ledger.",
+    )
     auto.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     auto.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
@@ -1599,10 +1614,14 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         allow_test_edits=args.allow_test_edits,
         temperature=args.temperature,
         reasoning_effort=args.reasoning_effort,
+        arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
+        sanctioned_test_rewrites=tuple(args.sanctioned_test_rewrite),
     )
 
     def show(event: Event) -> None:
-        if isinstance(event, ToolEnd):
+        if isinstance(event, AuditNote):
+            stdout.write(f"  {event.text.splitlines()[0]}\n")
+        elif isinstance(event, ToolEnd):
             stdout.write(f"  {event.label}\n")
         elif isinstance(event, ErrorEvent):
             stdout.write(f"  {event.message}\n")
@@ -1613,7 +1632,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         stdout.write(f"error: {exc}\n")
         return 1
     stdout.write(
-        f"{result.outcome}: {result.reason}\n"
+        f"{result.outcome}: {result.reason} (arm {options.arm})\n"
         f"branch {result.branch} at {result.commit[:12]} (worktree {result.worktree})\n"
         f"ledger {result.journal}\n"
     )

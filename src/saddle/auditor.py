@@ -63,7 +63,12 @@ from saddle.gates import GateCheck, RuffFinding, check_ruff, check_syntax, intro
 from saddle.journal import append_span, build_span
 
 Verdict = Literal["pass", "fail", "not-applicable", "blocked"]
-Reason = Literal["code-wrong", "evidence-thin", "scope", "unknown"]
+Reason = Literal["code-wrong", "evidence-thin", "scope", "unknown", "sanctioned"]
+"""`sanctioned`: a failing `assertion-preservation` finding that names only
+tests the task itself declared rewritable (`AuditorConfig.sanctioned_test_rewrites`).
+The verdict stays `fail` -- the gate did see rewritten assertions -- but the
+finding does not count against `Findings.passed`, so it neither blocks tier 2
+nor refuses an autonomous run's `finish`."""
 
 # Which gate runs at which tier; `Auditor` emits them in exactly this order.
 TIER0: Final[tuple[str, ...]] = ("syntax", "ruff", "imports")
@@ -159,7 +164,10 @@ class Findings:
 
     @property
     def passed(self) -> bool:
-        return all(f.verdict in ("pass", "not-applicable") for f in self.findings)
+        return all(
+            f.verdict in ("pass", "not-applicable") or f.reason == "sanctioned"
+            for f in self.findings
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -190,6 +198,30 @@ class AuditorConfig:
     journal: Path | None = None
     cache_dir: Path | None = None
     extra_import_roots: tuple[str, ...] = field(default=("src",))
+    sanctioned_test_rewrites: tuple[str, ...] = ()
+    """Test functions the task orders rewritten (T5's rule 8). Declared by
+    the caller, sealed in the run's ledger, part of the cache key; never a
+    blanket exemption: a finding naming any other test still fails."""
+
+
+_REWROTE: Final = " rewrote assertions in: "
+"""`gates.check_assertion_preservation`'s wording before the test names."""
+
+
+def sanction(finding: Finding, sanctioned: Sequence[str]) -> Finding:
+    """Reclass a failing assertion-preservation finding that names only
+    sanctioned tests; every other finding is returned unchanged."""
+    if finding.gate != "assertion-preservation" or finding.verdict != "fail":
+        return finding
+    _, sep, names = finding.detail.partition(_REWROTE)
+    named = {n.strip() for n in names.split(",") if n.strip()}
+    if not sep or not named or not named <= set(sanctioned):
+        return finding
+    return dataclasses.replace(
+        finding,
+        reason="sanctioned",
+        detail=f"{finding.detail} (all sanctioned by the task)",
+    )
 
 
 def _reason(gate: str, verdict: Verdict, detail: str) -> Reason:
@@ -267,7 +299,18 @@ class Auditor:
 
     def _key(self, tier: int, *parts: str) -> str:
         payload = json.dumps(
-            [tier, *parts, self.config.test_command, self.node.model_dump_json(), gate_surface()]
+            [
+                tier,
+                *parts,
+                self.config.test_command,
+                self.node.model_dump_json(),
+                gate_surface(),
+                *(
+                    [sorted(self.config.sanctioned_test_rewrites)]
+                    if self.config.sanctioned_test_rewrites
+                    else []
+                ),
+            ]
         )
         return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -381,7 +424,8 @@ class Auditor:
         findings = []
         for gate in wanted:
             status, detail, basis = statuses["tests" if gate == "full-suite" else gate]
-            findings.append(_finding(gate, tier, status, detail, basis))  # type: ignore[arg-type]
+            found = _finding(gate, tier, status, detail, basis)  # type: ignore[arg-type]
+            findings.append(sanction(found, self.config.sanctioned_test_rewrites))
         return self._store(Findings(tier=tier, key=key, findings=tuple(findings)))
 
     def tier1(self, tree: Path | None = None) -> Findings:
