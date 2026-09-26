@@ -20,6 +20,7 @@ import mimetypes
 import os
 import queue
 import secrets
+import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,7 +43,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET
+from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET, AutoError, repo_root
 from saddle.engine import TurnOptions
 from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
 from saddle.events import (
@@ -56,14 +57,14 @@ from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
-from saddle.packet import compile_packet
+from saddle.packet import Packet, compile_packet, render_packet_text
 from saddle.sandbox import OutsideRootError, resolve_within
-from saddle.sessions import BUILTIN_PERSONAS, SessionStore
+from saddle.sessions import BUILTIN_PERSONAS, SESSION_MODES, SessionStore
 from saddle.titles import title_for
-from saddle.tools import PREVIEWABLE, ToolContext, preview_for
+from saddle.tools import PREVIEWABLE, ToolContext, preview_for, tools_for_mode
 from saddle.undo import UndoLog
 from saddle.vllm import VllmClient
-from saddle.web import tasks
+from saddle.web import branch_actions, tasks
 from saddle.web.tasks import SMALL_LANE_TEST_EDITS, TaskRun
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -75,6 +76,26 @@ which holds the vLLM key -- this file is never read for that purpose."""
 
 TOKEN_COOKIE = "saddle_token"
 TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 365  # one year
+
+
+def git_branch(folder: Path) -> str:
+    """The folder's checked-out branch for the header, or "" if it has none.
+
+    Display only: a detached HEAD, a folder outside git, or git missing all
+    show nothing rather than an error, since the header is not the place to
+    report them."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(folder), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    name = out.stdout.strip()
+    return name if out.returncode == 0 and name != "HEAD" else ""
 
 
 def needs_token(host: str) -> bool:
@@ -239,7 +260,7 @@ def history_for_display(
                     "ok": ok,
                     "detail": detail,
                     "preview": preview_for(name, arguments, workdir),
-                "version": versions.get(call.get("id")),
+                    "version": versions.get(call.get("id")),
                 }
             )
         shown.append({**message, "tools": rows})
@@ -346,9 +367,7 @@ class ChatServer:
 
     # -- turn ------------------------------------------------------------
 
-    def _run(
-        self, session_id: str, text: str | None, images: list[str] | None = None
-    ) -> None:
+    def _run(self, session_id: str, text: str | None, images: list[str] | None = None) -> None:
         live = self._live(session_id)
         live.cancelled = False
         try:
@@ -364,6 +383,9 @@ class ChatServer:
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
                 )
+            # Set every turn: the context outlives a lane change.
+            tools = tools_for_mode(session.mode)
+            live.context.allowed = tuple(t["function"]["name"] for t in tools)
             live.turn += 1
             with self.client_factory() as client:
                 options = TurnOptions(
@@ -373,6 +395,7 @@ class ChatServer:
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
                     context_tokens=self._context_window(client),
+                    tools=tools,
                 )
                 for event in run_turn(
                     client,
@@ -465,7 +488,7 @@ def build_app(
         and the page that names those URLs is never stored.
         """
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for name in ("app.css", "markdown.js", "tasks.js", "app.js"):
+        for name in ("app.css", "markdown.js", "tasks.js", "notify.js", "app.js"):
             try:
                 version = int((STATIC / name).stat().st_mtime)
             except OSError:
@@ -474,7 +497,23 @@ def build_app(
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def list_sessions(_: Request) -> JSONResponse:
-        return JSONResponse([s.__dict__ for s in store.list()])
+        """Every session, with its latest run's state and task (None if none).
+
+        The sidebar reads this so a run in a session that is not on screen --
+        one waiting on you, above all -- is still visible. Runs are kept in
+        start order, so the last one seen for a session is its latest.
+        """
+        latest: dict[str, TaskRun] = {}
+        for run in list(server.tasks.values()):
+            latest[run.session_id] = run
+        rows = []
+        for session in store.list():
+            newest = latest.get(session.id)
+            row = dict(session.__dict__)
+            row["run_state"] = newest.state if newest is not None else None
+            row["run_task"] = newest.task if newest is not None else None
+            rows.append(row)
+        return JSONResponse(rows)
 
     async def create_session(request: Request) -> JSONResponse:
         body = await request.json() if await request.body() else {}
@@ -527,6 +566,12 @@ def build_app(
             body.setdefault("auto_title", False)
         if "temperature" in body:
             body["temperature"] = store.clamp_temperature(body["temperature"])
+        # `update` skips a None, so a bad mode must be refused here, before
+        # any other field in the same body is written.
+        if "mode" in body and body["mode"] not in SESSION_MODES:
+            return JSONResponse(
+                {"error": f"mode must be one of {', '.join(SESSION_MODES)}"}, status_code=400
+            )
         session = store.update(request.path_params["sid"], **body)
         # The Live is deliberately kept. It used to be dropped here "because
         # the workdir or persona may have moved", but a Live is not a cache of
@@ -640,9 +685,7 @@ def build_app(
         if not name or name in (".", ".."):
             return JSONResponse({"error": "give the folder a name"}, status_code=400)
         if name != Path(name).name or any(sep in name for sep in ("/", "\\")):
-            return JSONResponse(
-                {"error": "a name, not a path"}, status_code=400
-            )
+            return JSONResponse({"error": "a name, not a path"}, status_code=400)
         target = parent / name
         if target.exists():
             return JSONResponse({"error": f"{name!r} is already there"}, status_code=409)
@@ -747,15 +790,18 @@ def build_app(
         run.cancelled = True
         return JSONResponse({"stopping": run.state in ("running", "needs_you")})
 
-    async def task_packet(request: Request) -> JSONResponse:
-        """The run's evidence packet, compiled from its ledger on every read."""
-        sid, rid = request.path_params["sid"], request.path_params["rid"]
+    def _journal(sid: str, rid: str) -> Path | None:
         run = server.tasks.get(rid)
-        journal = (
+        return (
             run.journal
             if run is not None and run.session_id == sid
             else tasks.journal_for(store.journal_path(sid), rid)
         )
+
+    async def task_packet(request: Request) -> JSONResponse:
+        """The run's evidence packet, compiled from its ledger on every read."""
+        sid, rid = request.path_params["sid"], request.path_params["rid"]
+        journal = _journal(sid, rid)
         if journal is None:
             return JSONResponse({"error": "no such task in this session"}, status_code=404)
         # The run's repo, so the Reproduce row reports the branch anchor check
@@ -765,6 +811,77 @@ def build_app(
         shaped = len(parts) >= 4 and parts[-4:-2] == (".saddle", "runs")
         repo = Path(*parts[:-4]) if shaped else None
         return JSONResponse(compile_packet(journal, run_id=rid, anchor_repo=repo).payload())
+
+    def _branch_context(request: Request) -> tuple[str, Path, Packet, str]:
+        """The run id, checkout root, packet and run branch an action works on."""
+        sid, rid = request.path_params["sid"], request.path_params["rid"]
+        journal = _journal(sid, rid)
+        if journal is None:
+            msg = "no such task in this session"
+            raise branch_actions.ActionRefusedError(msg, 404)
+        packet = compile_packet(journal, run_id=rid)
+        try:
+            root = repo_root(Path(store.get(sid).workdir))
+        except AutoError as exc:
+            raise branch_actions.ActionRefusedError(str(exc), 404) from exc
+        return rid, root, packet, branch_actions.run_branch(packet)
+
+    def _refused(exc: branch_actions.ActionRefusedError) -> JSONResponse:
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+    async def task_branch(request: Request) -> JSONResponse:
+        """What the action row needs: branch, target, and whether merge is allowed."""
+        try:
+            _rid, root, packet, branch = _branch_context(request)
+        except branch_actions.ActionRefusedError as exc:
+            return _refused(exc)
+        return JSONResponse(
+            {
+                "branch": branch,
+                "exists": branch_actions.branch_exists(root, branch),
+                "target": branch_actions.current_branch(root),
+                "merge_refusal": branch_actions.merge_refusal(packet),
+                "recap": render_packet_text(packet),
+                "sealed": False,
+                "log": "actions.log",
+            }
+        )
+
+    async def task_diff(request: Request) -> JSONResponse:
+        """The run's branch against its base, per file."""
+        try:
+            _rid, root, _packet, branch = _branch_context(request)
+            files = branch_actions.diff(root, branch)
+        except branch_actions.ActionRefusedError as exc:
+            return _refused(exc)
+        return JSONResponse(
+            {"branch": branch, "files": [{"path": f.path, "patch": f.patch} for f in files]}
+        )
+
+    def _act(request: Request, action: str, body: dict[str, Any]) -> JSONResponse:
+        sid = request.path_params["sid"]
+        log = store.journal_path(sid).parent / "actions.log"
+        confirm = str(body.get("confirm") or "")
+        try:
+            rid, root, packet, branch = _branch_context(request)
+        except branch_actions.ActionRefusedError as exc:
+            return _refused(exc)
+        try:
+            if action == "merge":
+                said = branch_actions.merge(root, packet, branch, confirm)
+            else:
+                said = branch_actions.discard(root, branch, confirm)
+        except branch_actions.ActionRefusedError as exc:
+            branch_actions.log_action(log, rid, f"{action} refused", str(exc))
+            return _refused(exc)
+        branch_actions.log_action(log, rid, action, said)
+        return JSONResponse({"ok": True, "output": said, "sealed": False})
+
+    async def task_merge(request: Request) -> JSONResponse:
+        return _act(request, "merge", await request.json())
+
+    async def task_discard(request: Request) -> JSONResponse:
+        return _act(request, "discard", await request.json())
 
     def _rewind_target(sid: str, index: int) -> tuple[list[dict[str, Any]], str] | None:
         """The stored messages and the question at `index`, if one is there.
@@ -777,9 +894,7 @@ def build_app(
             return None
         content = messages[index].get("content")
         if isinstance(content, list):
-            asked = next(
-                (p.get("text", "") for p in content if p.get("type") == "text"), ""
-            )
+            asked = next((p.get("text", "") for p in content if p.get("type") == "text"), "")
         else:
             asked = str(content or "")
         return messages, asked
@@ -817,15 +932,13 @@ def build_app(
             if live.busy:
                 # While a turn is running the answer is 409 whatever the
                 # index says, so this is checked before the index is.
-                return JSONResponse(
-                    {"error": "a turn is already running"}, status_code=409
-                )
+                return JSONResponse({"error": "a turn is already running"}, status_code=409)
             live.busy = True
 
         target = _rewind_target(sid, index)
         if target is None:
             with live.lock:
-                live.busy = False        # nothing was started, so nothing holds it
+                live.busy = False  # nothing was started, so nothing holds it
             return JSONResponse({"error": "no question there"}, status_code=404)
         messages, _asked = target
 
@@ -876,6 +989,8 @@ def build_app(
                     persona=session.persona,
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
+                    mode=session.mode,
+                    branch=git_branch(Path(session.workdir)),
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
                     messages=history_for_display(
@@ -945,6 +1060,10 @@ def build_app(
             Route("/api/sessions/{sid}/stop", stop_turn, methods=["POST"]),
             Route("/api/sessions/{sid}/task", post_task, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/packet", task_packet),
+            Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
+            Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
+            Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),
+            Route("/api/sessions/{sid}/tasks/{rid}/discard", task_discard, methods=["POST"]),
             Route("/api/tasks/{rid}/answer", answer_task, methods=["POST"]),
             Route("/api/tasks/{rid}/stop", stop_task, methods=["POST"]),
             Route("/api/sessions/{sid}/events", events),

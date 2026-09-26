@@ -312,43 +312,290 @@ function renderPacket(card, packet) {
   }
   box.appendChild(verdict);
 
+  box.appendChild(actionRow(card, packet));
+  box.appendChild(summaryBand(packet));
+
+  // First screen: the band, then Scope, then Audit folded to its count.
+  // Everything else is under Details. A row this layout does not know goes
+  // to Details too, so no row the packet compiles is ever dropped.
+  const byKey = new Map(packet.rows.map((row) => [row.key, row]));
   const rows = el("div", "rows");
-  for (const row of packet.rows) {
-    const item = el("div", `prow s-${row.status} k-${row.key}`);
-    const label = el("div", "prow-label");
-    label.appendChild(el("span", "prow-title", row.title));
-    label.appendChild(el("span", "prow-status",
-      row.key === "narrative" ? packet.narrative_label : (STATUS_WORD[row.status] || row.status)));
-    item.appendChild(label);
-    const body = el("div", "prow-body");
-    if (row.key === "narrative") {
-      body.appendChild(narrativeBlock(packet));
-      body.appendChild(el("p", "prow-note", row.text));
-    } else {
-      body.appendChild(codeSpans(el("p", "prow-text"), row.text));
-    }
-    if (row.items.length) {
-      const list = el("ul", "prow-items");
-      for (const text of row.items) {
-        const li = el("li");
-        if (row.key === "reproduce") li.appendChild(el("code", null, text));
-        else li.textContent = text;
-        list.appendChild(li);
-      }
-      body.appendChild(list);
-    }
-    if (row.cites.length) {
-      const cites = el("div", "cites");
-      cites.appendChild(el("span", "cites-label", "ledger"));
-      for (const hash of row.cites) cites.appendChild(citeButton(hash, packet.records[hash], body));
-      body.appendChild(cites);
-    }
-    item.appendChild(body);
-    rows.appendChild(item);
+  if (byKey.has("scope")) rows.appendChild(packetRow(byKey.get("scope"), packet));
+  if (byKey.has("audit")) {
+    const audit = byKey.get("audit");
+    const fold = el("details", `audit-fold s-${audit.status}`);
+    const summary = el("summary", "audit-summary");
+    summary.appendChild(el("span", "prow-title", "Audit"));
+    summary.appendChild(el("span", "audit-count", audit.text.replace(/ findings?(?= passed)/, "").replace(/\.$/, "")));
+    fold.appendChild(summary);
+    fold.appendChild(packetRow(audit, packet));
+    rows.appendChild(fold);
   }
   box.appendChild(rows);
+  const details = el("details", "packet-details");
+  details.appendChild(el("summary", "details-summary", "Details"));
+  const placed = new Set(["tests", "mutation", "not-proven", "scope", "audit"]);
+  for (const key of DETAIL_ORDER) {
+    if (byKey.has(key)) details.appendChild(packetRow(byKey.get(key), packet));
+  }
+  for (const row of packet.rows) {
+    if (!placed.has(row.key) && !DETAIL_ORDER.includes(row.key)) {
+      details.appendChild(packetRow(row, packet));
+    }
+  }
+  box.appendChild(details);
   // Reading the packet is the point now; the session is one click away.
   if (card.count) card.log.open = false;
+}
+
+/* ---------- the packet's first screen ---------- */
+
+const DETAIL_ORDER = ["contract", "narrative", "cost", "reproduce"];
+const BAND_KEYS = ["tests", "mutation", "not-proven"];
+const GLYPH = {
+  ok: "✓", bad: "✗", info: "◐", none: "○", warn: "!",
+};
+
+/* A band line's tone: from the row's status alone. "Not proven" is ok only
+   when it lists nothing. */
+function lineTone(row) {
+  if (row.key === "not-proven") return row.items.length ? "warn" : "ok";
+  return { proven: "ok", failed: "bad", observed: "info", absent: "none" }[row.status] || "none";
+}
+
+function firstSentence(text) {
+  const match = /^(.*?[.!?])(\s|$)/.exec(text);
+  return match ? match[1] : text;
+}
+
+/* Tests, Mutation, Not proven: the three rows that decide "can I merge".
+   The band is green only for a finished run whose three lines are all ok;
+   a stop is amber whatever its lines say, and its unresolved findings are
+   listed here, not under a fold. */
+function summaryBand(packet) {
+  const byKey = new Map(packet.rows.map((row) => [row.key, row]));
+  const lines = BAND_KEYS.filter((key) => byKey.has(key)).map((key) => byKey.get(key));
+  const tones = lines.map(lineTone);
+  const tone = packet.verdict !== "finished" ? "stop"
+    : tones.includes("bad") ? "bad"
+    : tones.length === BAND_KEYS.length && tones.every((t) => t === "ok") ? "ok"
+    : "partial";
+  const band = el("div", `band band-${tone}`);
+  band.dataset.tone = tone;
+  lines.forEach((row, i) => {
+    // Each line opens to its full row, cites and all: the band summarises
+    // rows, it does not replace them.
+    const line = el("details", `band-line t-${tones[i]} k-${row.key}`);
+    line.dataset.key = row.key;
+    line.dataset.tone = tones[i];
+    const head = el("summary", "band-head");
+    const glyph = el("span", "band-glyph", GLYPH[tones[i]]);
+    glyph.setAttribute("aria-hidden", "true");
+    head.appendChild(glyph);
+    head.appendChild(el("span", "band-title", row.title));
+    const text = row.key === "not-proven" && row.items.length
+      ? `${row.items.length} thing${row.items.length === 1 ? "" : "s"} this packet cannot vouch for.`
+      : firstSentence(row.text);
+    head.appendChild(codeSpans(el("span", "band-text"), text));
+    if (row.key === "not-proven" && row.items.length) {
+      const list = el("ul", "band-items");
+      for (const item of row.items) list.appendChild(el("li", null, item));
+      head.appendChild(list);
+    }
+    line.appendChild(head);
+    line.appendChild(packetRow(row, packet));
+    band.appendChild(line);
+  });
+  return band;
+}
+
+function packetRow(row, packet) {
+  const item = el("div", `prow s-${row.status} k-${row.key}`);
+  const label = el("div", "prow-label");
+  label.appendChild(el("span", "prow-title", row.title));
+  label.appendChild(el("span", "prow-status",
+    row.key === "narrative" ? packet.narrative_label : (STATUS_WORD[row.status] || row.status)));
+  item.appendChild(label);
+  const body = el("div", "prow-body");
+  if (row.key === "narrative") {
+    body.appendChild(narrativeBlock(packet));
+    body.appendChild(el("p", "prow-note", row.text));
+  } else {
+    body.appendChild(codeSpans(el("p", "prow-text"), row.text));
+  }
+  if (row.items.length) {
+    const list = el("ul", "prow-items");
+    for (const text of row.items) {
+      const li = el("li");
+      if (row.key === "reproduce") li.appendChild(el("code", null, text));
+      else li.textContent = text;
+      list.appendChild(li);
+    }
+    body.appendChild(list);
+  }
+  if (row.cites.length) {
+    const cites = el("div", "cites");
+    cites.appendChild(el("span", "cites-label", "ledger"));
+    for (const hash of row.cites) cites.appendChild(citeButton(hash, packet.records[hash], body));
+    body.appendChild(cites);
+  }
+  item.appendChild(body);
+  return item;
+}
+
+/* ---------- what to do with the run's branch ---------- */
+
+function actionButton(label, cls) {
+  const button = el("button", `act ${cls}`, label);
+  button.type = "button";
+  return button;
+}
+
+async function postAction(card, action, branch) {
+  return api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/${action}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm: branch }),
+  });
+}
+
+function showDiff(panel, files) {
+  panel.textContent = "";
+  if (!files.length) {
+    panel.appendChild(el("p", "act-note", "The run's branch changes no file."));
+    return;
+  }
+  for (const file of files) {
+    const one = el("details", "diff-file");
+    one.open = true;
+    one.dataset.path = file.path;
+    one.appendChild(el("summary", "diff-path", file.path));
+    const body = el("div", "tool-detail diff-body");
+    renderDiff(body, file.patch);
+    one.appendChild(body);
+    panel.appendChild(one);
+  }
+}
+
+/* The confirm step lives in the page and names branch and target. Nothing
+   changes until its own button is pressed; Cancel and Escape change nothing. */
+function confirmStrip(panel, text, go, onYes) {
+  panel.textContent = "";
+  panel.dataset.showing = "confirm";
+  const strip = el("div", "act-confirm");
+  strip.setAttribute("role", "alertdialog");
+  strip.appendChild(el("p", "act-confirm-text", text));
+  const yes = actionButton(go, "act-yes primary");
+  const no = actionButton("Cancel", "act-no");
+  no.onclick = () => { panel.textContent = ""; };
+  strip.addEventListener("keydown", (event) => { if (event.key === "Escape") no.onclick(); });
+  yes.onclick = () => { yes.disabled = true; no.disabled = true; onYes(); };
+  strip.appendChild(yes);
+  strip.appendChild(no);
+  panel.appendChild(strip);
+  no.focus();
+}
+
+function actionResult(panel, ok, text, sealed) {
+  panel.textContent = "";
+  panel.dataset.showing = "result";
+  const box = el("div", `act-result ${ok ? "ok" : "error"}`);
+  box.appendChild(el("pre", "act-output", text));
+  if (sealed === false) {
+    box.appendChild(el("p", "act-note",
+      "Not sealed in the ledger: there is no ledger record for user actions. Logged to this session's actions.log."));
+  }
+  panel.appendChild(box);
+}
+
+function actionRow(card, packet) {
+  const wrap = el("div", "actions");
+  const row = el("div", "act-row");
+  const panel = el("div", "act-panel");
+  const view = actionButton("View diff", "act-diff");
+  const merge = actionButton("Merge", "act-merge");
+  const discard = actionButton("Discard branch", "act-discard");
+  const chat = actionButton("Continue in chat", "act-chat");
+  for (const b of [view, merge, discard]) b.disabled = true;
+  const why = el("p", "act-why");
+  row.append(view, merge, discard, chat);
+  wrap.append(row, why, panel);
+
+  let info = null;
+  api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/branch`).then((got) => {
+    info = got;
+    view.disabled = !got.exists;
+    discard.disabled = !got.exists;
+    merge.disabled = !got.exists || !!got.merge_refusal;
+    // Merge needs one auditor verdict, not all of them: a run with no proven
+    // Mutation row may merge, and the button says what it is merging without.
+    const mutation = packet.rows.find((r) => r.key === "mutation");
+    const unproven = !mutation || mutation.status !== "proven";
+    merge.textContent = (got.target ? `Merge into ${got.target}` : "Merge")
+      + (unproven ? " (mutation unproven)" : "");
+    merge.classList.toggle("unproven", unproven);
+    if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
+    else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
+  }).catch((error) => {
+    why.textContent = `No branch actions: ${error.message || error}`;
+  });
+
+  view.onclick = async () => {
+    if (panel.dataset.showing === "diff") {
+      panel.textContent = "";
+      panel.dataset.showing = "";
+      return;
+    }
+    try {
+      const got = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/diff`);
+      showDiff(panel, got.files);
+      panel.dataset.showing = "diff";
+    } catch (error) {
+      actionResult(panel, false, String(error.message || error));
+    }
+  };
+  merge.onclick = () => {
+    if (!info) return;
+    confirmStrip(panel,
+      `Merge ${info.branch} into ${info.target}? Fast-forward if possible, else cherry-pick its commits.`,
+      `Merge into ${info.target}`,
+      async () => {
+        try {
+          const got = await postAction(card, "merge", info.branch);
+          actionResult(panel, true, got.output, got.sealed);
+          merge.disabled = true;
+        } catch (error) {
+          actionResult(panel, false, String(error.message || error), false);
+        }
+      });
+  };
+  discard.onclick = () => {
+    if (!info) return;
+    confirmStrip(panel,
+      `Delete the branch ${info.branch} and its run worktree? ${info.target || "Your checkout"} is not touched.`,
+      `Delete ${info.branch}`,
+      async () => {
+        try {
+          const got = await postAction(card, "discard", info.branch);
+          actionResult(panel, true, got.output, got.sealed);
+          for (const b of [view, merge, discard]) b.disabled = true;
+        } catch (error) {
+          actionResult(panel, false, String(error.message || error), false);
+        }
+      });
+  };
+  chat.onclick = async () => {
+    let recap = info && info.recap;
+    if (!recap) {
+      recap = `verdict: ${packet.verdict} — ${packet.verdict_text}`;
+    }
+    // Leave Task for the read-only talk lane; Edit stays an explicit choice (LANECHIP).
+    if (typeof setMode === "function" && state.mode !== "ask") await setMode("ask");
+    const input = document.querySelector("#input");
+    input.value = `About the run "${packet.task}":\n\n${recap}\n\n`;
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+  };
+  return wrap;
 }
 
 /* A run that stopped "audit unresolved" with tests read-only, on a finding a
@@ -408,6 +655,7 @@ function handleTask(event) {
       paintState(card);
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
+      runState(state.sessionId, event.state, event.task);  // notify.js: tab, dot, live region
       if (event.state === "needs_you") {
         setStatus("needs", "needs you");
       } else if (event.state === "running") {
@@ -494,6 +742,12 @@ function openRunConfirm() {
     $("#input").focus();
     return;
   }
+  if (!state.folder) {
+    $("#mode-note").textContent = "Pick a folder first (Folder, in the sidebar). A task works on a copy of it.";
+    $("#mode-note").hidden = false;
+    return;
+  }
+  $("#mode-note").hidden = true;
   $("#tc-what").textContent = text;
   $("#tc-folder").textContent = state.folder || "this folder";
   api("/api/task-policy").then((policy) => {
@@ -517,7 +771,9 @@ function closeRunConfirm() {
 async function startTask() {
   const input = $("#input");
   const text = input.value.trim();
-  if (!text || state.busy) return;
+  // Nothing runs unless the strip is on screen: it is the one place the
+  // folder, lane, budgets and test policy are shown before a run.
+  if (!text || state.busy || $("#task-confirm").hidden) return;
   const minutes = Number($("#tc-time").value) || 30;
   const thousands = Number($("#tc-tokens").value) || 100;
   closeRunConfirm();

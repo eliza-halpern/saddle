@@ -37,7 +37,7 @@ from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP
-from saddle.events import AuditNote, ErrorEvent, Event, ToolEnd
+from saddle.events import Answered, AuditNote, ErrorEvent, Event, Question, ToolEnd
 from saddle.evidence import (
     RUFF_RULES,
     SADDLE_COMMIT_IDENTITY,
@@ -1726,6 +1726,9 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
             stdout.write(f"  {event.label}\n")
         elif isinstance(event, ErrorEvent):
             stdout.write(f"  {event.message}\n")
+        elif isinstance(event, Question | Answered):
+            # No one can answer here: the run seals the question's default.
+            stdout.write(f"  {'asked' if isinstance(event, Question) else '→'}: {event.text}\n")
 
     try:
         result = run_auto(options, client, on_event=show)

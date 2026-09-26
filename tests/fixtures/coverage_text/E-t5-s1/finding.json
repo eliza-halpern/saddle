@@ -1,0 +1,11 @@
+{
+ "gate": "coverage",
+ "tier": 1,
+ "verdict": "fail",
+ "reason": "evidence-thin",
+ "detail": "no test runs money.py:42, money.py:52, money.py:66, money.py:77, money.py:78, money.py:80, money.py:131, money.py:132, money.py:133, money.py:134, money.py:136, money.py:137, money.py:138, money.py:139, money.py:140, money.py:141, store.py:43, store.py:83, store.py:84",
+ "cites": [
+  "saddle.gates.check_changed_line_coverage",
+  "changed-lines=155 compelled-lines=5"
+ ]
+}

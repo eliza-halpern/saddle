@@ -19,7 +19,7 @@ const $ = (sel) => document.querySelector(sel);
 const state = {
   sessionId: null, stream: null, busy: false,
   turnNode: null, assistantNode: null, reasoningNode: null, reasoningBody: null,
-  tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null,
+  tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null, mode: "ask",
 };
 
 
@@ -253,6 +253,8 @@ function renderHistory(info) {
   $("#persona").value = info.persona;
   if (info.reasoning_effort) $("#effort").value = info.reasoning_effort;
   if (info.temperature !== undefined) showTemperature(info.temperature);
+  showMode(info.mode);
+  showWhere(info.workdir, info.branch);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
     handle({ kind: "context", used: info.context_used || 0, limit: info.context_limit });
@@ -518,6 +520,7 @@ async function loadSessions() {
   list.textContent = "";
   for (const session of sessions) {
     const row = el("div", `session${session.id === state.sessionId ? " active" : ""}`);
+    row.dataset.sid = session.id;
     row.appendChild(el("span", "name", session.title));
     const kill = el("button", "kill", "×");
     kill.title = "Delete session";
@@ -531,6 +534,7 @@ async function loadSessions() {
     row.onclick = () => select(session.id);
     list.appendChild(row);
   }
+  noteSessions(sessions);
   return sessions;
 }
 
@@ -541,6 +545,7 @@ function select(sessionId) {
   state.tools.clear();
   state.terminals.clear();
   localStorage.setItem("saddle.session", sessionId);
+  runSelected(sessionId);
   loadSessions();
   connect(sessionId);
 }
@@ -559,6 +564,119 @@ async function boot() {
 
 /* ---------- composer ---------- */
 
+/* The lane, per session: what Enter does. The words are what the code does
+   -- an Ask turn is offered read-only tools and the server refuses any other
+   call; an Edit turn runs the file and shell tools in the folder itself, with
+   no auditor; a task runs `saddle auto` in a worktree and ends in a packet.
+   Feature, Breadth and Long are shown so the shape is visible, and cannot be
+   chosen: `enabled` is false and nothing below selects a disabled lane. */
+const LANES = [
+  { id: "ask", enabled: true, label: "Ask",
+    desc: "Ask: read-only. It reads and searches your folder, then answers. It cannot edit files or run commands.",
+    placeholder: "ask about this folder (read-only, nothing changes)" },
+  { id: "edit", enabled: true, label: "Edit",
+    desc: "Edit: unaudited, edits your folder. It writes files and runs commands directly; nothing checks the work and there is no packet.",
+    placeholder: "this will edit your folder directly, unaudited" },
+  { id: "task", enabled: true, label: "Task · Small",
+    desc: "Task · Small: an audited run on a new branch in a copy of your folder, ending in an evidence packet. Enter shows the run before it starts.",
+    placeholder: "describe the job; Enter shows the run before it starts" },
+  { id: "feature", enabled: false, label: "Feature" },
+  { id: "breadth", enabled: false, label: "Breadth" },
+  { id: "long", enabled: false, label: "Long" },
+];
+const laneOf = (id) => LANES.find((lane) => lane.id === id && lane.enabled);
+// Kept by name for the code that already reads it (tasks.js, older tests).
+const MODES = Object.fromEntries(LANES.filter((l) => l.enabled).map((l) => [l.id, l]));
+
+function showMode(mode) {
+  const lane = laneOf(mode) || laneOf("ask");
+  state.mode = lane.id;
+  $("#lane-name").textContent = lane.label;
+  $("#lane-chip").dataset.lane = lane.id;
+  for (const option of document.querySelectorAll("#lane-menu li")) {
+    option.setAttribute("aria-selected", String(option.dataset.lane === lane.id));
+  }
+  $("#mode-desc").textContent = lane.desc;
+  $("#mode-chip").textContent = lane.id;
+  $("#mode-chip").dataset.mode = lane.id;
+  $("#input").placeholder = lane.placeholder;
+  $("#mode-note").hidden = true;
+  if (lane.id !== "task") closeRunConfirm();
+  paintSuggestion();
+}
+
+async function setMode(mode) {
+  if (!laneOf(mode)) return;          // a disabled or unknown lane is never chosen
+  showMode(mode);
+  $("#input").focus();
+  try {
+    await api(`/api/sessions/${state.sessionId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: state.mode }),
+    });
+  } catch (error) {
+    notice(String(error.message || error), "error");
+  }
+}
+
+/* Shift+Tab: the next enabled lane, wrapping. */
+function nextLane(from, step = 1) {
+  const usable = LANES.filter((lane) => lane.enabled);
+  const at = usable.findIndex((lane) => lane.id === from);
+  return usable[(at + step + usable.length) % usable.length].id;
+}
+
+/* A guess from the words alone, shown as a hint and never acted on: only
+   Tab (the user) takes it. Choosing the lane silently is how "ran a task by
+   accident" comes back. */
+const TASK_VERB = /^(please\s+)?(make|fix|add|remove|rename|refactor|change|implement|write|update|delete|move|replace|convert|split)\b/i;
+const FILE_NAME = /\b[\w./-]+\.(py|js|mjs|ts|tsx|md|json|toml|css|html|rs|go|c|h|java|ya?ml|txt|sh)\b/i;
+function suggestLane(text) {
+  const t = text.trim();
+  if (!t) return null;
+  if (t.endsWith("?")) return "ask";
+  if (TASK_VERB.test(t) && FILE_NAME.test(t)) return "task";
+  return null;
+}
+function paintSuggestion() {
+  const box = $("#lane-suggest");
+  const want = suggestLane($("#input").value);
+  state.suggestion = want && want !== state.mode ? want : null;
+  box.hidden = !state.suggestion;
+  box.textContent = state.suggestion === "task" ? "looks like a task → Tab"
+    : state.suggestion === "ask" ? "looks like a question → Tab for Ask" : "";
+}
+
+function openLaneMenu(open) {
+  const menu = $("#lane-menu");
+  menu.hidden = !open;
+  $("#lane-chip").setAttribute("aria-expanded", String(open));
+  if (open) {
+    for (const option of menu.querySelectorAll("li")) {
+      option.classList.toggle("active", option.dataset.lane === state.mode);
+    }
+    menu.focus();
+  }
+}
+function moveLaneFocus(step) {
+  const options = [...document.querySelectorAll('#lane-menu li:not([aria-disabled="true"])')];
+  const at = options.findIndex((o) => o.classList.contains("active"));
+  const next = options[(at + step + options.length) % options.length];
+  for (const o of options) o.classList.toggle("active", o === next);
+}
+
+function showWhere(workdir, branch) {
+  $("#where-folder").textContent = (workdir || "").split("/").filter(Boolean).pop() || workdir || "";
+  $("#where-folder").title = workdir || "";
+  $("#where-branch").textContent = branch || "";
+}
+
+function submitComposer() {
+  if (!$("#lane-menu").hidden) openLaneMenu(false);
+  if (state.mode === "task") openRunConfirm();
+  else send();
+}
+
 async function send() {
   const input = $("#input");
   const text = input.value.trim();
@@ -573,6 +691,7 @@ async function send() {
   const turn = newTurn(input.value.trim());
   followBottom();          // sending is an intent to watch the reply
   input.value = "";
+  paintSuggestion();
   input.style.height = "auto";
   state.attachments = [];
   $("#attachments").textContent = "";
@@ -666,17 +785,69 @@ $("#composer").addEventListener("submit", (event) => {
     setStatus("working", "stopping…");
     return;
   }
-  send();
+  submitComposer();
 });
 $("#input").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+  if (event.key === "Tab" && event.shiftKey) {
+    event.preventDefault();
+    setMode(nextLane(state.mode));
+    return;
+  }
+  if (event.key === "Tab" && !event.shiftKey && state.suggestion) {
+    event.preventDefault();         // the user took the hint; nothing else does
+    setMode(state.suggestion);
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitComposer(); }
+  if (event.key === "Escape" && !$("#task-confirm").hidden) { event.preventDefault(); closeRunConfirm(); }
 });
+$("#task-confirm").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRunConfirm();
+    $("#input").focus();
+  } else if (event.key === "Enter" && !event.shiftKey && event.target.id !== "tc-cancel") {
+    // Enter or Ctrl+Enter anywhere in the strip starts; Cancel keeps its own Enter.
+    event.preventDefault();
+    startTask();
+  }
+});
+$("#lane-chip").onclick = (event) => {
+  event.preventDefault();
+  openLaneMenu($("#lane-menu").hidden);
+};
+for (const option of document.querySelectorAll("#lane-menu li")) {
+  option.onclick = (event) => {
+    event.preventDefault();
+    if (option.getAttribute("aria-disabled") === "true") return;
+    openLaneMenu(false);
+    setMode(option.dataset.lane);
+  };
+}
+$("#lane-menu").addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    moveLaneFocus(event.key === "ArrowDown" ? 1 : -1);
+  } else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    const active = $("#lane-menu li.active");
+    openLaneMenu(false);
+    if (active) setMode(active.dataset.lane);
+  } else if (event.key === "Escape" || event.key === "Tab") {
+    event.preventDefault();
+    openLaneMenu(false);
+    $("#input").focus();
+  }
+});
+document.addEventListener("click", (event) => {
+  if (!$("#lane-menu").hidden && !event.target.closest(".lane")) openLaneMenu(false);
+});
+$("#input").addEventListener("input", paintSuggestion);
 $("#input").addEventListener("input", (event) => {
   event.target.style.height = "auto";
   event.target.style.height = Math.min(event.target.scrollHeight, 220) + "px";
 });
 $("#attach").onclick = () => $("#file-input").click();
-$("#run").onclick = (event) => { event.preventDefault(); openRunConfirm(); };
 $("#tc-cancel").onclick = (event) => { event.preventDefault(); closeRunConfirm(); };
 $("#tc-start").onclick = (event) => { event.preventDefault(); startTask(); };
 $("#tc-test-edits").onchange = paintTestPolicy;
@@ -878,6 +1049,7 @@ $("#folder-use").onclick = async (event) => {
   });
   state.folder = path;
   $("#folder-name").textContent = path.split("/").slice(-2).join("/");
+  showWhere(path, "");
   $("#folder-dialog").close();
 };
 
