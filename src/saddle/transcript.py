@@ -22,6 +22,11 @@ from saddle.journal import (
 )
 
 MAX_THOUGHT_EXCERPT_CHARS: Final = 200
+# The run span a rule D question halt seals (slice.QUESTION_EXIT and its
+# detail on phase2-rule-d, P2-3b). Mirrored, not imported: this module sits
+# below slice, and a journal sealed there must render wherever it is read.
+QUESTION_RUN_EXIT: Final = 4
+QUESTION_RUN_DETAIL: Final = " halted on a question"
 
 
 @dataclass(frozen=True)
@@ -164,7 +169,9 @@ def render_journal_transcript(
 
     Run metadata the journal never stores (task, timestamps) renders as
     "(unknown)"; the verdict is PASS only when every sealed gate output
-    passed, so an auditor recomputes it instead of trusting it.
+    passed, so an auditor recomputes it instead of trusting it. A run span
+    sealed as a rule D question halt (exit 4, "halted on a question") with
+    no sealed gate failure renders QUESTION; anything else not PASS is FAIL.
 
     Only proven nodes have sealed records, so proofs alone cannot see a
     failed node: the smoke run of 2026-09-19 (`1 proven, 1 failed, merge
@@ -197,11 +204,18 @@ def render_journal_transcript(
     proven = any(node.checks for node in nodes)
     runs = [span for span in spans if span.name == "run"]
     run_ok = runs[-1].exit_code == 0 if runs else True
-    verdict = (
-        "PASS"
-        if run_ok and proven and all(check.passed for node in nodes for check in node.checks)
-        else "FAIL"
-    )
+    checks_ok = all(check.passed for node in nodes for check in node.checks)
+    # A rule D question halt (phase2-rule-d, P2-3b) seals its run span with
+    # exit QUESTION_RUN_EXIT and a detail counting the halts. Both halves are
+    # read: exit 4 alone is not that shape. A sealed gate failure still wins.
+    asked = bool(runs) and runs[-1].exit_code == QUESTION_RUN_EXIT
+    asked = asked and QUESTION_RUN_DETAIL in runs[-1].detail
+    if run_ok and proven and checks_ok:
+        verdict = "PASS"
+    elif asked and checks_ok:
+        verdict = "QUESTION"
+    else:
+        verdict = "FAIL"
     return render_transcript(
         RunTranscript(
             task="(unknown)",
