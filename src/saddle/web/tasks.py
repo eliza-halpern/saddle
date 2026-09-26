@@ -222,6 +222,10 @@ def execute(
         publish(wrapped)
         if isinstance(event, RunProgress):
             run.progress = wrapped
+            # Extend raises a budget mid-run (engine._offer_budget): every
+            # later state event carries the budget the outcome will seal.
+            run.time_budget_s = event.time_budget_s
+            run.token_budget = event.token_budget
         if isinstance(event, Question):
             run.question = event
             run.state = "needs_you"

@@ -281,4 +281,6 @@ def test_the_card_answers_the_budget_question(tmp_path: Path, repo: Path) -> Non
     assert got["question"].startswith("This run has used 80% of its token budget")
     assert got["options"] == ["Extend", "Stop at limit"]
     assert got["verdict"] == "v-finished"
+    # UXREVIEW2 F1: the card's meter ends on the extended budget, as sealed.
+    assert got["meter"].endswith("of 2.0k"), got["meter"]
     assert got["contract"]["items"] == [f"You were asked: {got['question']} → you answered: Extend"]
