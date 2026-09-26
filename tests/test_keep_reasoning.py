@@ -13,11 +13,19 @@ import json
 from pathlib import Path
 from typing import Any
 
+import jinja2
+
 from saddle import cli
 from saddle.auto import AutoOptions, run_auto
 from saddle.engine import TurnOptions, run_turn
 from tests.test_auto import namespace, repo  # noqa: F401  (fixture)
 from tests.test_usage import FakeServer, _delta, _finish_call, _sealed, _sse
+
+TEMPLATE = Path(__file__).parent / "fixtures" / "qwen38_chat_template.jinja"
+"""The served Qwen3.8 chat template, byte for byte (sha256 c3cf9e34..., the
+same file in every model directory of qwen38-27b-rtx3090; no start script
+overrides it). It reads only `reasoning_content` on past assistant turns."""
+BLANK = "<think>\n\n</think>"
 
 R1 = "first-round reasoning about calc.py"
 R2 = "second-round reasoning after the nudge"
@@ -88,3 +96,47 @@ def test_interactive_chat_never_keeps_reasoning(tmp_path: Path) -> None:
     list(run_turn(server.client(), [], "look", options, turn=1))
     assert len(server.payloads) == 2
     assert R1 not in json.dumps(server.payloads[1])
+
+
+def _raise(message: str) -> None:
+    raise ValueError(message)
+
+
+def _render(payload: dict[str, Any]) -> str:
+    """Render a request body saddle emitted through the served template.
+
+    Tool-call arguments are parsed to mappings first, as vLLM does before
+    templating (the template iterates `arguments|items`); nothing else of
+    the body is touched, so which reasoning key saddle sent decides the
+    outcome."""
+    messages = json.loads(json.dumps(payload["messages"]))
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            call["function"]["arguments"] = json.loads(call["function"]["arguments"])
+    env = jinja2.Environment(extensions=["jinja2.ext.loopcontrols"])
+    env.globals["raise_exception"] = _raise
+    template = env.from_string(TEMPLATE.read_text())
+    return template.render(
+        messages=messages,
+        tools=payload.get("tools"),
+        add_generation_prompt=True,
+        reasoning_effort=payload.get("reasoning_effort"),
+    )
+
+
+def test_contract_kept_reasoning_reaches_the_served_template(repo: Path) -> None:  # noqa: F811
+    """The contract: round N's reasoning is in request N+1's *rendered* prompt."""
+    server, _ = _run(repo, keep=True)
+    first, second = _render(server.payloads[1]), _render(server.payloads[2])
+    assert f"<think>\n{R1}\n</think>" in first
+    assert f"<think>\n{R1}\n</think>" in second
+    assert f"<think>\n{R2}\n</think>" in second
+    assert BLANK not in second
+
+
+def test_contract_without_the_flag_the_template_sees_a_blank_think(repo: Path) -> None:  # noqa: F811
+    server, _ = _run(repo, keep=False)
+    second = _render(server.payloads[2])
+    assert R1 not in second
+    assert R2 not in second
+    assert second.count(BLANK) == 2

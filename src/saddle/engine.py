@@ -676,12 +676,14 @@ def run_turn(
 def _assistant(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str, Any]:
     """The assistant message as sent back, with its reasoning when `keep`.
 
-    The key is `reasoning`, what the server streams and what the untouched
-    agent (pi) sends back; vLLM hands it to the template's
-    `reasoning_content` (SPEED F-a: pi's prompt grew by the reasoning).
-    Appended last, so with `keep` off the message is exactly as before.
+    Sent under both keys: `reasoning_content`, the only one the served
+    Qwen3.8 template reads, and `reasoning`, what the server streams and
+    the untouched agent (pi) sends back. Relying on the server to map one
+    to the other would leave the flag inert if it does not. Appended last,
+    so with `keep` off the message is exactly as before.
     """
     if keep:
+        message["reasoning_content"] = reasoning
         message["reasoning"] = reasoning
     return message
 
