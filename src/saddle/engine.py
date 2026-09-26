@@ -117,12 +117,22 @@ class AuditHooks(Protocol):
     def after_tool(self, name: str, ok: bool) -> None: ...
     def collect(self) -> str: ...
     def final(self) -> tuple[bool, str]: ...
+    def unresolved(self) -> list[dict[str, object]]: ...
     def close(self) -> None: ...
     def last(self) -> dict[str, object] | None: ...
 
 
 FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
 """Prefix of `finish`'s result when the audit refuses it (arm E+A+F)."""
+
+DEFAULT_FINISH_REFUSAL_CAP: Final = 3
+"""Consecutive `finish` refusals on an unchanged failing finding set before
+the run stops (M3F: a correct T5 tree was refused 7,244 times until the
+token budget ran out). Tightened: the loop is bounded; the tree is never
+marked finished."""
+
+AUDIT_UNRESOLVED: Final = "audit unresolved"
+"""The sealed stop reason when the finish refusal cap is reached."""
 
 
 @dataclass
@@ -149,6 +159,13 @@ class AutoRun:
     refusals: int = 0
     feed: AuditHooks | None = None
     finish_refusals: int = 0
+    finish_refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP
+    """Stop after this many consecutive refusals whose failing finding set
+    (gate, reason, cites) is unchanged; a changed set restarts the count."""
+    unchanged_refusals: int = 0
+    """Length of the current run of refusals on one unchanged finding set."""
+    unresolved: list[dict[str, object]] = field(default_factory=list)
+    """The failing findings of the last refusal (gate, reason, cites)."""
     arm: str = "E"
     """Which Phase 2 arm this run is ("E", "E+A", "E+A+F"); sealed in the
     outcome sidecar so the ledger alone tells the arms apart."""
@@ -530,7 +547,7 @@ def run_turn(
                 tools.append({"name": call.name, "arguments": call.arguments, "result": seen})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": seen})
             rounds.append({"reply": reply, "tools": tools})
-            if stop() or (auto is not None and auto.outcome == "finished"):
+            if stop() or (auto is not None and auto.outcome):
                 break
     except VllmError as exc:
         yield ErrorEvent(message=str(exc))
@@ -574,6 +591,17 @@ def _finish(auto: AutoRun, arguments: str) -> str:
         accepted, findings = auto.feed.final()
         if not accepted:
             auto.finish_refusals += 1
+            unresolved = auto.feed.unresolved()
+            same = auto.unchanged_refusals > 0 and unresolved == auto.unresolved
+            auto.unchanged_refusals = auto.unchanged_refusals + 1 if same else 1
+            auto.unresolved = unresolved
+            if auto.unchanged_refusals >= auto.finish_refusal_cap:
+                auto.stop(AUDIT_UNRESOLVED)
+                return (
+                    f"{FINISH_REFUSED}The same findings refused finish "
+                    f"{auto.unchanged_refusals} times in a row; the run stops "
+                    f"({AUDIT_UNRESOLVED}).\n\n{findings}"
+                )
             return f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
     auto.finish(summary)
     return "finished. Your summary is recorded as narrative, not as evidence."
@@ -601,6 +629,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         f"files changed: {', '.join(files) or 'none'}; "
         f"commands run: {len(commands)}; refusals: {auto.refusals}"
     )
+    if auto.reason == AUDIT_UNRESOLVED:
+        named = ", ".join(f"{f['gate']} ({f['reason']})" for f in auto.unresolved)
+        detail += f"; unresolved findings: {named}"
     span = build_span(
         node_id=node_id,
         argv=[f"auto:{auto.outcome}"],
@@ -627,6 +658,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "arm": auto.arm,
         **auto.sealed,
         "finish_refusals": auto.finish_refusals,
+        "finish_refusal_cap": auto.finish_refusal_cap,
+        "unchanged_refusals": auto.unchanged_refusals,
+        "unresolved_findings": auto.unresolved,
         # The last completed audit (the finish audit if finish was called):
         # its tree id, findings and verdict. None for arm E, or when nothing
         # was audited before the run ended.

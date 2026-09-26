@@ -304,6 +304,19 @@ class AuditFeed:
             return True, ""
         return False, "\n\n".join(t for t in (before, text) if t)
 
+    def unresolved(self) -> list[dict[str, object]]:
+        """The last audit's failing findings as (gate, reason, cites), sorted.
+
+        The identity of a finish refusal: the engine counts consecutive
+        refusals on an unchanged set (`engine.AutoRun.finish_refusal_cap`).
+        Detail text is left out; it carries counts that can drift while the
+        finding stays the same.
+        """
+        if not self.results:
+            return []
+        keys = {(f.gate, f.reason, f.cites) for f in self.results[-1].findings if failing(f)}
+        return [{"gate": g, "reason": r, "cites": list(c)} for g, r, c in sorted(keys)]
+
     def close(self) -> None:
         """End of run: a pending checkpoint is awaited and journaled, never delivered."""
         self._await()

@@ -28,7 +28,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Final
 
-from saddle.engine import AutoRun, RunBudget, TurnOptions, run_turn
+from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.journal import append_span, build_span
@@ -83,6 +83,9 @@ class AutoOptions:
     (`--no-feedback`): the same audits, journaled, never delivered, never
     refusing. E (`--no-audit`): no auditor at all."""
     auditor_factory: AuditorFactory = default_auditor
+    finish_refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP
+    """Consecutive `finish` refusals on an unchanged failing finding set before
+    an honest stop, reason `audit unresolved` (`engine.AutoRun`)."""
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten (T5 rule 8). A failing
     assertion-preservation finding naming only these is classed `sanctioned`:
@@ -160,6 +163,9 @@ def run_auto(
     if options.arm not in ARMS:
         msg = f"unknown arm {options.arm!r}; expected one of {', '.join(ARMS)}"
         raise AutoError(msg)
+    if options.finish_refusal_cap < 1:
+        msg = f"finish refusal cap must be at least 1, got {options.finish_refusal_cap}"
+        raise AutoError(msg)
     repo = options.repo.resolve()
     run_id = options.run_id or uuid.uuid4().hex[:12]
     worktree, branch = create_worktree(repo, run_id)
@@ -199,6 +205,7 @@ def run_auto(
         run_span=start.span_id,
         changed_files=lambda: changed_files(worktree),
         feed=feed,
+        finish_refusal_cap=options.finish_refusal_cap,
         arm=options.arm,
         sealed={
             "temperature": options.temperature,
