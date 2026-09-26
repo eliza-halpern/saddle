@@ -885,6 +885,17 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     if outcome is not None and outcome.name == "auto:unchanged":
         gaps.append("No change was made: the tree equals the baseline, so nothing was audited.")
         gap_cites.append(outcome.record_hash)
+    # FEEDFIX (3): each baseline definition the coverage gate did not judge
+    # (sealed by the auditor from the gate's `spared-defs` basis), whatever
+    # the finding's verdict: a pass is where they would otherwise hide.
+    for cov in [a for a in audits if a.name == "audit:coverage"][-1:]:
+        sealed_cov = _sealed(journal, span_by_hash.get(cov.record_hash), "spared")
+        for name in sealed_cov["spared"] if sealed_cov is not None else []:
+            gaps.append(
+                f"{name} was not judged by coverage: a definition the baseline had, "
+                "which the change may not delete and no test reaches."
+            )
+            gap_cites.append(cov.record_hash)
     for q in unanswered:
         gaps.append(f"Unanswered question: {q.detail}")
         gap_cites.append(q.record_hash)

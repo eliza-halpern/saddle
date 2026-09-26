@@ -2773,7 +2773,7 @@ def test_run_tier1_spares_a_compelled_definition_the_coverage_gate_would_fail() 
     deletions = next(check for check in result.checks if check.name == "public-deletions")
 
     assert coverage.passed, "a line the node may not delete must not fail it"
-    assert coverage.basis == "changed-lines=2 compelled-lines=2"
+    assert coverage.basis == "changed-lines=2 compelled-lines=2 spared-defs=n1.py:A.keep"
     assert deletions.passed, "and the definition is indeed still there"
 
 

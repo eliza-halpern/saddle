@@ -1289,7 +1289,7 @@ def test_run_node_gate_spares_a_compelled_line_the_suite_never_reaches(tmp_path:
 
     assert coverage.passed, f"a line the node may not delete must not fail it: {coverage.detail}"
     assert coverage.detail == "every changed line is inside a definition the baseline already had"
-    assert coverage.basis == "changed-lines=1 compelled-lines=1"
+    assert coverage.basis == "changed-lines=1 compelled-lines=1 spared-defs=n.py:A.keep"
     assert deletions.passed, "and the definition is indeed still there"
 
 

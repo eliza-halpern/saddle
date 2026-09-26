@@ -83,6 +83,7 @@ from saddle.gates import (
     introduced_findings,
     set_aside_kind,
     shortlist_order,
+    spared_definitions,
 )
 from saddle.journal import append_span, build_span, write_attempt_sidecar
 
@@ -770,10 +771,20 @@ class Auditor:
                         f"{rewrote[1]}{GREEN_ON_BASELINE}{', '.join(green)}",
                         rewrote[2],
                     )
-            if tier == 1 and statuses["coverage"][0] in ("fail", "not-proven"):
+            if tier == 1:
+                status, detail, basis = statuses["coverage"]
                 # A not-proven coverage finding (SHORTLIST-4) names the same
                 # lines; its sidecar is what COVTEXT renders (FEEDFIX item 8).
-                sealed = coverage_evidence(copy, resolved, statuses["coverage"][1])
+                sealed = (
+                    coverage_evidence(copy, resolved, detail)
+                    if status in ("fail", "not-proven")
+                    else None
+                )
+                # FEEDFIX (3): the baseline definitions coverage did not judge,
+                # sealed whatever the verdict (a pass is where they hide).
+                spared = spared_definitions(basis or "")
+                if spared:
+                    sealed = {**(sealed or {}), "spared": spared}
                 if sealed is not None:
                     sidecars["coverage"] = sealed
         wanted = TIER1 if tier == 1 else TIER2
