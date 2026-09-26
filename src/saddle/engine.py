@@ -114,6 +114,14 @@ class RunBudget:
     def remaining_tokens(self) -> int:
         return max(self.tokens - self.spent_tokens, 0)
 
+    def near(self, fraction: float) -> str | None:
+        """ "token" or "time" once that budget is `fraction` spent but not gone."""
+        if self.tokens * fraction <= self.spent_tokens < self.tokens:
+            return "token"
+        if self.time_s * fraction <= self.elapsed() < self.time_s:
+            return "time"
+        return None
+
     def exhausted(self) -> str | None:
         """Which budget has run out, in words, or None if neither has."""
         if self.spent_tokens >= self.tokens:
@@ -166,6 +174,14 @@ UNANSWERED: Final = "unanswered"
 answer (a headless run) or the run was stopped while it waited, so the
 question's conservative default was taken."""
 
+EXTEND_BUDGET: Final = "Extend"
+STOP_AT_LIMIT: Final = "Stop at limit"
+"""The budget question's options; the second is the default."""
+
+BUDGET_ASK_AT: Final = 0.8
+"""The share of the time or token budget spent at which a running run asks,
+once, whether to extend it by the same amount again."""
+
 _CITE: Final = re.compile(r"[\w./-]+\.\w+:\d+")
 
 
@@ -217,7 +233,7 @@ class AutoRun:
     audit: Callable[[str, str, str], Sequence[Event]] | None = None
     answer: Callable[[Question], str | None] | None = None
     asked: set[str] = field(default_factory=set)
-    """Which of the run's own questions ("test-edits") were put; each at most once."""
+    """Which of the run's own questions ("test-edits", "budget") were put; each at most once."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -487,6 +503,8 @@ def run_turn(
                     auto.stop(spent)
                     yield ErrorEvent(message=f"stopped: {spent}")
                     break
+                if not stop():
+                    yield from _offer_budget(auto, options.journal, node_id)
             taken += 1
             parts: list[str] = []
             thoughts: list[str] = []
@@ -736,6 +754,37 @@ def _ask(
     append_span(journal, answered)
     yield Answered(id=question.id, text=detail, span_id=answered.span_id)
     return reply
+
+
+def _offer_budget(auto: AutoRun, journal: Path, node_id: str) -> Generator[Event, None, None]:
+    """At BUDGET_ASK_AT of either budget, ask once whether to extend it.
+
+    Extend raises that budget once by its own size, sealed in the outcome
+    sidecar; Stop at limit (the default, and what a headless run takes)
+    leaves it, so the run stops where it always would have.
+    """
+    which = auto.budget.near(BUDGET_ASK_AT)
+    if which is None or "budget" in auto.asked:
+        return
+    auto.asked.add("budget")
+    budget = auto.budget
+    more = f"{budget.tokens} generated tokens" if which == "token" else f"{budget.time_s:.0f}s"
+    question = Question(
+        id="budget",
+        text=f"This run has used {BUDGET_ASK_AT:.0%} of its {which} budget and has not "
+        f"finished. Extend by {more} or stop at the limit?",
+        options=[EXTEND_BUDGET, STOP_AT_LIMIT],
+    )
+    choice = yield from _ask(auto, journal, node_id, question, default=STOP_AT_LIMIT)
+    if choice != EXTEND_BUDGET:
+        return
+    if which == "token":
+        auto.sealed["budget_extended"] = {"budget": which, "by": budget.tokens}
+        budget.tokens *= 2
+    else:
+        auto.sealed["budget_extended"] = {"budget": which, "by": budget.time_s}
+        budget.time_s *= 2
+    yield _progress(auto)
 
 
 def _needs_a_test(auto: AutoRun) -> str | None:
