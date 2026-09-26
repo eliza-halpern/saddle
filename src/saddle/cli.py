@@ -60,6 +60,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
+from saddle.packet import compile_packet, render_packet_text
 from saddle.sessions import DEFAULT_WORKDIR
 from saddle.slice import (
     DEADLINE_EXIT,
@@ -1679,6 +1680,10 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         f"branch {result.branch} at {result.commit[:12]} (worktree {result.worktree})\n"
         f"ledger {result.journal}\n"
     )
+    # The packet, compiled from the sealed ledger the run just wrote: the
+    # terminal gets what the chat card gets (UXREVIEW2 Q7), not only the
+    # outcome line.
+    stdout.write(render_packet_text(compile_packet(result.journal, run_id=result.run_id)) + "\n")
     return 0 if result.outcome == "finished" else AUTO_STOPPED
 
 
