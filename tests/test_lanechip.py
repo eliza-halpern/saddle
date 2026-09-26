@@ -177,8 +177,20 @@ def test_git_branch_names_the_checkout_or_nothing(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", "-b", "lanes", str(repo)], check=True)
     assert git_branch(repo) == ""  # no commit yet: HEAD names no branch git can resolve
     subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
-         "commit", "-q", "--allow-empty", "-m", "i"],
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "i",
+        ],
         check=True,
     )
     assert git_branch(repo) == "lanes"
@@ -236,8 +248,12 @@ def test_the_chip_shows_six_lanes_three_greyed_and_shift_tab_cycles_the_rest(
     assert got["open"]["menuOpen"] is True
     lanes = [(o["lane"], o["disabled"]) for o in got["options"]]
     assert lanes == [
-        ("ask", False), ("edit", False), ("task", False),
-        ("feature", True), ("breadth", True), ("long", True),
+        ("ask", False),
+        ("edit", False),
+        ("task", False),
+        ("feature", True),
+        ("breadth", True),
+        ("long", True),
     ]
     assert all(o["desc"] for o in got["options"])
     assert "unaudited, edits your folder" in got["options"][1]["desc"].lower()

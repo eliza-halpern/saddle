@@ -303,9 +303,7 @@ class SessionStore:
         want_persona = persona or defaults["persona"]
         want_effort = reasoning_effort or defaults["reasoning_effort"]
         want_temp = (
-            defaults["temperature"]
-            if temperature is None
-            else self.clamp_temperature(temperature)
+            defaults["temperature"] if temperature is None else self.clamp_temperature(temperature)
         )
         with self._create_lock:
             if reuse_unstarted:

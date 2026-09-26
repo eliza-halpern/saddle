@@ -570,9 +570,8 @@ def test_each_tool_call_leaves_a_span_with_its_outcome(options: TurnOptions) -> 
 #
 # The user saw an empty reply and a persona that "did not work".
 
-def test_the_budget_uses_the_servers_own_count_when_it_has_one(
-    options: TurnOptions
-) -> None:
+
+def test_the_budget_uses_the_servers_own_count_when_it_has_one(options: TurnOptions) -> None:
     options.context_tokens = 100_000
     asked: list[dict[str, Any]] = []
 
@@ -580,9 +579,7 @@ def test_the_budget_uses_the_servers_own_count_when_it_has_one(
         asked.append({"messages": messages, "tools": tools})
         return 4_100
 
-    assert options.budget([{"role": "user", "content": "hi"}], counter) == (
-        100_000 - 4_100 - 2048
-    )
+    assert options.budget([{"role": "user", "content": "hi"}], counter) == (100_000 - 4_100 - 2048)
     # The schemas are part of the prompt, so they are part of what is counted.
     assert asked[0]["tools"] == options.tools
 
@@ -592,6 +589,7 @@ def test_a_counted_request_fits_the_window(options: TurnOptions) -> None:
     # prompt measured the way the server measures it.
     options.context_tokens = 175_000
     for real in (74, 948, 4_100, 90_000, 174_000):
+
         def counter(_m: Any, *, tools: Any = None, n: int = real) -> int:
             return n
 
@@ -601,9 +599,7 @@ def test_a_counted_request_fits_the_window(options: TurnOptions) -> None:
         )
 
 
-def test_a_server_that_cannot_count_falls_back_and_still_leaves_room(
-    options: TurnOptions
-) -> None:
+def test_a_server_that_cannot_count_falls_back_and_still_leaves_room(options: TurnOptions) -> None:
     options.context_tokens = 175_000
     messages = [{"role": "user", "content": "Hello, can you help me?" * 30}]
 
@@ -611,7 +607,7 @@ def test_a_server_that_cannot_count_falls_back_and_still_leaves_room(
         return None
 
     guessed = options.budget(messages, no_count)
-    assert guessed == options.budget(messages)        # same as having no counter
+    assert guessed == options.budget(messages)  # same as having no counter
 
     # The contract, not a proxy for it: the guess must exceed the raw sum by
     # the safety factor, because the raw sum is what was measured too low --
@@ -627,9 +623,7 @@ def test_the_tool_schemas_are_counted_at_all(options: TurnOptions) -> None:
     assert options.input_estimate([]) >= options.tool_tokens()
 
 
-def test_an_explicit_max_tokens_still_bypasses_all_of_this(
-    options: TurnOptions
-) -> None:
+def test_an_explicit_max_tokens_still_bypasses_all_of_this(options: TurnOptions) -> None:
     options.max_tokens = 4_096
 
     def counter(_m: Any, *, tools: Any = None) -> int:
@@ -639,7 +633,7 @@ def test_an_explicit_max_tokens_still_bypasses_all_of_this(
 
 
 def test_a_conversation_compacted_to_the_limit_still_leaves_room_to_answer(
-    options: TurnOptions
+    options: TurnOptions,
 ) -> None:
     """The invariant, stated as the thing that must hold.
 
@@ -655,8 +649,7 @@ def test_a_conversation_compacted_to_the_limit_still_leaves_room_to_answer(
         at_the_limit = options.compaction_limit() + options.tool_tokens()
         worst_case_prompt = int(at_the_limit * INPUT_SAFETY)
         assert worst_case_prompt + MIN_OUTPUT + OUTPUT_MARGIN <= window, (
-            f"window {window}: a conversation compacted to the limit "
-            f"leaves no room for a reply"
+            f"window {window}: a conversation compacted to the limit leaves no room for a reply"
         )
 
 

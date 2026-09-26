@@ -217,7 +217,7 @@ def test_a_patch_keeps_the_session_live_rather_than_discarding_it(
         client.patch(f"/api/sessions/{sid}", json={"workdir": str(tmp_path)})
 
         assert server._live(sid) is live
-        assert server._live(sid).turn == 7      # and the turn counter survives
+        assert server._live(sid).turn == 7  # and the turn counter survives
 
 
 def test_deleting_a_session_discards_its_live_state(store: SessionStore, tmp_path: Path) -> None:
@@ -1234,6 +1234,7 @@ def test_an_asset_that_cannot_be_stat_ed_is_served_unversioned(
 
 # -- one unstarted session ----------------------------------------------------
 
+
 def test_asking_for_a_new_session_twice_gives_the_same_unwritten_one(
     store: SessionStore, tmp_path: Path
 ) -> None:
@@ -1290,9 +1291,7 @@ def test_an_explicit_persona_is_honoured_even_when_one_is_lying_around(
         assert asked["id"] != lying_around["id"]
 
 
-def test_two_untouched_sessions_are_still_one_session(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_two_untouched_sessions_are_still_one_session(store: SessionStore, tmp_path: Path) -> None:
     # The original complaint must stay fixed: repeated clicks on a pristine
     # session still return it.
     with app_for(store, tmp_path) as (client, _app):
@@ -1316,9 +1315,7 @@ def test_reuse_can_be_declined_for_a_caller_that_wants_a_fresh_one(
 ) -> None:
     with app_for(store, tmp_path) as (client, _app):
         first = client.post("/api/sessions", json={}).json()["id"]
-        second = client.post(
-            "/api/sessions", json={"reuse_unstarted": False}
-        ).json()["id"]
+        second = client.post("/api/sessions", json={"reuse_unstarted": False}).json()["id"]
         assert second != first
 
 
@@ -1371,15 +1368,17 @@ def test_concurrent_creates_do_not_race(store: SessionStore, tmp_path: Path) -> 
 
 # -- defaults for a new session -----------------------------------------------
 
+
 def test_a_new_session_starts_at_the_stated_defaults_not_a_reset(
     store: SessionStore, tmp_path: Path
 ) -> None:
     with app_for(store, tmp_path) as (client, _app):
         assert client.get("/api/settings").json() == {
-            "persona": "engineer", "reasoning_effort": "xhigh", "temperature": 1.0,
+            "persona": "engineer",
+            "reasoning_effort": "xhigh",
+            "temperature": 1.0,
         }
-        client.patch("/api/settings", json={"persona": "reviewer",
-                                            "reasoning_effort": "low"})
+        client.patch("/api/settings", json={"persona": "reviewer", "reasoning_effort": "low"})
         made = client.post("/api/sessions", json={"reuse_unstarted": False}).json()
         assert made["persona"] == "reviewer"
         assert made["reasoning_effort"] == "low"
@@ -1394,9 +1393,7 @@ def test_a_sessions_own_persona_does_not_move_the_default(
         assert client.get("/api/settings").json()["persona"] == "engineer"
 
 
-def test_an_explicit_persona_beats_the_default(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_an_explicit_persona_beats_the_default(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, _app):
         client.patch("/api/settings", json={"persona": "reviewer"})
         made = client.post(
@@ -1409,10 +1406,11 @@ def test_an_unknown_setting_is_ignored_rather_than_stored(
     store: SessionStore, tmp_path: Path
 ) -> None:
     with app_for(store, tmp_path) as (client, _app):
-        body = client.patch("/api/settings", json={"nonsense": "x",
-                                                   "persona": "plain"}).json()
+        body = client.patch("/api/settings", json={"nonsense": "x", "persona": "plain"}).json()
         assert body == {
-            "persona": "plain", "reasoning_effort": "xhigh", "temperature": 1.0,
+            "persona": "plain",
+            "reasoning_effort": "xhigh",
+            "temperature": 1.0,
         }
 
 
@@ -1428,13 +1426,15 @@ def test_an_empty_setting_keeps_the_value_it_would_have_blanked(
 
 # -- writing and editing personas ---------------------------------------------
 
+
 def test_a_persona_can_be_written_and_reaches_the_model(
     store: SessionStore, tmp_path: Path
 ) -> None:
     seen: list[str] = []
 
-    def capture(_c: Any, messages: list[dict[str, Any]], text: str, options: Any,
-                **_kw: Any) -> Any:
+    def capture(
+        _c: Any, messages: list[dict[str, Any]], text: str, options: Any, **_kw: Any
+    ) -> Any:
         seen.append(options.system_prompt)
         messages.append({"role": "user", "content": text})
         return iter(())
@@ -1483,21 +1483,16 @@ def test_a_persona_needs_a_name(store: SessionStore, tmp_path: Path) -> None:
         assert reply.json()["error"] == "a persona needs a name"
 
 
-def test_an_overlong_persona_name_is_refused(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_an_overlong_persona_name_is_refused(store: SessionStore, tmp_path: Path) -> None:
     from saddle.sessions import MAX_PERSONA_NAME
 
     with app_for(store, tmp_path) as (client, _app):
-        reply = client.put("/api/personas/" + "x" * (MAX_PERSONA_NAME + 1),
-                           json={"prompt": "x"})
+        reply = client.put("/api/personas/" + "x" * (MAX_PERSONA_NAME + 1), json={"prompt": "x"})
         assert reply.status_code == 400
         assert str(MAX_PERSONA_NAME) in reply.json()["error"]
 
 
-def test_an_empty_persona_prompt_is_allowed(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_an_empty_persona_prompt_is_allowed(store: SessionStore, tmp_path: Path) -> None:
     # "plain" ships empty; a user may want the same.
     with app_for(store, tmp_path) as (client, _app):
         client.put("/api/personas/bare", json={"prompt": ""})
@@ -1622,9 +1617,8 @@ def test_a_moved_session_still_gets_a_fresh_tool_context(
 
 # -- the temperature knob -----------------------------------------------------
 
-def test_a_chat_turn_samples_rather_than_being_greedy(
-    store: SessionStore, tmp_path: Path
-) -> None:
+
+def test_a_chat_turn_samples_rather_than_being_greedy(store: SessionStore, tmp_path: Path) -> None:
     """Chat runs at 1.0, not the 0.0 the measured paths use.
 
     Greedy decoding gave the same answer to the same question every time,
@@ -1634,8 +1628,9 @@ def test_a_chat_turn_samples_rather_than_being_greedy(
     """
     seen: list[float] = []
 
-    def capture(_c: Any, messages: list[dict[str, Any]], text: str, options: Any,
-                **_kw: Any) -> Any:
+    def capture(
+        _c: Any, messages: list[dict[str, Any]], text: str, options: Any, **_kw: Any
+    ) -> Any:
         seen.append(options.temperature)
         messages.append({"role": "user", "content": text})
         return iter(())
@@ -1653,8 +1648,9 @@ def test_a_chat_turn_samples_rather_than_being_greedy(
 def test_the_knob_reaches_the_turn(store: SessionStore, tmp_path: Path) -> None:
     seen: list[float] = []
 
-    def capture(_c: Any, messages: list[dict[str, Any]], text: str, options: Any,
-                **_kw: Any) -> Any:
+    def capture(
+        _c: Any, messages: list[dict[str, Any]], text: str, options: Any, **_kw: Any
+    ) -> Any:
         seen.append(options.temperature)
         messages.append({"role": "user", "content": text})
         return iter(())
@@ -1670,19 +1666,16 @@ def test_the_knob_reaches_the_turn(store: SessionStore, tmp_path: Path) -> None:
     assert seen == [0.2]
 
 
-def test_zero_is_a_real_temperature_not_an_absent_one(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_zero_is_a_real_temperature_not_an_absent_one(store: SessionStore, tmp_path: Path) -> None:
     # 0.0 is the one setting whose most meaningful value is falsy, so a
     # truthiness check would drop it and silently leave the session at 1.0.
     with app_for(store, tmp_path) as (client, _app):
         sid = client.post("/api/sessions", json={}).json()["id"]
-        assert client.patch(
-            f"/api/sessions/{sid}", json={"temperature": 0.0}
-        ).json()["temperature"] == 0.0
-        assert client.patch(
-            "/api/settings", json={"temperature": 0.0}
-        ).json()["temperature"] == 0.0
+        assert (
+            client.patch(f"/api/sessions/{sid}", json={"temperature": 0.0}).json()["temperature"]
+            == 0.0
+        )
+        assert client.patch("/api/settings", json={"temperature": 0.0}).json()["temperature"] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -1696,14 +1689,13 @@ def test_a_temperature_the_server_would_refuse_is_clamped(
     # and the UI shows a refused request as a turn that produced nothing.
     with app_for(store, tmp_path) as (client, _app):
         sid = client.post("/api/sessions", json={}).json()["id"]
-        assert client.patch(
-            f"/api/sessions/{sid}", json={"temperature": sent}
-        ).json()["temperature"] == want
+        assert (
+            client.patch(f"/api/sessions/{sid}", json={"temperature": sent}).json()["temperature"]
+            == want
+        )
 
 
-def test_a_different_temperature_makes_a_new_session(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_different_temperature_makes_a_new_session(store: SessionStore, tmp_path: Path) -> None:
     # Same rule as persona: setting the knob is setting the session up, so
     # asking for a new one must not hand back your configured session.
     with app_for(store, tmp_path) as (client, _app):
@@ -1721,9 +1713,7 @@ def test_the_stream_reports_the_temperature_so_the_knob_shows_it(
         assert _frames(client, sid, 1)[0]["temperature"] == 1.6
 
 
-def test_the_chat_temperature_has_one_definition(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_the_chat_temperature_has_one_definition(store: SessionStore, tmp_path: Path) -> None:
     """A new session's temperature *is* the engine's chat default.
 
     It was held in two places. The session's value always wins in the chat
@@ -1746,6 +1736,7 @@ def test_the_chat_temperature_has_one_definition(
 # run_turn. The undo log is opened by the engine, so a fake turn that skips
 # that records nothing and the test passes having proved nothing -- which is
 # exactly what the first version of this did.
+
 
 class ScriptedClient:
     """Replays rounds of (reasoning, content, tool calls) like the server would."""
@@ -1776,8 +1767,11 @@ def _writes(path: str, body: str) -> list[list[Any]]:
     from saddle.vllm import StreamToken, ToolCall
 
     return [
-        [ToolCall(id="w", name="write_file",
-                  arguments=json.dumps({"path": path, "content": body}))],
+        [
+            ToolCall(
+                id="w", name="write_file", arguments=json.dumps({"path": path, "content": body})
+            )
+        ],
         [StreamToken(stream="content", text=f"wrote {path}")],
     ]
 
@@ -1798,25 +1792,19 @@ def test_a_retry_puts_back_the_file_the_first_attempt_wrote(
     target = work / "out.txt"
     target.write_text("what was there before\n")
 
-    with engine_app(store, tmp_path, _writes("out.txt", "first attempt")) as (
-        client, app
-    ):
+    with engine_app(store, tmp_path, _writes("out.txt", "first attempt")) as (client, app):
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
         client.patch(f"/api/sessions/{sid}", json={"mode": "edit"})  # writes need Edit (LANECHIP)
         _server_of(app)._run(sid, "change the file")
         assert target.read_text() == "first attempt"
 
-        asked = next(
-            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
-        )
+        asked = next(i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user")
 
         # The page is told what will change, before anything changes.
-        preview = client.get(
-            f"/api/sessions/{sid}/rewind", params={"index": asked}
-        ).json()
+        preview = client.get(f"/api/sessions/{sid}/rewind", params={"index": asked}).json()
         assert preview["reverted"] == [str(target)]
         assert preview["text"] == "change the file"
-        assert target.read_text() == "first attempt"      # preview touched nothing
+        assert target.read_text() == "first attempt"  # preview touched nothing
 
         ScriptedClient.rounds = _writes("out.txt", "second attempt")
         done = client.post(f"/api/sessions/{sid}/rewind", json={"index": asked}).json()
@@ -1841,9 +1829,7 @@ def test_a_retry_deletes_a_file_the_first_attempt_invented(
         _server_of(app)._run(sid, "make something")
         assert invented.exists()
 
-        asked = next(
-            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
-        )
+        asked = next(i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user")
         ScriptedClient.rounds = []
         done = client.post(f"/api/sessions/{sid}/rewind", json={"index": asked}).json()
         assert done["deleted"] == [str(invented)]
@@ -1857,49 +1843,42 @@ def test_an_edit_replaces_the_question_and_still_cleans_up(
     work.mkdir()
     target = work / "out.txt"
 
-    with engine_app(store, tmp_path, _writes("out.txt", "from the first wording")) as (
-        client, app
-    ):
+    with engine_app(store, tmp_path, _writes("out.txt", "from the first wording")) as (client, app):
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
         client.patch(f"/api/sessions/{sid}", json={"mode": "edit"})  # writes need Edit (LANECHIP)
         _server_of(app)._run(sid, "the first wording")
-        asked = next(
-            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
-        )
+        asked = next(i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user")
 
         ScriptedClient.rounds = _writes("out.txt", "from the second wording")
         client.post(
             f"/api/sessions/{sid}/rewind",
             json={"index": asked, "text": "the second wording"},
         )
-        _settle(
-            lambda: target.is_file() and target.read_text() == "from the second wording"
-        )
+        _settle(lambda: target.is_file() and target.read_text() == "from the second wording")
 
     users = [m["content"] for m in store.load_messages(sid) if m["role"] == "user"]
-    assert users == ["the second wording"]     # the old wording is gone, not kept
+    assert users == ["the second wording"]  # the old wording is gone, not kept
 
 
-def test_a_retry_re_answers_rather_than_re_asking(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_retry_re_answers_rather_than_re_asking(store: SessionStore, tmp_path: Path) -> None:
     from saddle.vllm import StreamToken
 
-    with engine_app(
-        store, tmp_path, [[StreamToken(stream="content", text="first")]]
-    ) as (client, app):
+    with engine_app(store, tmp_path, [[StreamToken(stream="content", text="first")]]) as (
+        client,
+        app,
+    ):
         sid = client.post("/api/sessions", json={}).json()["id"]
         _server_of(app)._run(sid, "ask once")
-        asked = next(
-            i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user"
-        )
+        asked = next(i for i, m in enumerate(store.load_messages(sid)) if m["role"] == "user")
 
         ScriptedClient.rounds = [[StreamToken(stream="content", text="second")]]
         client.post(f"/api/sessions/{sid}/rewind", json={"index": asked})
-        _settle(lambda: any(
-            m["role"] == "assistant" and m.get("content") == "second"
-            for m in store.load_messages(sid)
-        ))
+        _settle(
+            lambda: any(
+                m["role"] == "assistant" and m.get("content") == "second"
+                for m in store.load_messages(sid)
+            )
+        )
 
     stored = store.load_messages(sid)
     assert [m["content"] for m in stored if m["role"] == "user"] == ["ask once"]
@@ -1911,21 +1890,19 @@ def test_rewinding_to_something_that_is_not_a_question_is_refused(
 ) -> None:
     from saddle.vllm import StreamToken
 
-    with engine_app(
-        store, tmp_path, [[StreamToken(stream="content", text="hi")]]
-    ) as (client, app):
+    with engine_app(store, tmp_path, [[StreamToken(stream="content", text="hi")]]) as (client, app):
         sid = client.post("/api/sessions", json={}).json()["id"]
         _server_of(app)._run(sid, "hello")
         stored = store.load_messages(sid)
         assistant = next(i for i, m in enumerate(stored) if m["role"] == "assistant")
 
         for index in (assistant, len(stored), -1, 999):
-            assert client.post(
-                f"/api/sessions/{sid}/rewind", json={"index": index}
-            ).status_code == 404, index
-        assert client.post(
-            f"/api/sessions/{sid}/rewind", json={"index": "second"}
-        ).status_code == 400
+            assert (
+                client.post(f"/api/sessions/{sid}/rewind", json={"index": index}).status_code == 404
+            ), index
+        assert (
+            client.post(f"/api/sessions/{sid}/rewind", json={"index": "second"}).status_code == 400
+        )
         # A refused rewind must not leave the session wedged as busy.
         assert client.post(f"/api/sessions/{sid}/stop").json() == {"stopping": False}
 
@@ -1976,20 +1953,14 @@ def test_a_rewind_preview_refuses_what_is_not_a_question(
         assert reply.json() == {"error": "index must be a number"}
 
 
-def test_a_rewind_is_refused_while_a_turn_is_running(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_rewind_is_refused_while_a_turn_is_running(store: SessionStore, tmp_path: Path) -> None:
     from saddle.vllm import StreamToken
 
-    with engine_app(
-        store, tmp_path, [[StreamToken(stream="content", text="hi")]]
-    ) as (client, app):
+    with engine_app(store, tmp_path, [[StreamToken(stream="content", text="hi")]]) as (client, app):
         sid = client.post("/api/sessions", json={}).json()["id"]
         _server_of(app)._run(sid, "hello")
         _server_of(app)._live(sid).busy = True
-        assert client.post(
-            f"/api/sessions/{sid}/rewind", json={"index": 1}
-        ).status_code == 409
+        assert client.post(f"/api/sessions/{sid}/rewind", json={"index": 1}).status_code == 409
 
 
 def test_history_carries_the_index_each_message_can_be_rewound_to(
@@ -2018,8 +1989,13 @@ def test_an_edited_image_keeps_each_messages_own_version(
 
     def write(body: str, call: str) -> list[list[Any]]:
         return [
-            [ToolCall(id=call, name="write_file",
-                      arguments=json.dumps({"path": "frog.svg", "content": body}))],
+            [
+                ToolCall(
+                    id=call,
+                    name="write_file",
+                    arguments=json.dumps({"path": "frog.svg", "content": body}),
+                )
+            ],
             [StreamToken(stream="content", text="done")],
         ]
 
@@ -2033,9 +2009,7 @@ def test_an_edited_image_keeps_each_messages_own_version(
 
         shown = [
             row
-            for message in history_for_display(
-                store.load_messages(sid), work, store.undo_dir(sid)
-            )
+            for message in history_for_display(store.load_messages(sid), work, store.undo_dir(sid))
             for row in message.get("tools", [])
         ]
         assert [r["preview"] for r in shown] == ["frog.svg", "frog.svg"]
@@ -2053,9 +2027,7 @@ def test_an_edited_image_keeps_each_messages_own_version(
         assert fetch({"path": "frog.svg"}) == "<svg>blushing</svg>"
 
 
-def test_a_bogus_version_is_refused_or_falls_back(
-    store: SessionStore, tmp_path: Path
-) -> None:
+def test_a_bogus_version_is_refused_or_falls_back(store: SessionStore, tmp_path: Path) -> None:
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.svg").write_text("<svg/>")
@@ -2063,23 +2035,25 @@ def test_a_bogus_version_is_refused_or_falls_back(
         sid = client.post("/api/sessions", json={"workdir": str(work)}).json()["id"]
         # A version id is a blob name, so anything that is not one is refused
         # rather than joined onto a path.
-        assert client.get(f"/api/sessions/{sid}/file",
-                          params={"path": "a.svg", "v": "../../etc/passwd"}
-                          ).status_code == 400
+        assert (
+            client.get(
+                f"/api/sessions/{sid}/file", params={"path": "a.svg", "v": "../../etc/passwd"}
+            ).status_code
+            == 400
+        )
         # An unknown but well-formed id falls back to the current file.
-        assert client.get(f"/api/sessions/{sid}/file",
-                          params={"path": "a.svg", "v": "deadbeef"}).text == "<svg/>"
+        assert (
+            client.get(f"/api/sessions/{sid}/file", params={"path": "a.svg", "v": "deadbeef"}).text
+            == "<svg/>"
+        )
 
 
 # -- making a folder from the picker ------------------------------------------
 
-def test_a_folder_can_be_made_where_you_are_browsing(
-    store: SessionStore, tmp_path: Path
-) -> None:
+
+def test_a_folder_can_be_made_where_you_are_browsing(store: SessionStore, tmp_path: Path) -> None:
     with app_for(store, tmp_path) as (client, _app):
-        made = client.post(
-            "/api/browse", json={"path": str(tmp_path), "name": "new-project"}
-        )
+        made = client.post("/api/browse", json={"path": str(tmp_path), "name": "new-project"})
         assert made.status_code == 200
         assert made.json()["path"] == str(tmp_path / "new-project")
         assert (tmp_path / "new-project").is_dir()
@@ -2120,12 +2094,18 @@ def test_making_a_folder_somewhere_that_is_not_a_folder_is_refused(
 ) -> None:
     (tmp_path / "a-file").write_text("x")
     with app_for(store, tmp_path) as (client, _app):
-        assert client.post(
-            "/api/browse", json={"path": str(tmp_path / "a-file"), "name": "x"}
-        ).status_code == 400
-        assert client.post(
-            "/api/browse", json={"path": str(tmp_path / "absent"), "name": "x"}
-        ).status_code == 400
+        assert (
+            client.post(
+                "/api/browse", json={"path": str(tmp_path / "a-file"), "name": "x"}
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/api/browse", json={"path": str(tmp_path / "absent"), "name": "x"}
+            ).status_code
+            == 400
+        )
 
 
 def test_a_folder_that_cannot_be_made_says_why(

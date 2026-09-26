@@ -102,8 +102,13 @@ class UndoLog:
             # failing the tool call over it would be worse.
             return
         self._append(
-            {"kind": "write", "turn": self.turn, "path": str(path),
-             "existed": existed, "blob": blob}
+            {
+                "kind": "write",
+                "turn": self.turn,
+                "path": str(path),
+                "existed": existed,
+                "blob": blob,
+            }
         )
 
     def after_write(self, path: Path, call: str | None = None) -> str | None:
@@ -126,10 +131,15 @@ class UndoLog:
             shutil.copy2(path, target)
         except OSError:
             return None
-        self._append({
-            "kind": "version", "turn": self.turn, "call": call,
-            "path": str(path), "blob": blob,
-        })
+        self._append(
+            {
+                "kind": "version",
+                "turn": self.turn,
+                "call": call,
+                "path": str(path),
+                "blob": blob,
+            }
+        )
         return blob
 
     def versions(self) -> dict[str, str]:
@@ -153,15 +163,12 @@ class UndoLog:
     def _plan(self, index: int) -> tuple[list[dict[str, Any]], set[int]]:
         """The write records a rewind to `index` would act on, newest first."""
         records = self._read()
-        starts = {
-            r["turn"]: r["start_index"] for r in records if r.get("kind") == "turn"
-        }
+        starts = {r["turn"]: r["start_index"] for r in records if r.get("kind") == "turn"}
         undoing = {turn for turn, start in starts.items() if start >= index}
         # Newest first, so a file several turns touched lands on the oldest
         # snapshot rather than an intermediate one.
         return [
-            r for r in reversed(records)
-            if r.get("kind") == "write" and r.get("turn") in undoing
+            r for r in reversed(records) if r.get("kind") == "write" and r.get("turn") in undoing
         ], undoing
 
     def pending(self, index: int) -> Restored:

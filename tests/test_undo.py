@@ -41,7 +41,7 @@ def test_a_file_a_turn_created_is_deleted_again(tmp_path: Path) -> None:
     target = work / "new.py"
 
     log.begin(turn=1, start_index=0)
-    log.before_write(target)          # recorded as "did not exist"
+    log.before_write(target)  # recorded as "did not exist"
     target.write_text("invented\n")
 
     result = log.restore_to(0)
@@ -80,7 +80,7 @@ def test_only_turns_at_or_after_the_rewind_point_are_undone(tmp_path: Path) -> N
     undone.write_text("turn 2 wrote this\n")
 
     log.restore_to(4)
-    assert kept.read_text() == "turn 1 wrote this\n"     # earlier turn survives
+    assert kept.read_text() == "turn 1 wrote this\n"  # earlier turn survives
     assert undone.read_text() == "before turn 2\n"
 
 
@@ -96,10 +96,10 @@ def test_a_file_several_turns_touched_lands_on_the_oldest_snapshot(
         log.before_write(target)
         target.write_text(f"turn {turn}\n")
 
-    log.restore_to(4)                       # undo turns 2 and 3
+    log.restore_to(4)  # undo turns 2 and 3
     assert target.read_text() == "turn 1\n"
 
-    log.restore_to(0)                       # then turn 1 as well
+    log.restore_to(0)  # then turn 1 as well
     assert target.read_text() == "v0\n"
 
 
@@ -124,7 +124,7 @@ def test_a_write_outside_any_turn_is_not_recorded(tmp_path: Path) -> None:
     log, work = _log(tmp_path)
     target = work / "a.py"
     target.write_text("original\n")
-    log.before_write(target)               # begin() was never called
+    log.before_write(target)  # begin() was never called
     target.write_text("changed\n")
     assert log.restore_to(0).touched == 0
 
@@ -138,7 +138,7 @@ def test_an_unreadable_file_is_skipped_rather_than_failing_the_tool(
     target.chmod(0o000)
     try:
         log.begin(turn=1, start_index=0)
-        log.before_write(target)           # cannot be copied
+        log.before_write(target)  # cannot be copied
     finally:
         target.chmod(0o644)
     # Nothing was promised, so nothing is claimed.
@@ -186,6 +186,7 @@ def test_a_restore_that_cannot_write_is_reported_not_swallowed(
 
 
 # -- warning before touching anything -----------------------------------------
+
 
 def test_a_rewind_can_be_previewed_without_happening(tmp_path: Path) -> None:
     # Rewinding edits the user's working directory. Doing that silently is
@@ -265,6 +266,7 @@ def test_a_file_edited_repeatedly_in_one_turn_is_copied_once(tmp_path: Path) -> 
 
 
 # -- versions, so an old message keeps its own picture ------------------------
+
 
 def test_each_call_keeps_the_version_it_produced(tmp_path: Path) -> None:
     """A frog drawn once and edited later showed the edited frog in both.

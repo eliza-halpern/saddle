@@ -760,6 +760,7 @@ def test_a_transcript_with_no_file_yet_is_empty_not_an_error(tmp_path: Path) -> 
 
 # -- stylesheet invariants ----------------------------------------------------
 
+
 def _css_rules() -> list[tuple[str, str]]:
     """(selector, declarations) for every rule in the stylesheet."""
     import re
@@ -826,14 +827,12 @@ def test_the_invariant_can_see_a_violation() -> None:
     import re
 
     broken = "#thing { color: red }\n#thing::before { position: absolute; left: 0 }\n"
-    rules = [
-        (sel.strip(), body)
-        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", broken)
-    ]
+    rules = [(sel.strip(), body) for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", broken)]
     base_positions = {
         sel: {
             d.split(":", 1)[0].strip(): d.split(":", 1)[1].strip()
-            for d in body.split(";") if ":" in d
+            for d in body.split(";")
+            if ":" in d
         }.get("position")
         for sel, body in rules
     }
