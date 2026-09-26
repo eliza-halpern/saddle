@@ -17,7 +17,7 @@ import mimetypes
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any, Final
 
 from saddle.events import (
@@ -32,10 +32,16 @@ from saddle.events import (
     TurnEnd,
     TurnStart,
 )
-from saddle.journal import append_record, append_span, build_record, build_span
+from saddle.journal import (
+    append_record,
+    append_span,
+    build_record,
+    build_span,
+    write_attempt_sidecar,
+)
 from saddle.labels import label_for
 from saddle.memory import CHARS_PER_TOKEN, compact, estimate_tokens
-from saddle.tools import TOOLS, ToolContext, execute_tool, preview_for
+from saddle.tools import FINISH_TOOL, REFUSED, TOOLS, ToolContext, execute_tool, preview_for
 from saddle.vllm import ToolCall, VllmClient, VllmError
 
 type TokenCounter = Callable[..., int | None]
@@ -44,7 +50,92 @@ no /tokenize endpoint."""
 
 MAX_TOOL_ROUNDS: Final = 24
 """Raised from 10: agentic turns legitimately chain many calls, and the old
-cap truncated real work. A run that hits this is reported, not silent."""
+cap truncated real work. A run that hits this is reported, not silent.
+
+Applies to a chat turn only. An autonomous run (`AutoRun`) has no round
+cap; it is bounded by its `RunBudget` of wall time and generated tokens."""
+
+AUTO_NUDGE: Final = (
+    "No one is here to reply. Keep working with the tools, or call finish "
+    "when the task is done. If it cannot be done, call finish and say why."
+)
+"""What an autonomous run is told when a round ends with no tool call. In
+chat that ends the turn; here it would end the run with nothing recorded
+as its outcome, so the run goes on until `finish` or a budget."""
+
+
+@dataclass
+class RunBudget:
+    """Wall time and generated tokens an autonomous run may spend.
+
+    Generated tokens are estimated from the streamed text (reasoning,
+    content and tool-call arguments, `CHARS_PER_TOKEN` per token) because
+    the streaming client reports no usage. The clock is injectable so a
+    test can exhaust time without waiting for it.
+    """
+
+    time_s: float
+    tokens: int
+    clock: Callable[[], float] = monotonic
+    started: float | None = None
+    spent_tokens: int = 0
+
+    def start(self) -> None:
+        if self.started is None:
+            self.started = self.clock()
+
+    def elapsed(self) -> float:
+        return 0.0 if self.started is None else self.clock() - self.started
+
+    def charge(self, text_chars: int) -> None:
+        self.spent_tokens += max(1, text_chars // CHARS_PER_TOKEN)
+
+    def remaining_tokens(self) -> int:
+        return max(self.tokens - self.spent_tokens, 0)
+
+    def exhausted(self) -> str | None:
+        """Which budget has run out, in words, or None if neither has."""
+        if self.spent_tokens >= self.tokens:
+            return (
+                f"token budget exhausted: ~{self.spent_tokens} of {self.tokens} "
+                "generated tokens spent"
+            )
+        elapsed = self.elapsed()
+        if elapsed >= self.time_s:
+            return f"time budget exhausted: {elapsed:.0f}s of {self.time_s:.0f}s spent"
+        return None
+
+
+@dataclass
+class AutoRun:
+    """What makes a turn an autonomous run, and what it ended as.
+
+    The engine fills `outcome`: "finished" only when the model called
+    `finish`; "stopped" for a budget, a model error or a cancel. There is
+    no third ending, and a stop never reads as done.
+
+    Seam for the auditor lanes (not implemented here): every tool result
+    passes through `run_turn` beside `ToolEnd`, where an auditor's event
+    could be appended to the result the model sees.
+    """
+
+    budget: RunBudget
+    run_span: str
+    """The `auto:start` span every tool span of this run cites as parent."""
+    changed_files: Callable[[], list[str]] = list
+    outcome: str = ""
+    reason: str = ""
+    narrative: str = ""
+    span_hashes: list[str] = field(default_factory=list)
+    refusals: int = 0
+
+    def stop(self, reason: str) -> None:
+        if not self.outcome:
+            self.outcome, self.reason = "stopped", reason
+
+    def finish(self, narrative: str) -> None:
+        if not self.outcome:
+            self.outcome, self.reason, self.narrative = "finished", "finish called", narrative
 
 
 OUTPUT_MARGIN: Final = 2048
@@ -99,6 +190,8 @@ class TurnOptions:
     system_prompt: str = ""
     context_tokens: int = 175_000
     tools: list[dict[str, Any]] = field(default_factory=lambda: list(TOOLS))
+    auto: AutoRun | None = None
+    """Set for an autonomous run: no round cap, a budget, `finish`."""
 
     def tool_tokens(self) -> int:
         """What the tool schemas cost, which they do on every single request.
@@ -124,9 +217,7 @@ class TurnOptions:
                 return exact
         return self.input_estimate(messages)
 
-    def budget(
-        self, messages: list[dict[str, Any]], counter: TokenCounter | None = None
-    ) -> int:
+    def budget(self, messages: list[dict[str, Any]], counter: TokenCounter | None = None) -> int:
         """Tokens this reply may use: the window minus what is already in it.
 
         The failure this guards against is asymmetric. Asking for too few
@@ -155,9 +246,12 @@ def _stream(
     client: VllmClient, messages: list[dict[str, Any]], options: TurnOptions
 ) -> Iterator[tuple[str, Any]]:
     """Yield ('reasoning'|'content', text) or ('call', ToolCall)."""
+    cap = options.budget(messages, getattr(client, "count_tokens", None))
+    if options.auto is not None:
+        cap = max(min(cap, options.auto.budget.remaining_tokens()), 1)
     for event in client.stream_chat(
         messages,
-        max_tokens=options.budget(messages, getattr(client, "count_tokens", None)),
+        max_tokens=cap,
         temperature=options.temperature,
         reasoning_effort=options.reasoning_effort,
         tools=options.tools,
@@ -178,9 +272,11 @@ def _seal(
     rounds: list[dict[str, Any]],
     reasoning: str,
     parent: str | None,
+    kind: str = "",
 ) -> str:
     node_id = f"chat#{turn}"
     record = build_record(
+        kind=kind,
         evidence_id=node_id,
         node_id=node_id,
         diff=json.dumps({"prompt": prompt, "rounds": rounds}),
@@ -208,9 +304,7 @@ def _last_asked(messages: list[dict[str, Any]]) -> str:
             continue
         content = message.get("content")
         if isinstance(content, list):
-            return next(
-                (p.get("text", "") for p in content if p.get("type") == "text"), ""
-            )
+            return next((p.get("text", "") for p in content if p.get("type") == "text"), "")
         return str(content or "")
     return ""
 
@@ -282,11 +376,26 @@ def run_turn(
         yield Compaction(dropped_messages=dropped, kept_messages=len(messages), summary=summary)
 
     node_id = f"chat#{turn}"
+    auto = options.auto
+    if auto is not None:
+        auto.budget.start()
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     proof = parent
+    taken = 0
     try:
-        for _ in range(MAX_TOOL_ROUNDS):
+        while True:
+            if auto is None:
+                if taken >= MAX_TOOL_ROUNDS:
+                    yield ErrorEvent(message=f"stopped after {MAX_TOOL_ROUNDS} tool rounds")
+                    break
+            else:
+                spent = auto.budget.exhausted()
+                if spent is not None:
+                    auto.stop(spent)
+                    yield ErrorEvent(message=f"stopped: {spent}")
+                    break
+            taken += 1
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []
@@ -303,10 +412,17 @@ def run_turn(
                     yield ContentDelta(text=item)
             reply, reasoning = "".join(parts), "".join(thoughts)
             thinking.append(reasoning)
+            if auto is not None:
+                auto.budget.charge(
+                    len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
+                )
 
             if not calls:
                 messages.append({"role": "assistant", "content": reply})
                 rounds.append({"reply": reply, "tools": []})
+                if auto is not None and not stop():
+                    messages.append({"role": "user", "content": AUTO_NUDGE})
+                    continue
                 break
 
             messages.append(
@@ -334,17 +450,19 @@ def run_turn(
                     present=label_for(call.name, call.arguments, ok=None),
                 )
                 start = perf_counter()
-                result = execute_tool(call, workdir=options.workdir, context=ctx)
+                if auto is not None and call.name == FINISH_TOOL:
+                    result = _finish(auto, call.arguments)
+                else:
+                    result = execute_tool(call, workdir=options.workdir, context=ctx)
                 duration_ms = int((perf_counter() - start) * 1000)
                 ok = not result.startswith("error: ")
+                refused = result.startswith(REFUSED)
                 # An image this call wrote, and which stored version of it:
                 # an older message must keep showing what it produced, not
                 # whatever the file says by the end of the conversation.
                 preview = preview_for(call.name, call.arguments, options.workdir)
                 version = (
-                    ctx.undo.versions().get(call.id)
-                    if preview and ctx.undo is not None
-                    else None
+                    ctx.undo.versions().get(call.id) if preview and ctx.undo is not None else None
                 )
                 yield ToolEnd(
                     id=call.id,
@@ -355,29 +473,37 @@ def run_turn(
                     preview=preview,
                     version=version,
                 )
-                append_span(
-                    options.journal,
-                    build_span(
-                        node_id=node_id,
-                        argv=[call.name, call.arguments],
-                        duration_ms=duration_ms,
-                        exit_code=0 if ok else 1,
-                        detail=result,
-                    ),
+                span = build_span(
+                    node_id=node_id,
+                    argv=[call.name, call.arguments],
+                    duration_ms=duration_ms,
+                    exit_code=0 if ok else (2 if refused else 1),
+                    detail=result,
+                    name=f"refused:{call.name}" if refused else None,
+                    parent_id=auto.run_span if auto is not None else None,
                 )
+                append_span(options.journal, span)
+                if auto is not None:
+                    auto.span_hashes.append(span.record_hash)
+                    auto.refusals += refused
                 tools.append({"name": call.name, "arguments": call.arguments, "result": result})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             rounds.append({"reply": reply, "tools": tools})
-            if stop():
+            if stop() or (auto is not None and auto.outcome == "finished"):
                 break
-        else:
-            yield ErrorEvent(message=f"stopped after {MAX_TOOL_ROUNDS} tool rounds")
     except VllmError as exc:
         yield ErrorEvent(message=str(exc))
+        if auto is not None:
+            auto.stop(f"model error: {exc}")
     if stop():
         # The turn is still sealed: what it did before being stopped is real
         # work and belongs in the record.
         yield ErrorEvent(message="stopped by you")
+        if auto is not None:
+            auto.stop("cancelled")
+    if auto is not None:
+        auto.stop("the loop ended without finish")  # a no-op once outcome is set
+        _seal_outcome(options.journal, node_id, auto, rounds)
 
     yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
     proof = _seal(
@@ -387,5 +513,86 @@ def run_turn(
         rounds=rounds,
         reasoning="".join(thinking),
         parent=parent,
+        kind=f"auto-{auto.outcome}" if auto is not None else "",
     )
     yield TurnEnd(turn=turn, proof=proof)
+
+
+def _finish(auto: AutoRun, arguments: str) -> str:
+    """Record the model's `finish`: its narrative, labelled as narrative."""
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        args = None
+    summary = args.get("summary") if isinstance(args, dict) else None
+    if not isinstance(summary, str):
+        return "error: finish needs a string summary argument"
+    auto.finish(summary)
+    return "finished. Your summary is recorded as narrative, not as evidence."
+
+
+NARRATIVE_LABEL: Final = "narrative, not evidence"
+
+
+def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[str, Any]]) -> None:
+    """The run's last span: how it ended, and what it did, before the proof.
+
+    Its detail names the ending and the budget, readable in `saddle tail`;
+    the whole account (narrative labelled as such, files changed, commands
+    run, spend) is a sidecar the span's `attempt_hash` makes tamper-evident.
+    """
+    files = auto.changed_files()
+    commands = [
+        json.loads(t["arguments"]).get("command", "")
+        for r in rounds
+        for t in r["tools"]
+        if t["name"] == "run_command" and _is_object(t["arguments"])
+    ]
+    detail = (
+        f"{auto.outcome}: {auto.reason}; files changed: {', '.join(files) or 'none'}; "
+        f"commands run: {len(commands)}; refusals: {auto.refusals}"
+    )
+    span = build_span(
+        node_id=node_id,
+        argv=[f"auto:{auto.outcome}"],
+        duration_ms=int(auto.budget.elapsed() * 1000),
+        exit_code=0 if auto.outcome == "finished" else 3,
+        detail=detail,
+        kind="agent",
+        parent_id=auto.run_span,
+    )
+    evidence = {
+        "outcome": auto.outcome,
+        "reason": auto.reason,
+        "narrative_label": NARRATIVE_LABEL,
+        "narrative": auto.narrative,
+        "files_changed": files,
+        "commands": commands,
+        "rounds": len(rounds),
+        "refusals": auto.refusals,
+        "tokens_spent_estimate": auto.budget.spent_tokens,
+        "token_budget": auto.budget.tokens,
+        "elapsed_s": round(auto.budget.elapsed(), 3),
+        "time_budget_s": auto.budget.time_s,
+        "tool_span_hashes": list(auto.span_hashes),
+    }
+    digest = write_attempt_sidecar(journal, span.span_id, evidence)
+    span = build_span(
+        node_id=node_id,
+        argv=[f"auto:{auto.outcome}"],
+        duration_ms=span.duration_ms,
+        exit_code=span.exit_code,
+        detail=detail,
+        kind="agent",
+        parent_id=auto.run_span,
+        span_id=span.span_id,
+        attempt_hash=digest,
+    )
+    append_span(journal, span)
+
+
+def _is_object(arguments: str) -> bool:
+    try:
+        return isinstance(json.loads(arguments), dict)
+    except ValueError:
+        return False

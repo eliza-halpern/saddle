@@ -22,9 +22,17 @@ from rich.console import Console
 
 from saddle import __version__, audit
 from saddle.audit import AuditError, AuditResult, audit_tree
+from saddle.auto import (
+    DEFAULT_TIME_BUDGET_S,
+    DEFAULT_TOKEN_BUDGET,
+    AutoError,
+    AutoOptions,
+    run_auto,
+)
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
+from saddle.events import ErrorEvent, Event, ToolEnd
 from saddle.evidence import (
     RUFF_RULES,
     SADDLE_COMMIT_IDENTITY,
@@ -1503,7 +1511,74 @@ def build_parser() -> argparse.ArgumentParser:
         default="medium",
         help="Reply reasoning effort.",
     )
+    auto = sub.add_parser(
+        "auto", help="Run one task autonomously in a worktree; the result is a branch."
+    )
+    auto.add_argument("task", help="What to do, in words.")
+    auto.add_argument("--repo", default=".", help="Git repository to work on (default: .).")
+    auto.add_argument(
+        "--time-budget",
+        type=float,
+        default=DEFAULT_TIME_BUDGET_S,
+        help=f"Wall-clock seconds before an honest stop (default: {DEFAULT_TIME_BUDGET_S}).",
+    )
+    auto.add_argument(
+        "--token-budget",
+        type=int,
+        default=DEFAULT_TOKEN_BUDGET,
+        help=f"Generated tokens before an honest stop (default: {DEFAULT_TOKEN_BUDGET}).",
+    )
+    auto.add_argument(
+        "--allow-test-edits",
+        action="store_true",
+        help="Let the run edit test files (refused by default).",
+    )
+    auto.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
+    auto.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
+    auto.add_argument(
+        "--reasoning-effort",
+        choices=list(REASONING_EFFORTS),
+        default="medium",
+        help="Reasoning effort.",
+    )
     return parser
+
+
+AUTO_STOPPED: Final = 3
+"""Exit status of an autonomous run that ended on a budget or an error:
+distinct from 0 so a script cannot read a stop as done."""
+
+
+def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO[str]) -> int:
+    """`saddle auto`: run, print where the branch and ledger are, exit on the outcome."""
+    options = AutoOptions(
+        task=args.task,
+        repo=Path(args.repo),
+        time_budget_s=args.time_budget,
+        token_budget=args.token_budget,
+        allow_test_edits=args.allow_test_edits,
+        temperature=args.temperature,
+        reasoning_effort=args.reasoning_effort,
+    )
+
+    def show(event: Event) -> None:
+        if isinstance(event, ToolEnd):
+            stdout.write(f"  {event.label}\n")
+        elif isinstance(event, ErrorEvent):
+            stdout.write(f"  {event.message}\n")
+
+    try:
+        result = run_auto(options, client, on_event=show)
+    except AutoError as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    stdout.write(
+        f"{result.outcome}: {result.reason}\n"
+        f"branch {result.branch} at {result.commit[:12]} (worktree {result.worktree})\n"
+        f"ledger {result.journal}\n"
+    )
+    return 0 if result.outcome == "finished" else AUTO_STOPPED
 
 
 KEY_NAMES: Final = ("SADDLE_VLLM_API_KEY", "VLLM_API_KEY")
@@ -1576,6 +1651,7 @@ def main(
         "chat",
         "web",
         "audit",
+        "auto",
     ):
         return 0
     if args.command == "verify":
@@ -1640,6 +1716,9 @@ def main(
             token=token,
         )
         return 0
+    if args.command == "auto":
+        with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
+            return run_auto_command(args, client, stdout=stdout or sys.stdout)
     if args.command == "up":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             try:

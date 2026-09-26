@@ -143,6 +143,57 @@ TOOLS: Final[list[dict[str, Any]]] = [
     ),
 ]
 
+FINISH_TOOL: Final = "finish"
+"""The only way an autonomous run ends "finished" (engine.AutoRun).
+
+The engine handles it, not `_HANDLERS`: it ends the run rather than
+touching the tree, and it is offered only when a run is autonomous. What
+the model writes in it is sealed labelled as narrative, never evidence --
+the page's "its narrative can't assert a result"."""
+
+FINISH_SCHEMA: Final[dict[str, Any]] = _tool(
+    FINISH_TOOL,
+    "Finish the task. Call this once, when you are done, with a short account "
+    "of what you changed and why. The account is kept as your narrative; it is "
+    "not treated as proof that anything works.",
+    {"summary": {"type": "string"}},
+    ["summary"],
+)
+
+REFUSED: Final = "error: refused by the tier-0 guard: "
+"""Prefix of a result the tier-0 guard produced. Still an "error: " result,
+so the model reads it the way it reads every other failure; the engine
+tells a refusal apart by this prefix and records it as one."""
+
+TEST_FILE_NAMES: Final = ("conftest.py",)
+"""Files that are tests wherever they sit, besides `test_*.py`/`*_test.py`."""
+
+
+def is_test_path(relative: str, test_roots: tuple[str, ...]) -> bool:
+    """Whether a workdir-relative POSIX path is a test file for the guard.
+
+    Under a configured test root (`tests/` by default, or the repo's pytest
+    `testpaths`), or named like a pytest test module anywhere.
+    """
+    for raw in test_roots:
+        root = raw.strip("/")
+        if root and (relative == root or relative.startswith(root + "/")):
+            return True
+    base = relative.rsplit("/", 1)[-1]
+    return (
+        base in TEST_FILE_NAMES
+        or (base.startswith("test_") and base.endswith(".py"))
+        or base.endswith("_test.py")
+    )
+
+
+def _parses(text: str, name: str) -> SyntaxError | None:
+    try:
+        compile(text, name, "exec", dont_inherit=True)
+    except SyntaxError as exc:  # a NUL byte is one too, since Python 3.12
+        return exc
+    return None
+
 
 @dataclass
 class ToolContext:
@@ -171,6 +222,33 @@ class ToolContext:
         """Record the file as this call left it, for the transcript to show."""
         if self.undo is not None:
             self.undo.after_write(path, self.call_id)
+
+    protected_tests: tuple[str, ...] | None = None
+    """Tier-0 guard (the page's "test files read-only during
+    implementation"): when set, `write_file` and `edit_file` refuse any path
+    `is_test_path` names under these roots. None, the chat default, guards
+    nothing."""
+    syntax_guard: bool = False
+    """Tier-0 guard: refuse a write that leaves a `.py` file unparseable,
+    unless the file was already unparseable before it."""
+
+    def guard(self, path: Path, name: str, before: str | None, after: str) -> str | None:
+        """A refusal result for this write, or None to let it through."""
+        if self.protected_tests is not None:
+            relative = path.relative_to(self.workdir.resolve()).as_posix()
+            if is_test_path(relative, self.protected_tests):
+                return (
+                    f"{REFUSED}{name!r} is a test file, and tests are read-only in "
+                    "this run; change the implementation instead. The file was not changed."
+                )
+        if self.syntax_guard and path.suffix == ".py":
+            broken = _parses(after, name)
+            if broken is not None and (before is None or _parses(before, name) is None):
+                return (
+                    f"{REFUSED}that change leaves {name!r} with a SyntaxError: "
+                    f"{broken.msg} (line {broken.lineno}). The file was not changed."
+                )
+        return None
 
     def box(self) -> Sandbox:
         if self.sandbox is None:
@@ -211,6 +289,9 @@ def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     path = resolve_within(ctx.workdir, name)
     content = _text(args, "content", "write_file")
     before = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    refused = ctx.guard(path, name, before if path.is_file() else None, content)
+    if refused is not None:
+        return refused
     ctx.snapshot(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -294,6 +375,9 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         after = "\n".join(lines[:start] + new_text.splitlines() + lines[end:])
     else:
         after = before.replace(old_text, new_text, 1)
+    refused = ctx.guard(path, name, before, after)
+    if refused is not None:
+        return refused
     ctx.snapshot(path)
     try:
         path.write_text(after, encoding="utf-8")
