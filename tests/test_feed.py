@@ -926,3 +926,33 @@ def test_a_blocked_tier_2_names_only_the_unsanctioned_tier_1_failures(
     assert blocked.verdict == "blocked"
     assert blocked.detail == f"tier 1 failed ({', '.join(unsanctioned)}); tier 2 not run"
     assert ("assertion-preservation" in blocked.detail) is listed
+
+
+# -- mutant_detail: every scored mutant's show text, sealed in the audit span --
+
+
+class DetailAuditor(FakeAuditor):
+    """Tier 2 carries one killed and one surviving mutant's detail."""
+
+    DETAIL = (("m1", "killed", "-    return a - b\n+    return a + b"), ("m2", "survived", "x"))
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        found = self._findings(2, tree)
+        return Findings(tier=2, key="k2", findings=found.findings, mutant_detail=self.DETAIL)
+
+
+def test_the_finish_audit_record_carries_every_scored_mutants_detail(repo: Path) -> None:
+    """`feed.last()` is what the engine seals as the outcome sidecar's `audit`."""
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+    fed = AuditFeed(repo, "HEAD", repo / "j.jsonl", "s", factory=lambda *a: DetailAuditor())
+    fed.final()
+    record = fed.last()
+    assert record is not None
+    assert record["mutant_detail"] == [
+        {"name": "m1", "status": "killed", "show": "-    return a - b\n+    return a + b"},
+        {"name": "m2", "status": "survived", "show": "x"},
+    ]
+
+
+def test_an_audit_with_no_mutants_carries_no_mutant_detail_key() -> None:
+    assert "mutant_detail" not in AuditResult("finish", "t", ()).to_dict()

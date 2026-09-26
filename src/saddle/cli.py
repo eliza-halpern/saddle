@@ -1401,7 +1401,10 @@ def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]
     """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`."""
     verdict = "accept" if all(r.passed for r in results) else "refuse"
     if as_json:
-        payload = {"verdict": verdict, "tiers": [r.to_dict() for r in results]}
+        # mutant_detail is the audit span's record (MUTSUMMARY), not the CLI's:
+        # dropped so `--json` stays byte-identical to what it was before it.
+        tiers = [{k: v for k, v in r.to_dict().items() if k != "mutant_detail"} for r in results]
+        payload = {"verdict": verdict, "tiers": tiers}
         stdout.write(json.dumps(payload, indent=2) + "\n")
     else:
         for r in results:

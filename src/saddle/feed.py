@@ -115,6 +115,9 @@ class AuditResult:
     tree: str
     findings: tuple[Finding, ...]
     note: str = ""
+    mutant_detail: tuple[tuple[str, str, str], ...] = ()
+    """Tier 2's (name, status, show) for every scored mutant; sealed in the
+    audit span's sidecar under `mutant_detail` when non-empty."""
 
     @property
     def passed(self) -> bool:
@@ -127,6 +130,15 @@ class AuditResult:
             "passed": self.passed,
             "note": self.note,
             "findings": [dataclasses.asdict(f) for f in self.findings],
+            **(
+                {
+                    "mutant_detail": [
+                        {"name": n, "status": s, "show": t} for n, s, t in self.mutant_detail
+                    ]
+                }
+                if self.mutant_detail
+                else {}
+            ),
         }
 
 
@@ -263,12 +275,12 @@ class AuditFeed:
                     return None
                 self._checked_tree = tree
             found: list[Finding] = []
+            detail: tuple[tuple[str, str, str], ...] = ()
             for tier in tiers:
-                found.extend(
-                    sanction(f, self.sanctioned_test_rewrites)
-                    for f in self._tier(tier, scratch / "tree").findings
-                )
-            return AuditResult(point, tree, tuple(found))
+                got = self._tier(tier, scratch / "tree")
+                found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
+                detail = detail or got.mutant_detail
+            return AuditResult(point, tree, tuple(found), mutant_detail=detail)
         except AuditError as exc:
             if str(exc).startswith("nothing to audit"):
                 return AuditResult(point, "", (), note=str(exc))

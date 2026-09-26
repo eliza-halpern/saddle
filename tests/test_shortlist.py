@@ -451,3 +451,49 @@ def test_message_only_survivors_leave_the_shortlist_counted() -> None:
     assert "m.py:3" not in check.detail
     only = check_mutation_shortlist(_outcome(9, [_d("m1", 3, message=True)]), 85.0)
     assert only.passed
+
+
+# -- mutant_detail: recorded for every scored mutant (MUTSUMMARY's input) -----
+
+
+def test_mutant_detail_records_killed_mutants_and_omits_unscored_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    results = "  m1: survived\n  m2: killed\n  m3: no tests\n  m4: not checked"
+    _stub(tmp_path, monkeypatch, results, SHOW)
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "n.py").write_text("def f():\n    return 2\n")
+    outcome = mutation_sample(work, {(str(work / "n.py"), 2)}, 10, test_files=())
+    assert [(n, s) for n, s, _ in outcome.mutant_detail] == [
+        ("m1", "survived"),
+        ("m2", "killed"),
+        ("m3", "no tests"),
+    ]
+    assert {n: t for n, _, t in outcome.mutant_detail}["m2"] == SHOW
+
+
+def test_tier2_findings_carry_mutant_detail_in_score_mode_and_round_trip(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    auditor = Auditor(tree)
+    found = auditor.tier2()
+    assert [(n, s) for n, s, _ in found.mutant_detail] == [("k1", "killed"), ("s1", "survived")]
+    assert found.to_dict()["mutant_detail"][0] == {"name": "k1", "status": "killed", "show": SHOW3}
+    assert Findings.from_dict(found.to_dict()).mutant_detail == found.mutant_detail
+    assert auditor.tier1().mutant_detail == ()
+    assert "mutant_detail" not in auditor.tier1().to_dict()
+
+
+def test_tiered_json_leaves_mutant_detail_out(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    out, err = io.StringIO(), io.StringIO()
+    cli.main(
+        ["audit", "--tiered", "--no-cache", "--json", "--repo", str(tree)], stdout=out, stderr=err
+    )
+    tiers = json.loads(out.getvalue())["tiers"]
+    assert tiers[-1]["tier"] == 2
+    assert "mutant_detail" not in out.getvalue()

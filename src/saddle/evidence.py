@@ -702,6 +702,7 @@ def scoped_targets(targets: Collection[str], scope: Collection[str]) -> tuple[st
     return tuple(kept)
 
 
+type MutantDetail = tuple[str, str, str]  # (name, status, mutmut show text)
 type SurvivorDetail = tuple[str, str, str, int, str, bool]
 """(name, status, path, line, mutation text, message-only) of one survivor."""
 
@@ -744,6 +745,10 @@ class MutationOutcome:
     # (`--tier2 shortlist`) reads it. Not compared and not in the audit's
     # JSON (`audit.AuditResult.to_dict`), so `--tier2 score` is unchanged.
     survivor_details: tuple[SurvivorDetail, ...] = field(default=(), compare=False)
+    mutant_detail: tuple[MutantDetail, ...] = field(default=(), compare=False)
+    """(name, status, mutmut show text) for EVERY scored mutant, killed ones
+    included, in name order; a mutant mutmut never scored (`not checked`) or
+    that is not in `total` has none. Recording only: no verdict reads it."""
 
 
 def mutation_text(show_output: str) -> str:
@@ -1406,6 +1411,7 @@ def mutation_sample(
         scoped: list[tuple[str, str, str, set[int]]] = []
         texts: dict[str, str] = {}
         message_only: dict[str, bool] = {}
+        shown: dict[str, str] = {}
         undecided = 0
         text_only = 0
         for name in sorted(verdicts):
@@ -1446,6 +1452,7 @@ def mutation_sample(
                 continue
             scoped.append((name, verdict, key, hit))
             texts[name] = mutation_text(shown_stdout)
+            shown[name] = shown_stdout
             if verdict not in ("killed", "timeout"):
                 message_only[name] = message_only_mutant(shown_stdout, target.read_text(), name)
     sample = scoped
@@ -1483,6 +1490,7 @@ def mutation_sample(
         untested=untested,
         statuses=tuple(sorted(status_tally.items())),
         survivor_details=details,
+        mutant_detail=tuple((name, verdict, shown[name]) for name, verdict, _, _ in sample),
     )
 
 

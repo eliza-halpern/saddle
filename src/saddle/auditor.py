@@ -193,6 +193,10 @@ class Findings:
     """`--tier2 shortlist` only: the tier-2 mutation finding's open survivors,
     all of them, in shortlist order (its detail names the first few). Empty,
     and absent from `to_dict`, otherwise."""
+    mutant_detail: tuple[tuple[str, str, str], ...] = ()
+    """Tier 2 only: (name, status, show) for every scored mutant
+    (`MutationOutcome.mutant_detail`), in either mode; absent from `to_dict`
+    when empty. Recording only."""
 
     @property
     def passed(self) -> bool:
@@ -213,6 +217,15 @@ class Findings:
                 if self.survivors
                 else {}
             ),
+            **(
+                {
+                    "mutant_detail": [
+                        {"name": n, "status": s, "show": t} for n, s, t in self.mutant_detail
+                    ]
+                }
+                if self.mutant_detail
+                else {}
+            ),
         }
 
     @staticmethod
@@ -224,6 +237,10 @@ class Findings:
             key=str(data["key"]),
             findings=tuple(Finding(**{**f, "cites": tuple(f["cites"])}) for f in raw),
             survivors=tuple(Survivor(**v) for v in data.get("survivors", ())),  # type: ignore[attr-defined]
+            mutant_detail=tuple(
+                (d["name"], d["status"], d["show"])
+                for d in data.get("mutant_detail", ())  # type: ignore[attr-defined]
+            ),
         )
 
 
@@ -544,6 +561,7 @@ class Auditor:
                     for c in gated.checks
                 }
             survivors: tuple[Survivor, ...] = ()
+            scored = gated.mutation.mutant_detail if gated.mutation is not None else ()
             cites: dict[str, str] = {}
             shortlist = self.config.tier2 == "shortlist"
             if shortlist and tier == 2 and gated.mutation is not None:
@@ -572,7 +590,13 @@ class Auditor:
                 found = dataclasses.replace(found, cites=(cites[gate], *found.cites[1:]))
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
         return self._store(
-            Findings(tier=tier, key=key, findings=tuple(findings), survivors=survivors)
+            Findings(
+                tier=tier,
+                key=key,
+                findings=tuple(findings),
+                survivors=survivors,
+                mutant_detail=scored if tier == 2 else (),
+            )
         )
 
     def tier1(self, tree: Path | None = None) -> Findings:

@@ -141,10 +141,12 @@ class AuditResult:
 
 
 def _mutation_dict(mutation: MutationOutcome) -> dict[str, Any]:
-    """`asdict(mutation)` without `survivor_details`: the shortlist's in-process
-    evidence (`--tier2 shortlist`), never part of the audit's JSON record."""
+    """`asdict(mutation)` without `survivor_details` or `mutant_detail`: the
+    shortlist's in-process evidence and the audit span's per-mutant record,
+    neither part of `saddle audit --json`."""
     data = asdict(mutation)
     del data["survivor_details"]
+    del data["mutant_detail"]
     return data
 
 
