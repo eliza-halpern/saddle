@@ -1,6 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>saddle</title>
 <link rel="stylesheet" href="/static/app.css">
 <div id="app">
@@ -46,10 +47,28 @@
 
     <form id="composer" autocomplete="off">
       <div id="attachments"></div>
+      <div id="task-confirm" hidden>
+        <div class="tc-head">
+          <span class="tc-kicker">Run as a task</span>
+          <span class="tc-lane" title="Lanes: Ask, Small, Feature. Only Small runs here today.">Small lane</span>
+        </div>
+        <p class="tc-what" id="tc-what"></p>
+        <p class="tc-how">It works alone in a fresh git worktree of
+          <b id="tc-folder">this folder</b>; your checkout is not touched and
+          test files are read-only to it. You get a branch and an evidence packet.</p>
+        <div class="tc-row">
+          <label>Time <input id="tc-time" type="number" min="1" max="240" value="30"> min</label>
+          <label>Tokens <input id="tc-tokens" type="number" min="1" max="1000" value="100"> k</label>
+          <span class="tc-spacer"></span>
+          <button type="button" id="tc-cancel">Cancel</button>
+          <button type="button" id="tc-start" class="primary">Start task</button>
+        </div>
+      </div>
       <div class="composer-row">
         <button type="button" id="attach" title="Attach files or images">＋</button>
         <textarea id="input" rows="1" placeholder="what are we making today?"
                   spellcheck="false"></textarea>
+        <button type="button" id="run" title="Run as a task: saddle works on it alone and reports back with evidence">▶ Run</button>
         <button type="submit" id="send" title="Send">↑</button>
       </div>
       <input type="file" id="file-input" multiple hidden>
@@ -128,4 +147,5 @@
   </div>
 </dialog>
 <script src="/static/markdown.js"></script>
+<script src="/static/tasks.js"></script>
 <script src="/static/app.js"></script>
