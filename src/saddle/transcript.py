@@ -15,6 +15,8 @@ from typing import Final
 
 from saddle.gates import GateCheck
 from saddle.journal import (
+    AUTO_OUTCOMES,
+    AUTO_START,
     JournalEntry,
     PlanRecord,
     ProofRecord,
@@ -219,9 +221,13 @@ def render_journal_transcript(
         verdict = "QUESTION"
     else:
         verdict = "FAIL"
+    task = "(unknown)"
+    starts = [s for s in spans if s.kind == "agent" and s.name == AUTO_START]
+    if starts:
+        task, verdict = _auto_verdict(starts[-1], spans)
     return render_transcript(
         RunTranscript(
-            task="(unknown)",
+            task=task,
             started="(unknown)",
             finished="(unknown)",
             verdict=verdict,
@@ -229,6 +235,27 @@ def render_journal_transcript(
             journal_path=journal_path,
         )
     )
+
+
+def _auto_verdict(start: SpanRecord, spans: Sequence[SpanRecord]) -> tuple[str, str]:
+    """An autonomous run's task (its start span) and verdict (its outcome span).
+
+    FIX-2: an autonomous run seals no gate outputs and no `run` span, so the
+    slice rule above reads every one of them as FAIL, finished or not. Its
+    verdict is its own `auto:finished`/`auto:stopped` span under `start`.
+    FINISHED means the executor called finish, not that the change is proven:
+    the packet's Audit, Tests and Mutation rows say what was checked.
+    """
+    task = start.argv[1] if len(start.argv) > 1 else "(unknown)"
+    outcome = next(
+        (s for s in reversed(spans) if s.parent_id == start.span_id and s.name in AUTO_OUTCOMES),
+        None,
+    )
+    if outcome is None:
+        return task, "NO OUTCOME (no auto:finished or auto:stopped span)"
+    if outcome.name == "auto:finished":
+        return task, "FINISHED"
+    return task, f"STOPPED ({outcome.detail.split(';')[0].removeprefix('stopped: ')})"
 
 
 @dataclass(frozen=True)

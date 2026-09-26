@@ -25,11 +25,13 @@ import pytest
 from saddle import cli
 from saddle.auto import AutoOptions, AutoResult, run_auto
 from saddle.journal import (
+    SpanRecord,
     append_span,
     attempt_sidecar_path,
     build_span,
     verify_journal,
 )
+from saddle.transcript import render_journal_transcript
 from saddle.vllm import ToolCall, VllmClient
 
 
@@ -343,3 +345,46 @@ def test_a_deleted_span_prints_no_ok_line_and_its_issue_names_the_span(repo: Pat
     issue = [line for line in text.splitlines() if line.startswith("span-missing@")]
     assert len(issue) == 1
     assert gone["record_hash"] in issue[0]
+
+
+# -- FIX-2: the transcript of an autonomous run reads its own outcome span -----
+
+
+def test_a_finished_runs_transcript_names_its_task_and_its_outcome(repo: Path) -> None:
+    """out/DOCS/report.md: verify printed `Task: (unknown)` / `Verdict: FAIL`
+    for a finished autonomous run. The task is the start span's; the verdict
+    is the outcome span's, never the slice rule's proof-and-gate count."""
+    code, text = verify_text(run(repo).journal)
+    assert code == 0
+    assert "- Task: make add add\n" in text
+    assert "- Verdict: FINISHED\n" in text
+
+
+def test_a_stopped_runs_transcript_says_stopped_with_its_reason(repo: Path) -> None:
+    client = Scripted([[call("read_file", "c1", path="calc.py")]])
+    options = AutoOptions(task="t2", repo=repo, run_id="s1", arm="E", token_budget=1)
+    journal = run_auto(options, cast(VllmClient, client)).journal
+    code, text = verify_text(journal)
+    assert code == 0
+    assert "- Task: t2\n" in text
+    assert "- Verdict: STOPPED (token budget" in text
+
+
+def test_an_in_flight_runs_transcript_has_no_outcome_verdict(repo: Path) -> None:
+    result = run(repo)
+    rows = lines(result.journal)
+    write(result.journal, rows[: index_of(rows, "auto:finished")])
+    code, text = verify_text(result.journal)
+    assert code == 0
+    assert "- Verdict: NO OUTCOME (no auto:finished or auto:stopped span)\n" in text
+
+
+def test_the_last_runs_outcome_is_the_verdict_when_a_journal_holds_two(repo: Path) -> None:
+    rows = lines(two_runs(repo))
+    first = index_of(rows, "auto:finished")
+    rows[first] = reseal({**rows[first], "name": "auto:stopped", "detail": "stopped: x"})
+    spans = [SpanRecord.model_validate(r) for r in rows if r["record_type"] == "span"]
+    first_run = spans[: len(spans) // 2]
+    assert "- Verdict: STOPPED (x)\n" in render_journal_transcript([], first_run, "j")
+    text = render_journal_transcript([], spans, "j")
+    assert "- Verdict: FINISHED\n" in text
