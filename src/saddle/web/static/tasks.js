@@ -517,10 +517,11 @@ function actionRow(card, packet) {
   const view = actionButton("View diff", "act-diff");
   const merge = actionButton("Merge", "act-merge");
   const discard = actionButton("Discard branch", "act-discard");
-  const chat = actionButton("Continue in chat", "act-chat");
+  const chat = actionButton("Ask about this run", "act-chat");
+  const download = actionButton("Download full report", "act-download");
   for (const b of [view, merge, discard]) b.disabled = true;
   const why = el("p", "act-why");
-  row.append(view, merge, discard, chat);
+  row.append(view, merge, discard, chat, download);
   wrap.append(row, why, panel);
 
   let info = null;
@@ -586,6 +587,16 @@ function actionRow(card, packet) {
         }
       });
   };
+  // One markdown file, rendered fresh from the sealed ledger by the server
+  // (packet.md beside the run's proofs.jsonl); the click is in actions.log.
+  download.onclick = () => {
+    const a = document.createElement("a");
+    a.href = `/api/sessions/${state.sessionId}/tasks/${card.runId}/packet.md`;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
   chat.onclick = async () => {
     let recap = info && info.recap;
     if (!recap) {
@@ -594,7 +605,10 @@ function actionRow(card, packet) {
     // Leave Task for the read-only talk lane; Edit stays an explicit choice (LANECHIP).
     if (typeof setMode === "function" && state.mode !== "ask") await setMode("ask");
     const input = document.querySelector("#input");
-    input.value = `About the run "${packet.task}":\n\n${recap}\n\n`;
+    // The compact recap, then where the full packet is on disk: the Ask
+    // lane's read_file can open it on demand; the human sees a short message.
+    const report = info && info.report ? `\n\nFull report: ${info.report}` : "";
+    input.value = `About the run "${packet.task}":\n\n${recap}${report}\n`;
     input.dispatchEvent(new Event("input"));
     input.focus();
   };

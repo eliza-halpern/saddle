@@ -525,6 +525,32 @@ def test_the_command_exits_zero_only_when_finished(repo: Path) -> None:
     assert "stopped: model error: x" in out.getvalue()
 
 
+@pytest.mark.parametrize("finished", [True, False])
+def test_the_command_prints_the_packet_after_its_outcome_lines(repo: Path, finished: bool) -> None:
+    # UXREVIEW2 Q7: the terminal printed three lines and no packet. Contract:
+    # after "ledger <path>" comes render_packet_text of the ledger's packet,
+    # the same bytes the chat card's recap gets, for a finish and for a stop.
+    from saddle.packet import compile_packet, render_packet_text
+
+    out = io.StringIO()
+    client = (
+        Scripted([[call("edit_file", path="calc.py", old="a - b", new="a + b")], finish()])
+        if finished
+        else Scripted([VllmRequestError("x")])
+    )
+    args = namespace(repo) if finished else namespace(repo, token_budget=1)
+    cli.run_auto_command(args, cast(VllmClient, client), stdout=out)
+    text = out.getvalue()
+    ledger = Path(
+        next(line for line in text.splitlines() if line.startswith("ledger ")).split(" ", 1)[1]
+    )
+    packet = compile_packet(ledger)
+    assert packet.verdict == ("finished" if finished else "stopped")
+    tail = text.split(f"ledger {ledger}\n", 1)[1]
+    assert tail == render_packet_text(packet) + "\n"
+    assert "Not proven [not-proven]:" in tail
+
+
 def test_the_command_reports_setup_failure(tmp_path: Path) -> None:
     out = io.StringIO()
     code = cli.run_auto_command(namespace(tmp_path), cast(VllmClient, Scripted([])), stdout=out)

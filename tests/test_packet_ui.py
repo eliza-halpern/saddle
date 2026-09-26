@@ -4,8 +4,8 @@ Known-good: a finished, audited run shows the verdict, then the action row,
 then a band of Tests / Mutation / Not proven, then Scope and Audit folded
 to "N of M passed"; Contract, Narrative, Cost and Reproduce are under
 Details; View diff lists the run's files; Merge asks in the page, naming
-branch and target, and only its own button merges; Continue in chat seeds
-the composer with the recap.
+branch and target, and only its own button merges; Ask about this run seeds
+the composer with the recap and names the full report on disk.
 
 Known-bad: an honest stop's band is never green and lists the unresolved
 findings; Merge is disabled on a stop and says why; a merge into a dirty
@@ -72,9 +72,14 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     assert [(x["key"], x["tone"], x["glyph"]) for x in r["lines"]] == [
         ("tests", "ok", "✓"),
         ("mutation", "none", "○"),
-        ("not-proven", "ok", "✓"),
+        # flip (UXFIX2 Q4): was ("not-proven", "ok", "✓"). The old pin held
+        # "Nothing is left unproven" two lines under "No mutation record"
+        # (out/UXREVIEW2/shots/19-merge-unproven-desktop.png, N6): it pinned
+        # the contradiction, not a contract. The item is named below.
+        ("not-proven", "warn", "!"),
     ]
     assert r["lines"][0]["text"] == "The auditor ran the suite: 2 passed"
+    assert r["lines"][2]["items"] == ["Changed lines were not mutation-tested: no mutation record."]
     # Mutation has no record, so the band is not all-green: "partial".
     assert r["band"] == "partial"
     assert r["firstRows"][0].startswith("prow s-observed k-scope")
@@ -96,6 +101,7 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     assert r["discard"]["disabled"] is False
     assert r["why"] == ""
     assert r["panel"] == ""  # no confirm is open until asked for
+    assert r["download"] == {"text": "Download full report", "disabled": False}
     assert branch.startswith("saddle/auto/")
 
 
@@ -157,15 +163,34 @@ def test_discard_confirms_then_deletes_the_branch(tmp_path: Path) -> None:
     assert git(repo, "branch", "--list", branch) == ""
 
 
-def test_continue_in_chat_seeds_the_composer_with_the_recap(tmp_path: Path) -> None:
+def test_ask_about_this_run_seeds_the_composer_with_the_recap(tmp_path: Path) -> None:
     # The session starts in Task, so the lane switch is what is under test:
-    # "Continue in chat" must leave Task (where Enter opens the Run strip) for
-    # Ask, the read-only talk lane, and never opt into unaudited Edit.
-    got, _repo, _branch = page(tmp_path, "audited", "chat", mode="task")
+    # "Ask about this run" must leave Task (where Enter opens the Run strip)
+    # for Ask, the read-only talk lane, and never opt into unaudited Edit.
+    # The label pins the user's wording (UXFIX2 Q9): an outcome, in the lane's
+    # own word, not a place.
+    got, repo, _branch = page(tmp_path, "audited", "chat", mode="task")
+    assert got["read"]["chat"] == {"text": "Ask about this run", "disabled": False}
     assert got["input"].startswith('About the run "make add add":\n\nverdict: finished')
     assert "Tests [proven]: The auditor ran the suite: 2 passed" in got["input"]
     assert got["mode"] == "ask"
     assert got["focused"] == "input"
+    # The last line names the full report on disk, whose bytes are the full
+    # packet text; the message itself stays short.
+    lines = got["input"].strip().splitlines()
+    assert lines[-1].startswith("Full report: ")
+    report = Path(lines[-1].removeprefix("Full report: "))
+    assert report.is_file()
+    assert report.parent.parent == repo / ".saddle" / "runs"
+    from saddle.packet import compile_packet, render_packet_text
+
+    assert report.read_text(encoding="utf-8") == render_packet_text(
+        compile_packet(report.parent / "proofs.jsonl", run_id=report.parent.name)
+    )
+    # 23 lines with today's recap (the full render, minus Narrative). The
+    # user's bar is ~20: PACKETHOOK's compact rendering, not on this branch,
+    # is what brings it under; this pins that nothing longer creeps in.
+    assert len(lines) <= 25, len(lines)
 
 
 def test_a_run_with_a_proven_mutation_row_merges_under_a_plain_label(tmp_path: Path) -> None:

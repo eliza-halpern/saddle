@@ -5,6 +5,9 @@
 //   switch: start a task in <session-id> (tokens 1k) and wait for its question,
 //           then select <other-session-id>: report the header pill, the send
 //           button and what submitting there does; then select back.
+//   phone:  as switch, at 400 px: report the header pill on A (display, width)
+//           and the ☰ button on B (class, ::after content) -- what says
+//           "needs you" outside a closed drawer on a phone.
 //   jump:   scroll <session-id>'s transcript to the top at 400 px and 1280 px
 //           and report where the "↓ newest" pill sits against the composer.
 import { spawn } from "node:child_process";
@@ -113,6 +116,30 @@ try {
     await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "A's question again", 50).catch(() => {});
     await sleep(500);
     out.backOnA = await header();
+  } else if (step === "phone") {
+    await width(400);
+    await js(`select(${JSON.stringify(sid)})`);
+    await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`, "session A");
+    await js(`document.querySelector("#input").focus()`);
+    await send("Input.insertText", { text: "f(None) should be 0" });
+    await key("Enter");
+    await js(`document.querySelector("#tc-tokens").value = "1"`);
+    await key("Enter");
+    await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "the question");
+    const pill = () => js(`(() => { const n = document.querySelector("#status"); const r = n.getBoundingClientRect();
+      return { text: n.textContent, display: getComputedStyle(n).display, width: r.width,
+               onScreen: r.right <= innerWidth && r.width > 0 }; })()`);
+    const menu = () => js(`(() => { const n = document.querySelector("#menu"); const a = getComputedStyle(n, "::after");
+      return { needs: n.classList.contains("needs"), label: n.getAttribute("aria-label"),
+               after: a.content, afterWidth: parseFloat(a.width) || 0, color: a.backgroundColor,
+               drawerOpen: document.querySelector("#sidebar").classList.contains("open") }; })()`);
+    out.onA = { pill: await pill(), menu: await menu() };
+    await shot("phone-A-needs-you-400.png");
+    await js(`select(${JSON.stringify(other)})`);
+    await until(`state.historyFor === ${JSON.stringify(other)} && !document.querySelector(".task-card")`, "session B");
+    await sleep(1500);
+    out.onB = { pill: await pill(), menu: await menu() };
+    await shot("phone-B-other-needs-you-400.png");
   } else if (step === "jump") {
     await js(`select(${JSON.stringify(sid)})`);
     await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelectorAll("#transcript .turn").length > 5`, "the transcript");

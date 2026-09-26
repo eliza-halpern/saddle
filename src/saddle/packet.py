@@ -694,6 +694,10 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             "No auditor verdict: the suite, changed-line coverage and mutation "
             "were not checked by saddle."
         )
+    if audits and not mutation:
+        # The Mutation row above says "No mutation record"; Not proven must
+        # not then read "Nothing is left unproven" beside it (UXREVIEW2 Q4).
+        gaps.append("Changed lines were not mutation-tested: no mutation record.")
     if outcome is not None and outcome.name == "auto:stopped":
         gaps.append(
             "The run stopped before finishing: "

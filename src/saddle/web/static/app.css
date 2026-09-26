@@ -448,8 +448,17 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
 }
 
 @media (max-width: 420px) {
-  .status { display: none; }         /* the send button already says busy */
+  /* The send button already says busy. "needs you" is the one state that
+     asks for you, so it stays (UXREVIEW2 Q3). */
+  .status:not(.needs) { display: none; }
 }
+
+/* A run needs you in a session that is not on screen: on a phone the
+   sidebar is a closed drawer, so the ☰ button wears the peach dot. */
+#menu.needs { position: relative; }
+#menu.needs::after { content: ""; position: absolute; top: -4px; right: -4px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--peach);
+  border: 2px solid var(--bg); }
 
 /* A newly written file, shown as the file rather than a byte count. */
 .tool-detail .c-head { color: var(--ink-faint); margin-bottom: 8px;

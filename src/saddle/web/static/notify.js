@@ -80,6 +80,21 @@ function paintDot(sid, runState) {
   dot.title = `Latest run: ${look.word}`;
 }
 
+/* On a phone the sidebar is a closed drawer, so a run that needs you in a
+   session other than the one on screen is shown on the ☰ button: a dot,
+   and the sessions' names in its label (UXREVIEW2 Q3). */
+function paintMenu() {
+  const menu = document.getElementById("menu");
+  if (!menu) return;
+  const waiting = [...runWatch.seen]
+    .filter(([sid, st]) => st === "needs_you" && sid !== state.sessionId)
+    .map(([sid]) => sessionName(sid));
+  menu.classList.toggle("needs", waiting.length > 0);
+  const label = waiting.length ? `Sessions: a run needs you in ${waiting.join(", ")}` : "Sessions";
+  menu.setAttribute("aria-label", label);
+  menu.title = label;
+}
+
 function announce(text) {
   const live = document.getElementById("run-live");
   if (live) live.textContent = text;
@@ -108,6 +123,7 @@ function runState(sid, runStateNow, task) {
   runWatch.seen.set(sid, runStateNow);
   if (task) runWatch.tasks.set(sid, task);
   paintDot(sid, runStateNow);
+  paintMenu();
   const changed = prev !== runStateNow;
   if (sid === state.sessionId && changed) {
     runWatch.current = RUN_LOOK[runStateNow] ? { state: runStateNow, task: runWatch.tasks.get(sid) } : null;
@@ -144,6 +160,7 @@ function runSelected(sid) {
   const st = runWatch.seen.get(sid);
   runWatch.current = RUN_LIVE.has(st) ? { state: st, task: runWatch.tasks.get(sid) } : null;
   paintTab();
+  paintMenu();
 }
 
 function paintNotifyControl() {

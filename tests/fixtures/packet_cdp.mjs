@@ -1,6 +1,6 @@
 // Drives the chat page in headless Chrome over CDP to read a finished run's
 // packet card: the summary band, the folds, and the action row (View diff,
-// Merge, Discard, Continue in chat). Used by tests/test_packet_ui.py; node
+// Merge, Discard, Ask about this run). Used by tests/test_packet_ui.py; node
 // >= 22 and Chrome only. No model: the run is seeded by the test.
 //
 // usage: node packet_cdp.mjs <base> <sid> <read|diff|merge|merge-cancel|discard|chat> [shot-dir] [shot-prefix] [width]
@@ -97,7 +97,7 @@ try {
         keys: [...details.querySelectorAll(":scope > .prow")].map((n) => [...n.classList].find((c) => c.startsWith("k-")).slice(2)) } : null,
       allRows: [...p.querySelectorAll(".prow")].length,
       bandRows: [...band.querySelectorAll(":scope > .band-line > .prow")].map((n) => [...n.classList].find((c) => c.startsWith("k-")).slice(2)),
-      view: btn(".act-diff"), merge: btn(".act-merge"), discard: btn(".act-discard"), chat: btn(".act-chat"),
+      view: btn(".act-diff"), merge: btn(".act-merge"), discard: btn(".act-discard"), chat: btn(".act-chat"), download: btn(".act-download"),
       why: p.querySelector(".act-why").textContent,
       mergeClass: p.querySelector(".act-merge").classList.contains("unproven") ? "unproven" : "",
       panel: p.querySelector(".act-panel").textContent,
@@ -139,12 +139,20 @@ try {
     await until(`!!document.querySelector(".act-result")`);
     out.result = await js(`document.querySelector(".act-output").textContent`);
     out.after = await read();
-  } else if (step === "chat") {
+  } else if (step === "chat" || step === "chat-send") {
     await click(".act-chat");
     await sleep(300);
     out.input = await js(`document.querySelector("#input").value`);
     out.mode = await js(`state.mode`);
     out.focused = await js(`document.activeElement.id`);
+    if (step === "chat-send") {
+      // Send the pre-fill as the Ask turn and wait for the turn to end.
+      await js(`document.querySelector("#composer").requestSubmit()`);
+      await until(`state.busy === true`, 5000).catch(() => {});
+      await until(`state.busy === false`, 120000);
+      await sleep(500);
+      out.transcript = await js(`document.querySelector("#transcript").innerText`);
+    }
   }
   console.log(JSON.stringify(out));
   await finish(0);
