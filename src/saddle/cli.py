@@ -33,6 +33,7 @@ from saddle.auto import (
 from saddle.chat import ChatOptions, run_chat
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
+from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP
 from saddle.events import AuditNote, ErrorEvent, Event, ToolEnd
 from saddle.evidence import (
     RUFF_RULES,
@@ -1587,6 +1588,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="A test function the task orders rewritten; its assertion-preservation "
         "finding is reported, not held against the run. Repeatable; sealed in the ledger.",
     )
+    auto.add_argument(
+        "--finish-refusal-cap",
+        type=int,
+        default=DEFAULT_FINISH_REFUSAL_CAP,
+        metavar="N",
+        help="Stop (reason 'audit unresolved') after N consecutive finish refusals on an "
+        f"unchanged set of failing findings (default: {DEFAULT_FINISH_REFUSAL_CAP}).",
+    )
     auto.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     auto.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
@@ -1616,6 +1625,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         reasoning_effort=args.reasoning_effort,
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
         sanctioned_test_rewrites=tuple(args.sanctioned_test_rewrite),
+        finish_refusal_cap=args.finish_refusal_cap,
     )
 
     def show(event: Event) -> None:

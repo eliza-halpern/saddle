@@ -421,7 +421,8 @@ def test_finish_is_refused_while_the_audit_fails_and_names_the_findings(repo: Pa
 
     client = Stubborn([[EDIT_COMMENT], [FINISH]])
     fake = FakeAuditor()
-    result, _ = run(repo, client, "E+A+F", auditor=fake, token_budget=40)
+    # the cap is lifted so the token budget, not the cap, ends this run
+    result, _ = run(repo, client, "E+A+F", auditor=fake, token_budget=40, finish_refusal_cap=10_000)
     assert result.outcome == "stopped"
     assert "token budget exhausted" in result.reason
     refusals = [t for t in client.seen if t.startswith(FINISH_REFUSED)]
@@ -771,3 +772,132 @@ def test_the_cli_passes_sanctioned_rewrites(repo: Path, monkeypatch: pytest.Monk
         )  # type: ignore[arg-type]
     assert got == [("test_a", "test_b")]
     assert cli.build_parser().parse_args(["auto", "t"]).sanctioned_test_rewrite == []
+
+
+# -- the finish refusal cap (FEEDCAP; M3F: 7,244 refusals on a correct T5 tree) --
+
+
+class KeepsFinishing(Reactive):
+    """A model that ignores every refusal and calls finish again."""
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+        self.seen.append(str(messages[-1].get("content") or ""))
+        if self.script:
+            return iter(self.script.pop(0))
+        return iter([FINISH])
+
+
+class Shifting(FakeAuditor):
+    """Tier 1 passes; tier 2 fails, citing `sets[n]` on the n-th finish audit."""
+
+    def __init__(self, sets: list[str]) -> None:
+        super().__init__()
+        self.sets = sets
+        self.finals = 0
+
+    def tier1(self, tree: Path | None = None) -> Findings:
+        return Findings(tier=1, key="k1", findings=())
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        cite = self.sets[min(self.finals, len(self.sets) - 1)]
+        self.finals += 1
+        # the detail drifts on every call; only (gate, reason, cites) is the identity
+        found = Finding("mutation", 2, "fail", "evidence-thin", f"{self.finals} survived", (cite,))
+        return Findings(tier=2, key=f"k2-{self.finals}", findings=(found,))
+
+
+def test_an_unchanged_refusal_stops_the_run_at_the_cap_as_audit_unresolved(repo: Path) -> None:
+    client = KeepsFinishing([[EDIT_COMMENT], [FINISH]])
+    result, _ = run(repo, client, "E+A+F", token_budget=5000)
+    assert (result.outcome, result.reason) == ("stopped", "audit unresolved")
+    record = sidecar(result)
+    assert record["outcome"] == "stopped"
+    assert record["reason"] == "audit unresolved"
+    assert record["finish_refusals"] == 3
+    assert record["unchanged_refusals"] == 3
+    assert record["finish_refusal_cap"] == 3
+    assert record["unresolved_findings"] == [
+        {"gate": "mutation", "reason": "code-wrong", "cites": ["fake"]},
+        {"gate": "tests", "reason": "code-wrong", "cites": ["fake"]},
+    ]
+    assert record["audit"]["passed"] is False
+    span = [s for s in read_spans(result.journal) if s.name.startswith("auto:")][-1]
+    assert span.argv == ["auto:stopped"]
+    assert span.exit_code == 3
+    assert "unresolved findings: mutation (code-wrong), tests (code-wrong)" in span.detail
+    finishes = [s for s in read_spans(result.journal) if s.argv[:1] == ["finish"]]
+    assert len(finishes) == 3
+    assert "the run stops (audit unresolved)" in finishes[-1].detail
+    assert "calc.py:3: return a - b" in finishes[-1].detail
+    assert "Fix what it names" in finishes[1].detail
+    assert "saddle auto r1: stopped (audit unresolved)" in git(
+        result.worktree, "log", "-1", "--format=%B"
+    )
+
+
+def test_the_cap_is_configurable_and_one_stops_on_the_first_refusal(repo: Path) -> None:
+    for cap in (1, 2):
+        client = KeepsFinishing([[EDIT_COMMENT], [FINISH]])
+        result, _ = run(
+            repo, client, "E+A+F", token_budget=5000, finish_refusal_cap=cap, run_id=f"c{cap}"
+        )
+        assert result.reason == "audit unresolved"
+        assert sidecar(result)["finish_refusals"] == cap
+
+
+def test_a_changed_finding_set_restarts_the_count(repo: Path) -> None:
+    fake = Shifting(["a.py", "a.py", "b.py", "a.py", "a.py"])
+    client = KeepsFinishing([[EDIT_COMMENT], [FINISH]])
+    result, _ = run(repo, client, "E+A+F", auditor=fake, token_budget=5000)
+    assert result.reason == "audit unresolved"
+    record = sidecar(result)
+    # a a | b | a a a: the third unchanged refusal in a row is the sixth refusal
+    assert record["finish_refusals"] == 6
+    assert record["unchanged_refusals"] == 3
+    assert record["unresolved_findings"] == [
+        {"gate": "mutation", "reason": "evidence-thin", "cites": ["a.py"]}
+    ]
+
+
+def test_a_drifting_detail_is_not_a_changed_finding_set(repo: Path) -> None:
+    result, _ = run(
+        repo,
+        KeepsFinishing([[EDIT_COMMENT]]),
+        "E+A+F",
+        auditor=Shifting(["a.py"]),
+        token_budget=5000,
+    )
+    assert sidecar(result)["finish_refusals"] == 3
+
+
+def test_without_feedback_the_cap_never_fires(repo: Path) -> None:
+    result, _ = run(repo, KeepsFinishing([[EDIT_COMMENT], [FINISH]]), "E+A")
+    assert result.outcome == "finished"
+    record = sidecar(result)
+    assert (record["finish_refusals"], record["unresolved_findings"]) == (0, [])
+
+
+def test_a_cap_below_one_is_refused_before_anything_runs(repo: Path) -> None:
+    with pytest.raises(AutoError, match="at least 1"):
+        run(repo, KeepsFinishing([]), "E+A+F", finish_refusal_cap=0)
+    assert git(repo, "worktree", "list").count("\n") == 0
+
+
+def test_unresolved_is_empty_before_any_audit(repo: Path) -> None:
+    fed = AuditFeed(repo, "HEAD", repo / "j.jsonl", "s", factory=lambda *a: FakeAuditor())
+    assert fed.unresolved() == []
+
+
+def test_the_cli_passes_the_finish_refusal_cap(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    got: list[int] = []
+
+    def spy(options: AutoOptions, client: Any, **kw: Any) -> AutoResult:
+        got.append(options.finish_refusal_cap)
+        return cast(AutoResult, None)
+
+    monkeypatch.setattr(cli, "run_auto", spy)
+    parser = cli.build_parser()
+    for argv in (["auto", "t", "--repo", str(repo), "--finish-refusal-cap", "5"], ["auto", "t"]):
+        with pytest.raises(AttributeError):
+            cli.run_auto_command(parser.parse_args(argv), cast(VllmClient, None), stdout=None)  # type: ignore[arg-type]
+    assert got == [5, 3]
