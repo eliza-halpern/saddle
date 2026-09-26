@@ -111,15 +111,29 @@ def test_never_rendered_as_failed(t5_changed):
 
 
 def test_every_sentence_cites_the_record(t5_changed):
+    """Every bullet ends in a `[lines ...]` tag naming lines the finding
+    names; a quoted source line (`      <n>: text`, PACKETHOOK) is not a
+    sentence and carries no tag of its own, but its number must be one the
+    bullet above it tagged."""
     s = describe_coverage(t5_finding(), t5_sources(), t5_changed, t5_mutation())
     lines = render_coverage(s).splitlines()
     assert re.search(r"\[record: [^\]]+\]$", lines[0])
+    tagged: set[str] = set()
+    quoted = 0
     for line in lines[1:]:
+        q = re.fullmatch(r"      (\d+): .*", line)
+        if q:
+            assert q[1] in tagged, line
+            quoted += 1
+            continue
         m = re.search(r"\[lines ([\d, ]+)\]$", line)
         assert m, line
         file = line.split()[1]
-        for n in m[1].split(", "):
+        tagged = set(m[1].split(", "))
+        for n in tagged:
             assert f"{file}:{n}" in t5_finding()["detail"]
+    # every line the finding names is quoted exactly once (19 in E-t5-s1)
+    assert quoted == len(re.findall(r"\w+\.py:\d+", t5_finding()["detail"])) == 19
 
 
 # -- known-bad: module level, covered functions, no docstring -------------------
@@ -310,3 +324,19 @@ def test_compact_counts_unplaced_lines_on_one_line():
     assert text.splitlines()[-1] == "  2 lines not placed (file not in the tree read)"
     assert "not placed [record:" not in text
     assert render_coverage(s, compact=True, text=False) == text
+
+
+def test_compact_without_text_quotes_no_line(t5_changed):
+    s = describe_coverage(t5_finding(), t5_sources(), t5_changed)
+    text = render_coverage(s, compact=True, text=False)
+    assert "      131:" not in text
+    assert "more lines" not in text
+    assert [x for x in text.splitlines() if x.startswith("  - ")] == [
+        x for x in render_coverage(s, compact=True).splitlines() if x.startswith("  - ")
+    ]
+
+
+def test_compact_on_a_passing_finding_is_empty():
+    s = describe_coverage({"detail": "every changed line is run", "cites": []}, {"t.py": TOY})
+    assert render_coverage(s, compact=True) == ""
+    assert render_coverage(s) == ""

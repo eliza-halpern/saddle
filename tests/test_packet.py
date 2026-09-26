@@ -723,16 +723,23 @@ def coverage_evidence(tmp_path: Path, sources: dict[str, str] | None = None) -> 
     }
 
 
-def coverage_span(journal: Path, finding: dict[str, Any], sealed: dict[str, Any] | None) -> Any:
+def coverage_span(
+    journal: Path,
+    finding: dict[str, Any],
+    sealed: dict[str, Any] | None,
+    detail: str | None = None,
+) -> Any:
     body = {**finding, "tier": 1}
     exit_code = {"pass": 0, "fail": 1}[finding["verdict"]]
     kwargs: dict[str, Any] = {}
     if sealed is not None:
         kwargs["span_id"] = uuid.uuid4().hex
         kwargs["attempt_hash"] = write_attempt_sidecar(journal, kwargs["span_id"], sealed)
+    if detail is None:
+        detail = json.dumps(body, sort_keys=True)
     span = build_span(node_id="n", argv=["saddle-audit", "tier1", "coverage", "k"], duration_ms=0,
-                      exit_code=exit_code, detail=json.dumps(body, sort_keys=True),
-                      name="audit-tier1:coverage", **kwargs)  # fmt: skip
+                      exit_code=exit_code, detail=detail, name="audit-tier1:coverage",
+                      **kwargs)  # fmt: skip
     append_span(journal, span)
     return span
 
@@ -847,6 +854,35 @@ def test_a_source_sealed_as_one_string_over_the_sidecar_cap_is_not_placed(tmp_pa
     )
     assert "  - store.py load_accounts: 2 of 16 changed lines never run" in audit.summary
     assert "money.py convert" not in audit.summary
+
+
+@pytest.mark.parametrize("detail", ["no test runs money.py:131", "[1, 2]"])
+def test_a_coverage_span_whose_detail_is_not_a_finding_renders_no_english(
+    tmp_path: Path, detail: str
+) -> None:
+    """Known-bad: a sealed sidecar beside a span whose detail is not the JSON
+    finding (a bare sentence, or JSON that is not an object) yields no
+    summary rather than a crash or invented text. The packet still compiles."""
+    journal = tmp_path / "proofs.jsonl"
+    coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path), detail=detail)
+    packet = compile_packet(journal)
+    audit = next(r for r in packet.rows if r.key == "audit")
+    assert audit.summary == ""
+    assert audit.recap == ""
+
+
+def test_sources_sealed_as_anything_but_a_map_place_no_line(tmp_path: Path) -> None:
+    """Known-bad: `sources` sealed as a list (not the auditor's map of file to
+    lines) places nothing; every judged line is "not placed", none is
+    attributed to a function whose text was never read."""
+    journal = tmp_path / "proofs.jsonl"
+    sealed = coverage_evidence(tmp_path)
+    sealed["sources"] = list(sealed["sources"].values())
+    coverage_span(journal, coverage_finding(), sealed)
+    audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
+    assert "not placed [record: money.py:131]" in audit.summary
+    assert "not placed [record: store.py:43]" in audit.summary
+    assert "changed lines never run" not in audit.summary
 
 
 def test_every_row_has_a_recap_exactly_when_it_has_a_summary(tmp_path: Path) -> None:

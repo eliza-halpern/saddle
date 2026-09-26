@@ -480,3 +480,49 @@ def test_coverage_evidence_is_none_for_a_detail_that_names_no_line(tmp_path: Pat
     from saddle.auditor import coverage_evidence
 
     assert coverage_evidence(tmp_path, "HEAD", "every changed line is run") is None
+
+
+def test_coverage_evidence_skips_a_named_file_it_cannot_read(uncovered_tree: Path) -> None:
+    """A finding may name a file that is gone from the copy (or unreadable);
+    its lines are left for the packet to report "not placed", the files that
+    are readable are still sealed, and the changed set is unaffected."""
+    from saddle.auditor import coverage_evidence
+
+    sealed = coverage_evidence(uncovered_tree, "HEAD", "no test runs gone.py:1, m.py:1")
+    assert sealed is not None
+    assert sorted(sealed["sources"]) == ["m.py"]
+    # The tree's own diff against HEAD (m.py is untracked here, so n.py is the change).
+    assert sealed["changed"] == [["n.py", 2]]
+
+
+def test_tier1_seals_nothing_when_the_coverage_detail_names_no_line(
+    uncovered_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing coverage finding whose detail is not the "no test runs" shape
+    (nothing to place) is journaled as before, with no sidecar."""
+    monkeypatch.setattr(auditor_mod, "coverage_evidence", lambda *a, **k: None)
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(uncovered_tree, config=AuditorConfig(journal=journal)).tier1()
+    assert next(f for f in result.findings if f.gate == "coverage").verdict == "fail"
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert span.attempt_hash == ""
+    assert verify_journal(journal) == []
+
+
+def test_tier2_seals_nothing_when_the_gate_carries_no_outcome(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Tier1Result.mutation` is optional; a gate result without it journals
+    the tier as before and seals no sidecar."""
+    import dataclasses
+
+    _untested_mutmut(tmp_path, monkeypatch)
+    real = runner.run_node_gate
+    monkeypatch.setattr(
+        runner, "run_node_gate", lambda *a, **k: dataclasses.replace(real(*a, **k), mutation=None)
+    )
+    journal = tmp_path / "proofs.jsonl"
+    Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier2()
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
+    assert span.attempt_hash == ""
+    assert verify_journal(journal) == []
