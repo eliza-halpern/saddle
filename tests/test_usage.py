@@ -203,7 +203,10 @@ def test_the_budget_stop_uses_the_real_count(repo: Path) -> None:  # noqa: F811
 def test_without_usage_the_same_run_is_not_stopped_by_tokens(repo: Path) -> None:  # noqa: F811
     server = FakeServer([_sse(_delta({"content": "hm"})), _sse(_finish_call())], tail=None)
     result = _run(repo, server, tokens=1000)
-    assert result.outcome == "finished"
+    # Not stopped by tokens: the run reaches its finish call. The script edits
+    # nothing, so under the default auditor arm that finish ends `unchanged`,
+    # not `finished` (FEEDFIX item 5).
+    assert result.outcome == "unchanged"
     assert len(server.payloads) == 2
 
 

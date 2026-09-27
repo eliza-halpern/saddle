@@ -506,6 +506,13 @@ def test_an_unchanged_tree_is_nothing_to_audit_and_ends_unchanged_not_finished(
     assert (end.name, end.exit_code) == ("auto:unchanged", 3)
 
 
+def test_an_ending_already_decided_is_not_overwritten_by_unchanged() -> None:
+    auto = engine.AutoRun(budget=engine.RunBudget(time_s=1, tokens=1), run_span="s")
+    auto.stop("cancelled")
+    auto.end_unchanged("done")
+    assert (auto.outcome, auto.reason, auto.narrative) == ("stopped", "cancelled", "")
+
+
 def test_the_real_auditor_does_not_accept_an_unchanged_tree(real_repo: Path) -> None:
     """Known-bad (SANCTIONS construct/nothing_to_audit_probe.py): the finish
     audit of a tree equal to its baseline must not accept it."""
