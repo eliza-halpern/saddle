@@ -249,9 +249,15 @@ def render(result: AuditResult) -> str:
     if result.note:
         lines.append(result.note)
     bad = [f for f in result.findings if failing(f)]
+    # Identical failing lines are said once, with their count: tier 0 runs per
+    # file and its format detail names none, so two unformatted files read
+    # "ruff format --check exited 1" twice (EAFS-t5 s2's finish refusal).
+    said: dict[str, int] = {}
     for f in bad:
         detail = _worded(result, f)
-        lines.append(f"- {f.gate} (tier {f.tier}): {f.verdict}, {f.reason}: {detail}")
+        text = f"- {f.gate} (tier {f.tier}): {f.verdict}, {f.reason}: {detail}"
+        said[text] = said.get(text, 0) + 1
+    lines.extend(text if n == 1 else f"{text} ({n} findings)" for text, n in said.items())
     allowed = [f for f in result.findings if f.reason == "sanctioned" and f.verdict in FAILING]
     for f in allowed:
         lines.append(f"(info) {f.gate} (tier {f.tier}): {f.detail}")
