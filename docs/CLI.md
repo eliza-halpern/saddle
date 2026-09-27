@@ -48,7 +48,7 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | finished |
-| 3 | stopped (a budget, `audit unresolved`, a model error, cancelled, needs you) |
+| 3 | stopped (a budget, `audit unresolved`, no tool call in 3 consecutive rounds, a model error, cancelled, needs you: a question, or a change to saddle's own judging code) |
 | 1 | setup error (not a git repo, worktree failed, bad arm or cap) or no API key |
 
 ## saddle audit --tiered [REV]
