@@ -234,6 +234,38 @@ def render_compact(summary: CoverageSummary, *, text: bool = True) -> str:
     return "\n".join(out) + "\n"
 
 
+TALLY_FILES = 6
+"""Files `file_tally` names before "and N more files"."""
+
+
+def file_tally(summary: CoverageSummary, *, top: int = TALLY_FILES) -> str:
+    """One line for text read under a cap: uncovered lines per file, most first.
+
+    The rows run in path order, so a cap can cut them before the file that
+    carries most of the count; this line, placed under the heading, names
+    it anyway. Ties read in path order. At most `top` files, then
+    "and N more files (M lines)". Unplaced lines count under their file.
+    "" when the finding names fewer than two files: the heading's count is
+    that one file's.
+    """
+    counts: dict[str, int] = {}
+    for g in summary.gaps:
+        counts[g.file] = counts.get(g.file, 0) + len(g.uncovered)
+    for f, _ in summary.unplaced:
+        counts[f] = counts.get(f, 0) + 1
+    if len(counts) < 2:
+        return ""
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    named = ", ".join(f"{f} {n}" for f, n in ranked[:top])
+    rest = ranked[top:]
+    more = ""
+    if rest:
+        lines = sum(n for _, n in rest)
+        files = "file" if len(rest) == 1 else "files"
+        more = f"; and {len(rest)} more {files} ({lines} line{'' if lines == 1 else 's'})"
+    return f"  Lines per file, most first: {named}{more}"
+
+
 def render_coverage(summary: CoverageSummary, *, text: bool = True, compact: bool = False) -> str:
     """The coverage row as lines of English, each backed by the finding.
 

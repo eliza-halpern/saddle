@@ -114,3 +114,58 @@ def test_a_single_file_finding_reads_as_before(monkeypatch: pytest.MonkeyPatch) 
     )
     assert words == coverage_text.render_coverage(summary, text=False).rstrip("\n")
     assert len(_rows(words)) == 2
+
+
+CP2_TALLY = (
+    "  Lines per file, most first: scratch_verify.py 223, money.py 17, accounts.py 5, store.py 1"
+)
+
+
+def test_checkpoint_2_reads_the_tally_under_its_heading_largest_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, data = _checkpoint("checkpoint 2", monkeypatch)
+    shown = feed._worded(result, _coverage(result))
+    heading, tally, first_row = shown.splitlines()[:3]
+    assert heading == data["sealed_coverage_text"].splitlines()[0]
+    assert tally == CP2_TALLY
+    assert first_row == _rows(data["sealed_coverage_text"])[0]
+
+
+def test_checkpoint_1_reads_the_same_tally_without_the_scratch_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, _ = _checkpoint("checkpoint 1", monkeypatch)
+    assert result.coverage.splitlines()[1] == (
+        "  Lines per file, most first: money.py 17, accounts.py 5, store.py 1"
+    )
+
+
+def _summary(counts: dict[str, int], unplaced: tuple[tuple[str, int], ...] = ()) -> Any:
+    gaps = tuple(
+        coverage_text.FunctionGap(f, "f", None, tuple(range(1, n + 1)), None)
+        for f, n in counts.items()
+    )
+    total = sum(counts.values()) + len(unplaced)
+    return coverage_text.CoverageSummary(total, (), gaps, unplaced)
+
+
+def test_many_files_name_the_largest_and_count_the_rest() -> None:
+    """The largest file is last in path order; the tally still leads with it."""
+    counts = {f"a{i}.py": 1 for i in range(8)} | {"z_scratch.py": 90, "m.py": 2}
+    tally = coverage_text.file_tally(_summary(counts))
+    assert tally == (
+        "  Lines per file, most first: z_scratch.py 90, m.py 2, a0.py 1, a1.py 1, a2.py 1,"
+        " a3.py 1; and 4 more files (4 lines)"
+    )
+    one_more = coverage_text.file_tally(_summary(counts), top=9)
+    assert one_more.endswith("a6.py 1; and 1 more file (1 line)")
+    # realistic worst case: 40-character paths, the tally stays well inside the cap
+    wide = {f"src/package/subpackage/module_{i:03d}.py": 10 + i for i in range(40)}
+    assert len(coverage_text.file_tally(_summary(wide))) < feed.DETAIL_CHARS // 2
+
+
+def test_unplaced_lines_count_under_their_file() -> None:
+    tally = coverage_text.file_tally(_summary({"u.py": 1}, (("gone.py", 3), ("gone.py", 4))))
+    assert tally == "  Lines per file, most first: gone.py 2, u.py 1"
+    assert coverage_text.file_tally(_summary({"u.py": 5})) == ""

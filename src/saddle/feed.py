@@ -213,7 +213,15 @@ def _worded(result: AuditResult, finding: Finding) -> str:
 
 def _coverage_words(tree: Path, baseline: str, findings: Sequence[Finding]) -> str:
     """`coverage_text`'s rendering of the failing or not-proven coverage
-    finding among `findings`, over the snapshot it judged; "" if none."""
+    finding among `findings`, over the snapshot it judged; "" if none.
+
+    Under the heading, when the finding spans two or more files, a per-file
+    tally, most lines first (`coverage_text.file_tally`). `_worded` caps the
+    text at `DETAIL_CHARS` and the rows run in path order: in benchmark draw
+    EAF-t5 s1 the cap cut them seven rows in, and the file holding 223 of
+    the 246 lines the heading counted was never named. Wording only: the
+    rows and every verdict are unchanged (tightened).
+    """
     found = next(
         (f for f in findings if f.gate == "coverage" and f.verdict in ("fail", "not-proven")),
         None,
@@ -224,7 +232,12 @@ def _coverage_words(tree: Path, baseline: str, findings: Sequence[Finding]) -> s
     sources = {name: "\n".join(lines) + "\n" for name, lines in sealed["sources"].items()}
     changed = [(str(path), int(line)) for path, line in sealed["changed"]]
     summary = coverage_text.describe_coverage(dataclasses.asdict(found), sources, changed)
-    return coverage_text.render_coverage(summary, text=False).rstrip("\n")
+    rendered = coverage_text.render_coverage(summary, text=False).rstrip("\n")
+    tally = coverage_text.file_tally(summary)
+    if not tally:
+        return rendered
+    head, _, rows = rendered.partition("\n")
+    return f"{head}\n{tally}\n{rows}"
 
 
 def render(result: AuditResult) -> str:
