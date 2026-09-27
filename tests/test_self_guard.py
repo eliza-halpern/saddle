@@ -1,13 +1,15 @@
 """The self-guard: a run on saddle's own source cannot finish on its judges.
 
 When saddle works on its own repository, a run could change the code that
-judges runs. A run whose tree changes a guarded path (`auto.GUARDED_PATHS`:
-the gates, evidence, auditor and audit modules, their tests, and the suite's
-conftest) ends `stopped`, reason "needs you: ...", naming the paths, never
-`finished`. Each half both ways: a guarded edit stops, an unrelated module
-finishes; the guard is armed only on saddle's own source, so another repo
-with a `gates.py` is unaffected; and it is armed at the baseline, so a run
-cannot disarm it.
+judges runs. A run whose tree changes a guarded path (`auto.GUARDED_PATHS`: the gates,
+evidence, auditor and audit modules; the feed and the turn engine, which
+decide whether a finish is accepted; the sandbox and the memory cap, which
+confine the auditor's runs; their tests, and the suite's conftest) ends
+`stopped`, reason "needs you: ...", naming the paths, never `finished`. Each
+half both ways: a guarded edit stops, an unrelated module or a near-miss of a
+guarded name finishes; the guard is armed only on saddle's own source, so
+another repo with a `gates.py` is unaffected; and it is armed at the
+baseline, so a run cannot disarm it.
 """
 
 from __future__ import annotations
@@ -120,8 +122,17 @@ def _run(repo: Path, client: Any, **kwargs: Any) -> Any:
     return run_auto(options, cast(VllmClient, client))
 
 
-def test_the_guarded_list_is_the_four_judges_their_tests_and_the_conftest() -> None:
-    assert GUARDED_MODULES == ("gates", "evidence", "auditor", "audit")
+def test_the_guarded_list_is_the_judges_the_finish_path_the_confinement_and_their_tests() -> None:
+    assert GUARDED_MODULES == (
+        "gates",
+        "evidence",
+        "auditor",
+        "audit",
+        "feed",
+        "engine",
+        "memcap",
+        "sandbox",
+    )
     assert {
         "src/saddle/gates.py",
         "src/saddle/evidence.py",
@@ -132,6 +143,7 @@ def test_the_guarded_list_is_the_four_judges_their_tests_and_the_conftest() -> N
         "tests/test_auditor.py",
         "tests/test_audit.py",
         "tests/conftest.py",
+        *FINISH_PATH_JUDGES,
     } == GUARDED_PATHS
 
 

@@ -245,8 +245,9 @@ The ledger records exactly one outcome span: `auto:finished` or `auto:stopped`.
 - **stopped: needs you: this run changed code that judges runs (…).** Only when the run
   is on saddle's own source (its worktree has `src/saddle/__init__.py` at the start). A
   run that would have finished, but whose tree changes `src/saddle/gates.py`,
-  `evidence.py`, `auditor.py`, `audit.py`, their `tests/test_*.py` files or
-  `tests/conftest.py` (`auto.GUARDED_PATHS`), ends here instead. The reason names the
+  `evidence.py`, `auditor.py`, `audit.py`, `feed.py`, `engine.py`, `memcap.py`,
+  `sandbox.py`, the test files that pin them, or `tests/conftest.py`
+  (`auto.GUARDED_PATHS`), ends here instead. The reason names the
   paths and the outcome seals them as `guarded_paths`. The branch keeps the work for a
   person to review. Other repositories, including ones with a `gates.py` of their own,
   are not affected. Exit 3.

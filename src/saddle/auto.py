@@ -95,17 +95,44 @@ Read at the baseline, before the model acts, so a run cannot switch the guard
 off by deleting it, and by layout rather than distribution name, so a renamed
 or forked distribution of the same package is still guarded."""
 
-GUARDED_MODULES: Final = ("gates", "evidence", "auditor", "audit")
-"""The modules that judge a run. The one list the self-guard reads."""
+GUARDED_MODULES: Final = (
+    "gates",
+    "evidence",
+    "auditor",
+    "audit",
+    "feed",
+    "engine",
+    "memcap",
+    "sandbox",
+)
+"""The modules a run on saddle's own source may not finish on: the judges
+(`gates`, `evidence`, `auditor`, `audit`), what decides whether a finish is
+accepted (`feed`, `engine`), and what confines and caps the auditor's runs
+(`sandbox`, `memcap`). The one module list the self-guard reads."""
+
+GUARDED_TESTS: Final = (
+    "tests/test_gates.py",
+    "tests/test_evidence.py",
+    "tests/test_auditor.py",
+    "tests/test_audit.py",
+    "tests/test_feed.py",
+    "tests/test_feed_covtext.py",
+    "tests/test_feed_said_once.py",
+    "tests/test_feed_tally.py",
+    "tests/test_chat_engine.py",
+    "tests/test_memcap.py",
+    "tests/test_sandbox_reach.py",
+    "tests/conftest.py",
+)
+"""The test files that pin the guarded modules, and `tests/conftest.py`,
+which replaces parts of `evidence` for the whole suite. Listed by name
+because not every module's tests live at `tests/test_<module>.py`."""
 
 GUARDED_PATHS: Final = frozenset(
-    [f"src/saddle/{m}.py" for m in GUARDED_MODULES]
-    + [f"tests/test_{m}.py" for m in GUARDED_MODULES]
-    + ["tests/conftest.py"]
+    [f"src/saddle/{m}.py" for m in GUARDED_MODULES] + list(GUARDED_TESTS)
 )
 """Paths a run on saddle's own source may change but not finish on: the
-judging modules, their tests, and `tests/conftest.py`, which replaces parts
-of `evidence` for the whole suite. Named files, never a pattern."""
+guarded modules and their tests. Named files, never a pattern."""
 
 
 class AutoError(RuntimeError):
