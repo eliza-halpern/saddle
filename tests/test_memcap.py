@@ -1,7 +1,7 @@
 """A hard memory and task cap on every command that runs a tree's code.
 
-Both sides of each constraint (CLAUDE.md: a constraint is verified by a
-known-good instance, never by its existence):
+Both sides of each constraint (CONTRIBUTING.md: a constraint is verified by
+instances, never by its presence):
 
 - known-bad: a runaway allocation, one spread over several processes, and a
   process storm are stopped, recorded as a failure with a reason, and saddle

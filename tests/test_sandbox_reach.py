@@ -1,7 +1,7 @@
 """What a sandboxed command can and cannot reach.
 
-Each constraint is pinned from both sides (CLAUDE.md: "a constraint is verified
-by a known-good instance, never by its existence"): a command the lanes need
+Each constraint is pinned from both sides (CONTRIBUTING.md: "a constraint is
+verified by instances, never by its presence"): a command the lanes need
 still works, and a command that reaches past the workdir is stopped.
 
 Probes are harmless. Secrets are dummies set by the test itself, planted files
