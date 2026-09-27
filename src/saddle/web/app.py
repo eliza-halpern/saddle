@@ -356,7 +356,7 @@ class ChatServer:
                 self.window = 120_000
         return self.window
 
-    def _name_session(self, session: Any, text: str, client: Any, live: Live) -> None:
+    def _name_session(self, session: Any, text: str | None, client: Any, live: Live) -> None:
         """Name a new session after its opening message, once.
 
         Deliberately after the turn, not before it: the answer is already on
@@ -365,7 +365,8 @@ class ChatServer:
         called "New session" is a cosmetic problem, and a turn that died
         because its title could not be written would not be.
         """
-        if not session.auto_title or live.turn != 1:
+        # A retry (text None) asks nothing new to name the session after.
+        if text is None or not session.auto_title or live.turn != 1:
             return
         try:
             title = title_for(client, text)
