@@ -384,3 +384,24 @@ def test_a_command_whose_child_was_killed_for_memory_says_so(tmp_path: Path, cap
     assert terminal.exit_code == 0, terminal.output()
     assert "after-the-child" in terminal.output()
     assert "memory cap" in terminal.output()
+
+
+def test_a_sandbox_built_directly_is_capped_at_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # for_workdir is not the only way to build one; a caller that skips it
+    # must still get the documented cap, never an uncapped command.
+    from saddle import memcap as live
+
+    limits: list[int] = []
+    real = live.cap
+
+    def spy(limit: int) -> live.Cap:
+        limits.append(limit)
+        return real(limit)
+
+    monkeypatch.setattr(live, "cap", spy)
+    terminal = Sandbox(root=tmp_path).run("echo ran", timeout=60)
+    assert terminal.exit_code == 0, terminal.output()
+    assert "ran" in terminal.output()
+    assert limits == [live.DEFAULT_MEMORY_MAX]
