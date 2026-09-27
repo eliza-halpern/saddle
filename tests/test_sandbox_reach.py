@@ -618,3 +618,18 @@ def test_saddles_own_git_around_a_run_runs_no_planted_hook(repo: Path, tmp_path:
     # the known-good half: the run still set up its worktree and committed
     assert result.commit
     assert git(result.worktree, "log", "-1", "--format=%s").startswith("saddle auto r1")
+
+
+def test_default_expose_skips_what_is_not_a_venv_and_a_venv_without_a_home(
+    outside: Path,
+) -> None:
+    not_a_venv = outside / "plain"
+    (not_a_venv / "bin").mkdir(parents=True)
+    homeless = outside / "homeless"
+    (homeless / "bin").mkdir(parents=True)
+    (homeless / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+    tool = homeless / "bin" / "pytest"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    env = {"VIRTUAL_ENV": str(not_a_venv), "PATH": f"{homeless / 'bin'}"}
+    assert sandbox_module.default_expose(env) == ((homeless, homeless),)

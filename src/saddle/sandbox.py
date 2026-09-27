@@ -86,6 +86,16 @@ def command_env(extra: Mapping[str, str]) -> dict[str, str]:
     return {**kept, "TERM": "dumb", "NO_COLOR": "1", **extra}
 
 
+HOST_GIT_GUARD: Final = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null")
+"""Options for every git command saddle itself runs in a tree a command
+could have written: no fsmonitor, no hooks. Git runs both as programs, from
+config, so a hook or an fsmonitor written into `.git` is code the host
+executes the next time saddle stages or commits. Under bwrap a command cannot
+write `.git` at all; this is the second layer, for a run without bwrap and a
+repo that already carried such config. saddle's own commits, worktrees and
+merges need no hook, so nothing a run relies on is lost."""
+
+
 SYSTEM_DIRS: Final = (
     "/usr",
     "/bin",
@@ -105,6 +115,65 @@ another agent's scratch, /run/user sockets)."""
 
 RESOLVER_DIR: Final = "/run/systemd/resolve"
 """Where /etc/resolv.conf points on systemd boxes; needed only with network."""
+
+
+GATE_TOOLS: Final = ("python", "python3", "pytest", "ruff", "coverage", "mutmut")
+"""Names a command runs bare that saddle's own gates also run. Where one of
+them lives in a venv outside the system dirs (a project's `.venv`, a
+`uv tool` or `pipx` install under HOME), that venv is shown read-only."""
+
+
+def _venv_root(tool: Path) -> Path | None:
+    """The venv holding `tool` (`<venv>/bin/<tool>`), if it is one."""
+    root = tool.parent.parent
+    return root if (root / "pyvenv.cfg").is_file() else None
+
+
+def _base_prefix(venv: Path) -> Path | None:
+    """Where the venv's interpreter comes from (`home` in `pyvenv.cfg`)."""
+    for line in (venv / "pyvenv.cfg").read_text(encoding="utf-8", errors="replace").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "home" and value.strip():
+            return Path(value.strip()).resolve().parent
+    return None
+
+
+def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
+    """Read-only `(source, destination)` binds for the gate tools `env` finds.
+
+    Minimal on purpose: each venv a gate tool (or `VIRTUAL_ENV`) lives in,
+    the interpreter that venv was made from, and the tool's own PATH entry
+    when that is a link into the venv. Nothing else under HOME: a sibling of
+    the venv, the rest of `~/.local/bin`, and dotfiles all stay hidden."""
+    binds: dict[Path, Path] = {}
+    venvs: list[Path] = []
+    if env.get("VIRTUAL_ENV"):
+        venvs.append(Path(env["VIRTUAL_ENV"]))
+    for name in GATE_TOOLS:
+        found = shutil.which(name, path=env.get("PATH", ""))
+        if found is None:
+            continue
+        spelled, landed = Path(found).absolute(), Path(found).resolve()
+        for tool in (spelled, landed):
+            venv = _venv_root(tool)
+            if venv is not None:
+                venvs.append(venv)
+        if spelled != landed and _venv_root(landed) is not None:
+            binds[spelled] = landed
+    for venv in venvs:
+        if not (venv / "pyvenv.cfg").is_file():
+            continue
+        real = venv.resolve()
+        binds[real] = real
+        base = _base_prefix(real)
+        if base is not None:
+            binds[base] = base
+    return tuple((source, dest) for dest, source in sorted(binds.items()) if not _is_system(dest))
+
+
+def _is_system(path: Path) -> bool:
+    """Already visible: under one of `SYSTEM_DIRS`."""
+    return any(path == Path(d) or Path(d) in path.parents for d in SYSTEM_DIRS)
 
 
 @functools.cache
@@ -197,6 +266,9 @@ class Sandbox:
     """"none" gives a command its own empty network namespace (loopback only).
     saddle talks to the model itself, so no command needs the host network to
     do the task; only installs do."""
+    expose: tuple[tuple[Path, Path], ...] = ()
+    """Read-only `(source, destination)` binds beyond the system dirs and the
+    interpreter: the venvs the gate tools live in (`default_expose`)."""
 
     @classmethod
     def for_workdir(
@@ -221,6 +293,7 @@ class Sandbox:
             on_output=on_output,
             env=dict(env or {}),
             network=network,
+            expose=default_expose(command_env(env or {})),
         )
 
     def _git_binds(self) -> list[str]:
@@ -264,6 +337,8 @@ class Sandbox:
             argv += ["--ro-bind-try", RESOLVER_DIR, RESOLVER_DIR]
         for prefix in sorted({Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}):
             argv += ["--ro-bind", str(prefix), str(prefix)]
+        for source, dest in self.expose:
+            argv += ["--ro-bind", str(source), str(dest)]
         # Order matters: later mounts shadow earlier ones, so the writable
         # workdir comes after the tmpfs mounts (a workdir under /tmp or HOME
         # would vanish behind them), and the read-only .git after the workdir.

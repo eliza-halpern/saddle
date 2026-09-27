@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Final
 
 from saddle.packet import Packet
+from saddle.sandbox import HOST_GIT_GUARD
 
 RUN_BRANCH: Final = re.compile(r"saddle/auto/[0-9a-f]{6,64}")
 MERGE_KEYS: Final = ("tests", "mutation", "audit")
@@ -53,7 +54,10 @@ class FileDiff:
 
 def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+        ["git", "-C", str(root), *HOST_GIT_GUARD, *args],
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 

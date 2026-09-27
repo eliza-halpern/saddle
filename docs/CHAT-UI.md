@@ -76,9 +76,26 @@ required to stay inside the root, **symlinks included** — resolve first,
 then check containment, so a link out of the tree is caught by where it
 lands rather than by how it is spelled.
 
-Commands run under `bwrap` when it is present (read-only system, writable
-workdir) and as the invoking user when it is not. `Sandbox.isolation` says
-which, rather than implying protection that is absent.
+Commands run under `bwrap` when it works on the box, and as the invoking
+user when it does not. `Sandbox.isolation` says which, rather than implying
+protection that is absent; Task runs refuse to start without it.
+
+Under `bwrap` a command sees:
+
+- the system directories and the interpreter, read-only;
+- an empty HOME and an empty /tmp, except the venvs saddle's gate tools
+  (`python`, `pytest`, `ruff`, `coverage`, `mutmut`) resolve to on the
+  command's PATH or through `VIRTUAL_ENV`, read-only (`default_expose`);
+- the workdir, writable, with its `.git` read-only again;
+- an allowlisted environment, never saddle's own (no model key);
+- in Task runs, no network.
+
+**Commits are host-side.** A command cannot write `.git`, so `git commit`
+from a command fails in every lane. saddle commits a run's work itself when
+the run ends, and the packet's merge and discard actions (each confirmed by
+the user) carry it into the checkout. Every git command saddle runs there
+passes `-c core.fsmonitor= -c core.hooksPath=/dev/null`, so a hook or an
+fsmonitor in the repo's config is not run on its behalf.
 
 ## Background terminals
 
