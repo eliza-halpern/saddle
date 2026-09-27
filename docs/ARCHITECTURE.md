@@ -98,7 +98,7 @@ graph TD
 
 ### Phase -1: The Triage Router
 
-> *Status (2026-09-18): specified, not built — deferred, WORKPLAN §7.*
+> *Status (2026-09-18): specified, not built — deferred.*
 
 A low-latency, zero-reasoning classification pass using guided decoding to return an enum: [CREATIVE | MECHANICAL] — **plus a machine-checked intent record** (guided fields, not freeform):
 
@@ -152,7 +152,7 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 > * **Bounded Recompile:** Validation errors return to the Orchestrator as a machine-generated error list (max 3 rounds); exhaustion routes to the human gate. One call drafts, but nothing executes until the draft passes machine checks.
 > * **Rolling Wave (large/uncertain work):** The Orchestrator MAY emit a partial DAG plus a plan-ahead horizon instead of the whole graph; the scheduler requests extension waves as proof blocks land. One-shot compilation is the fast path, not a straitjacket.
 >
-> *Status (2026-09-18): specified, not built — deferred, WORKPLAN §7.*
+> *Status (2026-09-18): specified, not built — deferred.*
 > * **Escalation Ladder:** node recovery (bounded, Phase 3) → subgraph re-compilation here → human gate. Repeated node failure re-plans the *structure*, never just re-queues the *work* — workers are never burned against a bad decomposition.
 
 ### Phase 2: Topological Execution (Kahn's Algorithm)
@@ -185,7 +185,7 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 > 7. **Target Scope** (#64): a node that declares `target_files` may not change or add any file outside that list. Since T6-8 an `impl` or `refactor` node must declare it (`validate_dag` rejects `undeclared-scope`), and its declared files size the node before it runs: the estimated diff (`dag.emission_estimate`, from the repo's line counts) must fit the room the context window leaves after the node's read ceiling (`cli.diff_budget`), or the plan is rejected as `node-too-large` and re-planned. A `test` node may leave the list empty. Generation is not budgeted (T6-17): a worker call asks for the whole window left after its prompt, and nothing is held back for reasoning, because this model works by reasoning at length and the server enforces no split between thinking and content (F21.10: 17571 of 20256 tokens spent thinking at effort `low`). `finish_reason=length` is therefore the model's ceiling, not the harness's, and stays a retryable attempt failure with its evidence in the attempt sidecar (T6-12). The window is what the server reports as `max_model_len`, else `--context-window`, else 175000. T6-14's per-effort allowance and truncation ladder are gone.
 > 8. **Property Coverage:** A `test` node must state a property (a hypothesis `@given`), not only examples; the `impl` node that implements it must show the property alone kills a sampled mutant of its changed lines (T3-3). The oracle re-runs the mutation sample with only the property-bearing test modules that import a changed module collected, records `basis` as `oracle: killed k of n mutant(s) by <modules>`, is not required when no such module exists, and fails when it should have run and did not. A refactor is not bound.
 > 9. **Assertion Preservation:** Assertions in pre-existing tests are append-only, except for test nodes; a refactor may carry code and tests together but must not weaken an existing assertion.
-> 10. **Sampled Mutation Testing** (moved here from Tier 2 — audit §2.3): mutmut/Stryker/PIT restricted to the node's changed lines, capped (e.g., ≤100 mutants or ≤10 minutes, whichever binds first), with a kill-rate threshold from the node's gate spec, floored at 85% and selectable only upward. Not required for a `test` node.
+> 10. **Sampled Mutation Testing** (moved here from Tier 2 by the 2026-09-18 audit): mutmut/Stryker/PIT restricted to the node's changed lines, capped (e.g., ≤100 mutants or ≤10 minutes, whichever binds first), with a kill-rate threshold from the node's gate spec, floored at 85% and selectable only upward. Not required for a `test` node.
 
 **Tier 2 — merge-time (budgeted; once per DAG):**
 
@@ -204,7 +204,7 @@ The LLM returns code diffs, never self-evaluations. The Python harness intercept
 
 ### Phase 4: Synthesis & Commit
 
-> *Status (2026-09-18): specified, not built — deferred, WORKPLAN §7.*
+> *Status (2026-09-18): specified, not built — deferred.*
 
 Once all nodes reach verified completion, the Orchestrator's context is restored to GPU VRAM. It receives the collected proof records, **re-verifies the hash chain by recomputation (never by trust)**, confirms that global integration requirements are met, and prepares the final atomic Git commit.
 
@@ -228,7 +228,7 @@ Two structural properties, not model quality, carry the speedup — and both sur
 > * **mutmut / Stryker / PIT:** Mutation testing frameworks enforcing the Tier-2 sampled gate against tautological tests — scoped to changed lines, capped by mutant count and wall-clock, never per-node unscoped.
 > * **Operational Patterns (design constraints):** Token-degeneration stall detection with bounded retries instead of open-ended loops; throwaway subprocess contexts for noisy context gathering; and crash-safe file state — graph state persisted as human-readable Markdown/JSON so an operator can intervene and resume without session loss.
 >
-> *Status (2026-09-19): resume built (T3-1): a verified journal seeds the proven set and only unproven nodes run. What it resumes **onto** is checked, not assumed (T3-10): each proof seals the `git write-tree` id of the tracked worktree its gate passed on, kept at `refs/saddle/proven/<node>`, and a resume whose worktree hashes to anything else raises before any node runs, naming both ids and the `git restore --source` that puts the proven tree back (committing the proven edits keeps the same tree, so the `saddle run` clean-tree check and this one agree). Stall detection deferred, WORKPLAN §7.*
+> *Status (2026-09-19): resume built (T3-1): a verified journal seeds the proven set and only unproven nodes run. What it resumes **onto** is checked, not assumed (T3-10): each proof seals the `git write-tree` id of the tracked worktree its gate passed on, kept at `refs/saddle/proven/<node>`, and a resume whose worktree hashes to anything else raises before any node runs, naming both ids and the `git restore --source` that puts the proven tree back (committing the proven edits keeps the same tree, so the `saddle run` clean-tree check and this one agree). Stall detection deferred.*
 
 ## 6. Implementation Plan
 

@@ -1,24 +1,25 @@
 # Research sources used in saddle, and how each was used
 
 Collected 2026-09-25 from every citation in `docs/DESIGN-NOTES.md`,
-`docs/AUDIT-2026-09-18.md` §9, `docs/WORKPLAN.md` (citation-correction
-table and item text), `CLAUDE.md`, and a 2026-09-25 review.
+the 2026-09-18 internal audit (§9, its citation audit), the internal work
+log (its citation-correction table and item text), `CLAUDE.md`, and a
+2026-09-25 review. The audit and the work log are not public.
 Before this file, citations lived only where they were used. Add a row here
 whenever a new source is cited anywhere in the repo or the notes.
 
-**Status labels** (the audit's legend, `docs/WORKPLAN.md` §11):
+**Status labels** (the internal audit's legend):
 PROVEN-IN-PRODUCTION, PUBLISHED-WITH-MEASUREMENT (number checked against
 the source), VERIFIED (this repo's own runs), SPECULATIVE (no number, or a
 number the audit could not find). Two extra labels used only here:
 **CORRECTED** (the audit found the repo's original quotation wrong and the
-WORKPLAN table gives the corrected wording) and **UNVERIFIED-FROM-MEMORY**
+internal work log's table gives the corrected wording) and **UNVERIFIED-FROM-MEMORY**
 (named in conversation, not yet checked against the source; do not cite in
 a doc until checked).
 
 Where a source's number was corrected before 2026-09-25, the corrected
-wording is the one in `docs/WORKPLAN.md` "citation-correction" table (rows
-at lines ~460–488) and the audit §9 rows; this file summarises, it does not
-restate them. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
+wording is the one in the internal work log's citation-correction table
+and the audit's §9 rows; this file's CORRECTED rows summarise each
+correction in their caveat column. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
 and §5c, an internal research report on the Rule D question rate, not public),
 the corrected wording now lives in this file's own rows.
 
@@ -52,7 +53,7 @@ the corrected wording now lives in this file's own rows.
 | "Detecting Flaky Tests by Controlling Nondeterministic API Behavior" (ChaosAPI) | OOPSLA 2026 | D3 (repeat the baseline before trusting red) | Flake detection via API nondeterminism control | Figure unverifiable per audit; the 3-sample red baseline rests on CI rerun practice instead |
 | Context Rot (Chroma) | trychroma.com | D4 (stop maximising node context) | No notable variation across 11 needle positions (on Repeated Words, best near the start); direction only | CORRECTED: the ">30% drop" and "98.6% → 88%" figures are not in the post |
 | Martin & Roger, long-context degradation | arXiv 2605.12366 | D4 | Wrong or degraded answers 2× to 30× more often as context fills; recall 98.6% → 88% from prepending 800k benign tokens | PUBLISHED-WITH-MEASUREMENT (re-attributed from Chroma by the audit) |
-| Agentless | arXiv 2407.01489 | D2 (patch application); WORKPLAN item at line ~1148 | A deterministic pipeline beats agent loops | PUBLISHED-WITH-MEASUREMENT |
+| Agentless | arXiv 2407.01489 | D2 (patch application); an internal work-log item | A deterministic pipeline beats agent loops | PUBLISHED-WITH-MEASUREMENT |
 | Diff-XYZ | arXiv 2510.12487 | D2 | Diff-understanding benchmark; patch-format failure modes | PUBLISHED |
 | DebugHarness | arXiv 2604.03610 | D2; D16 | Dynamic debugging for repair | PUBLISHED |
 | "Why LLMs Fail: Failure Analysis for Automated Security Patch Generation" | arXiv 2603.10072 | D2 | Patch failure taxonomy | PUBLISHED |
@@ -69,7 +70,7 @@ the corrected wording now lives in this file's own rows.
 
 ## B. Sources named by the audit as corroborating, not cited in the design
 
-From `docs/AUDIT-2026-09-18.md` §9 "new sources with a use here"; none
+From the internal audit's §9 "new sources with a use here"; none
 changes a Tier 0–2 item. Confidence is the audit's.
 
 | Source | Use |
@@ -79,7 +80,7 @@ changes a Tier 0–2 item. Confidence is the audit's.
 | aider unified-diffs page (high) | PROVEN-IN-PRODUCTION edit format, for #61 |
 | pytest-timeout docs (high) | Per-test hang detection, an alternative to `SHELL_TIMEOUT` |
 | Qwen3.8-27B HF README (high) | The worker's documented reasoning-effort semantics |
-| Cleverest, arXiv 2501.11086; arXiv 2604.27296, 2604.26102 v2, 2605.08680, 2605.26128, 2604.03616, 2604.24712, 2607.22880, 2512.02304, 2604.14437, 2607.22883 (low–medium) | Corroborating only; not cited in the workplan |
+| Cleverest, arXiv 2501.11086; arXiv 2604.27296, 2604.26102 v2, 2605.08680, 2605.26128, 2604.03616, 2604.24712, 2607.22880, 2512.02304, 2604.14437, 2607.22883 (low–medium) | Corroborating only; not cited in the internal work log |
 
 ## C. Raised in the 2026-09-25 session, checked the same day
 
@@ -113,8 +114,8 @@ home.
 
 - Internal benchmark findings log — F-numbered findings from every benchmark round. Claims about saddle's behaviour cite an F-number or a run log.
 - Internal Phase 1 measurement plan and checker — pre-registered measurements (hashes in `runs/M1*/PREREG.sha256`) and their verdicts.
-- `docs/AUDIT-2026-09-18.md` §9 — the citation audit: 8 claims verified, 6 refuted; the source of every CORRECTED row above.
-- `docs/WORKPLAN.md` citation-correction table — the corrected wording for each refuted claim.
+- Internal audit of 2026-09-18, §9 — the citation audit: 8 claims verified, 6 refuted; the source of every CORRECTED row above.
+- Internal work log, citation-correction table — the corrected wording for each refuted claim.
 - Internal W6 report — root causes RC1–RC3 for the saddle arm's T1/T3 failures, with measured experiments E1/E2 and pre-registered interventions I1–I5.
 
 ## Maintenance
