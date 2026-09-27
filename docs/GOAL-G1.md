@@ -2,8 +2,8 @@
 
 **This file is the authoritative copy.** A Stop hook recites G1 at the end
 of every turn from a copy held app-side, which no file on disk controls —
-neither `.claude/settings*.json` (neither has a `hooks` key) nor anything
-under `~/.config/Claude`, checked including the binary stores. That copy
+neither the agent host's project settings (no `hooks` key) nor anything
+in its app configuration, checked including the binary stores. That copy
 lags: as of 2026-09-22 it still says `fees.py` reached 1334 lines (the
 tree holds 1337), that round 3e's reasoning is unread (read, F21.35 —
 re-derived a second time on 2026-09-22 as F21.60 and retracted, because
