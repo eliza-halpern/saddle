@@ -640,3 +640,16 @@ def test_default_expose_skips_what_is_not_a_venv_and_a_venv_without_a_home(
     tool.chmod(0o755)
     env = {"VIRTUAL_ENV": str(not_a_venv), "PATH": f"{homeless / 'bin'}"}
     assert sandbox_module.default_expose(env) == ((homeless, homeless),)
+
+
+def test_default_expose_shows_the_interpreter_a_venv_was_made_from(outside: Path) -> None:
+    # A venv's python is a link to its base interpreter; where that lives outside
+    # the system dirs (a uv- or pyenv-managed Python under HOME), it must be shown
+    # too, or the venv's python cannot start.
+    base = outside / "pythons" / "cpython-3.12"
+    (base / "bin").mkdir(parents=True)
+    venv = outside / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text(f"home = {base / 'bin'}\nversion = 3.12\n")
+    exposed = sandbox_module.default_expose({"VIRTUAL_ENV": str(venv), "PATH": ""})
+    assert exposed == ((base, base), (venv, venv))

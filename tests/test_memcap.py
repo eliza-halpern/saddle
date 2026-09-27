@@ -317,3 +317,58 @@ def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
         check=False,
     ).stdout
     assert "failed" not in left, left
+
+
+# -- every gate launch that runs the tree's code reads the configured cap -------
+
+
+def test_every_gate_launch_reads_the_configured_cap(
+    tmp_path: Path, capped: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_evidence import _mutation_workdir
+    from test_sanction_red import OLD_TESTS, SANCTIONED, _tree
+
+    from saddle import auditor, rule_d_run
+    from saddle.evidence import CapturedRun, mutation_sample
+
+    want = 256 * MIB
+    limits: dict[str, list[int | None]] = {}
+    real = evidence.run_capture
+
+    def spy(site: str, *, delegate: bool = True) -> object:
+        def run(argv: list[str], cwd: Path, **kw: object) -> CapturedRun:
+            limits.setdefault(site, []).append(kw.get("memory_limit"))  # type: ignore[arg-type]
+            if not delegate:
+                return CapturedRun(tuple(argv), 0, "", "")
+            return real(argv, cwd, **kw)  # type: ignore[arg-type]
+
+        return run
+
+    # the tests gate, the coverage run and the red-phase baseline all use this
+    monkeypatch.setattr(evidence, "run_capture", spy("shell"))
+    evidence.run_shell_capture(f"{PY} -c pass", tmp_path)
+    # mutmut run
+    monkeypatch.setattr(evidence, "run_capture", spy("mutmut", delegate=False))
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: f"/fake/{name}")
+    work = _mutation_workdir(tmp_path)
+    mutation_sample(work, {(str(work / "a.py"), 1)}, 10, test_files=set())
+    monkeypatch.undo()
+    monkeypatch.setenv("SADDLE_MEMORY_MAX", TEST_CAP)
+    # the auditor's baseline collection and run of sanctioned rewrites
+    monkeypatch.setattr(auditor, "run_capture", spy("auditor"))
+    tests = OLD_TESTS.replace("== 9", "== 8").replace("== 19", "== 18")
+    (tmp_path / "sanction").mkdir()
+    auditor.Auditor(_tree(tmp_path / "sanction", tests), config=SANCTIONED).tier1()
+    # rule D's per-input runs
+    seen: dict[str, object] = {}
+
+    def rule_d_spy(argv: list[str], cwd: Path, **kw: object) -> CapturedRun:
+        seen.update(kw)
+        return CapturedRun(tuple(argv), 1, "", "")
+
+    rule_d_run.tree_answers(tmp_path, "n.py", "f", ["a"], runner=rule_d_spy)
+
+    assert limits["shell"] == [want]
+    assert want in limits["mutmut"]
+    assert limits["auditor"].count(want) == 2  # collect-only, then the named tests
+    assert seen["memory_limit"] == want
