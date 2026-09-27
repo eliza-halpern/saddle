@@ -64,7 +64,10 @@ def memory_max(default: int = DEFAULT_MEMORY_MAX) -> int:
     if match is None:
         msg = f"{MEMORY_MAX_ENV}={raw!r}: expected bytes or a number with K, M, G or T"
         raise ValueError(msg)
-    return int(match.group(1)) * 1024 ** "_KMGT".index(match.group(2).upper() or "_")
+    # The exponent is an index, never negative, so the power is an int (the
+    # stubs type `int ** int` as Any because a negative one is a float).
+    scale: int = 1024 ** "_KMGT".index(match.group(2).upper() or "_")
+    return int(match.group(1)) * scale
 
 
 @functools.cache
