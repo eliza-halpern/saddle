@@ -580,7 +580,10 @@ def run_turn(
     """
     ctx = context or ToolContext(workdir=options.workdir)
     stop = cancel or (lambda: False)
-    yield TurnStart(turn=turn, prompt=text if text is not None else _last_asked(messages))
+    # A retry (text None) still answers a question; the turn's start and its
+    # sealed proof both name that one.
+    asked = text if text is not None else _last_asked(messages)
+    yield TurnStart(turn=turn, prompt=asked)
     if options.system_prompt and not any(m.get("role") == "system" for m in messages):
         messages.insert(0, {"role": "system", "content": options.system_prompt})
     if text is not None:
@@ -802,7 +805,7 @@ def run_turn(
     proof = _seal(
         options.journal,
         turn=turn,
-        prompt=text,
+        prompt=asked,
         rounds=rounds,
         reasoning="".join(thinking),
         parent=parent,
