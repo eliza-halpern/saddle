@@ -2,7 +2,7 @@
 
 The E-t5-s1 fixture is real: the sealed coverage finding from CALIB's
 E-t5-s1 audit, money.py and store.py at the audited rev, and the diff from
-baseline for those two files (saddle-notes/parallel/out/CALIB).
+baseline for those two files (internal CALIB run records, not public).
 """
 
 from __future__ import annotations

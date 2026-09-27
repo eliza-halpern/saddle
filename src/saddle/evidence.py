@@ -64,7 +64,7 @@ TEST_MEMORY_LIMIT_BYTES: Final = 6 * 1024**3
 """Address-space ceiling (`RLIMIT_AS`, applied with `prlimit`) for every
 subprocess that executes the audited tree's code: the declared test command
 and `mutmut run`. The oracle harness caps at the same 6 GiB
-(`MEM_LIMIT_GB` in saddle-bench's `oracles/_harness.py`, after a 57 GB OOM on
+(`MEM_LIMIT_GB` in the internal benchmark's oracle harness, after a 57 GB OOM on
 2026-09-20); the M1 audit of t7-untouched, uncapped, grew to 20.3 GB and was
 OOM-killed. Code past it gets `MemoryError` in its own process, and its tests
 fail. `git`, `ruff` and `coverage` bookkeeping calls are not capped."""
@@ -502,7 +502,7 @@ def attempt_ref(node_id: str, attempt: int) -> str:
 # `commit-tree` takes no identity of its own, so it falls back to git's
 # auto-derived `user@host` -- which is not a fallback at all when the host
 # has no domain: `unable to auto-detect email address (got
-# 'eliza@pop-os.(none)')`, exit 128. Round 3h died on that at its first
+# 'user@host.(none)')`, exit 128. Round 3h died on that at its first
 # node, 16 ms into the slice, and the transcript reported a node with no
 # proof and no gate naming it, because no gate ran. `_ensure_repo` already
 # committed the baseline under this name; the snapshots T6-34 added did

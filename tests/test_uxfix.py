@@ -296,7 +296,7 @@ def test_the_report_download_is_the_full_packet_text_written_beside_the_ledger(
 
 # Q9/Q10 end to end -- the Ask lane opens the report the pre-fill names.
 # A harness test, not a model-behaviour measurement: the "model" is the
-# fake server (tests/fixtures/fake_model_server.py, from saddle-bench's M3
+# fake server (tests/fixtures/fake_model_server.py, from the internal M3
 # dry run) replaying scripted tool calls. What it proves: a turn started
 # from the pre-filled composer can read_file the exact path on the
 # pre-fill's last line and gets the full packet bytes back (known-good);

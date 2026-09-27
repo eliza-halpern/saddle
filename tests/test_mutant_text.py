@@ -2,7 +2,7 @@
 
 Every class has a known-good instance that lands in it and a known-bad
 instance that does not. The T5 fixtures are real CALIB outcomes
-(saddle-notes/parallel/out/CALIB/results), copied verbatim.
+(internal CALIB run records, not public), copied verbatim.
 """
 
 from __future__ import annotations

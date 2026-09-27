@@ -557,7 +557,7 @@ def test_apply_diff_still_refuses_two_fenced_blocks(tmp_path: Path) -> None:
 def test_a_fenced_round3e_draw_unwraps_to_the_bytes_inside_its_fence() -> None:
     """T6-48 on real bytes, not a hand-written case. The fixture is round 3e
     n2 attempt 1's seed-0 draw with `DIFF_GRAMMAR` off, verbatim from
-    `../saddle-bench/runs/round3e-probe/grammar_cell_low.json`: two leading
+    the internal round-3e probe record (not public): two leading
     blank lines, a ```diff fence, and no final newline. Unwrapping must
     change the packaging and nothing else.
     """
