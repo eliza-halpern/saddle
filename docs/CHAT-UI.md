@@ -90,6 +90,15 @@ Under `bwrap` a command sees:
 - an allowlisted environment, never saddle's own (no model key);
 - in Task runs, no network.
 
+**Every command is capped.** A command and everything it starts run in a
+cgroup scope of their own (`systemd-run --user --scope`) with `MemoryMax`
+(`SADDLE_MEMORY_MAX`, default 6 GiB), no swap and a task limit, so a runaway
+allocation or a process storm is killed inside that scope and nowhere else.
+The command's output ends with the reason and it reads as a failed command,
+not a hung session. The audit gates' test, coverage and mutation runs get the
+same cap. Without a user systemd manager the cap falls back to a per-process
+address-space ceiling (`prlimit --as`).
+
 **Commits are host-side.** A command cannot write `.git`, so `git commit`
 from a command fails in every lane. saddle commits a run's work itself when
 the run ends, and the packet's merge and discard actions (each confirmed by

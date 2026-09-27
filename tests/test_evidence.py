@@ -19,6 +19,7 @@ import conftest
 import pytest
 
 import saddle.evidence as evidence_module
+from saddle import memcap
 from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
     SADDLE_COMMIT_IDENTITY,
@@ -153,6 +154,9 @@ def test_run_shell_capture_ceilings_a_runaway_allocation(
     succeeds and the command exits 0. The M1 audit of t7-untouched grew to
     20.3 GB the same way and was OOM-killed."""
     monkeypatch.setattr(evidence_module, "TEST_MEMORY_LIMIT_BYTES", 256 * 1024**2, raising=False)
+    # Pinned to the address-space fallback, which is where `MemoryError` comes
+    # from; the cgroup cap kills instead (tests/test_memcap.py).
+    monkeypatch.setattr(memcap, "cgroup_problem", lambda: "no user manager")
     run = run_shell_capture(f'{sys.executable} -c "b = bytearray(512 * 1024**2)"', tmp_path)
     assert run.exit_code != 0
     assert "MemoryError" in run.stdout + run.stderr

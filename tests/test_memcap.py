@@ -24,6 +24,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -75,6 +76,20 @@ def spread_hog(workers: int, mib: int) -> list[str]:
         "rc=0; for p in $pids; do wait $p || rc=1; done; echo spread-done; exit $rc"
     )
     return ["bash", "-c", script]
+
+
+STORM = """
+import subprocess
+held = []
+try:
+    for _ in range(100):
+        held.append(subprocess.Popen(["sleep", "3"]))
+except OSError as exc:
+    print("storm stopped:", exc)
+for p in held:
+    p.kill()
+"""
+"""100 processes at once, far past a 32-task cap; stops at the first refusal."""
 
 
 @pytest.fixture
@@ -134,8 +149,8 @@ def test_the_gate_cap_covers_every_process_a_run_starts(tmp_path: Path) -> None:
     # A per-process ceiling lets all four through; the run's own cgroup does not.
     argv = spread_hog(4, 120)
     run = evidence.run_capture(argv, tmp_path, memory_limit=256 * MIB)
-    assert "spread-done" in run.stdout  # the shell itself lived to report
     assert run.exit_code != 0, run.stdout + run.stderr
+    assert "memory cap" in run.stderr
 
 
 @needs_cgroup
@@ -143,8 +158,7 @@ def test_a_gate_run_cannot_start_a_process_storm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(memcap(), "TASKS_MAX", 32)
-    storm = "for i in $(seq 100); do sleep 3 & done 2>&1; wait; echo storm-done"
-    run = evidence.run_capture(["bash", "-c", storm], tmp_path, memory_limit=256 * MIB)
+    run = evidence.run_capture([sys.executable, "-c", STORM], tmp_path, memory_limit=256 * MIB)
     assert "Resource temporarily unavailable" in run.stdout + run.stderr
 
 
@@ -216,9 +230,8 @@ def test_a_command_cannot_start_a_process_storm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(memcap(), "TASKS_MAX", 32)
-    storm = "for i in $(seq 100); do sleep 3 & done; wait; echo storm-done"
     for box in boxes(tmp_path):
-        terminal = box.run(storm, timeout=60)
+        terminal = box.run(f"{PY} -c {shlex.quote(STORM)}", timeout=60)
         assert "Resource temporarily unavailable" in terminal.output(), box.isolation
 
 
@@ -232,3 +245,75 @@ def test_the_cap_does_not_hand_a_command_the_session_bus(
     for box in boxes(tmp_path):
         terminal = box.run('echo "[${XDG_RUNTIME_DIR:-unset}][${DBUS_SESSION_BUS_ADDRESS:-unset}]"')
         assert "[unset][unset]" in terminal.output(), box.isolation
+
+
+# -- the probe and the wrapper, directly ----------------------------------------
+
+
+@pytest.fixture
+def fresh_probe() -> Iterator[None]:
+    memcap().cgroup_problem.cache_clear()
+    yield
+    memcap().cgroup_problem.cache_clear()
+
+
+def test_no_systemd_run_means_no_cgroup(monkeypatch: pytest.MonkeyPatch, fresh_probe: None) -> None:
+    monkeypatch.setattr(memcap().shutil, "which", lambda name: None)
+    assert memcap().cgroup_problem() == "systemd-run is not installed"
+    assert memcap().cap(256 * MIB).kind == "rlimit"
+
+
+def test_a_systemd_run_that_cannot_reach_a_manager_is_not_trusted(
+    monkeypatch: pytest.MonkeyPatch, fresh_probe: None
+) -> None:
+    monkeypatch.setattr(memcap().shutil, "which", lambda name: "/bin/false")
+    assert memcap().cgroup_problem() == "exit 1"
+
+
+def test_a_systemd_run_that_will_not_start_is_not_trusted(
+    monkeypatch: pytest.MonkeyPatch, fresh_probe: None
+) -> None:
+    monkeypatch.setattr(memcap().shutil, "which", lambda name: "/nonexistent/systemd-run")
+    assert "nonexistent" in (memcap().cgroup_problem() or "")
+
+
+def test_a_missing_program_under_the_cap_is_unavailable_not_a_failure(tmp_path: Path) -> None:
+    run = evidence.run_capture(["no-such-program-here"], tmp_path, memory_limit=256 * MIB)
+    assert run.exit_code == evidence.TOOL_UNAVAILABLE
+
+
+def test_the_bus_is_lent_only_when_the_command_env_lacks_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memcap(), "cgroup_problem", lambda: None)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1")
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    cap = memcap().cap(256 * MIB)
+    argv, env = cap.wrap(["true"], {"PATH": "/usr/bin"})
+    assert argv[-5:] == ["env", "-u", "XDG_RUNTIME_DIR", "--", "true"]
+    assert env == {"PATH": "/usr/bin", "XDG_RUNTIME_DIR": "/run/user/1"}
+    argv, env = cap.wrap(["true"], {"XDG_RUNTIME_DIR": "/own"})
+    assert argv[-2:] == ["--", "true"]
+    assert "env" not in argv
+    assert env == {"XDG_RUNTIME_DIR": "/own"}
+    assert cap.wrap(["true"], None) == ([*cap.prefix, "true"], None)
+
+
+@needs_cgroup
+def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
+    tmp_path: Path, capped: None
+) -> None:
+    # The hog is the shell's child, not the command itself: the reason is
+    # still recorded, whatever the shell then exits with, and no failed scope
+    # is left behind in the user manager.
+    shell = f"{hog(512)}; echo after-the-child"
+    run = evidence.run_capture(["bash", "-c", shell], tmp_path, memory_limit=256 * MIB)
+    assert "allocated" not in run.stdout
+    assert "memory cap" in run.stderr
+    left = subprocess.run(
+        ["systemctl", "--user", "list-units", "--all", "--no-legend", "saddle-cmd-*"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    assert "failed" not in left, left

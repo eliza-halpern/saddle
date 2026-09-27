@@ -34,7 +34,7 @@ from typing import Any, Final
 
 from saddle import answer_book as ab
 from saddle import rule_d
-from saddle.evidence import TEST_MEMORY_LIMIT_BYTES, CapturedRun, run_capture
+from saddle.evidence import CapturedRun, run_capture, tree_memory_limit
 from saddle.journal import redact_secrets
 from saddle.refstore import ReferenceSet, load_reference_set
 
@@ -261,7 +261,7 @@ def tree_answers(
             [sys.executable, "-c", _DRIVER, str(job), str(out)],
             workdir,
             timeout=TREE_TIMEOUT_S,
-            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+            memory_limit=tree_memory_limit(),
         )
         if run.timed_out:
             return rule_d.Unusable("timeout", f"no answers within {TREE_TIMEOUT_S} s")

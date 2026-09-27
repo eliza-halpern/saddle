@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from saddle import evidence
+from saddle import evidence, memcap
 from saddle import sandbox as sandbox_module
 from saddle.sandbox import Sandbox
 from saddle.tools import ToolContext, execute_tool
@@ -485,7 +485,7 @@ def test_a_gate_timeout_kills_the_whole_process_group(work: Path, outside: Path)
     assert not marker.exists()
 
 
-@pytest.mark.xfail(strict=True, reason="later work: no cgroup memory/pids cap yet")
+@pytest.mark.skipif(memcap.cgroup_problem() is not None, reason="no user systemd manager")
 def test_a_command_runs_in_its_own_capped_cgroup(work: Path) -> None:
     # A cap needs a cgroup of its own; sharing saddle's means a fork bomb or a
     # runaway allocation in a command is charged to saddle (and whatever else
@@ -495,10 +495,17 @@ def test_a_command_runs_in_its_own_capped_cgroup(work: Path) -> None:
         assert terminal.process is not None
         try:
             mine = Path("/proc/self/cgroup").read_text()
-            theirs = Path(f"/proc/{terminal.process.pid}/cgroup").read_text()
+            # systemd-run joins its scope and then execs the command, so the
+            # move can land a moment after the process exists.
+            for _ in range(50):
+                theirs = Path(f"/proc/{terminal.process.pid}/cgroup").read_text()
+                if theirs != mine:
+                    break
+                time.sleep(0.1)
         finally:
             box.kill(terminal.id)
         assert theirs != mine, box.isolation
+        assert "saddle-cmd-" in theirs, theirs
 
 
 # -- tools the gates need, where they live under HOME -------------------------

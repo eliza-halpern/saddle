@@ -31,6 +31,7 @@ from typing import Any, Final
 
 import coverage
 
+from saddle import memcap
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding
 from saddle.journal import SpanRecorder
 
@@ -62,14 +63,20 @@ DEFAULT_TEST_TIMEOUT_S: Final = 300.0
 in seconds; this bounds non-termination without failing slow-but-sound
 runs."""
 
-TEST_MEMORY_LIMIT_BYTES: Final = 6 * 1024**3
-"""Address-space ceiling (`RLIMIT_AS`, applied with `prlimit`) for every
-subprocess that executes the audited tree's code: the declared test command
-and `mutmut run`. The oracle harness caps at the same 6 GiB
-(`MEM_LIMIT_GB` in saddle-bench's `oracles/_harness.py`, after a 57 GB OOM on
-2026-09-20); the M1 audit of t7-untouched, uncapped, grew to 20.3 GB and was
-OOM-killed. Code past it gets `MemoryError` in its own process, and its tests
-fail. `git`, `ruff` and `coverage` bookkeeping calls are not capped."""
+TEST_MEMORY_LIMIT_BYTES: Final = memcap.DEFAULT_MEMORY_MAX
+"""Default memory cap for every subprocess that executes the audited tree's
+code: the declared test command and `mutmut run` (`SADDLE_MEMORY_MAX`
+overrides it; `tree_memory_limit` reads both). 6 GiB, the benchmark oracle
+harness's cap, set after a 57 GB OOM; an uncapped audit of one benchmark tree
+grew to 20.3 GB before the kernel killed it. Code past the cap is killed in
+its own cgroup (or gets `MemoryError` under the address-space fallback), and
+its tests fail. `git`, `ruff` and `coverage` bookkeeping calls are not
+capped."""
+
+
+def tree_memory_limit() -> int:
+    """The cap for a command that runs the tree's code, read at each call."""
+    return memcap.memory_max(TEST_MEMORY_LIMIT_BYTES)
 
 
 def _record(
@@ -284,7 +291,7 @@ class CapturedRun:
 
 
 def _run_as_group(
-    argv: Sequence[str], cwd: Path, timeout: float | None
+    argv: Sequence[str], cwd: Path, timeout: float | None, env: Mapping[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     """`subprocess.run`, except a timeout kills the whole process group.
 
@@ -297,6 +304,7 @@ def _run_as_group(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        env=env,
     ) as proc:
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -321,15 +329,28 @@ def run_capture(
     On timeout the partial output is preserved and `timed_out` is set, so
     recovery prompts still see how far the run got before it stalled.
 
-    `memory_limit` caps the child's address space through a `prlimit` prefix,
-    not `preexec_fn`, which is unsafe once threads exist (`slice` runs a
-    `ThreadPoolExecutor`). The span and the result record `argv` without the
-    prefix, so journals and cache keys read as the command that was asked for.
+    `memory_limit` puts the command, and everything it starts, under a hard
+    cap (`memcap`): a cgroup scope of its own where the box has a user
+    systemd manager, else a `prlimit` address-space ceiling. Both are argv
+    prefixes, not `preexec_fn`, which is unsafe once threads exist (`slice`
+    runs a `ThreadPoolExecutor`). A command the cap killed exits nonzero with
+    the reason as the last line of its stderr and the first of its span, so
+    it reads as a failure with a cause, never as a hang or a crash of saddle.
+    The span and the result record `argv` without the prefix, so journals
+    and cache keys read as the command that was asked for.
     """
     start = perf_counter()
-    launched = argv if memory_limit is None else ["prlimit", f"--as={memory_limit}", "--", *argv]
+    cap = None if memory_limit is None else memcap.cap(memory_limit)
     try:
-        proc = _run_as_group(launched, cwd, timeout)
+        if cap is None:
+            proc = _run_as_group(argv, cwd, timeout)
+        else:
+            # A prefix would turn a missing program into its own exit status
+            # (`systemd-run` exits 1, which reads as "tests failed").
+            if shutil.which(argv[0]) is None:
+                raise FileNotFoundError(2, "No such file or directory", argv[0])
+            launched, _ = cap.wrap(argv, None)
+            proc = _run_as_group(launched, cwd, timeout)
     except subprocess.TimeoutExpired as expired:
         _record_timeout(recorder, argv, start, expired)
         return CapturedRun(
@@ -342,10 +363,22 @@ def run_capture(
     except OSError as exc:
         _record_unavailable(recorder, argv, start, exc)
         return CapturedRun(argv=tuple(argv), exit_code=TOOL_UNAVAILABLE, stdout="", stderr=str(exc))
-    _record(recorder, argv, start, proc)
+    if cap is not None and cap.oom_killed():
+        reason = cap.reason()
+        _record(recorder, argv, start, replace_stderr(proc, f"{reason}\n{proc.stderr}"))
+        proc = replace_stderr(proc, f"{proc.stderr.rstrip()}\n{reason}\n".lstrip("\n"))
+    else:
+        _record(recorder, argv, start, proc)
     return CapturedRun(
         argv=tuple(argv), exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
     )
+
+
+def replace_stderr(
+    proc: subprocess.CompletedProcess[str], stderr: str
+) -> subprocess.CompletedProcess[str]:
+    """`proc` with its stderr replaced."""
+    return subprocess.CompletedProcess(proc.args, proc.returncode, proc.stdout, stderr)
 
 
 def run_shell_capture(
@@ -356,13 +389,13 @@ def run_shell_capture(
     timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
 ) -> CapturedRun:
     """Run a `test_command` string via shlex splitting, capturing output, under
-    the `TEST_MEMORY_LIMIT_BYTES` ceiling: it executes the tree's code."""
+    the memory cap (`tree_memory_limit`): it executes the tree's code."""
     return run_capture(
         shlex.split(command),
         cwd,
         recorder=recorder,
         timeout=timeout,
-        memory_limit=TEST_MEMORY_LIMIT_BYTES,
+        memory_limit=tree_memory_limit(),
     )
 
 
@@ -1404,7 +1437,7 @@ def mutation_sample(
             ["timeout", str(timeout_s), "mutmut", "run"],
             scratch,
             recorder=recorder,
-            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+            memory_limit=tree_memory_limit(),
         )
         # `mutmut run` exits 0 even when mutants survive, so any other exit
         # is the tool failing, not a verdict (T3-20): the smoke run's mutmut

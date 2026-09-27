@@ -42,6 +42,8 @@ from pathlib import Path
 from time import monotonic
 from typing import Final, Literal
 
+from saddle import memcap
+
 DEFAULT_TIMEOUT: Final = 120
 MAX_CAPTURE: Final = 400_000
 """Per-terminal output cap. Beyond this the head and tail are kept: an
@@ -269,6 +271,9 @@ class Sandbox:
     expose: tuple[tuple[Path, Path], ...] = ()
     """Read-only `(source, destination)` binds beyond the system dirs and the
     interpreter: the venvs the gate tools live in (`default_expose`)."""
+    memory_max: int | None = None
+    """Hard memory cap in bytes for each command and everything it starts
+    (`memcap`); `for_workdir` sets it from `SADDLE_MEMORY_MAX`."""
 
     @classmethod
     def for_workdir(
@@ -294,6 +299,7 @@ class Sandbox:
             env=dict(env or {}),
             network=network,
             expose=default_expose(command_env(env or {})),
+            memory_max=memcap.memory_max(),
         )
 
     def _git_binds(self) -> list[str]:
@@ -366,16 +372,20 @@ class Sandbox:
     def start(self, command: str) -> Terminal:
         """Start a command in the background; returns immediately."""
         terminal = Terminal(id=uuid.uuid4().hex[:8], command=command, started=monotonic())
+        cap = None if self.memory_max is None else memcap.cap(self.memory_max)
+        argv, env = self._argv(command), command_env(self.env)
+        if cap is not None:
+            argv, env = cap.wrap(argv, env)
         try:
             process = subprocess.Popen(
-                self._argv(command),
+                argv,
                 cwd=str(self.root),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                env=command_env(self.env),
+                env=env,
                 start_new_session=True,
             )
         except OSError as exc:
@@ -396,6 +406,8 @@ class Sandbox:
                         self.on_output = None
             code = process.wait()
             _kill_group(process.pid)  # nothing it started outlives it
+            if cap is not None and cap.oom_killed():
+                terminal._append(f"\n{cap.reason()}\n")
             terminal.exit_code = code
 
         threading.Thread(target=pump, daemon=True).start()

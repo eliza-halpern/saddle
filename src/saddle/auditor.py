@@ -65,13 +65,13 @@ from saddle.audit import (
 from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
-    TEST_MEMORY_LIMIT_BYTES,
     MutationOutcome,
     changed_statements,
     git_diff,
     ruff_argv,
     ruff_findings,
     run_capture,
+    tree_memory_limit,
 )
 from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
@@ -375,7 +375,7 @@ def green_on_baseline(
             [*argv, "--collect-only", "--verbosity=-1", "-p", "no:cacheprovider"],
             base,
             timeout=DEFAULT_TEST_TIMEOUT_S,
-            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+            memory_limit=tree_memory_limit(),
         ).stdout.splitlines()
         wanted = set(names)
         nodes = [n for n in listed if "::" in n and n.rsplit("::", 1)[1].split("[")[0] in wanted]
@@ -385,7 +385,7 @@ def green_on_baseline(
             [*argv, "--verbosity=-1", "-rA", "-p", "no:cacheprovider", *nodes],
             base,
             timeout=DEFAULT_TEST_TIMEOUT_S,
-            memory_limit=TEST_MEMORY_LIMIT_BYTES,
+            memory_limit=tree_memory_limit(),
         ).stdout.splitlines()
     passed = {line.split(" ", 1)[1].split(" ")[0] for line in ran if line.startswith("PASSED ")}
     return sorted(
