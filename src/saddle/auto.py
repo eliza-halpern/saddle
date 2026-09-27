@@ -88,6 +88,25 @@ shared with the user's repo, so it is not used."""
 
 GIT_IDENTITY: Final = ("-c", "user.name=saddle", "-c", "user.email=saddle@localhost")
 
+SELF_PACKAGE: Final = "src/saddle/__init__.py"
+"""What marks a worktree as saddle's own source: the `saddle` package itself,
+at the path its build ships (`pyproject.toml`, `packages = ["src/saddle"]`).
+Read at the baseline, before the model acts, so a run cannot switch the guard
+off by deleting it, and by layout rather than distribution name, so a renamed
+or forked distribution of the same package is still guarded."""
+
+GUARDED_MODULES: Final = ("gates", "evidence", "auditor", "audit")
+"""The modules that judge a run. The one list the self-guard reads."""
+
+GUARDED_PATHS: Final = frozenset(
+    [f"src/saddle/{m}.py" for m in GUARDED_MODULES]
+    + [f"tests/test_{m}.py" for m in GUARDED_MODULES]
+    + ["tests/conftest.py"]
+)
+"""Paths a run on saddle's own source may change but not finish on: the
+judging modules, their tests, and `tests/conftest.py`, which replaces parts
+of `evidence` for the whole suite. Named files, never a pattern."""
+
 
 class AutoError(RuntimeError):
     """The run could not be set up (not a git repo, worktree failed)."""
@@ -209,6 +228,18 @@ def changed_files(worktree: Path) -> list[str]:
     return sorted({entry[3:] for entry in out.split("\0") if len(entry) > 3})
 
 
+def self_guard(worktree: Path) -> Callable[[], list[str]] | None:
+    """For a run on saddle's own source: which guarded paths it has changed.
+
+    None when the worktree is not saddle (no `SELF_PACKAGE` at the baseline):
+    a repository that merely has a `gates.py` is not saddle's judge, and the
+    guard does not apply to it.
+    """
+    if not (worktree / SELF_PACKAGE).is_file():
+        return None
+    return lambda: sorted(p for p in changed_files(worktree) if p in GUARDED_PATHS)
+
+
 def run_auto(
     options: AutoOptions,
     client: VllmClient,
@@ -267,6 +298,7 @@ def run_auto(
             mutant_shortlist=options.mutant_shortlist,
         )
     )
+    guard = self_guard(worktree)
     auto = AutoRun(
         budget=RunBudget(
             time_s=options.time_budget_s, tokens=options.token_budget, clock=options.clock
@@ -283,6 +315,7 @@ def run_auto(
             else None
         ),
         feed=feed,
+        guard=guard,
         finish_refusal_cap=options.finish_refusal_cap,
         arm=options.arm,
         sealed={
@@ -291,6 +324,7 @@ def run_auto(
             "allow_test_edits": options.allow_test_edits,
             "sanctioned_test_rewrites": list(options.sanctioned_test_rewrites),
             "prompt_shape": {"keep_reasoning": options.keep_reasoning},
+            **({"self_guard": True} if guard is not None else {}),
             **({"check_tool": True} if options.check_tool else {}),
             **(
                 {"tier2": "shortlist", "mutant_shortlist": options.mutant_shortlist}

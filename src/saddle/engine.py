@@ -209,6 +209,15 @@ FINISH_UNCHANGED: Final = (
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The sealed stop reason when the finish refusal cap is reached."""
 
+GUARDED_STOP: Final = (
+    "needs you: this run changed code that judges runs ({paths}), "
+    "so a person must review it before it counts as finished"
+)
+"""The stop reason when a finished run on saddle's own source changed a
+guarded path (`auto.GUARDED_PATHS`). Rule D's stop form ("needs you: ..."):
+the outcome is `stopped`, never `finished`. No semicolon, so the packet's
+verdict line (`packet.compile_packet`) keeps the whole reason."""
+
 TEST_CLOSES: Final = frozenset({"coverage", "evidence-thin"})
 """A finding gate or reason that a new test is the repair for (`packet.TEST_CLOSES`)."""
 
@@ -290,6 +299,11 @@ class AutoRun:
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
     on that same tree ends finished with it."""
+    guard: Callable[[], list[str]] | None = None
+    """The self-guard (`auto.self_guard`): set only when the run is on saddle's
+    own source, it names the guarded paths the run changed. A run that would
+    end `finished` with any ends `stopped`, reason `GUARDED_STOP`, and seals
+    them as `guarded_paths`."""
     prompt_check: Callable[[], dict[str, object]] | None = None
     """`prompt_constants.check` over the run's tree, called once at the seal
     and sealed as `prompt_constants` (FEEDFIX item 1); None when the task
@@ -756,6 +770,7 @@ def run_turn(
                     f"finish accepted with not-proven findings; the run then ended "
                     f"({auto.reason}) with the tree unchanged"
                 )
+        _hold_guarded(auto)
         _seal_outcome(options.journal, node_id, auto, rounds)
 
     yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
@@ -1088,6 +1103,21 @@ def _charge(
             parent_id=auto.run_span,
         ),
     )
+
+
+def _hold_guarded(auto: AutoRun) -> None:
+    """A finished run that changed a guarded path ends stopped, needing a person.
+
+    Checked once, on the tree the run ends on, after every route to
+    `finished` (an accepted finish, or the surfaced accept that stands), so no
+    route skips it.
+    """
+    if auto.outcome != "finished" or auto.guard is None:
+        return
+    held = auto.guard()
+    if held:
+        auto.outcome, auto.reason = "stopped", GUARDED_STOP.format(paths=", ".join(held))
+        auto.sealed["guarded_paths"] = held
 
 
 def _finish(auto: AutoRun, arguments: str) -> str:
