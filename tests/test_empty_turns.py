@@ -13,8 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from saddle.engine import AUTO_NUDGE, FINISH_REFUSED
-from saddle.journal import read_spans
 from test_feed import (  # noqa: F401
     EDIT_COMMENT,
     FINISH,
@@ -24,6 +22,9 @@ from test_feed import (  # noqa: F401
     run,
     sidecar,
 )
+
+from saddle.engine import AUTO_NUDGE, FINISH_REFUSED
+from saddle.journal import read_spans
 
 STOP = "no tool call in 3 consecutive rounds"
 WALL_S = 3600.0

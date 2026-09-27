@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from test_auto import Scripted, call, finish, namespace, sidecar
+from test_feed import CHECK, FakeAuditor, Reactive, StopsAfter, Surfaces
 
 from saddle import cli
 from saddle.auto import GUARDED_MODULES, GUARDED_PATHS, SELF_PACKAGE, AutoOptions, run_auto
@@ -28,8 +30,6 @@ from saddle.engine import GUARDED_STOP
 from saddle.journal import read_spans, verify_journal
 from saddle.packet import compile_packet
 from saddle.vllm import VllmClient
-from test_auto import Scripted, call, finish, namespace, sidecar
-from test_feed import CHECK, FakeAuditor, Reactive, StopsAfter, Surfaces
 
 BUGGY = "def add(a, b):\n    return a - b\n"
 

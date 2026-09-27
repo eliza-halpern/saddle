@@ -19,6 +19,9 @@ from typing import Any
 import jinja2
 import pytest
 from starlette.testclient import TestClient
+from test_auto import namespace, repo  # noqa: F401  (fixture)
+from test_ui3_mode import NoModel, _server_of
+from test_usage import FakeServer, _delta, _finish_call, _sealed, _sse
 
 from saddle import cli
 from saddle.auto import AutoError, AutoOptions, run_auto
@@ -27,9 +30,6 @@ from saddle.sessions import SessionStore
 from saddle.web import tasks
 from saddle.web.app import ChatServer, build_app
 from saddle.web.tasks import TaskRun
-from test_auto import namespace, repo  # noqa: F401  (fixture)
-from test_ui3_mode import NoModel, _server_of
-from test_usage import FakeServer, _delta, _finish_call, _sealed, _sse
 
 TEMPLATE = Path(__file__).parent / "fixtures" / "qwen38_chat_template.jinja"
 """The served Qwen3.8 chat template, byte for byte (sha256 c3cf9e34..., the
