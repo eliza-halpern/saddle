@@ -110,7 +110,7 @@ def seed(
         # it was decided from sealed beside it (PACKETHOOK): the CALIB tree
         # E-t5-s1's record, survivors and their diffs, verbatim.
         fixture = json.loads((FIXTURES / "mutant_text" / "E-t5-s1.json").read_text())
-        outcome = {**fixture["outcome"], "survivor_detail": fixture["survivor_detail"]}
+        sealed = {**fixture["outcome"], "survivor_detail": fixture["survivor_detail"]}
         finding = {
             "gate": "mutation",
             "tier": 2,
@@ -130,7 +130,7 @@ def seed(
                 detail=json.dumps(finding, sort_keys=True),
                 name="audit-tier2:mutation",
                 span_id=mutation_id,
-                attempt_hash=write_attempt_sidecar(journal, mutation_id, outcome),
+                attempt_hash=write_attempt_sidecar(journal, mutation_id, sealed),
             ),
         )
     if kind == "edit-checked":

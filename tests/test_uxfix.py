@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -33,7 +34,7 @@ from saddle.web.app import build_app
 CDP = Path(__file__).parent / "fixtures" / "uxfix_cdp.mjs"
 
 
-def cdp(base: str, *args: str) -> dict:
+def cdp(base: str, *args: str) -> dict[str, Any]:
     shots = [os.environ["UXFIX_SHOTS"]] if os.environ.get("UXFIX_SHOTS") else []
     out = subprocess.run(
         ["node", str(CDP), base, *args, *shots],
@@ -43,7 +44,8 @@ def cdp(base: str, *args: str) -> dict:
         check=False,
     )
     assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    result: dict[str, Any] = json.loads(out.stdout.strip().splitlines()[-1])
+    return result
 
 
 @pytest.mark.parametrize(("reply", "budget"), [("Extend", 2000), ("Stop at limit", 1000)])
@@ -167,7 +169,7 @@ def test_the_sidebar_rebuilds_a_runs_state_after_a_restart(
     assert (rows[blank]["run_state"], rows[blank]["run_task"]) == (None, None)
 
 
-def _seen(http: TestClient, sid: str, rid: str) -> dict:
+def _seen(http: TestClient, sid: str, rid: str) -> dict[str, Any]:
     row = next(r for r in http.get("/api/sessions").json() if r["id"] == sid)
     packet = http.get(f"/api/sessions/{sid}/tasks/{rid}/packet").json()
     cost = next(r for r in packet["rows"] if r["key"] == "cost")
@@ -420,7 +422,7 @@ def _open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _tool_calls(messages: list[dict]) -> tuple[list[dict], list[str]]:
+def _tool_calls(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     calls = [
         call["function"]
         for m in messages

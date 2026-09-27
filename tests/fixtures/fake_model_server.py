@@ -1,4 +1,4 @@
-# Copied from the internal benchmark's M3 dry-run fake model server for the UXFIX2 e2e; ruff-formatted, logic unchanged.
+# Copied from the internal benchmark's M3 dry-run fake model server for the UXFIX2 e2e; ruff-formatted and type-annotated, logic unchanged.
 # ruff: noqa: E401, E501, I001
 """Fake OpenAI-compatible model server for M3's dry run. NO model, NO GPU.
 
@@ -14,6 +14,7 @@ Usage: fake_server.py --port P --scripts scripts.json --log requests.jsonl
 """
 
 import argparse, json, threading
+from typing import Any
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ap = argparse.ArgumentParser()
@@ -28,10 +29,10 @@ LOCK = threading.Lock()
 
 
 class H(BaseHTTPRequestHandler):
-    def log_message(self, *a):
+    def log_message(self, *a: Any) -> None:
         pass
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code: int, body: str, ctype: str = "application/json") -> None:
         b = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -39,7 +40,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         if self.path == "/metrics":
             with LOCK:
                 g = GEN[0]
@@ -53,7 +54,7 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(404, "{}")
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         n = int(self.headers.get("Content-Length", 0))
         payload = json.loads(self.rfile.read(n) or b"{}")
         parts = self.path.strip("/").split("/")

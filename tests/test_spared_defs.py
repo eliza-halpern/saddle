@@ -48,6 +48,7 @@ def test_the_basis_names_only_the_definitions_a_changed_line_was_spared_from() -
     assert spared_definitions(check.basis) == ["n.py:A.keep"]
     # two spared, sorted; a compelled definition with no changed line is not named
     two = check_changed_line_coverage({("n.py", 7), ("n.py", 2)}, set(), 100.0, (), by_def)
+    assert two.basis is not None
     assert spared_definitions(two.basis) == ["n.py:A.keep", "n.py:f"]
     # the plain line set still spares, and names nothing
     lines = check_changed_line_coverage({("n.py", 7)}, set(), 100.0, (), set(by_def["n.py:A.keep"]))
@@ -57,6 +58,7 @@ def test_the_basis_names_only_the_definitions_a_changed_line_was_spared_from() -
     # nothing spared, nothing named: the line is judged and fails
     none = check_changed_line_coverage({("n.py", 4)}, set(), 100.0, (), by_def)
     assert not none.passed
+    assert none.basis is not None
     assert spared_definitions(none.basis) == []
 
 

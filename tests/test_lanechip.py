@@ -135,7 +135,9 @@ def test_the_lanes_are_exactly_ask_edit_and_task() -> None:
 def test_ask_tools_are_read_only_and_edit_tools_are_all() -> None:
     from saddle.tools import TOOLS, tools_for_mode
 
-    names = lambda mode: [t["function"]["name"] for t in tools_for_mode(mode)]  # noqa: E731
+    def names(mode: str) -> list[str]:
+        return [t["function"]["name"] for t in tools_for_mode(mode)]
+
     assert names("ask") == ["read_file", "list_dir", "search"]
     assert names("edit") == [t["function"]["name"] for t in TOOLS]
     # Anything that is not exactly "edit" gets the read-only set.
@@ -205,7 +207,7 @@ def test_git_branch_is_empty_when_git_cannot_run(
         missing = "git"
         raise FileNotFoundError(missing)
 
-    monkeypatch.setattr(module.subprocess, "run", boom)
+    monkeypatch.setattr("saddle.web.app.subprocess.run", boom)
     assert module.git_branch(tmp_path) == ""
 
 
@@ -230,7 +232,8 @@ def _browser(base: str, sid: str, step: str) -> dict[str, Any]:
         check=False,
     )
     assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    result: dict[str, Any] = json.loads(out.stdout.strip().splitlines()[-1])
+    return result
 
 
 @needs_browser

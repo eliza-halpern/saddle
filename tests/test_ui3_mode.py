@@ -26,6 +26,7 @@ from starlette.testclient import TestClient
 
 from saddle.sessions import SESSION_MODES, SessionStore
 from saddle.web.app import ChatServer, build_app
+from saddle.web.tasks import TaskRun
 
 HERE = Path(__file__).parent
 CDP = HERE / "fixtures" / "ui3_mode_cdp.mjs"
@@ -76,7 +77,8 @@ def _info(client: Any, sid: str) -> dict[str, Any]:
             if line.startswith("data: "):
                 frame = json.loads(line[6:])
                 if frame["kind"] == "session.info":
-                    return frame
+                    info: dict[str, Any] = frame
+                    return info
     message = "no session.info"
     raise AssertionError(message)  # pragma: no cover
 
@@ -143,10 +145,10 @@ def _recording(app: Any) -> Iterator[tuple[ChatServer, list[tuple[str, Any]], li
     runs: list[tuple[str, Any]] = []
     chats: list[str] = []
 
-    def run_task(sid: str, run: Any) -> None:
-        runs.append((sid, run))
-        with server._live(sid).lock:
-            server._live(sid).busy = False
+    def run_task(session_id: str, run: TaskRun) -> None:
+        runs.append((session_id, run))
+        with server._live(session_id).lock:
+            server._live(session_id).busy = False
 
     server._run_task = run_task  # type: ignore[method-assign]
     import saddle.web.app as module
@@ -174,7 +176,8 @@ def _browser(base: str, sid: str, step: str) -> dict[str, Any]:
         check=False,
     )
     assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    result: dict[str, Any] = json.loads(out.stdout.strip().splitlines()[-1])
+    return result
 
 
 BROWSER = shutil.which("node") and shutil.which("google-chrome")

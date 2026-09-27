@@ -515,13 +515,21 @@ def test_the_cost_row_counts_the_models_tool_calls_not_audit_records(repo: Path)
     assert "· 3 tool calls over" in cost.text
 
 
-def tier_span(tier: int, gate: str, verdict: str, detail: str, **sealed: str) -> Any:
+def tier_span(
+    tier: int,
+    gate: str,
+    verdict: str,
+    detail: str,
+    span_id: str | None = None,
+    attempt_hash: str = "",
+) -> SpanRecord:
     body = {"gate": gate, "tier": tier, "verdict": verdict, "reason": "evidence-thin",
             "detail": detail, "cites": []}  # fmt: skip
     exit_code = {"pass": 0, "fail": 1, "blocked": 2}[verdict]
     return build_span(node_id="n", argv=["saddle-audit", f"tier{tier}", gate, "k"],
                       duration_ms=0, exit_code=exit_code, detail=json.dumps(body),
-                      name=f"audit-tier{tier}:{gate}", **sealed)  # fmt: skip
+                      name=f"audit-tier{tier}:{gate}", span_id=span_id,
+                      attempt_hash=attempt_hash)  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -699,7 +707,8 @@ COVERAGE_FIXTURE = Path(__file__).parent / "fixtures" / "coverage_text" / "E-t5-
 
 
 def coverage_finding() -> dict[str, Any]:
-    return json.loads((COVERAGE_FIXTURE / "finding.json").read_text())
+    finding: dict[str, Any] = json.loads((COVERAGE_FIXTURE / "finding.json").read_text())
+    return finding
 
 
 def coverage_sources() -> dict[str, str]:

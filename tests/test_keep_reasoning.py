@@ -217,6 +217,7 @@ def test_saddle_chat_has_the_same_default_and_off_switch(
         argv = ["chat", "--no-open", "--workdir", str(tmp_path), "--sessions", str(tmp_path / "s")]
         assert cli.main([*argv, *extra], stdout=io.StringIO()) == 0
     assert served == [True, False]
+    assert web_app.serve.__kwdefaults__ is not None
     assert web_app.serve.__kwdefaults__["keep_reasoning"] is True
 
 

@@ -1081,7 +1081,7 @@ def test_stored_tool_calls_come_back_labelled_so_a_reconnect_keeps_them(
     from saddle.web.app import history_for_display
 
     (tmp_path / "note.txt").write_text("x")
-    messages = [
+    messages: list[dict[str, Any]] = [
         {"role": "user", "content": "read it"},
         {
             "role": "assistant",
@@ -1572,7 +1572,9 @@ def test_changing_a_setting_does_not_disconnect_a_watching_browser(
         # The same Live, with the same subscriber still attached.
         assert server._live(sid).subscribers == [channel]
         server._live(sid).publish(ContentDelta(text="still listening"))
-        assert channel.get_nowait().text == "still listening"
+        heard = channel.get_nowait()
+        assert isinstance(heard, ContentDelta)
+        assert heard.text == "still listening"
 
 
 def test_a_turn_after_a_patch_reaches_the_browser_that_was_already_watching(
@@ -2020,7 +2022,8 @@ def test_an_edited_image_keeps_each_messages_own_version(
 
         # Each version is served as it was, while the bare path is current.
         def fetch(query: dict[str, str]) -> str:
-            return client.get(f"/api/sessions/{sid}/file", params=query).text
+            served: str = client.get(f"/api/sessions/{sid}/file", params=query).text
+            return served
 
         assert fetch({"path": "frog.svg", "v": first}) == "<svg>plain</svg>"
         assert fetch({"path": "frog.svg", "v": second}) == "<svg>blushing</svg>"

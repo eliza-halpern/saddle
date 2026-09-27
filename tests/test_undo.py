@@ -285,6 +285,8 @@ def test_each_call_keeps_the_version_it_produced(tmp_path: Path) -> None:
     target.write_text("<svg>frog with blush</svg>")
     second = log.after_write(target, call="call-2")
 
+    assert first is not None
+    assert second is not None
     assert first != second
     assert log.blob_path(first).read_text() == "<svg>plain frog</svg>"
     assert log.blob_path(second).read_text() == "<svg>frog with blush</svg>"
@@ -363,5 +365,6 @@ def test_rewinding_does_not_take_the_pictures_with_it(tmp_path: Path) -> None:
     log.after_write(target, call="c2")
 
     log.restore_to(4)
+    assert kept is not None
     assert log.blob_path(kept).read_text() == "first"
     assert "c1" in log.versions()

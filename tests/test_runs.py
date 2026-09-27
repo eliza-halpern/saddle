@@ -474,7 +474,10 @@ def test_the_running_card_says_its_phase_and_ages_on_its_own(
     first, later = got["first"], got["later"]
     assert first.startswith("editing · round 2 · last event ")
     assert later.startswith("editing · round 2 · last event ")
-    age = lambda text: int(text.rsplit("event ", 1)[1].split("s", 1)[0])  # noqa: E731
+
+    def age(text: str) -> int:
+        return int(text.rsplit("event ", 1)[1].split("s", 1)[0])
+
     assert age(later) >= age(first) + 2
     assert got["fetches"] == 0
     assert "thinking" not in later

@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from saddle import cli
-from saddle.auditor import Auditor, AuditorConfig, Findings, behaviour_at
+from saddle.auditor import Auditor, AuditorConfig, Findings, Tier2Mode, behaviour_at
 from saddle.auto import AutoOptions, run_auto
 from saddle.evidence import (
     MutationOutcome,
@@ -328,7 +328,7 @@ def test_the_cli_flags_reach_the_auditor_config_and_the_seal(
 
     _git(tree, "add", "-A")
     _git(tree, "commit", "-m", "work")
-    cases = (
+    cases: tuple[tuple[Tier2Mode, int, dict[str, object]], ...] = (
         ("shortlist", 2, {"tier2": "shortlist", "mutant_shortlist": 2}),
         ("score", 2, {}),
     )
@@ -337,7 +337,7 @@ def test_the_cli_flags_reach_the_auditor_config_and_the_seal(
             task="t",
             repo=tree,
             run_id=f"s{mode}",
-            tier2=mode,  # type: ignore[arg-type]
+            tier2=mode,
             mutant_shortlist=n,
             auditor_factory=factory,
         )
@@ -486,7 +486,9 @@ def test_tier2_findings_carry_mutant_detail_in_score_mode_and_round_trip(
     auditor = Auditor(tree)
     found = auditor.tier2()
     assert [(n, s) for n, s, _ in found.mutant_detail] == [("k1", "killed"), ("s1", "survived")]
-    assert found.to_dict()["mutant_detail"][0] == {"name": "k1", "status": "killed", "show": SHOW3}
+    sealed = found.to_dict()["mutant_detail"]
+    assert isinstance(sealed, list)
+    assert sealed[0] == {"name": "k1", "status": "killed", "show": SHOW3}
     assert Findings.from_dict(found.to_dict()).mutant_detail == found.mutant_detail
     assert auditor.tier1().mutant_detail == ()
     assert "mutant_detail" not in auditor.tier1().to_dict()
@@ -644,7 +646,9 @@ def test_open_survivors_are_surfaced_with_every_row_and_the_finish_is_accepted(
     assert result.passed
     assert "(not proven, does not refuse) mutation (tier 2)" in render(result)
     assert "mutant s0 (survived)" in render(result)
-    assert [d["name"] for d in result.to_dict()["mutant_detail"]] == ["s0", "s1", "s2"]
+    sealed = result.to_dict()["mutant_detail"]
+    assert isinstance(sealed, list)
+    assert [d["name"] for d in sealed] == ["s0", "s1", "s2"]
 
 
 def test_score_mode_still_fails_on_the_same_survivors(
