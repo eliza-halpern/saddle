@@ -104,11 +104,14 @@ GUARDED_MODULES: Final = (
     "engine",
     "memcap",
     "sandbox",
+    "auto",
 )
 """The modules a run on saddle's own source may not finish on: the judges
 (`gates`, `evidence`, `auditor`, `audit`), what decides whether a finish is
-accepted (`feed`, `engine`), and what confines and caps the auditor's runs
-(`sandbox`, `memcap`). The one module list the self-guard reads."""
+accepted (`feed`, `engine`), what confines and caps the auditor's runs
+(`sandbox`, `memcap`), and `auto` itself, which holds these lists: a run that
+could shorten them must not finish either. The one module list the self-guard
+reads."""
 
 GUARDED_TESTS: Final = (
     "tests/test_gates.py",
@@ -122,6 +125,8 @@ GUARDED_TESTS: Final = (
     "tests/test_chat_engine.py",
     "tests/test_memcap.py",
     "tests/test_sandbox_reach.py",
+    "tests/test_auto.py",
+    "tests/test_self_guard.py",
     "tests/conftest.py",
 )
 """The test files that pin the guarded modules, and `tests/conftest.py`,

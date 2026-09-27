@@ -265,8 +265,8 @@ reason). The operator's view is docs/USING-SADDLE.md; this section is the struct
    tests are read-only). Each round's reasoning is fed back for the rest of the run by
    default (`--no-keep-reasoning` turns it off; sealed as `prompt_shape.keep_reasoning`).
    On saddle's own source a run that changes a judging module, the feed or turn engine
-   that accepts a finish, the sandbox or memory cap, or their tests
-   (`auto.GUARDED_PATHS`) cannot end `finished`; it stops "needs you".
+   that accepts a finish, the sandbox or memory cap, the guard itself (`auto`), or
+   their tests (`auto.GUARDED_PATHS`) cannot end `finished`; it stops "needs you".
 2. **Auditor** — `auditor.Auditor`: the gates of §3 Phase 3 (`gates`, pure predicates;
    `evidence`, the runners) applied to a tree the executor produced, split into tiers and
    cached by tree hash. Tier 0 checks one edited file at the edit (syntax, ruff, imports);
