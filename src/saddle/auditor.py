@@ -708,6 +708,9 @@ class Auditor:
                     )
                     return self._store(Findings(tier=2, key=key, findings=(blocked,)))
             gated = runner.run_node_gate(self.node, copy, baseline=resolved, tier2=tier == 2)
+            # Every entry becomes a Finding verdict (`_finding` below), and the
+            # shortlist paths write not-proven, so the table holds Verdicts.
+            statuses: dict[str, tuple[Verdict, str, str | None]]
             if self.config.node is None:
                 checks, _ = audit_checks(gated.checks, gated.mutation, copy)
                 statuses = {c.name: (c.status, c.detail, c.basis) for c in checks}
@@ -719,7 +722,7 @@ class Auditor:
             if self.config.tier2 == "shortlist" and statuses.get("coverage", ("",))[0] == "fail":
                 # SHORTLIST-4: coverage is a locator. An uncovered changed line is
                 # "not proven", never a refusal; the detail keeps its lines.
-                statuses["coverage"] = ("not-proven", *statuses["coverage"][1:])  # type: ignore[assignment]
+                statuses["coverage"] = ("not-proven", *statuses["coverage"][1:])
             survivors: tuple[Survivor, ...] = ()
             scored = gated.mutation.mutant_detail if gated.mutation is not None else ()
             cites: dict[str, str] = {}
@@ -791,7 +794,7 @@ class Auditor:
         findings = []
         for gate in wanted:
             status, detail, basis = statuses["tests" if gate == "full-suite" else gate]
-            found = _finding(gate, tier, status, detail, basis)  # type: ignore[arg-type]
+            found = _finding(gate, tier, status, detail, basis)
             if gate in cites:
                 found = dataclasses.replace(found, cites=(cites[gate], *found.cites[1:]))
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
