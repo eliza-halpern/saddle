@@ -1199,7 +1199,7 @@ def test_run_node_gate_property_oracle_names_a_tool_failure_apart_from_an_empty_
 def test_run_node_gate_property_oracle_is_vacuous_when_every_property_is_out_of_scope(
     tmp_path: Path,
 ) -> None:
-    """What F21.65's narrowing now admits, exhibited (WORKPLAN 0.6).
+    """What F21.65's narrowing now admits, exhibited (CONTRIBUTING.md, loosening).
 
     The node's own tests carry no property, and the only module that does
     is outside its declared scope, so the oracle does not run and the

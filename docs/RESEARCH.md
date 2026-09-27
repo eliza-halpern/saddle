@@ -1,24 +1,25 @@
 # Research sources used in saddle, and how each was used
 
 Collected 2026-09-25 from every citation in `docs/DESIGN-NOTES.md`,
-`docs/AUDIT-2026-09-18.md` §9, `docs/WORKPLAN.md` (citation-correction
-table and item text), `CLAUDE.md`, and a 2026-09-25 review.
+the 2026-09-18 internal audit (§9, its citation audit), the internal work
+log (its citation-correction table and item text), the contributor rules (now `CONTRIBUTING.md`), and a
+2026-09-25 review. The audit and the work log are not public.
 Before this file, citations lived only where they were used. Add a row here
 whenever a new source is cited anywhere in the repo or the notes.
 
-**Status labels** (the audit's legend, `docs/WORKPLAN.md` §11):
+**Status labels** (the internal audit's legend):
 PROVEN-IN-PRODUCTION, PUBLISHED-WITH-MEASUREMENT (number checked against
 the source), VERIFIED (this repo's own runs), SPECULATIVE (no number, or a
 number the audit could not find). Two extra labels used only here:
 **CORRECTED** (the audit found the repo's original quotation wrong and the
-WORKPLAN table gives the corrected wording) and **UNVERIFIED-FROM-MEMORY**
+internal work log's table gives the corrected wording) and **UNVERIFIED-FROM-MEMORY**
 (named in conversation, not yet checked against the source; do not cite in
 a doc until checked).
 
 Where a source's number was corrected before 2026-09-25, the corrected
-wording is the one in `docs/WORKPLAN.md` "citation-correction" table (rows
-at lines ~460–488) and the audit §9 rows; this file summarises, it does not
-restate them. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
+wording is the one in the internal work log's citation-correction table
+and the audit's §9 rows; this file's CORRECTED rows summarise each
+correction in their caveat column. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
 and §5c, an internal research report on the Rule D question rate, not public),
 the corrected wording now lives in this file's own rows.
 
@@ -26,7 +27,7 @@ the corrected wording now lives in this file's own rows.
 
 | Source | Where | Used for | What we took from it | Status / caveat |
 |---|---|---|---|---|
-| Meta ACH, "Mutation-Guided LLM-based Test Generation at Meta" | arXiv 2501.12862 | CLAUDE.md test-adequacy rule; D8 (contract mutants); WORKPLAN T2-4 basis; audit §9 | Few, specific mutants beat coverage-driven ones: 15% vs 2.4% killed; 277 of 571 mutant-killing tests added no line coverage; a test is accepted only when it kills | PROVEN-IN-PRODUCTION (one deployment, unreplicated). CORRECTED: "49% of accepted tests" was wrong; acceptance (73%) was a separate 191-test sample |
+| Meta ACH, "Mutation-Guided LLM-based Test Generation at Meta" | arXiv 2501.12862 | CONTRIBUTING.md test-adequacy rule; D8 (contract mutants); WORKPLAN T2-4 basis; audit §9 | Few, specific mutants beat coverage-driven ones: 15% vs 2.4% killed; 277 of 571 mutant-killing tests added no line coverage; a test is accepted only when it kills | PROVEN-IN-PRODUCTION (one deployment, unreplicated). CORRECTED: "49% of accepted tests" was wrong; acceptance (73%) was a separate 191-test sample |
 | "Who Tests the Tests: Mutation Testing and Negative Controls for Agent-Written Code" (Zylos blog) | zylos.ai, 2026-07-28 | D6 (test-writer ≠ implementer); D8; "discrimination evidence" doctrine | The name *correlated error* and the negative-control idea | Blog; names the failure only. CORRECTED: the 22,374-variant measurement is arXiv 2603.23443, not Zylos |
 | "Evaluating LLM-Based Test Generation Under Software Evolution" | arXiv 2603.23443 | D6; audit §9 (re-attribution) | >99% of failing single-shot LLM tests passed on the original program while executing the changed region; per-model 40.7–82.9%; the 40.7% model is Nemotron-3-Nano, listed as 30B, so a ~27B model near 41% is an extrapolation | PUBLISHED-WITH-MEASUREMENT. Scope: single-shot tests, not agent loops |
 | TEBench | arXiv 2605.06125 | audit §9 corroboration for the test-node hazard (#44, F5) | Identification F1 (locating the affected tests) 45.7–49.4% for seven agent configurations, all on frontier-class models; a heuristic baseline is reported alongside | PUBLISHED-WITH-MEASUREMENT (corroborating only) |
@@ -36,7 +37,7 @@ the corrected wording now lives in this file's own rows.
 | Property-Generated Solver / "Effective LLM Code Refinement via Property-Oriented and Structurally Minimal Feedback" | arXiv 2506.18315 v1/v2 | D6; D9 (properties, not examples); D17; property-test presence gate (#62) | Property generation is easier than solving: v2: 87.0 vs 63.0 (hard 76.5 vs 32.4) with DeepSeek-R1-32B on 100 LiveCodeBench problems; v1's 82.4 vs 62.4 (Easy split) does not appear in v2 and was not re-verified against v1 | CORRECTED: "83 vs 62" and the LiveCodeBench +4.2–17.4% range were not in the paper. The presence gate as built is SPECULATIVE (presence ≠ soundness) |
 | MAKER, "Solving a Million-Step LLM Task with Zero Errors" | arXiv 2511.09030 | D11 (parallel-k), D12, D15 (decomposition granularity); audit §9 | Micro-decomposition plus exact-match voting; k_min = 3 for gpt-4.1-mini, 15 for qwen-3, Θ(ln s); red-flag parser discards over-long responses | PUBLISHED on Towers of Hanoi only; SPECULATIVE for code. CORRECTED: "k=2–3" was wrong |
 | CRANE, "Reasoning with Constrained LLM Generation" | arXiv 2502.09061 | D14 (constrain output, never reasoning); the worker diff schema | Alternate constrained and unconstrained segments; strict constrained decoding costs up to 8pp against unconstrained chain-of-thought (Table 1: 13 vs 21, DeepSeek-R1-Distill-Llama-8B; 38 vs 43, QwQ-32B), which CRANE recovers, while against unconstrained decoding without chain-of-thought it is within one point or better on all nine models; TC⁰ result is for finite-output grammars only | CORRECTED: "10pp loss" was CRANE's gain; the 27pp EMNLP figure unverified |
-| Snell et al., "Scaling LLM Test-Time Compute Optimally" | arXiv 2408.03314 | D11; best-of-k proposals | Sequential vs parallel compute; compute-optimal allocation beats best-of-N with >4× less compute; sequential revision suits easy questions, and the hardest gain little; √N appears only as an illustrative allocation and a beam width | PUBLISHED. The gate as built was VACUOUS (k=3 at temperature 0.0 is one sample; CLAUDE.md vacuity rule) |
+| Snell et al., "Scaling LLM Test-Time Compute Optimally" | arXiv 2408.03314 | D11; best-of-k proposals | Sequential vs parallel compute; compute-optimal allocation beats best-of-N with >4× less compute; sequential revision suits easy questions, and the hardest gain little; √N appears only as an illustrative allocation and a beam width | PUBLISHED. The gate as built was VACUOUS (k=3 at temperature 0.0 is one sample; CONTRIBUTING.md vacuity rule) |
 | Weaver, "Shrinking the Generation-Verification Gap with Weak Verifiers" | arXiv 2506.18203 | D12 (evidence independence) | Weighted weak-verifier ensembles; 400M distillation | PUBLISHED (medium confidence per audit). Caveat: the 11.2-point gain over naive averaging uses weights learned from ~50k labelled pairs; the unsupervised model assumes conditionally independent verifiers |
 | Olausson et al., "Is Self-Repair a Silver Bullet for Code Generation?" | arXiv 2306.09896 | D16 (repair feedback quality) | Self-repair is bottlenecked by feedback quality (1.58×) | PUBLISHED-WITH-MEASUREMENT |
 | Vericoding benchmark | arXiv 2509.22908 | D7 (requirement structure; weak specs get "cheated") | 82/44/27% Dafny/Verus/Lean; cheating is caught by validation, while weak specs admit trivial but valid solutions to a different task (≈9% too weak, ≈15% mistranslated among sampled successes); adding natural-language descriptions did not help | PUBLISHED-WITH-MEASUREMENT |
@@ -52,7 +53,7 @@ the corrected wording now lives in this file's own rows.
 | "Detecting Flaky Tests by Controlling Nondeterministic API Behavior" (ChaosAPI) | OOPSLA 2026 | D3 (repeat the baseline before trusting red) | Flake detection via API nondeterminism control | Figure unverifiable per audit; the 3-sample red baseline rests on CI rerun practice instead |
 | Context Rot (Chroma) | trychroma.com | D4 (stop maximising node context) | No notable variation across 11 needle positions (on Repeated Words, best near the start); direction only | CORRECTED: the ">30% drop" and "98.6% → 88%" figures are not in the post |
 | Martin & Roger, long-context degradation | arXiv 2605.12366 | D4 | Wrong or degraded answers 2× to 30× more often as context fills; recall 98.6% → 88% from prepending 800k benign tokens | PUBLISHED-WITH-MEASUREMENT (re-attributed from Chroma by the audit) |
-| Agentless | arXiv 2407.01489 | D2 (patch application); WORKPLAN item at line ~1148 | A deterministic pipeline beats agent loops | PUBLISHED-WITH-MEASUREMENT |
+| Agentless | arXiv 2407.01489 | D2 (patch application); an internal work-log item | A deterministic pipeline beats agent loops | PUBLISHED-WITH-MEASUREMENT |
 | Diff-XYZ | arXiv 2510.12487 | D2 | Diff-understanding benchmark; patch-format failure modes | PUBLISHED |
 | DebugHarness | arXiv 2604.03610 | D2; D16 | Dynamic debugging for repair | PUBLISHED |
 | "Why LLMs Fail: Failure Analysis for Automated Security Patch Generation" | arXiv 2603.10072 | D2 | Patch failure taxonomy | PUBLISHED |
@@ -69,7 +70,7 @@ the corrected wording now lives in this file's own rows.
 
 ## B. Sources named by the audit as corroborating, not cited in the design
 
-From `docs/AUDIT-2026-09-18.md` §9 "new sources with a use here"; none
+From the internal audit's §9 "new sources with a use here"; none
 changes a Tier 0–2 item. Confidence is the audit's.
 
 | Source | Use |
@@ -79,7 +80,7 @@ changes a Tier 0–2 item. Confidence is the audit's.
 | aider unified-diffs page (high) | PROVEN-IN-PRODUCTION edit format, for #61 |
 | pytest-timeout docs (high) | Per-test hang detection, an alternative to `SHELL_TIMEOUT` |
 | Qwen3.8-27B HF README (high) | The worker's documented reasoning-effort semantics |
-| Cleverest, arXiv 2501.11086; arXiv 2604.27296, 2604.26102 v2, 2605.08680, 2605.26128, 2604.03616, 2604.24712, 2607.22880, 2512.02304, 2604.14437, 2607.22883 (low–medium) | Corroborating only; not cited in the workplan |
+| Cleverest, arXiv 2501.11086; arXiv 2604.27296, 2604.26102 v2, 2605.08680, 2605.26128, 2604.03616, 2604.24712, 2607.22880, 2512.02304, 2604.14437, 2607.22883 (low–medium) | Corroborating only; not cited in the internal work log |
 
 ## C. Raised in the 2026-09-25 session, checked the same day
 
@@ -113,8 +114,8 @@ home.
 
 - Internal benchmark findings log — F-numbered findings from every benchmark round. Claims about saddle's behaviour cite an F-number or a run log.
 - Internal Phase 1 measurement plan and checker — pre-registered measurements (hashes in `runs/M1*/PREREG.sha256`) and their verdicts.
-- `docs/AUDIT-2026-09-18.md` §9 — the citation audit: 8 claims verified, 6 refuted; the source of every CORRECTED row above.
-- `docs/WORKPLAN.md` citation-correction table — the corrected wording for each refuted claim.
+- Internal audit of 2026-09-18, §9 — the citation audit: 8 claims verified, 6 refuted; the source of every CORRECTED row above.
+- Internal work log, citation-correction table — the corrected wording for each refuted claim.
 - Internal W6 report — root causes RC1–RC3 for the saddle arm's T1/T3 failures, with measured experiments E1/E2 and pre-registered interventions I1–I5.
 
 ## Maintenance

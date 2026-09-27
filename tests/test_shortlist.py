@@ -7,7 +7,7 @@ accepted reason. The score is still computed and recorded in `basis`
 N survivors, one per line first, each with file:line, the changed line's
 text and the mutation.
 
-Loosening proof (CLAUDE.md): M3F (internal run report, not public)
+Loosening proof (CONTRIBUTING.md): M3F (internal run report, not public)
 measured 6 of 6 oracle-PASS T5 trees scoring 63-76% against the 85% bar.
 """
 

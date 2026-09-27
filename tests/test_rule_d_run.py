@@ -93,7 +93,7 @@ def _book(path: Path, *, answer: str | None = "reject", panel_sha: str | None = 
         {
             "kind": "registration",
             "callable": FN,
-            "by": "eliza",
+            "by": "reviewer",
             "at": T0,
             "key_fn": "k3@1",
             "either_by": [],
@@ -110,7 +110,7 @@ def _book(path: Path, *, answer: str | None = "reject", panel_sha: str | None = 
                 "input": SPLIT,
                 "answer": answer,
                 "source": "user",
-                "by": "eliza",
+                "by": "reviewer",
                 "at": T0,
                 "question_hash": "0" * 64,
                 "tree_hash": "",
@@ -146,7 +146,7 @@ def test_rule_d_run_a_correct_tree_with_the_book_is_accepted_and_seals_the_user_
     d = verdict(loaded, _tree(tmp_path, GOOD))
     assert (d.verdict, d.halt, d.refuse) == ("accept", False, False)
     entry = loaded.book.records[-1]["record_hash"]
-    assert d.evidence["cites"] == [f"user:eliza:{entry}"]
+    assert d.evidence["cites"] == [f"user:reviewer:{entry}"]
     assert d.evidence["provenance"] == {"references": 32, "user": 1}
     assert d.evidence["disagreements"] == []
     assert d.evidence["reference_set_id"] == loaded.refset.set_id
@@ -177,10 +177,10 @@ def test_rule_d_run_a_wrong_tree_is_refused_with_the_miss_and_its_cite(tmp_path:
             "got": "true",
             "expected": "false",
             "source": "user",
-            "cite": f"user:eliza:{entry}",
+            "cite": f"user:reviewer:{entry}",
         }
     ]
-    assert f"'{SPLIT}': tree true, expected false [user: user:eliza:{entry}]" in d.detail
+    assert f"'{SPLIT}': tree true, expected false [user: user:reviewer:{entry}]" in d.detail
 
 
 def test_rule_d_run_a_thin_band_miss_is_a_question_that_halts(tmp_path: Path) -> None:
@@ -529,7 +529,7 @@ def test_rule_d_run_the_run_path_seals_an_accept_into_the_proof_attempt(
     assert result.passed is True
     assert sidecars[-1]["exit_code"] == 0
     assert sidecars[-1]["rule_d"]["verdict"] == "accept"
-    assert sidecars[-1]["rule_d"]["cites"] == [f"user:eliza:{loaded.book.head()}"]
+    assert sidecars[-1]["rule_d"]["cites"] == [f"user:reviewer:{loaded.book.head()}"]
 
 
 def test_rule_d_run_the_run_path_fails_a_refused_tree_with_the_miss(
@@ -921,7 +921,7 @@ def test_seal_the_plan_lists_a_class_the_book_answers(tmp_path: Path) -> None:
     anchors = {SPLIT: "reject"}
     pv = book.preview(FN, "reject", anchors, [SPLIT], loaded.ctx)
     book.save_class(
-        FN, "reject", anchors, pv, confirmed_preview=True, by="eliza", at=T0, question="q",
+        FN, "reject", anchors, pv, confirmed_preview=True, by="reviewer", at=T0, question="q",
         tree_hash="0" * 64, ask_point="plan", run_id="run-1", ctx=loaded.ctx,
     )  # fmt: skip
     book.dump(book_path)

@@ -1014,7 +1014,7 @@ def test_requirement_binding_binds_a_data_example_to_the_values_inside_it() -> N
     )
     assert check.passed is False
     assert check.detail.endswith("(no test asserts on '3')")
-    # The known-bad this admits, exhibited (WORKPLAN 0.6): the values may
+    # The known-bad this admits, exhibited (CONTRIBUTING.md, loosening): the values may
     # be asserted without the behaviour being exercised. The flat-literal
     # rule already admitted the same shape -- quoting the blob verbatim --
     # so this widens what counts as bound, never what counts as tested.
@@ -2627,7 +2627,7 @@ def test_coverage_still_fails_the_same_lines_with_no_test_node_owed() -> None:
 
 
 def test_coverage_deferral_admits_a_node_that_adds_code_nothing_runs() -> None:
-    """What T6-53 admits, exhibited rather than described (WORKPLAN 0.6).
+    """What T6-53 admits, exhibited rather than described (CONTRIBUTING.md, loosening).
 
     This is the known-bad the rule now lets through: a node adds a
     private helper no test reaches, and while any test node is owed it

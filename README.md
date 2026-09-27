@@ -79,7 +79,7 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
 Comments, docstrings and docs cite findings and work items by ID: `F21.12a`,
 `F13`, "round 3e", `T6-56`, "Rec 97", run names such as `M3F` or `CALIB`, and
 lane names such as `FEEDFIX`. These refer to the author's internal benchmark
-notes and work log, which are not public. Each comment states the claim it
+notes and work log (cited as `WORKPLAN`), which are not public. Each comment states the claim it
 relies on, so it should read on its own; the ID only records where the
 evidence came from.
 

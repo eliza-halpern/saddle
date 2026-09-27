@@ -985,13 +985,13 @@ def _without_stubbed_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
     kept = [p for p in os.environ["PATH"].split(os.pathsep) if "mutmut-stub" not in p]
     monkeypatch.setenv("PATH", os.pathsep.join(kept))
     monkeypatch.setattr(evidence_module, "show_all_mutants", conftest._PRODUCTION_SHOW_ALL)
-    assert shutil.which("mutmut") is not None, "the venv must be on PATH (CLAUDE.md)"
+    assert shutil.which("mutmut") is not None, "the venv must be on PATH (CONTRIBUTING.md)"
 
 
 def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Real mutmut, the enforcing engine (CLAUDE.md): `test_files` does not
+    """Real mutmut, the enforcing engine (CONTRIBUTING.md): `test_files` does not
     choose what runs, `run_tests` does. Session 21's probe: a property with
     no discriminating power beside an example that has it, mutant
     `return 2 -> return 3`. With the example alone collected the mutant is
@@ -1392,7 +1392,7 @@ def _build_real_scratch(workdir: Path, scratch: Path, tests: set[str]) -> None:
 def test_show_all_mutants_matches_mutmut_show_byte_for_byte(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (P0-1), real engine (CLAUDE.md): `show_all_mutants` is
+    """Known-good (P0-1), real engine (CONTRIBUTING.md): `show_all_mutants` is
     byte-identical to `mutmut show NAME` for every name `mutmut results
     --all True` lists, across a module-level function, a method, a
     string-literal mutant and a module no test imports ("no tests").
@@ -1574,7 +1574,7 @@ def test_mutation_sample_names_a_failed_lookup_instead_of_reading_no_mutants(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Known-bad (P0-1), real engine: a batched-lookup subprocess failure is
-    named, never silently read as "no mutants" (CLAUDE.md: a lookup
+    named, never silently read as "no mutants" (CONTRIBUTING.md: a lookup
     failure must never read as absence, per T3-20's rule for `mutmut
     run`). `sys.executable` is the seam `show_all_mutants` shells out
     through for the lookup; breaking it is harmless to `mutmut run` and
@@ -1643,7 +1643,7 @@ def test_show_all_mutants_raises_when_stdout_is_not_a_string_mapping(
 # line of a multi-line statement could never intersect `changed`, which
 # only ever holds first lines (`statement_lines`). The three pairs below
 # are the spec's own minimal reproduction (P0-2-locator.md), against the
-# real engine (CLAUDE.md): a module-level `f`/`g` sharing a body line, a
+# real engine (CONTRIBUTING.md): a module-level `f`/`g` sharing a body line, a
 # method `K.m`, and a multi-line `return sum([a, b + 1])` inside `total`.
 
 
