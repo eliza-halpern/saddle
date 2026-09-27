@@ -2,7 +2,7 @@
 
 Status: **draft, pre-registered before the v3 re-run.** Written 2026-09-18
 against harness `fix/gate-integrity @ 49864ec`, after the v2 benchmark sweep
-(`../saddle-bench/runs/FINDINGS.md`, F1–F14).
+(findings F1–F14 in the internal benchmark notes, not public).
 
 This document exists because the v2 sweep produced a clear diagnosis and no
 plan. It takes each recorded failure mode, finds what the literature says
@@ -430,7 +430,7 @@ Worth stating plainly: saddle has emitted **1 node on six of seven tasks**
 
 **Settled 2026-09-19 against the serving build, and closed against
 structural tags** (T4-4; `tools/structured_output_probe.py`, records in
-`../saddle-bench/runs/t4-4-structured-output-2026-09-19/`, findings F16-F19).
+the internal benchmark notes (not public), findings F16-F19).
 vLLM 0.28.0 already gives this alternation for the shipped payload: with
 `structured_outputs={"grammar": DIFF_GRAMMAR}` and reasoning on, a prompt
 asking for *one sentence of prose* returned a git diff, while the same

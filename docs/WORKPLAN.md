@@ -29,7 +29,7 @@ These restate `CLAUDE.md` and the project handoff. They are not optional.
 2. **Secrets and infrastructure.** The vLLM API key belongs to the user: read it
    from `SADDLE_VLLM_API_KEY` or `VLLM_API_KEY` (see `src/saddle/cli.py:652`),
    never print it, never write it into any file, never search the user's files
-   for it. The vLLM container `qwen38-27b-rtx3090-single-1` at
+   for it. The local vLLM container serving
    `http://127.0.0.1:18020` is the user's protected infrastructure: if it is
    down or unhealthy, report and ask; never restart it.
 3. **Naming.** The stock single-agent comparison system is called the
@@ -266,7 +266,7 @@ Steps:
    `tests/test_recommendations.py`. If anything else is staged, stop.
 2. `git restore --staged tests/test_recommendations.py && rm tests/test_recommendations.py`
 3. Leave `RECOMMENDATIONS.md`, `SUGGESTIONS.md`, `conversation-*.txt`,
-   `saddle_logo*`, `.claude/` untouched (untracked, user's).
+   `saddle_logo*` and the local agent-settings directory untouched (untracked, user's).
 Done when: `git status --porcelain | grep -c '^A '` prints 0 and
 `uv run mypy src tests` reports 6 errors (the remaining dag/evidence/slice ones).
 Stop if: the file is tracked at HEAD (`git ls-files tests/test_recommendations.py` non-empty).
@@ -6933,9 +6933,9 @@ read:
 ```
 
 Reproduced by hand: `fatal: unable to auto-detect email address (got
-'eliza@pop-os.(none)')`. The host's DNS domain had gone away since round
-3g, whose commits in the same kind of worktree are authored `Eliza H
-<eliza@pop-os.mynetworksettings.com>` — an identity git *derived*, not
+'user@host.(none)')`. The host's DNS domain had gone away since round
+3g, whose commits in the same kind of worktree are authored with
+`user@host.<dns-domain>` — an identity git *derived*, not
 one anybody set. There is no identity in the worktree, none global, and
 none in the bench's `run_arm.sh`. Sixteen milliseconds into the slice,
 733 seconds of wall clock spent, no gate verdict, no oracle comparison,

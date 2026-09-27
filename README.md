@@ -74,6 +74,15 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
   the proven setup is [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)
 - pytest, coverage.py, ruff, mutmut (sampled per node in Tier 1; the merge-time Tier 2 is not built)
 
+## Reading the citations in the code
+
+Comments, docstrings and docs cite findings and work items by ID: `F21.12a`,
+`F13`, "round 3e", `T6-56`, "Rec 97", run names such as `M3F` or `CALIB`, and
+lane names such as `FEEDFIX`. These refer to the author's internal benchmark
+notes and work log, which are not public. Each comment states the claim it
+relies on, so it should read on its own; the ID only records where the
+evidence came from.
+
 ## License
 
 Copyright (C) 2026  Eliza Halpern and Eryn Lipkowitz. See [AUTHORS](AUTHORS).

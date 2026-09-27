@@ -22,8 +22,8 @@ are not, and on removing the loudest distractions first.
    5,282 lines of prior model output; a smaller model will read it as
    guidance. `.gitignore` does not cover them, so `git status` shows them to
    the executor every session.
-3. **Remove the `printenv VLLM_API_KEY` allow rule** from
-   `.claude/settings.local.json` for Tier 0–3 sessions. Those tiers never need
+3. **Remove any agent permission that can read the API key** from the
+   local agent settings for Tier 0–3 sessions. Those tiers never need
    the key, and an allow rule is an invitation.
 4. **Decide git rights and state them in the prompt.** Recommended: commit on
    the branch the checkout is already on, one commit per item, no push, no
@@ -83,7 +83,7 @@ READ THESE, IN THIS ORDER, BEFORE TOUCHING ANYTHING:
 
 DO NOT READ, even if they look relevant: docs/AUDIT-2026-09-18.md, any
 WORKPLAN item not listed above (and listed ones only when you reach them), RECOMMENDATIONS.md, SUGGESTIONS.md, conversation-*.txt,
-.claude/settings.local.json. If the item needs context from a file not in its
+local agent settings files. If the item needs context from a file not in its
 "Files:" line, that is a stop condition: report it, do not read around.
 
 SCOPE. Edit only the files named in the current item. Do not fix, tidy, rename, or

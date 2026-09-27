@@ -2505,7 +2505,7 @@ def _git_repo_that_refuses_to_guess(root: Path) -> None:
     """A repo git will not invent an author identity for.
 
     Round 3h died here 16 ms into its slice: the host's DNS domain had gone
-    away, so git's guess was `eliza@pop-os.(none)`, which is not an address,
+    away, so git's guess was `user@host.(none)`, which is not an address,
     and it refused. `user.useConfigOnly` makes git refuse the guess
     everywhere instead of only on a host that happens to be misconfigured.
     The seed commit carries its own identity so the refusal is the

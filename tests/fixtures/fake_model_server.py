@@ -1,4 +1,4 @@
-# Copied from saddle-bench ARMS/runner/fake_server.py (M3 dry-run fake model) for the UXFIX2 e2e; ruff-formatted, logic unchanged.
+# Copied from the internal benchmark's M3 dry-run fake model server for the UXFIX2 e2e; ruff-formatted, logic unchanged.
 # ruff: noqa: E401, E501, I001
 """Fake OpenAI-compatible model server for M3's dry run. NO model, NO GPU.
 

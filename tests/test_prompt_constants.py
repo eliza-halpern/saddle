@@ -23,7 +23,7 @@ from saddle.packet import compile_packet
 from saddle.prompt_constants import UNTESTED, check, items, named, superseded, tree_sources
 from saddle.vllm import ToolCall, VllmClient
 
-# The two T5 rules the check reads (saddle-bench prompts/t5.prompt, rules 3 and 5).
+# The two T5 rules the check reads (the internal benchmark's T5 prompt, rules 3 and 5).
 T5 = (
     "3. **Rounding.** `ROUND_HALF_UP`, quantized to 2 decimal places for\n"
     "   USD/EUR and 0 decimal places for JPY.\n"
