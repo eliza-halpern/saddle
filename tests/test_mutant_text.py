@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,12 +30,12 @@ from saddle.mutant_text import (
 FIXTURES = Path(__file__).parent / "fixtures" / "mutant_text"
 
 
-def load(tree: str) -> dict:
+def load(tree: str) -> dict[str, Any]:
     data = json.loads((FIXTURES / f"{tree}.json").read_text())
     return dict(data["outcome"], survivor_detail=data["survivor_detail"])
 
 
-def show(name: str, status: str, path: str, before: str, after: str) -> dict:
+def show(name: str, status: str, path: str, before: str, after: str) -> dict[str, str]:
     head = f"# {name}: {status}\n--- {path}\n+++ {path}\n@@ -1,1 +1,1 @@\n"
     body = f"{head}-    {before}\n+    {after}\n"
     return {"name": name, "status": status, "show": body}
@@ -337,7 +339,7 @@ def test_other_status_is_spelled() -> None:
 _TAG = re.compile(r"\[record: ([^\]]+)\]$")
 
 
-def unbacked_lines(text: str, outcome: dict) -> list[str]:
+def unbacked_lines(text: str, outcome: dict[str, Any]) -> list[str]:
     """Lines that name no mutant, cite no matching record field, and head nothing."""
     summary = describe_mutation(outcome)
     names = {m.name for m in summary.mutants} | set(summary.undescribed)
@@ -397,7 +399,9 @@ ARGUMENT = ("f(a, b)", "f(a, )")
 TEXT = ('raise ValueError("x")', "raise ValueError(None)")
 
 
-def synthetic(survivors: list[tuple[str, str]], killed: list[tuple[str, str]] = ()) -> dict:
+def synthetic(
+    survivors: list[tuple[str, str]], killed: Sequence[tuple[str, str]] = ()
+) -> dict[str, Any]:
     """An outcome whose every mutant is described: `survivors` and `killed` are
     (before, after) pairs, one mutant each, in m.py functions f0, f1, ..."""
     detail = []
@@ -414,11 +418,18 @@ def synthetic(survivors: list[tuple[str, str]], killed: list[tuple[str, str]] = 
     }
 
 
+def group_1(pattern: str, text: str) -> str:
+    """The first group of `pattern` in `text`, which must match."""
+    match = re.search(pattern, text)
+    assert match is not None, text
+    return match.group(1)
+
+
 def bullets(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith("  - ")]
 
 
-def test_compact_caps_survivors_at_five_and_counts_the_rest():
+def test_compact_caps_survivors_at_five_and_counts_the_rest() -> None:
     text = render_text(describe_mutation(synthetic([BOUNDARY] * 80)), compact=True)
     assert len(bullets(text)) == 5
     assert text.splitlines()[-1] == "  and 75 more in the packet"
@@ -426,24 +437,24 @@ def test_compact_caps_survivors_at_five_and_counts_the_rest():
     assert len(text.splitlines()) == 8
 
 
-def test_compact_lists_three_survivors_with_no_more_line():
+def test_compact_lists_three_survivors_with_no_more_line() -> None:
     text = render_text(describe_mutation(synthetic([BOUNDARY] * 3)), compact=True)
     assert len(bullets(text)) == 3
     assert "more in the packet" not in text
     assert text == render_compact(describe_mutation(synthetic([BOUNDARY] * 3)))
 
 
-def test_compact_orders_survivors_worst_group_first():
+def test_compact_orders_survivors_worst_group_first() -> None:
     text = render_text(
         describe_mutation(synthetic([BRANCH, ARGUMENT, BOUNDARY, ACCUMULATION])), compact=True
     )
-    names = [re.search(r"\[(m\.x_f\d)__mutmut_1\]", b).group(1) for b in bullets(text)]
+    names = [group_1(r"\[(m\.x_f\d)__mutmut_1\]", b) for b in bullets(text)]
     # f2 boundary, f3 accumulation, f0 branch, f1 argument
     assert names == ["m.x_f2", "m.x_f3", "m.x_f0", "m.x_f1"]
     assert all(("a wrong edit here" in b) for b in bullets(text))
 
 
-def test_compact_counts_caught_mutants_on_one_line_never_listing_them():
+def test_compact_counts_caught_mutants_on_one_line_never_listing_them() -> None:
     text = render_text(
         describe_mutation(synthetic([BOUNDARY], killed=[BOUNDARY, BRANCH, BOUNDARY])), compact=True
     )
@@ -455,12 +466,12 @@ def test_compact_counts_caught_mutants_on_one_line_never_listing_them():
     assert len(bullets(text)) == 1
 
 
-def test_compact_says_undescribed_caught_mutants_are_counted_not_described():
+def test_compact_says_undescribed_caught_mutants_are_counted_not_described() -> None:
     text = render_text(describe_mutation(load("E-t5-s1")), compact=True)
     assert text.splitlines()[1] == "220 caught: no recorded diff, so counted, not described"
 
 
-def test_compact_omits_text_and_equivalent_survivors_entirely():
+def test_compact_omits_text_and_equivalent_survivors_entirely() -> None:
     text = render_text(describe_mutation(synthetic([TEXT, BOUNDARY, TEXT])), compact=True)
     assert len(bullets(text)) == 1
     assert "[m.x_f1__mutmut_1]" in text
@@ -470,7 +481,7 @@ def test_compact_omits_text_and_equivalent_survivors_entirely():
     assert "Survived but not gaps (text or equivalent):" in full
 
 
-def test_compact_stays_within_its_line_budget_on_every_real_tree():
+def test_compact_stays_within_its_line_budget_on_every_real_tree() -> None:
     for tree in ("E-t5-s1", "EAF-t5-s3", "E-t8-s1", "U-t8-s1"):
         summary = describe_mutation(load(tree))
         compact = render_text(summary, compact=True)
@@ -479,7 +490,7 @@ def test_compact_stays_within_its_line_budget_on_every_real_tree():
         assert compact.splitlines()[0] == render_text(summary).splitlines()[0], tree
 
 
-def test_full_rendering_is_the_default_and_unchanged_by_the_flag():
+def test_full_rendering_is_the_default_and_unchanged_by_the_flag() -> None:
     summary = describe_mutation(load("E-t5-s1"))
     assert render_text(summary) == render_text(summary, compact=False)
     assert "Left untested:\n  boundary:\n" in render_text(summary)
