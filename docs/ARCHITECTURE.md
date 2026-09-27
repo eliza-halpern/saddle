@@ -267,6 +267,10 @@ reason). The operator's view is docs/USING-SADDLE.md; this section is the struct
    On saddle's own source a run that changes a judging module, the feed or turn engine
    that accepts a finish, the sandbox or memory cap, the guard itself (`auto`), or
    their tests (`auto.GUARDED_PATHS`) cannot end `finished`; it stops "needs you".
+   Commands run in `sandbox.Sandbox`: under `bwrap` (required for a run, with no
+   network), an environment allowlist, a read-only `.git`, and a per-command memory
+   cap (`memcap`, `SADDLE_MEMORY_MAX`, 6 GiB default) that also covers the gates' test
+   commands. The gates themselves still run unconfined on the host.
 2. **Auditor** — `auditor.Auditor`: the gates of §3 Phase 3 (`gates`, pure predicates;
    `evidence`, the runners) applied to a tree the executor produced, split into tiers and
    cached by tree hash. Tier 0 checks one edited file at the edit (syntax, ruff, imports);

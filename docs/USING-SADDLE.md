@@ -224,6 +224,31 @@ carry `run_state` and `run_task`):
   (`notify.js paintMenu`), because the sidebar is a closed drawer there.
 - **Screen readers:** a polite live region (`#run-live`) announces each transition.
 
+## 5b. What a run's commands can reach
+
+Every command the model runs goes through `sandbox.Sandbox`. What it can see depends
+on the lane:
+
+| | Task (`saddle auto`) | Ask and Edit (chat) |
+|---|---|---|
+| Isolation | `bwrap`, required: if it is missing or cannot start, the run refuses to begin | `bwrap` when it starts; otherwise the command runs as you, and the sandbox says `isolation: none` rather than pretending |
+| Filesystem | system directories and the interpreter, read-only; an empty HOME and /tmp; the worktree is the one writable place, and its `.git` is read-only | the same, under `bwrap` |
+| Network | none (loopback only): saddle talks to the model itself, so no command needs it | the host network |
+| Environment | an allowlist, not your shell's variables | the same allowlist |
+| Git | `.git` is read-only to commands, so a command cannot commit or plant a hook; saddle commits the run itself, with hooks and `core.fsmonitor` switched off | read-only under `bwrap`; without it, only saddle's own git calls are guarded |
+
+**Memory cap.** Every command, and every test command the auditor's gates run, gets a
+memory ceiling of its own: a systemd user scope with `MemoryMax` and no swap, or
+`prlimit` where no user systemd is reachable. A command that hits it is killed and
+recorded as a failing command, named as a memory kill, never as a pass. The ceiling is
+6 GiB by default; set `SADDLE_MEMORY_MAX` (bytes, or a number with K, M, G or T) to
+change it.
+
+**Not yet confined: the auditor's gates.** The gates (`pytest`, `coverage`, `mutmut`)
+still run as you on the host, with your read access and network, under the memory cap
+only. A test the model wrote runs there during an audit. Until that changes, run saddle
+only on code you would run yourself.
+
 ## 6. How a run ends
 
 The ledger records exactly one outcome span: `auto:finished` or `auto:stopped`.
@@ -319,6 +344,10 @@ text.
   first line, whether a mutant also survived there, and the uncovered lines' own text.
   A line in a file the auditor could not seal whole is listed as "not placed", never
   guessed (`packet._sealed_sources`; sidecar strings are capped at 4000 characters).
+  The same finding, fed back to the model during a run, leads with a tally: "Lines per
+  file, most first", the six files with the most uncovered lines and then "and N more"
+  (`coverage_text.file_tally`), so a large gap reads as where to start, not a wall of
+  lines. Identical failing lines in a feed are merged as "(N findings)".
 
 The web packet folds show the **full** text (`Row.summary`). The terminal packet and the
 "Ask about this run" recap show the **compact** form (`Row.recap`): at most 5 survivors
