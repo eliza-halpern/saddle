@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from saddle import coverage_text, mutant_text
+from saddle import coverage_text, mutant_text, prompt_constants
 from saddle.anchor import anchor_issues
 from saddle.journal import (
     AUDIT_SPAN_PREFIXES,
@@ -924,6 +924,29 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             tuple(gaps),
         )
     )
+
+    # -- prompt constants (FEEDFIX item 1; reporting only) ---------------------------
+    constants = evidence.get("prompt_constants") if evidence is not None else None
+    if isinstance(constants, dict) and outcome is not None:
+        said = prompt_constants.items(constants)
+        count = len(constants.get("named", []))
+        rows.append(
+            Row(
+                "prompt-constants",
+                "Prompt constants",
+                "not-proven" if said else "observed",
+                (
+                    f"The task names {_n(count, 'constant')}; the source never names "
+                    f"{len(said)} of them. Not a verdict: the source may be right for a "
+                    "reason a name check cannot see."
+                    if said
+                    else f"The task names {_n(count, 'constant')}; the source names every one "
+                    "it did not say was replaced."
+                ),
+                (outcome.record_hash,),
+                tuple(said),
+            )
+        )
 
     # -- narrative ------------------------------------------------------------------
     narrative_text = str(evidence.get("narrative", "")) if evidence else ""

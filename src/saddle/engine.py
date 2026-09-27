@@ -281,6 +281,10 @@ class AutoRun:
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
     on that same tree ends finished with it."""
+    prompt_check: Callable[[], dict[str, object]] | None = None
+    """`prompt_constants.check` over the run's tree, called once at the seal
+    and sealed as `prompt_constants` (FEEDFIX item 1); None when the task
+    names no constant, and then nothing is sealed."""
     waivers: list[str] | None = None
     """`feed.waivers` of the last accepted finish audit; None until one is.
     Sealed on a finished run with an auditor (FEEDFIX item 6)."""
@@ -1102,6 +1106,9 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         # was audited before the run ended.
         "audit": auto.feed.last() if auto.feed is not None else None,
     }
+    if auto.prompt_check is not None:
+        # FEEDFIX (1): reporting only; no verdict reads it.
+        evidence["prompt_constants"] = auto.prompt_check()
     if auto.outcome == "finished" and auto.waivers is not None:
         # FEEDFIX (6): every accepted finish seals what it stood on, [] if
         # nothing; arm E and ended-unaccepted runs seal the keys as before.

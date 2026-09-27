@@ -28,8 +28,9 @@ from pathlib import Path
 from time import monotonic
 from typing import Final
 
+from saddle import prompt_constants
 from saddle.anchor import anchor_trailers, outcome_hash
-from saddle.auditor import Tier2Mode
+from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
@@ -272,6 +273,15 @@ def run_auto(
         ),
         run_span=start.span_id,
         changed_files=lambda: changed_files(worktree),
+        prompt_check=(
+            (
+                lambda: prompt_constants.check(
+                    options.task, prompt_constants.tree_sources(worktree, _test_side)
+                )
+            )
+            if prompt_constants.named(options.task)
+            else None
+        ),
         feed=feed,
         finish_refusal_cap=options.finish_refusal_cap,
         arm=options.arm,
