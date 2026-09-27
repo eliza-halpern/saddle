@@ -50,10 +50,19 @@ FINISH_PATH_JUDGES = [
 and what confines and caps the auditor's runs (sandbox, memory cap), with the
 test files that pin each."""
 
+GUARD_ITSELF = [
+    "src/saddle/auto.py",
+    "tests/test_auto.py",
+    "tests/test_self_guard.py",
+]
+"""The module that defines the guard and its lists, and the tests that pin
+them: a run that could shorten the list must not finish on it either."""
+
 NEAR_MISSES = [
     "src/saddle/feeds.py",
     "src/saddle/engine_notes.py",
     "src/saddle/sandbox_util.py",
+    "src/saddle/autos.py",
     "tests/test_feed_extra.py",
     "tests/test_engine.py",
 ]
@@ -92,7 +101,7 @@ def saddle_repo(tmp_path: Path) -> Path:
             "src/saddle/mutant_text.py": "WIDTH = 1\n",
             "tests/test_gates.py": "def test_limit():\n    assert 1\n",
             "tests/conftest.py": "",
-            **dict.fromkeys(FINISH_PATH_JUDGES + NEAR_MISSES, "LIMIT = 1\n"),
+            **dict.fromkeys(FINISH_PATH_JUDGES + GUARD_ITSELF + NEAR_MISSES, "LIMIT = 1\n"),
         },
     )
 
@@ -132,6 +141,7 @@ def test_the_guarded_list_is_the_judges_the_finish_path_the_confinement_and_thei
         "engine",
         "memcap",
         "sandbox",
+        "auto",
     )
     assert {
         "src/saddle/gates.py",
@@ -144,6 +154,7 @@ def test_the_guarded_list_is_the_judges_the_finish_path_the_confinement_and_thei
         "tests/test_audit.py",
         "tests/conftest.py",
         *FINISH_PATH_JUDGES,
+        *GUARD_ITSELF,
     } == GUARDED_PATHS
 
 
@@ -253,6 +264,13 @@ def test_a_run_that_edits_the_finish_path_or_the_confinement_stops_needing_you(
 
 
 # -- known-good: what the guard must not stop ------------------------------------
+
+
+@pytest.mark.parametrize("path", GUARD_ITSELF)
+def test_a_run_that_edits_the_guard_itself_stops_needing_you(saddle_repo: Path, path: str) -> None:
+    result = _run(saddle_repo, Scripted([_edit(path), finish()]), allow_test_edits=True)
+    assert result.outcome == "stopped"
+    assert result.reason == GUARDED_STOP.format(paths=path)
 
 
 @pytest.mark.parametrize("path", NEAR_MISSES)
