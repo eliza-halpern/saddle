@@ -14,17 +14,26 @@ command may be started in the background, its output read while it runs, and
 waited on later -- which is what lets the model start work, say what it did,
 and come back to the result.
 
-Isolation beyond the path boundary is best-effort and honestly labelled:
-when `bwrap` is present it is used for a read-only view of the system with
-the workdir writable; when it is not, commands run as the invoking user and
-`Sandbox.isolation` says so rather than implying protection that is absent.
+**A command sees only what it needs.** Under `bwrap` the root is built up
+from the system directories and the interpreter, read-only; HOME and /tmp
+are empty; the workdir is the one writable place, and its `.git` is
+read-only again, because hooks and config there are code the host runs
+later. The environment is an allowlist, each command gets its own session
+and process group, and a lane can take the network away. A `bwrap` that is
+installed but cannot start is not trusted, and a lane that needs isolation
+refuses to run without it. Where isolation is absent, commands run as the
+invoking user and `Sandbox.isolation` says "none" rather than implying
+protection that is not there.
 """
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -41,6 +50,81 @@ unbounded buffer is how a `yes` loop takes the whole session down."""
 
 class OutsideRootError(ValueError):
     """A path escaped the workdir. Raised before anything is opened."""
+
+
+class IsolationUnavailableError(RuntimeError):
+    """A lane that needs isolation asked for it on a box that cannot give it."""
+
+
+Network = Literal["host", "none"]
+
+ENV_KEEP: Final = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "VIRTUAL_ENV",
+    "PYTHONPATH",
+    "PYTHONDONTWRITEBYTECODE",
+)
+"""The only variables of saddle's own environment a command sees, plus any
+`LC_*`. An allowlist rather than a `*KEY*`/`*TOKEN*` denylist: a key can be
+named anything, and saddle's process holds the model key when it is exported."""
+
+
+def command_env(extra: Mapping[str, str]) -> dict[str, str]:
+    """The environment a command runs with: the allowlist, then `extra`."""
+    kept = {
+        name: value
+        for name, value in os.environ.items()
+        if name in ENV_KEEP or name.startswith("LC_")
+    }
+    return {**kept, "TERM": "dumb", "NO_COLOR": "1", **extra}
+
+
+SYSTEM_DIRS: Final = (
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/etc",
+    "/opt",
+    "/sys",
+)
+"""What a command may read besides its workdir and the interpreter. Built up
+from an empty root rather than `--ro-bind / /` minus a list: a deny list of
+places misses the one nobody thought of (a sibling answer dir, /var/tmp,
+another agent's scratch, /run/user sockets)."""
+
+RESOLVER_DIR: Final = "/run/systemd/resolve"
+"""Where /etc/resolv.conf points on systemd boxes; needed only with network."""
+
+
+@functools.cache
+def bwrap_works(bwrap: str) -> str | None:
+    """None when `bwrap` can build a sandbox here, else its error text.
+
+    An installed bwrap is not a working one: where unprivileged user
+    namespaces are restricted (Ubuntu 24.04's AppArmor default) it exists and
+    fails on every call, and trusting `which` labels that "bwrap"."""
+    try:
+        done = subprocess.run(
+            [bwrap, "--ro-bind", "/", "/", "--unshare-all", "true"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    return None if done.returncode == 0 else (done.stderr.strip() or f"exit {done.returncode}")
 
 
 def resolve_within(root: Path, candidate: str | Path) -> Path:
@@ -108,7 +192,11 @@ class Sandbox:
     terminals: dict[str, Terminal] = field(default_factory=dict)
     on_output: Callable[[str, str], None] | None = None
     env: Mapping[str, str] = field(default_factory=dict)
-    """Extra environment for every command, over the caller's own."""
+    """Extra environment for every command, over the scrubbed allowlist."""
+    network: Network = "host"
+    """"none" gives a command its own empty network namespace (loopback only).
+    saddle talks to the model itself, so no command needs the host network to
+    do the task; only installs do."""
 
     @classmethod
     def for_workdir(
@@ -118,38 +206,74 @@ class Sandbox:
         prefer_bwrap: bool = True,
         on_output: Callable[[str, str], None] | None = None,
         env: Mapping[str, str] | None = None,
+        require_isolation: bool = False,
+        network: Network = "host",
     ) -> Sandbox:
-        available = prefer_bwrap and shutil.which("bwrap") is not None
+        """A sandbox for `root`; with `require_isolation`, never an unisolated one."""
+        found = shutil.which("bwrap") if prefer_bwrap else None
+        problem = "bwrap is not installed" if found is None else bwrap_works(found)
+        if problem is not None and require_isolation:
+            msg = f"this lane needs isolation and bwrap cannot provide it: {problem}"
+            raise IsolationUnavailableError(msg)
         return cls(
             root=root.resolve(),
-            isolation="bwrap" if available else "none",
+            isolation="bwrap" if problem is None else "none",
             on_output=on_output,
             env=dict(env or {}),
+            network=network,
         )
+
+    def _git_binds(self) -> list[str]:
+        """Read-only binds that keep git usable and its metadata untouchable.
+
+        A writable `.git` is code the host runs later: a hook, a
+        `core.fsmonitor`, or a worktree's `.git` file pointed at a repo the
+        command made. So `.git` is read-only, and a worktree's real gitdir
+        (outside the workdir, hidden otherwise) is shown read-only too."""
+        dot = self.root / ".git"
+        if dot.is_dir():
+            return ["--ro-bind", str(dot), str(dot)]
+        if not dot.is_file():
+            return []
+        binds = ["--ro-bind", str(dot), str(dot)]
+        text = dot.read_text(encoding="utf-8", errors="replace").strip()
+        if text.startswith("gitdir:"):
+            gitdir = (self.root / text.removeprefix("gitdir:").strip()).resolve()
+            common = gitdir / "commondir"
+            shown = [gitdir]
+            if common.is_file():
+                shown.append((gitdir / common.read_text(encoding="utf-8").strip()).resolve())
+            for path in shown:
+                binds += ["--ro-bind-try", str(path), str(path)]
+        return binds
 
     def _argv(self, command: str) -> list[str]:
         """The argv actually executed, wrapped for isolation when available."""
         if self.isolation != "bwrap":
             return ["bash", "-lc", command]
+        argv = ["bwrap"]
+        for name in SYSTEM_DIRS:
+            path = Path(name)
+            if path.is_symlink():
+                argv += ["--symlink", os.readlink(path), name]
+            else:
+                argv += ["--ro-bind-try", name, name]
+        argv += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+        argv += ["--tmpfs", str(Path.home())]
+        if self.network == "host":
+            argv += ["--ro-bind-try", RESOLVER_DIR, RESOLVER_DIR]
+        for prefix in sorted({Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}):
+            argv += ["--ro-bind", str(prefix), str(prefix)]
         # Order matters: later mounts shadow earlier ones, so the writable
-        # workdir bind must come AFTER --tmpfs /tmp or a workdir under /tmp
-        # disappears behind the tmpfs and --chdir fails.
+        # workdir comes after the tmpfs mounts (a workdir under /tmp or HOME
+        # would vanish behind them), and the read-only .git after the workdir.
+        argv += ["--bind", str(self.root), str(self.root), *self._git_binds()]
+        argv += ["--unshare-all"]
+        if self.network == "host":
+            argv += ["--share-net"]
         return [
-            "bwrap",
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--tmpfs",
-            "/tmp",
-            "--bind",
-            str(self.root),
-            str(self.root),
-            "--unshare-all",
-            "--share-net",
+            *argv,
+            "--new-session",
             "--die-with-parent",
             "--chdir",
             str(self.root),
@@ -171,11 +295,13 @@ class Sandbox:
             process = subprocess.Popen(
                 self._argv(command),
                 cwd=str(self.root),
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                env={**os.environ, "TERM": "dumb", "NO_COLOR": "1", **self.env},
+                env=command_env(self.env),
+                start_new_session=True,
             )
         except OSError as exc:
             terminal.exit_code = 127
@@ -193,7 +319,9 @@ class Sandbox:
                         self.on_output(terminal.id, line)
                     except Exception:  # a broken listener must not stop the command
                         self.on_output = None
-            terminal.exit_code = process.wait()
+            code = process.wait()
+            _kill_group(process.pid)  # nothing it started outlives it
+            terminal.exit_code = code
 
         threading.Thread(target=pump, daemon=True).start()
         self.terminals[terminal.id] = terminal
@@ -219,6 +347,18 @@ class Sandbox:
     def kill(self, terminal_id: str) -> Terminal:
         terminal = self.terminals[terminal_id]
         if terminal.process is not None and terminal.running:
-            terminal.process.kill()
+            _kill_group(terminal.process.pid)
             terminal.process.wait(timeout=5)
         return terminal
+
+
+def _kill_group(pgid: int) -> None:
+    """SIGKILL a command's whole process group (its own session: pgid == pid).
+
+    Killing the shell alone leaves its children running; without bwrap's PID
+    namespace nothing else reaps them. A child that calls setsid itself
+    escapes this, which is one reason unisolated runs are labelled "none"."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass

@@ -8,6 +8,7 @@ possible so fixtures stay fast and branch coverage stays cheap.
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import io
 import json
@@ -15,6 +16,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -281,6 +283,31 @@ class CapturedRun:
     timed_out: bool = False
 
 
+def _run_as_group(
+    argv: Sequence[str], cwd: Path, timeout: float | None
+) -> subprocess.CompletedProcess[str]:
+    """`subprocess.run`, except a timeout kills the whole process group.
+
+    `subprocess.run` kills only the direct child, so a test that forked a
+    helper left it running after the gate had moved on."""
+    with subprocess.Popen(
+        argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()  # like subprocess.run on POSIX: keep the partial bytes
+            raise
+    return subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
+
+
 def run_capture(
     argv: Sequence[str],
     cwd: Path,
@@ -302,7 +329,7 @@ def run_capture(
     start = perf_counter()
     launched = argv if memory_limit is None else ["prlimit", f"--as={memory_limit}", "--", *argv]
     try:
-        proc = subprocess.run(launched, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        proc = _run_as_group(launched, cwd, timeout)
     except subprocess.TimeoutExpired as expired:
         _record_timeout(recorder, argv, start, expired)
         return CapturedRun(

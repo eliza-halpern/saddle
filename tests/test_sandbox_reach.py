@@ -250,6 +250,36 @@ def test_host_runtime_sockets_are_hidden(work: Path) -> None:
     assert out.strip() == "", out
 
 
+def test_a_bwrap_that_cannot_be_executed_is_reported(outside: Path) -> None:
+    assert sandbox_module.bwrap_works(str(outside / "no-such-bwrap")) is not None
+
+
+@needs_bwrap
+def test_a_gitdir_file_without_a_commondir_still_works(outside: Path) -> None:
+    # a submodule-style `.git` file pointing at a whole repo's git dir
+    real = outside / "real"
+    real.mkdir()
+    (real / "a.py").write_text("x = 1\n")
+    git(real, "init", "-q")
+    git(real, "add", "-A")
+    git(real, "commit", "-q", "-m", "init")
+    tree = outside / "tree"
+    tree.mkdir()
+    (tree / ".git").write_text(f"gitdir: {real / '.git'}\n")
+    git(tree, "config", "core.worktree", str(tree))
+    (tree / "a.py").write_text("x = 2\n")
+    code, out = sh(Sandbox.for_workdir(tree), "git diff")
+    assert code == 0, out
+    assert "+x = 2" in out
+
+
+@needs_bwrap
+def test_a_git_file_that_is_not_a_gitdir_is_still_read_only(work: Path) -> None:
+    (work / ".git").write_text("not a gitdir line\n")
+    sh(Sandbox.for_workdir(work), "echo changed > .git")
+    assert (work / ".git").read_text() == "not a gitdir line\n"
+
+
 # -- the fallback without bwrap ----------------------------------------------
 
 

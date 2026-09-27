@@ -323,7 +323,9 @@ def run_auto(
     )
     context = ToolContext(
         workdir=worktree,
-        sandbox=Sandbox.for_workdir(worktree, env=COMMAND_ENV),
+        sandbox=Sandbox.for_workdir(
+            worktree, env=COMMAND_ENV, require_isolation=True, network="none"
+        ),
         protected_tests=roots,
         syntax_guard=True,
     )
