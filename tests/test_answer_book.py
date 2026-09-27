@@ -269,7 +269,7 @@ def reg(
     book: Book,
     *,
     key_fn: str | None = "k3@1",
-    either_by: Sequence[str] = ("eliza",),
+    either_by: Sequence[str] = ("reviewer",),
     either_at: Sequence[str] = ("plan", "verdict"),
     panel: bool = True,
 ) -> str:
@@ -277,7 +277,7 @@ def reg(
         {
             "kind": "registration",
             "callable": FN,
-            "by": "eliza",
+            "by": "reviewer",
             "at": T0,
             "key_fn": key_fn,
             "either_by": list(either_by),
@@ -301,7 +301,7 @@ def adopt(
         spec,
         known=list(known),
         ctx=c,
-        adopted_by="eliza",
+        adopted_by="reviewer",
         at=T_DEC,
         run_id="decision-2026-09-25-2111",
         decision_ref=DEC_REF,
@@ -321,7 +321,7 @@ def conv(
         sources=[cid],
         known=list(known),
         ctx=c,
-        adopted_by="eliza",
+        adopted_by="reviewer",
         at=T0,
         run_id="run-1",
     )
@@ -333,7 +333,7 @@ def exact(
     answer: str,
     *,
     source: str = "user",
-    by: str = "eliza",
+    by: str = "reviewer",
     tree_hash: str = TREE,
     ask_point: str = "verdict",
     overrides: Sequence[str] = (),
@@ -365,7 +365,7 @@ def klass(
     *,
     confirmed: bool = True,
     overrides: Sequence[str] = (),
-    by: str = "eliza",
+    by: str = "reviewer",
     ask_point: str = "verdict",
 ) -> tuple[str, ab.Preview]:
     pv = book.preview(FN, answer, anchors, list(known) or list(anchors), c, overrides=overrides)
@@ -395,7 +395,7 @@ def either_at_plan(book: Book, anchor: str, known: Sequence[str], c: Ctx) -> str
         known,
         None,
         c,
-        by="eliza",
+        by="reviewer",
         ask_point="plan",
         stdin=io.StringIO(""),
         stdout=io.StringIO(),
@@ -492,7 +492,7 @@ def test_answer_book_e1_every_entry_kind_with_full_provenance_appends_and_reload
     exact(b, WS_TRIM[1], "reject")
     exact(b, WS_TRIM[2], "reject", source="references", by="references")
     h, _pv = klass(b, {WS_TRIM[0]: "accept"}, "accept", c, known=WS_TRIM[:1])
-    b.revoke(h, by="eliza", at=T0, reason="test")
+    b.revoke(h, by="reviewer", at=T0, reason="test")
     assert Book.loads(b.dumps()).dumps() == b.dumps()
     kinds = [r["kind"] for r in b.records]
     assert kinds == ["registration", "spec", "convention", "exact", "exact", "class", "revoke"]
@@ -509,7 +509,7 @@ def test_answer_book_e2_a_user_answer_without_question_hash_tree_hash_or_run_id_
         "input": "a@b",
         "answer": "accept",
         "source": "user",
-        "by": "eliza",
+        "by": "reviewer",
         "at": T0,
         "question_hash": Q,
         "tree_hash": TREE,
@@ -565,7 +565,7 @@ def test_answer_book_e4_reserved_names_cannot_write_user_entries_and_spec_is_nev
     with pytest.raises(AnswersError, match="only a user may adopt"):
         b.append(dict(rec, adopted_by="references"))
     with pytest.raises(AnswersError, match="recorded as by='spec'"):
-        b.append(dict(rec, by="eliza"))
+        b.append(dict(rec, by="reviewer"))
 
 
 # M: spec entries, worked on the user's two T1 decisions
@@ -597,7 +597,7 @@ def test_answer_book_m1_pct_accept_and_newline_reject_pin_their_classes_with_the
     e = b.records[-1]
     assert (e["by"], e["adopted_by"], e["at"], e["question_hash"], e["panel_votes"]) == (
         "spec",
-        "eliza",
+        "reviewer",
         T_DEC,
         "",
         {LF_ORACLE: "F,F,F,F"},
@@ -681,7 +681,7 @@ def test_answer_book_m4_references_never_revoke_a_spec_pin_and_are_logged_as_def
     )
     with pytest.raises(AnswersError, match="only a user"):
         b.revoke(h, by="references", at=T0, reason="12 of 12 accept")
-    b.revoke(h, by="eliza", at=T0, reason="the user withdrew it")
+    b.revoke(h, by="reviewer", at=T0, reason="the user withdrew it")
     r3 = b.resolve(FN, [LF_SPLIT], c)
     assert (r3.pins[LF_SPLIT], r3.prov[LF_SPLIT]["source"]) == (True, "references")
 
@@ -908,7 +908,7 @@ def test_answer_book_h1_the_gate_passes_shows_three_members_shortest_first_and_f
         {WS_TRIM[5]: "accept"},
         pv,
         confirmed_preview=True,
-        by="eliza",
+        by="reviewer",
         at=T0,
         question="q",
         tree_hash=TREE,
@@ -1001,7 +1001,7 @@ def test_answer_book_i2_either_by_an_unregistered_user_or_at_an_unregistered_poi
             {LEAD: "either"},
             pv,
             confirmed_preview=True,
-            by="eliza",
+            by="reviewer",
             at=T0,
             question="q",
             tree_hash="",
@@ -1018,7 +1018,7 @@ def test_answer_book_i2_either_by_an_unregistered_user_or_at_an_unregistered_poi
         DD_MEMBERS,
         {DD: True},
         c,
-        by="eliza",
+        by="reviewer",
         ask_point="verdict",
         stdin=io.StringIO("y\n"),
         stdout=io.StringIO(),
@@ -1042,7 +1042,7 @@ def test_answer_book_i3_either_over_the_routed_trees_miss_fires_the_second_confi
         DD_MEMBERS,
         tree,
         c,
-        by="eliza",
+        by="reviewer",
         ask_point="verdict",
         stdin=io.StringIO(""),
         stdout=out_,
@@ -1071,7 +1071,7 @@ def test_answer_book_i4_y_at_the_second_confirmation_saves_either_with_the_miss_
         DD_MEMBERS,
         {DD: True},
         c,
-        by="eliza",
+        by="reviewer",
         ask_point="verdict",
         stdin=io.StringIO("y\n"),
         stdout=io.StringIO(),
@@ -1100,7 +1100,7 @@ def test_answer_book_i5_at_plan_time_either_needs_no_second_confirmation() -> No
         DD_MEMBERS,
         None,
         c,
-        by="eliza",
+        by="reviewer",
         ask_point="plan",
         stdin=io.StringIO(""),
         stdout=out_,
@@ -1120,7 +1120,7 @@ def test_answer_book_j1_a_revoked_class_answer_stops_pinning_and_its_record_rema
     reg(b)
     h, _ = klass(b, {WS_TRIM[0]: "accept"}, "accept", c, known=WS_TRIM)
     assert b.resolve(FN, [WS_TRIM[3]], c).pins == {WS_TRIM[3]: True}
-    b.revoke(h, by="eliza", at=T0, reason="wrong answer")
+    b.revoke(h, by="reviewer", at=T0, reason="wrong answer")
     assert b.resolve(FN, [WS_TRIM[3]], c).pins == {}
     t = b.dumps()
     assert any(json.loads(line)["record_hash"] == h for line in t.splitlines())
@@ -1132,12 +1132,12 @@ def test_answer_book_j2_revoking_twice_a_references_pin_or_as_the_worker_is_refu
     b = Book()
     reg(b)
     h, _ = klass(b, {WS_TRIM[0]: "accept"}, "accept", c, known=WS_TRIM)
-    b.revoke(h, by="eliza", at=T0, reason="r")
+    b.revoke(h, by="reviewer", at=T0, reason="r")
     with pytest.raises(AnswersError, match="already revoked"):
-        b.revoke(h, by="eliza", at=T0, reason="r")
+        b.revoke(h, by="reviewer", at=T0, reason="r")
     hr = exact(b, WS_TRIM[4], "reject", source="references", by="references")
     with pytest.raises(AnswersError, match="no such user"):
-        b.revoke(hr, by="eliza", at=T0, reason="r")
+        b.revoke(hr, by="reviewer", at=T0, reason="r")
     h2, _ = klass(b, {WS_TRIM[0]: "accept"}, "accept", c, known=WS_TRIM)
     with pytest.raises(AnswersError, match="only a user"):
         b.revoke(h2, by="worker", at=T0, reason="r")
@@ -1148,7 +1148,7 @@ def test_answer_book_j3_a_revoked_either_returns_its_members_to_checking() -> No
     b = Book()
     reg(b)
     either_at_plan(b, LEAD, LEAD_MEMBERS, c)
-    b.revoke(b.records[-1]["record_hash"], by="eliza", at=T0, reason="restore")
+    b.revoke(b.records[-1]["record_hash"], by="reviewer", at=T0, reason="restore")
     r = b.resolve(FN, LEAD_MEMBERS, c)
     assert r.retired == []
     assert r.pins == {}
@@ -1159,7 +1159,7 @@ def test_answer_book_j4_a_revoked_class_is_asked_again_at_most_once_in_the_next_
     b = Book()
     reg(b)
     h, _ = klass(b, {WS_TRIM[0]: "accept"}, "accept", c, known=WS_TRIM)
-    b.revoke(h, by="eliza", at=T0, reason="r")
+    b.revoke(h, by="reviewer", at=T0, reason="r")
     asked: set[str] = set()
     first = b.to_ask(FN, WS_TRIM, c, asked)
     assert len(first) == 1
