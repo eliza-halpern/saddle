@@ -17,6 +17,7 @@ from saddle.events import Compaction
 from saddle.memory import KEEP_RECENT, compact, estimate_tokens
 from saddle.vllm import VllmClient
 from tests.test_auto import Scripted, call, finish, git, repo  # noqa: F401  (fixture)
+from tests.test_feed import FakeAuditor
 from tests.test_keep_reasoning import _render
 
 TASK = "TASK-7f3a: make add() in calc.py return the sum instead of the difference"
@@ -62,7 +63,8 @@ PYTEST_FAIL = (
     )
     + "12 failed, 40 passed in 0.31s\n"
 )
-AUDIT = "[audit] REFUSED finish: tier-1 coverage: calc.py:2 not executed by any test"
+AUDIT = "calc.py:3: return a - b"
+"""The finding tests.test_feed.FakeAuditor names while calc.py subtracts."""
 
 
 def _auto_history(rounds: int) -> list[dict[str, Any]]:
@@ -158,14 +160,48 @@ def test_d2_note_does_not_tell_an_auto_run_to_ask_the_user(tmp_path: Path) -> No
 # -- D3: working state survives stage 2 ------------------------------------------
 
 
-def test_d3_edited_files_survive_compaction(tmp_path: Path) -> None:
-    request = _compacted_request(tmp_path)
-    assert "src/util_math.py" in json.dumps(request)
+def test_d3_edited_files_survive_compaction(repo: Path) -> None:  # noqa: F811
+    # Respelled (COMPACTFIX) to the real caller's shape: run_auto is the only
+    # caller that sets `changed_files`; the hand-built history had none.
+    # Expectation unchanged: the edited path is in the compacted request.
+    (repo / "big.py").write_text(BIG)
+    git(repo, "add", "big.py")
+    git(repo, "commit", "-q", "-m", "big")
+    edit = [call("write_file", "w0", path="src/util_math.py", content="X = 1\n")]
+    reads = [[call("read_file", f"r{i}", path="big.py")] for i in range(8)]
+    client = Scripted([edit, *reads, finish()])
+    options = AutoOptions(task=TASK, repo=repo, run_id="d3", arm="E", context_tokens=40_000)
+    run_auto(options, cast(VllmClient, client))
+    request = client.asked[-1]["messages"]
+    assert not any(c["id"] == "w0" for m in request for c in m.get("tool_calls") or [])
+    note = next(m for m in request if str(m.get("content")).startswith("[Earlier conversation"))
+    assert "src/util_math.py" in note["content"]
 
 
-def test_d3_latest_audit_finding_survives_compaction(tmp_path: Path) -> None:
-    request = _compacted_request(tmp_path)
-    assert AUDIT in json.dumps(request)
+def test_d3_latest_audit_finding_survives_compaction(repo: Path) -> None:  # noqa: F811
+    # Respelled (COMPACTFIX) to the real caller's shape: the finding reaches
+    # the model through the audit feed (arm E+A+F), which the hand-built
+    # history never had. Expectation unchanged: the finding is in the request
+    # after the message that delivered it is gone.
+    (repo / "big.py").write_text(BIG)
+    git(repo, "add", "big.py")
+    git(repo, "commit", "-q", "-m", "big")
+    edit = [call("edit_file", "e0", path="calc.py", old="def add", new="# adds\ndef add")]
+    reads = [[call("read_file", f"r{i}", path="big.py")] for i in range(8)]
+    client = Scripted([edit, [call("finish", "f0", summary="x")], *reads], tail=finish("y", "f9"))
+    options = AutoOptions(
+        task=TASK,
+        repo=repo,
+        run_id="d3a",
+        arm="E+A+F",
+        context_tokens=40_000,
+        auditor_factory=lambda *a: FakeAuditor(),
+    )
+    run_auto(options, cast(VllmClient, client))
+    request = client.asked[10]["messages"]  # the last request before the tail's finish
+    assert not any(m.get("tool_call_id") == "f0" for m in request)
+    note = next(m for m in request if str(m.get("content")).startswith("[Earlier conversation"))
+    assert AUDIT in note["content"]
 
 
 # -- D4: tool-call pairing and the served template --------------------------------

@@ -46,6 +46,7 @@ from saddle.events import (
 from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.journal import SpanRecord, append_span, build_span, read_entries, read_spans
+from saddle.memory import is_test_command
 from saddle.packet import compile_packet, render_packet_text
 from saddle.transcript import session_line
 
@@ -80,11 +81,10 @@ AUDIT_REFUSED: Final = "audit refused"
 WAITING_FOR_YOU: Final = "waiting for you"
 WORKING: Final = "working"
 EDIT_TOOLS: Final = frozenset({"edit_file", "write_file"})
-_TESTISH: Final = ("pytest", "unittest", "tox", "nox", "npm test", "cargo test", "go test")
 
 
 def _is_test_command(arguments: str) -> bool:
-    return any(word in arguments for word in _TESTISH)
+    return is_test_command(arguments)
 
 
 def tool_phase(name: str, arguments: str) -> str:

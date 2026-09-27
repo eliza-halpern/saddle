@@ -40,6 +40,7 @@ from saddle.events import (
 )
 from saddle.journal import (
     AUDIT_SPAN_HASHES,
+    COMPACTION_SPAN,
     append_record,
     append_span,
     build_record,
@@ -48,7 +49,15 @@ from saddle.journal import (
     write_attempt_sidecar,
 )
 from saddle.labels import label_for
-from saddle.memory import ASK_USER, CHARS_PER_TOKEN, REREAD, compact, estimate_tokens
+from saddle.memory import (
+    ASK_USER,
+    CHARS_PER_TOKEN,
+    REREAD,
+    compact,
+    estimate_tokens,
+    is_test_command,
+    run_state,
+)
 from saddle.tools import (
     CHECK_TOOL,
     FINISH_TOOL,
@@ -250,6 +259,13 @@ class AutoRun:
     and 1). Off, the tool is not offered and a `check` call is an unknown tool."""
     asked: set[str] = field(default_factory=set)
     """Which of the run's own questions ("test-edits", "budget") were put; each at most once."""
+    last_test: tuple[str, str] | None = None
+    """The newest test command the run ran and its full result, for the
+    compaction state block (`memory.run_state`)."""
+    delivered_audit: str = ""
+    """The newest audit text the model was shown (a delivered checkpoint or
+    a refused finish's findings). A withheld audit (arm E+A) never lands here."""
+    compactions: int = 0
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -523,16 +539,11 @@ def run_turn(
                 if not stop():
                     yield from _offer_budget(auto, options.journal, node_id)
             taken += 1
-            dropped, summary = compact(
-                messages,
-                limit_tokens=options.compaction_limit(),
-                pin_task=auto is not None,
-                ask_hint=REREAD if auto is not None else ASK_USER,
-            )
-            if dropped:
-                yield Compaction(
-                    dropped_messages=dropped, kept_messages=len(messages), summary=summary
-                )
+            # Before every request, not once per turn: an autonomous run is
+            # one turn, so a compaction before the loop only ever saw
+            # [system, task] (COMPACTRES F0; pi-blackhole's CHANGELOG #38
+            # fixed the same defect, OpenHands condenses at every step).
+            yield from _compact(messages, options, node_id)
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []
@@ -577,6 +588,7 @@ def run_turn(
                     if heard:
                         yield AuditNote(text=heard)
                         nudge = f"{nudge}\n\n{heard}"
+                        auto.delivered_audit = heard
                     messages.append({"role": "user", "content": nudge})
                     continue
                 break
@@ -664,6 +676,9 @@ def run_turn(
                     if heard:
                         yield AuditNote(text=heard)
                         seen = f"{result}\n\n{heard}"
+                        auto.delivered_audit = heard
+                if auto is not None:
+                    _note_round(auto, call, result)
                 if auto is not None and auto.audit is not None:
                     seen += yield from _consult(auto, options.journal, node_id, call, seen)
                 tools.append({"name": call.name, "arguments": call.arguments, "result": seen})
@@ -698,6 +713,69 @@ def run_turn(
         kind=f"auto-{auto.outcome}" if auto is not None else "",
     )
     yield TurnEnd(turn=turn, proof=proof)
+
+
+def _compact(messages: list[dict[str, Any]], options: TurnOptions, node_id: str) -> Iterator[Event]:
+    """Compact before one request; announce it, and seal it in a run's ledger."""
+    auto = options.auto
+    before = estimate_tokens(messages)
+    dropped, summary = compact(
+        messages,
+        limit_tokens=options.compaction_limit(),
+        pin="first" if auto is not None else "last",
+        hint=REREAD if auto is not None else ASK_USER,
+        state=(lambda: _run_state(auto)) if auto is not None else None,
+    )
+    if not summary:
+        return
+    event = Compaction(dropped_messages=dropped, kept_messages=len(messages), summary=summary)
+    if auto is not None:
+        auto.compactions += 1
+        record = {
+            "n": auto.compactions,
+            "dropped": dropped,
+            "kept": len(messages),
+            "estimate_before": before,
+            "estimate_after": estimate_tokens(messages),
+            "limit": options.compaction_limit(),
+        }
+        append_span(
+            options.journal,
+            build_span(
+                node_id=node_id,
+                argv=[COMPACTION_SPAN, json.dumps(record, sort_keys=True)],
+                duration_ms=0,
+                exit_code=0,
+                detail=summary,
+                kind="agent",
+                name=COMPACTION_SPAN,
+                parent_id=auto.run_span,
+            ),
+        )
+    yield event
+
+
+def _run_state(auto: AutoRun) -> str:
+    return run_state(
+        files=auto.changed_files(),
+        test=auto.last_test,
+        audit=auto.delivered_audit,
+        spent_tokens=auto.budget.spent_tokens,
+        token_budget=auto.budget.tokens,
+        elapsed_s=auto.budget.elapsed(),
+        time_budget_s=auto.budget.time_s,
+    )
+
+
+def _note_round(auto: AutoRun, call: ToolCall, result: str) -> None:
+    """Keep what the state block reads from one tool call of a run."""
+    if call.name == FINISH_TOOL and result.startswith(FINISH_REFUSED):
+        auto.delivered_audit = result.split("\n\n", 1)[-1]
+    if call.name != "run_command" or not _is_object(call.arguments):
+        return
+    command = json.loads(call.arguments).get("command")
+    if isinstance(command, str) and is_test_command(command):
+        auto.last_test = (command, result)
 
 
 def _assistant(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str, Any]:

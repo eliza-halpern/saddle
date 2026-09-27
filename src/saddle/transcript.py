@@ -17,6 +17,7 @@ from saddle.gates import GateCheck
 from saddle.journal import (
     AUTO_OUTCOMES,
     AUTO_START,
+    COMPACTION_SPAN,
     JournalEntry,
     PlanRecord,
     ProofRecord,
@@ -356,6 +357,8 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
         )
     if name == "auto:spend":
         return None  # a round's spend: the card's meters show it, not a line
+    if name == COMPACTION_SPAN:
+        return SessionLine("≈", f"context compacted · {_first_line(entry.detail)}", "info", cite)
     if name.startswith("auto:"):
         outcome = name.removeprefix("auto:")
         return SessionLine(
