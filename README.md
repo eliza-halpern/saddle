@@ -73,6 +73,12 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
 - Self-operated vLLM ≥ 0.28 server with guided decoding (XGrammar) + KV offloading —
   the proven setup is [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)
 - pytest, coverage.py, ruff, mutmut (sampled per node in Tier 1; the merge-time Tier 2 is not built)
+- Linux with `bwrap` (bubblewrap) that can start: Task runs refuse to run without it.
+  On Ubuntu 24.04 unprivileged user namespaces are restricted by AppArmor, so `bwrap`
+  needs the upstream `bwrap-userns-restrict` profile or an equivalent.
+- A user systemd manager (`systemd-run --user --scope` works) for the per-command memory
+  cap; without one saddle falls back to a weaker per-process address-space ceiling.
+  `SADDLE_MEMORY_MAX` sets the cap (bytes, or a number with K, M, G or T; default `6G`).
 
 ## Reading the citations in the code
 

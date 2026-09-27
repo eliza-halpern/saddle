@@ -36,7 +36,7 @@ from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.journal import append_span, build_span
-from saddle.sandbox import Sandbox
+from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
 
@@ -174,7 +174,7 @@ class AutoResult:
 
 def _git(repo: Path, *args: str) -> str:
     done = subprocess.run(
-        ["git", "-C", str(repo), *GIT_IDENTITY, *args],
+        ["git", "-C", str(repo), *HOST_GIT_GUARD, *GIT_IDENTITY, *args],
         capture_output=True,
         text=True,
         check=False,
@@ -360,7 +360,9 @@ def run_auto(
     )
     context = ToolContext(
         workdir=worktree,
-        sandbox=Sandbox.for_workdir(worktree, env=COMMAND_ENV),
+        sandbox=Sandbox.for_workdir(
+            worktree, env=COMMAND_ENV, require_isolation=True, network="none"
+        ),
         protected_tests=roots,
         syntax_guard=True,
     )

@@ -461,10 +461,16 @@ def _list_dir(ctx: ToolContext, args: Mapping[str, Any]) -> str:
 def _search(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     query = _text(args, "query", "search")
     pattern = str(args.get("glob") or "**/*")
+    if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
+        return f"error: glob {pattern!r} must stay inside the working directory"
     root = ctx.workdir.resolve()
     hits: list[str] = []
     for candidate in root.glob(pattern):
         if not candidate.is_file() or len(hits) >= MAX_MATCHES:
+            continue
+        try:  # a symlink out of the tree is refused here as read_file refuses it
+            resolve_within(root, candidate)
+        except OutsideRootError:
             continue
         try:
             text = candidate.read_text(encoding="utf-8", errors="strict")
