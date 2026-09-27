@@ -31,6 +31,33 @@ from tests.test_feed import CHECK, FakeAuditor, Reactive, StopsAfter, Surfaces
 
 BUGGY = "def add(a, b):\n    return a - b\n"
 
+FINISH_PATH_JUDGES = [
+    "src/saddle/feed.py",
+    "src/saddle/engine.py",
+    "src/saddle/memcap.py",
+    "src/saddle/sandbox.py",
+    "tests/test_feed.py",
+    "tests/test_feed_covtext.py",
+    "tests/test_feed_said_once.py",
+    "tests/test_feed_tally.py",
+    "tests/test_chat_engine.py",
+    "tests/test_memcap.py",
+    "tests/test_sandbox_reach.py",
+]
+"""What decides whether a finish is accepted (the feed and the turn engine)
+and what confines and caps the auditor's runs (sandbox, memory cap), with the
+test files that pin each."""
+
+NEAR_MISSES = [
+    "src/saddle/feeds.py",
+    "src/saddle/engine_notes.py",
+    "src/saddle/sandbox_util.py",
+    "tests/test_feed_extra.py",
+    "tests/test_engine.py",
+]
+"""Named files, never a pattern: paths that share a guarded module's stem but
+are not it, and must still finish."""
+
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -63,6 +90,7 @@ def saddle_repo(tmp_path: Path) -> Path:
             "src/saddle/mutant_text.py": "WIDTH = 1\n",
             "tests/test_gates.py": "def test_limit():\n    assert 1\n",
             "tests/conftest.py": "",
+            **dict.fromkeys(FINISH_PATH_JUDGES + NEAR_MISSES, "LIMIT = 1\n"),
         },
     )
 
@@ -202,7 +230,24 @@ def test_an_audited_accept_on_a_guarded_path_is_held(saddle_repo: Path) -> None:
     assert (result.outcome, sidecar(result)["audit"]["passed"]) == ("stopped", True)
 
 
+@pytest.mark.parametrize("path", FINISH_PATH_JUDGES)
+def test_a_run_that_edits_the_finish_path_or_the_confinement_stops_needing_you(
+    saddle_repo: Path, path: str
+) -> None:
+    result = _run(saddle_repo, Scripted([_edit(path), finish()]), allow_test_edits=True)
+    assert result.outcome == "stopped"
+    assert result.reason == GUARDED_STOP.format(paths=path)
+    assert sidecar(result)["guarded_paths"] == [path]
+
+
 # -- known-good: what the guard must not stop ------------------------------------
+
+
+@pytest.mark.parametrize("path", NEAR_MISSES)
+def test_a_run_on_a_near_miss_of_a_guarded_name_finishes(saddle_repo: Path, path: str) -> None:
+    result = _run(saddle_repo, Scripted([_edit(path), finish()]), allow_test_edits=True)
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+    assert "guarded_paths" not in sidecar(result)
 
 
 def test_a_run_on_an_unrelated_saddle_module_finishes(saddle_repo: Path) -> None:
