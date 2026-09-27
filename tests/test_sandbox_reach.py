@@ -499,3 +499,122 @@ def test_a_command_runs_in_its_own_capped_cgroup(work: Path) -> None:
         finally:
             box.kill(terminal.id)
         assert theirs != mine, box.isolation
+
+
+# -- tools the gates need, where they live under HOME -------------------------
+
+
+def _venv_with_tool(home: Path, tool: str) -> Path:
+    """A real venv under a stand-in HOME holding a stand-in gate tool."""
+    venv = home / "proj" / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
+    script = venv / "bin" / tool
+    script.write_text(
+        f"#!{venv / 'bin' / 'python'}\nimport sys\nprint('{tool} from', sys.prefix)\n"
+    )
+    script.chmod(0o755)
+    return venv
+
+
+@needs_bwrap
+def test_a_gate_tool_in_a_venv_under_home_still_runs(
+    work: Path, outside: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = outside / "home"
+    venv = _venv_with_tool(home, "ruff")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    monkeypatch.setenv("PATH", f"{venv / 'bin'}:/usr/bin:/bin")
+    code, out = sh(Sandbox.for_workdir(work), "ruff")
+    assert code == 0, out
+    assert f"ruff from {venv}" in out
+
+
+@needs_bwrap
+def test_exposing_a_venv_under_home_hides_the_rest_of_home(
+    work: Path, outside: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = outside / "home"
+    venv = _venv_with_tool(home, "ruff")
+    (home / "proj" / "secret.txt").write_text("PLANTED_BESIDE_VENV\n")
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "id_planted").write_text("PLANTED_KEY\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    monkeypatch.setenv("PATH", f"{venv / 'bin'}:/usr/bin:/bin")
+    box = Sandbox.for_workdir(work)
+    _, out = sh(box, f"cat {home}/proj/secret.txt {home}/.ssh/id_planted 2>/dev/null")
+    assert "PLANTED" not in out, out
+    _, listed = sh(box, f"ls -A {home} {home}/proj 2>/dev/null")
+    assert "secret.txt" not in listed.split(), listed
+    assert ".ssh" not in listed.split(), listed
+
+
+@needs_bwrap
+def test_a_gate_tool_linked_onto_path_from_a_venv_still_runs(
+    work: Path, outside: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the shape `uv tool install` / pipx leave: ~/.local/bin/<tool> -> a tool venv
+    home = outside / "home"
+    venv = _venv_with_tool(home, "mutmut")
+    shims = home / ".local" / "bin"
+    shims.mkdir(parents=True)
+    (shims / "mutmut").symlink_to(venv / "bin" / "mutmut")
+    (shims / "unrelated").write_text("#!/bin/sh\necho PLANTED_SHIM\n")
+    (shims / "unrelated").chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", f"{shims}:/usr/bin:/bin")
+    box = Sandbox.for_workdir(work)
+    code, out = sh(box, "mutmut")
+    assert code == 0, out
+    assert f"mutmut from {venv}" in out
+    _, out = sh(box, f"unrelated; cat {shims}/unrelated")
+    assert "PLANTED_SHIM" not in out, out
+
+
+@needs_bwrap
+def test_the_real_gate_tools_run_by_bare_name_under_bwrap(work: Path) -> None:
+    (work / "pyproject.toml").write_text('[tool.mutmut]\nsource_paths = ["calc.py"]\n')
+    box = Sandbox.for_workdir(work)
+    for command, expected in {
+        "ruff --version": "ruff",
+        "pytest --version": "pytest",
+        "coverage --version": "Coverage",
+        "mutmut --help": "Usage: mutmut",
+    }.items():
+        if shutil.which(command.split()[0]) is None:  # pragma: no cover - the dev venv has them
+            pytest.skip(f"{command.split()[0]} is not on PATH")
+        code, out = sh(box, command)
+        assert code == 0, (command, out)
+        assert expected in out, (command, out)
+
+
+# -- host-side git: what saddle itself runs in a tree a command could touch ----
+
+
+def plant_host_hooks(repo: Path, markers: Path) -> None:
+    """Hooks and an fsmonitor in `repo`'s config, each touching a marker.
+
+    Under bwrap a command cannot write these (the test above); without it, or
+    in a repo that already had them, saddle's own git is the last line."""
+    hooks = markers / "hooks"
+    hooks.mkdir()
+    for name in ("pre-commit", "post-commit", "post-checkout", "post-merge", "post-index-change"):
+        (hooks / name).write_text(f"#!/bin/sh\ntouch {markers}/ran-{name}\n")
+        (hooks / name).chmod(0o755)
+    git(repo, "config", "core.hooksPath", str(hooks))
+    git(repo, "config", "core.fsmonitor", f"touch {markers}/ran-fsmonitor; false")
+
+
+@needs_bwrap
+def test_saddles_own_git_around_a_run_runs_no_planted_hook(repo: Path, tmp_path: Path) -> None:
+    markers = tmp_path / "markers"
+    markers.mkdir()
+    plant_host_hooks(repo, markers)
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")  # a change to commit
+    result = auto(repo, Scripted([finish()]))
+    assert sorted(p.name for p in markers.glob("ran-*")) == []
+    # the known-good half: the run still set up its worktree and committed
+    assert result.commit
+    assert git(result.worktree, "log", "-1", "--format=%s").startswith("saddle auto r1")

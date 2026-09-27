@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from packet_seed import git, make_repo, seed
 from starlette.testclient import TestClient
+from test_sandbox_reach import plant_host_hooks
 from test_ui3_mode import NoModel
 
 from saddle.packet import Packet, Row
@@ -70,6 +71,39 @@ def test_a_finished_audited_run_fast_forwards_into_a_clean_checkout(
     assert "a + b" in (repo / "calc.py").read_text()
     log = (store.journal_path(sid).parent / "actions.log").read_text()
     assert f"\t{rid}\tmerge\tFast-forwarded main" in log
+
+
+def test_a_merge_runs_no_hook_or_fsmonitor_the_repo_config_names(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    """The run's worktree shares the checkout's config, so a hook or an
+    fsmonitor planted there by a command (on a box without bwrap) would run
+    at merge time. saddle's merge and cherry-pick run with neither."""
+    sid, rid, branch = seed(store, repo, "audited")
+    markers = tmp_path / "markers"
+    markers.mkdir()
+    plant_host_hooks(repo, markers)
+    with client_for(store, repo) as client:
+        done = client.post(url(sid, rid, "merge"), json={"confirm": branch})
+    assert done.status_code == 200, done.text
+    assert head(repo) == git(repo, "rev-parse", branch).strip()
+    assert sorted(p.name for p in markers.glob("ran-*")) == []
+
+
+def test_a_cherry_pick_runs_no_hook_the_repo_config_names(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    sid, rid, branch = seed(store, repo, "audited")
+    (repo / "README").write_text("calc, moved on\n")
+    git(repo, "commit", "-qam", "meanwhile")
+    markers = tmp_path / "markers"
+    markers.mkdir()
+    plant_host_hooks(repo, markers)
+    with client_for(store, repo) as client:
+        done = client.post(url(sid, rid, "merge"), json={"confirm": branch})
+    assert done.status_code == 200, done.text
+    assert "a + b" in (repo / "calc.py").read_text()
+    assert sorted(p.name for p in markers.glob("ran-*")) == []
 
 
 def test_a_checkout_that_moved_on_gets_the_runs_commits_cherry_picked(
