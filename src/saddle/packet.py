@@ -686,18 +686,18 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             )
         )
     elif runs:
-        last = runs[-1]
-        code = _exit_of(last.detail)
-        said = f"exit {code}" if code is not None else "no exit code recorded"
+        last_run = runs[-1]
+        code = _exit_of(last_run.detail)
+        exited = f"exit {code}" if code is not None else "no exit code recorded"
         rows.append(
             Row(
                 "tests",
                 "Tests",
                 "observed",
-                f"The executor last ran `{_command(last)}` → {said}. "
+                f"The executor last ran `{_command(last_run)}` → {exited}. "
                 f"That is its own run ({_n(len(runs), 'test command')} in all), "
                 "not an auditor verdict.",
-                (last.record_hash,),
+                (last_run.record_hash,),
             )
         )
     else:
@@ -928,23 +928,23 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     # -- prompt constants (FEEDFIX item 1; reporting only) ---------------------------
     constants = evidence.get("prompt_constants") if evidence is not None else None
     if isinstance(constants, dict) and outcome is not None:
-        said = prompt_constants.items(constants)
+        unnamed = prompt_constants.items(constants)
         count = len(constants.get("named", []))
         rows.append(
             Row(
                 "prompt-constants",
                 "Prompt constants",
-                "not-proven" if said else "observed",
+                "not-proven" if unnamed else "observed",
                 (
                     f"The task names {_n(count, 'constant')}; the source never names "
-                    f"{len(said)} of them. Not a verdict: the source may be right for a "
+                    f"{len(unnamed)} of them. Not a verdict: the source may be right for a "
                     "reason a name check cannot see."
-                    if said
+                    if unnamed
                     else f"The task names {_n(count, 'constant')}; the source names every one "
                     "it did not say was replaced."
                 ),
                 (outcome.record_hash,),
-                tuple(said),
+                tuple(unnamed),
             )
         )
 
