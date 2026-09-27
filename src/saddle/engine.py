@@ -391,8 +391,9 @@ class TurnOptions:
     keep_reasoning: bool = False
     """Autonomous runs only: send each round's reasoning back on its
     assistant message (field `reasoning`) for the rest of the turn, as the
-    untouched agent does (SPEED F-a). Off by default so arms E/E+A/E+A+F
-    send byte-identical requests; ignored in interactive chat."""
+    untouched agent does (SPEED F-a). `auto.run_auto` always sets it from
+    `AutoOptions.keep_reasoning`, which is on by default; ignored in
+    interactive chat."""
 
     def tool_tokens(self) -> int:
         """What the tool schemas cost, which they do on every single request.

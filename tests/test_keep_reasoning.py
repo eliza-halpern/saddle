@@ -10,15 +10,25 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import jinja2
+import pytest
+from starlette.testclient import TestClient
 
 from saddle import cli
-from saddle.auto import AutoOptions, run_auto
+from saddle.auto import AutoError, AutoOptions, run_auto
 from saddle.engine import TurnOptions, run_turn
+from saddle.sessions import SessionStore
+from saddle.web import tasks
+from saddle.web.app import ChatServer, build_app
+from saddle.web.tasks import TaskRun
 from tests.test_auto import namespace, repo  # noqa: F401  (fixture)
+from tests.test_ui3_mode import NoModel, _server_of
 from tests.test_usage import FakeServer, _delta, _finish_call, _sealed, _sse
 
 TEMPLATE = Path(__file__).parent / "fixtures" / "qwen38_chat_template.jinja"
@@ -78,13 +88,136 @@ def test_without_the_flag_no_request_carries_reasoning(repo: Path) -> None:  # n
 
 
 def test_the_cli_flag_reaches_the_wire(repo: Path) -> None:  # noqa: F811
-    assert cli.build_parser().parse_args(["auto", "t"]).keep_reasoning is False
+    assert cli.build_parser().parse_args(["auto", "t"]).keep_reasoning is True
     server = FakeServer(_script())
     code = cli.run_auto_command(
         namespace(repo, keep_reasoning=True), server.client(), stdout=io.StringIO()
     )
     assert code == 0
     assert [m.get("reasoning") for m in _assistants(server.payloads[1])] == [R1]
+
+
+# -- the default (#72): on for `saddle auto` and chat-started runs; opt-out off --
+
+
+def test_saddle_auto_keeps_reasoning_by_default_on_the_wire_and_in_the_seal(
+    repo: Path,  # noqa: F811
+) -> None:
+    server = FakeServer(_script())
+    args = cli.build_parser().parse_args(
+        ["auto", "make add add", "--repo", str(repo), "--no-audit"]
+    )
+    code = cli.run_auto_command(args, server.client(), stdout=io.StringIO())
+    assert code == 0
+    assert [m.get("reasoning") for m in _assistants(server.payloads[2])] == [R1, R2]
+    assert f"<think>\n{R1}\n</think>" in _render(server.payloads[2])
+    evidence, _ = _sealed(_only_run(repo))
+    assert evidence["prompt_shape"] == {"keep_reasoning": True}
+
+
+def test_no_keep_reasoning_turns_it_off_on_the_wire_and_in_the_seal(
+    repo: Path,  # noqa: F811
+) -> None:
+    server = FakeServer(_script())
+    argv = ["auto", "make add add", "--repo", str(repo), "--no-audit", "--no-keep-reasoning"]
+    code = cli.run_auto_command(
+        cli.build_parser().parse_args(argv), server.client(), stdout=io.StringIO()
+    )
+    assert code == 0
+    for payload in server.payloads:
+        assert R1 not in json.dumps(payload)
+    evidence, _ = _sealed(_only_run(repo))
+    assert evidence["prompt_shape"] == {"keep_reasoning": False}
+
+
+def _only_run(repo_path: Path) -> SimpleNamespace:
+    (journal,) = (repo_path / ".saddle" / "runs").glob("*/proofs.jsonl")
+    return SimpleNamespace(journal=journal)
+
+
+def test_auto_options_default_is_on() -> None:
+    assert AutoOptions(task="t", repo=Path()).keep_reasoning is True
+
+
+def test_a_chat_started_run_keeps_reasoning_unless_turned_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chat's Task path builds its own AutoOptions (web.tasks.execute)."""
+    seen: list[bool] = []
+
+    def fake_auto(options: AutoOptions, client: Any, **_: Any) -> None:
+        seen.append(options.keep_reasoning)
+        msg = "stop here"
+        raise AutoError(msg)
+
+    monkeypatch.setattr(tasks, "run_auto", fake_auto)
+    repo_path = tmp_path / "r"
+    repo_path.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo_path)], check=True)
+    for extra in ({}, {"keep_reasoning": False}):
+        run = TaskRun(run_id="r1", session_id="s", task="t", time_budget_s=60, token_budget=10)
+        tasks.execute(
+            run,
+            workdir=repo_path,
+            client=None,
+            publish=lambda _: None,
+            chat_journal=tmp_path / "chat.jsonl",
+            reasoning_effort="none",
+            audit=None,
+            **extra,  # type: ignore[arg-type]
+        )
+    assert seen == [True, False]
+
+
+def test_the_chat_server_passes_its_setting_to_each_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    got: list[Any] = []
+
+    def fake_execute(run: TaskRun, **kwargs: Any) -> tuple[str, None]:
+        got.append(kwargs["keep_reasoning"])
+        run.state = "finished"
+        return "finished", None
+
+    monkeypatch.setattr(tasks, "execute", fake_execute)
+    for keep in (True, False):
+        store = SessionStore(tmp_path / f"s{keep}")
+        sid = store.create(workdir=str(tmp_path)).id
+        app = build_app(store, NoModel, default_workdir=tmp_path, keep_reasoning=keep)
+        with TestClient(app) as client:
+            client.post(f"/api/sessions/{sid}/task", json={"text": "fix it"})
+            deadline = time.monotonic() + 5
+            while len(got) < (1 if keep else 2):
+                assert time.monotonic() < deadline, "timed out"
+                time.sleep(0.02)
+    assert got == [True, False]
+    assert (
+        _server_of(
+            build_app(SessionStore(tmp_path / "d"), NoModel, default_workdir=tmp_path)
+        ).keep_reasoning
+        is True
+    )
+    direct = ChatServer(SessionStore(tmp_path / "c"), NoModel, default_workdir=tmp_path)
+    assert direct.keep_reasoning is True
+
+
+def test_saddle_chat_has_the_same_default_and_off_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import uvicorn
+
+    from saddle.web import app as web_app
+
+    served: list[bool] = []
+    monkeypatch.setattr(
+        uvicorn, "run", lambda app, **kw: served.append(_server_of(app).keep_reasoning)
+    )
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    for extra in ([], ["--no-keep-reasoning"]):
+        argv = ["chat", "--no-open", "--workdir", str(tmp_path), "--sessions", str(tmp_path / "s")]
+        assert cli.main([*argv, *extra], stdout=io.StringIO()) == 0
+    assert served == [True, False]
+    assert web_app.serve.__kwdefaults__["keep_reasoning"] is True
 
 
 def test_interactive_chat_never_keeps_reasoning(tmp_path: Path) -> None:

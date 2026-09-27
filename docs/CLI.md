@@ -22,7 +22,7 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--finish-refusal-cap N` | `3` | stop `audit unresolved` after N consecutive refusals on an unchanged finding set; must be ≥ 1 |
 | `--tier2 {score,shortlist}` | `score` | tier-2 mutation verdict: `score` is the 85% kill-rate bar; `shortlist` makes an open changed-line survivor `not-proven` (surfaced, not refused) and names it, with coverage as a locator only (USING-SADDLE.md §7a) |
 | `--mutant-shortlist N` | `5` | with `--tier2 shortlist`: how many surviving mutants a refused finish names, one per changed line first |
-| `--keep-reasoning` | off | send each round's reasoning back to the model for the rest of the run; sealed as `prompt_shape.keep_reasoning`; effect under measurement |
+| `--keep-reasoning` / `--no-keep-reasoning` | on | send each round's reasoning back to the model for the rest of the run; sealed as `prompt_shape.keep_reasoning`. `saddle chat` takes the same pair for the runs it starts |
 | `--check-tool` | off | offer the model a `check` tool that runs audit tiers 0 and 1 on the current tree before finish (arm E+A+F only) |
 | `--base-url URL` | `http://127.0.0.1:18020/v1` | model server |
 | `--model ID` | `qwen3.8-27b` | model id |
@@ -99,6 +99,7 @@ Exit 0 prints the `OK: … ledger verifies …` line and a transcript. Exit 1 pr
 | `--sessions` | `~/.saddle/sessions` |
 | `--base-url`, `--model` | as for `auto` |
 | `--no-open` | do not open a browser |
+| `--keep-reasoning` / `--no-keep-reasoning` | on: task runs the chat starts keep each round's reasoning, as `auto` does |
 
 Exit 2 if the token file cannot be created (`FileExistsError`).
 

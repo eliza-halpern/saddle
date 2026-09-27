@@ -135,10 +135,13 @@ class AutoOptions:
     finish_refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP
     """Consecutive `finish` refusals on an unchanged failing finding set before
     an honest stop, reason `audit unresolved` (`engine.AutoRun`)."""
-    keep_reasoning: bool = False
-    """`--keep-reasoning`: send each round's reasoning back within the run
-    (engine.TurnOptions.keep_reasoning). Loosened prompt shape, default off;
-    sealed as `prompt_shape.keep_reasoning` either way."""
+    keep_reasoning: bool = True
+    """Send each round's reasoning back within the run
+    (engine.TurnOptions.keep_reasoning). On by default for `saddle auto` and
+    chat-started runs, so every run has one prompt shape; `--no-keep-reasoning`
+    turns it off (without it the served chat templates put an empty reasoning
+    block in every past round). Sealed as `prompt_shape.keep_reasoning` either
+    way."""
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten (T5 rule 8). A failing
     assertion-preservation finding naming only these is classed `sanctioned`:

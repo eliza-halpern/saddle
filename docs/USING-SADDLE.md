@@ -482,12 +482,16 @@ that confirm step; `saddle auto` itself leaves the branch and its worktree for y
 
 Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
 
-- `--keep-reasoning` (off by default): sends each round's reasoning back to the model
-  for the rest of the run, as both `reasoning_content` (the key the served chat template
-  reads) and `reasoning`. Sealed in the outcome as `prompt_shape.keep_reasoning` on
-  every run, on or off. With the flag off the requests sent are byte-identical to
-  before the flag existed. Whether it helps is **under measurement** (an E vs E+R A/B);
-  nothing here claims a result. The interactive chat never keeps reasoning.
+- `--keep-reasoning` (on by default; `--no-keep-reasoning` turns it off): sends each
+  round's reasoning back to the model for the rest of the run, as both
+  `reasoning_content` (the key the served chat template reads) and `reasoning`. Without
+  it the served templates insert an empty reasoning block for every past round. Sealed
+  in the outcome as `prompt_shape.keep_reasoning` on every run, on or off; with it off
+  the requests sent are byte-identical to before the flag existed. An A/B on T5 (6 runs
+  each way) finished faster with it on (median wall 735 s against 1121 s) and was
+  correct at least as often (6/6 against 5/6), which is why it is the default. Runs
+  started from `saddle chat` use the same default and the same off switch. The
+  interactive chat turn itself never keeps reasoning.
 - `--check-tool` (off by default, arm E+A+F only): offers the model a `check` tool that
   runs audit tiers 0 and 1 on the current tree before `finish`; each call is journaled
   as an `audit:check` span (`feed.CHECK_SPAN`).
