@@ -449,6 +449,50 @@ def test_a_retry_with_no_question_has_an_empty_prompt_and_no_index(
     assert records[0]["start_index"] == -1
 
 
+def _retry_seal(events: list[Event], options: TurnOptions) -> str:
+    """The diff hash sealed by a retry's proof (turn 2)."""
+    proof = one(events[-1], TurnEnd).proof
+    records = [json.loads(line) for line in options.journal.read_text().splitlines()]
+    return str(next(r for r in records if r.get("record_hash") == proof)["diff_hash"])
+
+
+def _retry_hash(prompt: str | None, reply: str) -> str:
+    """What a turn-2 proof with no parent and no reasoning seals for `prompt`."""
+    from saddle.journal import build_record
+
+    return build_record(
+        evidence_id="chat#2",
+        node_id="chat#2",
+        diff=json.dumps({"prompt": prompt, "rounds": [{"reply": reply, "tools": []}]}),
+        parent_proofs=[],
+        gate_outputs=[],
+        requirement_ids=[],
+        thinking="",
+    ).diff_hash
+
+
+def test_a_retry_is_sealed_with_the_question_it_answers(options: TurnOptions) -> None:
+    # A retry passes no text, but the turn it seals answered a question: the
+    # proof must commit to that question, as TurnStart reports it, not to null.
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": "name three frogs"},
+        {"role": "assistant", "content": "no"},
+    ]
+    events, _ = _retry(FakeClient([[content("tree, bull, glass")]]), options, messages)
+    assert one(events[0], TurnStart).prompt == "name three frogs"
+    assert _retry_seal(events, options) == _retry_hash("name three frogs", "tree, bull, glass")
+    assert _retry_seal(events, options) != _retry_hash(None, "tree, bull, glass")
+
+
+def test_a_retry_with_no_question_is_sealed_with_an_empty_prompt_not_null(
+    options: TurnOptions,
+) -> None:
+    messages: list[dict[str, Any]] = [{"role": "system", "content": "be brief"}]
+    events, _ = _retry(FakeClient([[content("ok")]]), options, messages)
+    assert _retry_seal(events, options) == _retry_hash("", "ok")
+    assert _retry_seal(events, options) != _retry_hash(None, "ok")
+
+
 # -- images -------------------------------------------------------------------
 
 
