@@ -167,6 +167,8 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 >   * *Tool Masking:* Each name in `allowed_tools` is one harness capability, and a node gets it only by listing it: `read_file` puts the repo files' contents in the worker prompt (without it the prompt lists the file names only); `write_file` lets the node create files, subject to its kind's scope rule (without it any added file fails Tier-1 item 6); `run_tests` puts the test command's captured output in the repair prompt after a failed attempt, and `lint` does the same for ruff's (without them the repair prompt carries the gate verdict lines only). Autofix is not on this list: it is harness hygiene, not a capability the plan chooses.
 >
 > *Status (2026-09-18): built — `TOOL_BINDINGS` (`cli.py`) is the registry and `RUN_ALLOWLIST` is derived from it, so a name with no binding cannot be validated into a plan; WORKPLAN T3-4.*
+>
+> *Status (2026-09-26, P2-1): an `impl` node's first attempt is drawn from a task-first prompt (`cli.build_task_first_prompt`, opening with `slice.TASK_FIRST_PREAMBLE`): the task and the files, without the requirement list, literals, gate command and working rules the structured prompt carries (loosened; F21.77). Retries, `test` and `refactor` nodes keep the structured prompt. Which prompt a draw came from is read off the prompt text itself and sealed in the attempt sidecar as `prompt_shape` (`slice.prompt_shape`: `task-first` or `structured`), so the field cannot say task-first about a draw that was not.*
 
 ### Phase 3: Tiered Deterministic Environment Gates
 
@@ -243,3 +245,74 @@ Saddle is built incrementally behind decision gates — each phase must earn the
 > * **R2 — Local ops burden.** A self-operated vLLM server plus a sandbox is real ownership (upgrades, CUDA/Triton breakage, VRAM tuning) versus turnkey agent frameworks' conveniences. Price it honestly against the wall-clock winnings.
 > * **R3 — Mutation sampling is probabilistic.** A capped sample reports a kill-rate estimate, not certainty. Per-node certainty rests on Tier-1 (red-phase + coverage + requirement binding); Tier-2 is a backstop with a reported sample size, not a proof.
 > * **R4 — Inference coupling.** Guided decoding ties the harness to a server it controls. Paths that can't offer constrained decoding (llama.cpp, Ollama) can't offer the same guarantees — the harness degrades to tolerant parsing there, not to silence.
+
+## 8. Phase 2: agent plus auditor (built, 2026-09-26)
+
+Sections 1–7 specify the planner pipeline: a DAG, whole-file candidates per node, gates
+run in full one node at a time. Phase 2 inverts that for everyday work, following the
+Daily Driver page: saddle's own chat engine does the work as one continuous agent loop
+in a git worktree, and the gates run beside it as an **auditor**. The planner (`saddle
+run`, §3) is kept for long work. Measured: M3 (F21.81): no-harm verified on T5/T8,
+detection measured separately (F21.82: 65/65 planted bugs refused, 49/65 for the right
+reason). The operator's view is docs/USING-SADDLE.md; this section is the structure.
+
+**Four layers.**
+
+1. **Executor** — `engine.run_turn` run autonomously (`auto.run_auto`), one worktree and
+   branch `saddle/auto/<run-id>` per task, with a time and a token budget and an honest
+   stop when either runs out. The tools are the chat's (`tools.TOOLS`) plus `finish`.
+   Every write passes a tier-0 guard at the tool (unparseable `.py`, test paths while
+   tests are read-only). `--keep-reasoning` (off; sealed as `prompt_shape.keep_reasoning`)
+   feeds each round's reasoning back for the rest of the run; its effect is under
+   measurement.
+2. **Auditor** — `auditor.Auditor`: the gates of §3 Phase 3 (`gates`, pure predicates;
+   `evidence`, the runners) applied to a tree the executor produced, split into tiers and
+   cached by tree hash. Tier 0 checks one edited file at the edit (syntax, ruff, imports);
+   tier 1 runs at checkpoints on a copy of the tree in a background thread; tiers 1 and 2
+   run at `finish`. Findings reach the model as tool results (`feed.AuditFeed`, arm
+   E+A+F); `finish` is refused while a finding is `fail` or `blocked` and not
+   `sanctioned`, up to `--finish-refusal-cap` consecutive refusals on an unchanged set
+   (then `stopped: audit unresolved`). Arms: E (no auditor), E+A (audit and journal,
+   deliver nothing), E+A+F (deliver and refuse). Tier 2 has two modes
+   (`auditor.TIER2_MODES`): `score`, the 85% kill-rate bar of §3; and `shortlist`
+   (`gates.check_mutation_shortlist`), which surfaces instead of refusing: an open
+   changed-line survivor makes the finding `not-proven` and names it, coverage becomes a
+   locator (`not-proven`, never a refusal), and `not-proven` does not refuse `finish`
+   (`auditor.Findings.passed`). Detection under shortlist is unmeasured.
+3. **Ledger** — the journal of §3 (`journal`, `saddle verify`), with an outcome span per
+   run (`auto:finished` / `auto:stopped`), the tool-span list and the audit-span list
+   sealed in the outcome's sidecar, `attempts/` sidecars beside it, and a `Saddle-Outcome`
+   trailer on the run's final commit that `verify --anchor` checks. The auditor seals its
+   evidence beside its findings: the mutation outcome with a `mutant_detail` row per
+   scored mutant beside `audit-tier2:mutation`, and the uncovered lines' sources beside a
+   failing `audit-tier1:coverage`.
+4. **Packet** — `packet.compile_packet`, a pure function of the ledger; `check_packet`
+   refuses a row that claims without citing a record. Rows: verdict, Contract, Tests,
+   Mutation, Scope, Audit, Edit checks, Not proven, Narrative, Cost, Reproduce. Only an
+   auditor finding is `proven`/`failed`; what the executor did is `observed`; missing
+   evidence is `absent` and the row is still shown. Audit verdicts are tiers 1–2 only:
+   tier 0 is counted on its own Edit checks row, and `blocked` (tier 2 never ran) is
+   reported as blocked, never as failed (`packet._audits`, `packet._finished_but`). The
+   Mutation and coverage findings carry English compiled from the sealed record by a fixed
+   classifier and template (`mutant_text`, `coverage_text`), every sentence citing the
+   record; the web folds show the full text (`Row.summary`), the terminal packet and the
+   chat recap the compact form (`Row.recap`). The Narrative row is the model's `finish`
+   summary and is not evidence: sentences that pair a check word with a result word are
+   struck (`packet.flag_narrative`).
+
+**Lanes.** The chat (`saddle chat`, the web UI; `saddle up`, the terminal) scopes every
+turn by lane through one function, `tools.scope_turn`: **Ask** (default) offers
+`tools.READ_ONLY_TOOLS` and refuses any other call before it runs; **Edit** offers every
+tool, unaudited; **Task · Small** starts the executor above from the browser. The web and
+terminal chats share the function so the two lists cannot drift; the two Task paths
+share `auto.run_auto`. Feature, Breadth and Long lanes are not built.
+
+**Layering.** `dag → gates → evidence → runner → slice` (CLAUDE.md) is unchanged: the
+auditor imports `gates` and `evidence`; `packet` reads the ledger and imports neither
+the engine nor the auditor (`packet.AUDIT_UNRESOLVED` and `packet.CHECK_SPAN` are spelled
+locally for that reason).
+
+**Not built or unmeasured here.** Feature, Breadth and Long lanes; the `check` tool is
+opt-in (`--check-tool`); the Auditor's tier-0 ruff and import checks run under `saddle
+audit --tiered`, not during a run (the in-run guard is syntax and test paths). Rule D
+(question rate on underspecified inputs) is Phase 1/3 and is not described here.
