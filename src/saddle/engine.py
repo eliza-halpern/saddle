@@ -301,8 +301,9 @@ class AutoRun:
     """The newest test command the run ran and its full result, for the
     compaction state block (`memory.run_state`)."""
     delivered_audit: str = ""
-    """The newest audit text the model was shown (a delivered checkpoint or
-    a refused finish's findings). A withheld audit (arm E+A) never lands here."""
+    """The newest audit text the model was shown (a delivered checkpoint, a
+    refused finish's findings, or an accepted finish's surfaced not-proven
+    findings). A withheld audit (arm E+A) never lands here."""
     compactions: int = 0
 
     def stop(self, reason: str) -> None:
@@ -826,6 +827,8 @@ def _note_round(auto: AutoRun, call: ToolCall, result: str) -> None:
     """Keep what the state block reads from one tool call of a run."""
     if call.name == FINISH_TOOL and result.startswith(FINISH_REFUSED):
         auto.delivered_audit = result.split("\n\n", 1)[-1]
+    elif call.name == FINISH_TOOL and result.startswith(FINISH_SURFACED):
+        auto.delivered_audit = result[len(FINISH_SURFACED) :]
     if call.name != "run_command" or not _is_object(call.arguments):
         return
     command = json.loads(call.arguments).get("command")

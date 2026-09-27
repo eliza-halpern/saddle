@@ -428,6 +428,15 @@ class StubFeed:
     def last(self) -> dict[str, object] | None:
         return None
 
+    def unchanged(self) -> bool:
+        return False
+
+    def accepted_unchanged(self) -> bool:
+        return False
+
+    def waivers(self) -> list[str]:
+        return []
+
 
 def test_r7_a_newer_delivered_audit_replaces_the_older_one(tmp_path: Path) -> None:
     (tmp_path / "big.py").write_text(BIG)
@@ -683,3 +692,19 @@ def test_a_chat_note_names_files_edited_in_the_dropped_part() -> None:
     note = next(m for m in messages if is_note(m))
     assert "Files edited in the dropped part: p.py" in note["content"]
     assert ASK_USER in note["content"]
+
+
+def test_r7_a_surfaced_finish_findings_count_as_delivered(tmp_path: Path) -> None:
+    """INTEG6: FEEDFIX item 7 delivers an accepted finish's not-proven findings
+    to the model; the state block's "latest audit delivered" must hold them,
+    as it does a refused finish's. A plain accepted finish delivers nothing."""
+    from saddle.engine import FINISH_SURFACED, FINISH_TOOL, _note_round
+    from saddle.vllm import ToolCall
+
+    run = AutoRun(budget=RunBudget(time_s=600, tokens=10**7), run_span="s")
+    done = ToolCall(id="1", name=FINISH_TOOL, arguments=json.dumps({"summary": "x"}))
+    _note_round(run, done, "finished. Your summary is recorded as narrative, not as evidence.")
+    assert run.delivered_audit == ""  # known-good: nothing was delivered
+    _note_round(run, done, f"{FINISH_SURFACED}(not proven) mutation (tier 2): SURVIVOR-7")
+    assert "SURVIVOR-7" in run.delivered_audit  # known-bad before the fix: stays ""
+    assert FINISH_SURFACED.strip() not in run.delivered_audit  # the findings, not the preamble
