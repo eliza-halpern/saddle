@@ -38,7 +38,7 @@ from saddle.memory import (
     run_state,
 )
 from saddle.transcript import session_line
-from saddle.vllm import VllmClient
+from saddle.vllm import StreamToken, VllmClient
 from tests.test_auto import Scripted, call, finish, git, namespace, repo  # noqa: F401  (fixture)
 from tests.test_feed import EDIT_COMMENT, FakeAuditor
 from tests.test_keep_reasoning import _render
@@ -187,6 +187,24 @@ def test_r2_a_nudge_is_not_pinned_only_the_task_is() -> None:
     assert len(kept) < 11  # early nudges went; the task did not
 
 
+def test_r2_an_auto_run_with_nudges_still_pins_the_task(repo: Path) -> None:  # noqa: F811
+    """The engine's pin choice, not only `compact`'s: nudges are user messages too."""
+    _commit_big(repo)
+    talk = [StreamToken(stream="content", text="Still looking.")]
+    rounds: list[Any] = []
+    for step in _reads(8):
+        rounds += [step, talk]
+    client = Scripted([*rounds, finish()])
+    _auto(repo, client)
+    compacted = [r for r in client.asked if any(map(is_note, r["messages"]))]
+    assert compacted
+    nudged = [r for r in compacted if any(m["content"] == AUTO_NUDGE for m in r["messages"])]
+    assert nudged  # known-bad present: a later user message the pin could wrongly pick
+    for request in compacted:
+        users = [m for m in request["messages"] if m["role"] == "user"]
+        assert users[0] == {"role": "user", "content": TASK}
+
+
 def test_r2_a_chat_keeps_the_question_it_is_answering(tmp_path: Path) -> None:
     """A chat turn with many tool rounds: the question falls out of the tail."""
     (tmp_path / "big.py").write_text(BIG)
@@ -320,10 +338,13 @@ def test_r7_files_lists_what_differs_from_the_starting_commit_not_what_was_touch
         ]
     )
     _auto(repo, client)
-    note = _last_note(client)
-    files = _field(note, "files changed since the run's starting commit")
-    assert files.endswith(": src/util_math.py")  # known-good: still changed
-    assert "calc.py" not in note  # known-bad: edited, then put back, named nowhere
+    notes = [_note(r) for r in client.asked if any(map(is_note, r["messages"]))]
+    assert notes
+    # every note, including the one from the pass that dropped the calc.py edits
+    for note in notes:
+        files = _field(note, "files changed since the run's starting commit")
+        assert files.endswith(": src/util_math.py")  # known-good: still changed
+        assert "calc.py" not in note  # known-bad: edited, then put back, named nowhere
 
 
 def test_r7_files_says_none_when_nothing_is_changed(repo: Path) -> None:  # noqa: F811
@@ -544,14 +565,38 @@ def test_r8_stage1_keeps_failed_lines_elides_the_rest_and_caps_them() -> None:
 def test_r8_an_elided_result_is_not_elided_again() -> None:
     body = "A" * 5000 + "\nFAILED t.py::x\n" + "B" * 5000
     once = compact_once(body)
-    assert compact_once(once) == once
+    assert once != body
+    assert ELIDED in once  # known-good: the first pass did elide it
+    assert "FAILED t.py::x" in once
+    assert compact_once(once) == once  # known-bad: a second pass re-elides the marker
+
+
+def _batch(first: str) -> list[dict[str, Any]]:
+    """One call whose results run into the protected tail, so stage 2 cannot
+    drop it and stage 1 is the only thing that may touch `first`."""
+    ids = [str(i) for i in range(KEEP_RECENT + 1)]
+    calls = [{"id": i, "function": {"name": "read_file", "arguments": "{}"}} for i in ids]
+    messages: list[dict[str, Any]] = [{"role": "assistant", "content": "", "tool_calls": calls}]
+    messages.append({"role": "tool", "tool_call_id": ids[0], "content": first})
+    messages += [{"role": "tool", "tool_call_id": i, "content": "T" * 1500} for i in ids[1:]]
+    return messages
 
 
 def compact_once(body: str) -> str:
-    messages: list[dict[str, Any]] = [{"role": "tool", "tool_call_id": "1", "content": body}]
-    messages += [{"role": "user", "content": "r"} for _ in range(KEEP_RECENT)]
+    messages = _batch(body)
     compact(messages, limit_tokens=1)
-    return str(messages[0]["content"])
+    assert messages[1]["role"] == "tool"  # the result under test is still there
+    return str(messages[1]["content"])
+
+
+def test_r3_a_call_whose_results_reach_the_tail_is_kept_whole() -> None:
+    messages = _batch("F" * 3000)
+    tail = [dict(m) for m in messages[-KEEP_RECENT:]]
+    dropped, _ = compact(messages, limit_tokens=1)
+    assert dropped == 0
+    assert messages[-KEEP_RECENT:] == tail  # known-good: the protected tail is untouched
+    assert messages[0]["role"] == "assistant"  # known-bad: the call went with its tail
+    assert len(messages) == KEEP_RECENT + 2
 
 
 # -- the note is its own, and is rebuilt rather than stacked -------------------
@@ -582,6 +627,7 @@ def test_the_note_is_rebuilt_not_stacked_and_carries_the_count() -> None:
     notes = [m for m in messages if is_note(m)]
     assert len(notes) == 1
     assert notes[0]["content"].startswith(f"{NOTE_HEAD}{first + second} earlier message(s)")
+    assert notes[0]["content"].count(NOTE_HEAD) == 1  # the old note was replaced, not dropped
     assert "state two" in notes[0]["content"]
     assert "state one" not in notes[0]["content"]
 
