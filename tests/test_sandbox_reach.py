@@ -31,8 +31,8 @@ from saddle import sandbox as sandbox_module
 from saddle.sandbox import Sandbox
 from saddle.tools import ToolContext, execute_tool
 from saddle.vllm import ToolCall
-from tests.test_auto import Scripted, auto, call, finish
-from tests.test_auto import repo as repo  # fixture
+from test_auto import Scripted, auto, call, finish
+from test_auto import repo as repo  # fixture
 
 HAS_BWRAP = shutil.which("bwrap") is not None
 needs_bwrap = pytest.mark.skipif(not HAS_BWRAP, reason="bwrap is not installed")

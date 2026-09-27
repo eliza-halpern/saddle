@@ -28,8 +28,8 @@ from saddle.engine import GUARDED_STOP
 from saddle.journal import read_spans, verify_journal
 from saddle.packet import compile_packet
 from saddle.vllm import VllmClient
-from tests.test_auto import Scripted, call, finish, namespace, sidecar
-from tests.test_feed import CHECK, FakeAuditor, Reactive, StopsAfter, Surfaces
+from test_auto import Scripted, call, finish, namespace, sidecar
+from test_feed import CHECK, FakeAuditor, Reactive, StopsAfter, Surfaces
 
 BUGGY = "def add(a, b):\n    return a - b\n"
 

@@ -15,7 +15,7 @@ from typing import Any
 
 from saddle.engine import AUTO_NUDGE, FINISH_REFUSED
 from saddle.journal import read_spans
-from tests.test_feed import (  # noqa: F401
+from test_feed import (  # noqa: F401
     EDIT_COMMENT,
     FINISH,
     FakeAuditor,

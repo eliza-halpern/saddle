@@ -39,9 +39,9 @@ from saddle.memory import (
 )
 from saddle.transcript import session_line
 from saddle.vllm import StreamToken, VllmClient
-from tests.test_auto import Scripted, call, finish, git, namespace, repo  # noqa: F401  (fixture)
-from tests.test_feed import EDIT_COMMENT, FakeAuditor
-from tests.test_keep_reasoning import _render
+from test_auto import Scripted, call, finish, git, namespace, repo  # noqa: F401  (fixture)
+from test_feed import EDIT_COMMENT, FakeAuditor
+from test_keep_reasoning import _render
 
 BIG = "".join(f"def helper_{i}(x):\n    return x * {i}  # filler line {i}\n" for i in range(600))
 """~33 KB: one read of it is ~8k estimated tokens."""

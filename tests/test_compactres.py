@@ -16,9 +16,9 @@ from saddle.engine import AUTO_NUDGE, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Compaction
 from saddle.memory import KEEP_RECENT, compact, estimate_tokens
 from saddle.vllm import VllmClient
-from tests.test_auto import Scripted, call, finish, git, repo  # noqa: F401  (fixture)
-from tests.test_feed import FakeAuditor
-from tests.test_keep_reasoning import _render
+from test_auto import Scripted, call, finish, git, repo  # noqa: F401  (fixture)
+from test_feed import FakeAuditor
+from test_keep_reasoning import _render
 
 TASK = "TASK-7f3a: make add() in calc.py return the sum instead of the difference"
 BIG = "".join(f"def helper_{i}(x):\n    return x * {i}  # filler line {i}\n" for i in range(600))

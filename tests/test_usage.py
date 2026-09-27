@@ -22,7 +22,7 @@ from saddle.chat import ChatOptions, _stream_response
 from saddle.engine import RunBudget
 from saddle.journal import attempt_sidecar_path, read_spans, verify_journal
 from saddle.vllm import StreamToken, StreamUsage, VllmClient, VllmResponseError
-from tests.test_auto import repo  # noqa: F401  (fixture)
+from test_auto import repo  # noqa: F401  (fixture)
 
 
 def _sse(*chunks: dict[str, Any]) -> str:
