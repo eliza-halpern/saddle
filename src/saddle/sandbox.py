@@ -271,9 +271,10 @@ class Sandbox:
     expose: tuple[tuple[Path, Path], ...] = ()
     """Read-only `(source, destination)` binds beyond the system dirs and the
     interpreter: the venvs the gate tools live in (`default_expose`)."""
-    memory_max: int | None = None
+    memory_max: int = memcap.DEFAULT_MEMORY_MAX
     """Hard memory cap in bytes for each command and everything it starts
-    (`memcap`); `for_workdir` sets it from `SADDLE_MEMORY_MAX`."""
+    (`memcap`); `for_workdir` sets it from `SADDLE_MEMORY_MAX`. There is no
+    uncapped setting."""
 
     @classmethod
     def for_workdir(
@@ -372,10 +373,8 @@ class Sandbox:
     def start(self, command: str) -> Terminal:
         """Start a command in the background; returns immediately."""
         terminal = Terminal(id=uuid.uuid4().hex[:8], command=command, started=monotonic())
-        cap = None if self.memory_max is None else memcap.cap(self.memory_max)
-        argv, env = self._argv(command), command_env(self.env)
-        if cap is not None:
-            argv, env = cap.wrap(argv, env)
+        cap = memcap.cap(self.memory_max)
+        argv, env = cap.wrap(self._argv(command), command_env(self.env))
         try:
             process = subprocess.Popen(
                 argv,
@@ -406,7 +405,7 @@ class Sandbox:
                         self.on_output = None
             code = process.wait()
             _kill_group(process.pid)  # nothing it started outlives it
-            if cap is not None and cap.oom_killed():
+            if cap.oom_killed():
                 terminal._append(f"\n{cap.reason()}\n")
             terminal.exit_code = code
 
