@@ -238,6 +238,10 @@ The ledger records exactly one outcome span: `auto:finished` or `auto:stopped`.
   and cites; a change in the set restarts the count. The packet lists the findings.
   When a finding is coverage or evidence-thin and tests were read-only, the card offers
   **Run again with test edits allowed**. Exit 3.
+- **stopped: no tool call in 3 consecutive rounds.** The model stopped calling tools
+  (for example, it answered a refused `finish` with empty turns). A round with no tool
+  call is nudged; the third in a row ends the run instead of letting it spend the rest
+  of its time budget. Any tool call restarts the count. Exit 3.
 - Other stops, also exit 3: `model error: …`, `cancelled` (you pressed Stop), and
   `needs you: …` (a question with no answer).
 

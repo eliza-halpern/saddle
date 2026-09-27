@@ -86,7 +86,22 @@ AUTO_NUDGE: Final = (
 )
 """What an autonomous run is told when a round ends with no tool call. In
 chat that ends the turn; here it would end the run with nothing recorded
-as its outcome, so the run goes on until `finish` or a budget."""
+as its outcome, so the run goes on until `finish`, a budget, or
+`EMPTY_ROUND_CAP` such rounds in a row."""
+
+EMPTY_ROUND_CAP: Final = 3
+"""Consecutive rounds with no tool call before an autonomous run stops.
+
+The finish refusal cap counts `finish` calls, so a model that answers a
+refused finish with empty turns never reaches it and ran to its wall budget
+(#81). In the recorded `saddle auto` ledgers (202 runs, 2,280 rounds) a
+round with no tool call is rare (6) and never came twice in a row: each was
+followed by a tool call. Three is one more than any run has needed, so two
+empty rounds in a row are still nudged and not stopped. Tightened: the loop
+is bounded; the tree is never marked finished by it."""
+
+EMPTY_ROUNDS: Final = "no tool call in {n} consecutive rounds"
+"""The sealed stop reason when `EMPTY_ROUND_CAP` is reached."""
 
 
 @dataclass
@@ -319,6 +334,8 @@ class AutoRun:
     refused finish's findings, or an accepted finish's surfaced not-proven
     findings). A withheld audit (arm E+A) never lands here."""
     compactions: int = 0
+    empty_rounds: int = 0
+    """Length of the current run of rounds with no tool call."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -642,6 +659,11 @@ def run_turn(
                 )
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
+                    auto.empty_rounds += 1
+                    if auto.empty_rounds >= EMPTY_ROUND_CAP:
+                        auto.stop(EMPTY_ROUNDS.format(n=auto.empty_rounds))
+                        yield ErrorEvent(message=f"stopped: {auto.reason}")
+                        break
                     nudge = AUTO_NUDGE
                     heard = auto.feed.collect() if auto.feed is not None else ""
                     if heard:
@@ -652,6 +674,8 @@ def run_turn(
                     continue
                 break
 
+            if auto is not None:
+                auto.empty_rounds = 0
             messages.append(
                 _assistant(
                     {
