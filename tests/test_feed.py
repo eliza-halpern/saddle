@@ -269,7 +269,7 @@ def test_an_unknown_arm_is_refused_before_anything_runs(repo: Path) -> None:
 
 def test_the_cli_flags_select_the_arm(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     arms = []
-    real = cli.run_auto
+    real = run_auto  # the object cli.run_auto names (saddle.auto's)
 
     def spy(options: AutoOptions, client: Any, **kw: Any) -> AutoResult:
         arms.append(options.arm)
@@ -287,10 +287,9 @@ def test_the_cli_flags_select_the_arm(repo: Path, monkeypatch: pytest.MonkeyPatc
         client = Reactive([[EDIT_COMMENT], [CHECK], [FINISH]])
         cli.run_auto_command(args, cast(VllmClient, client), stdout=out)
         text = out.getvalue()
-        shown[" ".join(flags)] = (
-            "[audit checkpoint 1 on tree" in text,
-            re.search(r"\(arm ([^)]+)\)", text)[1],
-        )  # type: ignore[index]
+        arm = re.search(r"\(arm ([^)]+)\)", text)
+        assert arm is not None, text
+        shown[" ".join(flags)] = ("[audit checkpoint 1 on tree" in text, arm[1])
     assert shown == {
         "": (True, "E+A+F"),
         "--no-feedback": (False, "E+A"),
@@ -898,8 +897,10 @@ def test_the_cli_passes_sanctioned_rewrites(repo: Path, monkeypatch: pytest.Monk
     ]
     with pytest.raises(AttributeError):
         cli.run_auto_command(
-            cli.build_parser().parse_args(argv), cast(VllmClient, None), stdout=None
-        )  # type: ignore[arg-type]
+            cli.build_parser().parse_args(argv),
+            cast(VllmClient, None),
+            stdout=None,  # type: ignore[arg-type]  # deliberately not an IO: the call must fail
+        )
     assert got == [("test_a", "test_b")]
     assert cli.build_parser().parse_args(["auto", "t"]).sanctioned_test_rewrite == []
 

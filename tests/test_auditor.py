@@ -9,12 +9,14 @@ from __future__ import annotations
 import io
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from saddle import auditor as auditor_mod
-from saddle import runner
+from saddle import evidence, gates, runner
 from saddle.audit import AuditError, audit_node
 from saddle.auditor import (
     REASONS,
@@ -87,11 +89,11 @@ def uncovered_tree(clean_tree: Path) -> Path:
 class _Spy:
     """Counts calls through to the wrapped function."""
 
-    def __init__(self, target):  # type: ignore[no-untyped-def]
+    def __init__(self, target: Callable[..., Any]) -> None:
         self.target = target
         self.calls = 0
 
-    def __call__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.calls += 1
         return self.target(*args, **kwargs)
 
@@ -105,7 +107,7 @@ def gate_spy(monkeypatch: pytest.MonkeyPatch) -> _Spy:
 
 @pytest.fixture
 def mutation_spy(monkeypatch: pytest.MonkeyPatch) -> _Spy:
-    spy = _Spy(runner.mutation_sample)
+    spy = _Spy(evidence.mutation_sample)  # the object runner.mutation_sample names
     monkeypatch.setattr(runner, "mutation_sample", spy)
     return spy
 
@@ -142,7 +144,7 @@ def test_correct_change_passes_every_tier_then_hits_the_cache(
     assert mutation.cites == ("saddle.gates.check_mutation", "sampled n=5")
     # tier 1 once, tier 2 once (its tier-1 prerequisite is a cache hit).
     assert gate_spy.calls == 2
-    syntax_spy = _Spy(auditor_mod.check_syntax)
+    syntax_spy = _Spy(gates.check_syntax)  # the object auditor_mod.check_syntax names
     monkeypatch.setattr(auditor_mod, "check_syntax", syntax_spy)
     again = auditor.audit()
     assert all(r.cached for r in again)

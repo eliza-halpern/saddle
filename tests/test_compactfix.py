@@ -698,7 +698,8 @@ def test_r7_a_surfaced_finish_findings_count_as_delivered(tmp_path: Path) -> Non
     """INTEG6: FEEDFIX item 7 delivers an accepted finish's not-proven findings
     to the model; the state block's "latest audit delivered" must hold them,
     as it does a refused finish's. A plain accepted finish delivers nothing."""
-    from saddle.engine import FINISH_SURFACED, FINISH_TOOL, _note_round
+    from saddle.engine import FINISH_SURFACED, _note_round
+    from saddle.tools import FINISH_TOOL
     from saddle.vllm import ToolCall
 
     run = AutoRun(budget=RunBudget(time_s=600, tokens=10**7), run_span="s")

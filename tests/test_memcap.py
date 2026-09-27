@@ -30,7 +30,7 @@ from types import ModuleType
 
 import pytest
 
-from saddle import evidence
+from saddle import evidence, gates
 from saddle.journal import SpanRecorder, read_spans
 from saddle.sandbox import Sandbox
 
@@ -279,7 +279,7 @@ def test_a_systemd_run_that_will_not_start_is_not_trusted(
 
 def test_a_missing_program_under_the_cap_is_unavailable_not_a_failure(tmp_path: Path) -> None:
     run = evidence.run_capture(["no-such-program-here"], tmp_path, memory_limit=256 * MIB)
-    assert run.exit_code == evidence.TOOL_UNAVAILABLE
+    assert run.exit_code == gates.TOOL_UNAVAILABLE
 
 
 def test_the_bus_is_lent_only_when_the_command_env_lacks_it(
