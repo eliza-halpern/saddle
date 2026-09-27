@@ -303,11 +303,14 @@ def test_the_bus_is_lent_only_when_the_command_env_lacks_it(
 def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
     tmp_path: Path, capped: None
 ) -> None:
-    # The hog is the shell's child, not the command itself: the reason is
-    # still recorded, whatever the shell then exits with, and no failed scope
-    # is left behind in the user manager.
-    shell = f"{hog(512)}; echo after-the-child"
+    # The hog is the shell's child, not the command itself, and the shell
+    # ignores the SIGTERM systemd sends the rest of the scope after the kill:
+    # it outlives the child and exits 0. The exit code stands, the reason is
+    # still recorded, and no failed scope is left behind in the user manager.
+    shell = f"trap '' TERM; {hog(512)}; echo after-the-child"
     run = evidence.run_capture(["bash", "-c", shell], tmp_path, memory_limit=256 * MIB)
+    assert run.exit_code == 0, run.stderr
+    assert "after-the-child" in run.stdout
     assert "allocated" not in run.stdout
     assert "memory cap" in run.stderr
     left = subprocess.run(
@@ -372,3 +375,12 @@ def test_every_gate_launch_reads_the_configured_cap(
     assert want in limits["mutmut"]
     assert limits["auditor"].count(want) == 2  # collect-only, then the named tests
     assert seen["memory_limit"] == want
+
+
+@needs_cgroup
+def test_a_command_whose_child_was_killed_for_memory_says_so(tmp_path: Path, capped: None) -> None:
+    box = Sandbox.for_workdir(tmp_path, prefer_bwrap=False)
+    terminal = box.run(f"trap '' TERM; {hog(512)}; echo after-the-child", timeout=60)
+    assert terminal.exit_code == 0, terminal.output()
+    assert "after-the-child" in terminal.output()
+    assert "memory cap" in terminal.output()
