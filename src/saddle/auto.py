@@ -73,7 +73,7 @@ COMMAND_ENV: Final = {"PYTHONDONTWRITEBYTECODE": "1"}
 """No command the run starts writes bytecode. Python trusts a `.pyc` whose
 recorded source mtime (one-second resolution) and size match, so a
 same-length edit followed by a run in the same second would execute the
-old code and fail a correct fix (CLAUDE.md, harness rule 3). The worktree
+old code and fail a correct fix (CONTRIBUTING.md, harness rule 3). The worktree
 is a fresh checkout, so with nothing written there is nothing stale."""
 
 UNSTAGED: Final = (

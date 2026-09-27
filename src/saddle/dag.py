@@ -170,7 +170,7 @@ class Node(BaseModel):
     # touch. Empty means unrestricted, so an omitted field changes nothing
     # and a declared list can only narrow the node's own scope. Validated
     # here rather than by a JSON-schema `pattern`: the decoder compiles a
-    # pattern as a full match (CLAUDE.md), and no lookahead-free regex
+    # pattern as a full match (CONTRIBUTING.md), and no lookahead-free regex
     # says "no `..` segment" -- a wrong pattern would make every path
     # unrepresentable, silently.
     target_files: list[NonEmptyStr] = Field(default_factory=list)

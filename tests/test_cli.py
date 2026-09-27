@@ -2762,7 +2762,7 @@ def test_every_registry_name_is_a_behaviour_the_harness_honours() -> None:
     `RUN_ALLOWLIST` used to be four strings validated against emissions
     and consumed nowhere, so adding a fifth would have cost nothing and
     bought nothing. Each probe here shows the *difference* listing a name
-    makes -- both halves, per CLAUDE.md -- and the set comparison means a
+    makes -- both halves, per CONTRIBUTING.md -- and the set comparison means a
     registry entry without a probe cannot be added quietly.
     """
     assert set(_TOOL_BEHAVIOUR_PROBES) == set(TOOL_BINDINGS)

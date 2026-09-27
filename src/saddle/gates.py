@@ -85,7 +85,7 @@ class GateCheck:
 
     `basis` names the evidence the verdict rests on where a bare verdict
     would hide its weight: a mutation verdict over 0 mutants and one over
-    5 both read "passed" (T7's 218-line module, CLAUDE.md), so the
+    5 both read "passed" (T7's 218-line module, CONTRIBUTING.md), so the
     mutation check records how many mutants were sampled. Checks whose
     detail already carries the count leave it None.
     """
@@ -1215,7 +1215,7 @@ def check_target_files(target_files: Collection[str], touched_files: Collection[
     Empty `target_files` is unrestricted, so an emitting model that omits
     the field loses nothing; a declared list can only narrow the node's
     own scope, which is the one direction a planner-supplied value may
-    move (CLAUDE.md: "A threshold the model itself supplies lets the model
+    move (CONTRIBUTING.md: "A threshold the model itself supplies lets the model
     set its own bar" -- this one cannot lower it). T4's worker fixed the
     wrong module while passing every gate then in force; a node that had
     said which module would have been caught here.

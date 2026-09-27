@@ -307,7 +307,7 @@ tool, unaudited; **Task · Small** starts the executor above from the browser. T
 terminal chats share the function so the two lists cannot drift; the two Task paths
 share `auto.run_auto`. Feature, Breadth and Long lanes are not built.
 
-**Layering.** `dag → gates → evidence → runner → slice` (CLAUDE.md) is unchanged: the
+**Layering.** `dag → gates → evidence → runner → slice` (CONTRIBUTING.md) is unchanged: the
 auditor imports `gates` and `evidence`; `packet` reads the ledger and imports neither
 the engine nor the auditor (`packet.AUDIT_UNRESOLVED` and `packet.CHECK_SPAN` are spelled
 locally for that reason).

@@ -1,7 +1,7 @@
 """T6-29b: the survivor-driven test machinery, each contract pinned twice.
 
 Every contract below gets an instance it must accept and one it must
-reject; asserting that a filter exists would pin nothing (CLAUDE.md).
+reject; asserting that a filter exists would pin nothing (CONTRIBUTING.md).
 The brief's known-bad is the load-bearing one: a brief that leaks a line
 of the implementation produces a test of the code, which passes whatever
 the code does.

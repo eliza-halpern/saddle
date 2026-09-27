@@ -22,3 +22,5 @@ dist/
 *.jsonl
 !tests/fixtures/*.jsonl
 !tests/fixtures/question_run/*.jsonl
+# Local, per-contributor agent notes
+CLAUDE.local.md
