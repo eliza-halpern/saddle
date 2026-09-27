@@ -57,15 +57,15 @@ Two further items from that round, recorded rather than buried:
 ### Round 2 (current)
 
 Re-run from T1 under the fixed harness (`fix/gate-integrity`), five arms
-per task. Results live in `saddle-bench/runs/`, findings in
-`../saddle-bench/runs/FINDINGS.md`.
+per task. Results and findings live in the author's internal benchmark
+notes, which are not public.
 
 ### Round 3 (T4-6a viability sweep, 2026-09-20)
 
 Thirteen saddle-only runs against per-task correctness oracles frozen
-before the first run (`saddle-bench@d9bd23b`), `--sample-temperature 0.7`,
-one seed on T1-T4 and three on T5-T7. Full record in
-`../saddle-bench/runs/FINDINGS.md` F21.
+before the first run (internal benchmark revision `d9bd23b`), `--sample-temperature 0.7`,
+one seed on T1-T4 and three on T5-T7. Full record in finding F21 of
+the internal benchmark notes (not public).
 
 **5 of 13 pass their oracle. 3 of 13 on the strict reading** that also
 requires a sealed proof covering the implementation (F21.2). **Not one of
@@ -114,7 +114,7 @@ run log as evidence, are in F21.8.
 ### Round 3b (the T6-14 measurement, 2026-09-20)
 
 One T5 seed against T6-8+T6-14 (`9b18dad`), predictions frozen in
-`../saddle-bench/runs/round3b/PREDICTION.md` before the run. Full record
+the internal benchmark notes (not public) before the run. Full record
 in F21.9. **TIMEOUT at 1800 s, 0 sealed proofs**, worktree clean at exit.
 
 ```
@@ -177,7 +177,7 @@ worktree untouched.
 
 ## Open structural gaps
 
-Measured, not speculative — see ../saddle-bench/runs/FINDINGS.md for evidence.
+Measured, not speculative; the run evidence is in the internal benchmark notes (not public).
 
 - **Gates verify the test run, not the requirement.** T1 round 2: saddle
   passed all seven gates and shipped a validator failing 6 of 18

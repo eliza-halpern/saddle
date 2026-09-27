@@ -2,7 +2,7 @@
 
 Collected 2026-09-25 from every citation in `docs/DESIGN-NOTES.md`,
 `docs/AUDIT-2026-09-18.md` §9, `docs/WORKPLAN.md` (citation-correction
-table and item text), `CLAUDE.md`, and the 2026-09-25 dispatcher session.
+table and item text), `CLAUDE.md`, and a 2026-09-25 review.
 Before this file, citations lived only where they were used. Add a row here
 whenever a new source is cited anywhere in the repo or the notes.
 
@@ -19,7 +19,7 @@ Where a source's number was corrected before 2026-09-25, the corrected
 wording is the one in `docs/WORKPLAN.md` "citation-correction" table (rows
 at lines ~460–488) and the audit §9 rows; this file summarises, it does not
 restate them. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
-and §5c, `../saddle-research/reports/Rule D question rate calibration.md`),
+and §5c, an internal research report on the Rule D question rate, not public),
 the corrected wording now lives in this file's own rows.
 
 ## A. Sources behind the design notes (D1–D25)
@@ -85,11 +85,11 @@ changes a Tier 0–2 item. Confidence is the audit's.
 
 Named from memory while answering "what does the research say about the
 saddle arm's 0-for-42 on T1". Each maps to a hypothesis or to a W6 root
-cause (`../saddle-notes/parallel/out/W6/report.md` §2). **Status:
+cause (the internal W6 report, §2; not public). **Status:
 UNVERIFIED-FROM-MEMORY for every row as raised.** Check the id, the claim and the
 scope against the source before citing in a doc. Each row has since been
-checked against the held source (`../saddle-research/reports/Rule D question
-rate calibration.md` §5b); the Status column gives the result, the Source
+checked against the held source (the internal Rule D question-rate report,
+§5b; not public); the Status column gives the result, the Source
 and Claim columns carry the ids and corrections it added, and a CORRECTED
 status quotes the recalled wording that was wrong.
 
@@ -107,11 +107,15 @@ status quotes the recalled wording that was wrong.
 
 ## D. Internal evidence records (not research, but where claims are checked)
 
-- `../saddle-bench/runs/FINDINGS.md` — F-numbered findings from every benchmark round. Claims about saddle's behaviour cite an F-number or a run log.
-- `../saddle-notes/phase1/MEASURE.md` and `runs/CHECKER.md` — pre-registered measurements (hashes in `runs/M1*/PREREG.sha256`) and their verdicts.
+The benchmark notes and reports below are the author's internal records and
+are not public; they are listed so the IDs cited across the repo have a named
+home.
+
+- Internal benchmark findings log — F-numbered findings from every benchmark round. Claims about saddle's behaviour cite an F-number or a run log.
+- Internal Phase 1 measurement plan and checker — pre-registered measurements (hashes in `runs/M1*/PREREG.sha256`) and their verdicts.
 - `docs/AUDIT-2026-09-18.md` §9 — the citation audit: 8 claims verified, 6 refuted; the source of every CORRECTED row above.
 - `docs/WORKPLAN.md` citation-correction table — the corrected wording for each refuted claim.
-- `../saddle-notes/parallel/out/W6/report.md` — root causes RC1–RC3 for the saddle arm's T1/T3 failures, with measured experiments E1/E2 and pre-registered interventions I1–I5.
+- Internal W6 report — root causes RC1–RC3 for the saddle arm's T1/T3 failures, with measured experiments E1/E2 and pre-registered interventions I1–I5.
 
 ## Maintenance
 
