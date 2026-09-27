@@ -262,9 +262,10 @@ reason). The operator's view is docs/USING-SADDLE.md; this section is the struct
    branch `saddle/auto/<run-id>` per task, with a time and a token budget and an honest
    stop when either runs out. The tools are the chat's (`tools.TOOLS`) plus `finish`.
    Every write passes a tier-0 guard at the tool (unparseable `.py`, test paths while
-   tests are read-only). `--keep-reasoning` (off; sealed as `prompt_shape.keep_reasoning`)
-   feeds each round's reasoning back for the rest of the run; its effect is under
-   measurement.
+   tests are read-only). Each round's reasoning is fed back for the rest of the run by
+   default (`--no-keep-reasoning` turns it off; sealed as `prompt_shape.keep_reasoning`).
+   On saddle's own source a run that changes a judging module or its tests
+   (`auto.GUARDED_PATHS`) cannot end `finished`; it stops "needs you".
 2. **Auditor** — `auditor.Auditor`: the gates of §3 Phase 3 (`gates`, pure predicates;
    `evidence`, the runners) applied to a tree the executor produced, split into tiers and
    cached by tree hash. Tier 0 checks one edited file at the edit (syntax, ruff, imports);

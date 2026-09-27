@@ -86,7 +86,22 @@ AUTO_NUDGE: Final = (
 )
 """What an autonomous run is told when a round ends with no tool call. In
 chat that ends the turn; here it would end the run with nothing recorded
-as its outcome, so the run goes on until `finish` or a budget."""
+as its outcome, so the run goes on until `finish`, a budget, or
+`EMPTY_ROUND_CAP` such rounds in a row."""
+
+EMPTY_ROUND_CAP: Final = 3
+"""Consecutive rounds with no tool call before an autonomous run stops.
+
+The finish refusal cap counts `finish` calls, so a model that answers a
+refused finish with empty turns never reaches it and ran to its wall budget
+(#81). In the recorded `saddle auto` ledgers (202 runs, 2,280 rounds) a
+round with no tool call is rare (6) and never came twice in a row: each was
+followed by a tool call. Three is one more than any run has needed, so two
+empty rounds in a row are still nudged and not stopped. Tightened: the loop
+is bounded; the tree is never marked finished by it."""
+
+EMPTY_ROUNDS: Final = "no tool call in {n} consecutive rounds"
+"""The sealed stop reason when `EMPTY_ROUND_CAP` is reached."""
 
 
 @dataclass
@@ -209,6 +224,15 @@ FINISH_UNCHANGED: Final = (
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The sealed stop reason when the finish refusal cap is reached."""
 
+GUARDED_STOP: Final = (
+    "needs you: this run changed code that judges runs ({paths}), "
+    "so a person must review it before it counts as finished"
+)
+"""The stop reason when a finished run on saddle's own source changed a
+guarded path (`auto.GUARDED_PATHS`). Rule D's stop form ("needs you: ..."):
+the outcome is `stopped`, never `finished`. No semicolon, so the packet's
+verdict line (`packet.compile_packet`) keeps the whole reason."""
+
 TEST_CLOSES: Final = frozenset({"coverage", "evidence-thin"})
 """A finding gate or reason that a new test is the repair for (`packet.TEST_CLOSES`)."""
 
@@ -290,6 +314,11 @@ class AutoRun:
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
     on that same tree ends finished with it."""
+    guard: Callable[[], list[str]] | None = None
+    """The self-guard (`auto.self_guard`): set only when the run is on saddle's
+    own source, it names the guarded paths the run changed. A run that would
+    end `finished` with any ends `stopped`, reason `GUARDED_STOP`, and seals
+    them as `guarded_paths`."""
     prompt_check: Callable[[], dict[str, object]] | None = None
     """`prompt_constants.check` over the run's tree, called once at the seal
     and sealed as `prompt_constants` (FEEDFIX item 1); None when the task
@@ -305,6 +334,8 @@ class AutoRun:
     refused finish's findings, or an accepted finish's surfaced not-proven
     findings). A withheld audit (arm E+A) never lands here."""
     compactions: int = 0
+    empty_rounds: int = 0
+    """Length of the current run of rounds with no tool call."""
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -377,8 +408,9 @@ class TurnOptions:
     keep_reasoning: bool = False
     """Autonomous runs only: send each round's reasoning back on its
     assistant message (field `reasoning`) for the rest of the turn, as the
-    untouched agent does (SPEED F-a). Off by default so arms E/E+A/E+A+F
-    send byte-identical requests; ignored in interactive chat."""
+    untouched agent does (SPEED F-a). `auto.run_auto` always sets it from
+    `AutoOptions.keep_reasoning`, which is on by default; ignored in
+    interactive chat."""
 
     def tool_tokens(self) -> int:
         """What the tool schemas cost, which they do on every single request.
@@ -627,6 +659,11 @@ def run_turn(
                 )
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
+                    auto.empty_rounds += 1
+                    if auto.empty_rounds >= EMPTY_ROUND_CAP:
+                        auto.stop(EMPTY_ROUNDS.format(n=auto.empty_rounds))
+                        yield ErrorEvent(message=f"stopped: {auto.reason}")
+                        break
                     nudge = AUTO_NUDGE
                     heard = auto.feed.collect() if auto.feed is not None else ""
                     if heard:
@@ -637,6 +674,8 @@ def run_turn(
                     continue
                 break
 
+            if auto is not None:
+                auto.empty_rounds = 0
             messages.append(
                 _assistant(
                     {
@@ -756,6 +795,7 @@ def run_turn(
                     f"finish accepted with not-proven findings; the run then ended "
                     f"({auto.reason}) with the tree unchanged"
                 )
+        _hold_guarded(auto)
         _seal_outcome(options.journal, node_id, auto, rounds)
 
     yield Context(used=estimate_tokens(messages), limit=options.context_tokens)
@@ -1088,6 +1128,21 @@ def _charge(
             parent_id=auto.run_span,
         ),
     )
+
+
+def _hold_guarded(auto: AutoRun) -> None:
+    """A finished run that changed a guarded path ends stopped, needing a person.
+
+    Checked once, on the tree the run ends on, after every route to
+    `finished` (an accepted finish, or the surfaced accept that stands), so no
+    route skips it.
+    """
+    if auto.outcome != "finished" or auto.guard is None:
+        return
+    held = auto.guard()
+    if held:
+        auto.outcome, auto.reason = "stopped", GUARDED_STOP.format(paths=", ".join(held))
+        auto.sealed["guarded_paths"] = held
 
 
 def _finish(auto: AutoRun, arguments: str) -> str:

@@ -310,6 +310,7 @@ def execute(
     arm: Arm = "E+A+F",
     feed_auditor: FeedAuditorFactory = default_auditor,
     allow_test_edits: bool = False,
+    keep_reasoning: bool = True,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run the task to its end; return its ledger verdict and the recap message.
 
@@ -368,6 +369,7 @@ def execute(
         arm=arm,
         auditor_factory=feed_auditor,
         allow_test_edits=allow_test_edits,
+        keep_reasoning=keep_reasoning,
     )
     try:
         run_auto(

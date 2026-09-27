@@ -1712,6 +1712,13 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
     web.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     web.add_argument("--no-open", action="store_true", help="Do not open a browser.")
+    web.add_argument(
+        "--keep-reasoning",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Chat-started task runs send each round's reasoning back to the model, "
+        "as `saddle auto` does (on by default; --no-keep-reasoning drops it).",
+    )
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
     up.add_argument(
@@ -1775,9 +1782,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auto.add_argument(
         "--keep-reasoning",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Send each round's reasoning back to the model for the rest of the run "
-        "(off by default; sealed in the outcome as prompt_shape.keep_reasoning).",
+        "(on by default; --no-keep-reasoning drops it; sealed in the outcome as "
+        "prompt_shape.keep_reasoning).",
     )
     auto.add_argument(
         "--finish-refusal-cap",
@@ -2009,6 +2018,7 @@ def main(
             workdir=_chat_workdir(args.workdir),
             sessions_root=Path(args.sessions) if args.sessions else None,
             token=token,
+            keep_reasoning=args.keep_reasoning,
         )
         return 0
     if args.command == "auto":

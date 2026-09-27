@@ -238,6 +238,18 @@ The ledger records exactly one outcome span: `auto:finished` or `auto:stopped`.
   and cites; a change in the set restarts the count. The packet lists the findings.
   When a finding is coverage or evidence-thin and tests were read-only, the card offers
   **Run again with test edits allowed**. Exit 3.
+- **stopped: no tool call in 3 consecutive rounds.** The model stopped calling tools
+  (for example, it answered a refused `finish` with empty turns). A round with no tool
+  call is nudged; the third in a row ends the run instead of letting it spend the rest
+  of its time budget. Any tool call restarts the count. Exit 3.
+- **stopped: needs you: this run changed code that judges runs (…).** Only when the run
+  is on saddle's own source (its worktree has `src/saddle/__init__.py` at the start). A
+  run that would have finished, but whose tree changes `src/saddle/gates.py`,
+  `evidence.py`, `auditor.py`, `audit.py`, their `tests/test_*.py` files or
+  `tests/conftest.py` (`auto.GUARDED_PATHS`), ends here instead. The reason names the
+  paths and the outcome seals them as `guarded_paths`. The branch keeps the work for a
+  person to review. Other repositories, including ones with a `gates.py` of their own,
+  are not affected. Exit 3.
 - Other stops, also exit 3: `model error: …`, `cancelled` (you pressed Stop), and
   `needs you: …` (a question with no answer).
 
@@ -482,12 +494,16 @@ that confirm step; `saddle auto` itself leaves the branch and its worktree for y
 
 Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
 
-- `--keep-reasoning` (off by default): sends each round's reasoning back to the model
-  for the rest of the run, as both `reasoning_content` (the key the served chat template
-  reads) and `reasoning`. Sealed in the outcome as `prompt_shape.keep_reasoning` on
-  every run, on or off. With the flag off the requests sent are byte-identical to
-  before the flag existed. Whether it helps is **under measurement** (an E vs E+R A/B);
-  nothing here claims a result. The interactive chat never keeps reasoning.
+- `--keep-reasoning` (on by default; `--no-keep-reasoning` turns it off): sends each
+  round's reasoning back to the model for the rest of the run, as both
+  `reasoning_content` (the key the served chat template reads) and `reasoning`. Without
+  it the served templates insert an empty reasoning block for every past round. Sealed
+  in the outcome as `prompt_shape.keep_reasoning` on every run, on or off; with it off
+  the requests sent are byte-identical to before the flag existed. An A/B on T5 (6 runs
+  each way) finished faster with it on (median wall 735 s against 1121 s) and was
+  correct at least as often (6/6 against 5/6), which is why it is the default. Runs
+  started from `saddle chat` use the same default and the same off switch. The
+  interactive chat turn itself never keeps reasoning.
 - `--check-tool` (off by default, arm E+A+F only): offers the model a `check` tool that
   runs audit tiers 0 and 1 on the current tree before `finish`; each call is journaled
   as an `audit:check` span (`feed.CHECK_SPAN`).

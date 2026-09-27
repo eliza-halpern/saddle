@@ -320,6 +320,7 @@ class ChatServer:
         arm: Arm = "E+A+F",
         feed_auditor: FeedAuditorFactory = default_auditor,
         allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
+        keep_reasoning: bool = True,
     ) -> None:
         self.store = store
         self.client_factory = client_factory
@@ -337,6 +338,8 @@ class ChatServer:
         """Builds the feed's auditor (`feed.default_auditor`: the real one)."""
         self.allow_test_edits = allow_test_edits
         """The confirm strip's default for "Allow test edits"; each run may override it."""
+        self.keep_reasoning = keep_reasoning
+        """Whether a chat-started run keeps its reasoning (`AutoOptions.keep_reasoning`)."""
         self.index_lock = threading.Lock()
         self.indexed: dict[str, str] = {}
         """run id -> the state last written to the run index."""
@@ -486,6 +489,7 @@ class ChatServer:
                     arm=self.arm,
                     feed_auditor=self.feed_auditor,
                     allow_test_edits=run.allow_test_edits,
+                    keep_reasoning=self.keep_reasoning,
                 )
             if recap is not None:
                 messages = self.store.load_messages(session_id)
@@ -510,6 +514,7 @@ def build_app(
     arm: Arm = "E+A+F",
     feed_auditor: FeedAuditorFactory = default_auditor,
     allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
+    keep_reasoning: bool = True,
 ) -> ASGIApp:
     server = ChatServer(
         store,
@@ -519,6 +524,7 @@ def build_app(
         arm=arm,
         feed_auditor=feed_auditor,
         allow_test_edits=allow_test_edits,
+        keep_reasoning=keep_reasoning,
     )
 
     async def index(_: Request) -> Response:
@@ -1224,6 +1230,7 @@ def serve(
     workdir: Path,
     sessions_root: Path | None = None,
     token: str | None = None,
+    keep_reasoning: bool = True,
 ) -> None:
     import uvicorn
 
@@ -1236,5 +1243,7 @@ def serve(
     # caller passed none, so a direct call can never open the server by
     # omission the way the CLI's own resolution does deliberately.
     resolved = (token or chat_token()) if needs_token(host) else None
-    app = build_app(store, factory, default_workdir=workdir, token=resolved)
+    app = build_app(
+        store, factory, default_workdir=workdir, token=resolved, keep_reasoning=keep_reasoning
+    )
     uvicorn.run(app, host=host, port=port, log_level="warning")
