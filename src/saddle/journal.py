@@ -604,6 +604,12 @@ TOOL_SPAN_HASHES: Final = "tool_span_hashes"
 AUDIT_SPAN_HASHES: Final = "audit_span_hashes"
 """The outcome sidecar's list of the run's audit records (FIX-5), as a set:
 the auditor writes from the feed's thread, so their order is not the run's."""
+COMPACTION_SPAN: Final = "compaction"
+"""The span an autonomous run seals each time its context is compacted
+(`engine._compact`): argv[1] is the counts as JSON, detail the summary.
+Not `auto:`-prefixed, since `transcript.session_line` and the packet read
+those as the run's start, spend and outcome; not a tool span, so the chain
+does not hold it to the outcome's tool list."""
 AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
 """A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
 FEEDFIX item 5's third ending (finish on a tree equal to the baseline). Not `auto:spend`,
