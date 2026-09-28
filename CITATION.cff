@@ -5,5 +5,5 @@ type: software
 authors:
   - name: "Eliza Halpern"
   - name: "Eryn Lipkowitz"
-version: "0.1.0"
+version: "0.1.1"
 license: AGPL-3.0-or-later

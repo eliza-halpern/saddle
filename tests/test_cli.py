@@ -287,7 +287,7 @@ def test_version_flag_prints_and_exits(capsys: pytest.CaptureFixture[str]) -> No
     with pytest.raises(SystemExit, match=r"^0$"):
         main(["--version"])
     out = capsys.readouterr().out
-    assert out.startswith("saddle 0.1.0")
+    assert out.startswith("saddle 0.1.1")
 
 
 def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -> None:
