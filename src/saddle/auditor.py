@@ -46,7 +46,7 @@ import shutil
 import sys
 import tempfile
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
@@ -510,14 +510,47 @@ def _survivors(outcome: MutationOutcome, sources: dict[str, str]) -> tuple[Survi
     return tuple(found)
 
 
-def check_imports(path: str, source: str, roots: Sequence[Path]) -> GateCheck:
+_FIND_SPECS: Final = (
+    "import importlib.util, json, sys; "
+    "print(json.dumps([n for n in sys.argv[1:] if importlib.util.find_spec(n) is not None]))"
+)
+
+
+def gate_interpreter_finds(names: Sequence[str]) -> set[str]:
+    """The names among `names` that the `python` the gates run the tests with
+    finds (`sandbox.gate_path`: the user's PATH first, saddle's own last).
+
+    Asked from an empty directory, so no file beside the check shadows a
+    distribution. A python that cannot be started or answers with anything
+    but a JSON list finds nothing: a lookup that fails leaves the names
+    unresolved, never resolved."""
+    if not names:
+        return set()
+    with tempfile.TemporaryDirectory(prefix="saddle-find-spec-") as empty:
+        run = run_capture(["python", "-c", _FIND_SPECS, *names], Path(empty))
+    try:
+        found = json.loads(run.stdout) if run.exit_code == 0 else []
+    except ValueError:
+        found = []
+    return {name for name in found if name in names} if isinstance(found, list) else set()
+
+
+def check_imports(
+    path: str,
+    source: str,
+    roots: Sequence[Path],
+    interpreter_finds: Callable[[Sequence[str]], set[str]] | None = None,
+) -> GateCheck:
     """Every absolute import's top-level name resolves: stdlib, a module or
     package under one of `roots`, or an installed distribution.
 
     Only top-level names are looked up, with `importlib.util.find_spec`,
     which imports nothing for a top-level name; relative imports are not
-    checked and are counted in the detail. The interpreter asked is saddle's
-    own, not necessarily the one the tree's tests run under.
+    checked and are counted in the detail. saddle's own interpreter is asked
+    first; a name it cannot find is then put to `interpreter_finds` (the
+    auditor passes `gate_interpreter_finds`), because the tree's tests run
+    under the python on the user's PATH, whose environment holds the
+    project's dependencies and saddle's does not.
     """
     try:
         tree = ast.parse(source)
@@ -542,6 +575,8 @@ def check_imports(path: str, source: str, roots: Sequence[Path]) -> GateCheck:
             and importlib.util.find_spec(name) is None
         }
     )
+    if missing and interpreter_finds is not None:
+        missing = sorted(set(missing) - interpreter_finds(missing))
     note = f"; {relative} relative import(s) not checked" if relative else ""
     if missing:
         return GateCheck(
@@ -678,7 +713,7 @@ class Auditor:
             (self.repo / rel).parent,
             *(self.repo / r for r in self.config.extra_import_roots),
         ]
-        imports = check_imports(rel, new_text, roots)
+        imports = check_imports(rel, new_text, roots, gate_interpreter_finds)
         findings = tuple(_from_check(c, 0) for c in (syntax, ruff, imports))
         return self._store(Findings(tier=0, key=key, findings=findings))
 

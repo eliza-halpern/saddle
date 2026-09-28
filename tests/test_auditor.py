@@ -9,7 +9,8 @@ from __future__ import annotations
 import io
 import json
 import os
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from saddle.auditor import (
     AuditorConfig,
     Findings,
     check_imports,
+    gate_interpreter_finds,
 )
 from saddle.cli import main
 from saddle.evidence import run_argv
@@ -295,6 +297,78 @@ def test_check_imports_counts_relative_imports(tmp_path: Path) -> None:
     assert "1 relative" in missing.detail
     (tmp_path / "pkg").mkdir()
     assert check_imports("a.py", "import pkg.sub\n", [tmp_path]).passed
+
+
+def test_a_name_saddle_lacks_is_put_to_the_interpreter_finder(tmp_path: Path) -> None:
+    """Only the names saddle's own interpreter cannot find are asked; a name
+    the finder resolves passes (known-good), one it does not stays
+    unresolved (known-bad)."""
+    asked: list[list[str]] = []
+
+    def finds(names: Sequence[str]) -> set[str]:
+        asked.append(list(names))
+        return {"zz_elsewhere"} & set(names)
+
+    source = "import json\nimport zz_elsewhere\n"
+    assert check_imports("a.py", source, [tmp_path], finds).passed
+    assert asked == [["zz_elsewhere"]]
+    missing = check_imports("a.py", "import zz_nowhere\n", [tmp_path], finds)
+    assert not missing.passed
+    assert "zz_nowhere" in missing.detail
+
+
+def _project_python(root: Path, package: str) -> Path:
+    """A PATH dir whose `python` is this interpreter with `package` importable:
+    a project environment holding a dependency saddle's venv lacks."""
+    site = root / "site"
+    (site / package).mkdir(parents=True)
+    (site / package / "__init__.py").write_text("")
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "python"
+    wrapper.write_text(f'#!/bin/sh\nPYTHONPATH={site} exec {sys.executable} "$@"\n')
+    wrapper.chmod(0o755)
+    return bin_dir
+
+
+def test_the_gate_interpreter_finds_what_the_projects_python_has(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project_python(tmp_path / "project", "zz_project_only")
+    monkeypatch.setenv("PATH", f"{project}{os.pathsep}/usr/bin{os.pathsep}/bin")
+    assert gate_interpreter_finds(["zz_project_only", "zz_nowhere"]) == {"zz_project_only"}
+    assert gate_interpreter_finds([]) == set()
+
+
+def test_the_gate_interpreter_without_the_project_finds_nothing_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Known-bad: PATH without the project's python; saddle's is asked instead."""
+    monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
+    assert gate_interpreter_finds(["zz_project_only"]) == set()
+
+
+@pytest.mark.parametrize("answer", ["exit 1", "echo not-json", "echo 7"])
+def test_a_lookup_that_fails_finds_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    """A python that fails or answers nonsense resolves no name."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python").write_text(f"#!/bin/sh\n{answer}\n")
+    (bin_dir / "python").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert gate_interpreter_finds(["json"]) == set()
+
+
+def test_tier0_resolves_imports_with_the_projects_python(
+    clean_tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wiring: tier 0 passes an import only the project's python has."""
+    project = _project_python(tmp_path / "project", "zz_project_only")
+    monkeypatch.setenv("PATH", f"{project}{os.pathsep}{os.environ['PATH']}")
+    found = Auditor(clean_tree).tier0("test_x.py", "import zz_project_only\n")
+    assert _verdicts(found)["imports"] == "pass"
 
 
 def test_one_byte_change_misses_the_cache(clean_tree: Path, gate_spy: _Spy) -> None:
