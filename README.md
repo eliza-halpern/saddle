@@ -84,9 +84,12 @@ Give saddle your server's API key. Either export `SADDLE_VLLM_API_KEY`, or put i
 
 ```bash
 mkdir -p ~/.config/saddle
-printf 'SADDLE_VLLM_API_KEY=%s\n' 'your-key' > ~/.config/saddle/env
-chmod 600 ~/.config/saddle/env
+read -rsp 'API key: ' key; echo
+(umask 077; printf 'SADDLE_VLLM_API_KEY=%s\n' "$key" > ~/.config/saddle/env); unset key
 ```
+
+The key is read with echo off, so it stays out of your shell history, and the file is
+readable only by you.
 
 Check that saddle can reach the server, then start the chat:
 
