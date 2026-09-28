@@ -475,6 +475,36 @@ def test_a_gate_run_cannot_read_a_planted_answer(work: Path, outside: Path) -> N
     assert "PLANTED_ANSWER" not in run.stdout
 
 
+def _plant_reaching_suite(work: Path, outside: Path, port: int) -> None:
+    """A tree whose own test reads a planted answer and dials a host port.
+
+    What an agent-written test can do during a gate run: print whatever it
+    can read or reach, so the output flows back as failure text."""
+    (outside / "bench" / "answer.txt").write_text("PLANTED_ANSWER\n")
+    (work / "test_reach.py").write_text(
+        "import socket\n\n\n"
+        "def test_reach():\n"
+        "    try:\n"
+        f"        print(open({str(outside / 'bench' / 'answer.txt')!r}).read())\n"
+        "    except OSError as exc:\n"
+        "        print('READ', type(exc).__name__)\n"
+        "    s = socket.socket()\n"
+        "    s.settimeout(2)\n"
+        f"    print('CONNECT', s.connect_ex(('127.0.0.1', {port})))\n"
+    )
+
+
+def test_a_gate_pytest_run_reaches_past_the_workdir(
+    work: Path, outside: Path, listener: int
+) -> None:
+    # The hole (#104): the tests gate runs the tree's own pytest on the host.
+    _plant_reaching_suite(work, outside, listener)
+    run = evidence.run_shell_capture(f"{PY} -m pytest -q -s -p no:cacheprovider", work)
+    assert run.exit_code == 0, run.stdout + run.stderr
+    assert "PLANTED_ANSWER" in run.stdout
+    assert "CONNECT 0" in run.stdout
+
+
 def test_a_gate_timeout_kills_the_whole_process_group(work: Path, outside: Path) -> None:
     marker = outside / "gate-orphan"
     run = evidence.run_capture(
