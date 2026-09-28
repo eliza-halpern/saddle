@@ -225,6 +225,33 @@ once showed dozens of phantom missing lines in one module purely because a
 prompt string was edited while the run was in flight. Let the run finish,
 or re-run once the edit has settled.
 
+## Public text: the leak guard
+
+This repository is public. `saddle.leakguard` refuses local home paths,
+agent scratch paths, machine-named email addresses, secret shapes (AWS and
+`sk-` keys, GitHub tokens, private key headers) and internal finding or
+recommendation numbers in what you publish. Install its hooks once per
+clone:
+
+```bash
+git config core.hooksPath tools/githooks
+```
+
+`pre-commit` checks the staged content, `commit-msg` the message, and
+`pre-push` every commit the remote does not already have: its message, its
+author and committer emails, and the lines it adds. History already on the
+remote is not re-judged.
+
+The source is public, so it holds only generic rules. Names that are
+private to you (other repositories, hosts, people) go in an untracked file,
+one Python regex per line, at `~/.config/saddle/leak-patterns.txt` (or the
+path in `$SADDLE_LEAK_PATTERNS`). An invalid file stops the hook; a missing
+one is announced. A test fake that trips a rule goes in `ALLOWED_VALUES`
+by its exact value, never by file, and a test builds its known-bad values
+from fragments so the guard can scan the test itself.
+`python -m saddle.leakguard tree` and `messages <range>` audit without a
+hook.
+
 ## Running the suite
 
 The gate runners call `coverage` and `ruff` by bare name, so the virtual
