@@ -32,6 +32,7 @@ from __future__ import annotations
 import atexit
 import functools
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -363,8 +364,10 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
 
     Minimal on purpose: each venv a gate tool (or `VIRTUAL_ENV`) lives in,
     the interpreter that venv was made from, and the tool's own PATH entry
-    when that is a link into the venv. Nothing else under HOME: a sibling of
-    the venv, the rest of `~/.local/bin`, and dotfiles all stay hidden."""
+    when that is a link into the venv; and, for a `python` or `python3`
+    that is no venv's, that interpreter's user site-packages
+    (`user_site`). Nothing else under HOME: a sibling of the venv, the rest
+    of `~/.local` and `~/.local/bin`, and dotfiles all stay hidden."""
     binds: dict[Path, Path] = {}
     venvs: list[Path] = []
     if env.get("VIRTUAL_ENV"):
@@ -380,6 +383,14 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
                 venvs.append(venv)
         if spelled != landed and _venv_root(landed) is not None:
             binds[spelled] = landed
+        if (
+            name in ("python", "python3")
+            and _venv_root(spelled) is None
+            and _venv_root(landed) is None
+        ):
+            site = user_site(landed)
+            if site is not None:
+                binds[site] = site
     for venv in venvs:
         if not (venv / "pyvenv.cfg").is_file():
             continue
@@ -389,6 +400,24 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
         if base is not None:
             binds[base] = base
     return tuple((source, dest) for dest, source in sorted(binds.items()) if not _is_system(dest))
+
+
+def user_site(interpreter: Path) -> Path | None:
+    """`~/.local/lib/pythonX.Y/site-packages` for an interpreter named
+    `pythonX.Y` (as `/usr/bin/python3` resolves), when that directory exists.
+
+    Shown read-only, and it alone of HOME, because `pip install --user` is
+    how a system Python gets pytest on Debian and Ubuntu: hidden, the gates
+    run a different environment from the user's own `python3 -m pytest`
+    and refuse correct work. It holds installed code, not credentials;
+    what it points at elsewhere under HOME (an editable install's `.pth`)
+    stays hidden. A venv's interpreter is never given it: a venv ignores
+    the user site."""
+    match = re.fullmatch(r"python(\d+\.\d+)", interpreter.name)
+    if match is None:
+        return None
+    site = Path.home() / ".local" / "lib" / f"python{match[1]}" / "site-packages"
+    return site if site.is_dir() else None
 
 
 def _is_system(path: Path) -> bool:
