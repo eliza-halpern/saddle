@@ -36,12 +36,17 @@ Phase 2 adds:
   caching.
 - [docs/CLI.md](docs/CLI.md): every flag and exit code.
 
-**Status as of 2026-09-26:**
+**Status as of 2026-09-27:**
 
-- **Measured:** the suite and contract mutants for each piece (see commit messages), and
-  runs against a scripted fake model.
-- **Not measured:** there is no live E+A+F result yet. Nothing yet shows that the
-  auditor lowers the false-done rate on real tasks, or what it costs in wall time.
+- **Measured, no harm:** on two benchmark tasks, six seeds each, the audited agent's
+  false-done rate was 0 of 6 on both, the same as the plain agent's, at 0.95x and 0.69x
+  of its wall time to a finished evidence packet.
+- **Measured, detection:** a rate on planted defects, not a pass. Re-audited offline on
+  `48eb6d6`, the auditor refused 65 of 65 planted-bug trees, 49 of 65 for the right
+  reason. Every right-reason refusal came from the agent's own tests failing; on one
+  task the other gates refused correct and wrong trees alike.
+- **Not measured:** the false-done rate on tasks beyond those two (#109), and detection
+  of defects that were not planted.
 - **Not built:** only the Small lane exists. Contracts are not sealed before
   implementation. The only questions a run asks are the two above.
 
@@ -62,7 +67,7 @@ Phase 2 adds:
 
 ## Quickstart
 
-The CLI as built (`src/saddle/cli.py:582-641`): `saddle doctor`, `saddle dag`, `saddle run`, `saddle tail`, `saddle verify`, `saddle up`. Configure the vLLM API key via `SADDLE_VLLM_API_KEY` or `VLLM_API_KEY`. Run the suite with:
+The CLI as built (`cli.build_parser`; every command and flag in docs/CLI.md): `saddle doctor`, `saddle dag`, `saddle run`, `saddle auto`, `saddle audit`, `saddle tail`, `saddle verify`, `saddle explain`, `saddle chat` (alias `saddle web`), `saddle up`. Configure the vLLM API key via `SADDLE_VLLM_API_KEY` or `VLLM_API_KEY`. Run the suite with:
 ```bash
 PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
 ```
@@ -80,14 +85,62 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
   cap; without one saddle falls back to a weaker per-process address-space ceiling.
   `SADDLE_MEMORY_MAX` sets the cap (bytes, or a number with K, M, G or T; default `6G`).
 
-## Reading the citations in the code
+## Security model
 
-Comments, docstrings and docs cite findings and work items by ID: `F21.12a`,
-`F13`, "round 3e", `T6-56`, "Rec 97", run names such as `M3F` or `CALIB`, and
-lane names such as `FEEDFIX`. These refer to the author's internal benchmark
-notes and work log (cited as `WORKPLAN`), which are not public. Each comment states the claim it
-relies on, so it should read on its own; the ID only records where the
-evidence came from.
+Saddle runs code a model wrote, on your machine, as you. It confines some of that and
+not all of it. Run it only on code you would be willing to run yourself.
+
+It needs a model server: a local OpenAI-compatible chat-completions endpoint (vLLM with
+structured outputs; `--base-url`, default `vllm.DEFAULT_BASE_URL`,
+`http://127.0.0.1:18020/v1`). Your prompts and the files the model reads go to that
+server. Point `--base-url` somewhere else and they go there instead.
+
+**What is confined** (`sandbox.py`, `memcap.py`):
+
+- **File tools stay in the workdir.** Every path a tool reads or writes is resolved,
+  symlinks included, and refused if it lands outside the working directory
+  (`sandbox.resolve_within`).
+- **Commands run under `bwrap` when it can start** (`Sandbox._argv`). The root is built
+  up from the system directories and the interpreter, read-only (`SYSTEM_DIRS`); HOME
+  and /tmp are empty; the workdir is the one writable place, and its `.git` is
+  read-only (`Sandbox._git_binds`). Each command gets its own namespaces (sharing the
+  host network unless the lane takes it away), its own session and process group, and
+  its process group is killed when it ends.
+- **The environment is an allowlist** (`sandbox.ENV_KEEP`), so the model key in
+  saddle's own environment does not reach a command.
+- **A Task run (`saddle auto`) requires isolation and has no network.** It refuses to
+  start when `bwrap` is missing or cannot start (`require_isolation=True`,
+  `IsolationUnavailableError`), and its commands see loopback only (`network="none"`).
+- **Every command the model runs has a memory cap** (`memcap.cap`): a systemd user scope with
+  `MemoryMax`, no swap and at most 4096 tasks, or a per-process `prlimit --as` ceiling
+  where no user systemd manager is reachable. The cap also covers the audited tree's
+  test command and `mutmut run` (`evidence.tree_memory_limit`). Default 6 GiB;
+  `SADDLE_MEMORY_MAX` changes it. A command the cap kills is recorded as a failure.
+- **The git calls of an autonomous run and of the packet's branch actions run with
+  hooks and `core.fsmonitor` off** (`sandbox.HOST_GIT_GUARD`, used in `auto.py` and
+  `web/branch_actions.py`), so config planted in `.git` does not run there. saddle's
+  other git calls, such as the gates' diffs (`evidence.py`), do not pass it.
+- **The chat server binds to loopback by default**; any other bind address requires a
+  token (`web.app.needs_token`).
+
+**What is not confined:**
+
+- **The auditor's gates.** `pytest`, `coverage` and `mutmut` run as you on the host,
+  with your read access and your network, under the memory cap only (#104). A test the
+  model wrote runs there during an audit.
+- **Ask and Edit in the chat without a working `bwrap`.** Those lanes use `bwrap` when it
+  starts; otherwise commands run as you and the sandbox reports `isolation: none`
+  (`Sandbox.isolation`). They keep the host network either way. Ask offers the model
+  read-only tools only (`tools.tools_for_mode`); Edit writes your folder directly,
+  unaudited.
+- **`git`, `ruff` and `coverage` bookkeeping calls** have no memory cap.
+
+## Reading the comments
+
+Comments and docstrings state the claim they rely on, and the evidence behind it, in
+plain words. Some name a benchmark task and seed (`T5`, `t8-s1`) or a round of runs
+("round 3e"); docs/BENCHMARK-RECORD.md describes the tasks and the rounds. The raw run
+records behind those measurements are the author's own and are not public.
 
 ## License
 
