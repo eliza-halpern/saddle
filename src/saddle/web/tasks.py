@@ -158,10 +158,10 @@ class TaskRun:
     runs on while the user reads, and the engine takes that wait back out
     only once the answer comes (`engine._ask`)."""
     final: tuple[float, int] | None = None
+    """The ended run's time and tokens, from its sealed outcome where it has one."""
     shown_tokens: int = 0
     """The tokens the last `run.progress` reported, a streaming reply's
     partial estimate included: what an open page's meter last showed."""
-    """The ended run's time and tokens, from its sealed outcome where it has one."""
 
     def spent(self) -> tuple[float, int] | None:
         """(seconds, generated tokens) the run has spent, or None before it has a budget."""

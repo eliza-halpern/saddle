@@ -28,7 +28,7 @@ from starlette.testclient import TestClient
 import saddle.auto
 from saddle import engine
 from saddle.engine import RunBudget
-from saddle.events import AuditFinding, Event, Question, TaskState
+from saddle.events import AuditFinding, Event, Question, RunProgress, TaskState
 from saddle.journal import attempt_sidecar_path, read_entries, read_spans
 from saddle.sessions import SessionStore
 from saddle.vllm import StreamToken, ToolCall
@@ -716,3 +716,40 @@ def test_a_snapshot_mid_reply_never_reads_below_the_partial_progress_the_page_sa
     assert replay.event["tokens"] == snap.tokens
     # An ended run still shows what its outcome sealed.
     assert run.state_event().tokens == packet["spend"]["tokens"]
+
+
+def test_a_settled_reply_under_its_estimate_brings_the_snapshot_down_to_it(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The snapshot follows the last report, not the highest ever: a reply's
+    measured count may come in under its chars/4 estimate, and the report
+    sent when it settles is the true figure."""
+    seen: list[int | None] = []
+
+    def fake(options: Any, _client: Any, **kw: Any) -> Any:
+        budget = RunBudget(time_s=60, tokens=1000)
+        budget.start()
+        kw["on_budget"](budget)
+        budget.spent_tokens = 100
+        kw["on_event"](
+            RunProgress(elapsed_s=1, time_budget_s=60, tokens=180, token_budget=1000, partial=True)
+        )
+        seen.append(run.state_event().tokens)  # mid-reply: the estimate the page saw
+        budget.spent_tokens = 150  # the server's usage: under the estimate
+        kw["on_event"](RunProgress(elapsed_s=2, time_budget_s=60, tokens=150, token_budget=1000))
+        seen.append(run.state_event().tokens)
+        msg = "stop here"
+        raise saddle.auto.AutoError(msg)
+
+    monkeypatch.setattr(tasks, "run_auto", fake)
+    run = TaskRun(run_id="r", session_id="s", task="t", time_budget_s=60, token_budget=1000)
+    execute(
+        run,
+        workdir=repo,
+        client=None,
+        publish=lambda _e: None,
+        chat_journal=tmp_path / "chat.jsonl",
+        reasoning_effort="low",
+        audit=None,
+    )
+    assert seen == [180, 150]
