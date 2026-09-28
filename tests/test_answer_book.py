@@ -193,7 +193,7 @@ T0 = "2026-09-25T21:00:00Z"
 T_DEC = "2026-09-26T01:11:00Z"  # 2026-09-25 21:11 EDT
 Q = hashlib.sha256(b"Should ' use@example.com' be accepted?").hexdigest()
 TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-DEC_REF = "phase2/measurements/T1-rescore-t1_probe_g.md@e206e1789037"
+DEC_REF = "decisions/t1-rescore.md@e206e1789037"
 SPEC_PCT_CLASS: dict[str, object] = {
     "clause_id": "t1.local-pct@1",
     "clause": "'%' is atext; a '%' in the local part does not by itself make an address invalid",

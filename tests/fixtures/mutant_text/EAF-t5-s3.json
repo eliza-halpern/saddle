@@ -1,6 +1,6 @@
 {
  "tree": "EAF-t5-s3",
- "source": "internal CALIB run record EAF-t5-s3 (not public)",
+ "source": "calibration run record EAF-t5-s3 (not public)",
  "outcome": {
   "killed": 269,
   "total": 291,

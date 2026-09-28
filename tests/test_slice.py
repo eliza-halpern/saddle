@@ -2938,7 +2938,7 @@ def test_run_slice_resume_drops_a_record_that_predates_the_node_hash(tmp_path: P
             parent_proofs=[],
             gate_outputs=[GateOutput(name="tests", passed=True, detail="ok")],
             requirement_ids=["REQ-001"],
-            thinking="sealed before T3-9",
+            thinking="sealed before records named their node",
         ),
     )
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})

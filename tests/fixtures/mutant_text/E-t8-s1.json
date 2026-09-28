@@ -1,6 +1,6 @@
 {
  "tree": "E-t8-s1",
- "source": "internal CALIB run record E-t8-s1 (not public)",
+ "source": "calibration run record E-t8-s1 (not public)",
  "outcome": {
   "killed": 105,
   "total": 112,

@@ -1555,7 +1555,7 @@ def build_parser() -> argparse.ArgumentParser:
         "on its branch in REPO (default: the checkout the ledger sits in; write the journal "
         "first).",
     )
-    explain = sub.add_parser("explain", help="Explain a run from its journal (T6-27).")
+    explain = sub.add_parser("explain", help="Explain a run from its journal.")
     explain.add_argument(
         "journal",
         nargs="?",
