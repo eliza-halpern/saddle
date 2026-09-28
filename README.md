@@ -6,7 +6,7 @@ Break your local model to harness.
 
 Saddle is a deterministic execution harness that turns a non-deterministic local LLM into a dependable coding tool: constrained DAG planning, parallel proof-gated workers, machine-checked gates. No retries on unverified foundations.
 
-**Status:** vertical slice built and benchmarked (see docs/BENCHMARK-RECORD.md). Tier-1 gates, the Kahn scheduler, the proof journal and the CLI exist; Tier-2 merge gates, Phase -1/0 and Phase 4 are specified in docs/ARCHITECTURE.md and not yet built.
+**Status:** early. The agent-plus-auditor loop below is built and measured on a small benchmark (details under *Status* below). Don't trust it unattended yet: on harder tasks the auditor has accepted wrong work (#109).
 
 ## Phase 2: agent plus auditor
 
@@ -36,7 +36,7 @@ Phase 2 adds:
   caching.
 - [docs/CLI.md](docs/CLI.md): every flag and exit code.
 
-**Status as of 2026-09-27:**
+**Status as of 2026-09-28:**
 
 - **Measured, no harm:** on two benchmark tasks, six seeds each, the audited agent's
   false-done rate was 0 of 6 on both, the same as the plain agent's, at 0.95x and 0.69x
@@ -45,8 +45,10 @@ Phase 2 adds:
   `48eb6d6`, the auditor refused 65 of 65 planted-bug trees, 49 of 65 for the right
   reason. Every right-reason refusal came from the agent's own tests failing; on one
   task the other gates refused correct and wrong trees alike.
-- **Not measured:** the false-done rate on tasks beyond those two (#109), and detection
-  of defects that were not planted.
+- **Observed, not yet measured:** in single unscored runs on two harder tasks, the
+  auditor accepted a tree that failed the task's hidden checks (#109). Measuring that
+  rate is next.
+- **Not measured:** detection of defects that were not planted.
 - **Not built:** only the Small lane exists. Contracts are not sealed before
   implementation. The only questions a run asks are the two above.
 
