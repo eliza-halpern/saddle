@@ -4,6 +4,36 @@ saddle is a harness whose job is to refuse work that has not been shown to
 be correct. The rules below hold the harness itself to the same standard.
 Each one exists because the opposite habit let a defect through.
 
+## Start here
+
+1. **Prerequisites.** Linux with a `bwrap` (bubblewrap) that can start and a
+   user systemd manager; the README's Requirements section says why and how.
+   The test suite does not need a model server: the live tests skip
+   unless `SADDLE_VLLM_API_KEY` is set.
+2. **Set up and run the gate.**
+
+   ```bash
+   uv sync --frozen
+   git config core.hooksPath tools/githooks
+   PATH="$PWD/.venv/bin:$PATH" ./check.sh
+   ```
+
+   `check.sh` is the gate CI runs: `ruff check`, `ruff format --check`,
+   `mypy` in strict mode, and `pytest` at 100% line and branch coverage.
+   "Green" means all four; a passing `pytest` alone is not green.
+3. **Make the change.** Every change that carries a contract states it in
+   one sentence and names one to three mutations of it that a test kills
+   (below). A change with no contract, such as a comment or a doc, says
+   "no contract change" in its commit message.
+4. **Write the commit message.** Record the mutants and their verdicts, and
+   label the direction of any contract change: *tightened*, *loosened* or
+   *scope narrowed*. A test whose expected outcome changes direction is
+   labelled `flip: <test name>` with its evidence.
+5. **License.** saddle is AGPL-3.0; contributions are accepted under the
+   same license.
+
+The rest of this file is the reasoning behind steps 3 and 4.
+
 ## Test adequacy: contract mutants, not a kill percentage
 
 Every change that carries a contract names one to three mutations of *that
@@ -260,11 +290,14 @@ environment must be on `PATH`, or a few dozen tests fail with
 
 ```bash
 uv sync --frozen
-PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
+PATH="$PWD/.venv/bin:$PATH" ./check.sh
 ```
 
-The suite runs at 100% line and branch coverage; `ruff check .` and
-`ruff format --check .` must also pass.
+`check.sh` runs `ruff check`, `ruff format --check`, `mypy` in strict mode
+over `src` and `tests`, and `pytest` at 100% line and branch coverage. A
+change is green only when all four pass; `pytest` alone once hid over a
+hundred type errors. For a quicker loop while you work, run one test file
+with `--no-cov`, then the whole gate before you commit.
 
 ## Layering
 
