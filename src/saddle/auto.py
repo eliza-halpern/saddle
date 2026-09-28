@@ -11,6 +11,10 @@ turns on the tier-0 guards and a budget, and hands one turn to the same engine t
   the user's checkout. The result is that branch.
 - The ledger is `.saddle/runs/<run-id>/proofs.jsonl`, outside the
   worktree, so the tools cannot reach it; `saddle verify` reads it.
+- The worktree holds tracked files only, so a project's untracked `.venv`
+  is looked for in the user's folder (`sandbox.project_env`). When there is
+  one, the model's commands and the gates both run on it, and the start
+  record seals which environment the gates used (`environment ...`).
 - It ends `finished` only when the model calls `finish`, and otherwise
   `stopped`, naming the budget or error. In arm E+A+F `finish` is refused
   while the audit of the tree fails; in E and E+A a `finished` outcome is
@@ -28,7 +32,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Final
 
-from saddle import prompt_constants
+from saddle import prompt_constants, sandbox
 from saddle.anchor import anchor_trailers, outcome_hash
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
@@ -318,6 +322,12 @@ def run_auto(
         msg = f"--check-tool needs arm E+A+F (it delivers audit findings); got {options.arm}"
         raise AutoError(msg)
     repo = options.repo.resolve()
+    project = sandbox.project_env(repo_root(repo))
+    problem = sandbox.project_env_problem(project) if project is not None else None
+    if problem is not None and options.arm != "E":
+        raise AutoError(problem)
+    with sandbox.using_project_env(project):
+        environment = sandbox.gate_environment()
     run_id = options.run_id or uuid.uuid4().hex[:12]
     base = run_base(repo)
     worktree, branch = create_worktree(repo, run_id)
@@ -334,8 +344,8 @@ def run_auto(
         f"base {base}; "
         f"budgets {options.time_budget_s:.0f}s, "
         f"{options.token_budget} generated tokens; test edits "
-        f"{'allowed' if options.allow_test_edits else 'refused'}"
-        + ("; check tool offered" if options.check_tool else ""),
+        f"{'allowed' if options.allow_test_edits else 'refused'}; "
+        f"environment {environment}" + ("; check tool offered" if options.check_tool else ""),
         kind="agent",
     )
     append_span(journal, start)
@@ -349,6 +359,7 @@ def run_auto(
             run_span=start.span_id,
             feedback=options.arm == "E+A+F",
             factory=options.auditor_factory,
+            project_env=project,
             sanctioned_test_rewrites=options.sanctioned_test_rewrites,
             tier2=options.tier2,
             mutant_shortlist=options.mutant_shortlist,
@@ -416,7 +427,10 @@ def run_auto(
     context = ToolContext(
         workdir=worktree,
         sandbox=Sandbox.for_workdir(
-            worktree, env=COMMAND_ENV, require_isolation=True, network="none"
+            worktree,
+            env={**COMMAND_ENV, **sandbox.project_command_env(project)},
+            require_isolation=True,
+            network="none",
         ),
         protected_tests=roots,
         syntax_guard=True,

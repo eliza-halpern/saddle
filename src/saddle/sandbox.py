@@ -29,15 +29,21 @@ protection that is not there. The gates' subprocesses on the tree's code
 
 from __future__ import annotations
 
+import atexit
 import functools
 import os
+import re
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
@@ -100,8 +106,82 @@ def tool_dir() -> Path | None:
     return Path(sys.executable).parent if sys.executable else None
 
 
+PROJECT_VENVS: Final = (".venv", "venv")
+"""Where a project keeps its own virtualenv, relative to its folder, in the
+order they are tried. A directory counts only with a `pyvenv.cfg`."""
+
+GATE_ENV_TOOLS: Final = ("python", "pytest", "coverage", "mutmut")
+"""What a project venv must hold, in its `bin`, for the gates to run on it:
+the test command's `python` (which also runs `-m pytest` and `-m coverage`)
+and `mutmut`, which runs the tests in its own process. A venv missing one
+would run that gate on a different interpreter, without the project's
+packages, and refuse correct work."""
+
+_PROJECT_ENV: ContextVar[Path | None] = ContextVar("saddle_project_env", default=None)
+
+
+def project_env(folder: Path, environ: Mapping[str, str] | None = None) -> Path | None:
+    """The project's own virtualenv for work on `folder`, or None.
+
+    `folder` is the user's folder, never a run's worktree: a worktree holds
+    tracked files only, so an untracked `.venv` is not in it. Tried in
+    order: each of `PROJECT_VENVS` under `folder`, then an active
+    `VIRTUAL_ENV` (from `environ`, default saddle's own environment) unless
+    that is saddle's own environment, which is no project's."""
+    for name in PROJECT_VENVS:
+        candidate = folder / name
+        if (candidate / "pyvenv.cfg").is_file():
+            return candidate.resolve()
+    active = (os.environ if environ is None else environ).get("VIRTUAL_ENV", "")
+    if active and (Path(active) / "pyvenv.cfg").is_file():
+        real = Path(active).resolve()
+        if real != Path(sys.prefix).resolve():
+            return real
+    return None
+
+
+def project_env_problem(env: Path) -> str | None:
+    """None when the gates can run on `env`, else a setup error naming what is missing."""
+    missing = [name for name in GATE_ENV_TOOLS if not (env / "bin" / name).exists()]
+    if not missing:
+        return None
+    return (
+        f"setup: the project's virtualenv {env} has no {', '.join(missing)}; the auditor "
+        "runs the tests on it, so install them into it "
+        f"({env / 'bin' / 'python'} -m pip install {' '.join(missing)})"
+        if "python" not in missing
+        else f"setup: the project's virtualenv {env} has no python in {env / 'bin'}"
+    )
+
+
+@contextmanager
+def using_project_env(env: Path | None) -> Iterator[None]:
+    """Within the block (this thread, this context), the gates run on `env`:
+    `gate_path` puts its `bin` first and `confine` shows it read-only."""
+    token = _PROJECT_ENV.set(env)
+    try:
+        yield
+    finally:
+        _PROJECT_ENV.reset(token)
+
+
+def project_command_env(env: Path | None, path: str | None = None) -> dict[str, str]:
+    """Extra environment for the model's commands on a project with venv
+    `env`: its `bin` first on `path` (default saddle's PATH), and
+    `VIRTUAL_ENV` naming it, which `default_expose` shows read-only.
+    Empty when there is no project venv: PATH is then left as it was."""
+    if env is None:
+        return {}
+    rest = os.environ.get("PATH", "") if path is None else path
+    bin_dir = str(env / "bin")
+    entries = [entry for entry in rest.split(os.pathsep) if entry and entry != bin_dir]
+    return {"PATH": os.pathsep.join([bin_dir, *entries]), "VIRTUAL_ENV": str(env)}
+
+
 def gate_path(path: str) -> str:
-    """`path`, then `tool_dir()` as the last entry when `path` lacks it.
+    """`path`, with the project venv's `bin` first when one is in use
+    (`using_project_env`), then `tool_dir()` as the last entry when `path`
+    lacks it.
 
     The gates run their tools by bare name. A tool on the user's PATH wins:
     it belongs to the environment the project's tests were written for,
@@ -111,11 +191,114 @@ def gate_path(path: str) -> str:
     (which read as "tests failed", a refusal of correct work). Only the
     gates use this; a command the model runs (`command_env`) never sees
     saddle's own directory."""
+    env = _PROJECT_ENV.get()
+    if env is not None:
+        path = project_command_env(env, path)["PATH"]
     fallback = tool_dir()
     entries = [entry for entry in path.split(os.pathsep) if entry]
+    shim = _python3_shim(entries)
+    tail = [str(shim)] if shim is not None else []
     if fallback is None or any(Path(entry) == fallback for entry in entries):
-        return path
-    return os.pathsep.join([*entries, str(fallback)])
+        return os.pathsep.join([*entries, *tail]) if tail else path
+    return os.pathsep.join([*entries, *tail, str(fallback)])
+
+
+GATE_MODULES: Final = ("pytest", "coverage", "mutmut")
+"""What a `python3` must import, under the gates' own confinement, to run
+the gates in place of a missing `python`."""
+
+PROBE_TIMEOUT_S: Final = 60.0
+
+_SHIMS: dict[Path, str] = {}
+"""Shim directory -> the `python3` its `python` runs (`_shim_for`)."""
+
+
+def _python3_shim(entries: Sequence[str]) -> Path | None:
+    """A directory whose `python` runs the `python3` on `entries`, when
+    `entries` has no `python` and that `python3` can run the gates; else None.
+
+    Ubuntu ships `python3` without `python` unless python-is-python3 is
+    installed, and the test command is `python -m pytest`. Without this the
+    gates fell back to saddle's own interpreter, which has none of the
+    project's packages, and refused correct work. That `python3` is used
+    only when it imports every one of `GATE_MODULES` inside the sandbox and
+    a `mutmut` is on `entries` too (mutmut runs the tests in its own
+    process): one that cannot would refuse correct work the same way, so
+    saddle's own stays the fallback. Nothing on the user's system is
+    changed: the shim is a script in a directory saddle owns."""
+    joined = os.pathsep.join(entries)
+    if shutil.which("python", path=joined) is not None:
+        return None
+    found = shutil.which("python3", path=joined)
+    if found is None or shutil.which("mutmut", path=joined) is None:
+        return None
+    python3 = str(Path(found).absolute())
+    return _shim_for(python3) if _runs_gates(python3) else None
+
+
+@functools.cache
+def _runs_gates(python3: str) -> bool:
+    """`python3` imports all of `GATE_MODULES`, run confined as a gate runs
+    (so a package the sandbox hides counts as missing). Asked once per
+    saddle process: install the tools, then restart saddle."""
+    # Its own directory first, so `default_expose` shows the venv it lives
+    # in; then saddle's PATH, where `bwrap` itself is found.
+    env = command_env(
+        {"PATH": os.pathsep.join([str(Path(python3).parent), os.environ.get("PATH", "")])}
+    )
+    argv = [python3, "-c", f"import {', '.join(GATE_MODULES)}"]
+    with tempfile.TemporaryDirectory(prefix="saddle-probe-") as root:
+        wrapped, lent = _confined(argv, Path(root), env)
+        try:
+            done = subprocess.run(
+                wrapped,
+                cwd=root,
+                env=lent,
+                capture_output=True,
+                timeout=PROBE_TIMEOUT_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+    return done.returncode == 0
+
+
+@functools.cache
+def _shim_for(python3: str) -> Path:
+    """A private directory holding one script, `python`, that execs `python3`.
+
+    A script, not a link: a venv's interpreter finds its `pyvenv.cfg` next
+    to the path it was started by, so a link elsewhere would lose the venv."""
+    where = Path(tempfile.mkdtemp(prefix="saddle-python-")).resolve()
+    script = where / "python"
+    script.write_text(f'#!/bin/sh\nexec {shlex.quote(python3)} "$@"\n', encoding="utf-8")
+    script.chmod(0o755)
+    atexit.register(shutil.rmtree, where, True)
+    _SHIMS[where] = python3
+    return where
+
+
+def gate_environment() -> str:
+    """Which environment the gates run the tests on, in words, for the
+    run's sealed start record: the project venv in use, else the `python`
+    `gate_path` finds and where it came from. No `;` (the record's field
+    separator) survives unescaped."""
+    env = _PROJECT_ENV.get()
+    if env is not None:
+        said = f"the project's virtualenv {env}"
+    else:
+        found = shutil.which("python", path=gate_path(os.environ.get("PATH", "")))
+        fallback = tool_dir()
+        shimmed = _SHIMS.get(Path(found).parent) if found is not None else None
+        if found is None:
+            said = "no python found"
+        elif shimmed is not None:
+            said = f"{shimmed} from PATH (there is no `python` on PATH)"
+        elif fallback is not None and Path(found).parent == fallback:
+            said = f"saddle's own interpreter {found}"
+        else:
+            said = f"{found} from PATH"
+    return said.replace(";", "%3B")
 
 
 def gate_env() -> dict[str, str]:
@@ -181,8 +364,10 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
 
     Minimal on purpose: each venv a gate tool (or `VIRTUAL_ENV`) lives in,
     the interpreter that venv was made from, and the tool's own PATH entry
-    when that is a link into the venv. Nothing else under HOME: a sibling of
-    the venv, the rest of `~/.local/bin`, and dotfiles all stay hidden."""
+    when that is a link into the venv; and, for a `python` or `python3`
+    that is no venv's, that interpreter's user site-packages
+    (`user_site`). Nothing else under HOME: a sibling of the venv, the rest
+    of `~/.local` and `~/.local/bin`, and dotfiles all stay hidden."""
     binds: dict[Path, Path] = {}
     venvs: list[Path] = []
     if env.get("VIRTUAL_ENV"):
@@ -198,6 +383,14 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
                 venvs.append(venv)
         if spelled != landed and _venv_root(landed) is not None:
             binds[spelled] = landed
+        if (
+            name in ("python", "python3")
+            and _venv_root(spelled) is None
+            and _venv_root(landed) is None
+        ):
+            site = user_site(landed)
+            if site is not None:
+                binds[site] = site
     for venv in venvs:
         if not (venv / "pyvenv.cfg").is_file():
             continue
@@ -207,6 +400,24 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
         if base is not None:
             binds[base] = base
     return tuple((source, dest) for dest, source in sorted(binds.items()) if not _is_system(dest))
+
+
+def user_site(interpreter: Path) -> Path | None:
+    """`~/.local/lib/pythonX.Y/site-packages` for an interpreter named
+    `pythonX.Y` (as `/usr/bin/python3` resolves), when that directory exists.
+
+    Shown read-only, and it alone of HOME, because `pip install --user` is
+    how a system Python gets pytest on Debian and Ubuntu: hidden, the gates
+    run a different environment from the user's own `python3 -m pytest`
+    and refuse correct work. It holds installed code, not credentials;
+    what it points at elsewhere under HOME (an editable install's `.pth`)
+    stays hidden. A venv's interpreter is never given it: a venv ignores
+    the user site."""
+    match = re.fullmatch(r"python(\d+\.\d+)", interpreter.name)
+    if match is None:
+        return None
+    site = Path.home() / ".local" / "lib" / f"python{match[1]}" / "site-packages"
+    return site if site.is_dir() else None
 
 
 def _is_system(path: Path) -> bool:
@@ -340,16 +551,30 @@ def confine(
     `Sandbox.for_workdir`'s default: where bwrap cannot start, the argv
     runs unwrapped, with the environment still scrubbed.
 
-    PATH is `gate_path`'s: the user's tools first, saddle's own as the
-    fallback. `default_expose` shows the venv each tool it finds lives in
-    read-only; saddle's own is inside `sys.prefix`, shown regardless.
+    PATH is `gate_path`'s: the project venv's `bin` when one is in use
+    (`using_project_env`, which also sets `VIRTUAL_ENV` to it), the user's
+    tools, then saddle's own as the fallback. `default_expose` shows the
+    venv each tool it finds lives in read-only; saddle's own is inside
+    `sys.prefix`, shown regardless.
     `extra_env` is laid over the scrubbed environment last."""
-    env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **(extra_env or {})})
+    project = _PROJECT_ENV.get()
+    venv = {"VIRTUAL_ENV": str(project)} if project is not None else {}
+    env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **venv, **(extra_env or {})})
+    return _confined(argv, root, env, writable)
+
+
+def _confined(
+    argv: Sequence[str], root: Path, env: dict[str, str], writable: Sequence[Path] = ()
+) -> tuple[list[str], dict[str, str]]:
+    """`confine` for an environment already built: `argv` under bwrap with
+    `root` writable, or unwrapped where bwrap cannot start."""
     if isolation_problem() is not None:
         return list(argv), env
     real = root.resolve()
     extra = [path.resolve() for path in writable]
     expose = default_expose(env)
+    # A `_shim_for` script is a bare `python` on PATH outside any venv, so
+    # `_bare_tools` shows it like any other such tool.
     wrapped = bwrap_argv(
         real,
         argv,

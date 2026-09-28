@@ -73,7 +73,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal, Protocol
 
-from saddle import coverage_text
+from saddle import coverage_text, sandbox
 from saddle.audit import AuditError
 from saddle.auditor import (
     Auditor,
@@ -333,6 +333,10 @@ class AuditFeed:
     """`--tier2`; "shortlist" turns on this module's shortlist behaviour too."""
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
     """How many survivors a mutation finding names (`--mutant-shortlist`)."""
+    project_env: Path | None = None
+    """The project's virtualenv (`sandbox.project_env`) every audit runs the
+    tests on; None leaves the gates on saddle's PATH. Set per audit, inside
+    `_audit`, because a checkpoint audit runs on the feed's own thread."""
     auditor: AuditorLike | None = None
     results: list[AuditResult] = field(default_factory=list)
     """Every completed audit, in completion order; the last is the verdict."""
@@ -373,6 +377,19 @@ class AuditFeed:
     ) -> AuditResult | None:
         """The audit of `files` at `tiers`. For a `check`, None (nothing run)
         when the tree is the one the last check audited."""
+        with sandbox.using_project_env(self.project_env):
+            return self._audit_on(point, tiers, files, scratch, check=check)
+
+    def _audit_on(
+        self,
+        point: str,
+        tiers: tuple[int, ...],
+        files: Path,
+        scratch: Path,
+        *,
+        check: bool,
+    ) -> AuditResult | None:
+        """`_audit`'s body, run with the project environment in place."""
         assert self.auditor is not None
         try:
             tree = snapshot(self.worktree, files, scratch / "tree")
