@@ -258,6 +258,20 @@ carry `run_state` and `run_task`):
   (`notify.js paintMenu`), because the sidebar is a closed drawer there.
 - **Screen readers:** a polite live region (`#run-live`) announces each transition.
 
+**When you do look.** The card's time and token meters come from the run's own budget
+(`engine.RunBudget`): a page opened or reloaded mid-run starts them where the run is,
+not at zero, and time spent waiting on your answer is not on them. An ended run's card,
+live or redrawn from its recap after a reload, shows the numbers its outcome sealed,
+the same ones the packet's Cost row gives in words.
+
+Under the ledger lines, a folded **Model activity** strip shows what the model is doing
+now: thinking, writing a reply, or in a tool call; roughly how many tokens the current
+reply has streamed (estimated from characters); the last tool call; and, opened, a short
+tail of the latest reasoning. It is labelled *not evidence* and drawn apart from the
+ledger in the narrative's style. It reads the run's live events and writes nothing the
+ledger, a verdict or the packet reads. Whether it is open is remembered per browser; on
+a card rebuilt after a reload its counts say "since this page opened".
+
 ## 5b. What a run's commands can reach
 
 Every command the model runs goes through `sandbox.Sandbox`. What it can see depends

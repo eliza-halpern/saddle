@@ -498,6 +498,7 @@ class ChatServer:
                 self.store.save_messages(session_id, messages)
         except Exception as exc:  # a dead run must not take the server with it
             run.state = "failed"
+            run.end_spend()
             publish(run.state_event(f"{type(exc).__name__}: {exc}"))
         finally:
             with live.lock:
@@ -1147,8 +1148,9 @@ def build_app(
                     yield f"data: {json.dumps(run.phase_event().payload())}\n\n"
                     for line in list(run.lines):
                         yield f"data: {json.dumps(line.payload())}\n\n"
-                    if run.progress is not None:
-                        yield f"data: {json.dumps(run.progress.payload())}\n\n"
+                    progress = run.progress_event()
+                    if progress is not None:
+                        yield f"data: {json.dumps(progress.payload())}\n\n"
                 while True:
                     if await request.is_disconnected():
                         return

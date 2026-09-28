@@ -26,8 +26,9 @@ import pytest
 from starlette.testclient import TestClient
 
 import saddle.auto
+from saddle.engine import RunBudget
 from saddle.events import AuditFinding, Event, Question, TaskState
-from saddle.journal import read_entries, read_spans
+from saddle.journal import attempt_sidecar_path, read_entries, read_spans
 from saddle.sessions import SessionStore
 from saddle.vllm import ToolCall
 from saddle.web import tasks
@@ -504,6 +505,10 @@ def test_a_reconnecting_page_gets_the_running_cards_state_lines_and_spend(
     assert frames[1]["question"]["text"] == "Should add(0, 0) be 0?"
     assert "task.line" in kinds
     assert frames[-2]["event"]["kind"] == "run.progress"
+    # The replayed report is restated at the snapshot's spend, not the last
+    # reply's: replayed after the snapshot, an old one would pull the meter back.
+    assert frames[-2]["event"]["elapsed_s"] == frames[1]["elapsed_s"] > 0
+    assert frames[-2]["event"]["tokens"] == frames[1]["tokens"] > 0
     assert frames[-1]["kind"] == "task.state"
     assert frames[-1]["state"] == "running"
     assert first["kind"] == "session.info"  # another session's card is not replayed
@@ -536,3 +541,110 @@ def test_an_unchanged_run_keeps_its_state_across_a_restart(tmp_path: Path) -> No
     assert tasks.latest_run_ref(chat) == ("unchanged", "t")
     append_span(chat, tasks.run_ref_span(run, "unrecorded", "none", ""))
     assert tasks.latest_run_ref(chat) == ("failed", "t")
+
+
+# -- a card rebuilt from a snapshot shows what the run has spent (#114) --------
+
+
+class Held(Scripted):
+    """A scripted client whose first reply is held open until `release` is set:
+    a long model reply, during which the engine emits no `run.progress`."""
+
+    def __init__(self, rounds: list[list[Any]]) -> None:
+        super().__init__(rounds)
+        self.release = threading.Event()
+        self.replying = threading.Event()
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Iterator[Any]:
+        if not self.replying.is_set():
+            self.replying.set()
+            self.release.wait(30)
+        return super().stream_chat(messages, **kwargs)
+
+
+def test_a_snapshot_carries_the_runs_own_spend_mid_reply_and_while_it_waits(
+    store: SessionStore, repo: Path
+) -> None:
+    held = Held(FIX)
+    app = build_app(store, lambda: held, default_workdir=repo, auditor=asking, arm="E")
+    server = next(
+        cell.cell_contents
+        for route in app.routes  # type: ignore[attr-defined]
+        for cell in (getattr(getattr(route, "endpoint", None), "__closure__", None) or ())
+        if isinstance(cell.cell_contents, ChatServer)
+    )
+    with TestClient(app) as client:
+        sid = client.post("/api/sessions").json()["id"]
+        rid = client.post(f"/api/sessions/{sid}/task", json={"text": "t"}).json()["run_id"]
+        assert held.replying.wait(30)
+        time.sleep(0.4)
+        run = server.tasks[rid]
+        # Mid-reply: no progress event has been sent, yet the snapshot a
+        # reloading page gets says the run has been working.
+        mid = run.state_event().payload()
+        assert run.progress is None
+        assert mid["elapsed_s"] >= 0.4
+        assert mid["tokens"] == 0
+        held.release.set()
+        wait_for(lambda: run.state == "needs_you")
+        asked = run.state_event()
+        progress: dict[str, Any] = run.progress.event if run.progress is not None else {}
+        time.sleep(0.4)
+        still = run.state_event()
+        client.post(f"/api/tasks/{rid}/answer", json={"text": "yes"})
+        wait_for(lambda: idle(server, sid))
+        packet = client.get(f"/api/sessions/{sid}/tasks/{rid}/packet").json()
+
+    # The same numbers a card open from the start was sent last.
+    assert asked.tokens == progress["tokens"] > 0
+    assert asked.elapsed_s is not None
+    assert asked.elapsed_s >= progress["elapsed_s"] >= 0.4
+    # Waiting on the user is not charged: the meter does not move.
+    assert still.elapsed_s == asked.elapsed_s
+    # An ended run shows the sealed outcome's numbers, the packet's too.
+    assert run.journal is not None
+    end = next(s for s in reversed(read_spans(run.journal)) if s.name.startswith("auto:"))
+    sealed = json.loads(attempt_sidecar_path(run.journal, end.span_id).read_text())
+    final = run.state_event()
+    assert final.state == "finished"
+    assert (final.elapsed_s, final.tokens) == (sealed["elapsed_s"], sealed["tokens_spent"])
+    assert packet["spend"] == {
+        "elapsed_s": sealed["elapsed_s"],
+        "time_budget_s": sealed["time_budget_s"],
+        "tokens": sealed["tokens_spent"],
+        "token_budget": sealed["token_budget"],
+    }
+
+
+def test_an_ended_runs_spend_is_frozen_and_prefers_the_sealed_numbers() -> None:
+    now = [100.0]
+    budget = RunBudget(time_s=60, tokens=1000, clock=lambda: now[0])
+    budget.start()
+    budget.spent_tokens = 250
+    run = TaskRun(run_id="r", session_id="s", task="t", time_budget_s=60, token_budget=1000)
+    assert run.spent() is None  # no budget yet: nothing to claim, not a 0
+    assert run.state_event().elapsed_s is None
+    run.budget = budget
+    now[0] = 112.5
+    assert run.spent() == (12.5, 250)
+    run.end_spend({"elapsed_s": 11.0})  # a sealed record without tokens: the budget's own
+    now[0] = 500.0
+    assert run.state_event().elapsed_s == 12.5  # frozen, the clock runs on
+    assert run.state_event().tokens == 250
+    sealed = TaskRun(run_id="q", session_id="s", task="t", time_budget_s=60, token_budget=1000)
+    sealed.budget = budget
+    sealed.end_spend({"elapsed_s": 11.0, "tokens": 240.0})
+    assert sealed.spent() == (11.0, 240)
+    never = TaskRun(run_id="n", session_id="s", task="t", time_budget_s=60, token_budget=1000)
+    never.end_spend()
+    assert never.spent() == (0.0, 0)  # failed before it had a budget: it spent nothing
+
+
+def test_the_packets_meters_are_only_what_the_sidecar_holds_as_numbers() -> None:
+    from saddle.packet import _meters
+
+    assert _meters({"time_budget_s": 60}) is None  # no elapsed: no meters, not a sealed 0
+    assert _meters({"elapsed_s": 3, "tokens_spent_estimate": 40, "token_budget": True}) == {
+        "elapsed_s": 3.0,
+        "tokens": 40.0,
+    }

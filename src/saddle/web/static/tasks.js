@@ -9,7 +9,10 @@
    What is evidence and what is not is visible in the styling, not only in
    the words: packet rows carry cites that open the record they came from;
    the model's narrative is set apart, in another face, and labelled
-   "narrative, not evidence"; a row with nothing behind it says so. */
+   "narrative, not evidence"; a row with nothing behind it says so. The
+   model-activity strip under the ledger lines is the live stream, set apart
+   the same way and labelled "not evidence": it reads the run's events and
+   writes nothing that a verdict, the ledger or the packet reads. */
 
 const TASK_STATES = {
   running:   { word: "running",   glyph: "●" },
@@ -96,6 +99,9 @@ function taskCard(runId, task, turnNode) {
   log.appendChild(lines);
   node.appendChild(log);
 
+  const activity = activityStrip();
+  node.appendChild(activity.box);
+
   const ask = el("div", "task-ask");
   ask.hidden = true;
   node.appendChild(ask);
@@ -106,7 +112,8 @@ function taskCard(runId, task, turnNode) {
 
   (turnNode || state.turnNode || $("#transcript")).appendChild(node);
   const card = {
-    runId, task, node, pill, stop, testsChip, time, tokens, now, log, logSummary, lines, ask, packet,
+    runId, task, node, pill, stop, testsChip, time, tokens, meters, now, log, logSummary, lines, ask,
+    packet, activity,
     state: "running", elapsed: 0, elapsedAt: Date.now(), timeBudget: 0, tokenBudget: 0,
     spent: 0, timer: 0, count: 0,
     phase: "starting", round: 1, lastEventAt: Date.now(), ageTimer: 0,
@@ -130,7 +137,10 @@ function paintState(card) {
   card.pill.appendChild(el("b", null, look.glyph));
   card.pill.appendChild(document.createTextNode(` ${look.word}`));
   card.stop.hidden = ENDED.has(card.state) || card.state === "loading";
-  card.meters = card.meters || null;
+  // The live stream is for a run that is still going; an ended run's story
+  // is its packet.
+  card.activity.box.hidden = ENDED.has(card.state) || card.state === "loading";
+  paintActivity(card);
   tick(card);
   clearInterval(card.timer);
   if (card.state === "running") card.timer = setInterval(() => tick(card), 1000);
@@ -176,6 +186,144 @@ function addLine(card, line) {
   card.count += 1;
   card.logSummary.textContent = `Session · ${card.count} ledger line${card.count === 1 ? "" : "s"}`;
   card.lines.scrollTop = card.lines.scrollHeight;
+}
+
+/* ---------- model activity: live, and not evidence ---------- */
+
+/* What the model is doing right now, from the run's own events: whether it
+   is thinking, writing or in a tool call, how much it has streamed this
+   reply, the last tool call, and a short tail of the latest stream. None of
+   it is sealed; it is folded by default and says so on its face. */
+const ACTIVITY_OPEN = "saddle.activityOpen";
+const TAIL_CHARS = 280;
+const CHARS_PER_TOKEN = 4;  // engine.CHARS_PER_TOKEN: how an unmetered round is estimated
+
+function activityWanted() {
+  try { return localStorage.getItem(ACTIVITY_OPEN) === "1"; } catch { return false; }
+}
+
+function activityStrip() {
+  const box = el("details", "task-activity");
+  box.open = activityWanted();
+  const head = el("summary", "act-head");
+  head.appendChild(el("span", "act-title", "Model activity"));
+  head.appendChild(el("span", "act-tag", "not evidence"));
+  const glance = el("span", "act-glance");
+  head.appendChild(glance);
+  box.appendChild(head);
+  const body = el("div", "act-body");
+  const facts = el("dl", "act-facts");
+  const fact = (label) => {
+    facts.appendChild(el("dt", null, label));
+    const dd = el("dd");
+    facts.appendChild(dd);
+    return dd;
+  };
+  const doing = fact("now");
+  const streamed = fact("this reply");
+  const tool = fact("last tool");
+  body.appendChild(facts);
+  const tailLabel = el("div", "act-tail-label");
+  const tail = el("blockquote", "act-tail");
+  body.appendChild(tailLabel);
+  body.appendChild(tail);
+  body.appendChild(el("p", "act-note",
+    "Live from the model's stream. Nothing here is sealed or cited; the ledger lines above and the packet are the record."));
+  box.appendChild(body);
+  box.addEventListener("toggle", () => {
+    try { localStorage.setItem(ACTIVITY_OPEN, box.open ? "1" : "0"); } catch { /* per-browser nicety only */ }
+  });
+  return {
+    box, glance, doing, streamed, tool, tailLabel, tail,
+    mode: "waiting", chars: 0, text: "", stream: "", lastTool: null, fresh: true, queued: false,
+    // A card rebuilt after a reload joins a reply part-way: its counts are
+    // "since this page opened" until the next tool call starts a new reply.
+    joined: true,
+  };
+}
+
+const ACT_WORDS = {
+  waiting: "waiting for the model",
+  thinking: "thinking",
+  writing: "writing a reply",
+  tool: "in a tool call",
+  asking: "waiting for you",
+};
+
+/* One engine event of the run, read into the strip. A reply is counted from
+   its first streamed character after a tool call; progress events (however
+   often they come) do not reset it. */
+function noteActivity(card, inner) {
+  const a = card.activity;
+  switch (inner.kind) {
+    case "reasoning.delta":
+    case "content.delta": {
+      const stream = inner.kind === "reasoning.delta" ? "reasoning" : "reply";
+      if (a.fresh) { a.chars = 0; a.text = ""; a.fresh = false; }
+      if (a.stream !== stream) a.text = "";
+      a.stream = stream;
+      a.mode = stream === "reasoning" ? "thinking" : "writing";
+      a.chars += (inner.text || "").length;
+      a.text = (a.text + (inner.text || "")).slice(-TAIL_CHARS * 2);
+      break;
+    }
+    case "tool.start":
+      a.mode = "tool";
+      a.fresh = true;
+      a.joined = false;
+      a.lastTool = { text: inner.present || inner.name || "a tool", ok: null };
+      break;
+    case "tool.end":
+      a.mode = "waiting";
+      a.lastTool = { text: inner.label || (a.lastTool && a.lastTool.text) || "a tool", ok: !!inner.ok };
+      break;
+    case "question":
+      a.mode = "asking";
+      break;
+    case "question.answered":
+      a.mode = "waiting";
+      break;
+    default:
+      return;
+  }
+  scheduleActivity(card);
+}
+
+/* Deltas arrive a token at a time: paint at most once a frame. */
+function scheduleActivity(card) {
+  const a = card.activity;
+  if (a.queued) return;
+  a.queued = true;
+  const run = () => { a.queued = false; paintActivity(card); };
+  if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(run);
+  else setTimeout(run, 50);
+}
+
+function paintActivity(card) {
+  const a = card.activity;
+  const mode = card.state === "needs_you" ? "asking" : a.mode;
+  const words = ACT_WORDS[mode] || mode;
+  const tokens = a.chars ? `~${fmtTokens(Math.ceil(a.chars / CHARS_PER_TOKEN))} tokens` : "";
+  a.box.dataset.mode = mode;
+  a.glance.textContent = tokens && (mode === "thinking" || mode === "writing") ? `${words} · ${tokens}` : words;
+  a.doing.textContent = words;
+  const since = a.joined ? " since this page opened" : "";
+  a.streamed.textContent = a.chars
+    ? `${tokens} streamed${since} (estimated from ${a.chars.toLocaleString()} characters)`
+    : `nothing streamed${since || " yet"}`;
+  a.tool.textContent = a.lastTool
+    ? `${a.lastTool.text}${a.lastTool.ok === null ? " …" : a.lastTool.ok ? "" : " (failed)"}`
+    : `none${since || " yet"}`;
+  a.tailLabel.textContent = a.stream === "reasoning" ? "latest reasoning, not evidence"
+    : a.stream === "reply" ? "latest reply text, not evidence" : "";
+  // The newest words are the point: cut the window at a word and keep the
+  // box scrolled to its end, so a narrow screen clips the oldest words.
+  const cut = a.text.slice(-TAIL_CHARS);
+  const shown = a.text.length > TAIL_CHARS ? `…${cut.slice(cut.indexOf(" ") + 1)}` : a.text;
+  a.tail.textContent = shown;
+  a.tail.hidden = !shown;
+  a.tailLabel.hidden = !shown;
+  a.tail.scrollTop = a.tail.scrollHeight;
 }
 
 /* ---------- needs you ---------- */
@@ -320,6 +468,7 @@ function renderPacket(card, packet) {
   if (packet.task) verdict.appendChild(el("p", "verdict-task", packet.task));
   verdict.appendChild(el("p", "verdict-text", packet.verdict_text));
   paintTests(card, packet.test_edits);
+  paintSpend(card, packet.spend);
   if (packet.offer_test_edits) verdict.appendChild(testEditOffer(card, packet));
   if (packet.header.length) {
     const meta = el("div", "verdict-meta");
@@ -365,6 +514,20 @@ function renderPacket(card, packet) {
   box.appendChild(details);
   // Reading the packet is the point now; the session is one click away.
   if (card.count) card.log.open = false;
+}
+
+/* An ended run's meters show what its outcome sealed -- the numbers the
+   packet's Cost row gives in words -- whether the card watched the run or
+   was drawn from its recap after a reload. */
+function paintSpend(card, spend) {
+  if (!spend || typeof spend.elapsed_s !== "number") return;
+  card.elapsed = spend.elapsed_s;
+  card.elapsedAt = Date.now();
+  if (typeof spend.tokens === "number") card.spent = spend.tokens;
+  if (spend.time_budget_s) card.timeBudget = spend.time_budget_s;
+  if (spend.token_budget) card.tokenBudget = spend.token_budget;
+  card.meters.hidden = false;
+  tick(card);
 }
 
 /* ---------- the packet's first screen ---------- */
@@ -672,21 +835,32 @@ function handleTask(event) {
   switch (event.kind) {
     case "task.state": {
       let host = null;
+      let watched = false;
       if (!tasks.has(event.run_id)) {
         // The turn startTask made for it, or -- a reload mid-run -- a new
         // one with the task's bubble, so the card never appears unexplained.
+        watched = !!state.pendingTaskTurn;
         host = state.pendingTaskTurn || taskTurn(event.task);
         state.pendingTaskTurn = null;
       }
       const card = taskCard(event.run_id, event.task, host);
+      if (watched) card.activity.joined = false;  // this page saw the run start
       const was = card.state;
       if (event.time_budget_s) card.timeBudget = event.time_budget_s;
       if (event.token_budget) card.tokenBudget = event.token_budget;
       paintTests(card, event.test_edits);
-      if (was === "running" && event.state !== "running") {
-        card.elapsed += (Date.now() - card.elapsedAt) / 1000;
+      if (typeof event.elapsed_s === "number") {
+        // The run's own budget says what it has spent (#114): a card built
+        // after a reload starts here, not at zero.
+        card.elapsed = event.elapsed_s;
+        card.elapsedAt = Date.now();
+      } else {
+        if (was === "running" && event.state !== "running") {
+          card.elapsed += (Date.now() - card.elapsedAt) / 1000;
+        }
+        if (event.state === "running" && was !== "running") card.elapsedAt = Date.now();
       }
-      if (event.state === "running" && was !== "running") card.elapsedAt = Date.now();
+      if (typeof event.tokens === "number") card.spent = event.tokens;
       card.state = event.state;
       card.lastEventAt = Date.now();
       paintState(card);
@@ -724,12 +898,15 @@ function handleTask(event) {
       const inner = event.event || {};
       card.lastEventAt = Date.now();
       if (inner.kind === "run.progress") {
-        card.elapsed = inner.elapsed_s;
-        card.elapsedAt = Date.now();
-        card.spent = inner.tokens;
-        card.timeBudget = inner.time_budget_s;
-        card.tokenBudget = inner.token_budget;
+        // Once a reply today; more often if the engine reports mid-reply.
+        // Same shape either way: each one is the run's total so far.
+        if (typeof inner.elapsed_s === "number") { card.elapsed = inner.elapsed_s; card.elapsedAt = Date.now(); }
+        if (typeof inner.tokens === "number") card.spent = inner.tokens;
+        if (inner.time_budget_s) card.timeBudget = inner.time_budget_s;
+        if (inner.token_budget) card.tokenBudget = inner.token_budget;
         tick(card);
+      } else {
+        noteActivity(card, inner);
       }
       paintNow(card);
       return true;
@@ -765,7 +942,7 @@ function recapCard(turn, content) {
   const card = taskCard(runId, task, turn);
   card.state = "loading";
   card.log.hidden = true;
-  card.node.querySelector(".task-meters").hidden = true;
+  card.meters.hidden = true;  // until the packet says what the run spent
   paintState(card);
   loadPacket(card).then(() => {
     const verdict = card.packet.querySelector(".verdict");

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from saddle.auto import AutoError, AutoOptions, ledger_path, repo_root, run_auto
+from saddle.engine import RunBudget
 from saddle.events import (
     Answered,
     Event,
@@ -150,8 +151,34 @@ class TaskRun:
     state_since: float = field(default_factory=time.time)
     """When `state` last changed: a needs-you row says how long it has waited."""
     lock: threading.Lock = field(default_factory=threading.Lock)
+    budget: RunBudget | None = None
+    """The run's own budget, the object the engine charges (`run_auto(on_budget=)`)."""
+    paused_s: float | None = None
+    """The charged time when the run asked its question: the budget's clock
+    runs on while the user reads, and the engine takes that wait back out
+    only once the answer comes (`engine._ask`)."""
+    final: tuple[float, int] | None = None
+    """The ended run's time and tokens, from its sealed outcome where it has one."""
+
+    def spent(self) -> tuple[float, int] | None:
+        """(seconds, generated tokens) the run has spent, or None before it has a budget."""
+        if self.final is not None:
+            return self.final
+        if self.budget is None:
+            return None
+        elapsed = self.paused_s if self.paused_s is not None else self.budget.elapsed()
+        return round(elapsed, 3), self.budget.spent_tokens
+
+    def end_spend(self, sealed: dict[str, float] | None = None) -> None:
+        """Freeze the spend an ended run shows: the sealed outcome's, else the budget's."""
+        if sealed is not None and "tokens" in sealed:
+            self.final = (sealed["elapsed_s"], int(sealed["tokens"]))
+            return
+        now = self.spent()
+        self.final = now if now is not None else (0.0, 0)
 
     def state_event(self, detail: str = "") -> TaskState:
+        spent = self.spent()
         return TaskState(
             run_id=self.run_id,
             state=self.state,
@@ -160,6 +187,8 @@ class TaskRun:
             time_budget_s=self.time_budget_s,
             token_budget=self.token_budget,
             test_edits=self.allow_test_edits,
+            elapsed_s=spent[0] if spent is not None else None,
+            tokens=spent[1] if spent is not None else None,
             question=(
                 {
                     "id": self.question.id,
@@ -170,6 +199,24 @@ class TaskRun:
                 else None
             ),
         )
+
+    def progress_event(self) -> TaskEvent | None:
+        """The last spend report, restated at the run's spend now, for a page that reconnects.
+
+        The report as the engine sent it is as old as the last reply; replayed
+        after the state snapshot, its time would pull a reloaded card's meter
+        back to the end of that reply. None until the engine has reported once.
+        """
+        spent = self.spent()
+        if self.progress is None or spent is None:
+            return self.progress
+        event = RunProgress(
+            elapsed_s=spent[0],
+            time_budget_s=self.time_budget_s,
+            tokens=spent[1],
+            token_budget=self.token_budget,
+        )
+        return TaskEvent(run_id=self.run_id, event=event.payload())
 
     def phase_event(self) -> TaskPhase:
         return TaskPhase(run_id=self.run_id, phase=self.phase, round=self.round)
@@ -325,9 +372,13 @@ def execute(
         root = repo_root(workdir)
     except AutoError as exc:
         run.state = "failed"
+        run.end_spend()
         publish(run.state_event(str(exc)))
         return "failed", None
     run.journal = ledger_path(root, run.run_id)
+
+    def on_budget(budget: RunBudget) -> None:
+        run.budget = budget
 
     def on_event(event: Event) -> None:
         wrapped = TaskEvent(run_id=run.run_id, event=event.payload())
@@ -346,7 +397,12 @@ def execute(
             run.question = event
             run.state = "needs_you"
             run.phase = WAITING_FOR_YOU
+            # The engine starts its wait only when this returns, so the
+            # budget's clock now is the time the run has been charged.
+            if run.budget is not None:
+                run.paused_s = run.budget.elapsed()
         elif isinstance(event, Answered):
+            run.paused_s = None
             run.question = None
             run.state = "running"
             run.phase = WORKING
@@ -379,14 +435,17 @@ def execute(
             audit=audit,
             answer=run.wait_for_answer,
             cancel=lambda: run.cancelled,
+            on_budget=on_budget,
         )
     except AutoError as exc:
         run.state = "failed"
+        run.end_spend()
         publish(run.state_event(str(exc)))
         return "failed", None
     for line in run.new_lines():
         publish(line)
     packet = compile_packet(run.journal, run_id=run.run_id)
+    run.end_spend(packet.spend)
     run.state = packet.verdict if packet.verdict in ENDED_VERDICTS else "failed"
     start = next((s for s in read_spans(run.journal) if s.name == "auto:start"), None)
     append_span(
