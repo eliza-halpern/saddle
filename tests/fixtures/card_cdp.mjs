@@ -91,6 +91,7 @@ try {
       metersShown: !!meters && getComputedStyle(meters).display !== "none",
       shown: c.elapsed + (c.state === "running" ? (Date.now() - c.elapsedAt) / 1000 : 0),
       lines: n.querySelectorAll(".task-lines li").length,
+      spent: c.spent,
       strip: a ? {
         shown: getComputedStyle(a).display !== "none",
         open: a.open,
@@ -134,11 +135,15 @@ try {
   out.stripPosts = (await js(`window.__posts`)) - posts;
   await shot("running-open.png");
 
-  // Reload mid-reply: no progress event comes until the reply ends.
+  // Reload mid-reply: the engine reports the streaming reply's share as
+  // partial progress about once a second; the snapshot must not undercut it.
   await sleep(1500);
   out.beforeReload = await card();
   await load();
-  await until(`!!document.querySelector(".task-card[data-state=running]")`, "the card after a reload");
+  // Read as soon as the card is built from the snapshot, before the next
+  // partial progress event can repaint it.
+  await until(`!!document.querySelector(".task-card[data-state=running]")`, "the card after a reload", 1500);
+  out.firstAfterReload = await card();
   await sleep(400);
   out.afterReload = await card();
   await shot("reloaded.png");

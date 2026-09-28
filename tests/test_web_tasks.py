@@ -26,11 +26,12 @@ import pytest
 from starlette.testclient import TestClient
 
 import saddle.auto
+from saddle import engine
 from saddle.engine import RunBudget
 from saddle.events import AuditFinding, Event, Question, TaskState
 from saddle.journal import attempt_sidecar_path, read_entries, read_spans
 from saddle.sessions import SessionStore
-from saddle.vllm import ToolCall
+from saddle.vllm import StreamToken, ToolCall
 from saddle.web import tasks
 from saddle.web.app import ChatServer, build_app
 from saddle.web.tasks import RECAP_PREFIX, RUN_REF, TaskRun, execute, journal_for
@@ -648,3 +649,70 @@ def test_the_packets_meters_are_only_what_the_sidecar_holds_as_numbers() -> None
         "elapsed_s": 3.0,
         "tokens": 40.0,
     }
+
+
+class Streaming(Scripted):
+    """A first reply that streams 400 characters of reasoning and is then held
+    open until `release` is set: the engine's clock ticks report the reply's
+    share as partial progress while nothing of it is settled yet."""
+
+    def __init__(self, rounds: list[list[Any]]) -> None:
+        super().__init__(rounds)
+        self.release = threading.Event()
+        self.first = True
+
+    def stream_chat(self, messages: Any, **kwargs: Any) -> Iterator[Any]:
+        if not self.first:
+            return super().stream_chat(messages, **kwargs)
+        self.first = False
+        rest = super().stream_chat(messages, **kwargs)
+
+        def reply() -> Iterator[Any]:
+            for _ in range(10):
+                yield StreamToken(stream="reasoning", text="x" * 40)
+            self.release.wait(30)
+            yield from rest
+
+        return reply()
+
+
+def test_a_snapshot_mid_reply_never_reads_below_the_partial_progress_the_page_saw(
+    store: SessionStore, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reload mid-reply must not step the token meter back to the settled
+    count: the page last saw settled + the streaming reply's estimate."""
+    monkeypatch.setattr(engine, "STREAM_POLL_S", 0.05)
+    model = Streaming(FIX)
+    app = build_app(store, lambda: model, default_workdir=repo, arm="E")
+    server = next(
+        cell.cell_contents
+        for route in app.routes  # type: ignore[attr-defined]
+        for cell in (getattr(getattr(route, "endpoint", None), "__closure__", None) or ())
+        if isinstance(cell.cell_contents, ChatServer)
+    )
+    with TestClient(app) as client:
+        sid = client.post("/api/sessions").json()["id"]
+        rid = client.post(f"/api/sessions/{sid}/task", json={"text": "t"}).json()["run_id"]
+        wait_for(lambda: rid in server.tasks)
+        run = server.tasks[rid]
+        wait_for(
+            lambda: (
+                run.progress is not None
+                and run.progress.event["partial"]
+                and run.progress.event["tokens"] >= 100
+            )
+        )
+        assert run.progress is not None
+        seen = run.progress.event["tokens"]
+        snap = run.state_event()
+        replay = run.progress_event()
+        model.release.set()
+        wait_for(lambda: idle(server, sid))
+        packet = client.get(f"/api/sessions/{sid}/tasks/{rid}/packet").json()
+
+    assert snap.tokens is not None
+    assert snap.tokens >= seen >= 100  # what the page showed, not the settled 0
+    assert replay is not None
+    assert replay.event["tokens"] == snap.tokens
+    # An ended run still shows what its outcome sealed.
+    assert run.state_event().tokens == packet["spend"]["tokens"]

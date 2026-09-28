@@ -158,6 +158,9 @@ class TaskRun:
     runs on while the user reads, and the engine takes that wait back out
     only once the answer comes (`engine._ask`)."""
     final: tuple[float, int] | None = None
+    shown_tokens: int = 0
+    """The tokens the last `run.progress` reported, a streaming reply's
+    partial estimate included: what an open page's meter last showed."""
     """The ended run's time and tokens, from its sealed outcome where it has one."""
 
     def spent(self) -> tuple[float, int] | None:
@@ -167,7 +170,9 @@ class TaskRun:
         if self.budget is None:
             return None
         elapsed = self.paused_s if self.paused_s is not None else self.budget.elapsed()
-        return round(elapsed, 3), self.budget.spent_tokens
+        # The budget holds settled replies only; mid-reply the page has seen
+        # the partial estimate on top, and a reload must not step it back.
+        return round(elapsed, 3), max(self.budget.spent_tokens, self.shown_tokens)
 
     def end_spend(self, sealed: dict[str, float] | None = None) -> None:
         """Freeze the spend an ended run shows: the sealed outcome's, else the budget's."""
@@ -386,6 +391,7 @@ def execute(
         before = (run.phase, run.round)
         if isinstance(event, RunProgress):
             run.progress = wrapped
+            run.shown_tokens = event.tokens
             # Extend raises a budget mid-run (engine._offer_budget): every
             # later state event carries the budget the outcome will seal.
             run.time_budget_s = event.time_budget_s

@@ -131,8 +131,19 @@ def test_the_cards_meters_survive_a_reload_and_the_strip_is_not_evidence(
     before, after = got["beforeReload"], got["afterReload"]
     assert before["shown"] > 2
     assert after["shown"] >= before["shown"] - 0.5  # not restarted
-    assert after["tokens"] == before["tokens"] != "—"
-    assert after["lines"] == before["lines"] == 1  # still the first reply: no progress yet
+    # flip: was `after["tokens"] == before["tokens"]`. It pinned "no progress
+    # event mid-reply", which the engine's partial progress (sent about once
+    # a second while a reply streams) made false: the live meter advances
+    # between the two reads (known-good below). The contract is that a
+    # reload never steps the meter back; that is asserted on the first
+    # paint after the reload, before any new progress event can repaint it.
+    first, later = got["streaming"][0], got["streaming"][1]
+    assert later["spent"] > first["spent"]  # the meter moves mid-reply
+    right_after = got["firstAfterReload"]
+    assert right_after["tokens"] != "—"
+    assert right_after["spent"] >= before["spent"] > 0
+    assert after["spent"] >= before["spent"]
+    assert after["lines"] == before["lines"] == 1  # still the first reply
 
     # -- an ended run: live, then rebuilt from its recap ------------------------
     stopped, recap = got["stopped"], got["recap"]
