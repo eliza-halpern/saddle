@@ -270,7 +270,8 @@ reason). The operator's view is docs/USING-SADDLE.md; this section is the struct
    Commands run in `sandbox.Sandbox`: under `bwrap` (required for a run, with no
    network), an environment allowlist, a read-only `.git`, and a per-command memory
    cap (`memcap`, `SADDLE_MEMORY_MAX`, 6 GiB default) that also covers the gates' test
-   commands. The gates themselves still run unconfined on the host.
+   commands. The gates' own subprocesses on the tree's code run in the same
+   boundary (`sandbox.confine`, no network).
 2. **Auditor** — `auditor.Auditor`: the gates of §3 Phase 3 (`gates`, pure predicates;
    `evidence`, the runners) applied to a tree the executor produced, split into tiers and
    cached by tree hash. Tier 0 checks one edited file at the edit (syntax, ruff, imports);

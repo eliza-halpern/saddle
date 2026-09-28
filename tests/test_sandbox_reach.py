@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 from test_auto import Scripted, auto, call, finish
 from test_auto import repo as repo  # fixture
+from test_evidence import _without_stubbed_mutmut
 
 from saddle import evidence, memcap
 from saddle import sandbox as sandbox_module
@@ -465,10 +466,10 @@ def test_search_with_an_absolute_glob_is_an_error_not_a_crash(work: Path) -> Non
     assert _search(work, query="root", glob="/etc/*").startswith("error: ")
 
 
-# -- gate runs execute model-written code too (later work) ----
+# -- gate runs execute model-written code too ------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="later work: gates run on the host, unsandboxed")
+@needs_bwrap
 def test_a_gate_run_cannot_read_a_planted_answer(work: Path, outside: Path) -> None:
     (outside / "bench" / "answer.txt").write_text("PLANTED_ANSWER\n")
     run = evidence.run_shell_capture(f"cat {outside}/bench/answer.txt", work)
@@ -494,15 +495,132 @@ def _plant_reaching_suite(work: Path, outside: Path, port: int) -> None:
     )
 
 
-def test_a_gate_pytest_run_reaches_past_the_workdir(
+@needs_bwrap
+def test_a_gate_pytest_run_cannot_reach_past_the_workdir(
     work: Path, outside: Path, listener: int
 ) -> None:
-    # The hole (#104): the tests gate runs the tree's own pytest on the host.
+    # Was the hole (#104): the tests gate ran the tree's own pytest on the host.
     _plant_reaching_suite(work, outside, listener)
     run = evidence.run_shell_capture(f"{PY} -m pytest -q -s -p no:cacheprovider", work)
+    assert run.exit_code == 0, run.stdout + run.stderr  # the suite itself still ran and passed
+    assert "PLANTED_ANSWER" not in run.stdout
+    assert "READ FileNotFoundError" in run.stdout
+    assert "CONNECT" in run.stdout
+    assert "CONNECT 0" not in run.stdout
+
+
+def _launched_by_a_gate(
+    work: Path, monkeypatch: pytest.MonkeyPatch, *, bwrap_problem: str | None
+) -> tuple[list[str], dict[str, str] | None]:
+    """What a capped gate call hands to Popen, with bwrap's availability set.
+
+    Runs everywhere: nothing is executed, so it needs neither bwrap nor a
+    user systemd manager, and pins the construction the bwrap tests check
+    end to end."""
+    seen: list[tuple[list[str], dict[str, str] | None]] = []
+
+    def fake_run(
+        argv: list[str], cwd: Path, timeout: float | None, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        seen.append((list(argv), env))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(sandbox_module, "isolation_problem", lambda: bwrap_problem)
+    monkeypatch.setattr(evidence, "_run_as_group", fake_run)
+    monkeypatch.setattr(memcap, "cgroup_problem", lambda: "no user manager in this test")
+    monkeypatch.setenv(SECRET_NAME, SECRET_VALUE)
+    scratch = work.parent / "scratch"
+    scratch.mkdir()
+    run = evidence.run_capture(
+        [sys.executable, "-m", "pytest", "-q"],
+        work,
+        memory_limit=123_456_789,
+        writable=(scratch,),
+    )
+    assert run.exit_code == 0
+    assert run.argv == (sys.executable, "-m", "pytest", "-q")  # spans name the asked command
+    [(launched, env)] = seen
+    return launched, env
+
+
+def test_a_capped_gate_command_is_built_into_bwrap_with_only_the_workdir_writable(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launched, env = _launched_by_a_gate(work, monkeypatch, bwrap_problem=None)
+    root, scratch = str(work), str(work.parent / "scratch")
+    # the memory cap still wraps the whole sandbox
+    assert launched[:3] == ["prlimit", "--as=123456789", "--"]
+    box = launched[3:]
+    assert box[0] == "bwrap"
+    assert box[-4:] == [sys.executable, "-m", "pytest", "-q"]
+    triples = [tuple(box[i : i + 3]) for i in range(len(box) - 2)]
+    assert ("--bind", root, root) in triples
+    assert ("--ro-bind", root, root) not in triples
+    assert ("--bind", scratch, scratch) in triples
+    assert ("--chdir", root, sys.executable) in triples
+    writable = {box[i + 1] for i, flag in enumerate(box) if flag == "--bind"}
+    assert writable == {root, scratch}
+    assert "--unshare-all" in box
+    assert "--share-net" not in box
+    assert env is not None
+    assert SECRET_NAME not in env
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_a_capped_gate_command_without_bwrap_runs_bare_with_the_scrubbed_env(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sandbox.for_workdir's default policy: no working bwrap means isolation
+    # "none", still capped and with the allowlisted environment.
+    launched, env = _launched_by_a_gate(work, monkeypatch, bwrap_problem="bwrap is not installed")
+    assert launched == ["prlimit", "--as=123456789", "--", sys.executable, "-m", "pytest", "-q"]
+    assert env is not None
+    assert SECRET_NAME not in env
+
+
+def test_a_gate_shows_a_bare_tool_on_path_as_that_one_file(outside: Path) -> None:
+    # The host resolves `mutmut` on PATH; the confined run must find that
+    # same program. Only the file is shown: its directory's other entries,
+    # system tools, venv tools already shown, and missing tools add nothing.
+    bin_dir = outside / "bin"
+    bin_dir.mkdir()
+    for name in ("mutmut", "unrelated"):
+        (bin_dir / name).write_text("#!/bin/sh\nexit 0\n")
+        (bin_dir / name).chmod(0o755)
+    shown_venv = outside / "venv"
+    (shown_venv / "bin").mkdir(parents=True)
+    (shown_venv / "bin" / "ruff").write_text("#!/bin/sh\nexit 0\n")
+    (shown_venv / "bin" / "ruff").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:{shown_venv / 'bin'}:/usr/bin:/bin"}
+    binds = sandbox_module._bare_tools(env, ((shown_venv, shown_venv),))
+    assert binds == ((bin_dir / "mutmut", bin_dir / "mutmut"),)
+
+
+@needs_bwrap
+def test_a_normal_suite_passes_every_gate_step_under_the_sandbox(
+    work: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The known-good half: tests, coverage and mutmut still work confined.
+    _without_stubbed_mutmut(monkeypatch)
+    (work / "calc.py").write_text(
+        "def add(a, b):\n    return a + b\n\n\ndef neg(a):\n    return -a\n"
+    )
+    (work / "test_calc.py").write_text(
+        "from calc import add, neg\n\n\n"
+        "def test_add():\n    assert add(2, 2) == 4\n\n\n"
+        "def test_neg():\n    assert neg(3) == -3\n"
+    )
+    data_file = str(work / ".coverage.tier1")
+    run = evidence.run_shell_capture(evidence.under_coverage("pytest -q", data_file), work)
     assert run.exit_code == 0, run.stdout + run.stderr
-    assert "PLANTED_ANSWER" in run.stdout
-    assert "CONNECT 0" in run.stdout
+    assert "2 passed" in run.stdout
+    calc = str(work / "calc.py")
+    assert evidence.covered_lines(data_file, [calc]) >= {(calc, 2), (calc, 6)}
+    outcome = evidence.mutation_sample(
+        work, {(calc, 6)}, 10, test_files={"test_calc.py"}, run_tests=("test_calc.py",)
+    )
+    assert outcome.total >= 1, outcome
+    assert outcome.killed == outcome.total, outcome
 
 
 def test_a_gate_timeout_kills_the_whole_process_group(work: Path, outside: Path) -> None:

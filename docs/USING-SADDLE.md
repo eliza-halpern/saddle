@@ -244,10 +244,15 @@ recorded as a failing command, named as a memory kill, never as a pass. The ceil
 6 GiB by default; set `SADDLE_MEMORY_MAX` (bytes, or a number with K, M, G or T) to
 change it.
 
-**Not yet confined: the auditor's gates.** The gates (`pytest`, `coverage`, `mutmut`)
-still run as you on the host, with your read access and network, under the memory cap
-only. A test the model wrote runs there during an audit. Until that changes, run saddle
-only on code you would run yourself.
+**The auditor's gates.** Every gate subprocess that runs the tree's code (its tests
+under `pytest` and `coverage`, `mutmut run`, the rule-D answer driver) runs inside the
+same boundary as a Task command (`sandbox.confine`): the tree under test is the one
+writable place, the gate tools' venvs are read-only, there is no network, the
+environment is the allowlist, and the memory cap applies. Where `bwrap` cannot start
+it matches the Ask and Edit column: the gate runs as you, capped and with the
+allowlisted environment, but unconfined. A project that imports itself through an
+editable install sees its checkout hidden; point `pythonpath` (pytest) or `PYTHONPATH`
+into the tree instead.
 
 ## 6. How a run ends
 

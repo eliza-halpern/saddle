@@ -262,6 +262,7 @@ def tree_answers(
             workdir,
             timeout=TREE_TIMEOUT_S,
             memory_limit=tree_memory_limit(),
+            writable=(Path(tmp),),
         )
         if run.timed_out:
             return rule_d.Unusable("timeout", f"no answers within {TREE_TIMEOUT_S} s")

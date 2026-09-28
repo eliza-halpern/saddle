@@ -23,7 +23,8 @@ and process group, and a lane can take the network away. A `bwrap` that is
 installed but cannot start is not trusted, and a lane that needs isolation
 refuses to run without it. Where isolation is absent, commands run as the
 invoking user and `Sandbox.isolation` says "none" rather than implying
-protection that is not there.
+protection that is not there. The gates' subprocesses on the tree's code
+(its tests, `mutmut run`) use the same boundary through `confine`.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
@@ -212,6 +213,131 @@ def resolve_within(root: Path, candidate: str | Path) -> Path:
     return target
 
 
+def isolation_problem() -> str | None:
+    """None when this box's `bwrap` can build a sandbox, else why not."""
+    found = shutil.which("bwrap")
+    return "bwrap is not installed" if found is None else bwrap_works(found)
+
+
+def _git_binds(root: Path) -> list[str]:
+    """Read-only binds that keep git usable and its metadata untouchable.
+
+    A writable `.git` is code the host runs later: a hook, a
+    `core.fsmonitor`, or a worktree's `.git` file pointed at a repo the
+    command made. So `.git` is read-only, and a worktree's real gitdir
+    (outside the workdir, hidden otherwise) is shown read-only too."""
+    dot = root / ".git"
+    if dot.is_dir():
+        return ["--ro-bind", str(dot), str(dot)]
+    if not dot.is_file():
+        return []
+    binds = ["--ro-bind", str(dot), str(dot)]
+    text = dot.read_text(encoding="utf-8", errors="replace").strip()
+    if text.startswith("gitdir:"):
+        gitdir = (root / text.removeprefix("gitdir:").strip()).resolve()
+        common = gitdir / "commondir"
+        shown = [gitdir]
+        if common.is_file():
+            shown.append((gitdir / common.read_text(encoding="utf-8").strip()).resolve())
+        for path in shown:
+            binds += ["--ro-bind-try", str(path), str(path)]
+    return binds
+
+
+def bwrap_argv(
+    root: Path,
+    argv: Sequence[str],
+    *,
+    network: Network,
+    expose: Sequence[tuple[Path, Path]],
+    writable: Sequence[Path] = (),
+) -> list[str]:
+    """`argv` wrapped in bwrap: `root` (and each of `writable`) is the only
+    writable place, and nothing else outside the system dirs, the
+    interpreter and `expose` exists."""
+    wrapped = ["bwrap"]
+    for name in SYSTEM_DIRS:
+        path = Path(name)
+        if path.is_symlink():
+            wrapped += ["--symlink", os.readlink(path), name]
+        else:
+            wrapped += ["--ro-bind-try", name, name]
+    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+    wrapped += ["--tmpfs", str(Path.home())]
+    if network == "host":
+        wrapped += ["--ro-bind-try", RESOLVER_DIR, RESOLVER_DIR]
+    for prefix in sorted({Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}):
+        wrapped += ["--ro-bind", str(prefix), str(prefix)]
+    for source, dest in expose:
+        wrapped += ["--ro-bind", str(source), str(dest)]
+    # Order matters: later mounts shadow earlier ones, so the writable
+    # workdir comes after the tmpfs mounts (a workdir under /tmp or HOME
+    # would vanish behind them), and the read-only .git after the workdir.
+    for path in writable:
+        wrapped += ["--bind", str(path), str(path)]
+    wrapped += ["--bind", str(root), str(root), *_git_binds(root)]
+    wrapped += ["--unshare-all"]
+    if network == "host":
+        wrapped += ["--share-net"]
+    return [*wrapped, "--new-session", "--die-with-parent", "--chdir", str(root), *argv]
+
+
+GATE_NETWORK: Final[Network] = "none"
+"""A gate runs the tree's own tests, which the agent may have written, and
+nothing a gate measures needs the host network; a test's own loopback
+server still works in the empty namespace."""
+
+
+def confine(
+    argv: Sequence[str], root: Path, *, writable: Sequence[Path] = ()
+) -> tuple[list[str], dict[str, str]]:
+    """The argv and environment that run a gate's `argv` on the tree at `root`.
+
+    The same boundary a command gets (`Sandbox`), for the subprocesses the
+    gates start on the tree's code (its tests under pytest and coverage,
+    `mutmut run`): `root` writable, `writable` (a scratch dir the gate
+    reads back) writable too, the gate-tool venvs read-only, no network,
+    and the scrubbed environment. The fallback matches
+    `Sandbox.for_workdir`'s default: where bwrap cannot start, the argv
+    runs unwrapped, with the environment still scrubbed."""
+    env = command_env({})
+    if isolation_problem() is not None:
+        return list(argv), env
+    real = root.resolve()
+    extra = [path.resolve() for path in writable]
+    expose = default_expose(env)
+    wrapped = bwrap_argv(
+        real,
+        argv,
+        network=GATE_NETWORK,
+        expose=(*expose, *_bare_tools(env, expose)),
+        writable=extra,
+    )
+    return wrapped, env
+
+
+def _bare_tools(
+    env: Mapping[str, str], expose: Sequence[tuple[Path, Path]]
+) -> tuple[tuple[Path, Path], ...]:
+    """Read-only binds for gate tools on PATH that no venv bind already shows.
+
+    A gate runs `mutmut` or `pytest` by bare name, and the host resolves
+    that name on PATH; the confined run must find the same program, not a
+    different one further along PATH. Only the file itself is shown, never
+    the directory it sits in."""
+    shown = [dest for _, dest in expose]
+    binds: list[tuple[Path, Path]] = []
+    for name in GATE_TOOLS:
+        found = shutil.which(name, path=env.get("PATH", ""))
+        if found is None:
+            continue
+        spelled = Path(found).absolute()
+        if _is_system(spelled) or any(d == spelled or d in spelled.parents for d in shown):
+            continue
+        binds.append((spelled.resolve(), spelled))
+    return tuple(binds)
+
+
 @dataclass
 class Terminal:
     """One command, possibly still running."""
@@ -288,8 +414,7 @@ class Sandbox:
         network: Network = "host",
     ) -> Sandbox:
         """A sandbox for `root`; with `require_isolation`, never an unisolated one."""
-        found = shutil.which("bwrap") if prefer_bwrap else None
-        problem = "bwrap is not installed" if found is None else bwrap_works(found)
+        problem = isolation_problem() if prefer_bwrap else "bwrap is not installed"
         if problem is not None and require_isolation:
             msg = f"this lane needs isolation and bwrap cannot provide it: {problem}"
             raise IsolationUnavailableError(msg)
@@ -303,66 +428,13 @@ class Sandbox:
             memory_max=memcap.memory_max(),
         )
 
-    def _git_binds(self) -> list[str]:
-        """Read-only binds that keep git usable and its metadata untouchable.
-
-        A writable `.git` is code the host runs later: a hook, a
-        `core.fsmonitor`, or a worktree's `.git` file pointed at a repo the
-        command made. So `.git` is read-only, and a worktree's real gitdir
-        (outside the workdir, hidden otherwise) is shown read-only too."""
-        dot = self.root / ".git"
-        if dot.is_dir():
-            return ["--ro-bind", str(dot), str(dot)]
-        if not dot.is_file():
-            return []
-        binds = ["--ro-bind", str(dot), str(dot)]
-        text = dot.read_text(encoding="utf-8", errors="replace").strip()
-        if text.startswith("gitdir:"):
-            gitdir = (self.root / text.removeprefix("gitdir:").strip()).resolve()
-            common = gitdir / "commondir"
-            shown = [gitdir]
-            if common.is_file():
-                shown.append((gitdir / common.read_text(encoding="utf-8").strip()).resolve())
-            for path in shown:
-                binds += ["--ro-bind-try", str(path), str(path)]
-        return binds
-
     def _argv(self, command: str) -> list[str]:
         """The argv actually executed, wrapped for isolation when available."""
         if self.isolation != "bwrap":
             return ["bash", "-lc", command]
-        argv = ["bwrap"]
-        for name in SYSTEM_DIRS:
-            path = Path(name)
-            if path.is_symlink():
-                argv += ["--symlink", os.readlink(path), name]
-            else:
-                argv += ["--ro-bind-try", name, name]
-        argv += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
-        argv += ["--tmpfs", str(Path.home())]
-        if self.network == "host":
-            argv += ["--ro-bind-try", RESOLVER_DIR, RESOLVER_DIR]
-        for prefix in sorted({Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}):
-            argv += ["--ro-bind", str(prefix), str(prefix)]
-        for source, dest in self.expose:
-            argv += ["--ro-bind", str(source), str(dest)]
-        # Order matters: later mounts shadow earlier ones, so the writable
-        # workdir comes after the tmpfs mounts (a workdir under /tmp or HOME
-        # would vanish behind them), and the read-only .git after the workdir.
-        argv += ["--bind", str(self.root), str(self.root), *self._git_binds()]
-        argv += ["--unshare-all"]
-        if self.network == "host":
-            argv += ["--share-net"]
-        return [
-            *argv,
-            "--new-session",
-            "--die-with-parent",
-            "--chdir",
-            str(self.root),
-            "bash",
-            "-lc",
-            command,
-        ]
+        return bwrap_argv(
+            self.root, ["bash", "-lc", command], network=self.network, expose=self.expose
+        )
 
     def run(self, command: str, *, timeout: int = DEFAULT_TIMEOUT) -> Terminal:
         """Run to completion (or timeout) and return the finished terminal."""

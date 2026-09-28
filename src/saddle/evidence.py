@@ -31,7 +31,7 @@ from typing import Any, Final
 
 import coverage
 
-from saddle import memcap
+from saddle import memcap, sandbox
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding
 from saddle.journal import SpanRecorder
 
@@ -323,6 +323,7 @@ def run_capture(
     recorder: SpanRecorder | None = None,
     timeout: float | None = None,
     memory_limit: int | None = None,
+    writable: Sequence[Path] = (),
 ) -> CapturedRun:
     """Run `argv` in `cwd`; journal its span and return exit plus output.
 
@@ -338,6 +339,12 @@ def run_capture(
     it reads as a failure with a cause, never as a hang or a crash of saddle.
     The span and the result record `argv` without the prefix, so journals
     and cache keys read as the command that was asked for.
+
+    A `memory_limit` marks a command that runs the tree's code, so it is
+    also confined (`sandbox.confine`): `cwd` and `writable` are the only
+    places it can write, it sees nothing else outside the system dirs and
+    the gate-tool venvs, it has no network, and its environment is the
+    scrubbed allowlist.
     """
     start = perf_counter()
     cap = None if memory_limit is None else memcap.cap(memory_limit)
@@ -349,8 +356,9 @@ def run_capture(
             # (`systemd-run` exits 1, which reads as "tests failed").
             if shutil.which(argv[0]) is None:
                 raise FileNotFoundError(2, "No such file or directory", argv[0])
-            launched, _ = cap.wrap(argv, None)
-            proc = _run_as_group(launched, cwd, timeout)
+            confined, env = sandbox.confine(argv, cwd, writable=writable)
+            launched, lent = cap.wrap(confined, env)
+            proc = _run_as_group(launched, cwd, timeout, lent)
     except subprocess.TimeoutExpired as expired:
         _record_timeout(recorder, argv, start, expired)
         return CapturedRun(
