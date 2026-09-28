@@ -1674,7 +1674,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Judge each impl tree with rule D against a sealed reference store (default off).",
     )
-    run.add_argument("--rule-d-store", help="Reference store directory (S1-c format).")
+    run.add_argument("--rule-d-store", help="Reference store directory (see saddle.refstore).")
     run.add_argument("--rule-d-set-id", help="The store's sealed set id (sha256 of SHA256SUMS).")
     run.add_argument(
         "--rule-d-table", default="fix8", help="Answers table whose inputs rule D checks."

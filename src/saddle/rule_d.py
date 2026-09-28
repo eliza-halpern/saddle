@@ -247,7 +247,7 @@ def _check_authorities(a: Authorities) -> None:
         raise ValueError(msg)
     for s in a.reference_pins:
         if s in a.user or s in a.spec or s in a.either or s in a.convention:
-            msg = f"reference pin for {s!r} shares an input with another slot (S3-4 O: one slot)"
+            msg = f"reference pin for {s!r} shares an input with another slot (one slot per input)"
             raise ValueError(msg)
 
 

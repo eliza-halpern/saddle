@@ -1828,7 +1828,7 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --rule-d              Judge each impl tree with rule D against a sealed\n"
         "                        reference store (default off).\n"
         "  --rule-d-store RULE_D_STORE\n"
-        "                        Reference store directory (S1-c format).\n"
+        "                        Reference store directory (see saddle.refstore).\n"
         "  --rule-d-set-id RULE_D_SET_ID\n"
         "                        The store's sealed set id (sha256 of SHA256SUMS).\n"
         "  --rule-d-table RULE_D_TABLE\n"
