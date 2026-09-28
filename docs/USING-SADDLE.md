@@ -33,13 +33,36 @@ from a line `SADDLE_VLLM_API_KEY=...` in `~/.config/saddle/env`, which saddle re
 itself (`saddle.cli._api_key`). Every command that talks to the model refuses to start
 without one.
 
-The auditor runs `python`, `pytest`, `coverage`, `ruff` and `mutmut` by bare name. Each
-is taken from your PATH when it is there, and otherwise from beside saddle's own
-interpreter (`sandbox.gate_path`); since 0.1.1 all of them are installed with saddle.
-The `python` found first is the one the tests run on, so a project whose tests import
-third-party packages needs its own virtualenv, activated before you start saddle. `saddle
-audit` reports a tool found in neither place as a setup error (exit 2), not a refusal. The repository
-you point saddle at must be a git repository whose tests run with `python -m pytest -q`.
+The auditor runs `python`, `pytest`, `coverage`, `ruff` and `mutmut` by bare name
+(`sandbox.gate_path`). The `python` it finds is the one the tests run on, and
+`mutmut` runs them again in its own process, so both must see your project's packages.
+It looks in this order:
+
+1. **The project's own virtualenv** (Task runs and the chat lanes). A Task run works
+   in a fresh worktree of tracked files, so it looks in your folder instead: `.venv/`,
+   then `venv/` (each with a `pyvenv.cfg`), then an activated `VIRTUAL_ENV` that is
+   not saddle's own (`sandbox.project_env`). Its `bin` goes first on PATH, for the
+   gates and for the model's commands alike, and the venv is shown read-only in the
+   sandbox. It must hold `python`, `pytest`, `coverage` and `mutmut`
+   (`.venv/bin/python -m pip install pytest coverage mutmut`); an audited run on a
+   venv without them stops before it starts with a setup error naming them. The
+   run's start record seals the environment, and the packet's Tests row ends
+   "Tests ran on the project's virtualenv ...".
+2. **The first `python` on your PATH.**
+3. **A `python3` on your PATH, when there is no `python`** (Ubuntu without
+   python-is-python3), used only if it imports `pytest`, `coverage` and `mutmut`
+   inside the sandbox and a `mutmut` is on PATH too. The gates reach it through a
+   `python` script in a directory saddle owns; nothing on your system is changed.
+   This is decided once per saddle process, so restart saddle after installing them.
+4. **Saddle's own interpreter**, beside which the gate tools are installed since
+   0.1.1. It has none of your project's packages.
+
+A system `python3`'s user site-packages (`~/.local/lib/pythonX.Y/site-packages`,
+where `pip install --user` puts things) is visible, read-only, inside the sandbox;
+nothing else of HOME is. `saddle audit` does not look for a project venv (activate
+it first), and reports a tool found nowhere as a setup error (exit 2), not a refusal.
+The repository you point saddle at must be a git repository whose tests run with
+`python -m pytest -q`.
 
 The default server is `http://127.0.0.1:18020/v1` with model `qwen3.8-27b`. Pass
 `--base-url` and `--model` to use another one.
@@ -246,7 +269,7 @@ on the lane:
 | | Task (`saddle auto`) | Ask and Edit (chat) |
 |---|---|---|
 | Isolation | `bwrap`, required: if it is missing or cannot start, the run refuses to begin | `bwrap` when it starts; otherwise the command runs as you, and the sandbox says `isolation: none` rather than pretending |
-| Filesystem | system directories and the interpreter, read-only; an empty HOME and /tmp; the worktree is the one writable place, and its `.git` is read-only | the same, under `bwrap` |
+| Filesystem | system directories, the interpreter and the project's virtualenv, read-only; an empty HOME (except a system `python3`'s user site-packages, read-only) and /tmp; the worktree is the one writable place, and its `.git` is read-only | the same, under `bwrap` |
 | Network | none (loopback only): saddle talks to the model itself, so no command needs it | the host network |
 | Environment | an allowlist, not your shell's variables | the same allowlist |
 | Git | `.git` is read-only to commands, so a command cannot commit or plant a hook; saddle commits the run itself, with hooks and `core.fsmonitor` switched off | read-only under `bwrap`; without it, only saddle's own git calls are guarded |

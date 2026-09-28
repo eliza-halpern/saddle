@@ -102,9 +102,22 @@ The default server is `http://127.0.0.1:18020/v1` serving the model id `qwen3.8-
 For any other server, pass `--base-url` and `--model` to each command (#119).
 
 If the project you point saddle at has tests that import third-party packages, give it
-its own virtualenv and activate it before starting saddle. The auditor runs the tests
-with the first `python` on your PATH, and falls back to saddle's own interpreter, which
-has none of your project's packages (#113).
+its own virtualenv at `.venv/` or `venv/` in the project folder, with `pytest`,
+`coverage` and `mutmut` installed into it beside your packages:
+
+```bash
+.venv/bin/python -m pip install pytest coverage mutmut
+```
+
+A Task run finds that venv by itself (`sandbox.project_env`; an activated
+`VIRTUAL_ENV` counts when the folder has none) and runs both the model's commands and
+the auditor's tests on it, read-only. Its packet says which environment the tests ran
+on. An audited Task run on a venv that lacks one of those three tools stops before it
+starts with a setup error naming it. Without a project venv, the auditor uses the
+first `python` on your PATH; with none, a `python3` on PATH that can import all three
+(with `mutmut` on PATH too); and otherwise saddle's own interpreter, which has none of
+your project's packages (#113). `saddle audit` does not look for the project venv:
+activate it first.
 
 [docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
 evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle
@@ -142,9 +155,12 @@ server. Point `--base-url` somewhere else and they go there instead.
   symlinks included, and refused if it lands outside the working directory
   (`sandbox.resolve_within`).
 - **Commands run under `bwrap` when it can start** (`Sandbox._argv`). The root is built
-  up from the system directories and the interpreter, read-only (`SYSTEM_DIRS`); HOME
-  and /tmp are empty; the workdir is the one writable place, and its `.git` is
-  read-only (`Sandbox._git_binds`). Each command gets its own namespaces (sharing the
+  up from the system directories and the interpreter, read-only (`SYSTEM_DIRS`), plus
+  the virtualenvs the tools on PATH live in (`default_expose`); HOME and /tmp are
+  empty, except that a system `python3`'s user site-packages
+  (`~/.local/lib/pythonX.Y/site-packages`, where `pip install --user` puts pytest) is
+  shown read-only (`sandbox.user_site`); the workdir is the one writable place, and
+  its `.git` is read-only (`Sandbox._git_binds`). Each command gets its own namespaces (sharing the
   host network unless the lane takes it away), its own session and process group, and
   its process group is killed when it ends.
 - **The environment is an allowlist** (`sandbox.ENV_KEEP`), so the model key in
@@ -166,9 +182,11 @@ server. Point `--base-url` somewhere else and they go there instead.
 
 **What is not confined:**
 
-- **The auditor's gates.** `pytest`, `coverage` and `mutmut` run as you on the host,
-  with your read access and your network, under the memory cap only (#104). A test the
-  model wrote runs there during an audit.
+- **The auditor's gates without a working `bwrap`.** Where `bwrap` starts, the gate
+  runs of the tree's code (`pytest`, `coverage`, `mutmut run`) get the same boundary as
+  a Task command, with no network (`sandbox.confine`, #104). Where it cannot, they run
+  as you, with your read access and your network, under the memory cap and the
+  allowlisted environment only.
 - **Ask and Edit in the chat without a working `bwrap`.** Those lanes use `bwrap` when it
   starts; otherwise commands run as you and the sandbox reports `isolation: none`
   (`Sandbox.isolation`). They keep the host network either way. Ask offers the model
