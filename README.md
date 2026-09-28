@@ -1,4 +1,4 @@
-<img width="492" height="90" alt="saddle_logo" src="https://github.com/user-attachments/assets/b2fb1593-833c-4008-8d52-32c81825adcf" />
+<img width="492" alt="saddle" src="docs/saddle-logo.svg" />
 
 # Saddle
 
