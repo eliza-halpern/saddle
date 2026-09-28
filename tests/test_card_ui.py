@@ -1,11 +1,20 @@
-"""The task card's meters in a real browser, across a reload (#114).
+"""The task card in a real browser: its meters across a reload, and the
+model-activity strip that is not evidence.
 
-Contract: a card built after a reload shows the elapsed time and tokens the
-run's own budget has spent, not a meter restarted at zero, and an ended
-run's card -- live or rebuilt from its recap -- shows the numbers its
-outcome sealed. Known-good: reloaded mid-reply, the time meter is not
-behind where it was before the reload; after Stop and a reload the card
-shows the stopped card's time and tokens. Known-bad: the meter that
+Model activity (#112). Contract: the strip reads the run's live events and
+writes nothing a verdict, the ledger or the packet reads. Known-good: while
+a reply streams, the strip's count grows and the ledger's line count does
+not; it is folded by default, labelled "not evidence", the fold is
+remembered per browser, and a card rebuilt after a reload says its counts
+are "since this page opened" until the next reply. Known-bad: none of its
+tail appears as a ledger line, and it sends nothing to the server.
+
+Meters (#114). Contract: a card built after a reload shows the elapsed time
+and tokens the run's own budget has spent, not a meter restarted at zero,
+and an ended run's card -- live or rebuilt from its recap -- shows the
+numbers its outcome sealed. Known-good: reloaded mid-reply, the time meter
+is not behind where it was before the reload; after Stop and a reload the
+card shows the stopped card's time and tokens. Known-bad: the meter that
 restarted at the last progress report, and the recap card that read "0s"
 and "—" under a packet that said otherwise.
 """
@@ -72,7 +81,7 @@ class LongReply:
             yield call("finish", "f", summary="gave up")
 
 
-def test_the_cards_meters_survive_a_reload_and_show_an_ended_runs_sealed_spend(
+def test_the_cards_meters_survive_a_reload_and_the_strip_is_not_evidence(
     tmp_path: Path,
     repo: Path,  # noqa: F811
 ) -> None:
@@ -93,6 +102,31 @@ def test_the_cards_meters_survive_a_reload_and_show_an_ended_runs_sealed_spend(
     assert out.returncode == 0, out.stderr
     got: dict[str, Any] = json.loads(out.stdout.strip().splitlines()[-1])
 
+    # -- the strip: live, folded, labelled, and apart from the ledger ------------
+    first, later, opened = got["streaming"]
+    assert first["strip"]["shown"]
+    assert not first["strip"]["open"]  # folded by default
+    assert "not evidence" in first["strip"]["head"]
+    assert first["strip"]["mode"] == "thinking"
+    assert later["strip"]["chars"] > first["strip"]["chars"]  # the tail grows...
+    assert later["lines"] == first["lines"]  # ...and the ledger does not
+    assert opened["strip"]["open"]
+    assert opened["strip"]["tailLabel"] == "latest reasoning, not evidence"
+    assert opened["strip"]["tail"].strip()
+    assert "since this page opened" not in opened["strip"]["streamed"]  # watched from its start
+    assert opened["strip"]["tool"] == "none yet"
+    assert not opened["strip"]["inLedger"]
+    assert got["stripPosts"] == 0  # it asks the server for nothing
+    reloaded, tool = got["afterReload"]["strip"], got["afterTool"]["strip"]
+    assert reloaded["open"]  # the fold is remembered
+    # Rebuilt after a reload, it joins the reply part-way and says so...
+    assert "since this page opened" in reloaded["streamed"]
+    assert reloaded["tool"] == "none since this page opened"
+    # ...until the next tool call starts a reply it sees whole.
+    assert tool["tool"] == "Read calc.py"
+    assert "since this page opened" not in tool["streamed"]
+    assert not tool["inLedger"]
+
     # -- the meters across a reload mid-reply ---------------------------------
     before, after = got["beforeReload"], got["afterReload"]
     assert before["shown"] > 2
@@ -103,6 +137,7 @@ def test_the_cards_meters_survive_a_reload_and_show_an_ended_runs_sealed_spend(
     # -- an ended run: live, then rebuilt from its recap ------------------------
     stopped, recap = got["stopped"], got["recap"]
     assert stopped["state"] == recap["state"] == "stopped"
+    assert not stopped["strip"]["shown"]  # the packet is the story now
     assert recap["metersShown"]
     assert recap["time"] != "0s"
     assert recap["tokens"] != "—"

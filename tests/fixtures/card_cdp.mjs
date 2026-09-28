@@ -1,11 +1,12 @@
-// The task card's meters across a reload, in headless Chrome over CDP;
-// prints one JSON line. Used by tests/test_card_ui.py.
+// The task card's meters across a reload, and its model-activity strip, in
+// headless Chrome over CDP; prints one JSON line. Used by tests/test_card_ui.py.
 //
 // usage: node card_cdp.mjs <base-url> <session-id> <width> <scheme> [shot-dir] [prefix]
-//   Starts a task in <session-id> from the page, waits until the model is
-//   a few seconds into its first reply, then reports: the time meter just before
-//   and just after a reload; the card after Stop; and the recap card after
-//   a second reload.
+//   Starts a task in <session-id> from the page and, during the model's
+//   first reply, reports the strip while it streams (folded, then open) and
+//   the time meter just before and just after a reload; then, once the first
+//   tool call has run, the strip again; the card after Stop; and the recap
+//   card after a second reload.
 //   <scheme> is "dark" or "light" (prefers-color-scheme).
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -82,6 +83,7 @@ try {
     if (!n) return null;
     const c = tasks.get(n.dataset.run);
     const meters = n.querySelector(".task-meters");
+    const a = n.querySelector(".task-activity");
     return {
       state: n.dataset.state,
       time: n.querySelectorAll(".tmeter-value")[0].textContent,
@@ -89,6 +91,19 @@ try {
       metersShown: !!meters && getComputedStyle(meters).display !== "none",
       shown: c.elapsed + (c.state === "running" ? (Date.now() - c.elapsedAt) / 1000 : 0),
       lines: n.querySelectorAll(".task-lines li").length,
+      strip: a ? {
+        shown: getComputedStyle(a).display !== "none",
+        open: a.open,
+        head: a.querySelector("summary").textContent,
+        mode: a.dataset.mode,
+        chars: c.activity.chars,
+        tailLabel: a.querySelector(".act-tail-label").textContent,
+        tail: a.querySelector(".act-tail").textContent,
+        streamed: a.querySelectorAll(".act-facts dd")[1].textContent,
+        tool: a.querySelectorAll(".act-facts dd")[2].textContent,
+        inLedger: [...n.querySelectorAll(".task-lines li")].some((li) =>
+          c.activity.text && li.textContent.includes(c.activity.text.trim().slice(-20))),
+      } : null,
       packet: !n.querySelector(".packet").hidden && !!n.querySelector(".packet .verdict"),
     };
   })()`);
@@ -103,11 +118,21 @@ try {
   await js(`localStorage.setItem("saddle.session", ${JSON.stringify(sid)})`);
   await load();
   const out = {};
+  // Count every request the page makes from here on: the strip makes none.
+  await js(`(() => { window.__posts = 0; const f = window.fetch; window.fetch = (u, o) => {
+    if (o && o.method && o.method !== "GET") window.__posts += 1; return f(u, o); }; })()`);
   await js(`launchTask("make add add", 1800, 100000, true)`);
-  await until(`!!document.querySelector(".task-card")`, "the card");
-  await sleep(3000);
+  const posts = await (async () => { await until(`!!document.querySelector(".task-card")`, "the card"); return js(`window.__posts`); })();
+  await until(`(() => { const n = document.querySelector(".task-card"); return n && tasks.get(n.dataset.run).activity.chars > 200; })()`, "a streaming reply");
   out.streaming = [await card()];
-  await shot("running.png");
+  await sleep(1500);
+  out.streaming.push(await card());
+  await shot("running-collapsed.png");
+  await js(`document.querySelector(".task-activity > summary").click()`);
+  await sleep(700);
+  out.streaming.push(await card());
+  out.stripPosts = (await js(`window.__posts`)) - posts;
+  await shot("running-open.png");
 
   // Reload mid-reply: no progress event comes until the reply ends.
   await sleep(1500);
@@ -117,6 +142,11 @@ try {
   await sleep(400);
   out.afterReload = await card();
   await shot("reloaded.png");
+  // The first tool call ends the reply the reloaded page joined part-way.
+  await until(`/Read calc.py/.test(document.querySelectorAll(".task-card .act-facts dd")[2].textContent)`, "the first tool call", 150);
+  await until(`tasks.get(document.querySelector(".task-card").dataset.run).activity.chars > 0`, "the next reply");
+  await sleep(400);
+  out.afterTool = await card();
 
   await js(`stopTask(document.querySelector(".task-card").dataset.run)`);
   await until(`!!document.querySelector(".task-card .packet .verdict")`, "the stopped card's packet");
