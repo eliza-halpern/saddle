@@ -1211,7 +1211,7 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
         return CapturedRun(argv=tuple(argv), exit_code=0, stdout="", stderr="")
 
     monkeypatch.setattr(evidence_module, "run_capture", fake)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(shutil, "which", lambda name, **_: f"/fake/{name}")
     rec = SpanRecorder(path=tmp_path / "spans.jsonl", node_id="n1")
     outcome = mutation_sample(
         workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set(), recorder=rec
@@ -1253,7 +1253,7 @@ def test_mutmut_run_is_ceilinged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         return CapturedRun(argv=tuple(argv), exit_code=0, stdout="", stderr="")
 
     monkeypatch.setattr(evidence_module, "run_capture", spy)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/fake/{name}")
+    monkeypatch.setattr(shutil, "which", lambda name, **_: f"/fake/{name}")
     mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
     (run_limit,) = [limit for argv, limit in limits if argv[-2:] == ("mutmut", "run")]
     assert run_limit == evidence_module.TEST_MEMORY_LIMIT_BYTES

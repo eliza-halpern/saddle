@@ -22,7 +22,7 @@ out tools' versions) all match a stored key exactly. Any other file state --
 a missing file, unparseable JSON, a mismatched key -- is a miss, never a
 verdict and never an exception. `nothing-to-audit` is never cached.
 
-Layering: this module imports `dag`, `evidence`, `gates` and `runner`; only the
+Layering: this module imports `dag`, `evidence`, `gates`, `runner` and `sandbox`; only the
 CLI and `saddle.auditor` import it.
 """
 
@@ -44,6 +44,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal, cast
 
+from saddle import sandbox
 from saddle.dag import Node
 from saddle.evidence import MutationOutcome, run_capture
 from saddle.gates import GateCheck
@@ -66,6 +67,10 @@ SURFACE_MODULES: Final[tuple[str, ...]] = (
     "saddle.dag",
 )
 SURFACE_TOOLS: Final[tuple[str, ...]] = ("mutmut", "ruff", "coverage")
+# The programs the gates start by bare name under the default test command
+# (`python -m pytest`, run as `python -m coverage run -m pytest`), or under
+# the `pytest ...` spelling of it. Each must resolve on `sandbox.gate_path`.
+GATE_COMMANDS: Final[tuple[str, ...]] = ("python", "pytest", "coverage", "ruff", "mutmut")
 
 # Machine noise a run leaves behind, ignored at any depth: none of it is a
 # change, so none of it may reach `git add -A` in the copy, whatever the
@@ -271,6 +276,7 @@ def gate_surface(
             Path(cast(str, importlib.import_module(name).__file__)) for name in SURFACE_MODULES
         ]
     if versions is None:
+        check_gate_commands()
         versions = {tool: _installed_version(tool) for tool in SURFACE_TOOLS}
     digest = hashlib.sha256()
     for path in files:
@@ -279,6 +285,22 @@ def gate_surface(
         digest.update(f"{tool}={version}\n".encode())
     digest.update(platform.python_version().encode())
     return digest.hexdigest()
+
+
+def check_gate_commands() -> None:
+    """A `GateSetupError` naming every `GATE_COMMANDS` program the gates
+    cannot find, looked up exactly as they look it up (`sandbox.gate_path`).
+
+    Checked before any gate runs: a tool that fails to launch mid-battery
+    reads as a failing check, and a failing check is a refusal."""
+    path = sandbox.gate_path(os.environ.get("PATH", ""))
+    missing = [name for name in GATE_COMMANDS if shutil.which(name, path=path) is None]
+    if missing:
+        msg = (
+            f"setup: gate tools not found beside saddle ({sandbox.tool_dir()}) or on PATH:"
+            f" {', '.join(missing)}; reinstall saddle-harness with its dependencies"
+        )
+        raise GateSetupError(msg)
 
 
 def _installed_version(tool: str) -> str:

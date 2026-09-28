@@ -153,7 +153,9 @@ def run_argv(
     """
     start = perf_counter()
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout)
+        proc = subprocess.run(
+            argv, cwd=cwd, capture_output=True, timeout=timeout, env=sandbox.gate_env()
+        )
     except subprocess.TimeoutExpired as expired:
         _record_timeout(recorder, argv, start, expired)
         return SHELL_TIMEOUT
@@ -187,7 +189,13 @@ def ruff_argv(command: str, *args: str) -> list[str]:
 def ruff_version() -> str:
     """The installed ruff's version (`ruff --version`), or "unavailable"."""
     try:
-        proc = subprocess.run(["ruff", "--version"], capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            ["ruff", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=sandbox.gate_env(),
+        )
     except OSError:
         return "unavailable"
     words = proc.stdout.split()
@@ -350,11 +358,11 @@ def run_capture(
     cap = None if memory_limit is None else memcap.cap(memory_limit)
     try:
         if cap is None:
-            proc = _run_as_group(argv, cwd, timeout)
+            proc = _run_as_group(argv, cwd, timeout, sandbox.gate_env())
         else:
             # A prefix would turn a missing program into its own exit status
             # (`systemd-run` exits 1, which reads as "tests failed").
-            if shutil.which(argv[0]) is None:
+            if shutil.which(argv[0], path=sandbox.gate_path(os.environ.get("PATH", ""))) is None:
                 raise FileNotFoundError(2, "No such file or directory", argv[0])
             confined, env = sandbox.confine(argv, cwd, writable=writable)
             launched, lent = cap.wrap(confined, env)
@@ -1415,7 +1423,7 @@ def mutation_sample(
     """
     if not changed:
         return MutationOutcome(killed=0, total=0, generated=0, survivors=())
-    if shutil.which("mutmut") is None:
+    if shutil.which("mutmut", path=sandbox.gate_path(os.environ.get("PATH", ""))) is None:
         return MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut not on PATH",))
     root = os.path.realpath(workdir)
     by_line: dict[str, set[int]] = {}

@@ -89,6 +89,41 @@ def command_env(extra: Mapping[str, str]) -> dict[str, str]:
     return {**kept, "TERM": "dumb", "NO_COLOR": "1", **extra}
 
 
+def tool_dir() -> Path | None:
+    """The directory of the interpreter running saddle, or None when Python
+    cannot name it (`sys.executable` is empty).
+
+    In a virtual environment this is the venv's `bin`, where the installer
+    put the gate tools saddle depends on (`pytest`, `coverage`, `ruff`,
+    `mutmut`) beside the `python` they run on. It is inside `sys.prefix`,
+    which `bwrap_argv` already shows read-only."""
+    return Path(sys.executable).parent if sys.executable else None
+
+
+def gate_path(path: str) -> str:
+    """`path`, then `tool_dir()` as the last entry when `path` lacks it.
+
+    The gates run their tools by bare name. A tool on the user's PATH wins:
+    it belongs to the environment the project's tests were written for,
+    with the project's own dependencies beside it. A `uv tool` or `pipx`
+    install puts only the `saddle` script on PATH, so a tool the user has
+    nowhere else is found beside saddle's interpreter instead of not at all
+    (which read as "tests failed", a refusal of correct work). Only the
+    gates use this; a command the model runs (`command_env`) never sees
+    saddle's own directory."""
+    fallback = tool_dir()
+    entries = [entry for entry in path.split(os.pathsep) if entry]
+    if fallback is None or any(Path(entry) == fallback for entry in entries):
+        return path
+    return os.pathsep.join([*entries, str(fallback)])
+
+
+def gate_env() -> dict[str, str]:
+    """saddle's own environment with `gate_path` as PATH, for the gate tool
+    runs that are not confined (`ruff`, the version probe)."""
+    return {**os.environ, "PATH": gate_path(os.environ.get("PATH", ""))}
+
+
 HOST_GIT_GUARD: Final = ("-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null")
 """Options for every git command saddle itself runs in a tree a command
 could have written: no fsmonitor, no hooks. Git runs both as programs, from
@@ -299,8 +334,12 @@ def confine(
     reads back) writable too, the gate-tool venvs read-only, no network,
     and the scrubbed environment. The fallback matches
     `Sandbox.for_workdir`'s default: where bwrap cannot start, the argv
-    runs unwrapped, with the environment still scrubbed."""
-    env = command_env({})
+    runs unwrapped, with the environment still scrubbed.
+
+    PATH is `gate_path`'s: the user's tools first, saddle's own as the
+    fallback. `default_expose` shows the venv each tool it finds lives in
+    read-only; saddle's own is inside `sys.prefix`, shown regardless."""
+    env = command_env({"PATH": gate_path(os.environ.get("PATH", ""))})
     if isolation_problem() is not None:
         return list(argv), env
     real = root.resolve()
