@@ -186,12 +186,17 @@ class SessionInfo(Event):
 
 @dataclass(frozen=True)
 class RunProgress(Event):
-    """What an autonomous run has spent so far, after each round."""
+    """What an autonomous run has spent so far, after each round.
+
+    With `partial`, sent while a reply streams: `tokens` then includes that
+    reply's tokens so far, estimated from its text, and no round has ended.
+    """
 
     elapsed_s: float
     time_budget_s: float
     tokens: int
     token_budget: int
+    partial: bool = False
     kind: str = "run.progress"
 
 

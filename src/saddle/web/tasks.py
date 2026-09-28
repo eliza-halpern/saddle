@@ -339,7 +339,7 @@ def execute(
             # later state event carries the budget the outcome will seal.
             run.time_budget_s = event.time_budget_s
             run.token_budget = event.token_budget
-            run.round += 1
+            run.round += not event.partial  # a streaming reply's meter is not a round
         if isinstance(event, ToolStart):
             run.phase = tool_phase(event.name, event.arguments)
         if isinstance(event, Question):

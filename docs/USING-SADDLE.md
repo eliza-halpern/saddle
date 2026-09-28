@@ -198,8 +198,28 @@ closes the strip.
    - **Budget.** When generated tokens or wall time first reach 80% of the budget
      (`engine.BUDGET_ASK_AT`) without finishing, the run asks whether to extend that
      budget by the same amount again or stop at the limit [Extend, Stop at limit].
-     Extend doubles that budget once and seals `budget_extended`. A single round that
-     jumps from below 80% to past 100% is not asked.
+     Extend doubles that budget once and seals `budget_extended`. The question is
+     asked once per run, for whichever budget reaches 80% first.
+     - *Tokens.* Every reply's `max_tokens` is what the token budget has left, so no
+       reply spends past it. Until the question has been asked, it is also what is
+       left before the 80% mark: a reply that would carry the run past 80% is stopped
+       there by the server, which counts tokens exactly, and the question is asked
+       before the next request. The stopped reply is kept, the model is told it was
+       cut off, and it does not count as a round without a tool call. Its
+       `auto:spend` record carries `max_tokens` and
+       `cut: "reply cut at 80% of the token budget for the budget question"`; a reply
+       stopped by the budget itself carries `cut: "reply cut at the token limit"`.
+       Extend cannot enlarge a reply already in flight, which is why the reply is
+       stopped at the mark rather than asked about while it streams.
+     - *Time.* The run looks up from a streaming reply every second
+       (`engine.STREAM_POLL_S`), whether or not the server has sent anything. If 80%
+       of the time budget is reached then, the question is asked while the reply goes
+       on. If the time budget runs out, the reply is cancelled and the run stops with
+       the reason `time budget exhausted: …; reply cancelled at the time limit`, so a
+       stalled server holds a run at most a second past its budget. A tool call that
+       is running when the budget runs out is not cut short; its own timeout bounds it.
+     - *Meter.* Between those looks the run also reports the reply's tokens so far,
+       estimated from its text, as `run.progress` with `partial: true`.
 
    The default (Keep read-only, Stop at limit) is the old behaviour. A run with no answer
    channel (headless `saddle auto`, which prints the question and the default) or one
@@ -276,7 +296,8 @@ The ledger records exactly one outcome span: `auto:finished` or `auto:stopped`.
   `saddle auto` exits 0. In arms E and E+A, "finished" only means the model called
   `finish`; it makes no claim that the change works.
 - **stopped: token budget exhausted / time budget exhausted.** A budget ran out. The
-  branch holds the partial work. Exit 3.
+  branch holds the partial work. When the time budget ran out during a reply, the
+  reason ends `; reply cancelled at the time limit`. Exit 3.
 - **stopped: audit unresolved.** `finish` was refused `--finish-refusal-cap` times in a
   row (default 3) on the same set of failing findings. "Same set" compares gate, reason
   and cites; a change in the set restarts the count. The packet lists the findings.
