@@ -602,7 +602,7 @@ AUTO_START: Final = "auto:start"
 AUTO_PROOF_PREFIX: Final = "auto-"
 TOOL_SPAN_HASHES: Final = "tool_span_hashes"
 AUDIT_SPAN_HASHES: Final = "audit_span_hashes"
-"""The outcome sidecar's list of the run's audit records (FIX-5), as a set:
+"""The outcome sidecar's list of the run's audit records, as a set:
 the auditor writes from the feed's thread, so their order is not the run's."""
 COMPACTION_SPAN: Final = "compaction"
 """The span an autonomous run seals each time its context is compacted
@@ -613,7 +613,7 @@ does not hold it to the outcome's tool list."""
 AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
 """A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
 the third ending (finish on a tree equal to the baseline). Not `auto:spend`,
-which USAGE seals under the start span once per round."""
+which the measured-usage record seals under the start span once per round."""
 AUDIT_SPAN_PREFIXES: Final = ("audit:", "audit-tier")
 """Audit records a run's journal also holds: the feed's `audit:delivered` /
 `audit:withheld`, the chat seam's `audit:<gate>`, and the auditor's own
@@ -628,7 +628,7 @@ def _auto_run_issues(
     auto_proofs: Sequence[tuple[int, ProofRecord]],
     found: Sequence[JournalIssue],
 ) -> list[JournalIssue]:
-    """Hold an autonomous run's tool spans to its outcome's list (CHAIN).
+    """Hold an autonomous run's tool spans to its outcome's list.
 
     Spans are hashed one by one, so deleting, reordering or appending a
     whole line leaves every remaining hash intact. The outcome span's
@@ -645,11 +645,11 @@ def _auto_run_issues(
     no `auto:start` span -- chat, slice runs -- is not judged here.
 
     The outcome is the run's `auto:finished`/`auto:stopped` span, by name
-    (`AUTO_OUTCOMES`): the audit feed, the chat's question seam and USAGE's
-    `auto:spend` also write agent spans under the start span. Audit records
+    (`AUTO_OUTCOMES`): the audit feed, the chat's question seam and the
+    measured-usage `auto:spend` also write agent spans under the start span. Audit records
     (`AUDIT_SPAN_PREFIXES`) are not tool calls and are not held to the
     tool list (scope narrowed, INTEG); they are held, as a set, to the
-    sidecar's `audit_span_hashes` when it has one (FIX-5, tightened).
+    sidecar's `audit_span_hashes` when it has one (tightened).
     """
     issues: list[JournalIssue] = []
     starts = [
@@ -767,10 +767,10 @@ def _audit_list_issues(
     outcome_line: int,
     outcome: SpanRecord,
 ) -> list[JournalIssue]:
-    """Hold a run's audit records before its outcome to the sealed set (FIX-5).
+    """Hold a run's audit records before its outcome to the sealed set.
 
     An outcome sealed before the list existed has none and is not judged
-    here (scope stated in the FIX-5 commit): rewriting a sealed sidecar to
+    here (scope stated in the commit that added the list): rewriting a sealed sidecar to
     drop the key reseals the outcome, which the branch anchor catches.
     """
     listed = _listed_hashes(path, outcome, AUDIT_SPAN_HASHES)
@@ -810,7 +810,7 @@ def run_audit_hashes(path: Path, run_span: str) -> list[str]:
 
     The same membership `_auto_run_issues` judges: a span citing the start
     span as parent, or any span after the start line and before the next
-    start line. Read by the engine when it seals the outcome (FIX-5), so it
+    start line. Read by the engine when it seals the outcome, so it
     never raises on a line it cannot read (verify reports those), and a run
     whose start span is not in this journal keeps only the spans citing it.
     """

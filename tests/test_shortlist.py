@@ -7,8 +7,8 @@ accepted reason. The score is still computed and recorded in `basis`
 N survivors, one per line first, each with file:line, the changed line's
 text and the mutation.
 
-Loosening proof (CONTRIBUTING.md): M3F (internal run report, not public)
-measured 6 of 6 oracle-PASS T5 trees scoring 63-76% against the 85% bar.
+Loosening proof (CONTRIBUTING.md): a measured run (report not public)
+found 6 of 6 oracle-PASS T5 trees scoring 63-76% against the 85% bar.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def test_a_survivor_fails_even_when_the_score_clears_the_bar() -> None:
 
 
 def test_every_survivor_accepted_passes_below_the_bar() -> None:
-    """Known-good in the M3F shape: a low score whose survivors all carry a reason."""
+    """Known-good in that run's shape: a low score whose survivors all carry a reason."""
     outcome = _outcome(1, [_d("m1", 3), _d("m2", 4)])
     assert not check_mutation(outcome, 85.0).passed
     check = check_mutation_shortlist(outcome, 85.0, accepted={("m.py", 3), ("m.py", 4)})

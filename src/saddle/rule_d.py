@@ -100,7 +100,7 @@ class Either:
 
 @dataclass(frozen=True)
 class Authorities:
-    """Per-input labels, one slot per source. The answer book (S3-4) builds these."""
+    """Per-input labels, one slot per source. The answer book builds these."""
 
     user: Mapping[str, Label] = field(default_factory=dict)
     spec: Mapping[str, Label] = field(default_factory=dict)

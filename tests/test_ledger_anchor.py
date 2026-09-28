@@ -119,7 +119,7 @@ def tip_message(result: AutoResult) -> str:
 
 
 def forge(result: AutoResult) -> None:
-    """Delete the refusal span, drop it from the list, reseal the outcome: CHAIN's limit."""
+    """Delete the refusal span, drop it from the list, reseal the outcome: the list's limit."""
     rows = lines(result.journal)
     refused = rows.pop(index_of(rows, "refused:edit_file"))
     at = next(i for i, r in enumerate(rows) if r.get("name") in ("auto:finished", "auto:stopped"))
@@ -203,7 +203,7 @@ def test_an_in_flight_run_with_neither_outcome_nor_anchor_verifies(repo: Path) -
 def test_a_resealed_forgery_verifies_without_the_anchor_and_fails_with_it(repo: Path) -> None:
     result = run(repo)
     forge(result)
-    assert verify_journal(result.journal) == []  # CHAIN's documented limit
+    assert verify_journal(result.journal) == []  # the sealed list's documented limit
     found = anchor_issues(result.journal, repo)
     assert [i.code for i in found] == ["anchor-mismatch"]
     assert result.branch in found[0].message
@@ -226,7 +226,7 @@ def test_a_deleted_outcome_and_proof_read_in_flight_unless_anchored(repo: Path) 
         if r["record_type"] != "proof" and r.get("name") != "auto:finished"
     ]
     write(result.journal, rows)
-    assert verify_journal(result.journal) == []  # CHAIN's documented limit
+    assert verify_journal(result.journal) == []  # the sealed list's documented limit
     found = anchor_issues(result.journal, repo)
     assert [i.code for i in found] == ["outcome-missing-anchored"]
     assert outcome_hash(result.journal, rows[0]["span_id"]) == ""
@@ -312,7 +312,7 @@ def in_flight(result: AutoResult) -> None:
 
 
 def test_the_packet_claims_no_match_for_a_run_in_flight(repo: Path) -> None:
-    """FIX-4: the web page reads packets mid-run. With no outcome sealed, a
+    """The web page reads packets mid-run. With no outcome sealed, a
     clean anchor check has nothing to match; an anchor with no outcome
     behind it is still reported."""
     result = run(repo)

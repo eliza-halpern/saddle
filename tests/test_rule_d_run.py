@@ -1,6 +1,6 @@
 """Rule D in the run path: known-good and known-bad pairs.
 
-Every store here is a real S1-c store written with `write_reference_set` and
+Every store here is a real reference store written with `write_reference_set` and
 loaded through its sealed id; every tree is real code run in a subprocess.
 """
 
@@ -792,7 +792,7 @@ def test_rule_d_run_saddle_run_exits_4_on_a_question_and_keeps_1_and_0(
     assert cli.run_task(options, None, stdin=io.StringIO(), stdout=io.StringIO()) == code  # type: ignore[arg-type]
 
 
-# ------------------------------------------------------------------ the seal M1-J's scorer reads
+# ------------------------------------------------------------------ the seal a scorer reads
 
 
 def test_seal_a_band_question_carries_channel_inputs_and_provenance(
@@ -842,7 +842,7 @@ def test_seal_an_accepted_tree_seals_empty_channels(tmp_path: Path) -> None:
 def test_seal_an_asked_input_without_provenance_raises_not_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad: an empty source would let M1-J 4b pass vacuously, so the seal refuses."""
+    """Known-bad: an empty source would let a scorer pass vacuously, so the seal refuses."""
     real = rule_d.consensus_verdict
 
     def stripped(*a: Any, **k: Any) -> rule_d.DifferentialResult:

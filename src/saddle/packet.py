@@ -449,7 +449,7 @@ class _Spend:
 def _spend(evidence: dict[str, Any]) -> _Spend | None:
     """The run's token spend, saying whether it was measured.
 
-    USAGE's sidecar has `tokens_spent` with `token_source` ("usage",
+    The measured-usage sidecar has `tokens_spent` with `token_source` ("usage",
     "estimate", "mixed", "none") and `tokens_by_source`. A sidecar written
     before it has only `tokens_spent_estimate`: that is an estimate, and a
     missing count is "not recorded", never a measured 0.
@@ -528,7 +528,7 @@ def _anchor_text(journal: Path, repo: Path | None, *, sealed: bool) -> str:
 
     With no outcome sealed yet (a run in flight, as the web page reads it)
     a clean check has nothing to match, so it says nothing; an anchor with
-    no outcome behind it is still reported (FIX-4).
+    no outcome behind it is still reported.
     """
     if repo is None:
         return ""
@@ -559,7 +559,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     start = next((s for s in spans if s.name == "auto:start"), None)
     outcome = next((s for s in reversed(spans) if s.name in AUTO_OUTCOMES), None)
     # The model's tool calls: audit records are journaled as `tool` spans too,
-    # but the auditor wrote them (FIX-1; the ledger's list excludes them alike).
+    # but the auditor wrote them (the ledger's list excludes them alike).
     tools = [s for s in spans if s.kind == "tool" and not s.name.startswith(AUDIT_SPAN_PREFIXES)]
     refusals = [s for s in tools if s.name.startswith("refused:")]
     audits = _audits(spans)
@@ -708,7 +708,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     # -- mutation -------------------------------------------------------------------
     if mutation and mutation[-1].verdict == "blocked":
         # Tier 2 never ran: tier 1 failed on that tree. There is no mutation
-        # result to call failed (FIX-3); the auditor's detail names the cause.
+        # result to call failed; the auditor's detail names the cause.
         last = mutation[-1]
         rows.append(
             Row("mutation", "Mutation", "not-proven", f"blocked: {last.body}", (last.record_hash,))

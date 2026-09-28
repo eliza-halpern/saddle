@@ -1,10 +1,10 @@
 """`saddle verify` re-renders a rule D QUESTION run as QUESTION, not FAIL.
 
-The journals under tests/fixtures/question_run/ were sealed by phase2-rule-d
-(b6fd1fa)'s own `slice._seal_run` (by a one-off generator script), one
+The journals under tests/fixtures/question_run/ were sealed by an earlier rule D
+tree (b6fd1fa)'s own `slice._seal_run` (by a one-off generator script), one
 per case of its test_rule_d_run_question_is_the_verdict_only_when_every_failure_is_a_question.
 Only the run span's exit code (4) and detail ("halted on a question") are read;
-nothing from phase2-rule-d is imported here.
+nothing from that tree is imported here.
 """
 
 from __future__ import annotations

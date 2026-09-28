@@ -13,7 +13,7 @@ field it was read from; every heading is followed by the mutant lines it
 heads. The phrase attached to a mutant is a fixed template per class, not
 prose about the code.
 
-What the record holds today (phase2-integ 913f4d2): `MutationOutcome` keeps
+What the record holds today (an earlier integration tree, 913f4d2): `MutationOutcome` keeps
 survivor *names*, a status tally and survivor lines, but no `mutmut show`
 diff and no killing test. The calibration harness recorded `survivor_detail`
 (survivors only) beside the outcome. So a killed mutant can only be counted,

@@ -1,6 +1,6 @@
 """What an autonomous run keeps once its context is compacted.
 
-Each test names the compaction recommendation it pins (R1..R8)
+Each test names the compaction rule it pins, numbered R1..R8 here,
 and holds both halves: a known-good instance the contract keeps and a
 known-bad one it must not. The runs are real `run_auto` runs over a git
 repo, the only caller that sets `changed_files` and delivers audits, with a

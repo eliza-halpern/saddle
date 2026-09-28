@@ -2,7 +2,7 @@
 
 FEED's `AuditFeed` (arm E+A+F, the real `auditor.Auditor`) is the source of
 findings; UI's session lines and packet read them from the ledger alone;
-CHAIN's verifier accepts the journal the two write together. The mutation count
+The verifier accepts the journal the two write together. The mutation count
 reaches the packet only through the sealed `audit-tier2:mutation`
 span, which is the contract under test. Tier 2 runs the real mutmut
 engine (`test_evidence._without_stubbed_mutmut`): the conftest stub mutates
@@ -119,7 +119,7 @@ def run(
 def test_a_real_finding_reaches_the_model_the_card_and_the_packet(repo: Path) -> None:
     result, client = run(repo, learns=True)
     assert result.outcome == "finished", result.reason
-    assert verify_journal(result.journal) == []  # CHAIN accepts the feed's and auditor's spans
+    assert verify_journal(result.journal) == []  # verify accepts the feed's and auditor's spans
     spans = read_spans(result.journal)
     # the checkpoint's coverage finding, delivered to the model as a tool result
     delivered = [s for s in spans if s.name == "audit:delivered"]
@@ -160,7 +160,7 @@ def test_a_refused_finish_reads_failed_on_the_packet(repo: Path) -> None:
     assert packet.verdict == "stopped"
     assert rows["audit"].status == "failed"
     assert any(i.startswith("✗ coverage: tier 1, fail") for i in rows["audit"].items)
-    # flip (FIX-3): blocked by tier 1 is not a failed mutation result, which
+    # flip: blocked by tier 1 is not a failed mutation result, which
     # would not exist; it is still recorded and cited, never absent.
     assert rows["mutation"].status == "not-proven"
     assert rows["mutation"].text.startswith("blocked: tier 1 failed (")
@@ -207,7 +207,7 @@ def test_start_fields_are_read_by_key_not_position() -> None:
     assert start_field(feed, "missing") == ""
 
 
-# -- cost: measured vs estimated (USAGE's sidecar fields) -----------------------
+# -- cost: measured vs estimated (the measured-usage sidecar fields) ----------
 
 
 def test_the_cost_row_says_measured_when_the_server_reported_usage(repo: Path) -> None:
@@ -230,7 +230,7 @@ def test_the_cost_row_says_estimate_when_no_usage_came(repo: Path) -> None:
 
 
 def test_an_old_sidecar_is_never_read_as_zero_measured_tokens(tmp_path: Path) -> None:
-    """Known-bad: a sidecar written before USAGE has only `tokens_spent_estimate`."""
+    """Known-bad: a sidecar written before usage was measured has only `tokens_spent_estimate`."""
     runs = tmp_path / "old"
     shutil.copytree(Path(__file__).parent / "fixtures" / "auto_pre_chain", runs)
     rows = {row.key: row for row in compile_packet(runs / "proofs.jsonl").rows}

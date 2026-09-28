@@ -1,7 +1,7 @@
 """An autonomous run's ledger, anchored outside itself in its branch.
 
-`saddle verify` holds a run's tool spans to the list its outcome span seals
-(CHAIN), but nothing in the ledger is keyed: someone who deletes a span,
+`saddle verify` holds a run's tool spans to the list its outcome span seals,
+but nothing in the ledger is keyed: someone who deletes a span,
 rewrites the sidecar list and recomputes the outcome span's `attempt_hash`
 and `record_hash` gets a ledger that verifies, and deleting the outcome
 together with its proof makes a finished run read as in-flight.

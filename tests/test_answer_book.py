@@ -1,8 +1,8 @@
 """The answer book's known-good / known-bad pairs (51 pairs; names carry the id).
 
-Fixtures are R2's real per-input rows for M1-F's Fix-8 set and the case list
+Fixtures are real recorded per-input rows for the calibration inputs and the case list
 (`tests/fixtures/t1_reference_rows.jsonl`: the 12 frozen references'
-signature and R1's four-grammar votes per input, 2009 rows), and R1's
+signature and the four-grammar votes per input, 2009 rows), and the
 published-grammar panel, vendored below as `PANEL` so the panel votes are
 recomputed here rather than trusted. Pair P0 checks the vendored panel
 against the recorded votes on every row: both halves of the fixture.
@@ -50,7 +50,7 @@ from saddle.answer_book import (
     shortest_first,
 )
 
-# ------------------------------------------------------------------ R1's grammar panel (vendored)
+# ------------------------------------------------------------------ the grammar panel (vendored)
 
 
 def _r5322(nonascii: bool) -> re.Pattern[str]:
@@ -138,10 +138,10 @@ def votes(s: str) -> str:
     return ",".join("T" if f(s) else "F" for f in GRAMMARS.values())
 
 
-PANEL_SHA = "748c5ce2a55c9962" + "0" * 48  # R1 grammars.py sha256 prefix; the rest is a fixture
+PANEL_SHA = "748c5ce2a55c9962" + "0" * 48  # the panel's sha256 prefix; the rest is a fixture
 FIXTURE = Path(__file__).parent / "fixtures" / "t1_reference_rows.jsonl"
 
-# ------------------------------------------------------------------ fixtures (R2's real rows)
+# ------------------------------------------------------------------ fixtures (real recorded rows)
 
 
 def _load_rows() -> dict[str, dict[str, str]]:
@@ -182,9 +182,9 @@ WS_DEAD = sel(k3_key="('ws',)", signature="F" * 12, vote="F,F,F,F")
 NEWLINES = [s for s in ALL if s.endswith("\n")]
 PCT = sel(k3_key="('core', ('%',), False, False, False)", vote="T,T,T,T")
 PCT_OUT = sel(k3_key="('core', ('%',), False, False, False)", vote="F,F,F,F")
-LF_ORACLE = "user@example.com\n"  # t1_probe_g's literal; not in R2's tables
+LF_ORACLE = "user@example.com\n"  # t1_probe_g's literal; not in the recorded tables
 LF_SPLIT = "user@domain.com\n"  # 10 of 12 references accept it
-# Two inputs not in R2's tables, for the grouping pair only; references synthetic (labelled).
+# Two inputs not in the recorded rows, for the grouping pair only; references synthetic (labelled).
 SYNTH = {"user@[192.168.1.1]": "F" * 12, "user@[2001:db8::1]": "F" * 12}
 REFS.update(SYNTH)
 
@@ -412,7 +412,7 @@ def body(rec: dict[str, object]) -> dict[str, object]:
 
 
 def test_answer_book_p0_fixtures_agree_with_the_recorded_panel_votes() -> None:
-    # both halves: the vendored panel reproduces R2's recorded votes on every row, and the
+    # both halves: the vendored panel reproduces the recorded votes on every row, and the
     # fixture's class sizes are the spec's (fact 1, fact 5, M)
     assert all(votes(s) == R2VOTES[s] for s in ALL), (
         "vendored panel drifted from the recorded votes"
@@ -1380,7 +1380,7 @@ def test_answer_book_p2_overrides_and_anchor_scope_reach_rule_d_so_its_checks_pa
     assert (res.verdict, res.either) == ("no-reference", (LEAD,))
 
 
-# X: S3-5 prompts
+# X: answer prompts
 
 
 def test_answer_book_x1_e_is_not_an_answer_unless_either_is_offered() -> None:

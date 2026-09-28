@@ -911,7 +911,7 @@ def build_app(
         if journal is None:
             return JSONResponse({"error": "no such task in this session"}, status_code=404)
         # The run's repo, so the Reproduce row reports the branch anchor check
-        # (FIX-4). A web run's ledger is `auto.ledger_path(repo, rid)`; a path
+        # for a run in flight too. A web run's ledger is `auto.ledger_path(repo, rid)`; a path
         # of any other shape names no repo, and the check is left out.
         parts = journal.parts
         shaped = len(parts) >= 4 and parts[-4:-2] == (".saddle", "runs")

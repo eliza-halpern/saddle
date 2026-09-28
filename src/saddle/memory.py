@@ -78,7 +78,7 @@ REREAD: Final = (
     "Re-read files and re-run commands with the tools if you need detail "
     "that is no longer in context."
 )
-"""The hint for an autonomous run: nobody is there to ask (R5)."""
+"""The hint for an autonomous run: nobody is there to ask."""
 
 EDIT_TOOLS: Final = ("edit_file", "write_file")
 

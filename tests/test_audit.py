@@ -421,7 +421,7 @@ def test_a_tracked_coveragerc_is_not_noise(tmp_path: Path) -> None:
 
 
 def test_tracked_bytecode_is_not_noise(tmp_path: Path) -> None:
-    """Pair 1 (contract A): a tracked `__pycache__/*.pyc` is not noise (M-Z1).
+    """Pair 1 (contract A): a tracked `__pycache__/*.pyc` is not noise.
 
     Red at 27dc53f: `_audit_ignore` drops `__pycache__` and `*.pyc` at any
     depth by name alone, so the copy lacks a file the baseline tracks, git
@@ -442,8 +442,8 @@ def test_tracked_bytecode_is_not_noise(tmp_path: Path) -> None:
 
 def test_audit_ignore_tells_tracked_and_untracked_siblings_apart(tmp_path: Path) -> None:
     """Pair 2 (contract A): one directory, a tracked and an untracked
-    `.pyc`. The directory is kept because a tracked file lives beneath it (M-Z2:
-    the ancestor set), the untracked sibling is still dropped, the tracked one
+    `.pyc`. The directory is kept because a tracked file lives beneath it (the
+    ancestor set), the untracked sibling is still dropped, the tracked one
     is kept, and an untracked `__pycache__` elsewhere is still dropped."""
     tree = tmp_path / "tree"
     _init(tree, {"pkg/__init__.py": "", "pkg/__pycache__/a.pyc": "a"})

@@ -4,7 +4,7 @@ Numbering follows the spec: `test_differential_p01_*` is pair 1. Pair 8 and
 the baseline half of pair 9 are the draft's (`baseline_verdict`, contract
 A5). Fixtures are synthetic unless marked "real vector": the real vectors
 are the 12 frozen references' recorded answers in `W-a-1 ... W-c-4` order
-(R2 `answers_fix8.jsonl` signatures; R1 per-reference probe table).
+(recorded answer signatures and a per-reference probe table).
 
 Every pair except 6 sets `MIN_UNANIMOUS_SHARE` to 0.0 to isolate its own
 contract; pair 6 uses the shipped 0.40.
@@ -592,7 +592,7 @@ def test_differential_p27_a_user_label_on_a_decided_input_must_name_the_clause()
     assert res.verdict == "accept"
 
 
-# ---- addendum 2026-09-25 (S3-4-final interface items)
+# ---- addendum 2026-09-25 (answer book interface items)
 
 
 def test_differential_p28_reference_pins_have_their_own_slot() -> None:
@@ -608,7 +608,7 @@ def test_differential_p28_reference_pins_have_their_own_slot() -> None:
     assert res.verdict == "accept"
     res = consensus_verdict("m.f", [s], {s: T}, refs_const(3, {s: F}), authorities=pin, classes={})
     assert res.verdict == "refuse"  # a pin decides below the floor too
-    # the overload S3-4 proposed is NOT equivalent: as a user label on a spec-decided input
+    # the overload once proposed is NOT equivalent: as a user label on a spec-decided input
     # it raises
     nl = "user@domain.com\n"
     over = Authorities(

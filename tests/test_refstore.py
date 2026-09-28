@@ -1,6 +1,6 @@
-"""Known-good / known-bad pairs for the S1-c reference store (vendored from parallel/out/S1C).
+"""Known-good / known-bad pairs for the reference store (`saddle.refstore`).
 
-The S1-c test that loads the built T1 store is not vendored: the store lives outside the repo.
+The upstream test that loads the built T1 store is not vendored: the store lives outside the repo.
 """
 
 from __future__ import annotations
@@ -305,7 +305,7 @@ def test_reference_set_id_argument_is_required_and_checked(tmp_path: Path) -> No
 
 
 # ------------------------------------------------------------------ vendored into saddle
-# Known-bad pairs for the checks the S1-c tests left unexercised: each defect is
+# Known-bad pairs for the checks the upstream tests left unexercised: each defect is
 # built on a valid store, resealed so only the named check can catch it.
 
 

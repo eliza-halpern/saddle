@@ -1,8 +1,8 @@
 """Red tests for what an autonomous run needs from compaction.
 
 Each test states one property the agent needs to keep continuity once its
-conversation outgrows the window, and is expected to FAIL on phase2-final
-(4ee7cf7). No fix here; these are discrimination evidence only.
+conversation outgrows the window, and is expected to FAIL on an earlier
+integration tree (4ee7cf7). No fix here; these are discrimination evidence only.
 """
 
 from __future__ import annotations

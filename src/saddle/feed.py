@@ -101,7 +101,7 @@ FAILING: Final = frozenset({"fail", "blocked"})
 CHECK_SPAN: Final = "audit:check"
 """A `check` call's audit record: the rendered text as detail, the findings
 (`AuditResult.to_dict`) in the span's attempt sidecar. Its `audit:` prefix
-puts it in the outcome's sealed audit list (FIX-5)."""
+puts it in the outcome's sealed audit list."""
 
 CHECK_UNCHANGED: Final = "error: check refused: the tree is unchanged since check "
 """Prefix of a refused `check`. Not the tier-0 guard's `REFUSED`, so it is

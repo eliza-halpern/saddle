@@ -1,8 +1,8 @@
-"""A frozen, content-addressed store for differential-rule references (S1-c).
+"""A frozen, content-addressed store for differential-rule references.
 
 This module is standalone: it imports nothing from saddle, calls no model and needs no
-network or GPU. It follows the S1 draft §3 ("How references are stored and hashed") and
-§S1-c (contracts C1 and C2), with one extension: optional answer tables and a provenance
+network or GPU. It follows the rule D draft's storage and hashing design
+(contracts C1 and C2), with one extension: optional answer tables and a provenance
 stamp (task id, model, sampling, server profile) in the manifest.
 
 Layout of a store directory::

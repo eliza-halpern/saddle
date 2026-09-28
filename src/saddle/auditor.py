@@ -697,7 +697,7 @@ class Auditor:
                 first = self.tier1(copy)
                 if not first.passed:
                     # The cause is what failed tier 1: a sanctioned finding did not
-                    # (`Findings.passed`), so it is not named (FIX-3, M3F finding 6).
+                    # (`Findings.passed`), so it is not named.
                     failed = ", ".join(
                         f.gate
                         for f in first.findings

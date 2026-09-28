@@ -1,4 +1,4 @@
-"""The answer book (S3-4 final, 2026-09-25): what the user, the spec and a convention decided.
+"""The answer book: what the user, the spec and a convention decided.
 
 Record kinds are `registration`, `exact` (source `user` or `references`),
 `class`, `spec`, `convention` and `revoke`. The book is append-only JSON
@@ -18,7 +18,7 @@ source, never written by the model.
 
 The class key has three parts: the key function's
 value, the sealed references' signature and the panel votes. K3 alone
-merges `u..x@example.com` with 578 Fix-8 inputs, 369 of them valid by every
+merges `u..x@example.com` with 578 calibration inputs, 369 of them valid by every
 grammar; without the panel votes a "trim is fine" answer pins `' '`.
 """
 
@@ -91,7 +91,7 @@ Convention = Callable[[str], bool | None]
 Panel = Callable[[str], str]
 
 
-# ------------------------------------------------------------------ what the S3-6 seam knows
+# ------------------------------------------------------------------ what the question seam knows
 
 
 @dataclass
@@ -979,13 +979,13 @@ def render_pinned_tests(res: Resolution, callable_name: str) -> str:
     return "\n".join(out)
 
 
-# ------------------------------------------------------------------ S3-5 prompts
+# ------------------------------------------------------------------ answer prompts
 
 
 def ask_question(
     inp: str, *, offer_either: bool, stdin: IO[str], stdout: IO[str], attempts: int = 3
 ) -> str:
-    """S3-5 B: `[y/n/e]` only when "either" is offered; `e` counts as unparseable otherwise."""
+    """`[y/n/e]` only when "either" is offered; `e` counts as unparseable otherwise."""
     hint = "y/n/e" if offer_either else "y/n"
     for _ in range(attempts):
         stdout.write(f"Should {inp!r} be accepted? [{hint}] ")

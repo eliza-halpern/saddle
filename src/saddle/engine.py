@@ -205,7 +205,7 @@ error and not a refusal: `finish_refusals` and the cap are untouched."""
 
 DEFAULT_FINISH_REFUSAL_CAP: Final = 3
 """Consecutive `finish` refusals on an unchanged failing finding set before
-the run stops (M3F: a correct T5 tree was refused 7,244 times until the
+the run stops (in a measured run a correct T5 tree was refused 7,244 times until the
 token budget ran out). Tightened: the loop is bounded; the tree is never
 marked finished."""
 
@@ -1238,7 +1238,7 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "elapsed_s": round(auto.budget.elapsed(), 3),
         "time_budget_s": auto.budget.time_s,
         "tool_span_hashes": list(auto.span_hashes),
-        # FIX-5: every audit record the run's journal holds by now (the feed
+        # Every audit record the run's journal holds by now (the feed
         # was closed above), so a deleted or inserted one fails verify.
         AUDIT_SPAN_HASHES: run_audit_hashes(journal, auto.run_span),
         "arm": auto.arm,

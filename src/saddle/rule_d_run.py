@@ -1,13 +1,13 @@
 """Rule D in the run path: the plan-time census and the verdict after the gates.
 
-`saddle run --rule-d` reads a frozen S1-c reference store (`saddle.refstore`)
+`saddle run --rule-d` reads a frozen reference store (`saddle.refstore`)
 and an answer book (`saddle.answer_book`), and does two things the run did
 not do before:
 
 1. **Plan time.** `census` lists every class of spec-silent split inputs the
    book does not already answer, under the book's registered key function
    (the three-part class key). The run prints every one and stops when there
-   are more than the budget; it never drops a question to fit (M1-J D1).
+   are more than the budget; it never drops a question to fit.
 2. **Verdict time.** After an `impl` node's gates pass, `verdict` runs the
    tree's function on the table's inputs in a subprocess and hands rule D the
    tree's answers, the stored references' answers and the book's authorities.
@@ -39,16 +39,16 @@ from saddle.journal import redact_secrets
 from saddle.refstore import ReferenceSet, load_reference_set
 
 CENSUS_BUDGET: Final = 50
-"""Split classes at plan time, per task (M1-J D1; QB N7 measured 46)."""
+"""Split classes at plan time, per task (a measured task needed 46)."""
 
 VERDICT_BUDGET: Final = 5
-"""Asks at verdict time, per tree (M1-J D1; QB N8 measured 0-5)."""
+"""Asks at verdict time, per tree (measured: 0-5)."""
 
 TREE_TIMEOUT_S: Final = 120.0
 """Wall for one tree's answers over the whole input table."""
 
 EXAMPLES: Final = 3
-"""Examples shown per question group (M1-H 3a: at most three)."""
+"""Examples shown per question group (at most three)."""
 
 _DRIVER: Final = r"""
 import importlib.util, inspect, json, sys
@@ -206,7 +206,7 @@ def load(config: RuleDConfig) -> Loaded:
 def census(loaded: Loaded) -> list[CensusClass]:
     """Plan time: every split class the book does not answer, in first-appearance order.
 
-    Tree-independent (S1a-final A3'): a split input's question does not depend on
+    Tree-independent: a split input's question does not depend on
     any tree, so the whole list is known before the first draw.
     """
     split = [x for x in loaded.inputs if len(set(loaded.ctx.refs[x])) > 1]
@@ -355,7 +355,7 @@ def asked_inputs(result: rule_d.DifferentialResult) -> dict[str, Any]:
     tree's and the references' answers; `questions` (split, spec-silent) carries every input
     with the tree's answer, "" when the tree gave none. `source` is that input's
     `Provenance.source` and is looked up, never defaulted: an asked input with no provenance
-    raises KeyError here rather than sealing a record that would pass M1-J 4b vacuously.
+    raises KeyError here rather than sealing a record that a scorer would pass vacuously.
     `asks` stays the bare class ids; these two lists say which channel each came from.
     """
     src = {p.input: p.source for p in result.provenance}

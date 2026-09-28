@@ -605,7 +605,8 @@ def _scope_line(node: Node) -> str:
     if not node.target_files:
         return ""
     # The planner's list reaches the gate; the worker has to hear it
-    # too, or it writes the extra test file 20b's node-2 wrote (R3).
+    # too, or it writes the extra test file a measured round's
+    # second node wrote.
     return (
         f"- Touch only these files: {', '.join(node.target_files)}. "
         "The gate rejects a diff that names any other file.\n"
@@ -1222,7 +1223,7 @@ def run_verify(journal: Path, *, stdout: IO[str], anchor: Path | None = None) ->
     records = read_records(journal)
     spans = read_spans(journal)
     plans = read_plans(journal)
-    # Records are self-hashed, not chained (CHAIN, bb5b7e1): what verify
+    # Records are self-hashed, not chained (bb5b7e1): what verify
     # establishes is every record's own hash, its parent links and, for an
     # autonomous run, that its tool spans are exactly the list its outcome
     # span seals. Say that, with the counts, rather than "chain verifies".

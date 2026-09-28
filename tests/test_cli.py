@@ -321,7 +321,7 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "may not create or rename files" in prompt
     assert 'never start one with "/"' in prompt
     assert 'never use "/"' not in prompt
-    # The four rules the 20a/20b smoke runs showed the planner needs.
+    # The four rules two smoke runs showed the planner needs.
     assert 'Never name a package "src"' in prompt
     assert "cite the requirement id of every node they specify" in prompt
     assert "every file the node will create as well as edit" in prompt
@@ -338,7 +338,7 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
 
 
 def test_build_worker_prompt_tells_the_worker_its_target_files() -> None:
-    """20b's node-2 wrote a second test file no node listed (R3): the
+    """A measured round's second node wrote a test file no node listed: the
     gate rejected it, but the worker had never been told the list."""
     scoped = Node.model_validate({**_node_dict(), "target_files": ["n.py", "m.py"]})
     prompt = build_worker_prompt(task=TASK, node=scoped, files=["n.py"], contents={})
@@ -4145,7 +4145,7 @@ def test_repair_and_retry_prompts_stay_structured() -> None:
 
 
 def test_test_and_refactor_nodes_keep_the_structured_first_prompt() -> None:
-    """Task-first contract C: only an impl node's first attempt changes shape (U2)."""
+    """Task-first contract C: only an impl node's first attempt changes shape."""
     for kind in ("test", "refactor"):
         prompt = _p2_1_prompt(kind)
         assert "Requirements" in prompt

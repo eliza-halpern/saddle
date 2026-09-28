@@ -241,7 +241,7 @@ def render_journal_transcript(
 def _auto_verdict(start: SpanRecord, spans: Sequence[SpanRecord]) -> tuple[str, str]:
     """An autonomous run's task (its start span) and verdict (its outcome span).
 
-    FIX-2: an autonomous run seals no gate outputs and no `run` span, so the
+    An autonomous run seals no gate outputs and no `run` span, so the
     slice rule above reads every one of them as FAIL, finished or not. Its
     verdict is its own `auto:finished`/`auto:stopped` span under `start`.
     FINISHED means the executor called finish, not that the change is proven:

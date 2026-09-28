@@ -149,9 +149,9 @@ def test_run_shell_capture_splits_and_returns_output(tmp_path: Path) -> None:
 def test_run_shell_capture_ceilings_a_runaway_allocation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pair 4 (contract B, key; M-Z3): tested code runs under an
+    """Pair 4 (contract B, key): tested code runs under an
     address-space ceiling. Red at 27dc53f: no ceiling, the 512 MiB bytearray
-    succeeds and the command exits 0. The M1 audit of t7-untouched grew to
+    succeeds and the command exits 0. A measured audit of t7-untouched grew to
     20.3 GB the same way and was OOM-killed."""
     monkeypatch.setattr(evidence_module, "TEST_MEMORY_LIMIT_BYTES", 256 * 1024**2, raising=False)
     # Pinned to the address-space fallback, which is where `MemoryError` comes
@@ -1235,7 +1235,7 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_mutmut_run_is_ceilinged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pair 6 (contract B; M-Z4): `mutmut run` executes the tested code
+    """Pair 6 (contract B): `mutmut run` executes the tested code
     in forked workers that inherit the launcher's limit, so the launch carries
     `memory_limit == TEST_MEMORY_LIMIT_BYTES`. The bookkeeping calls after it
     do not."""
@@ -1864,7 +1864,7 @@ def test_mutant_lines_unparseable_source_with_a_parsed_name_returns_empty() -> N
 
 
 def test_mutant_lines_a_dedented_string_content_line_is_not_its_own() -> None:
-    """Known-bad for A (X-L6): a mutant inside method `m` removes its
+    """Known-bad for A: a mutant inside method `m` removes its
     own body line (`        return x`, 8 spaces -- mutmut's rendering adds
     that level back at `indent + snippet`). The method also holds a
     multi-line string whose content line, once dedented, reads exactly

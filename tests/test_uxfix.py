@@ -76,7 +76,7 @@ def test_the_runs_state_event_carries_the_budget_its_outcome_sealed(
 
 # Defect 2 -- a session switch carried the last session's run state along.
 # Contract: the header pill, the send button and what submitting does belong
-# to the session on screen. Seen in shots/13-needs-you-from-another-session:
+# to the session on screen. Seen in a screenshot:
 # a session with no run showed "? needs you" and a stop square, and the
 # square, pressed there, stopped the other session's run (state.activeTask).
 # Known-good half: back on the run's own session, "needs you" is replayed.
@@ -110,7 +110,7 @@ def test_switching_sessions_leaves_the_other_runs_state_behind(
 # Defect 3 -- the "↓ newest" pill sat on the composer. Contract: when shown, the
 # pill is wholly above the composer and inside the viewport, at 400 px and
 # at desktop width. It was placed at a fixed `bottom: 96px` of <main>, and
-# the composer is taller than that (shots/04-question-card-400.png: the pill
+# the composer is taller than that (in a 400 px screenshot the pill
 # covers the placeholder beside the send button).
 
 
@@ -135,12 +135,12 @@ def test_the_newest_pill_sits_above_the_composer(tmp_path: Path) -> None:
         assert pill["jumpRight"] <= pill["viewport"], (width, pill)
 
 
-# Q1 (N4) -- the sidebar forgot every run when the server restarted, because
+# The sidebar forgot every run when the server restarted, because
 # `app.list_sessions` read only `server.tasks` (memory). Contract: a session's
 # latest ended run reads the same after a restart over the same store as it
 # did before -- state and task in `/api/sessions`, verdict and budget in the
 # packet, branch from the branch endpoint -- because the chat journal's
-# `run-ref` span names it (shots/10-sidebar-after-restart-desktop.png).
+# `run-ref` span names it.
 # Known-bad half: a session whose journal has no run-ref shows no run.
 
 
@@ -182,9 +182,9 @@ def _seen(http: TestClient, sid: str, rid: str) -> dict[str, Any]:
     }
 
 
-# Q3 (N5) -- on a phone, nothing outside the closed drawer said that another
+# On a phone, nothing outside the closed drawer said that another
 # session needs you: `.status` was display:none at 420 px and below, and ☰
-# had no badge (shots/13-needs-you-from-another-session-400.png). Contract,
+# had no badge (seen in a 400 px screenshot). Contract,
 # at 400 px: on the run's own session the header pill "needs you" is
 # rendered and on screen; on any other session the ☰ button carries a
 # visible dot (a ::after with a width) and says so in its label, with the
@@ -220,9 +220,9 @@ def test_a_phone_shows_needs_you_outside_the_drawer(
     assert on_b["pill"]["text"] == "idle"
 
 
-# Q4 (N6) -- a finished run with no mutation record said "Mutation ○ No
+# A finished run with no mutation record said "Mutation ○ No
 # mutation record" and, two lines under it, "Not proven ✓ Nothing is left
-# unproven" (shots/19-merge-unproven-desktop.png). Contract: when an auditor
+# unproven" (seen in a desktop screenshot). Contract: when an auditor
 # ran and no mutation record exists, Not proven carries an item saying the
 # changed lines were not mutation-tested. Known-good: a mutation record
 # present keeps "Nothing is left unproven."
@@ -256,7 +256,7 @@ def test_not_proven_names_a_missing_mutation_record(
     assert rows["mutation"].status == ("proven" if kind == "mutated" else "absent")
 
 
-# Q10 -- "Download full report": GET .../tasks/<rid>/packet.md serves the full
+# "Download full report": GET .../tasks/<rid>/packet.md serves the full
 # packet as one markdown attachment, rendered fresh from the sealed ledger
 # through render_packet_text and written beside the ledger as packet.md, and
 # the click is logged in the session's actions.log. Known-bad: an unknown
@@ -296,7 +296,7 @@ def test_the_report_download_is_the_full_packet_text_written_beside_the_ledger(
     assert [p.name for p in (calc / ".saddle" / "runs").rglob("packet.md")] == ["packet.md"]
 
 
-# Q9/Q10 end to end -- the Ask lane opens the report the pre-fill names.
+# Report download end to end -- the Ask lane opens the report the pre-fill names.
 # A harness test, not a model-behaviour measurement: the "model" is the
 # fake server (tests/fixtures/fake_model_server.py, from the internal M3
 # dry run) replaying scripted tool calls. What it proves: a turn started

@@ -121,14 +121,14 @@ def test_an_untouched_run_verifies_and_its_list_is_every_tool_span_in_order(repo
     result = run(repo)
     rows = lines(result.journal)
     names = [row.get("name") for row in rows if row["record_type"] == "span"]
-    assert names.count("auto:spend") == 4  # USAGE: one agent span per round, never listed
+    assert names.count("auto:spend") == 4  # measured usage: one agent span per round, never listed
     names = [name for name in names if name != "auto:spend"]
     assert names == ["auto:start", "edit_file", "refused:edit_file", "read_file", "finish",
                      "auto:finished"]  # fmt: skip
     code, text = verify_text(result.journal)
     assert (code, verify_journal(result.journal)) == (0, [])
     proofs = sum(1 for row in rows if row["record_type"] == "proof")
-    # INTEG-4: 6 listed spans + USAGE's 4 unlisted auto:spend spans = 10; plus 1 proof.
+    # 6 listed spans + the 4 unlisted auto:spend spans = 10; plus 1 proof.
     assert (proofs, len(rows)) == (1, 11)
     assert text.startswith(
         f"OK: {result.journal}: ledger verifies: 11 records (1 proof(s), "
@@ -308,7 +308,7 @@ def test_an_outcome_without_a_readable_list_fails_verify(
 # -- compatibility: a journal written before this check ----------------------
 
 PRE_CHAIN = Path(__file__).parent / "fixtures" / "auto_pre_chain"
-"""Written by `saddle auto` at origin/phase2-executor (1325bd7), before the
+"""Written by `saddle auto` at an earlier executor tree (1325bd7), before the
 span-list check existed; the write path is unchanged, so it must verify."""
 
 
@@ -328,7 +328,7 @@ def test_a_journal_written_before_the_check_is_held_to_its_list(tmp_path: Path) 
 
 
 def test_verify_counts_every_record_and_every_autonomous_run(repo: Path) -> None:
-    """POLISH-1: the OK line's counts are the journal's, not constants."""
+    """The OK line's counts are the journal's, not constants."""
     journal = two_runs(repo)
     code, text = verify_text(journal)
     total = len(lines(journal))
@@ -338,7 +338,7 @@ def test_verify_counts_every_record_and_every_autonomous_run(repo: Path) -> None
 
 
 def test_a_deleted_span_prints_no_ok_line_and_its_issue_names_the_span(repo: Path) -> None:
-    """POLISH-1 known-bad: the issue line leads with the code and names the hash."""
+    """Known-bad: the issue line leads with the code and names the hash."""
     result = run(repo)
     rows = lines(result.journal)
     gone = rows.pop(index_of(rows, "read_file"))
@@ -351,7 +351,7 @@ def test_a_deleted_span_prints_no_ok_line_and_its_issue_names_the_span(repo: Pat
     assert gone["record_hash"] in issue[0]
 
 
-# -- FIX-2: the transcript of an autonomous run reads its own outcome span -----
+# -- the transcript of an autonomous run reads its own outcome span ------------
 
 
 def test_a_finished_runs_transcript_names_its_task_and_its_outcome(repo: Path) -> None:
@@ -394,7 +394,7 @@ def test_the_last_runs_outcome_is_the_verdict_when_a_journal_holds_two(repo: Pat
     assert "- Verdict: FINISHED\n" in text
 
 
-# -- FIX-5: audit records are held to a sealed list too ------------------------
+# -- audit records are held to a sealed list too -------------------------------
 
 
 class PassingAuditor:
@@ -483,13 +483,14 @@ def test_a_deleted_audit_record_resealed_out_of_the_list_is_caught_by_the_anchor
     path.write_bytes(encoded)
     rows[at] = reseal({**rows[at], "attempt_hash": hashlib.sha256(encoded).hexdigest()})
     write(result.journal, rows)
-    assert verify_journal(result.journal) == []  # CHAIN's documented limit, unchanged
+    assert verify_journal(result.journal) == []  # the sealed list's documented limit, unchanged
     assert [i.code for i in anchor_issues(result.journal, repo)] == ["anchor-mismatch"]
 
 
 def test_a_journal_sealed_before_the_audit_list_is_not_held_to_one() -> None:
     """Compatibility, scope stated: an outcome with no `audit_span_hashes`
-    (every run sealed before FIX-5) is not judged on its audit records."""
+    (every run sealed before outcomes sealed their audit list) is not judged
+    on its audit records."""
     rows = lines(PRE_CHAIN / "proofs.jsonl")
     assert audit_rows(rows) == []
     assert verify_journal(PRE_CHAIN / "proofs.jsonl") == []

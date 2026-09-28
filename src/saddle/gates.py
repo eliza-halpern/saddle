@@ -1690,7 +1690,7 @@ def check_requirement_binding(
     declare: the test sources are read suite-wide, so a plan that
     gives its `test` node `REQ-001` and its `impl` node `REQ-002` cites
     both ids in one file, and with the node's own ids alone no node of
-    such a plan can pass (session 20b). The first half is untouched: an
+    such a plan can pass (seen in a smoke run). The first half is untouched: an
     id the node itself declares must be cited, whatever the plan holds.
 
     `examples` are the `(id, "accepts"|"rejects", text)` triples the
@@ -1982,7 +1982,7 @@ def check_mutation_shortlist(
     Scope narrowed: the kill-rate against `threshold` is still
     computed and recorded in `basis`, but it no longer decides. No source
     calibrates an 85% bar on changed-line mutants, and correct T5 trees
-    scored 63-76% (M3F). What decides is each survivor -- `no tests` ones
+    scored 63-76% in a measured run. What decides is each survivor -- `no tests` ones
     included, since a mutant no test runs is a missing test --
     either dying or sitting on a line in `accepted` (a checked reason,
     `verify_untested_claims`). A survivor whose every change sits in the
