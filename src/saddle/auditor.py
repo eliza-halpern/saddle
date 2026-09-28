@@ -41,12 +41,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
 import tempfile
+import tomllib
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
@@ -535,11 +537,57 @@ def gate_interpreter_finds(names: Sequence[str]) -> set[str]:
     return {name for name in found if name in names} if isinstance(found, list) else set()
 
 
+_REQUIREMENT_NAME: Final = re.compile(r"\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+
+
+def build_requirement_names(pyproject: str | None) -> set[str]:
+    """The top-level import names a build frontend installs into its isolated
+    build environment before it runs the tree's `setup.py`, lower-cased with
+    `-` and `.` read as `_`.
+
+    Those are the names in pyproject.toml's `[build-system] requires`; with no
+    pyproject.toml, or one without a `[build-system]` table, the frontend
+    falls back to setuptools (PEP 518). A table whose `requires` is not a
+    list, or a file that does not parse, provides nothing: a lookup that fails
+    excuses no import."""
+    if pyproject is None:
+        return {"setuptools"}
+    try:
+        data = tomllib.loads(pyproject)
+    except tomllib.TOMLDecodeError:
+        return set()
+    if "build-system" not in data:
+        return {"setuptools"}
+    system = data["build-system"]
+    requires = system.get("requires") if isinstance(system, dict) else None
+    if not isinstance(requires, list):
+        return set()
+    names = set()
+    for requirement in requires:
+        match = _REQUIREMENT_NAME.match(requirement) if isinstance(requirement, str) else None
+        if match:
+            names.add(re.sub(r"[-.]", "_", match.group(1).lower()))
+    return names
+
+
+def setup_py_build_requirements(repo: Path) -> set[str]:
+    """`build_requirement_names` of `repo`'s pyproject.toml; a file that is
+    absent is the setuptools fallback, one that cannot be read provides nothing."""
+    try:
+        text = (repo / "pyproject.toml").read_text()
+    except FileNotFoundError:
+        return build_requirement_names(None)
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return build_requirement_names(text)
+
+
 def check_imports(
     path: str,
     source: str,
     roots: Sequence[Path],
     interpreter_finds: Callable[[Sequence[str]], set[str]] | None = None,
+    build_provides: Set[str] = frozenset(),
 ) -> GateCheck:
     """Every absolute import's top-level name resolves: stdlib, a module or
     package under one of `roots`, or an installed distribution.
@@ -551,6 +599,11 @@ def check_imports(
     auditor passes `gate_interpreter_finds`), because the tree's tests run
     under the python on the user's PATH, whose environment holds the
     project's dependencies and saddle's does not.
+
+    A name in `build_provides` (lower-cased) is not looked up at all: the
+    auditor passes a root `setup.py` the names its build system installs
+    (`setup_py_build_requirements`), because a build frontend runs that file
+    in an isolated environment holding them, never in the test environment.
     """
     try:
         tree = ast.parse(source)
@@ -566,11 +619,13 @@ def check_imports(
                 relative += 1
             else:
                 names.append(str(node.module).split(".")[0])
+    provided = {name for name in names if name.lower() in build_provides}
     missing = sorted(
         {
             name
             for name in names
-            if name not in sys.stdlib_module_names
+            if name not in provided
+            and name not in sys.stdlib_module_names
             and not any((r / f"{name}.py").is_file() or (r / name).is_dir() for r in roots)
             and importlib.util.find_spec(name) is None
         }
@@ -578,6 +633,8 @@ def check_imports(
     if missing and interpreter_finds is not None:
         missing = sorted(set(missing) - interpreter_finds(missing))
     note = f"; {relative} relative import(s) not checked" if relative else ""
+    if provided:
+        note += f"; {len(provided)} build requirement(s) not looked up"
     if missing:
         return GateCheck(
             name="imports",
@@ -713,7 +770,8 @@ class Auditor:
             (self.repo / rel).parent,
             *(self.repo / r for r in self.config.extra_import_roots),
         ]
-        imports = check_imports(rel, new_text, roots, gate_interpreter_finds)
+        build = setup_py_build_requirements(self.repo) if rel == "setup.py" else set()
+        imports = check_imports(rel, new_text, roots, gate_interpreter_finds, build)
         findings = tuple(_from_check(c, 0) for c in (syntax, ruff, imports))
         return self._store(Findings(tier=0, key=key, findings=findings))
 

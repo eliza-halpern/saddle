@@ -443,6 +443,92 @@ def compelled_definitions(
     return compelled
 
 
+def _fails_when_run(statement: ast.stmt) -> bool:
+    """True for a statement whose running fails the test it is in.
+
+    `assert <falsy constant>`, `raise AssertionError[(...)]` and
+    `pytest.fail(...)`: the lines a test reaches only when the code under
+    test is wrong.
+    """
+    if isinstance(statement, ast.Assert):
+        return isinstance(statement.test, ast.Constant) and not statement.test.value
+    if isinstance(statement, ast.Raise):
+        exc = statement.exc
+        target = exc.func if isinstance(exc, ast.Call) else exc
+        return isinstance(target, ast.Name) and target.id == "AssertionError"
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+        func = statement.value.func
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr == "fail"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "pytest"
+        )
+    return False
+
+
+def _is_main_guard(statement: ast.If) -> bool:
+    """True for `if __name__ == "__main__":`, either operand first."""
+    if not isinstance(statement.test, ast.Compare):
+        return False
+    test = statement.test
+    if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
+        return False
+    operands = {
+        ("name" if isinstance(node, ast.Name) and node.id == "__name__" else None)
+        or ("main" if isinstance(node, ast.Constant) and node.value == "__main__" else None)
+        for node in (test.left, test.comparators[0])
+    }
+    return operands == {"name", "main"}
+
+
+def never_run_test_lines(sources: Mapping[str, str], prefix: str = "") -> set[tuple[str, int]]:
+    """Lines of a test module that no passing pytest run executes.
+
+    Two shapes, both in modules pytest collects (`_is_test_file`):
+
+    - a statement that fails the test when it runs (`_fails_when_run`),
+      such as the `assert False` after a call that must raise. It runs
+      only on wrong code, which the tests gate refuses, so asking
+      coverage to see it run asks for a tree no gate set can accept;
+    - the body of a module-level `if __name__ == "__main__":`. pytest
+      imports a test module under its own name, and the coverage run is
+      always a pytest run (`under_coverage`), so the body never runs.
+
+    `check_changed_line_coverage` leaves these out of its judgement. What
+    that admits, stated plainly: such a line in a test nothing collects
+    is no longer named. The test's other lines still are, and a
+    source module's lines, `__main__` included, are judged as before.
+    Keys are spelled as `compelled_lines` spells them, with `prefix`.
+    """
+    never: set[tuple[str, int]] = set()
+    for rel, text in sources.items():
+        if not _is_test_file(rel):
+            continue
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        key = str(PurePath(prefix) / rel) if prefix else rel
+        spans = [
+            _statement_span(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.stmt) and _fails_when_run(node)
+        ]
+        for guard in tree.body:
+            if isinstance(guard, ast.If) and _is_main_guard(guard):
+                spans.extend(_statement_span(node) for node in guard.body)
+        for first, last in spans:
+            never.update((key, line) for line in range(first, last + 1))
+    return never
+
+
+EXEMPT_TEST_LINES: Final = "exempt-test-lines="
+"""The `basis` field of `check_changed_line_coverage` counting the changed
+lines it did not judge because no passing pytest run executes them
+(`never_run_test_lines`)."""
+
+
 SPARED_DEFS: Final = "spared-defs="
 """The `basis` field of `check_changed_line_coverage` naming each baseline
 definition whose changed lines it did not judge (`compelled_definitions`)."""
@@ -463,6 +549,7 @@ def check_changed_line_coverage(
     owed: Collection[str] = (),
     compelled: Collection[tuple[str, int]] | Mapping[str, Collection[tuple[str, int]]] = (),
     writable: bool = True,
+    never_run: Collection[tuple[str, int]] = (),
 ) -> GateCheck:
     """Every changed line must be executed; `minimum` is the node threshold.
 
@@ -490,6 +577,11 @@ def check_changed_line_coverage(
     changed line was spared from, `spared-defs=<file>:<name>,...`: a pass
     that judged nothing in them says which.
 
+    `never_run` is the test-module lines no passing pytest run executes
+    (`never_run_test_lines`). Like `compelled` they leave the judgement,
+    and `basis` counts them: requiring one to run is requiring the code
+    under test to be wrong.
+
     Deferral does not fail the run later. A line still uncovered when
     the DAG drains is uncovered against the arm's own suite, and the
     hidden suite that decides the task is a different one, so failing on
@@ -514,12 +606,19 @@ def check_changed_line_coverage(
     names = sorted(name for name, group in by_def.items() if name and changed & set(group))
     if names:
         note += f" {SPARED_DEFS}{','.join(names)}"
-    judged = changed - spared
+    unrunnable = (changed - spared) & set(never_run)
+    if unrunnable:
+        note += f" {EXEMPT_TEST_LINES}{len(unrunnable)}"
+    judged = changed - spared - unrunnable
     if not judged:
         return GateCheck(
             name="coverage",
             passed=True,
-            detail="every changed line is inside a definition the baseline already had",
+            detail=(
+                "every changed line is compelled or a test line no passing pytest run executes"
+                if unrunnable
+                else "every changed line is inside a definition the baseline already had"
+            ),
             basis=f"changed-lines={len(changed)}{note}",
         )
     missing = sorted(judged - covered)
@@ -2105,6 +2204,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
                 inputs.baseline_sources, inputs.sources, inputs.workdir, inputs.covered
             ),
             writable=may_write_tests,
+            never_run=never_run_test_lines(inputs.sources, inputs.workdir),
         )
     )
     checks = (

@@ -88,7 +88,11 @@ def test_t5_renders_convert_and_version_1_loader(t5_changed: Changed) -> None:
         "[record: detail names 19 lines; changed-lines=155 compelled-lines=5]"
     )
     assert (
-        "  - money.py convert: 10 of 16 changed lines never run -- nothing exercises convert "
+        # Lines 126-130 of convert's body are changed and not listed: they
+        # ran, or were compelled. The record cannot say which, so the row
+        # claims neither "nothing exercises" nor that convert runs.
+        "  - money.py convert: 10 of 16 changed lines never run -- no test reaches these "
+        "lines of convert "
         '("Convert a Decimal amount from source to target.") '
         "[lines 131, 132, 133, 134, 136, 137, 138, 139, 140, 141]"
     ) in text
@@ -239,6 +243,56 @@ def test_other_details_render_nothing() -> None:
     assert render_coverage(toy("every changed line is inside a definition")) == ""
     s = describe_coverage({"detail": "no test runs t.py:14"}, {"t.py": TOY})
     assert render_coverage(s).splitlines()[0].endswith("[record: detail names 1 lines]")
+
+
+PART = """def product_at(pool, index):
+    if index < 0:
+        raise IndexError(index)
+    total = 1
+    for size in pool:
+        total *= size
+    return total
+
+
+def never_called(x):
+    y = x + 1
+    return y
+"""
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [None, {("/w/p.py", n) for n in (1, 2, 3, 4, 5, 6, 7, 10, 11, 12)}],
+)
+def test_a_function_that_ran_is_not_said_to_be_unexercised(changed: Changed | None) -> None:
+    """Known-bad: product_at's other statements are not listed, so they ran
+    (or were exempt); "nothing exercises product_at" would be false, the
+    shape a green 92/92 tree was told about a test that ran 27 of its 30
+    lines. Known-good: never_called's def line ran at import and is not
+    listed, but its whole body is, so "nothing exercises" is what the record
+    holds."""
+    finding = {"detail": "no test runs p.py:3, p.py:11, p.py:12", "cites": []}
+    s = describe_coverage(finding, {"p.py": PART}, changed)
+    part, never = s.gaps
+    assert (part.never_ran, never.never_ran) == (False, True)
+    counts = ("1 of 7 ", "2 of 3 ") if changed else ("1 ", "2 ")
+    assert gap_sentence(part) == (
+        f"p.py product_at: {counts[0]}changed lines never run -- "
+        "no test reaches these lines of product_at [lines 3]"
+    )
+    assert gap_sentence(never) == (
+        f"p.py never_called: {counts[1]}changed lines never run -- "
+        "nothing exercises never_called [lines 11, 12]"
+    )
+
+
+def test_a_function_with_no_body_statement_is_not_said_to_be_unexercised() -> None:
+    """A docstring is not a statement: with nothing in the body to list, the
+    record cannot show the body never ran."""
+    src = 'def f():\n    """Only a docstring."""\n'
+    (g,) = describe_coverage({"detail": "no test runs a.py:1"}, {"a.py": src}).gaps
+    assert not g.never_ran
+    assert "no test reaches these lines of f" in gap_sentence(g)
 
 
 def test_blank_docstring_is_no_docstring() -> None:

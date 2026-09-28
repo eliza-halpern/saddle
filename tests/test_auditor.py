@@ -371,6 +371,82 @@ def test_tier0_resolves_imports_with_the_projects_python(
     assert _verdicts(found)["imports"] == "pass"
 
 
+_BUILD_PYPROJECT = '[build-system]\nrequires = ["setuptools>=61", "zz-build-helper"]\n'
+_SETUP_PY = "import zz_build_helper\nfrom setuptools import setup\n\nsetup()\n"
+
+
+def test_tier0_resolves_what_the_build_system_installs_for_setup_py(
+    clean_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root setup.py runs in the build frontend's isolated environment, which
+    holds `[build-system] requires` and not the test environment: its imports of
+    those names resolve (known-good). The same import from any other file, from
+    a setup.py below the root, or of a name the table does not declare stays
+    unresolved (known-bad). No python on PATH has zz_build_helper, so the
+    verdict does not depend on what the machine happens to have installed."""
+    monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
+    (clean_tree / "pyproject.toml").write_text(_BUILD_PYPROJECT)
+    auditor = Auditor(clean_tree)
+    good = auditor.tier0("setup.py", _SETUP_PY)
+    assert _verdicts(good)["imports"] == "pass"
+    assert "2 build requirement(s) not looked up" in good.findings[2].detail
+    for path, source in [
+        ("test_x.py", _SETUP_PY),
+        ("pkg/setup.py", _SETUP_PY),
+        ("setup.py", "import zz_undeclared\n"),
+    ]:
+        bad = auditor.tier0(path, source)
+        assert _verdicts(bad)["imports"] == "fail", path
+        assert "zz_" in bad.findings[2].detail
+
+
+def test_imports_no_longer_vouch_that_a_declared_build_requirement_exists(
+    clean_tree: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cost of the rule above, on the record: a build requirement no index
+    has (a hallucinated one) passes tier 0 when setup.py imports it. The build
+    itself still fails; tier 0 no longer says so."""
+    monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
+    (clean_tree / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["zz-no-index-has-this"]\n'
+    )
+    found = Auditor(clean_tree).tier0("setup.py", "import zz_no_index_has_this\n")
+    assert _verdicts(found)["imports"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("pyproject", "names"),
+    [
+        (None, {"setuptools"}),
+        ('[project]\nname = "p"\n', {"setuptools"}),
+        (
+            '[build-system]\nrequires = ["setuptools>=61", "setuptools-scm[toml]",'
+            ' "Cython ; python_version < \'4\'", "a.b", 7]\n',
+            {"setuptools", "setuptools_scm", "cython", "a_b"},
+        ),
+        ('[build-system]\nrequires = ["hatchling"]\n', {"hatchling"}),
+        ('[build-system]\nbuild-backend = "x"\n', set()),
+        ('[build-system]\nrequires = "setuptools"\n', set()),
+        ("build-system = 1\n", set()),
+        ("[build-system\n", set()),
+    ],
+)
+def test_build_requirement_names(pyproject: str | None, names: set[str]) -> None:
+    """With no [build-system] table the frontend falls back to setuptools; a
+    table names its own; a table without a readable requires list, or a file
+    that does not parse, provides nothing."""
+    assert auditor_mod.build_requirement_names(pyproject) == names
+
+
+def test_setup_py_build_requirements_reads_the_trees_pyproject(tmp_path: Path) -> None:
+    assert auditor_mod.setup_py_build_requirements(tmp_path) == {"setuptools"}
+    (tmp_path / "pyproject.toml").write_text('[build-system]\nrequires = ["flit_core"]\n')
+    assert auditor_mod.setup_py_build_requirements(tmp_path) == {"flit_core"}
+    (tmp_path / "pyproject.toml").unlink()
+    (tmp_path / "pyproject.toml").mkdir()
+    assert auditor_mod.setup_py_build_requirements(tmp_path) == set()
+
+
 def test_one_byte_change_misses_the_cache(clean_tree: Path, gate_spy: _Spy) -> None:
     auditor = Auditor(clean_tree)
     first = auditor.tier1()

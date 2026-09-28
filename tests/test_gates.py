@@ -37,6 +37,7 @@ from saddle.gates import (
     check_test_command,
     compelled_lines,
     introduced_findings,
+    never_run_test_lines,
     plan_prescribes_deletion,
     plan_restates_the_gate,
     plan_retargets_reserved_files,
@@ -2795,3 +2796,151 @@ def test_run_tier1_still_fails_coverage_for_a_definition_the_baseline_lacked() -
     assert not coverage.passed
     assert "no test runs n1.py:2, n1.py:3" == coverage.detail
     assert coverage.basis == "changed-lines=2"
+
+
+_NEVER_RUN_TEST = """import pytest
+from m import f
+
+
+def test_raises():
+    try:
+        f(-1)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+    for x in (1, 2):
+        if x > 5:
+            assert f(x) > 0
+    assert 1
+    assert f(1)
+
+
+def _lookup(xs, want):
+    for x in xs:
+        if x == want:
+            return x
+    else:
+        raise AssertionError
+
+
+def test_other_raises():
+    try:
+        f(-2)
+        raise AssertionError(
+            "expected ValueError"
+        )
+    except ValueError:
+        pass
+    try:
+        f(-3)
+        pytest.fail("expected ValueError")
+    except ValueError:
+        pass
+    helper.fail("not pytest")
+    raise ValueError("not an assertion")
+    raise
+
+
+if __name__ == "__main__":
+    test_raises()
+    for name in ("a", "b"):
+        print(name)
+else:
+    print("imported")
+if "__main__" == __name__:
+    print("reversed")
+if __name__ != "__main__":
+    print("not main")
+if __name__ == "__main__" == "x":
+    print("chained")
+if __file__ == "__main__":
+    print("other name")
+if flag:
+    print("plain if")
+"""
+"""Every line `never_run_test_lines` names in it is one the tuple below lists."""
+
+_NEVER_RUN_EXPECTED: Final = (8, 23, 29, 30, 31, 36, 45, 46, 47, 51)
+"""`assert False` (8), bare `raise AssertionError` (23), the three lines of
+`raise AssertionError(...)` (29-31), `pytest.fail` (36), the `__main__`
+body (45-47) and the reversed guard's body (51). Not: a data-dependent
+assert (13), `assert 1` and `assert f(1)` (14-15), `helper.fail` (39),
+`raise ValueError` and a bare `raise` (40-41), the guard's `else:` body
+(49), a `!=` guard, a chained compare, another name compared to
+"__main__", or a plain `if`."""
+
+
+def test_never_run_test_lines_names_exactly_the_lines_no_passing_pytest_run_executes() -> None:
+    """Known-good and known-bad in one module: the exact set, both ways."""
+    lines = never_run_test_lines({"test_m.py": _NEVER_RUN_TEST})
+    assert lines == {("test_m.py", line) for line in _NEVER_RUN_EXPECTED}
+
+
+def test_never_run_test_lines_spares_nothing_outside_a_test_module() -> None:
+    """The same text as a source module is judged in full: `m.py` is not collected."""
+    assert never_run_test_lines({"m.py": _NEVER_RUN_TEST}) == set()
+    # and a test module that does not parse contributes nothing (syntax fails it)
+    assert never_run_test_lines({"test_bad.py": "def f(:\n"}) == set()
+
+
+def test_never_run_test_lines_keys_match_the_runner_spelling() -> None:
+    """With a prefix the keys are the absolute ones `changed_statements` writes."""
+    lines = never_run_test_lines({"sub/m_test.py": "assert 0\n"}, "/w")
+    assert lines == {("/w/sub/m_test.py", 1)}
+
+
+def test_coverage_passes_a_correct_tree_whose_only_gaps_are_never_run_test_lines() -> None:
+    """Known-good: the refusal a green suite could never clear.
+
+    Without `never_run` the gate names `test_m.py:8`, the `assert False`
+    after a call that must raise. With it the line leaves the judgement,
+    and `basis` counts it.
+    """
+    never = never_run_test_lines({"test_m.py": _NEVER_RUN_TEST})
+    changed = {("m.py", 1), ("test_m.py", 6), ("test_m.py", 8)}
+    covered = {("m.py", 1), ("test_m.py", 6)}
+
+    before = check_changed_line_coverage(changed, covered, 100.0)
+    after = check_changed_line_coverage(changed, covered, 100.0, never_run=never)
+
+    assert not before.passed
+    assert before.detail == "no test runs test_m.py:8"
+    assert after.passed
+    assert after.detail == "every changed line runs"
+    assert after.basis == "changed-lines=3 exempt-test-lines=1"
+
+
+def test_coverage_still_fails_a_test_line_a_passing_run_could_reach() -> None:
+    """Known-bad: the data-dependent assert on line 13 stays judged."""
+    never = never_run_test_lines({"test_m.py": _NEVER_RUN_TEST})
+    changed = {("test_m.py", 8), ("test_m.py", 13)}
+    check = check_changed_line_coverage(changed, set(), 100.0, never_run=never)
+    assert not check.passed
+    assert check.detail == "no test runs test_m.py:13"
+
+
+def test_coverage_says_so_when_every_changed_line_is_exempt() -> None:
+    """A diff of only never-run test lines passes, and the detail does not claim tests ran."""
+    never = never_run_test_lines({"test_m.py": _NEVER_RUN_TEST})
+    check = check_changed_line_coverage({("test_m.py", 8)}, set(), 100.0, never_run=never)
+    assert check.passed
+    assert check.detail == (
+        "every changed line is compelled or a test line no passing pytest run executes"
+    )
+    assert check.basis == "changed-lines=1 exempt-test-lines=1"
+
+
+def test_coverage_exemption_admits_an_uncollected_test_of_only_failure_lines() -> None:
+    """The loosening's cost, on the record.
+
+    `tset_typo` is never collected, so its body never runs. Before, the
+    gate named its one body line; now that line is `assert False`, which
+    is exempt, so nothing names it. A body with any other statement is
+    still named, as the test above shows.
+    """
+    source = "def tset_typo():\n    assert False, 'never collected'\n"
+    never = never_run_test_lines({"test_t.py": source})
+    changed = {("test_t.py", 1), ("test_t.py", 2)}
+    covered = {("test_t.py", 1)}
+    assert not check_changed_line_coverage(changed, covered, 100.0).passed
+    assert check_changed_line_coverage(changed, covered, 100.0, never_run=never).passed
