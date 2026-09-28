@@ -29,12 +29,15 @@ protection that is not there. The gates' subprocesses on the tree's code
 
 from __future__ import annotations
 
+import atexit
 import functools
 import os
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -192,9 +195,86 @@ def gate_path(path: str) -> str:
         path = project_command_env(env, path)["PATH"]
     fallback = tool_dir()
     entries = [entry for entry in path.split(os.pathsep) if entry]
+    shim = _python3_shim(entries)
+    tail = [str(shim)] if shim is not None else []
     if fallback is None or any(Path(entry) == fallback for entry in entries):
-        return path
-    return os.pathsep.join([*entries, str(fallback)])
+        return os.pathsep.join([*entries, *tail]) if tail else path
+    return os.pathsep.join([*entries, *tail, str(fallback)])
+
+
+GATE_MODULES: Final = ("pytest", "coverage", "mutmut")
+"""What a `python3` must import, under the gates' own confinement, to run
+the gates in place of a missing `python`."""
+
+PROBE_TIMEOUT_S: Final = 60.0
+
+_SHIMS: dict[Path, str] = {}
+"""Shim directory -> the `python3` its `python` runs (`_shim_for`)."""
+
+
+def _python3_shim(entries: Sequence[str]) -> Path | None:
+    """A directory whose `python` runs the `python3` on `entries`, when
+    `entries` has no `python` and that `python3` can run the gates; else None.
+
+    Ubuntu ships `python3` without `python` unless python-is-python3 is
+    installed, and the test command is `python -m pytest`. Without this the
+    gates fell back to saddle's own interpreter, which has none of the
+    project's packages, and refused correct work. That `python3` is used
+    only when it imports every one of `GATE_MODULES` inside the sandbox and
+    a `mutmut` is on `entries` too (mutmut runs the tests in its own
+    process): one that cannot would refuse correct work the same way, so
+    saddle's own stays the fallback. Nothing on the user's system is
+    changed: the shim is a script in a directory saddle owns."""
+    joined = os.pathsep.join(entries)
+    if shutil.which("python", path=joined) is not None:
+        return None
+    found = shutil.which("python3", path=joined)
+    if found is None or shutil.which("mutmut", path=joined) is None:
+        return None
+    python3 = str(Path(found).absolute())
+    return _shim_for(python3) if _runs_gates(python3) else None
+
+
+@functools.cache
+def _runs_gates(python3: str) -> bool:
+    """`python3` imports all of `GATE_MODULES`, run confined as a gate runs
+    (so a package the sandbox hides counts as missing). Asked once per
+    saddle process: install the tools, then restart saddle."""
+    # Its own directory first, so `default_expose` shows the venv it lives
+    # in; then saddle's PATH, where `bwrap` itself is found.
+    env = command_env(
+        {"PATH": os.pathsep.join([str(Path(python3).parent), os.environ.get("PATH", "")])}
+    )
+    argv = [python3, "-c", f"import {', '.join(GATE_MODULES)}"]
+    with tempfile.TemporaryDirectory(prefix="saddle-probe-") as root:
+        wrapped, lent = _confined(argv, Path(root), env)
+        try:
+            done = subprocess.run(
+                wrapped,
+                cwd=root,
+                env=lent,
+                capture_output=True,
+                timeout=PROBE_TIMEOUT_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+    return done.returncode == 0
+
+
+@functools.cache
+def _shim_for(python3: str) -> Path:
+    """A private directory holding one script, `python`, that execs `python3`.
+
+    A script, not a link: a venv's interpreter finds its `pyvenv.cfg` next
+    to the path it was started by, so a link elsewhere would lose the venv."""
+    where = Path(tempfile.mkdtemp(prefix="saddle-python-")).resolve()
+    script = where / "python"
+    script.write_text(f'#!/bin/sh\nexec {shlex.quote(python3)} "$@"\n', encoding="utf-8")
+    script.chmod(0o755)
+    atexit.register(shutil.rmtree, where, True)
+    _SHIMS[where] = python3
+    return where
 
 
 def gate_environment() -> str:
@@ -208,8 +288,11 @@ def gate_environment() -> str:
     else:
         found = shutil.which("python", path=gate_path(os.environ.get("PATH", "")))
         fallback = tool_dir()
+        shimmed = _SHIMS.get(Path(found).parent) if found is not None else None
         if found is None:
             said = "no python found"
+        elif shimmed is not None:
+            said = f"{shimmed} from PATH (there is no `python` on PATH)"
         elif fallback is not None and Path(found).parent == fallback:
             said = f"saddle's own interpreter {found}"
         else:
@@ -448,11 +531,21 @@ def confine(
     project = _PROJECT_ENV.get()
     venv = {"VIRTUAL_ENV": str(project)} if project is not None else {}
     env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **venv, **(extra_env or {})})
+    return _confined(argv, root, env, writable)
+
+
+def _confined(
+    argv: Sequence[str], root: Path, env: dict[str, str], writable: Sequence[Path] = ()
+) -> tuple[list[str], dict[str, str]]:
+    """`confine` for an environment already built: `argv` under bwrap with
+    `root` writable, or unwrapped where bwrap cannot start."""
     if isolation_problem() is not None:
         return list(argv), env
     real = root.resolve()
     extra = [path.resolve() for path in writable]
     expose = default_expose(env)
+    # A `_shim_for` script is a bare `python` on PATH outside any venv, so
+    # `_bare_tools` shows it like any other such tool.
     wrapped = bwrap_argv(
         real,
         argv,
