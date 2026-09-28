@@ -19,7 +19,7 @@ import conftest
 import pytest
 
 import saddle.evidence as evidence_module
-from saddle import memcap
+from saddle import memcap, sandbox
 from saddle.evidence import (
     _MUTATION_TIMEOUT_S,
     SADDLE_COMMIT_IDENTITY,
@@ -1263,8 +1263,11 @@ def test_mutmut_run_is_ceilinged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_mutation_sample_missing_tool_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Missing from PATH and from beside saddle's interpreter (the fallback,
+    `sandbox.gate_path`): the gate says so rather than scoring nothing."""
     workdir = _mutation_workdir(tmp_path)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(sandbox, "tool_dir", lambda: tmp_path / "empty")
     outcome = mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
     assert outcome == MutationOutcome(
         killed=0, total=0, generated=0, survivors=("mutmut not on PATH",)
