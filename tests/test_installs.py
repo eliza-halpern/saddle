@@ -535,3 +535,21 @@ def test_a_hung_install_step_times_out(
     seam.overlay.mkdir()
     done = seam._run([sys.executable, "-c", "import time; time.sleep(30)"], use=seam.project)
     assert (done.returncode, done.stdout) == (124, "timed out after 0s")
+
+
+def test_in_arm_e_an_approved_install_reaches_the_models_commands(
+    repo: Path, wheels: WheelFolder
+) -> None:
+    """Arm E has no auditor to switch, but its commands still use the overlay."""
+    probe = call("run_command", "r1", command=PROBE)
+    result = _run(
+        repo,
+        Scripted([[probe], _ask(), [probe], finish()]),
+        wheels,
+        answer=lambda _q: "Install",
+        arm="E",
+    )
+    before, after = _tool(result, "run_command")
+    assert "No module named 'needsinstall'" in before.detail, before.detail
+    assert "exit 0" in after.detail, after.detail
+    assert str((result.journal.parent / "overlay").resolve()) in after.detail
