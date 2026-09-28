@@ -10,10 +10,12 @@ nothing from that tree is imported here.
 from __future__ import annotations
 
 import io
+import json
 import shutil
 from pathlib import Path
 
 import pytest
+from test_packet import BUGGY, FIX, TEST, asking_auditor, call, git, run
 
 from saddle.cli import run_verify
 from saddle.journal import GateOutput, ProofRecord, build_record, read_spans
@@ -37,7 +39,13 @@ def verify(tmp_path: Path, name: str) -> tuple[int, str]:
         # known-bad: each keeps FAIL, as the sealed run verdict does
         ("question_and_gate", "FAIL"),
         ("question_red_merge", "FAIL"),
-        ("question_deadline", "FAIL"),
+        # stated, not only FAIL: the run stopped at its deadline (the sealed
+        # verdict word stays FAIL; the parenthesis names the stop)
+        (
+            "question_deadline",
+            "FAIL (stopped at its deadline, before finishing: "
+            "0 proven, 0 failed, 1 halted on a question, 1 undispatched)",
+        ),
         ("gate", "FAIL"),
     ],
 )
@@ -74,3 +82,86 @@ def test_exit_4_without_the_question_detail_is_fail() -> None:
     (span,) = read_spans(FIXTURES / "question.jsonl")
     other = span.model_copy(update={"detail": "0 proven, 1 failed, 1 undispatched"})
     assert "- Verdict: FAIL\n" in render_journal_transcript([], [other], "j")
+
+
+# -- an autonomous run: the ledger's integrity and the run's outcome, apart ----
+
+
+def _repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    (root / "tests").mkdir(parents=True)
+    (root / "calc.py").write_text(BUGGY)
+    (root / "tests" / "test_calc.py").write_text(TEST)
+    (root / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\npythonpath = ["."]\n'
+    )
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    return root
+
+
+def _verify(journal: Path, anchor: Path | None = None) -> tuple[int, str]:
+    out = io.StringIO()
+    return run_verify(journal, stdout=out, anchor=anchor), out.getvalue()
+
+
+def _cut_before(journal: Path, marker: str) -> Path:
+    """The run's ledger as it stood before its first line holding `marker`."""
+    lines = journal.read_text().splitlines()
+    cut = next(i for i, line in enumerate(lines) if marker in line)
+    trimmed = journal.with_name("trimmed.jsonl")
+    trimmed.write_text("\n".join(lines[:cut]) + "\n")
+    return trimmed
+
+
+@pytest.mark.parametrize(
+    ("how", "verdict"),
+    [
+        ("question", "STOPPED (needs you: Should add(0, 0) be 0?)"),
+        ("budget", "STOPPED (token budget exhausted: "),
+        (
+            "waiting",
+            "NEEDS YOU (no outcome yet: the run is waiting on your answer: Should add(0, 0) be 0?)",
+        ),
+        # known-bad half: in flight with no question asked, or with the
+        # question answered, is still "no outcome", never "needs you"
+        ("in-flight", "NO OUTCOME (no auto:finished or auto:stopped span)"),
+        ("answered", "NO OUTCOME (no auto:finished or auto:stopped span)"),
+    ],
+)
+def test_a_run_that_did_not_finish_verifies_intact_with_its_outcome_stated(
+    tmp_path: Path, how: str, verdict: str
+) -> None:
+    root = _repo(tmp_path)
+    if how == "budget":
+        reading = [call("read_file", "r", path="calc.py")]
+        result = run(root, [], tail=reading, opts={"token_budget": 1})
+    else:
+        result = run(root, FIX, **asking_auditor("yes" if how == "answered" else None))
+    journal = result.journal
+    if how == "answered":
+        journal = _cut_before(journal, '"auto:finished"')
+    if how == "waiting":
+        journal = _cut_before(journal, '"auto:stopped"')
+    if how == "in-flight":
+        journal = _cut_before(journal, '"question"')
+    code, text = _verify(journal, anchor=root if how in ("question", "budget") else None)
+    assert code == 0, text
+    assert text.startswith("OK: ")
+    assert f"- Verdict: {verdict}" in text
+
+
+def test_a_broken_ledger_of_a_question_stopped_run_fails_verify(tmp_path: Path) -> None:
+    """Known-bad: the same run with one record rewritten is a broken ledger, exit 1."""
+    result = run(_repo(tmp_path), FIX, **asking_auditor(None))
+    lines = result.journal.read_text().splitlines()
+    index = next(i for i, line in enumerate(lines) if '"question"' in line)
+    record = json.loads(lines[index])
+    record["detail"] = "Should add(0, 0) be 1?"
+    lines[index] = json.dumps(record)
+    result.journal.write_text("\n".join(lines) + "\n")
+    code, text = _verify(result.journal)
+    assert code == 1
+    assert not text.startswith("OK: ")
+    assert "- Verdict:" not in text

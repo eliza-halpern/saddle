@@ -33,6 +33,10 @@ MAX_THOUGHT_EXCERPT_CHARS: Final = 200
 # below slice, and a journal sealed there must render wherever it is read.
 QUESTION_RUN_EXIT: Final = 4
 QUESTION_RUN_DETAIL: Final = " halted on a question"
+# The run span a deadline stop seals (slice.DEADLINE_EXIT, detail
+# prefixed "deadline: "), mirrored for the same reason.
+DEADLINE_RUN_EXIT: Final = 3
+DEADLINE_RUN_DETAIL: Final = "deadline: "
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,9 @@ def render_journal_transcript(
     "(unknown)"; the verdict is PASS only when every sealed gate output
     passed, so an auditor recomputes it instead of trusting it. A run span
     sealed as a rule D question halt (exit 4, "halted on a question") with
-    no sealed gate failure renders QUESTION; anything else not PASS is FAIL.
+    no sealed gate failure renders QUESTION; a deadline stop (exit 3,
+    "deadline: ...") renders FAIL naming the deadline; anything else not
+    PASS is FAIL.
 
     Only proven nodes have sealed records, so proofs alone cannot see a
     failed node: the smoke run of 2026-09-19 (`1 proven, 1 failed, merge
@@ -216,10 +222,17 @@ def render_journal_transcript(
     # read: exit 4 alone is not that shape. A sealed gate failure still wins.
     asked = bool(runs) and runs[-1].exit_code == QUESTION_RUN_EXIT
     asked = asked and QUESTION_RUN_DETAIL in runs[-1].detail
+    # A deadline stop keeps FAIL, as its sealed verdict does, and says so:
+    # the run did not finish, which is not the ledger failing to verify.
+    deadline = bool(runs) and runs[-1].exit_code == DEADLINE_RUN_EXIT
+    deadline = deadline and runs[-1].detail.startswith(DEADLINE_RUN_DETAIL)
     if run_ok and proven and checks_ok:
         verdict = "PASS"
     elif asked and checks_ok:
         verdict = "QUESTION"
+    elif deadline:
+        stopped = runs[-1].detail.removeprefix(DEADLINE_RUN_DETAIL)
+        verdict = f"FAIL (stopped at its deadline, before finishing: {stopped})"
     else:
         verdict = "FAIL"
     task = "(unknown)"
@@ -246,6 +259,8 @@ def _auto_verdict(start: SpanRecord, spans: Sequence[SpanRecord]) -> tuple[str, 
     verdict is its own `auto:finished`/`auto:stopped` span under `start`.
     FINISHED means the executor called finish, not that the change is proven:
     the packet's Audit, Tests and Mutation rows say what was checked.
+    With no outcome yet and a question unanswered, the run is waiting on
+    the user, and the verdict says so rather than only "no outcome".
     """
     task = start.argv[1] if len(start.argv) > 1 else "(unknown)"
     outcome = next(
@@ -253,6 +268,17 @@ def _auto_verdict(start: SpanRecord, spans: Sequence[SpanRecord]) -> tuple[str, 
         None,
     )
     if outcome is None:
+        answered = {s.parent_id for s in spans if s.name == "answer"}
+        waiting = [
+            s
+            for s in spans
+            if s.parent_id == start.span_id and s.name == "question" and s.span_id not in answered
+        ]
+        if waiting:
+            return task, (
+                "NEEDS YOU (no outcome yet: the run is waiting on your answer: "
+                f"{_first_line(waiting[-1].detail)})"
+            )
         return task, "NO OUTCOME (no auto:finished or auto:stopped span)"
     if outcome.name == "auto:finished":
         return task, "FINISHED"

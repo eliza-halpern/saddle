@@ -9,6 +9,7 @@ record is never shown finished.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import subprocess
@@ -19,10 +20,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from packet_seed import make_repo, seed
 
 from saddle import mutant_text
 from saddle.auditor import Finding, Findings
-from saddle.auto import AutoOptions, AutoResult, run_auto
+from saddle.auto import AutoOptions, AutoResult, ledger_path, run_auto
+from saddle.cli import run_verify
 from saddle.events import AuditFinding, Event, Question
 from saddle.journal import (
     SpanRecord,
@@ -43,6 +46,7 @@ from saddle.packet import (
     flag_narrative,
     render_packet_text,
 )
+from saddle.sessions import SessionStore
 from saddle.vllm import ToolCall, VllmClient
 
 BUGGY = "def add(a, b):\n    return a - b\n"
@@ -168,6 +172,62 @@ def test_every_cite_in_a_real_runs_packet_resolves_to_a_ledger_record(repo: Path
     assert "add now adds" not in text  # the recap carries no model narrative
     assert render_packet_text(compile_packet(result.journal)) == text  # deterministic
     assert packet.payload()["narrative_label"] == NARRATIVE_LABEL
+
+
+@pytest.mark.parametrize("start", ["main", "master", "detached"])
+def test_the_reproduce_log_runs_from_the_base_the_run_started_on(
+    tmp_path: Path, start: str
+) -> None:
+    """Known-good: `git log -p <base>..<run branch>` runs in the repo and shows the change.
+
+    Known-bad: a literal `main` in a repository on `master`, or on a detached
+    HEAD, is an unknown revision there, and the command fails.
+    """
+    root = tmp_path / "repo"
+    (root / "tests").mkdir(parents=True)
+    (root / "calc.py").write_text(BUGGY)
+    (root / "tests" / "test_calc.py").write_text(TEST)
+    git(root, "init", "-q", "-b", "master" if start == "master" else "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    if start == "detached":
+        git(root, "checkout", "-q", "--detach")
+    result = run(root, FIX)
+    packet = compile_packet(result.journal, anchor_repo=root)
+    rows = {row.key: row for row in packet.rows}
+    base = head if start == "detached" else start
+    command = f"git log -p {base}..saddle/auto/r1"
+    assert command in rows["reproduce"].items
+    shown = subprocess.run(
+        ["git", "-C", str(root), *command.split()[1:]], capture_output=True, text=True, check=True
+    ).stdout
+    assert "+    return (a + b)" in shown
+    assert f"saddle auto r1: {result.outcome}" in shown
+    # the base lives in the sealed start record: the ledger and its anchor verify
+    out = io.StringIO()
+    assert run_verify(result.journal, stdout=out, anchor=root) == 0, out.getvalue()
+
+
+def test_a_ledger_sealed_before_the_base_was_recorded_shows_the_runs_own_commit(
+    tmp_path: Path,
+) -> None:
+    """No base in the start record: the run's one commit, never a guessed `main`."""
+    repo = make_repo(tmp_path / "repo")
+    git(repo, "branch", "-m", "main", "master")
+    _sid, rid, branch = seed(SessionStore(tmp_path / "s"), repo, "unaudited")
+    packet = compile_packet(ledger_path(repo, rid), run_id=rid)
+    rows = {row.key: row for row in packet.rows}
+    command = f"git log -p -1 {branch}"
+    assert command in rows["reproduce"].items
+    assert not any(" main.." in item for item in rows["reproduce"].items)
+    shown = subprocess.run(
+        ["git", "-C", str(repo), *command.split()[1:]], capture_output=True, text=True, check=True
+    ).stdout
+    assert f"saddle auto {rid}" in shown
+    assert "+    return a + b" in shown
 
 
 def test_the_packet_is_refused_when_its_ledger_is_tampered_with(repo: Path) -> None:

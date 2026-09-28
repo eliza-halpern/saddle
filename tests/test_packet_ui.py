@@ -25,6 +25,7 @@ import pytest
 from packet_seed import git, make_repo, seed
 from test_ui3_mode import NoModel, serving
 
+from saddle.packet import compile_packet, render_packet_text
 from saddle.sessions import SessionStore
 from saddle.web.app import build_app
 
@@ -237,3 +238,38 @@ def test_a_mutation_line_without_a_sealed_outcome_shows_no_summary_block(tmp_pat
     m = got["mutation"]
     assert m["text"] == "killed 2 of 2 changed-line mutants"
     assert (m["summary"], m["others"]) == (None, 0)
+
+
+def _report_items(repo: Path, title: str) -> list[str]:
+    """The items `packet.md` lists under the row `title`, as the page's download writes it."""
+    (journal,) = (repo / ".saddle" / "runs").glob("*/proofs.jsonl")
+    lines = render_packet_text(compile_packet(journal, run_id=journal.parent.name)).splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"{title} ["))
+    items = []
+    for line in lines[start + 1 :]:
+        if not line.startswith("  - "):
+            break
+        items.append(line.removeprefix("  - "))
+    return items
+
+
+@pytest.mark.parametrize("kind", ["budget", "stopped", "audited"])
+def test_not_proven_draws_each_packet_md_item_once_and_no_bullet_is_empty(
+    tmp_path: Path, kind: str
+) -> None:
+    """Known-good: a run stopped on its token budget before any audit draws
+    exactly its two packet.md items, with every fold open. Known-bad: an item
+    drawn twice (the band's list and its row's list), or an empty bullet."""
+    got, repo, _branch = page(tmp_path, kind, "not-proven")
+    expected = _report_items(repo, "Not proven")
+    if kind == "budget":
+        assert expected == [
+            "No auditor verdict: the suite, changed-line coverage and mutation were not "
+            "checked by saddle.",
+            "The run stopped before finishing: token budget exhausted: ~100000 of 100000 "
+            "generated tokens spent.",
+        ]
+    assert got["notProven"]["items"] == expected
+    assert got["notProven"]["empty"] == 0
+    if kind == "budget":
+        assert got["notProven"]["cites"] == 1  # the fold still opens to its cite

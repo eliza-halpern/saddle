@@ -108,6 +108,20 @@ try {
   if (step === "read") {
     await toPacket();
     await shot("packet.png");
+  } else if (step === "not-proven") {
+    // Open every fold in the packet: an item drawn only when opened counts too.
+    await js(`document.querySelectorAll(".packet details").forEach((d) => { d.open = true; }); true`);
+    await sleep(300);
+    out.notProven = await js(`(() => {
+      const line = document.querySelector(".band-line.k-not-proven");
+      return {
+        items: [...line.querySelectorAll("li")].map((li) => li.textContent),
+        empty: [...document.querySelectorAll(".packet li")].filter((li) => !li.textContent.trim()).length,
+        cites: line.querySelectorAll(".cites button").length,
+      };
+    })()`);
+    await toPacket(".band");
+    await shot("not-proven-open.png");
   } else if (step === "mutation") {
     // Open the band's Mutation line: the English summary sits inside that fold.
     await js(`document.querySelector(".band-line.k-mutation").open = true`);
