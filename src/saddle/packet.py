@@ -131,6 +131,10 @@ class Packet:
     offer_test_edits: bool = False
     """Stopped "audit unresolved" with tests read-only on a finding a test
     closes: the card offers the same task again with test edits allowed."""
+    spend: dict[str, float] | None = None
+    """The sealed outcome's own numbers -- `elapsed_s`, `time_budget_s`,
+    `tokens`, `token_budget` -- for the card's meters; None without an
+    outcome record. The Cost row says the same in words."""
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -156,6 +160,7 @@ class Packet:
             "records": self.records,
             "test_edits": self.test_edits,
             "offer_test_edits": self.offer_test_edits,
+            "spend": self.spend,
         }
 
 
@@ -483,6 +488,27 @@ def _spend(evidence: dict[str, Any]) -> _Spend | None:
         True,
         "Token counts are estimates (characters / 4): the server reported no usage.",
     )
+
+
+def _meters(evidence: dict[str, Any]) -> dict[str, float] | None:
+    """The outcome sidecar's time and token numbers, for the card's meters.
+
+    Only fields the sidecar holds as numbers; a sidecar with no elapsed time
+    gives None, so a card never shows a sealed 0 that was not sealed.
+    """
+    tokens = evidence.get("tokens_spent", evidence.get("tokens_spent_estimate"))
+    fields = {
+        "elapsed_s": evidence.get("elapsed_s"),
+        "time_budget_s": evidence.get("time_budget_s"),
+        "tokens": tokens,
+        "token_budget": evidence.get("token_budget"),
+    }
+    numbers = {
+        k: float(v)
+        for k, v in fields.items()
+        if isinstance(v, int | float) and not isinstance(v, bool)
+    }
+    return numbers if "elapsed_s" in numbers else None
 
 
 def _unresolved(evidence: dict[str, Any]) -> list[str]:
@@ -1036,6 +1062,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         narrative=sentences,
         test_edits=test_edits,
         offer_test_edits=offer_test_edits,
+        spend=_meters(evidence) if evidence is not None else None,
         records={
             h: _display(e)
             for h in cited

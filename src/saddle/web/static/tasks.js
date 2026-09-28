@@ -106,7 +106,8 @@ function taskCard(runId, task, turnNode) {
 
   (turnNode || state.turnNode || $("#transcript")).appendChild(node);
   const card = {
-    runId, task, node, pill, stop, testsChip, time, tokens, now, log, logSummary, lines, ask, packet,
+    runId, task, node, pill, stop, testsChip, time, tokens, meters, now, log, logSummary, lines, ask,
+    packet,
     state: "running", elapsed: 0, elapsedAt: Date.now(), timeBudget: 0, tokenBudget: 0,
     spent: 0, timer: 0, count: 0,
     phase: "starting", round: 1, lastEventAt: Date.now(), ageTimer: 0,
@@ -130,7 +131,6 @@ function paintState(card) {
   card.pill.appendChild(el("b", null, look.glyph));
   card.pill.appendChild(document.createTextNode(` ${look.word}`));
   card.stop.hidden = ENDED.has(card.state) || card.state === "loading";
-  card.meters = card.meters || null;
   tick(card);
   clearInterval(card.timer);
   if (card.state === "running") card.timer = setInterval(() => tick(card), 1000);
@@ -320,6 +320,7 @@ function renderPacket(card, packet) {
   if (packet.task) verdict.appendChild(el("p", "verdict-task", packet.task));
   verdict.appendChild(el("p", "verdict-text", packet.verdict_text));
   paintTests(card, packet.test_edits);
+  paintSpend(card, packet.spend);
   if (packet.offer_test_edits) verdict.appendChild(testEditOffer(card, packet));
   if (packet.header.length) {
     const meta = el("div", "verdict-meta");
@@ -365,6 +366,20 @@ function renderPacket(card, packet) {
   box.appendChild(details);
   // Reading the packet is the point now; the session is one click away.
   if (card.count) card.log.open = false;
+}
+
+/* An ended run's meters show what its outcome sealed -- the numbers the
+   packet's Cost row gives in words -- whether the card watched the run or
+   was drawn from its recap after a reload. */
+function paintSpend(card, spend) {
+  if (!spend || typeof spend.elapsed_s !== "number") return;
+  card.elapsed = spend.elapsed_s;
+  card.elapsedAt = Date.now();
+  if (typeof spend.tokens === "number") card.spent = spend.tokens;
+  if (spend.time_budget_s) card.timeBudget = spend.time_budget_s;
+  if (spend.token_budget) card.tokenBudget = spend.token_budget;
+  card.meters.hidden = false;
+  tick(card);
 }
 
 /* ---------- the packet's first screen ---------- */
@@ -683,10 +698,18 @@ function handleTask(event) {
       if (event.time_budget_s) card.timeBudget = event.time_budget_s;
       if (event.token_budget) card.tokenBudget = event.token_budget;
       paintTests(card, event.test_edits);
-      if (was === "running" && event.state !== "running") {
-        card.elapsed += (Date.now() - card.elapsedAt) / 1000;
+      if (typeof event.elapsed_s === "number") {
+        // The run's own budget says what it has spent (#114): a card built
+        // after a reload starts here, not at zero.
+        card.elapsed = event.elapsed_s;
+        card.elapsedAt = Date.now();
+      } else {
+        if (was === "running" && event.state !== "running") {
+          card.elapsed += (Date.now() - card.elapsedAt) / 1000;
+        }
+        if (event.state === "running" && was !== "running") card.elapsedAt = Date.now();
       }
-      if (event.state === "running" && was !== "running") card.elapsedAt = Date.now();
+      if (typeof event.tokens === "number") card.spent = event.tokens;
       card.state = event.state;
       card.lastEventAt = Date.now();
       paintState(card);
@@ -724,11 +747,12 @@ function handleTask(event) {
       const inner = event.event || {};
       card.lastEventAt = Date.now();
       if (inner.kind === "run.progress") {
-        card.elapsed = inner.elapsed_s;
-        card.elapsedAt = Date.now();
-        card.spent = inner.tokens;
-        card.timeBudget = inner.time_budget_s;
-        card.tokenBudget = inner.token_budget;
+        // Once a reply today; more often if the engine reports mid-reply.
+        // Same shape either way: each one is the run's total so far.
+        if (typeof inner.elapsed_s === "number") { card.elapsed = inner.elapsed_s; card.elapsedAt = Date.now(); }
+        if (typeof inner.tokens === "number") card.spent = inner.tokens;
+        if (inner.time_budget_s) card.timeBudget = inner.time_budget_s;
+        if (inner.token_budget) card.tokenBudget = inner.token_budget;
         tick(card);
       }
       paintNow(card);
@@ -765,7 +789,7 @@ function recapCard(turn, content) {
   const card = taskCard(runId, task, turn);
   card.state = "loading";
   card.log.hidden = true;
-  card.node.querySelector(".task-meters").hidden = true;
+  card.meters.hidden = true;  // until the packet says what the run spent
   paintState(card);
   loadPacket(card).then(() => {
     const verdict = card.packet.querySelector(".verdict");

@@ -284,11 +284,15 @@ def run_auto(
     audit: Callable[[str, str, str], Sequence[Event]] | None = None,
     answer: Callable[[Question], str | None] | None = None,
     cancel: Callable[[], bool] | None = None,
+    on_budget: Callable[[RunBudget], None] | None = None,
 ) -> AutoResult:
     """Run one task to `finish` or a budget, then commit what it left.
 
     `audit` and `answer` are the auditor seam (`engine.AutoRun`); `cancel`
-    is the chat's stop button. The CLI passes none of them.
+    is the chat's stop button; `on_budget` is handed the run's own
+    `RunBudget` -- the object the engine charges -- once it exists, so a
+    watcher reads spend from the run's accounting rather than keeping its
+    own clock. The CLI passes none of them.
     """
     if options.arm not in ARMS:
         msg = f"unknown arm {options.arm!r}; expected one of {', '.join(ARMS)}"
@@ -372,6 +376,8 @@ def run_auto(
         answer=answer,
         check_tool=options.check_tool,
     )
+    if on_budget is not None:
+        on_budget(auto.budget)
     roots = None if options.allow_test_edits else guarded_test_roots(worktree)
     tests = (
         "You may edit tests."

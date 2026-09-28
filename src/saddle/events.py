@@ -247,6 +247,12 @@ class TaskState(Event):
     question: dict[str, Any] | None = None
     test_edits: bool = False
     """Whether this run may edit test files (`allow_test_edits`)."""
+    elapsed_s: float | None = None
+    """Time the run has spent, from its own budget (`engine.RunBudget`):
+    time waiting on the user's answer is not in it. None before the run has
+    a budget. A card rebuilt from this snapshot starts its meter here."""
+    tokens: int | None = None
+    """Generated tokens the run has spent, from the same budget."""
     kind: str = "task.state"
 
 
