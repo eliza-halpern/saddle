@@ -48,6 +48,23 @@ It looks in this order:
    venv without them stops before it starts with a setup error naming them. The
    run's start record seals the environment, and the packet's Tests row ends
    "Tests ran on the project's virtualenv ...".
+
+   **Approved installs** (`--allow-installs`, #113). A Task run started with it
+   offers the model an `install` tool. Each request is a question on the task card,
+   Install or Refuse; a run nobody can answer takes Refuse, sealed as unanswered.
+   Installs come only from your wheel folder (`--wheel-dir`, else
+   `SADDLE_WHEEL_DIR`, else `~/.local/share/saddle/wheels`), with pip's
+   `--no-index --find-links --only-binary=:all:` inside `bwrap` with no network.
+   They go into an overlay of the run's own, `.saddle/runs/<run-id>/overlay`: a venv
+   of the project's interpreter whose `.pth` adds the project venv's site-packages
+   (`installs.Installs`). From the first approved install on, the gates and the
+   model's commands run on the overlay, which the sandbox shows read-only together
+   with the project venv it layers on; the Tests row then says how many approved
+   installs were layered on. The project venv is never written, and the overlay is
+   removed when the run ends, so install what the change needs into your project
+   venv yourself before merging. A request for a package with no wheel in the folder
+   is refused as missing without asking; a run with installs allowed does not start
+   without a project venv, or with a wheel folder that is missing or holds no wheels.
 2. **The first `python` on your PATH.**
 3. **A `python3` on your PATH, when there is no `python`** (Ubuntu without
    python-is-python3), used only if it imports `pytest`, `coverage` and `mutmut`
@@ -304,7 +321,7 @@ on the lane:
 |---|---|---|
 | Isolation | `bwrap`, required: if it is missing or cannot start, the run refuses to begin | `bwrap` when it starts; otherwise the command runs as you, and the sandbox says `isolation: none` rather than pretending |
 | Filesystem | system directories, the interpreter and the project's virtualenv, read-only; an empty HOME (except a system `python3`'s user site-packages, read-only) and /tmp; the worktree is the one writable place, and its `.git` is read-only | the same, under `bwrap` |
-| Network | none (loopback only): saddle talks to the model itself, so no command needs it | the host network |
+| Network | none (loopback only): saddle talks to the model itself, so no command needs it; an approved install (`--allow-installs`) has none either | the host network |
 | Environment | an allowlist, not your shell's variables | the same allowlist |
 | Git | `.git` is read-only to commands, so a command cannot commit or plant a hook; saddle commits the run itself, with hooks and `core.fsmonitor` switched off | read-only under `bwrap`; without it, only saddle's own git calls are guarded |
 

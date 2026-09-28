@@ -301,6 +301,24 @@ def gate_environment() -> str:
     return said.replace(";", "%3B")
 
 
+def environment_key() -> str:
+    """What the gates' environment holds, for the auditor's cache key.
+
+    `gate_environment`'s words, plus, when a project venv is in use, the
+    names in its site-packages and in those of every venv it layers on. An
+    approved install (`installs`) adds a `.dist-info` there, so a verdict
+    cached before it is not reused after it on an unchanged tree."""
+    parts = [gate_environment()]
+    env = _PROJECT_ENV.get()
+    seen: set[Path] = set()
+    while env is not None and env not in seen:
+        seen.add(env)
+        for site in sorted(env.glob("lib/python*/site-packages")):
+            parts.append(f"{site}: {' '.join(sorted(p.name for p in site.iterdir()))}")
+        env = layers_on(env)
+    return "\n".join(parts)
+
+
 def gate_env() -> dict[str, str]:
     """saddle's own environment with `gate_path` as PATH, for the gate tool
     runs that are not confined (`ruff`, the version probe)."""
@@ -359,6 +377,25 @@ def _base_prefix(venv: Path) -> Path | None:
     return None
 
 
+LAYERS_ON: Final = "saddle-layers-on"
+"""The `pyvenv.cfg` key of a run's install overlay (`installs.Installs`): the
+project venv it layers on, whose site-packages its own `.pth` adds."""
+
+
+def layers_on(venv: Path) -> Path | None:
+    """The venv `venv` layers on (its `LAYERS_ON` key), when that is a venv."""
+    try:
+        text = (venv / "pyvenv.cfg").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == LAYERS_ON and value.strip():
+            under = Path(value.strip())
+            return under.resolve() if (under / "pyvenv.cfg").is_file() else None
+    return None
+
+
 def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
     """Read-only `(source, destination)` binds for the gate tools `env` finds.
 
@@ -366,7 +403,8 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
     the interpreter that venv was made from, and the tool's own PATH entry
     when that is a link into the venv; and, for a `python` or `python3`
     that is no venv's, that interpreter's user site-packages
-    (`user_site`). Nothing else under HOME: a sibling of the venv, the rest
+    (`user_site`); and, for a run's install overlay, the venv it layers
+    on (`layers_on`). Nothing else under HOME: a sibling of the venv, the rest
     of `~/.local` and `~/.local/bin`, and dotfiles all stay hidden."""
     binds: dict[Path, Path] = {}
     venvs: list[Path] = []
@@ -395,10 +433,15 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
         if not (venv / "pyvenv.cfg").is_file():
             continue
         real = venv.resolve()
+        if real in binds:
+            continue
         binds[real] = real
         base = _base_prefix(real)
         if base is not None:
             binds[base] = base
+        under = layers_on(real)
+        if under is not None:
+            venvs.append(under)  # an overlay's packages include the project venv's
     return tuple((source, dest) for dest, source in sorted(binds.items()) if not _is_system(dest))
 
 

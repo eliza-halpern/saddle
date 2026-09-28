@@ -717,6 +717,15 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     if start is not None and (environment := start_field(start.detail, "environment")):
         ran_on = f". Tests ran on {environment.replace('%3B', ';')}."
         on_cite = (start.record_hash,)
+        # An approved install (`installs`) layers the run's own environment on
+        # that one; the tests that ran after it ran there, so the row says so.
+        installed = [s for s in tools if s.argv and s.argv[0] == "install" and s.exit_code == 0]
+        if installed:
+            ran_on = (
+                f"{ran_on[:-1]}, with {len(installed)} approved install(s) layered on it "
+                "for the tests after them."
+            )
+            on_cite = (*on_cite, *(s.record_hash for s in installed))
     if test_audits:
         last = test_audits[-1]
         rows.append(

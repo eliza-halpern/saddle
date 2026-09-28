@@ -54,7 +54,7 @@ from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal
 
-from saddle import coverage_text, runner
+from saddle import coverage_text, runner, sandbox
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     AuditError,
@@ -666,6 +666,7 @@ class Auditor:
                 self.config.test_command,
                 self.node.model_dump_json(),
                 gate_surface(),
+                sandbox.environment_key(),
                 *(
                     ["shortlist", self.config.mutant_shortlist]
                     if self.config.tier2 == "shortlist"

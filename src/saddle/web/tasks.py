@@ -46,6 +46,7 @@ from saddle.events import (
 )
 from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
+from saddle.installs import WheelFolder
 from saddle.journal import SpanRecord, append_span, build_span, read_entries, read_spans
 from saddle.memory import is_test_command
 from saddle.packet import compile_packet, render_packet_text
@@ -363,6 +364,7 @@ def execute(
     feed_auditor: FeedAuditorFactory = default_auditor,
     allow_test_edits: bool = False,
     keep_reasoning: bool = True,
+    wheels: WheelFolder | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run the task to its end; return its ledger verdict and the recap message.
 
@@ -432,6 +434,7 @@ def execute(
         auditor_factory=feed_auditor,
         allow_test_edits=allow_test_edits,
         keep_reasoning=keep_reasoning,
+        wheels=wheels,
     )
     try:
         run_auto(

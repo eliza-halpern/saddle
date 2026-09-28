@@ -217,6 +217,27 @@ CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
     [],
 )
 
+INSTALL_TOOL: Final = "install"
+"""The model's request for a package (`saddle auto --allow-installs`, `installs`).
+
+Like `finish`, the engine handles it, and it is offered only when the run
+was started with installs allowed; without that the name is not in the
+tool list. The user approves or refuses every call."""
+
+INSTALL_SCHEMA: Final[dict[str, Any]] = _tool(
+    INSTALL_TOOL,
+    "Ask the user to install Python packages this task needs into this run's own "
+    "environment, from the user's local wheel folder (there is no network). The user "
+    "approves or refuses each request. Give plain requirements, a name and an optional "
+    "version such as pkg==1.2, and say why the task needs them. A package with no wheel "
+    "in the folder is refused as missing.",
+    {
+        "packages": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"},
+    },
+    ["packages", "reason"],
+)
+
 REFUSED: Final = "error: refused by the tier-0 guard: "
 """Prefix of a result the tier-0 guard produced. Still an "error: " result,
 so the model reads it the way it reads every other failure; the engine
