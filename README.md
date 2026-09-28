@@ -67,19 +67,55 @@ Phase 2 adds:
   - `cli.py` — command-line interface.
 - `transcript.py`, `timeline.py`, `ux.py`, `tools.py`, `chat.py` — reporting and CLI support (`chat.py` present; see #23).
 
-## Quickstart
+## Install and first run
 
-The CLI as built (`cli.build_parser`; every command and flag in docs/CLI.md): `saddle doctor`, `saddle dag`, `saddle run`, `saddle auto`, `saddle audit`, `saddle tail`, `saddle verify`, `saddle explain`, `saddle chat` (alias `saddle web`), `saddle up`. Configure the vLLM API key via `SADDLE_VLLM_API_KEY` or `VLLM_API_KEY`. Run the suite with:
+Check the Requirements below first: saddle needs a model server you run yourself, and
+Linux with a working `bwrap`.
+
 ```bash
-PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m pytest -q
+uv tool install saddle-harness      # or: pipx install saddle-harness
 ```
+
+This puts one command, `saddle`, on your PATH. The tools the auditor runs (`pytest`,
+`coverage`, `ruff`, `mutmut`) are installed with it.
+
+Give saddle your server's API key. Either export `SADDLE_VLLM_API_KEY`, or put it in
+`~/.config/saddle/env`, which saddle reads by itself:
+
+```bash
+mkdir -p ~/.config/saddle
+printf 'SADDLE_VLLM_API_KEY=%s\n' 'your-key' > ~/.config/saddle/env
+chmod 600 ~/.config/saddle/env
+```
+
+Check that saddle can reach the server, then start the chat:
+
+```bash
+saddle doctor     # server reachable, key accepted, model served
+saddle chat       # opens http://127.0.0.1:8777/ in your browser
+```
+
+The default server is `http://127.0.0.1:18020/v1` serving the model id `qwen3.8-27b`.
+For any other server, pass `--base-url` and `--model` to each command (#119).
+
+If the project you point saddle at has tests that import third-party packages, give it
+its own virtualenv and activate it before starting saddle. The auditor runs the tests
+with the first `python` on your PATH, and falls back to saddle's own interpreter, which
+has none of your project's packages (#113).
+
+[docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
+evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle
+doctor`, `dag`, `run`, `auto`, `audit`, `tail`, `verify`, `explain`, `chat` (alias
+`web`) and `up`.
+
+To work on saddle itself, see [CONTRIBUTING.md](CONTRIBUTING.md#start-here).
 
 ## Requirements
 
 - Python 3.12+
 - Self-operated vLLM ≥ 0.28 server with guided decoding (XGrammar) + KV offloading —
   the proven setup is [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)
-- pytest, coverage.py, ruff, mutmut (sampled per node in Tier 1; the merge-time Tier 2 is not built)
+- pytest, coverage.py, ruff, mutmut: installed with saddle since 0.1.1; a copy on your PATH wins
 - Linux with `bwrap` (bubblewrap) that can start: Task runs refuse to run without it.
   On Ubuntu 24.04 unprivileged user namespaces are restricted by AppArmor, so `bwrap`
   needs the upstream `bwrap-userns-restrict` profile or an equivalent.

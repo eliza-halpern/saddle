@@ -19,23 +19,34 @@ Related: [AUDIT-TIERS.md](AUDIT-TIERS.md) (what each check proves) and
 
 ## 1. Install
 
-You need Python 3.12 or newer, git, and an OpenAI-compatible model server. Saddle is
-built for vLLM serving `qwen3.8-27b` (see README, Requirements).
+You need Python 3.12 or newer, git, Linux with a working `bwrap`, and an
+OpenAI-compatible model server. Saddle is built for vLLM serving `qwen3.8-27b` (see
+README, Requirements).
 
 ```bash
-git clone https://github.com/eliza-halpern/saddle.git && cd saddle
-uv sync                      # runtime deps plus the `dev` dependency group
-export SADDLE_VLLM_API_KEY=...   # or put it in ~/.config/saddle/env
+uv tool install saddle-harness      # or: pipx install saddle-harness
+saddle doctor                       # server reachable, key accepted, model served
 ```
 
-The auditor runs `pytest`, `coverage`, `ruff` and `mutmut` by bare name, so the venv
-must be on `PATH` when saddle runs: `export PATH="$PWD/.venv/bin:$PATH"`. `mutmut`,
-`pytest` and `ruff` are dev-group dependencies, not runtime ones. The repository you
-point saddle at must be a git repository whose tests run with `python -m pytest -q`.
+The key comes from `SADDLE_VLLM_API_KEY` (or `VLLM_API_KEY`) in the environment, or
+from a line `SADDLE_VLLM_API_KEY=...` in `~/.config/saddle/env`, which saddle reads
+itself (`saddle.cli._api_key`). Every command that talks to the model refuses to start
+without one.
+
+The auditor runs `python`, `pytest`, `coverage`, `ruff` and `mutmut` by bare name. Each
+is taken from your PATH when it is there, and otherwise from beside saddle's own
+interpreter (`sandbox.gate_path`); since 0.1.1 all of them are installed with saddle.
+The `python` found first is the one the tests run on, so a project whose tests import
+third-party packages needs its own virtualenv, activated before you start saddle. `saddle
+audit` reports a tool found in neither place as a setup error (exit 2), not a refusal. The repository
+you point saddle at must be a git repository whose tests run with `python -m pytest -q`.
 
 The default server is `http://127.0.0.1:18020/v1` with model `qwen3.8-27b`. Pass
-`--base-url` and `--model` to use another one. Every command that talks to the model
-refuses to start without an API key (`saddle.cli._api_key`).
+`--base-url` and `--model` to use another one.
+
+To run saddle from a checkout instead (to work on it), follow
+[CONTRIBUTING.md](../CONTRIBUTING.md#start-here): `uv sync --frozen`, then run with
+the checkout's `.venv/bin` on PATH.
 
 ## 2. Start the chat
 
