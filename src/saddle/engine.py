@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import mimetypes
+import queue
 import re
+import threading
 from collections.abc import Callable, Generator, Iterator, Sequence
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import monotonic, perf_counter
@@ -253,6 +257,24 @@ BUDGET_ASK_AT: Final = 0.8
 """The share of the time or token budget spent at which a running run asks,
 once, whether to extend it by the same amount again."""
 
+CUT_AT_MARK: Final = "reply cut at 80% of the token budget for the budget question"
+CUT_AT_LIMIT: Final = "reply cut at the token limit"
+CUT_AT_TIME: Final = "reply cancelled at the time limit"
+"""How a reply that did not end by itself is named in its `auto:spend`
+record (`cut`) and, for the time limit, in the stop reason."""
+
+CUT_NUDGE: Final = (
+    "Your last reply was cut off at a token limit before it called a tool. " + AUTO_NUDGE
+)
+"""What the model is told after a reply cut at the 80% mark: the cut is the
+harness's, so the round does not count toward `EMPTY_ROUND_CAP`."""
+
+STREAM_POLL_S: Final = 1.0
+"""How often, in real seconds, a run looks up from a streaming reply, whether
+or not the reply has sent anything: to cancel it at the time limit, to ask
+the time budget's question, and to report the reply's tokens so far. A reply
+in flight is cancelled at most this long after the time budget runs out."""
+
 _CITE: Final = re.compile(r"[\w./-]+\.\w+:\d+")
 
 
@@ -462,21 +484,107 @@ class TurnOptions:
         return max(int(room / INPUT_SAFETY) - self.tool_tokens(), MIN_OUTPUT)
 
 
-def _stream(
+def _reply_cap(
     client: VllmClient, messages: list[dict[str, Any]], options: TurnOptions
-) -> Iterator[tuple[str, Any]]:
-    """Yield ('reasoning'|'content', text), ('call', ToolCall) or ('usage', StreamUsage)."""
+) -> tuple[int, str]:
+    """The reply's `max_tokens`, and the cut it names if the reply reaches it.
+
+    In a run the cap is also what the token budget has left, so no reply can
+    spend past it (`CUT_AT_LIMIT`); and while the budget question has not
+    been put, what is left before the 80% mark (`CUT_AT_MARK`), so a reply
+    that would carry the run past the mark stops there and the question is
+    asked before the next round. The server counts these tokens itself, so
+    the mark holds exactly, which a count of streamed text could not. The
+    cut is "" when the context window, not a budget, set the cap.
+    """
     cap = options.budget(messages, getattr(client, "count_tokens", None))
-    if options.auto is not None:
-        cap = max(min(cap, options.auto.budget.remaining_tokens()), 1)
-    for event in client.stream_chat(
-        messages,
-        max_tokens=cap,
-        temperature=options.temperature,
-        reasoning_effort=options.reasoning_effort,
-        tools=options.tools,
-    ):
-        if isinstance(event, ToolCall):
+    auto = options.auto
+    if auto is None:
+        return cap, ""
+    budget = auto.budget
+    room, cut = budget.remaining_tokens(), CUT_AT_LIMIT
+    to_mark = math.ceil(budget.tokens * BUDGET_ASK_AT) - budget.spent_tokens
+    if "budget" not in auto.asked and 0 < to_mark < room:
+        room, cut = to_mark, CUT_AT_MARK
+    if room < cap:
+        return max(room, 1), cut
+    return cap, ""
+
+
+class _Tick:
+    """What `_pump` yields when `STREAM_POLL_S` passes."""
+
+
+_TICK: Final = _Tick()
+
+
+def _pump(source: Generator[Any, None, None]) -> Iterator[Any]:
+    """`source`'s items, read on a daemon thread, with `_TICK` every `STREAM_POLL_S`.
+
+    A stalled server sends nothing, so a loop that only wakes on items can
+    never stop it; this one wakes on the clock too. When the caller stops
+    early, the thread drops what arrives next and closes `source`, which
+    closes the HTTP stream (the server then stops generating). A reply that
+    never sends another byte holds only that daemon thread, until the
+    client's own read timeout.
+    """
+    box: queue.Queue[tuple[bool, Any]] = queue.Queue()
+    abandoned = threading.Event()
+
+    def work() -> None:
+        try:
+            for item in source:
+                if abandoned.is_set():
+                    break
+                box.put((True, item))
+            box.put((False, None))
+        except Exception as exc:  # re-raised on the caller's thread
+            box.put((False, exc))
+        finally:
+            source.close()
+
+    threading.Thread(target=work, name="saddle-reply", daemon=True).start()
+    last = perf_counter()
+    try:
+        while True:
+            now = perf_counter()
+            if now - last >= STREAM_POLL_S:
+                last = now
+                yield _TICK
+                continue
+            try:
+                more, item = box.get(timeout=STREAM_POLL_S - (now - last))
+            except queue.Empty:
+                continue
+            if more:
+                yield item
+            elif item is None:
+                return
+            else:
+                raise item
+    finally:
+        abandoned.set()
+
+
+def _stream(
+    client: VllmClient, messages: list[dict[str, Any]], options: TurnOptions, cap: int
+) -> Generator[tuple[str, Any], None, None]:
+    """Yield ('reasoning'|'content', text), ('call', ToolCall), ('usage', StreamUsage)
+    or ('tick', None) each `STREAM_POLL_S`."""
+
+    def source() -> Generator[Any, None, None]:
+        yield from client.stream_chat(
+            messages,
+            max_tokens=cap,
+            temperature=options.temperature,
+            reasoning_effort=options.reasoning_effort,
+            tools=options.tools,
+        )
+
+    for event in _pump(source()):
+        if event is _TICK:
+            yield "tick", None
+        elif isinstance(event, ToolCall):
             yield "call", event
         elif isinstance(event, StreamUsage):
             yield "usage", event
@@ -628,23 +736,38 @@ def run_turn(
             thoughts: list[str] = []
             calls: list[ToolCall] = []
             usage: StreamUsage | None = None
+            cap, cut = _reply_cap(client, messages, options)
+            timed_out = False
             sent = perf_counter()
             first: float | None = None
-            for stream, item in _stream(client, messages, options):
-                if first is None:
-                    first = perf_counter()
-                if stop():
-                    break
-                if stream == "call":
-                    calls.append(item)
-                elif stream == "usage":
-                    usage = item
-                elif stream == "reasoning":
-                    thoughts.append(item)
-                    yield ReasoningDelta(text=item)
-                else:
-                    parts.append(item)
-                    yield ContentDelta(text=item)
+            with closing(_stream(client, messages, options, cap)) as replies:
+                for stream, item in replies:
+                    if stream == "tick":
+                        if stop():
+                            break
+                        if auto is None:
+                            continue
+                        if auto.budget.elapsed() >= auto.budget.time_s:
+                            timed_out = True
+                            break
+                        # The time question, asked while the reply streams on.
+                        yield from _offer_budget(auto, options.journal, node_id)
+                        yield _progress(auto, sum(map(len, (*thoughts, *parts))))
+                        continue
+                    if first is None:
+                        first = perf_counter()
+                    if stop():
+                        break
+                    if stream == "call":
+                        calls.append(item)
+                    elif stream == "usage":
+                        usage = item
+                    elif stream == "reasoning":
+                        thoughts.append(item)
+                        yield ReasoningDelta(text=item)
+                    else:
+                        parts.append(item)
+                        yield ContentDelta(text=item)
             done = perf_counter()
             timing = _RoundTiming(
                 model_ms=int((done - sent) * 1000),
@@ -653,8 +776,20 @@ def run_turn(
             reply, reasoning = "".join(parts), "".join(thoughts)
             thinking.append(reasoning)
             if auto is not None:
-                _charge(options.journal, node_id, auto, reply, reasoning, calls, usage, timing)
+                cut = CUT_AT_TIME if timed_out else cut
+                cut = _charge(
+                    options.journal, node_id, auto, reply, reasoning, calls, usage, timing, cap, cut
+                )
                 yield _progress(auto)
+                if timed_out:
+                    rounds.append({"reply": reply, "tools": []})
+                    elapsed = auto.budget.elapsed()
+                    auto.stop(
+                        f"time budget exhausted: {elapsed:.0f}s of {auto.budget.time_s:.0f}s "
+                        f"spent; {CUT_AT_TIME}"
+                    )
+                    yield ErrorEvent(message=f"stopped: {auto.reason}")
+                    break
 
             keep = options.keep_reasoning and auto is not None and bool(reasoning)
             if not calls:
@@ -663,12 +798,15 @@ def run_turn(
                 )
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
-                    auto.empty_rounds += 1
+                    nudge = AUTO_NUDGE
+                    if cut == CUT_AT_MARK:
+                        nudge = CUT_NUDGE
+                    else:
+                        auto.empty_rounds += 1
                     if auto.empty_rounds >= EMPTY_ROUND_CAP:
                         auto.stop(EMPTY_ROUNDS.format(n=auto.empty_rounds))
                         yield ErrorEvent(message=f"stopped: {auto.reason}")
                         break
-                    nudge = AUTO_NUDGE
                     heard = auto.feed.collect() if auto.feed is not None else ""
                     if heard:
                         yield AuditNote(text=heard)
@@ -895,12 +1033,19 @@ def _assistant(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str,
     return message
 
 
-def _progress(auto: AutoRun) -> RunProgress:
+def _progress(auto: AutoRun, streamed_chars: int | None = None) -> RunProgress:
+    """The run's spend; with `streamed_chars`, including the reply still streaming.
+
+    A reply's own count arrives only when it ends, so while it streams its
+    share is estimated from its text (`CHARS_PER_TOKEN`), marked `partial`.
+    """
+    partial = streamed_chars is not None
     return RunProgress(
         elapsed_s=round(auto.budget.elapsed(), 3),
         time_budget_s=auto.budget.time_s,
-        tokens=auto.budget.spent_tokens,
+        tokens=auto.budget.spent_tokens + (streamed_chars or 0) // CHARS_PER_TOKEN,
         token_budget=auto.budget.tokens,
+        partial=partial,
     )
 
 
@@ -1093,8 +1238,14 @@ def _charge(
     calls: list[ToolCall],
     usage: StreamUsage | None,
     timing: _RoundTiming | None = None,
-) -> None:
+    cap: int | None = None,
+    cut: str = "",
+) -> str:
     """Charge one round to the budget and seal the spend, naming its source.
+
+    Returns the cut the round was stopped by, or "": `CUT_AT_TIME` as given,
+    and a budget cut (`_reply_cap`) only when the round reached its `cap`
+    (`max_tokens`), which is then sealed beside it as `cut`.
 
     Also records what the round cost in time and reasoning (SPEED, F-a):
     `reasoning_tokens` is the server's count when its usage carried one,
@@ -1105,6 +1256,8 @@ def _charge(
     """
     chars = len(reply) + len(reasoning) + sum(len(c.arguments) for c in calls)
     tokens, source = auto.budget.charge(chars, usage)
+    if cut != CUT_AT_TIME and (cap is None or tokens < cap):
+        cut = ""
     if usage is not None and usage.reasoning_tokens is not None:
         reasoning_tokens, reasoning_source = usage.reasoning_tokens, "usage"
     else:
@@ -1117,6 +1270,8 @@ def _charge(
         "reasoning_source": reasoning_source,
         "model_ms": timing.model_ms if timing is not None else 0,
         "ttft_ms": timing.ttft_ms if timing is not None else 0,
+        **({"max_tokens": cap} if cap is not None else {}),
+        **({"cut": cut} if cut else {}),
     }
     append_span(
         journal,
@@ -1126,12 +1281,14 @@ def _charge(
             duration_ms=0,
             exit_code=0,
             detail=f"{tokens} generated tokens ({source}); "
-            f"{auto.budget.spent_tokens} of {auto.budget.tokens} spent",
+            f"{auto.budget.spent_tokens} of {auto.budget.tokens} spent"
+            + (f"; {cut}" if cut else ""),
             kind="agent",
             name="auto:spend",
             parent_id=auto.run_span,
         ),
     )
+    return cut
 
 
 def _hold_guarded(auto: AutoRun) -> None:
