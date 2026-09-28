@@ -416,19 +416,22 @@ function summaryBand(packet) {
       ? `${row.items.length} thing${row.items.length === 1 ? "" : "s"} this packet cannot vouch for.`
       : firstSentence(row.text);
     head.appendChild(codeSpans(el("span", "band-text"), text));
-    if (row.key === "not-proven" && row.items.length) {
+    const listed = row.key === "not-proven" && row.items.length > 0;
+    if (listed) {
       const list = el("ul", "band-items");
       for (const item of row.items) list.appendChild(el("li", null, item));
       head.appendChild(list);
     }
     line.appendChild(head);
-    line.appendChild(packetRow(row, packet));
+    // The head already lists Not proven's items; its fold adds the cites
+    // only, so each item is drawn once, as packet.md prints it once.
+    line.appendChild(packetRow(row, packet, { listed }));
     band.appendChild(line);
   });
   return band;
 }
 
-function packetRow(row, packet) {
+function packetRow(row, packet, { listed = false } = {}) {
   const item = el("div", `prow s-${row.status} k-${row.key}`);
   const label = el("div", "prow-label");
   label.appendChild(el("span", "prow-title", row.title));
@@ -439,13 +442,13 @@ function packetRow(row, packet) {
   if (row.key === "narrative") {
     body.appendChild(narrativeBlock(packet));
     body.appendChild(el("p", "prow-note", row.text));
-  } else {
+  } else if (!listed) {
     body.appendChild(codeSpans(el("p", "prow-text"), row.text));
   }
   // The row's English, compiled from the record it cites (the Mutation
   // row's mutant summary): beneath the count line, inside the row's fold.
   if (row.summary) body.appendChild(el("pre", "prow-summary", row.summary));
-  if (row.items.length) {
+  if (row.items.length && !listed) {
     const list = el("ul", "prow-items");
     for (const text of row.items) {
       const li = el("li");

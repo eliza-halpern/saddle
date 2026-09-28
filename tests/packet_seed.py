@@ -24,7 +24,8 @@ from saddle.web.tasks import RUN_REF, TaskRun, recap_message
 FIXTURES = Path(__file__).parent / "fixtures"
 
 Kind = Literal[
-    "audited", "mutated", "summarised", "unaudited", "stopped", "failed", "edit-checked"
+    "audited", "mutated", "summarised", "unaudited", "stopped", "failed", "edit-checked",
+    "budget",
 ]  # fmt: skip
 
 
@@ -88,6 +89,7 @@ def seed(
         ],
         "summarised": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
         "unaudited": [],
+        "budget": [],  # stopped on its token budget before any audit
         "stopped": [("audit:tests", 0, "2 passed"), ("audit:coverage", 1, "line 2 uncovered")],
         "failed": [("audit:tests", 1, "1 failed")],
     }[kind]
@@ -137,8 +139,11 @@ def seed(
         # The real auditor's tier-0 records (syntax, ruff, imports) on the edit.
         config = AuditorConfig(journal=journal)
         Auditor(worktree, config=config).tier0("calc.py", (worktree / "calc.py").read_text())
-    outcome = "stopped" if kind == "stopped" else "finished"
-    reason = "audit unresolved" if kind == "stopped" else "finish called"
+    outcome = "stopped" if kind in ("stopped", "budget") else "finished"
+    reason = {
+        "stopped": "audit unresolved",
+        "budget": "token budget exhausted: ~100000 of 100000 generated tokens spent",
+    }.get(kind, "finish called")
     evidence = {
         "outcome": outcome,
         "reason": reason,
