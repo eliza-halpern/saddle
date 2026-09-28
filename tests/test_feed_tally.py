@@ -56,6 +56,45 @@ def _rows(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith("  - ")]
 
 
+# The rows whose function's whole body the finding lists: the only ones for
+# which "nothing exercises" is what the record holds. The run sealed that
+# phrase on every row; on each other row the function's own changed body
+# statements are neither listed nor in a spared definition, so they ran
+# (checkpoint 1's transfer: 110, 111, 113 and 114 ran, 112 did not).
+NEVER_RAN = {
+    "checkpoint 1": {"money.py _unsupported"},
+    "checkpoint 2": {
+        "money.py _unsupported",
+        "scratch_verify.py module level",
+        *(
+            f"scratch_verify.py {f}"
+            for f in (
+                "check",
+                "expect_raises",
+                "r2_coercion",
+                "r3_rounding",
+                "r4_accounts",
+                "r5_fees",
+                "r6_report",
+                "r7_store",
+                "misc",
+            )
+        ),
+    },
+}
+
+
+def _as_now(name: str, sealed: str) -> list[str]:
+    """The sealed rows with the phrase the renderer now writes: a function
+    that ran is one "no test reaches these lines of"."""
+    return [
+        row
+        if row[4:].split(":")[0] in NEVER_RAN[name]
+        else row.replace("-- nothing exercises ", "-- no test reaches these lines of ", 1)
+        for row in _rows(sealed)
+    ]
+
+
 @pytest.mark.parametrize("name", ["checkpoint 1", "checkpoint 2"])
 def test_the_fixture_renders_the_rows_the_run_sealed(
     name: str, monkeypatch: pytest.MonkeyPatch
@@ -64,7 +103,8 @@ def test_the_fixture_renders_the_rows_the_run_sealed(
     result, data = _checkpoint(name, monkeypatch)
     sealed = data["sealed_coverage_text"]
     assert result.coverage.splitlines()[0] == sealed.splitlines()[0]
-    assert _rows(result.coverage) == _rows(sealed)
+    assert _rows(result.coverage) == _as_now(name, sealed)
+    assert sum("-- nothing exercises " in r for r in _rows(result.coverage)) == len(NEVER_RAN[name])
     assert len(_rows(sealed)) > 7
 
 
@@ -86,7 +126,7 @@ def test_checkpoint_1_still_leads_with_its_heading_and_first_rows(
     result, data = _checkpoint("checkpoint 1", monkeypatch)
     shown = feed._worded(result, _coverage(result))
     assert shown.startswith(data["sealed_coverage_text"].splitlines()[0] + "\n")
-    for row in _rows(data["sealed_coverage_text"])[:4]:
+    for row in _as_now("checkpoint 1", data["sealed_coverage_text"])[:4]:
         assert row in shown
     assert "scratch" not in shown
 
@@ -129,7 +169,7 @@ def test_checkpoint_2_reads_the_tally_under_its_heading_largest_first(
     heading, tally, first_row = shown.splitlines()[:3]
     assert heading == data["sealed_coverage_text"].splitlines()[0]
     assert tally == CP2_TALLY
-    assert first_row == _rows(data["sealed_coverage_text"])[0]
+    assert first_row == _as_now("checkpoint 2", data["sealed_coverage_text"])[0]
 
 
 def test_checkpoint_1_reads_the_same_tally_without_the_scratch_file(

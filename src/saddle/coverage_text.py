@@ -12,9 +12,15 @@ The heading is "Not proven by any test", never a failure: under the
 shortlist design coverage is a locator whose verdict reads "not proven"
 (PREREG addendum-EAFS §S3). This module changes no gate.
 
-A line outside every function is "module level". The phrase after
-"nothing exercises" is the function's name, plus its docstring's first line
-quoted when it has one; no other prose is written about the code. Where
+A line outside every function is "module level". A row says "nothing
+exercises <function>" only when the finding lists every statement of that
+function's body (`evidence.statement_lines`, the gate's own reading) as
+never run, which is what the record holds for a function no test entered.
+Otherwise some statement of it may have run -- a test that runs 27 of its
+30 lines is not "not exercised" -- and the row says "no test reaches these
+lines of <function>". Either way the function is its name, plus its
+docstring's first line quoted when it has one; no other prose is written
+about the code. Where
 `mutant_text` recorded a surviving behaviour mutant in the same file and
 function, the line says so; nothing else links the two rows.
 """
@@ -26,6 +32,7 @@ import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
+from saddle.evidence import statement_lines
 from saddle.mutant_text import MutationSummary
 
 MODULE_LEVEL = "module level"
@@ -47,6 +54,7 @@ class _Scope:
     first: int
     last: int
     doc: str | None
+    body: int
 
 
 def _scopes(source: str) -> list[_Scope]:
@@ -60,7 +68,15 @@ def _scopes(source: str) -> list[_Scope]:
                     first = min([child.lineno] + [d.lineno for d in child.decorator_list])
                     doc = ast.get_docstring(child)
                     head = doc.strip().splitlines()[0].strip() if doc and doc.strip() else None
-                    out.append(_Scope(name, first, child.end_lineno or child.lineno, head))
+                    out.append(
+                        _Scope(
+                            name,
+                            first,
+                            child.end_lineno or child.lineno,
+                            head,
+                            child.body[0].lineno,
+                        )
+                    )
                 visit(child, f"{name}.")
 
     visit(ast.parse(source), "")
@@ -99,6 +115,9 @@ class FunctionGap:
     # function was placed in: only the lines the gate judged, never the
     # whole function. Empty for a file the tree did not hold.
     text: tuple[tuple[int, str], ...] = ()
+    # The finding lists every statement of the function's body as never run:
+    # the one case "nothing exercises <function>" is what the record holds.
+    never_ran: bool = False
 
 
 @dataclass(frozen=True)
@@ -139,8 +158,18 @@ def describe_coverage(
         grouped.setdefault(key, []).append(line)
         docs[key] = scope.doc if scope else None
         spans[key] = scope
+    listed: dict[str, set[int]] = {}
+    for file, line in lines:
+        listed.setdefault(file, set()).add(line)
+    statements = {f: statement_lines(sources[f]) for f in parsed}
     gaps = []
     for (file, func), nums in grouped.items():
+        span = spans[(file, func)]
+        body = (
+            {n for n in statements[file] if span.body <= n <= span.last}
+            if span is not None
+            else set()
+        )
         source_lines = sources[file].splitlines()
         text = tuple((n, source_lines[n - 1].rstrip()) for n in nums if 1 <= n <= len(source_lines))
         count = None
@@ -164,6 +193,7 @@ def describe_coverage(
                 count,
                 (file, func) in survived,
                 text,
+                bool(body) and body <= listed[file],
             )
         )
     raw = finding.get("cites")
@@ -177,15 +207,22 @@ def describe_coverage(
 
 
 def gap_sentence(g: FunctionGap) -> str:
-    """`<file> <function>: N of M changed lines never run -- nothing exercises <phrase> [lines]`."""
+    """`<file> <function>: N of M changed lines never run -- <what> [lines]`.
+
+    <what> is "nothing exercises <phrase>" for module-level lines and for a
+    function whose whole body the finding lists (`FunctionGap.never_ran`);
+    for any other function it is "no test reaches these lines of <phrase>".
+    """
     n = len(g.uncovered)
     count = f"{n} of {g.changed} changed lines" if g.changed is not None else f"{n} changed lines"
     tail = "; and a mutant there survived" if g.mutant_survived else ""
     nums = ", ".join(str(x) for x in g.uncovered)
-    return (
-        f"{g.file} {g.function}: {count} never run -- nothing exercises "
-        f"{phrase(g.function, g.doc)}{tail} [lines {nums}]"
-    )
+    named = phrase(g.function, g.doc)
+    if g.never_ran or g.function == MODULE_LEVEL:
+        what = f"nothing exercises {named}"
+    else:
+        what = f"no test reaches these lines of {named}"
+    return f"{g.file} {g.function}: {count} never run -- {what}{tail} [lines {nums}]"
 
 
 def line_text(g: FunctionGap) -> list[str]:

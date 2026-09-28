@@ -775,7 +775,8 @@ def test_a_failing_coverage_finding_with_sealed_sources_renders_its_english_unde
         "changed-lines=155 compelled-lines=5]\n"
     )
     assert (
-        "  - money.py convert: 10 of 16 changed lines never run -- nothing exercises convert "
+        "  - money.py convert: 10 of 16 changed lines never run -- no test reaches these "
+        "lines of convert "
         '("Convert a Decimal amount from source to target."); and a mutant there survived '
         "[lines 131, 132, 133, 134, 136, 137, 138, 139, 140, 141]\n"
         '      131:     if source == "USD":\n'
