@@ -64,6 +64,9 @@ testpaths = ["tests"]
 # arm workdirs, never collected here.
 norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist",
                  "node_modules", "venv", "{arch}", "benchmark/tasks", "mutants"]
+markers = [
+    "packaging: builds the sdist or wheel and inspects or installs it (tests/test_packaging.py)",
+]
 addopts = "--cov=saddle --cov-report=term-missing --cov-fail-under=100"
 
 [tool.coverage.run]

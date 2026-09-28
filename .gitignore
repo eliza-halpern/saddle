@@ -20,7 +20,6 @@ dist/
 # Harness runtime (proof journals stay local unless curated into docs/)
 .proofs/
 *.jsonl
-!tests/fixtures/*.jsonl
-!tests/fixtures/question_run/*.jsonl
+!tests/fixtures/**/*.jsonl
 # Local, per-contributor agent notes
 CLAUDE.local.md
