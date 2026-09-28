@@ -26,7 +26,14 @@ from pathlib import Path
 from typing import Any, Final
 
 from saddle.edits import loose_spans
-from saddle.sandbox import DEFAULT_TIMEOUT, OutsideRootError, Sandbox, resolve_within
+from saddle.sandbox import (
+    DEFAULT_TIMEOUT,
+    OutsideRootError,
+    Sandbox,
+    project_command_env,
+    project_env,
+    resolve_within,
+)
 from saddle.undo import UndoLog
 from saddle.vllm import ToolCall
 
@@ -306,8 +313,14 @@ class ToolContext:
         return None
 
     def box(self) -> Sandbox:
+        """The chat lanes' sandbox on the user's folder, with the folder's own
+        virtualenv first on PATH when it has one (`sandbox.project_env`)."""
         if self.sandbox is None:
-            self.sandbox = Sandbox.for_workdir(self.workdir, on_output=self.on_output)
+            self.sandbox = Sandbox.for_workdir(
+                self.workdir,
+                on_output=self.on_output,
+                env=project_command_env(project_env(self.workdir)),
+            )
         return self.sandbox
 
 

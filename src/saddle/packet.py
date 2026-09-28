@@ -674,6 +674,13 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         for s in tools
         if s.argv and s.argv[0] == "run_command" and TEST_COMMAND.search(_command(s))
     ]
+    # The environment the gates ran the tests on, as `auto:start` sealed it
+    # (`sandbox.gate_environment`); a ledger from before that field says nothing.
+    ran_on = ""
+    on_cite: tuple[str, ...] = ()
+    if start is not None and (environment := start_field(start.detail, "environment")):
+        ran_on = f". Tests ran on {environment.replace('%3B', ';')}."
+        on_cite = (start.record_hash,)
     if test_audits:
         last = test_audits[-1]
         rows.append(
@@ -681,8 +688,10 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "tests",
                 "Tests",
                 "proven" if last.exit_code == 0 else "failed",
-                f"The auditor ran the suite: {last.detail}",
-                (last.record_hash,),
+                f"The auditor ran the suite: {last.detail.rstrip('.')}{ran_on}"
+                if ran_on
+                else f"The auditor ran the suite: {last.detail}",
+                (last.record_hash, *on_cite),
             )
         )
     elif runs:
