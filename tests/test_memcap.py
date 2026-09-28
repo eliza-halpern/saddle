@@ -31,6 +31,7 @@ from types import ModuleType
 import pytest
 
 from saddle import evidence, gates
+from saddle import sandbox as sandbox_module
 from saddle.journal import SpanRecorder, read_spans
 from saddle.sandbox import Sandbox
 
@@ -299,20 +300,7 @@ def test_the_bus_is_lent_only_when_the_command_env_lacks_it(
     assert cap.wrap(["true"], None) == ([*cap.prefix, "true"], None)
 
 
-@needs_cgroup
-def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
-    tmp_path: Path, capped: None
-) -> None:
-    # The hog is the shell's child, not the command itself, and the shell
-    # ignores the SIGTERM systemd sends the rest of the scope after the kill:
-    # it outlives the child and exits 0. The exit code stands, the reason is
-    # still recorded, and no failed scope is left behind in the user manager.
-    shell = f"trap '' TERM; {hog(512)}; echo after-the-child"
-    run = evidence.run_capture(["bash", "-c", shell], tmp_path, memory_limit=256 * MIB)
-    assert run.exit_code == 0, run.stderr
-    assert "after-the-child" in run.stdout
-    assert "allocated" not in run.stdout
-    assert "memory cap" in run.stderr
+def _no_failed_scope_left() -> None:
     left = subprocess.run(
         ["systemctl", "--user", "list-units", "--all", "--no-legend", "saddle-cmd-*"],
         capture_output=True,
@@ -320,6 +308,44 @@ def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
         check=False,
     ).stdout
     assert "failed" not in left, left
+
+
+@needs_cgroup
+def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
+    tmp_path: Path, capped: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The hog is the shell's child, not the command itself, and the shell
+    # ignores the SIGTERM systemd sends the rest of the scope after the kill:
+    # it outlives the child and exits 0. The exit code stands, the reason is
+    # still recorded, and no failed scope is left behind in the user manager.
+    # Unconfined (no working bwrap) so the shell is the scope's top process;
+    # the confined case is the next test.
+    monkeypatch.setattr(sandbox_module, "isolation_problem", lambda: "unconfined in this test")
+    shell = f"trap '' TERM; {hog(512)}; echo after-the-child"
+    run = evidence.run_capture(["bash", "-c", shell], tmp_path, memory_limit=256 * MIB)
+    assert run.exit_code == 0, run.stderr
+    assert "after-the-child" in run.stdout
+    assert "allocated" not in run.stdout
+    assert "memory cap" in run.stderr
+    _no_failed_scope_left()
+
+
+@needs_cgroup
+@pytest.mark.skipif(not HAS_BWRAP, reason="bwrap is not installed")
+def test_a_confined_command_whose_child_is_oom_killed_fails_with_the_reason(
+    tmp_path: Path, capped: None
+) -> None:
+    # Confined (#104), bwrap is the scope's top process and does not ignore
+    # the SIGTERM systemd sends after the kill, so a parent that would have
+    # outlived its child is stopped too. What this admits is recorded here:
+    # the command fails where it once exited 0, and the reason still names
+    # the cap.
+    shell = f"trap '' TERM; {hog(512)}; echo after-the-child"
+    run = evidence.run_capture(["bash", "-c", shell], tmp_path, memory_limit=256 * MIB)
+    assert run.exit_code != 0, run.stdout
+    assert "allocated" not in run.stdout
+    assert "memory cap" in run.stderr
+    _no_failed_scope_left()
 
 
 # -- every gate launch that runs the tree's code reads the configured cap -------

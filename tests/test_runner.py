@@ -1005,8 +1005,9 @@ def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
     The gate's run comes first and the oracle's second (`runner.py`
     calls `mutation_sample` in that order); every call gets a fresh
-    scratch copy, so the marker lives beside the stub: `run` sets it on
-    its second call and `results` then reports survivors; the first call
+    scratch copy, so the marker lives beside the stub. `results` keeps
+    it, not `run`: `mutmut run` executes the tree's code and runs confined
+    (#104), where the stub's own directory is read-only. The first call
     reports kills. Since the gate was scoped, both runs carry the node's declared
     scope, so the two `pyproject.toml`s no longer tell the calls apart
     (here the scope and the property target are the same file); the
@@ -1019,9 +1020,9 @@ def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     script.write_text(
         "#!/bin/sh\n"
         'case "$1" in\n'
-        '  run) d=$(dirname "$0"); if [ -f "$d/.gate-run" ]; then touch "$d/.narrowed";'
-        ' else touch "$d/.gate-run"; fi; exit 0;;\n'
-        '  results) if [ -f "$(dirname "$0")/.narrowed" ]; then v=survived; else v=killed; fi;'
+        "  run) exit 0;;\n"
+        '  results) d=$(dirname "$0"); if [ -f "$d/.gate-run" ]; then v=survived;'
+        ' else v=killed; touch "$d/.gate-run"; fi;'
         ' for i in 1 2 3 4 5; do echo "  m$i: $v"; done;;\n'
         f"  show) printf '%s' '{show}';;\n"
         "esac\n"
