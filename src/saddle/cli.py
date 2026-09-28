@@ -1505,6 +1505,17 @@ def _add_tier2(sub: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_server_flags(parser: argparse.ArgumentParser) -> None:
+    """`--base-url` and `--model`, the same on every command that talks to the server.
+
+    The default is None, not the built-in value: `resolve_setting` has to
+    tell "not given" from "given the default", so the environment and the
+    env file can fill the first and never override the second.
+    """
+    parser.add_argument("--base-url", default=None, help=f"vLLM base URL (else ${BASE_URL_ENV}).")
+    parser.add_argument("--model", default=None, help=f"Model id (else ${MODEL_ENV}).")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -1512,13 +1523,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
     doctor = sub.add_parser("doctor", help="Check the server is usable.")
-    doctor.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
-    doctor.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    _add_server_flags(doctor)
     dag = sub.add_parser("dag", help="Show the plan before it runs.")
     dag.add_argument("task", help="Task description to decompose into a plan.")
     dag.add_argument("--repo", default=".", help="Repository whose files the planner is shown.")
-    dag.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
-    dag.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    _add_server_flags(dag)
     dag.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
     dag.add_argument(
         "--context-window",
@@ -1611,8 +1620,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("task", help="Task description to decompose and execute.")
     run.add_argument("--repo", default=".", help="Directory to work in (repo created if missing).")
     run.add_argument("--journal", help="Journal path (default: REPO/.saddle/proofs.jsonl).")
-    run.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
-    run.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    _add_server_flags(run)
     run.add_argument("--max-tokens", type=int, default=8192, help="Emission max tokens.")
     run.add_argument(
         "--context-window",
@@ -1710,8 +1718,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Session store (default: ~/.saddle/sessions).",
     )
-    web.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
-    web.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    _add_server_flags(web)
     web.add_argument("--no-open", action="store_true", help="Do not open a browser.")
     web.add_argument(
         "--keep-reasoning",
@@ -1727,8 +1734,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=".saddle/chat.jsonl",
         help="Journal path (default: .saddle/chat.jsonl).",
     )
-    up.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
-    up.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    _add_server_flags(up)
     up.add_argument("--max-tokens", type=int, default=8192, help="Reply max tokens.")
     up.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     up.add_argument(
@@ -1812,8 +1818,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Offer the model a `check` tool that runs audit tiers 0 and 1 on the current "
         "tree before finish (arm E+A+F only; off by default).",
     )
-    auto.add_argument("--base-url", default=DEFAULT_BASE_URL, help="vLLM base URL.")
-    auto.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    _add_server_flags(auto)
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     auto.add_argument(
         "--reasoning-effort",
@@ -1880,17 +1885,19 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
 
 KEY_NAMES: Final = ("SADDLE_VLLM_API_KEY", "VLLM_API_KEY")
 KEY_FILE: Final = "~/.config/saddle/env"
-"""Where the key lives when it is not already exported. Read only as a
-fallback, and only for these two names -- this is not a general dotenv
-loader, and nothing else in the file is put into the environment."""
+"""Where the key, and optionally SADDLE_BASE_URL and SADDLE_MODEL, live when
+they are not already exported. Read only as a fallback, and only for those
+names -- this is not a general dotenv loader, and nothing in the file is put
+into the environment."""
 
 
-def _key_from_file(path: Path) -> str | None:
-    """Read SADDLE_VLLM_API_KEY out of a shell-style env file.
+def _value_from_file(path: Path, names: Collection[str]) -> str | None:
+    """Read the first non-empty value for one of `names` from a shell-style env file.
 
     Without this, every command needs `set -a; . ~/.config/saddle/env; set +a`
     in front of it, which is the kind of friction that ends with a key pasted
-    somewhere it should not be.
+    somewhere it should not be. Only the lines for `names` are looked at,
+    and nothing read here is put into the environment.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -1901,7 +1908,7 @@ def _key_from_file(path: Path) -> str | None:
         if stripped.startswith("export "):
             stripped = stripped[len("export ") :].lstrip()
         name, sep, value = stripped.partition("=")
-        if not sep or name.strip() not in KEY_NAMES:
+        if not sep or name.strip() not in names:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
@@ -1909,6 +1916,42 @@ def _key_from_file(path: Path) -> str | None:
         if value:
             return value
     return None
+
+
+def _key_from_file(path: Path) -> str | None:
+    """The API key from the env file, under either of `KEY_NAMES`."""
+    return _value_from_file(path, KEY_NAMES)
+
+
+BASE_URL_ENV: Final = "SADDLE_BASE_URL"
+MODEL_ENV: Final = "SADDLE_MODEL"
+
+
+@dataclass(frozen=True)
+class Setting:
+    """A resolved server setting and where it came from, for `saddle doctor`."""
+
+    value: str
+    source: str
+
+
+def resolve_setting(flag: str | None, *, option: str, env: str, default: str) -> Setting:
+    """One setting by precedence: the flag, the environment, the env file, the default.
+
+    Every command that talks to the server resolves through here, so a
+    server that is not on the defaults is named once (exported, or a line
+    in `KEY_FILE`) rather than on every command. An empty variable or line
+    counts as unset, the same as for the key.
+    """
+    if flag is not None:
+        return Setting(flag, f"from flag {option}")
+    if os.environ.get(env):
+        return Setting(os.environ[env], f"from environment {env}")
+    path = Path(KEY_FILE).expanduser()
+    from_file = _value_from_file(path, (env,))
+    if from_file:
+        return Setting(from_file, f"from file {path}")
+    return Setting(default, "built-in default")
 
 
 def _chat_workdir(given: str | None) -> Path:
@@ -1974,9 +2017,17 @@ def main(
             file=stderr or sys.stderr,
         )
         return 1
+    base_url = resolve_setting(
+        args.base_url, option="--base-url", env=BASE_URL_ENV, default=DEFAULT_BASE_URL
+    )
+    model = resolve_setting(args.model, option="--model", env=MODEL_ENV, default=DEFAULT_MODEL)
+    args.base_url, args.model = base_url.value, model.value
     if args.command == "doctor":
+        out = stdout or sys.stdout
+        out.write(f"base URL: {base_url.value} ({base_url.source})\n")
+        out.write(f"model: {model.value} ({model.source})\n")
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
-            return run_doctor(args.base_url, args.model, client, stdout=stdout or sys.stdout)
+            return run_doctor(args.base_url, args.model, client, stdout=out)
     if args.command == "dag":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             dag_options = DagOptions(

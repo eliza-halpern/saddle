@@ -99,7 +99,8 @@ saddle chat       # opens http://127.0.0.1:8777/ in your browser
 ```
 
 The default server is `http://127.0.0.1:18020/v1` serving the model id `qwen3.8-27b`.
-For any other server, pass `--base-url` and `--model` to each command (#119).
+For any other server, add `SADDLE_BASE_URL=...` and `SADDLE_MODEL=...` lines to the same
+file (or export them); `saddle doctor` prints where each value came from.
 
 If the project you point saddle at has tests that import third-party packages, give it
 its own virtualenv and activate it before starting saddle. The auditor runs the tests
@@ -134,7 +135,7 @@ not all of it. Run it only on code you would be willing to run yourself.
 It needs a model server: a local OpenAI-compatible chat-completions endpoint (vLLM with
 structured outputs; `--base-url`, default `vllm.DEFAULT_BASE_URL`,
 `http://127.0.0.1:18020/v1`). Your prompts and the files the model reads go to that
-server. Point `--base-url` somewhere else and they go there instead.
+server. Point `--base-url` (or `SADDLE_BASE_URL`) somewhere else and they go there instead.
 
 **What is confined** (`sandbox.py`, `memcap.py`):
 
