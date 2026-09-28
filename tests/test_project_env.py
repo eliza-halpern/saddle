@@ -222,6 +222,21 @@ def test_without_a_project_venv_the_start_record_names_the_gates_python(tmp_path
     assert f"environment {said}" in _start(result).detail
 
 
+def test_the_label_says_which_python_the_gates_found_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = make_venv(tmp_path / "other") / "bin"
+    monkeypatch.setenv("PATH", f"{other}{os.pathsep}/usr/bin{os.pathsep}/bin")
+    assert sandbox.gate_environment() == f"{other / 'python'} from PATH"
+    own = sandbox.tool_dir()
+    assert own is not None
+    monkeypatch.setenv("PATH", f"{own}{os.pathsep}/usr/bin{os.pathsep}/bin")
+    assert sandbox.gate_environment() == f"saddle's own interpreter {own / 'python'}"
+    monkeypatch.setattr(sandbox, "tool_dir", lambda: None)
+    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    assert sandbox.gate_environment() == "no python found"
+
+
 # -- the model's commands ------------------------------------------------------
 
 
