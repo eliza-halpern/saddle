@@ -1679,8 +1679,10 @@ def test_run_parser_defaults_and_overrides() -> None:
         "task": "Do it.",
         "repo": ".",
         "journal": None,
-        "base_url": DEFAULT_BASE_URL,
-        "model": "qwen3.8-27b",
+        # Unset at parse time; `resolve_setting` fills it from the environment,
+        # the env file or the default (test_server_settings.py).
+        "base_url": None,
+        "model": None,
         "max_tokens": 8192,
         "context_window": None,
         "temperature": 0.0,
@@ -1795,8 +1797,8 @@ def test_run_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  -h, --help            show this help message and exit\n"
         "  --repo REPO           Directory to work in (repo created if missing).\n"
         "  --journal JOURNAL     Journal path (default: REPO/.saddle/proofs.jsonl).\n"
-        "  --base-url BASE_URL   vLLM base URL.\n"
-        "  --model MODEL         Model id.\n"
+        "  --base-url BASE_URL   vLLM base URL (else $SADDLE_BASE_URL).\n"
+        "  --model MODEL         Model id (else $SADDLE_MODEL).\n"
         "  --max-tokens MAX_TOKENS\n"
         "                        Emission max tokens.\n"
         "  --context-window CONTEXT_WINDOW\n"
@@ -1852,8 +1854,8 @@ def test_doctor_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> No
         "\n"
         "options:\n"
         "  -h, --help           show this help message and exit\n"
-        "  --base-url BASE_URL  vLLM base URL.\n"
-        "  --model MODEL        Model id.\n"
+        "  --base-url BASE_URL  vLLM base URL (else $SADDLE_BASE_URL).\n"
+        "  --model MODEL        Model id (else $SADDLE_MODEL).\n"
     )
 
 
@@ -1876,7 +1878,11 @@ def test_main_doctor_passes_flags_through(
     assert _FakeClient.made[0]["api_key"] == "k"
     assert _FakeClient.made[0]["base_url"] == "http://x/v1"
     assert _FakeClient.made[0]["model"] == "m"
-    assert capsys.readouterr().out == "OK: http://x/v1 serves m (models: m)\n"
+    assert capsys.readouterr().out == (
+        "base URL: http://x/v1 (from flag --base-url)\n"
+        "model: m (from flag --model)\n"
+        "OK: http://x/v1 serves m (models: m)\n"
+    )
 
 
 def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1895,8 +1901,8 @@ def test_dag_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "options:\n"
         "  -h, --help            show this help message and exit\n"
         "  --repo REPO           Repository whose files the planner is shown.\n"
-        "  --base-url BASE_URL   vLLM base URL.\n"
-        "  --model MODEL         Model id.\n"
+        "  --base-url BASE_URL   vLLM base URL (else $SADDLE_BASE_URL).\n"
+        "  --model MODEL         Model id (else $SADDLE_MODEL).\n"
         "  --max-tokens MAX_TOKENS\n"
         "                        Emission max tokens.\n"
         "  --context-window CONTEXT_WINDOW\n"
@@ -1996,7 +2002,11 @@ def test_main_doctor_uses_defaults(
     assert _FakeClient.made[0]["base_url"] == DEFAULT_BASE_URL
     assert _FakeClient.made[0]["model"] == DEFAULT_MODEL
     out = capsys.readouterr().out
-    assert out == (f"OK: {DEFAULT_BASE_URL} serves {DEFAULT_MODEL} (models: {DEFAULT_MODEL})\n")
+    assert out == (
+        f"base URL: {DEFAULT_BASE_URL} (built-in default)\n"
+        f"model: {DEFAULT_MODEL} (built-in default)\n"
+        f"OK: {DEFAULT_BASE_URL} serves {DEFAULT_MODEL} (models: {DEFAULT_MODEL})\n"
+    )
 
 
 def _sealed_journal(path: Path) -> None:
@@ -2425,8 +2435,8 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  -h, --help            show this help message and exit\n"
         "  --workdir WORKDIR     Directory tools run in (default: .).\n"
         "  --journal JOURNAL     Journal path (default: .saddle/chat.jsonl).\n"
-        "  --base-url BASE_URL   vLLM base URL.\n"
-        "  --model MODEL         Model id.\n"
+        "  --base-url BASE_URL   vLLM base URL (else $SADDLE_BASE_URL).\n"
+        "  --model MODEL         Model id (else $SADDLE_MODEL).\n"
         "  --max-tokens MAX_TOKENS\n"
         "                        Reply max tokens.\n"
         "  --temperature TEMPERATURE\n"
@@ -2446,8 +2456,10 @@ def test_up_parser_defaults_and_overrides() -> None:
         "command": "up",
         "workdir": ".",
         "journal": ".saddle/chat.jsonl",
-        "base_url": DEFAULT_BASE_URL,
-        "model": "qwen3.8-27b",
+        # Unset at parse time; `resolve_setting` fills it from the environment,
+        # the env file or the default (test_server_settings.py).
+        "base_url": None,
+        "model": None,
         "max_tokens": 8192,
         "temperature": 0.0,
         "reasoning_effort": "medium",

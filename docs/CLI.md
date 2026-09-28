@@ -1,9 +1,37 @@
 # CLI reference: `saddle auto`, `saddle audit --tiered`, `saddle verify`
 
 This reference is taken from `saddle.cli.build_parser` and the command handlers. Run
-`saddle <command> --help` for the same text. `auto` needs an API key
-(`SADDLE_VLLM_API_KEY` or `VLLM_API_KEY`, or `~/.config/saddle/env`). `audit` and
-`verify` do not.
+`saddle <command> --help` for the same text. `auto`, like every command that talks
+to the model server, needs an API key (`SADDLE_VLLM_API_KEY` or `VLLM_API_KEY`, or
+`~/.config/saddle/env`). `audit` and `verify` do not.
+
+## Server URL and model
+
+Every command that talks to the model server (`doctor`, `dag`, `run`, `auto`, `chat`,
+`up`) resolves `--base-url` and `--model` the same way. The first of these that is set
+wins:
+
+1. the flag (`--base-url URL`, `--model ID`), even when it names the default;
+2. the environment variable (`SADDLE_BASE_URL`, `SADDLE_MODEL`); an empty one counts as unset;
+3. a line in `~/.config/saddle/env`, parsed like the key's (`NAME=value`, optional
+   `export ` and quotes);
+4. the built-in default: `http://127.0.0.1:18020/v1` and `qwen3.8-27b`.
+
+Only `SADDLE_VLLM_API_KEY`, `VLLM_API_KEY`, `SADDLE_BASE_URL` and `SADDLE_MODEL` are
+read from that file, and nothing in it is put into the environment. The chat server
+builds its model client from the resolved values, so the task runs it starts use them
+too.
+
+`saddle doctor` prints where each value came from before its verdict, and never the key:
+
+```
+base URL: http://127.0.0.1:18020/v1 (built-in default)
+model: my-model (from environment SADDLE_MODEL)
+OK: http://127.0.0.1:18020/v1 serves my-model (models: my-model)
+```
+
+The source is one of `from flag --base-url`, `from environment SADDLE_BASE_URL`,
+`from file <path>` or `built-in default` (and the same for `--model`).
 
 ## saddle auto TASK
 
@@ -24,8 +52,8 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--mutant-shortlist N` | `5` | with `--tier2 shortlist`: how many surviving mutants a refused finish names, one per changed line first |
 | `--keep-reasoning` / `--no-keep-reasoning` | on | send each round's reasoning back to the model for the rest of the run; sealed as `prompt_shape.keep_reasoning`. `saddle chat` takes the same pair for the runs it starts |
 | `--check-tool` | off | offer the model a `check` tool that runs audit tiers 0 and 1 on the current tree before finish (arm E+A+F only) |
-| `--base-url URL` | `http://127.0.0.1:18020/v1` | model server |
-| `--model ID` | `qwen3.8-27b` | model id |
+| `--base-url URL` | `$SADDLE_BASE_URL`, else `http://127.0.0.1:18020/v1` | model server (see [Server URL and model](#server-url-and-model)) |
+| `--model ID` | `$SADDLE_MODEL`, else `qwen3.8-27b` | model id |
 | `--temperature T` | `0.0` | sampling temperature |
 | `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
 

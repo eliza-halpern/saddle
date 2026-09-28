@@ -49,10 +49,16 @@ def _no_real_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     So every test reads the key from a path that cannot exist, unless it
     points KEY_FILE somewhere itself. Tests must never depend on -- or
     spend -- a real credential.
+
+    The server URL and model resolve the same way, so an exported
+    SADDLE_BASE_URL or SADDLE_MODEL on the developer's machine is cleared
+    too: a test that expects the built-in default must not see theirs.
     """
     from saddle import cli
 
     monkeypatch.setattr(cli, "KEY_FILE", "/nonexistent/saddle-test-env")
+    monkeypatch.delenv(cli.BASE_URL_ENV, raising=False)
+    monkeypatch.delenv(cli.MODEL_ENV, raising=False)
 
 
 def _replay_show_all_mutants(
