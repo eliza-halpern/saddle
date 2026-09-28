@@ -24,7 +24,7 @@ printed on passing findings too, for example `pass tests [code-wrong]`.
 |---|---|---|
 | `syntax` (`gates.check_syntax`) | code-wrong | the file parses |
 | `ruff` (`gates.check_ruff`) | code-wrong | no ruff finding *introduced* relative to the baseline copy; format check |
-| `imports` (`auditor.check_imports`, not one of the 13) | code-wrong | every absolute top-level import is stdlib, under the repo, `src/` or the file's directory, or installed in *saddle's* interpreter; relative imports are counted, not checked |
+| `imports` (`auditor.check_imports`, not one of the 13) | code-wrong | every absolute top-level import is stdlib, under the repo, `src/` or the file's directory, or installed in saddle's interpreter or in the `python` the tests run on; a root `setup.py`'s imports of its `[build-system] requires` (setuptools when there is no such table) are not looked up, since a build frontend installs them in its own environment; relative imports are counted, not checked |
 
 `saddle audit --tiered` runs all of tier 0 on every changed `.py` file. An autonomous
 run does not call `Auditor.tier0`. Its tier-0 guard is in the tools instead
