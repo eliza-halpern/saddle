@@ -332,6 +332,7 @@ def run_capture(
     timeout: float | None = None,
     memory_limit: int | None = None,
     writable: Sequence[Path] = (),
+    extra_env: Mapping[str, str] | None = None,
 ) -> CapturedRun:
     """Run `argv` in `cwd`; journal its span and return exit plus output.
 
@@ -358,13 +359,13 @@ def run_capture(
     cap = None if memory_limit is None else memcap.cap(memory_limit)
     try:
         if cap is None:
-            proc = _run_as_group(argv, cwd, timeout, sandbox.gate_env())
+            proc = _run_as_group(argv, cwd, timeout, {**sandbox.gate_env(), **(extra_env or {})})
         else:
             # A prefix would turn a missing program into its own exit status
             # (`systemd-run` exits 1, which reads as "tests failed").
             if shutil.which(argv[0], path=sandbox.gate_path(os.environ.get("PATH", ""))) is None:
                 raise FileNotFoundError(2, "No such file or directory", argv[0])
-            confined, env = sandbox.confine(argv, cwd, writable=writable)
+            confined, env = sandbox.confine(argv, cwd, writable=writable, extra_env=extra_env)
             launched, lent = cap.wrap(confined, env)
             proc = _run_as_group(launched, cwd, timeout, lent)
     except subprocess.TimeoutExpired as expired:
@@ -405,14 +406,34 @@ def run_shell_capture(
     timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
 ) -> CapturedRun:
     """Run a `test_command` string via shlex splitting, capturing output, under
-    the memory cap (`tree_memory_limit`): it executes the tree's code."""
+    the memory cap (`tree_memory_limit`): it executes the tree's code, and
+    imports the tree's own package (`src_layout_env`)."""
     return run_capture(
         shlex.split(command),
         cwd,
         recorder=recorder,
         timeout=timeout,
         memory_limit=tree_memory_limit(),
+        extra_env=src_layout_env(cwd),
     )
+
+
+def src_layout_env(tree: Path) -> dict[str, str]:
+    """`PYTHONPATH` with `<tree>/src` first when `tree` has a `src/`, else nothing.
+
+    A `src`-layout project's tests import its package through an install,
+    usually an editable one. In the gate that install is either absent
+    (the sandbox hides the checkout it points at, so every test errors) or
+    another copy (saddle auditing saddle: the tests ran against the
+    maintainer's checkout, not the tree audited). With `src` first, `import
+    <package>` finds the audited tree's copy. Not for `mutmut run`, which
+    puts its mutated `src` first and removes the original from `sys.path`
+    itself."""
+    src = tree / "src"
+    if not src.is_dir():
+        return {}
+    inherited = os.environ.get("PYTHONPATH", "")
+    return {"PYTHONPATH": os.pathsep.join([str(src.resolve()), *filter(None, [inherited])])}
 
 
 def drop_test_caches(root: Path) -> None:

@@ -324,7 +324,11 @@ server still works in the empty namespace."""
 
 
 def confine(
-    argv: Sequence[str], root: Path, *, writable: Sequence[Path] = ()
+    argv: Sequence[str],
+    root: Path,
+    *,
+    writable: Sequence[Path] = (),
+    extra_env: Mapping[str, str] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """The argv and environment that run a gate's `argv` on the tree at `root`.
 
@@ -338,8 +342,9 @@ def confine(
 
     PATH is `gate_path`'s: the user's tools first, saddle's own as the
     fallback. `default_expose` shows the venv each tool it finds lives in
-    read-only; saddle's own is inside `sys.prefix`, shown regardless."""
-    env = command_env({"PATH": gate_path(os.environ.get("PATH", ""))})
+    read-only; saddle's own is inside `sys.prefix`, shown regardless.
+    `extra_env` is laid over the scrubbed environment last."""
+    env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **(extra_env or {})})
     if isolation_problem() is not None:
         return list(argv), env
     real = root.resolve()
