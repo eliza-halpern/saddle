@@ -248,6 +248,20 @@ def create_worktree(repo: Path, run_id: str) -> tuple[Path, str]:
     return worktree, branch
 
 
+def run_base(repo: Path) -> str:
+    """What the run branch starts from: the checked-out branch's name, else HEAD's commit.
+
+    The packet's Reproduce row prints `git log -p <base>..<run branch>`, so
+    the base is recorded at the start, not assumed to be `main`. A detached
+    HEAD, or a branch name holding the start record's `;` separator, is
+    recorded as the 40-hex commit instead.
+    """
+    name = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if name == "HEAD" or ";" in name:
+        return _git(repo, "rev-parse", "HEAD").strip()
+    return name
+
+
 def ledger_path(root: Path, run_id: str) -> Path:
     """Where a run's ledger lives: outside its worktree, beside the others."""
     return root / ".saddle" / "runs" / run_id / "proofs.jsonl"
@@ -301,6 +315,7 @@ def run_auto(
         raise AutoError(msg)
     repo = options.repo.resolve()
     run_id = options.run_id or uuid.uuid4().hex[:12]
+    base = run_base(repo)
     worktree, branch = create_worktree(repo, run_id)
     root = worktree.parent.parent.parent
     journal = ledger_path(root, run_id)
@@ -312,6 +327,7 @@ def run_auto(
         detail=f"arm {options.arm}; temperature {options.temperature}; "
         f"effort {options.reasoning_effort}; sanctioned test rewrites "
         f"{','.join(options.sanctioned_test_rewrites) or 'none'}; branch {branch}; "
+        f"base {base}; "
         f"budgets {options.time_budget_s:.0f}s, "
         f"{options.token_budget} generated tokens; test edits "
         f"{'allowed' if options.allow_test_edits else 'refused'}"

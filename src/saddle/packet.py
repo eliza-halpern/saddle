@@ -523,6 +523,16 @@ def _needs_a_test(evidence: dict[str, Any]) -> bool:
     )
 
 
+def _change_log(branch: str, base: str) -> str:
+    """The command that shows the run's change: from its recorded base to its branch.
+
+    A ledger sealed before the base was recorded names none; the run
+    commits once, on its own branch (`auto.run_auto`), so that commit alone
+    is shown rather than guessing a branch name the repository may not have.
+    """
+    return f"git log -p {base}..{branch}" if base else f"git log -p -1 {branch}"
+
+
 def _anchor_text(journal: Path, repo: Path | None, *, sealed: bool) -> str:
     """The Reproduce row's sentence on the branch anchor, "" when it was not checked.
 
@@ -992,6 +1002,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
 
     # -- reproduce ----------------------------------------------------------------------
     branch = start_field(start.detail, "branch") if start is not None else ""
+    base = start_field(start.detail, "base") if start is not None else ""
     anchor = proofs[-1].record_hash if proofs else (start.record_hash if start else "")
     rows.append(
         Row(
@@ -1005,7 +1016,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             (anchor,) if anchor else (),
             (
                 f"saddle verify {_shown(journal)}{' --anchor' if anchor_repo is not None else ''}",
-                *((f"git log -p main..{branch}",) if branch else ()),
+                *((_change_log(branch, base),) if branch else ()),
             ),
         )
     )
