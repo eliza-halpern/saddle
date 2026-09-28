@@ -1,0 +1,8 @@
+#!/bin/sh
+# saddle leak guard (commit-msg). Install: git config core.hooksPath tools/githooks
+# See CONTRIBUTING.md, "Public text: the leak guard".
+here=$(cd "$(dirname "$0")" && pwd) || exit 2
+root=$(dirname "$(dirname "$here")")
+py="$root/.venv/bin/python"
+[ -x "$py" ] || py=python3
+PYTHONPATH="$root/src${PYTHONPATH:+:$PYTHONPATH}" exec "$py" -m saddle.leakguard commit-msg "$@"
