@@ -139,7 +139,7 @@ at `xhigh` can spend 40,000-80,000 tokens thinking before it writes a word
 -- so the reply arrives truncated mid-thought.
 
 The budget is now sized per call from the window left after the
-conversation, the rule `saddle run` has used since T6-17:
+conversation, the rule `saddle run` also uses:
 
 | | |
 |---|---|
@@ -148,9 +148,8 @@ conversation, the rule `saddle run` has used since T6-17:
 | floor, however full the window | 8,192 |
 
 The window is read from the server (`max_model_len`), not assumed.
-Reasoning effort is per session and defaults to `xhigh`, because F21.17
-measured every degenerate draw of round 3e at effort `low` and every clean
-one at `xhigh`.
+Reasoning effort is per session and defaults to `xhigh`, because in round 3e
+every degenerate draw was at effort `low` and every clean one at `xhigh`.
 
 Other limits, all deliberate and none of them 8192: 24 tool rounds per
 turn (was 10), 200,000 characters per file read, 400,000 per terminal

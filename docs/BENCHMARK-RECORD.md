@@ -60,15 +60,15 @@ Re-run from T1 under the fixed harness (`fix/gate-integrity`), five arms
 per task. Results and findings live in the author's internal benchmark
 notes, which are not public.
 
-### Round 3 (T4-6a viability sweep, 2026-09-20)
+### Round 3 (viability sweep, 2026-09-20)
 
 Thirteen saddle-only runs against per-task correctness oracles frozen
 before the first run (internal benchmark revision `d9bd23b`), `--sample-temperature 0.7`,
-one seed on T1-T4 and three on T5-T7. Full record in finding F21 of
+one seed on T1-T4 and three on T5-T7. The full record is in
 the internal benchmark notes (not public).
 
 **5 of 13 pass their oracle. 3 of 13 on the strict reading** that also
-requires a sealed proof covering the implementation (F21.2). **Not one of
+requires a sealed proof covering the implementation. **Not one of
 the nine large-task runs completed**: eight hit the 1800 s wall, the ninth
 exhausted its replans.
 
@@ -83,7 +83,7 @@ exhausted its replans.
 | T7 | 3 | 0/3 | timeout x2, verdict x1; no implementation produced |
 
 All four pre-registered predictions but one were falsified; they are
-recorded unedited in `runs/round3/PREDICTION.md`.
+recorded unedited in the internal benchmark notes.
 
 **What round 3 establishes that round 2 could not.** Round 2's verdicts
 were void because red-phase could not fail. This round the gates
@@ -91,7 +91,7 @@ demonstrably reject work -- nine node-attempt failures across T2, T6 and
 T7 -- and T2/T3/T4 correctness was measured for the first time against
 oracles nobody could tune afterwards.
 
-**The defect to fix first (F21.1).** The worker's output cap is
+**The defect to fix first.** The worker's output cap is
 `WORKER_OUTPUT_TOKENS[effort]`, and `effort` comes from the *planner's*
 `reasoning_budget`. `propose()` (`cli.py:505-542`) recomputes that same
 cap on every retry, so `vllm.py:314`'s "retry with more max_tokens" is
@@ -101,21 +101,22 @@ holding the budget fixed. vLLM's histogram shows 7 generations in the
 `medium = 32768`. T5's three seeds fail identically to the second:
 budget-bound, not content-bound. Labelled **harness**, not model ceiling.
 
-**Reading the T6 passes correctly (F21.2).** t6-s1 and t6-s2 pass every
+**Reading the T6 passes correctly.** t6-s1 and t6-s2 pass every
 oracle check on a `filterlang.py` saddle never proved: the sealed proof
 covers `tests/test_filterlang.py` alone, and the corrected source is
 residue from an impl attempt that failed its gates and was not reverted.
-F14's shape. An oracle PASS is not a saddle PASS, and the columns must
+An oracle PASS is not a saddle PASS, and the columns must
 stay separate.
 
 Eleven follow-on items, each labelled harness or model-ceiling with its
-run log as evidence, are in F21.8.
+run log as evidence, are in the internal notes.
 
-### Round 3b (the T6-14 measurement, 2026-09-20)
+### Round 3b (the truncation-ladder measurement, 2026-09-20)
 
-One T5 seed against T6-8+T6-14 (`9b18dad`), predictions frozen in
-the internal benchmark notes (not public) before the run. Full record
-in F21.9. **TIMEOUT at 1800 s, 0 sealed proofs**, worktree clean at exit.
+One T5 seed against the node-size pre-flight and truncation ladder
+(`9b18dad`), predictions frozen in the internal benchmark notes (not
+public) before the run. Full record in the same notes. **TIMEOUT at
+1800 s, 0 sealed proofs**, worktree clean at exit.
 
 ```
 attempt 1/3: 3 gate(s) failed: syntax, tests, red-phase
@@ -123,7 +124,7 @@ Attempt 2 of 3: completion truncated at 32624 output tokens
 Attempt 3 of 3: completion truncated at 32768 output tokens
 ```
 
-**T6-14's mechanism works.** The truncation message names its cap, the
+**The ladder works.** The truncation message names its cap, the
 advice no caller acted on is gone, and attempt 3 ran a ladder rung above
 attempt 2 — where round 3a's three seeds resent an identical cap forever.
 
@@ -133,7 +134,7 @@ of failed output inflated attempt 2's budget: `194 + 699 - 6 = 887`
 lines, and `16384 + 887*16 + 2048 = 32624`, the observed cap exactly.
 Degeneration produces bigger files, bigger files produce a bigger cap.
 And that inflated cap landed 144 tokens below the 32768 rung, so the
-escalation bought 0.4 % more room (F21.9a, F21.9b).
+escalation bought 0.4 % more room.
 
 **The failure underneath is degeneration, not budget.** Attempt 1 did not
 truncate; it emitted a complete, applying diff containing 19
@@ -141,14 +142,14 @@ byte-identical copies of one test and a 20th cut off mid-signature. The
 `syntax` gate caught it correctly. `temperature` is the only sampling
 parameter saddle sends — no `repetition_penalty`, `top_p`, `top_k` or
 `min_p` appears anywhere in `src/` — and retries drop to temperature 0.0,
-the most degeneration-prone setting available (F21.9c).
+the most degeneration-prone setting available.
 
 That reframes round 3a: its truncations were plausibly this same
-degeneration meeting a lower ceiling, in which case T6-14 converted a
+degeneration meeting a lower ceiling, in which case the ladder converted a
 truncation into a syntax error rather than curing the cause. Progress —
 the gate now sees the failure and the work reaches the worktree — but not
 the cure. Labelled **harness**: the truncations were at a quarter of the
-ladder's top, so the honest model-ceiling row T6-14 predicted was never
+ladder's top, so the honest model-ceiling row the ladder predicted was never
 reached.
 
 ## Harness defects found and fixed
@@ -201,11 +202,11 @@ implementation **zero** times in nine attempts.
 
 The crossover hypothesis -- saddle loses on small tasks and wins on large
 ones -- remains untested, because the large tasks never reached a verdict.
-F21.1's ceiling is fixed (T6-14, `9b18dad`) and round 3b confirms the
+The planner-set output ceiling is fixed (`9b18dad`) and round 3b confirms the
 ladder engages. The blocker moved rather than cleared: the emission
 estimate is inflated by failed attempts, the escalation step can be 144
 tokens, and the worker call sends no repetition controls at all, so the
 model degenerates into a loop and fills whatever budget it is given.
-Items 12-17 in F21.8/F21.9. A T4-6b comparison still has nothing to
+A baseline-arm comparison still has nothing to
 compare on the large tasks: across four T5 attempts in two rounds,
 saddle has sealed zero proofs.

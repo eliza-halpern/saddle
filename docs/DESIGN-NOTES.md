@@ -2,7 +2,7 @@
 
 Status: **draft, pre-registered before the v3 re-run.** Written 2026-09-18
 against harness `fix/gate-integrity @ 49864ec`, after the v2 benchmark sweep
-(findings F1–F14 in the internal benchmark notes, not public).
+(its findings are recorded in the author's benchmark notes, which are not public).
 
 This document exists because the v2 sweep produced a clear diagnosis and no
 plan. It takes each recorded failure mode, finds what the literature says
@@ -59,7 +59,7 @@ destroying runs before independence gets a chance to matter.
 
 **Recorded:** T7's `test_op_add` does not fail, it never terminates.
 `x += x` calls `extend(self)`, which iterates the backing list while
-inserting into it. Six of seven gates passed on that code (F13).
+inserting into it. Six of seven gates passed on that code.
 
 **Today:** saddle has no timeout concept. A hanging test hangs the gate.
 
@@ -81,7 +81,7 @@ afternoon of work.
 
 **Recorded:** T1 burned ~110s of 200s on two unusable diffs. T6 died on
 diff-apply. T7 died on three consecutive diff-apply failures *after recovery
-had driven it from four failing gates to one* (F4, F11, F13). This is the
+had driven it from four failing gates to one*. This is the
 highest-value fix in the backlog and it is not a correctness problem.
 
 **Today:** unified diff, no repair, no constraint, 3 sequential retries.
@@ -98,7 +98,7 @@ highest-value fix in the backlog and it is not a correctness problem.
    applies a minimal-edit-distance correction algorithm to malformed diffs
    *prior to application*, rather than asking the model to self-correct.
    Free, deterministic, no model call.
-3. **Guided-decode the patch block.** F9 records zero malformed packets
+3. **Guided-decode the patch block.** The sweeps recorded zero malformed packets
    across both rounds for the DAG, because it is schema-constrained. The
    same technique is simply absent on diffs. Note D14 for how to do this
    without damaging reasoning.
@@ -159,7 +159,7 @@ not the middle. Drop the floor guidance; keep the ceiling.
 ### D5. Schema floors on every planner-set threshold
 
 **Recorded:** the planner set T3's mutation kill bar to **50%** and T7's
-coverage bar to **0.0%** (F6, F12). Two of seven gates were decorative on
+coverage bar to **0.0%**. Two of seven gates were decorative on
 T7's node by the graded party's own choice.
 
 **Today:** `changed_line_coverage_min` and `kill_threshold` are free floats.
@@ -183,7 +183,7 @@ built together — each one alone is partial.
 
 ### D6. The test-writer must not be the implementer
 
-**Recorded:** F5. The worker receives `Requirements: REQ-001, REQ-002` —
+**Recorded:** the worker receives `Requirements: REQ-001, REQ-002` —
 two opaque strings — invents what they mean, writes a test asserting its own
 invention, and tags it. The gate greps for the substring and passes.
 
@@ -222,7 +222,7 @@ just a gate.
 - **Orphan detection.** [traceSDD][tracesdd] treats every REQ ID cited in
   code as a verifiable claim: an ID that does not appear in the spec is an
   automatically detectable orphan, i.e. a hallucinated requirement. That is a
-  machine check, not model opinion, and it closes the circularity in F5.
+  machine check, not model opinion, and it closes the circularity recorded above.
 
 **The honest ceiling:** this does not eliminate the problem, it relocates it
 to spec quality. The vericoding benchmarks report **82% Dafny, 44%
@@ -236,7 +236,7 @@ it, because that is the part a human can own.
 
 ### D8. Replace the kill-% gate with named contract mutants
 
-**Recorded:** F1 and F12 are the same defect seen twice. T1's four-line
+**Recorded:** the same defect, seen twice. T1's four-line
 regex admitted **2 mutants**, both killed by shallow tests → 100% PASS. T7's
 218-line module admitted **0 mutants** → fail-open PASS having tested
 nothing. The gate's strength scales with *line count*, and is therefore
@@ -328,7 +328,7 @@ proposals themselves.
 
 ### D11. Parallel-k with forced diversity — and retire sequential retry
 
-**Recorded:** F13. Recovery spent T7's entire attempt budget converging on
+**Recorded:** recovery spent T7's entire attempt budget converging on
 *ruff*, because ruff was the only gate pushing back, while the hang sat
 untouched. Retry allocates worker effort in proportion to gate strength, and
 gate strength was anti-correlated with defect severity.
@@ -422,15 +422,15 @@ expensive mutation gate; this belongs there.
 **This is the largest gap in the document and nothing in the backlog
 addresses it. New issue.**
 
-Worth stating plainly: saddle has emitted **1 node on six of seven tasks**
-(F7), so the compounding risk and this blind spot are both currently
+Worth stating plainly: saddle has emitted **1 node on six of seven tasks**,
+so the compounding risk and this blind spot are both currently
 *untested*. The architecture's central claim has never actually run.
 
 ### D14. Constrain the output, never the reasoning
 
 **Settled 2026-09-19 against the serving build, and closed against
-structural tags** (T4-4; `tools/structured_output_probe.py`, records in
-the internal benchmark notes (not public), findings F16-F19).
+structural tags** (`tools/structured_output_probe.py`; the records are in the
+author's benchmark notes, which are not public).
 vLLM 0.28.0 already gives this alternation for the shipped payload: with
 `structured_outputs={"grammar": DIFF_GRAMMAR}` and reasoning on, a prompt
 asking for *one sentence of prose* returned a git diff, while the same
@@ -441,11 +441,11 @@ involved. Two things follow. An `enable_in_reasoning`-style flag must not
 be written into any payload: this build answers 200 to it, to a top-level
 spelling of it, and to `saddle_not_a_real_key` alike, with byte-identical
 output in all three -- unknown keys are dropped silently, so such a flag
-would read as configured while doing nothing (F17). And structural tags
+would read as configured while doing nothing. And structural tags
 are the wrong instrument here, not merely deferred: only the legacy shape
 on `response_format` validates at all, its span constraint is a JSON
 Schema rather than a grammar, and the trigger is the model's choice -- a
-worker that never emits `<diff>` is never constrained (F18, F19). Using
+worker that never emits `<diff>` is never constrained. Using
 one would put the diff back inside a JSON string, the shape recorded at
 `src/saddle/vllm.py:36-52` as having cost the whole v3 sweep.
 ARCHITECTURE.md §1 says "snapping schema constraints down only after
@@ -461,7 +461,7 @@ are against unconstrained chain-of-thought (Table 1: 13 vs 21 and 38 vs
 decoding is within one point or better on all nine models.
 benchmarks under strict format constraints.
 
-That is why F9 has never leaked: the DAG is emitted *after* reasoning.
+That is why the DAG has never produced a malformed packet: the DAG is emitted *after* reasoning.
 When D2 extends guided decoding to diffs, it must preserve the alternation —
 free reasoning, then a delimited constrained block — or it will trade a
 patch-application problem for a reasoning problem.
@@ -469,8 +469,7 @@ patch-application problem for a reasoning problem.
 ### D15. Decomposition granularity gets a rule
 
 **Recorded:** the emit prompt says "prefer the fewest nodes that cover the
-task," and the planner emits 1 node for a 443-line four-module rewrite
-(F7, F10).
+task," and the planner emits 1 node for a 443-line four-module rewrite.
 
 **Finding:** published working bounds exist. Under ~50 tokens of output is
 too granular; **100–500 tokens** is a working estimate (no source found; T4
@@ -482,7 +481,7 @@ measures this.
 independently verifiable — its stated non-applicability is tasks "requiring
 long-range reasoning or context accumulation across many steps."
 
-**Change:** encode the bound. Also fix the adjacent defect recorded in F7 —
+**Change:** encode the bound. Also fix the adjacent defect recorded in the same sweep —
 a `finish_reason=length` truncation is a harness condition with an obvious
 remedy (retry with a larger budget), not a verdict about the work, and
 currently there is no retry path for worker-call failures at all.
@@ -520,7 +519,7 @@ case in the suite.
 
 ### D18. Move the budget toward verification
 
-**Recorded:** F8. saddle's entire Tier-1 stack — pytest under coverage,
+**Recorded:** saddle's entire Tier-1 stack — pytest under coverage,
 mutmut, ruff — costs **3 to 15 seconds**. Model calls cost **two to three
 minutes**. Verification overhead is a rounding error; call count and call
 waste are the cost.
@@ -670,7 +669,7 @@ already made:
   the DAG, absent on diffs.
 - **Heterogeneous test-time compute per node** (D19) — wired per node via
   `reasoning_budget` → `BUDGET_TO_EFFORT` (`cli.py:402-404`); benefit
-  unmeasured (T4-3).
+  unmeasured.
 - **Tiered gates with expensive checks at merge time** — specified; the merge
   tier is where D13's composition gate belongs.
 - **Requirement-bound acceptance with per-ID test evidence** — specified as

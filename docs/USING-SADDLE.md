@@ -2,14 +2,17 @@
 
 This guide covers the Phase 2 features: autonomous runs with an auditor, the chat's
 lanes (Ask, Edit, Task · Small), and the evidence packet. It describes the merged
-Phase 2 tree, `phase2-final` at 4ee7cf7: the anchor, UI3, notify, ask, lane-chip, fix and
-packet merges, then TOOLSCOPE, REASON, PACKETFIX, the two UX review rounds, MUTSUMMARY,
-COVTEXT, PACKETHOOK, SHORTLIST, rule D, credits and RUNS. Each behaviour below was
+Phase 2 tree (4ee7cf7): the ledger anchor, a UI round, notifications, the run
+questions, the lane chip, run fixes and the evidence packet, then per-lane tool scope,
+reasoning records, packet fixes, the two UX review rounds, the mutation summary,
+coverage text, the packet hook, the finding shortlist, rule D, credits and the Runs
+view. Each behaviour below was
 checked against the code, its tests, or a run against a scripted fake model. Anything
 marked **[unverified: …]** was not checked, and the bracket says why.
 
-Phase 2's measurement, in one sentence: M3 (F21.81): no-harm verified on T5/T8, detection
-measured separately (F21.82: 65/65 planted bugs refused, 49/65 for the right reason).
+Phase 2's measurement, in brief: no harm, verified on T5 and T8. Detection was measured
+separately, as a rate on planted defects: the auditor refused 65 of 65 planted-bug trees,
+49 of 65 for the right reason (measured on `48eb6d6`).
 
 Related: [AUDIT-TIERS.md](AUDIT-TIERS.md) (what each check proves) and
 [CLI.md](CLI.md) (every flag).
@@ -423,7 +426,7 @@ default `score`) chooses how the mutation gate decides.
   *failing* findings before the run stops (section 6). Under shortlist fewer findings
   fail, so the cap is reached less often.
 
-Detection under shortlist against wrong code is unmeasured (SHORTLIST report). With the
+Detection under shortlist against wrong code is unmeasured. With the
 flag off, the auditor's output is byte-identical to the score mode.
 
 [unverified: how the packet's Mutation and Audit rows show a `not-proven` finding.
@@ -448,7 +451,7 @@ chain. What verify establishes:
 - for an autonomous run, that the tool spans match the list sealed in the outcome's
   sidecar, in order;
 - for a run sealed with an audit list (`audit_span_hashes`, every run since the
-  phase2-fix merge), that its audit records match that list. A deleted audit record
+  merge that added it), that its audit records match that list. A deleted audit record
   gives `audit-span-missing`, an inserted one `audit-span-unlisted`. Outcomes sealed
   before that have no list, and their audit records are not judged.
 

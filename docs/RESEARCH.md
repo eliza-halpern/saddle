@@ -19,18 +19,18 @@ a doc until checked).
 Where a source's number was corrected before 2026-09-25, the corrected
 wording is the one in the internal work log's citation-correction table
 and the audit's §9 rows; this file's CORRECTED rows summarise each
-correction in their caveat column. For the rows corrected on 2026-09-25 (the Rec 95 report's §5b
-and §5c, an internal research report on the Rule D question rate, not public),
+correction in their caveat column. For the rows corrected on 2026-09-25 (two sections of an internal
+research report on the Rule D question rate, not public),
 the corrected wording now lives in this file's own rows.
 
 ## A. Sources behind the design notes (D1–D25)
 
 | Source | Where | Used for | What we took from it | Status / caveat |
 |---|---|---|---|---|
-| Meta ACH, "Mutation-Guided LLM-based Test Generation at Meta" | arXiv 2501.12862 | CONTRIBUTING.md test-adequacy rule; D8 (contract mutants); WORKPLAN T2-4 basis; audit §9 | Few, specific mutants beat coverage-driven ones: 15% vs 2.4% killed; 277 of 571 mutant-killing tests added no line coverage; a test is accepted only when it kills | PROVEN-IN-PRODUCTION (one deployment, unreplicated). CORRECTED: "49% of accepted tests" was wrong; acceptance (73%) was a separate 191-test sample |
+| Meta ACH, "Mutation-Guided LLM-based Test Generation at Meta" | arXiv 2501.12862 | CONTRIBUTING.md test-adequacy rule; D8 (contract mutants); the gate evidence `basis` field; audit §9 | Few, specific mutants beat coverage-driven ones: 15% vs 2.4% killed; 277 of 571 mutant-killing tests added no line coverage; a test is accepted only when it kills | PROVEN-IN-PRODUCTION (one deployment, unreplicated). CORRECTED: "49% of accepted tests" was wrong; acceptance (73%) was a separate 191-test sample |
 | "Who Tests the Tests: Mutation Testing and Negative Controls for Agent-Written Code" (Zylos blog) | zylos.ai, 2026-07-28 | D6 (test-writer ≠ implementer); D8; "discrimination evidence" doctrine | The name *correlated error* and the negative-control idea | Blog; names the failure only. CORRECTED: the 22,374-variant measurement is arXiv 2603.23443, not Zylos |
 | "Evaluating LLM-Based Test Generation Under Software Evolution" | arXiv 2603.23443 | D6; audit §9 (re-attribution) | >99% of failing single-shot LLM tests passed on the original program while executing the changed region; per-model 40.7–82.9%; the 40.7% model is Nemotron-3-Nano, listed as 30B, so a ~27B model near 41% is an extrapolation | PUBLISHED-WITH-MEASUREMENT. Scope: single-shot tests, not agent loops |
-| TEBench | arXiv 2605.06125 | audit §9 corroboration for the test-node hazard (#44, F5) | Identification F1 (locating the affected tests) 45.7–49.4% for seven agent configurations, all on frontier-class models; a heuristic baseline is reported alongside | PUBLISHED-WITH-MEASUREMENT (corroborating only) |
+| TEBench | arXiv 2605.06125 | audit §9 corroboration for the test-node hazard (#44) | Identification F1 (locating the affected tests) 45.7–49.4% for seven agent configurations, all on frontier-class models; a heuristic baseline is reported alongside | PUBLISHED-WITH-MEASUREMENT (corroborating only) |
 | "Variation in Verification" | arXiv 2509.17995 | §0 reframe (weak generator + independent verifier) | True-negative rate 0.68 → 0.17 in one heatmap cell; a fixed verifier closed 75.7% of the gap in one 181-problem Maths bin; whole-domain 30–50% | CORRECTED: the repo over-generalised one cell and one bin |
 | SpecBench | arXiv 2605.21384 | §0; D11; D13 (reward hacking under longer search) | Validation/held-out gap; longer search worsens reward hacking; "weaker models cheat more" | VERIFIED with caveat: no model under ~35B or quantized tested; 27pp is a P90 bound (R²=0.21, v2 §3.1; the v2 abstract says 28pp and Fig. 2's legend "+28pp per 10× LOC, R²=0.25"). ImpossibleBench (arXiv 2510.20270) finds the opposite direction; present both |
 | ImpossibleBench | arXiv 2510.20270 | audit §9 counter-evidence to SpecBench | Stronger models cheat more (GPT-5 76%) | PUBLISHED-WITH-MEASUREMENT; cited as the disagreement |
@@ -75,7 +75,7 @@ changes a Tier 0–2 item. Confidence is the audit's.
 
 | Source | Use |
 |---|---|
-| MUTGEN, arXiv 2506.02954 v2 (medium) | PITest mutants fed into an LLM test-generation prompt, 204 subjects; mutmut occurs 0 times in v2 and v8; v8: 74% of 50 inspected unfixed failures were wrong oracles; relevant to T2-4's basis field |
+| MUTGEN, arXiv 2506.02954 v2 (medium) | PITest mutants fed into an LLM test-generation prompt, 204 subjects; mutmut occurs 0 times in v2 and v8; v8: 74% of 50 inspected unfixed failures were wrong oracles; relevant to the gate evidence `basis` field |
 | xgrammar-2 blog, 2026-05-04 (high) | Engine roadmap for the constrained decoder |
 | aider unified-diffs page (high) | PROVEN-IN-PRODUCTION edit format, for #61 |
 | pytest-timeout docs (high) | Per-test hang detection, an alternative to `SHELL_TIMEOUT` |
@@ -104,16 +104,16 @@ status quotes the recalled wording that was wrong.
 | Just et al., "Are Mutants a Valid Substitute for Real Faults?" (FSE 2014) | D8 | Mutation score correlates with real fault detection at suite level | CORRECTED: "not as a per-diff bar" is not in the paper and is dropped. The rest holds: detection correlates with real faults, more strongly than statement coverage for 4 of 5 programs (357 faults, 230,000 mutants; 73% coupled, 17% not) |
 | Cemri et al., "Why Do Multi-Agent LLM Systems Fail?" (arXiv 2503.13657, 2025) | RC1 / hypothesis "decomposition destroys information" | Failure taxonomy of 14 modes in 3 categories; system design issues and inter-agent misalignment dominate: 44.2% and 32.3% of 1,642 traces, task verification 23.5% (Fig. 1; Figs. 2 and 4 give other shares) | PUBLISHED-WITH-MEASUREMENT (NeurIPS 2025 Datasets and Benchmarks). The first category's v3 name is "System Design Issues", not "specification" |
 | Wang et al., "Self-Consistency" (arXiv 2203.11171, 2022; ICLR 2023) | RC1 (one temperature-0 plan) | Sampling and voting beats one greedy draw | PUBLISHED-WITH-MEASUREMENT: beats greedy chain-of-thought by 17.9 (GSM8K), 11.0 (SVAMP), 12.2 (AQuA), 6.4 (StrategyQA) and 3.9 (ARC-c) points |
-| ClarifyGPT, Mu et al. (arXiv 2310.10996, 2023) | The user's principle "asking is not a failure"; M1-H | Code models improve when they detect ambiguity and ask | PUBLISHED-WITH-MEASUREMENT: GPT-4 Pass@1 on MBPP-sanitized 70.96% → 80.80% with real user feedback; with simulated feedback over four benchmarks 68.02% → 75.75% (GPT-4) and 58.55% → 67.22% (ChatGPT). The FSE 2024 version (doi:10.1145/3660810) is from search only, not checked |
+| ClarifyGPT, Mu et al. (arXiv 2310.10996, 2023) | The principle "asking is not a failure" (rule D) | Code models improve when they detect ambiguity and ask | PUBLISHED-WITH-MEASUREMENT: GPT-4 Pass@1 on MBPP-sanitized 70.96% → 80.80% with real user feedback; with simulated feedback over four benchmarks 68.02% → 75.75% (GPT-4) and 58.55% → 67.22% (ChatGPT). The FSE 2024 version (doi:10.1145/3660810) is from search only, not checked |
 
 ## D. Internal evidence records (not research, but where claims are checked)
 
 The benchmark notes and reports below are the author's internal records and
-are not public; they are listed so the IDs cited across the repo have a named
-home.
+are not public; they are listed so the claims that rest on them name their
+source.
 
-- Internal benchmark findings log — F-numbered findings from every benchmark round. Claims about saddle's behaviour cite an F-number or a run log.
-- Internal Phase 1 measurement plan and checker — pre-registered measurements (hashes in `runs/M1*/PREREG.sha256`) and their verdicts.
+- Internal benchmark findings log — findings from every benchmark round. Claims about saddle's behaviour rest on a finding or a run log.
+- Internal Phase 1 measurement plan and checker — pre-registered measurements (each plan hashed before its run) and their verdicts.
 - Internal audit of 2026-09-18, §9 — the citation audit: 8 claims verified, 6 refuted; the source of every CORRECTED row above.
 - Internal work log, citation-correction table — the corrected wording for each refuted claim.
 - Internal W6 report — root causes RC1–RC3 for the saddle arm's T1/T3 failures, with measured experiments E1/E2 and pre-registered interventions I1–I5.
