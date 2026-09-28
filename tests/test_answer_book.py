@@ -1,4 +1,4 @@
-"""The answer book's known-good / known-bad pairs (S3-4-final.md, 51 pairs; names carry the id).
+"""The answer book's known-good / known-bad pairs (51 pairs; names carry the id).
 
 Fixtures are R2's real per-input rows for M1-F's Fix-8 set and the case list
 (`tests/fixtures/t1_reference_rows.jsonl`: the 12 frozen references'
@@ -7,8 +7,7 @@ published-grammar panel, vendored below as `PANEL` so the panel votes are
 recomputed here rather than trusted. Pair P0 checks the vendored panel
 against the recorded votes on every row: both halves of the fixture.
 
-The two spec entries are the user's decision of 2026-09-25 21:11 EDT
-(phase2/measurements/T1-rescore-t1_probe_g.md, "Decisions").
+The two spec entries are the user's recorded decision of 2026-09-25.
 """
 
 from __future__ import annotations
@@ -204,7 +203,7 @@ SPEC_PCT_CLASS: dict[str, object] = {
     "anchors": ["us%er@example.com"],
     "scope": "class",
 }
-# Row 6 (DECISIONS-2026-09-25, approved): the ADOPTED T1 entry is anchor-scoped. SPEC_PCT_CLASS
+# Approved decision: the ADOPTED T1 entry is anchor-scoped. SPEC_PCT_CLASS
 # stays as the fixture that exercises the class-scope mechanism (M1, M3, M5, N1, F-pairs, D1).
 SPEC_PCT: dict[str, object] = dict(SPEC_PCT_CLASS, scope="anchors")
 SPEC_LF: dict[str, object] = {
@@ -1278,7 +1277,8 @@ def test_answer_book_d1_spec_pins_tests_fail_a_dollar_anchored_validator_and_pas
     assert _pytest_failures(tmp_path / "full", src, full) == 0
 
 
-# Final (DECISIONS-2026-09-25): rows 3 and 6, L18
+# Final decisions: pins carry their authorities, the adopted entry is anchor-scoped, and a
+# group answer may not override a convention silently.
 
 
 def test_answer_book_m7_the_adopted_pct_entry_pins_its_one_anchor_only() -> None:

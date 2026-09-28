@@ -488,7 +488,8 @@ class NothingToAudit(FakeAuditor):
 def test_an_unchanged_tree_is_nothing_to_audit_and_ends_unchanged_not_finished(
     repo: Path, arm: str
 ) -> None:
-    """flip (FEEDFIX 5): was `outcome == "finished"`. Not accepted and not a
+    """flip: was `outcome == "finished"`, which sealed a tree equal to its
+    baseline as accepted work with nothing audited. Not accepted and not a
     refusal: no refusal counted, no cap, the note sealed, ends `unchanged`."""
     result, _ = run(repo, Reactive([[FINISH]]), arm, auditor=NothingToAudit(), finish_refusal_cap=1)
     assert result.outcome == "unchanged"
@@ -513,7 +514,7 @@ def test_an_ending_already_decided_is_not_overwritten_by_unchanged() -> None:
 
 
 def test_the_real_auditor_does_not_accept_an_unchanged_tree(real_repo: Path) -> None:
-    """Known-bad (SANCTIONS construct/nothing_to_audit_probe.py): the finish
+    """Known-bad (a finish that changed nothing): the finish
     audit of a tree equal to its baseline must not accept it."""
     fed = AuditFeed(real_repo, "HEAD", real_repo.parent / "j.jsonl", "probe")
     assert fed.final() == (False, "")
@@ -765,12 +766,12 @@ def test_an_unsanctioned_rewrite_still_refuses_finish(repo: Path) -> None:
     assert "- assertion-preservation (tier 1): fail, evidence-thin:" in note
 
 
-# -- FEEDFIX (6): an accepted finish seals the waivers it stood on -----------
+# -- an accepted finish seals the waivers it stood on -----------------------
 
 
 def test_a_sanctioned_accept_seals_the_names_it_stood_on(repo: Path) -> None:
     # known-bad for the field: the accept stood on a sanctioned rewrite, so
-    # the sidecar names each test (SANCTIONSLIB (3); EAF-t5-s2-0's four).
+    # the sidecar names each test (EAF-t5-s2-0's four).
     client = Reactive([[EDIT_COMMENT], [CHECK], [FINISH]])
     result, _ = run(
         repo,
@@ -905,7 +906,7 @@ def test_the_cli_passes_sanctioned_rewrites(repo: Path, monkeypatch: pytest.Monk
     assert cli.build_parser().parse_args(["auto", "t"]).sanctioned_test_rewrite == []
 
 
-# -- the finish refusal cap (FEEDCAP; M3F: 7,244 refusals on a correct T5 tree) --
+# -- the finish refusal cap (a run once made 7,244 refusals on a correct T5 tree) --
 
 
 class KeepsFinishing(Reactive):
@@ -967,7 +968,7 @@ def test_an_unchanged_refusal_stops_the_run_at_the_cap_as_audit_unresolved(repo:
 
 
 def test_a_tier0_only_refusal_counts_toward_the_cap(repo: Path) -> None:
-    """LINTFINISH: a lint-only refusal is a refusal like any other. Tiers 1 and
+    """A lint-only refusal is a refusal like any other. Tiers 1 and
     2 pass (the fix is right), tier 0 fails on every finish, and the run stops
     at the cap naming the ruff finding as unresolved."""
 
@@ -1069,7 +1070,7 @@ def test_the_cli_passes_the_finish_refusal_cap(repo: Path, monkeypatch: pytest.M
 def test_a_blocked_tier_2_names_only_the_unsanctioned_tier_1_failures(
     tmp_path: Path, sanctioned: tuple[str, ...], listed: bool
 ) -> None:
-    """FIX-3 (out/M3F/report.md finding 6): the blocked detail listed a
+    """The blocked detail listed a
     sanctioned assertion-preservation finding as a cause. An uncovered new
     function keeps tier 1 failing either way; the sanctioned rewrite is
     named only when it is not sanctioned."""
@@ -1120,7 +1121,7 @@ def test_an_audit_with_no_mutants_carries_no_mutant_detail_key() -> None:
     assert "mutant_detail" not in AuditResult("finish", "t", ()).to_dict()
 
 
-# -- FEEDFIX (7): an accepted finish delivers its not-proven findings once -------
+# -- an accepted finish delivers its not-proven findings once -------------------
 
 ROWS = tuple(
     f"- calc.py:{n}: `return a + b`: mutant calc.x_add__mutmut_{n} (survived)" for n in (1, 2, 3)
@@ -1236,7 +1237,7 @@ def test_accepted_unchanged_is_false_before_any_surfacing_and_when_no_snapshot_c
     assert fed.accepted_unchanged() is False
 
 
-# -- FEEDFIX (8): every audit span seals its whole result ---------------------------
+# -- every audit span seals its whole result -------------------------------------
 
 
 class Killing(DetailAuditor):

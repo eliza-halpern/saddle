@@ -1,8 +1,8 @@
-"""FEEDFIX item 3: coverage names each baseline definition it spared.
+"""Coverage names each baseline definition it spared.
 
 `check_changed_line_coverage` removes from its judgement the lines of a
 public definition the baseline had, that `public-deletions` will not let
-the change drop and that no test reaches (`compelled_lines`, T6-75). Its
+the change drop and that no test reaches (`compelled_lines`). Its
 `basis` said only how many lines ("compelled-lines=N"), so a pass that
 judged nothing in `Account.to_dict` read the same as one that judged
 everything. Now the basis names each spared definition, the auditor

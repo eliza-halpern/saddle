@@ -29,7 +29,7 @@ from saddle.labels import label_for
 
 MAX_THOUGHT_EXCERPT_CHARS: Final = 200
 # The run span a rule D question halt seals (slice.QUESTION_EXIT and its
-# detail on phase2-rule-d, P2-3b). Mirrored, not imported: this module sits
+# detail). Mirrored, not imported: this module sits
 # below slice, and a journal sealed there must render wherever it is read.
 QUESTION_RUN_EXIT: Final = 4
 QUESTION_RUN_DETAIL: Final = " halted on a question"
@@ -96,7 +96,7 @@ def is_run_end(entry: JournalEntry) -> bool:
 
 
 def render_plan(plan: PlanRecord) -> list[str]:
-    """A plan record as one header and one line per node (T6-13)."""
+    """A plan record as one header and one line per node."""
     head = f"replan of {plan.replaces}" if plan.replaces else "plan"
     lines = [f"{head}: {len(plan.nodes)} node(s)"]
     for node in plan.nodes:
@@ -183,7 +183,7 @@ def render_journal_transcript(
     failed node: the smoke run of 2026-09-19 (`1 proven, 1 failed, merge
     exit 2`) re-rendered as PASS. The run's own span is the record of
     what happened to the rest of the DAG, so when the journal has one its
-    exit governs too (T3-21); a journal with no run span (in flight, or
+    exit governs too; a journal with no run span (in flight, or
     older than run spans) keeps the proof-only verdict.
 
     A journal with no sealed proofs is FAIL, never PASS: `all()` over an
@@ -211,7 +211,7 @@ def render_journal_transcript(
     runs = [span for span in spans if span.name == "run"]
     run_ok = runs[-1].exit_code == 0 if runs else True
     checks_ok = all(check.passed for node in nodes for check in node.checks)
-    # A rule D question halt (phase2-rule-d, P2-3b) seals its run span with
+    # A rule D question halt seals its run span with
     # exit QUESTION_RUN_EXIT and a detail counting the halts. Both halves are
     # read: exit 4 alone is not that shape. A sealed gate failure still wins.
     asked = bool(runs) and runs[-1].exit_code == QUESTION_RUN_EXIT

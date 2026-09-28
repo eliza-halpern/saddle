@@ -350,7 +350,7 @@ def test_derived_schema_matches_model_both_directions() -> None:
 def test_gate_thresholds_below_the_spec_floor_are_unrepresentable() -> None:
     """The planner cannot set its own bar below ARCHITECTURE.md's.
 
-    F6/F12: the planner set T3's kill threshold to 50.0 and T7's coverage
+    In early runs the planner set T3's kill threshold to 50.0 and T7's coverage
     bar to 0.0, and T7's node then reported `PASS (98.8% >= 0.0%)` while
     an infinite loop shipped. A gate whose strictness the graded party
     chooses is not a gate.
@@ -400,7 +400,7 @@ def test_shrinking_the_mutant_cap_is_unrepresentable() -> None:
     With coverage pinned at 100.0 and kill_threshold floored at 85.0, a
     planner minimising gate strength has one move left: sample one
     mutant. Kill it and the node reports 100% >= 85% having tested
-    almost nothing -- F1's T1 result (2 mutants, 100% kill, a validator
+    almost nothing -- an early T1 result (2 mutants, 100% kill, a validator
     that accepts `user@example..com`) made worse by design.
 
     The cap is a ceiling, not a target: lowering it only discards mutants
@@ -424,7 +424,7 @@ def test_shrinking_the_mutant_cap_is_unrepresentable() -> None:
 def test_requirements_carry_testable_statements() -> None:
     """A bare ID states nothing, so no gate can check it.
 
-    F5: the worker receives `Requirements: REQ-001, REQ-002` -- two
+    Seen in an early run: the worker receives `Requirements: REQ-001, REQ-002` -- two
     opaque strings -- invents what they mean, writes a test asserting its
     own invention, and the gate greps for the substring. On T1 that gave
     7/7 gates and 12/18 on hidden behaviour.
@@ -466,7 +466,7 @@ def _email_requirement(rejects: list[str]) -> dict[str, Any]:
 
 
 def test_requirement_examples_are_near_misses() -> None:
-    """T6-4 known-good: a reject within `REQ_NEAR_MISS_K` edits of some
+    """Known-good: a reject within `REQ_NEAR_MISS_K` edits of some
     accept validates, and the node lists every example for the gate."""
     node = _node("n1")
     node["requirements"] = [_email_requirement(["user@@example.com", "user@example.com."])]
@@ -484,7 +484,7 @@ def test_requirement_examples_are_near_misses() -> None:
 
 
 def test_requirement_reject_far_from_every_accept_is_invalid() -> None:
-    """T6-4 known-bad from the run: T1's REQ-001 offered `"user"`, 12 edits
+    """Known-bad from the run: T1's REQ-001 offered `"user"`, 12 edits
     from `user@example.com`, which rejects nothing a lazy validator would
     not; the error names the distance and the bar."""
     node = _node("n1")
@@ -507,7 +507,7 @@ def test_requirement_reject_far_from_every_accept_is_invalid() -> None:
 
 
 def test_requirement_without_examples_is_unrepresentable() -> None:
-    """T6-4 known-bad from the run: T1's REQ-002 had no reject at all.
+    """Known-bad from the run: T1's REQ-002 had no reject at all.
     Both lists are floored at one entry, and the floor is a `minItems`
     the decoder can enforce, not a pattern it would compile as a full match."""
     for missing in ("accepts", "rejects"):
@@ -574,7 +574,7 @@ def test_node_kind_is_constrained_to_the_three_kinds() -> None:
 
 
 def test_target_files_default_empty_and_repo_relative_accepted() -> None:
-    """Known-good (T3-2, widened T3-13): the field is optional and plain
+    """Known-good (widened to empty and '.' segments): the field is optional and plain
     repo-relative POSIX paths, including nested ones and a dotfile-led
     segment that is not a bare '.' segment, are representable."""
     plain = Node.model_validate(_node("n1"))
@@ -610,7 +610,7 @@ def test_target_files_default_empty_and_repo_relative_accepted() -> None:
     ],
 )
 def test_target_files_rejects_escapes_and_absolute_paths(bad: str) -> None:
-    """Known-bad (T3-2, widened T3-13): anything that could name a file
+    """Known-bad (widened to empty and '.' segments): anything that could name a file
     outside the repo, is not a clean POSIX path, or contains an empty or
     '.' segment that the gate's exact-string match could never see again
     as the node's own file, is refused at validation."""
@@ -620,7 +620,7 @@ def test_target_files_rejects_escapes_and_absolute_paths(bad: str) -> None:
         Node.model_validate(node)
 
 
-# --- T3-24: the ids a plan declares, for the binding gate's orphan half ----
+# --- the ids a plan declares, for the binding gate's orphan half ----------
 
 
 def test_planned_requirement_ids_is_the_sorted_union_over_every_node() -> None:
@@ -652,7 +652,7 @@ def _scoped(node_id: str, files: list[str], *, kind: str = "impl", budget: str =
 
 
 def test_emission_estimate_is_none_without_scope_and_counts_only_existing_files() -> None:
-    """Known-good (T6-8): the estimate is sized from the repo, not the plan.
+    """Known-good: the estimate is sized from the repo, not the plan.
     A declared file the repo lacks is one the node creates and adds nothing."""
     lines = {"a.py": 100, "b.py": 50}
     assert emission_estimate(_scoped("n", []), lines) is None
@@ -674,7 +674,7 @@ def test_validate_dag_scope_checks_are_off_without_file_lines() -> None:
 
 
 def test_validate_dag_flags_undeclared_scope_on_impl_and_refactor_only() -> None:
-    """Known-bad (T6-8): an impl or refactor node with no `target_files`
+    """Known-bad: an impl or refactor node with no `target_files`
     cannot be size-checked, so it is invalid once a repo is in view; a
     `test` node writes tests it names itself and is not gated on scope."""
     dag = Dag(
@@ -695,7 +695,7 @@ def test_validate_dag_flags_undeclared_scope_on_impl_and_refactor_only() -> None
 
 
 def test_validate_dag_rejects_a_node_too_large_for_its_budget_and_accepts_its_split() -> None:
-    """Known-bad (T6-8): one node over files whose diff estimate exceeds the
+    """Known-bad: one node over files whose diff estimate exceeds the
     budget its caller allows; known-good: the same files split across two
     nodes, each under budget, and a small node at the same budget."""
     lines = {"a.py": 4000, "b.py": 4000, "c.py": 10}
@@ -723,7 +723,7 @@ def test_validate_dag_rejects_a_node_too_large_for_its_budget_and_accepts_its_sp
 
 
 def test_pending_test_nodes_names_only_what_can_still_write_tests() -> None:
-    """T6-53: an `impl` node may not write tests and a proven node is done.
+    """An `impl` node may not write tests and a proven node is done.
 
     The answer decides whether an uncovered changed line is a defect or a
     schedule, so both exclusions are load-bearing: naming an `impl` node
@@ -768,11 +768,11 @@ def _round3i_dag() -> Dag:
 
 
 def test_reserved_target_files_names_what_a_pending_sibling_still_owes() -> None:
-    """T6-65, the round 3i instance. Replacing `n1` reserves `n2`'s files.
+    """The round 3i instance. Replacing `n1` reserves `n2`'s files.
 
     This is the fact the replanner never had: `n1.r2` declared
     `accounts.py` and `fees.py` while `n2` was still pending, so `n2`
-    ran against a tree where its work was done (F21.40).
+    ran against a tree where its work was done.
     """
     dag = _round3i_dag()
     assert reserved_target_files(dag, set(), replacing="n1") == (

@@ -1,4 +1,4 @@
-"""Tier 0 at finish (F21.81 finding 1, Rec 97; tightened).
+"""Tier 0 at finish (tightened).
 
 The contract: a tree the in-run `finish` accepts is a tree the post-hoc
 `saddle audit --tiered` tier 0 accepts, on the changed files. In the M3

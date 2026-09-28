@@ -76,7 +76,7 @@ branch = true
 # (per-run coverage is pure overhead and fails the 100% gate by design).
 source_paths = ["src/saddle/"]
 # Copied into mutants/ unmutated. benchmark/: test_stall_check imports the
-# harness. docs/: test_docs reads ARCHITECTURE.md. tools/: the T3-18 grammar
+# harness. docs/: test_docs reads ARCHITECTURE.md. tools/: the diff-grammar
 # test imports diff_grammar_check. A test that reads outside the copy fails
 # there whatever the mutation and kills every mutant, so the Tier-2 score
 # would read 100% while measuring nothing; test_mutmut_layout runs those

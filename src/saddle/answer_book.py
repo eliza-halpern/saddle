@@ -16,7 +16,7 @@ here imports `evidence` or `runner`. Prompts take their streams as
 arguments (`ux.ask_confirm`). The key-function registry `KEY_FNS` is saddle
 source, never written by the model.
 
-The class key (G, DECISIONS row 5) has three parts: the key function's
+The class key has three parts: the key function's
 value, the sealed references' signature and the panel votes. K3 alone
 merges `u..x@example.com` with 578 Fix-8 inputs, 369 of them valid by every
 grammar; without the panel votes a "trim is fine" answer pins `' '`.
@@ -62,7 +62,7 @@ def _cc(c: str) -> str:
 
 
 def k3(s: str) -> tuple[object, ...]:
-    """MEASURE §M1-G's K3 shape key (phase1/tools/m1g_apply_d.shape_key, copied)."""
+    """The K3 shape key, copied from the calibration tool that defined it."""
     if s and (_cc(s[0]) == "ZC" or _cc(s[-1]) == "ZC"):
         return ("ws",)
     if "@" in s:
@@ -925,7 +925,7 @@ def detected_misses(
     members: Iterable[str], tree: Mapping[str, bool], ctx: Ctx, res: Resolution
 ) -> list[Record]:
     """Members on which the tree's answer is contradicted by a live pin, or by at least one valid
-    reference (the routed case, M1-F F3). Shortest first. Empty when no tree exists (plan time)."""
+    reference (the routed case). Shortest first. Empty when no tree exists (plan time)."""
     out: list[Record] = []
     for x in shortest_first(members):
         if x not in tree:

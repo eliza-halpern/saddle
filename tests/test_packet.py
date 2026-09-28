@@ -166,7 +166,7 @@ def test_every_cite_in_a_real_runs_packet_resolves_to_a_ledger_record(repo: Path
     text = render_packet_text(packet)
     assert text.startswith("verdict: finished")
     assert "add now adds" not in text  # the recap carries no model narrative
-    assert render_packet_text(compile_packet(result.journal)) == text  # deterministic (T5-9)
+    assert render_packet_text(compile_packet(result.journal)) == text  # deterministic
     assert packet.payload()["narrative_label"] == NARRATIVE_LABEL
 
 
@@ -495,7 +495,7 @@ class PassingAuditor:
 
 
 def test_the_cost_row_counts_the_models_tool_calls_not_audit_records(repo: Path) -> None:
-    """FIX-1 (out/DOCS/report.md: a 4-tool-call run's Cost row said 18).
+    """A 4-tool-call run's Cost row once said 18.
 
     The feed journals its audit records as `tool` spans, but the model did
     not make them. Three calls are scripted; a count that admits the audit
@@ -548,7 +548,7 @@ def tier_span(
 def test_a_blocked_tier_2_is_reported_blocked_not_failed(
     tmp_path: Path, verdict: str, detail: str, status: str, text: str
 ) -> None:
-    """FIX-3 (out/DOCS/report.md): a tier 2 that never ran because tier 1
+    """A tier 2 that never ran because tier 1
     failed was shown as a failed mutation result, which does not exist."""
     journal = tmp_path / "proofs.jsonl"
     append_span(journal, tier_span(1, "coverage", "fail", "calc.py:2 uncovered"))
@@ -558,13 +558,13 @@ def test_a_blocked_tier_2_is_reported_blocked_not_failed(
     assert (row.status, row.text, row.cites) == (status, text, (span.record_hash,))
 
 
-# -- the mutation row's English summary (PACKETHOOK) ---------------------------------
+# -- the mutation row's English summary ---------------------------------------------
 
 MUTANT_FIXTURES = Path(__file__).parent / "fixtures" / "mutant_text"
 
 
 def mutation_outcome(name: str = "E-t5-s1") -> dict[str, Any]:
-    """A CALIB tree's sealed `MutationOutcome` plus its `survivor_detail`."""
+    """A calibration tree's sealed `MutationOutcome` plus its `survivor_detail`."""
     data = json.loads((MUTANT_FIXTURES / f"{name}.json").read_text())
     return {**data["outcome"], "survivor_detail": data["survivor_detail"]}
 
@@ -588,7 +588,7 @@ def test_a_sealed_mutation_outcome_renders_the_grouped_english_beneath_the_count
     tmp_path: Path,
 ) -> None:
     """Known-good: the Mutation row keeps its count line; the sealed outcome's
-    English (MUTSUMMARY) sits beneath it, in the text recap and the payload."""
+    English sits beneath it, in the text recap and the payload."""
     journal = tmp_path / "proofs.jsonl"
     detail = "killed 220 of 322 sampled mutants; 21 untested"
     span = sealed_mutation_span(journal, "fail", detail, mutation_outcome())
@@ -607,7 +607,7 @@ def test_a_sealed_mutation_outcome_renders_the_grouped_english_beneath_the_count
     assert "[accounts.xǁAccountǁwithdraw__mutmut_18]" in row.summary
     text = render_packet_text(packet)
     assert f"Mutation [failed]: tier 2, fail: {detail}\n  220 of 322 sampled mutants" in text
-    # The recap prints the COMPACT form (PACKETHOOK-3: it must not scroll):
+    # The recap prints the COMPACT form (it must not scroll):
     # survivors capped at 5, worst group first, "and N more in the packet".
     # Each summary line sits two spaces under the row, so a bullet is "    - ".
     assert "\n  Left untested:\n    - accounts.py Account.withdraw:" in text
@@ -674,7 +674,7 @@ def test_a_blocked_tier_2_renders_no_summary_even_with_a_sidecar(tmp_path: Path)
 
 
 def test_a_mutation_sidecar_that_does_not_hash_makes_the_ledger_unrecorded(tmp_path: Path) -> None:
-    """The sealed outcome is a sidecar like any other (T6-12): an edited one
+    """The sealed outcome is a sidecar like any other: an edited one
     fails `verify_journal`, and the packet says so instead of describing it."""
     journal = tmp_path / "proofs.jsonl"
     span = sealed_mutation_span(journal, "fail", "killed 220 of 322", mutation_outcome())
@@ -701,7 +701,7 @@ def test_a_seam_mutation_audit_has_no_summary_and_no_summary_key(repo: Path) -> 
     assert all("summary" not in r for r in packet.payload()["rows"])
 
 
-# -- the Audit row's coverage English (PACKETHOOK, COVTEXT) -------------------------
+# -- the Audit row's coverage English ---------------------------------------------
 
 COVERAGE_FIXTURE = Path(__file__).parent / "fixtures" / "coverage_text" / "E-t5-s1"
 
@@ -760,7 +760,7 @@ def test_a_failing_coverage_finding_with_sealed_sources_renders_its_english_unde
     tmp_path: Path,
 ) -> None:
     """Known-good: the Audit row keeps its count and items; beneath them, the
-    coverage English (COVTEXT) for E-t5-s1, linked to the mutation summary
+    coverage English for E-t5-s1, linked to the mutation summary
     sealed on the same ledger, with the uncovered lines' own text."""
     journal = tmp_path / "proofs.jsonl"
     span = coverage_span(journal, coverage_finding(), coverage_evidence(tmp_path))
@@ -785,7 +785,7 @@ def test_a_failing_coverage_finding_with_sealed_sources_renders_its_english_unde
     assert "\nAudit [failed]: 0 of 1 finding passed.\n  - ✗ coverage: tier 1, fail:" in text
     assert "\n  Not proven by any test: 19 changed lines no test runs" in text
     assert '\n        131:     if source == "USD":\n        132:         usd = value\n' in text
-    # Compact in the recap (PACKETHOOK-3), full in the payload for the web fold.
+    # Compact in the recap, full in the payload for the web fold.
     assert "\n        and 8 more lines\n" in text
     assert "\n    and 1 more functions in the packet\n" in text
     assert "store.py _from_record_v1" not in text

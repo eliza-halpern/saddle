@@ -1,11 +1,11 @@
 """The packet's audit count: auditor verdicts only, each counted as what it was.
 
-PACKETFIX-2 (out/FIX/report.md, "Verdict line"): a finished run's verdict
+Blocked is not failed: a finished run's verdict
 line counted a `blocked` finding (tier 2 not run because tier 1 failed on
 that tree) among "N audit findings failed". Blocked is reported as
 blocked; failures count only gates that ran and failed.
 
-PACKETFIX-1 (out/CHECK/report.md, DISPATCH 12:30): the real auditor's
+Edit checks are not verdicts: the real auditor's
 tier-0 findings (syntax, ruff, imports on one edited file) were counted as
 audit verdicts, so a run whose auditor issued 9 verdicts read "12 of 12".
 A tier-0 check is reported on its own "Edit checks" row; the Audit row and
@@ -144,9 +144,8 @@ def test_a_failing_edit_check_is_its_own_failed_line_and_still_refuses_merge(
 
     The unused import is in the file tier 0 checks last (`Auditor.audit`
     sorts by path): the row keeps the latest finding per gate, so an earlier
-    file's failure is masked by a later file's pass (open, see
-    out/PACKETFIX/report.md; the ledger does not record which file a tier-0
-    span checked).
+    file's failure is masked by a later file's pass (open: the
+    ledger does not record which file a tier-0 span checked).
     """
     journal = audited_run(tmp_path, test="import os\n" + TEST)
     packet = compile_packet(journal)
@@ -181,7 +180,7 @@ def test_every_count_row_cites_the_records_it_counts(tmp_path: Path, key: str) -
     assert tiers == ({0} if key == "edit-checks" else {1, 2})
 
 
-# -- PACKETFIX-2: blocked is not failed ------------------------------------------
+# -- blocked is not failed -------------------------------------------------------
 
 
 BLOCKED = "tier 1 failed (coverage); tier 2 not run"

@@ -471,7 +471,7 @@ class ChatServer:
     # -- task -----------------------------------------------------------
 
     def _run_task(self, session_id: str, run: TaskRun) -> None:
-        """Run one chat-started task on `saddle auto`'s own path (T5-7)."""
+        """Run one chat-started task on `saddle auto`'s own path."""
         live = self._live(session_id)
         publish = self._publisher(run, live)
         try:
@@ -567,7 +567,7 @@ def build_app(
                 shown: tuple[str, str] | None = (newest.state, newest.task)
             else:
                 # Nothing in memory (a restart, above all): the session's own
-                # chat journal still names its latest ended run (UXREVIEW2 Q1).
+                # chat journal still names its latest ended run.
                 shown = tasks.latest_run_ref(store.journal_path(session.id))
             row["run_state"] = shown[0] if shown is not None else None
             row["run_task"] = shown[1] if shown is not None else None
@@ -919,7 +919,7 @@ def build_app(
         return JSONResponse(compile_packet(journal, run_id=rid, anchor_repo=repo).payload())
 
     def write_report(journal: Path, rid: str) -> tuple[Path, str]:
-        """The full packet as text, written beside the run's ledger (UXFIX2 Q10).
+        """The full packet as text, written beside the run's ledger.
 
         `packet.md` sits in `.saddle/runs/<id>/` next to `proofs.jsonl`: inside
         the session's folder, so the Ask lane's read_file can open it when

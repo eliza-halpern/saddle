@@ -1,4 +1,4 @@
-"""LANECHIP: Ask is the default lane and cannot write; Edit is opt-in.
+"""The session lane chip: Ask is the default lane and cannot write; Edit is opt-in.
 
 Known-good: in an Edit session a scripted `edit_file` call changes the file,
 and the tools offered to the model include every file and shell tool.

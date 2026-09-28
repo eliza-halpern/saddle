@@ -510,7 +510,7 @@ def test_a_reconnecting_page_gets_the_running_cards_state_lines_and_spend(
 
 
 def test_the_web_packet_reports_the_branch_anchor_check(store: SessionStore, repo: Path) -> None:
-    """FIX-4 (out/ANCHOR/report.md limits): the web packet never passed the
+    """The web packet never passed the
     repo, so its Reproduce row could not show the anchor check. A web run
     has a branch, so the served packet reports the check and its command."""
     with app_for(store, repo, FIX) as (client, server):
@@ -524,7 +524,7 @@ def test_the_web_packet_reports_the_branch_anchor_check(store: SessionStore, rep
 
 
 def test_an_unchanged_run_keeps_its_state_across_a_restart(tmp_path: Path) -> None:
-    """FEEDFIX (5): `unchanged` is an ended state of its own, not "failed"."""
+    """`unchanged` is an ended state of its own, not "failed"."""
     from saddle.journal import append_span
 
     chat = tmp_path / "chat.jsonl"

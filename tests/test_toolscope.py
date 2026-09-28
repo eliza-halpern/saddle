@@ -1,4 +1,4 @@
-"""TOOLSCOPE: the terminal chat (`saddle up`) is scoped by lane exactly as the web chat is.
+"""The terminal chat (`saddle up`) is scoped by lane exactly as the web chat is.
 
 Contract: for each chat lane, the tool list the terminal model is offered
 equals the list the web model is offered, and a call to a tool outside that

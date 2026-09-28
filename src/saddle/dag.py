@@ -38,10 +38,10 @@ NodeKind = Literal["test", "impl", "refactor"]
 # `Regex("^diff --git ", json_string=true)` -- so a malformed ID is
 # unrepresentable rather than rejected after the packet exists.
 RequirementId = Annotated[str, Field(pattern=r"^REQ-\d{3}$")]
-# How far, in edits, a reject may sit from its nearest accept (T6-4).
+# How far, in edits, a reject may sit from its nearest accept.
 # Lives here rather than in gates.py because dag sits below gates in the
 # layering and the validator that enforces it is the model's own. Start
-# at 3; T6-1's row B tunes it.
+# at 3; a retrospective over the round-3 attempts is what tunes it.
 REQ_NEAR_MISS_K: Final = 3
 
 
@@ -60,7 +60,7 @@ class Requirement(BaseModel):
     """One acceptance criterion: an ID plus what it actually requires.
 
     A bare ID states nothing, so no gate can check whether a test tests
-    it (F5). The worker received `Requirements: REQ-001, REQ-002`, invented
+    it. The worker received `Requirements: REQ-001, REQ-002`, invented
     what they meant, asserted its own invention and the gate greped for the
     substring -- 7/7 gates and 12/18 on hidden behaviour for T1. The
     statement is what makes the binding checkable by anything other than
@@ -71,14 +71,14 @@ class Requirement(BaseModel):
 
     id: RequirementId
     statement: Statement
-    # Concrete inputs the statement admits and refuses (T6-4). A statement
+    # Concrete inputs the statement admits and refuses. A statement
     # alone left T1's REQ-002 with no reject at all, and a reject far from
     # every accept -- REQ-001's `"user"`, 12 edits from `user@example.com`
     # -- rejects nothing a lazy validator would not; a near-miss is what
     # tells the requirement from a looser one. The lists are floored at
     # one entry each in the wire schema (`minItems`); the distance rule is
     # checked here, after the packet exists, because no grammar can state
-    # it (T3-2's lesson on patterns).
+    # it (a decoder pattern is a full match; see CONTRIBUTING.md).
     accepts: list[str] = Field(min_length=1)
     rejects: list[str] = Field(min_length=1)
 
@@ -157,7 +157,7 @@ class Node(BaseModel):
     id: NodeId
     # The test/implementation split: an `impl` node may not edit tests and
     # a `test` node may not ship the implementation, so a misreading of
-    # the contract cannot be encoded twice by the same worker (F5, #44).
+    # the contract cannot be encoded twice by the same worker (#44).
     # `refactor` is the behaviour-preserving case, which has to move code
     # and its tests together.
     kind: NodeKind
@@ -166,7 +166,7 @@ class Node(BaseModel):
     requirements: list[Requirement] = Field(min_length=1)
     execution_constraints: ExecutionConstraints
     deterministic_gate: DeterministicGate
-    # Opt-in localisation (T3-2, #64): repo-relative files this node may
+    # Opt-in localisation (#64): repo-relative files this node may
     # touch. Empty means unrestricted, so an omitted field changes nothing
     # and a declared list can only narrow the node's own scope. Validated
     # here rather than by a JSON-schema `pattern`: the decoder compiles a
@@ -209,7 +209,7 @@ class Dag(BaseModel):
 
 
 def planned_requirement_ids(dag: Dag) -> tuple[str, ...]:
-    """Every requirement id some node of `dag` declares, sorted (T3-24).
+    """Every requirement id some node of `dag` declares, sorted.
 
     The binding gate's orphan half reads citations from every discovered
     test source, and a plan that splits its ids across nodes puts one
@@ -225,7 +225,7 @@ def planned_requirement_ids(dag: Dag) -> tuple[str, ...]:
 
 
 def pending_test_nodes(dag: Dag, proven: Collection[str]) -> tuple[str, ...]:
-    """Ids of nodes that may still write tests, sorted (T6-53).
+    """Ids of nodes that may still write tests, sorted.
 
     An `impl` node may not edit tests (`check_node_scope`), so a changed
     line it cannot reach from the tests that exist is not a line it can
@@ -248,7 +248,7 @@ def pending_test_nodes(dag: Dag, proven: Collection[str]) -> tuple[str, ...]:
 
 
 def reserved_target_files(dag: Dag, proven: Collection[str], *, replacing: str) -> tuple[str, ...]:
-    """Files a still-pending node other than `replacing` declares, sorted (T6-65).
+    """Files a still-pending node other than `replacing` declares, sorted.
 
     A recovery subplan replaces one failed node, and `build_replan_task`
     hands the planner the *whole* original task: it never sees the
@@ -257,7 +257,7 @@ def reserved_target_files(dag: Dag, proven: Collection[str], *, replacing: str) 
     and `fees.py` -- `n2`'s files, byte for byte. `n1.r2` sealed, and
     `n2` then ran against a tree where its work was already done. It
     emitted a docstring change and failed `red-phase` and `mutation`,
-    both correctly: there was nothing left to prove (F21.40).
+    both correctly: there was nothing left to prove.
 
     Two exclusions, and both are the point. The node being replaced is
     excluded, because its own files are exactly what a replacement is
@@ -395,7 +395,7 @@ def _ceiling_violations(dag: Dag, context_ceiling: int) -> list[DagIssue]:
     return issues
 
 
-# Emission estimate for a node (T6-8): what its diff costs to write, from the
+# Emission estimate for a node: what its diff costs to write, from the
 # repo, not from the planner. A unified diff re-emits the changed lines with
 # context and headers; measured on round 3 (T5: ~250 diff lines, ~4000
 # tokens), 16 tokens per baseline line of the declared files plus a fixed
@@ -507,7 +507,7 @@ def validate_dag(
     """Zero-LLM semantic checks over a parsed DAG. Empty list means valid.
 
     With `file_lines` (baseline line count per repo file) the scope checks
-    run too (T6-8): an `impl`/`refactor` node must declare `target_files`,
+    run too: an `impl`/`refactor` node must declare `target_files`,
     and with `emission_budget` a node whose estimated diff exceeds the
     budget its caller allows is `node-too-large`. Callers that validate a
     DAG with no repo behind it leave both unset.

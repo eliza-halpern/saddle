@@ -1,6 +1,6 @@
-"""An autonomous run's ledger is anchored outside itself, in its branch (ANCHOR).
+"""An autonomous run's ledger is anchored outside itself, in its branch.
 
-CHAIN holds a run's spans to the list its outcome seals, but nothing is
+The hash chain holds a run's spans to the list its outcome seals, but nothing is
 keyed: delete a span, drop it from the sidecar list, recompute the outcome
 span's `attempt_hash` and `record_hash`, and the ledger verifies. So the
 run branch's final commit carries the outcome span's `record_hash` as a

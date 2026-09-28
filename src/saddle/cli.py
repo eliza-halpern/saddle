@@ -105,7 +105,7 @@ from saddle.vllm import (
 )
 
 # Every name a plan may list, and the harness behaviour listing it buys
-# (T3-4). The list was decorative until this registry existed: it was
+# The list was decorative until this registry existed: it was
 # validated against emissions and consumed nowhere, so a plan that dropped
 # `read_file` still got the whole repo inlined. A name with no binding here
 # is a name the node cannot be given, so `RUN_ALLOWLIST` is derived rather
@@ -138,18 +138,18 @@ BUDGET_TO_EFFORT: Final[dict[str, str]] = {
 }
 # `max_context_tokens` is the worker's INPUT ceiling (ARCHITECTURE.md §2:
 # "each subagent receives a clean ~28,000-30,000-token ceiling"). Generation
-# is not budgeted at all (T6-17): this model's strategy is long test-time
+# is not budgeted at all: this model's strategy is long test-time
 # compute, vLLM enforces no split between thinking and content, and every
-# cap the harness tried was paid for by the diff, not the thinking -- F21.10
-# arm (c) reasoned 17571 tokens at effort `low` against a 16384 "allowance"
+# cap the harness tried was paid for by the diff, not the thinking -- one
+# measured arm reasoned 17571 tokens at effort `low` against a 16384 "allowance"
 # and truncated 3/3. So a worker call asks for everything the context has
 # left after its prompt; `finish_reason=length` is then the model's ceiling,
 # not the harness's, and stays a retryable attempt failure whose evidence
-# is in the sidecar (T6-12). The window comes from the server
+# is in the sidecar. The window comes from the server
 # (`max_model_len` on `GET /models`), else `--context-window`, else the
 # container's `MAX_LEN`.
 DEFAULT_CONTEXT_WINDOW: Final = 175000
-# Code tokenises denser than prose; F21.10's 24739-char worker prompt was
+# Code tokenises denser than prose; one measured 24739-char worker prompt was
 # 6586 tokens (3.76 chars/token). Three over-counts the prompt, so the
 # request can never exceed the window, at the cost of room no diff needs.
 PROMPT_CHARS_PER_TOKEN: Final = 3
@@ -158,19 +158,19 @@ OUTPUT_MARGIN: Final = 2048
 
 
 def worker_max_tokens(prompt: str, context_window: int) -> int:
-    """The `max_tokens` a worker call sends: the window left after `prompt` (T6-17)."""
+    """The `max_tokens` a worker call sends: the window left after `prompt`."""
     left = context_window - len(prompt) // PROMPT_CHARS_PER_TOKEN - OUTPUT_MARGIN
     return max(left, OUTPUT_MARGIN)
 
 
 def diff_budget(node: Node, context_window: int) -> int:
-    """Most a node's diff may be estimated at and still be planned (T6-8).
+    """Most a node's diff may be estimated at and still be planned.
 
     The window minus the node's own read ceiling and the margin: a diff
     that cannot fit in the room its prompt leaves is a node no retry can
     rescue, so it is rejected before any worker call and the planner
-    splits it. Since T6-17 nothing is subtracted for reasoning, because
-    nothing caps it.
+    splits it. Nothing is subtracted for reasoning, because nothing
+    caps it.
     """
     return context_window - node.execution_constraints.max_context_tokens - OUTPUT_MARGIN
 
@@ -222,12 +222,12 @@ class RunOptions:
     context_window: int = DEFAULT_CONTEXT_WINDOW
     recovery_temperature: float | None = None
     deadline_s: float | None = None
-    # Sealed on the run span (T6-27): rounds were compared on the
+    # Sealed on the run span: rounds were compared on the
     # assumption the model never moved, and nothing could have said if it had.
     model: str = DEFAULT_MODEL
     server_version: str = "unknown"
-    # Survivor rounds (T6-29c): candidate tests are drawn at their own
-    # effort and token cap, k at a time. F21.14: `none` yielded two usable
+    # Survivor rounds: candidate tests are drawn at their own
+    # effort and token cap, k at a time. Measured: `none` yielded two usable
     # drafts in ten and no kills; numeric length instructions in the brief
     # do not land, so the cap is the harness's, not the prompt's.
     survivor_effort: str = "low"
@@ -238,7 +238,7 @@ class RunOptions:
     # costs one line. The prompt and the grammar have to agree, so both are
     # chosen from this single field rather than set independently.
     emission: str = "whole-file"
-    # Rule D (P2-3): off unless `--rule-d`. When off, nothing below reads a
+    # Rule D: off unless `--rule-d`. When off, nothing below reads a
     # store, prints a census or calls rule D, so the run is the run it was.
     rule_d: RuleDConfig | None = None
 
@@ -292,7 +292,7 @@ def rule_d_plan(
 
 
 def survivor_drawer(client: VllmClient, options: RunOptions) -> TestDrawer:
-    """The test-candidate draw a survivor round makes (T6-29c).
+    """The test-candidate draw a survivor round makes.
 
     One grammar-constrained diff call per seed at `survivor_effort`,
     capped at `survivor_max_tokens` (and by the window left after the
@@ -327,12 +327,12 @@ def survivor_drawer(client: VllmClient, options: RunOptions) -> TestDrawer:
 
 
 def worker_temperature(options: RunOptions, failure: str | None) -> float:
-    """The temperature a worker diff call samples at (T6-15).
+    """The temperature a worker diff call samples at.
 
     First attempts use `sample_temperature`; retries use it too unless
-    `recovery_temperature` is given. Until T6-15 a retry dropped to
-    `temperature` (0.0 by default) for a reproducible repair (T2-1); F21.10
-    arm (c) measured that: three seeds at 0.0 were one byte-identical
+    `recovery_temperature` is given. A retry used to drop to
+    `temperature` (0.0 by default) for a reproducible repair; one measured
+    arm showed the cost: three seeds at 0.0 were one byte-identical
     sample and truncated 3/3, and a retry that resends a greedy walk after
     a degenerate one walks the same way. `temperature` still governs
     planning and the recovery-plan prose.
@@ -349,7 +349,7 @@ class DagOptions:
     """Resolved `dag` inputs: task, server, emission knobs, and the repo to list.
 
     `repo` is only read (`git ls-files`) so the planner sees the files it
-    is planning for (T3-19); None lists nothing, for callers without one.
+    is planning for; None lists nothing, for callers without one.
     """
 
     task: str
@@ -380,7 +380,7 @@ def build_emit_prompt(task: str, files: Sequence[str] = ()) -> str:
     honour cannot reach the planner and a binding cannot change without
     the prompt saying so.
 
-    `files` is the repository's tracked listing (T3-19). A planner that
+    `files` is the repository's tracked listing. A planner that
     sees only the task sentence plans blind: the smoke run of 2026-09-19
     built a parallel `src/f.py` beside the `n.py` that already defined
     `f`, so the task's subject ended up twice with different behaviour.
@@ -559,12 +559,12 @@ def build_worker_prompt(
     emission: str = "whole-file",
     failure: str | None = None,
 ) -> str:
-    """The prompt a node's attempt is drawn from (P2-1).
+    """The prompt a node's attempt is drawn from.
 
     An `impl` node's FIRST attempt gets the task-first prompt: the task,
     the files, the wire format and the scope line, nothing else. With the
     loop, tools, sampling and effort held equal, the structured prompt
-    alone moved T1 first drafts from 10/18 correct to 0/18 (F21.77). Every
+    alone moved T1 first drafts from 10/18 correct to 0/18. Every
     retry, and every `test` or `refactor` node on any attempt, keeps the
     structured prompt: a retry arrives after a gate said what was wrong,
     and a test node's binding rules are what its gates check.
@@ -590,7 +590,7 @@ def _shown_files(files: Sequence[str]) -> str:
 
 
 def _file_context(node: Node, contents: Mapping[str, str]) -> str:
-    """File contents truncated to the node's own context ceiling (T3-4 binding)."""
+    """File contents truncated to the node's own context ceiling (the `read_file` binding)."""
     if "read_file" not in node.execution_constraints.allowed_tools:
         return CONTENTS_WITHHELD
     context = "\n\n".join(f"--- {name} ---\n{text}" for name, text in contents.items())
@@ -668,7 +668,7 @@ def build_structured_prompt(
     reads worst.
 
     `read_file` is the binding that decides whether the contents appear
-    at all (T3-4): without it the node still gets the file *names*, which
+    at all: without it the node still gets the file *names*, which
     is what makes omitting it a context-cost lever rather than blindness.
     """
     shown = _shown_files(files)
@@ -776,7 +776,7 @@ def build_repair_prompt(
     that rather than against the node's baseline.
 
     Under the whole-file envelope "fix forward" is about WHICH TREE to
-    write against, not about how much to emit (T6-62/A1). Every write is
+    write against, not about how much to emit. Every write is
     the complete file either way, so the sentence says to write the files
     as they should now be.
 
@@ -795,7 +795,7 @@ def build_repair_prompt(
     followed.
 
     `plan` is `None` when the diagnosis step produced an instruction a
-    gate would reject (T6-54); the section is then absent rather than
+    gate would reject; the section is then absent rather than
     replaced, so the worker fixes forward on the failure alone and the
     harness does not hand it a plan it cannot legally follow.
     """
@@ -862,7 +862,7 @@ def _ensure_repo(repo: Path) -> bool:
 def _ensure_clean(repo: Path) -> None:
     """Refuse repos with uncommitted changes against HEAD (tracked tree).
 
-    This is also the first half of the resume flow after a crash (T3-10).
+    This is also the first half of the resume flow after a crash.
     A run that died left its proven edits staged, so this check refuses
     the repo; the user commits them (`git add -u && git commit`) and runs
     again. `run_slice`'s tree check then passes, because a commit names
@@ -891,11 +891,11 @@ def _emit_valid_dag(
 
     `file_lines` (baseline lines per file) turns on the scope checks: an
     impl/refactor node must declare its files and its estimated diff must
-    fit the room the window leaves it (T6-8, `diff_budget`). Both come
+    fit the room the window leaves it (`diff_budget`). Both come
     back to the planner as validation errors, like every other issue.
 
     `reserved` is empty for the first plan and carries the pending nodes'
-    files for a replan (T6-65): the replan prompt states the whole task,
+    files for a replan: the replan prompt states the whole task,
     so nothing else stops a subplan re-planning a sibling's work.
     """
     prompt = build_emit_prompt(task, files)
@@ -931,7 +931,7 @@ def _emit_valid_dag(
             emission_budget=lambda node: diff_budget(node, context_window),
         )
         round_errors = [f"{issue.code}: {issue.message}" for issue in issues]
-        # T6-58: a plan that restates the gate is refused and REDRAWN, never
+        # A plan that restates the gate is refused and REDRAWN, never
         # rewritten here -- editing the statement would leave the node held
         # to a requirement no model ever wrote, and the worker reads the
         # requirement block as binding.
@@ -941,7 +941,7 @@ def _emit_valid_dag(
                 "plan-restates-gate: a node description or requirement statement restates "
                 f"the coverage gate: {restated!r}. State behaviour a test can falsify."
             )
-        # T6-65: the same redraw, for a subplan that would do a pending
+        # The same redraw, for a subplan that would do a pending
         # node's work. Naming the files is what tells the planner a
         # sibling exists at all -- the replan prompt does not.
         retargeted = plan_retargets_reserved_files(dag.nodes, reserved)
@@ -958,7 +958,7 @@ def _emit_valid_dag(
 
 
 def served_version(client: VllmClient) -> str:
-    """The server's version for the run span (T6-27); `unknown` when it will not say."""
+    """The server's version for the run span; `unknown` when it will not say."""
     try:
         return client.server_version() or "unknown"
     except VllmRequestError:
@@ -1020,7 +1020,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         budget = node.execution_constraints.reasoning_budget
         effort = options.worker_effort or BUDGET_TO_EFFORT[budget]
         files = git_ls_files(options.repo)
-        # Every call gets the window left after its own prompt (T6-17):
+        # Every call gets the window left after its own prompt:
         # a longer prompt (a repair brief, a tree a failed attempt bloated)
         # buys less room, never more, and nothing is held back for thinking.
         contents = {
@@ -1098,7 +1098,7 @@ def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout:
         "worker_effort": options.worker_effort or "node budget",
         "survivor_effort": options.survivor_effort,
         "survivor_samples": str(options.survivor_samples),
-        # What the ruff gate ran with (T6-37, T6-34): the verdict is a
+        # What the ruff gate ran with: the verdict is a
         # function of both, and round 3d's trees could not say which ruff
         # autofixed them.
         "ruff": ruff_version(),
@@ -1174,7 +1174,7 @@ def _listable_files(repo: Path | None) -> list[str]:
     """The repo's tracked files for `saddle dag`; none outside a repository.
 
     `dag` is a preview and may run anywhere, so a cwd that is not a git
-    repository lists nothing rather than failing (T3-19).
+    repository lists nothing rather than failing.
     """
     if repo is None:
         return []
@@ -1210,7 +1210,7 @@ def run_verify(journal: Path, *, stdout: IO[str], anchor: Path | None = None) ->
     """Audit one journal: hashes, links and outcome span lists, then its transcript.
 
     With `anchor` (a repo), also hold each autonomous run's outcome span to
-    the `Saddle-Outcome` trailer on its branch there (ANCHOR).
+    the `Saddle-Outcome` trailer on its branch there.
     """
     issues = verify_journal(journal)
     if anchor is not None:
@@ -1272,7 +1272,7 @@ def _explain_attempt(journal: Path, span: SpanRecord) -> list[str]:
 
 
 def run_explain(journal: Path, *, attempt: str | None, stdout: IO[str]) -> int:
-    """Explain a run from its journal (T6-27): times, calls, verdicts, findings.
+    """Explain a run from its journal: times, calls, verdicts, findings.
 
     The default tier is redacted -- identifiers, start times, durations,
     seeds, temperatures, token counts, gate verdicts, verify findings --
@@ -1387,7 +1387,7 @@ def _render_audit(result: AuditResult, stdout: IO[str]) -> None:
 
 
 def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> int:
-    """Gate a diff with no plan and exit with the verdict (P1-5).
+    """Gate a diff with no plan and exit with the verdict.
 
     No revision: `--repo`'s working tree, untracked files included, against
     `--baseline` (default HEAD). A revision: that commit's tree, taken from a
@@ -1478,7 +1478,7 @@ def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]
     """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`."""
     verdict = "accept" if all(r.passed for r in results) else "refuse"
     if as_json:
-        # mutant_detail is the audit span's record (MUTSUMMARY), not the CLI's:
+        # mutant_detail is the audit span's record, not the CLI's:
         # dropped so `--json` stays byte-identical to what it was before it.
         tiers = [{k: v for k, v in r.to_dict().items() if k != "mutant_detail"} for r in results]
         payload = {"verdict": verdict, "tiers": tiers}
@@ -1871,7 +1871,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         f"ledger {result.journal}\n"
     )
     # The packet, compiled from the sealed ledger the run just wrote: the
-    # terminal gets what the chat card gets (UXREVIEW2 Q7), not only the
+    # terminal gets what the chat card gets, not only the
     # outcome line.
     stdout.write(render_packet_text(compile_packet(result.journal, run_id=result.run_id)) + "\n")
     return 0 if result.outcome == "finished" else AUTO_STOPPED

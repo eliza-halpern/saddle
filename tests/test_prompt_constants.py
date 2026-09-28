@@ -1,7 +1,7 @@
-"""FEEDFIX item 1: a reporting-only row for the constants a task prompt names.
+"""A reporting-only row for the constants a task prompt names.
 
-SURVIVORRES found no survivor ordering that surfaces the T5 rounding bug on
-the broken tree, but a name check sees it: the source names
+No ordering of the surviving mutants surfaces the T5 rounding bug on the
+broken tree, but a name check sees it: the source names
 `ROUND_HALF_EVEN`, a sibling of the `ROUND_HALF_UP` the prompt names, and
 never `ROUND_HALF_UP`. The row words it as untested behaviour the prompt
 names, never as a bug, and changes no verdict.

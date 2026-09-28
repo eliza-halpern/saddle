@@ -387,7 +387,7 @@ def _run_span(exit_code: int, detail: str) -> SpanRecord:
 
 
 def test_render_journal_transcript_failed_run_span_is_fail() -> None:
-    """T3-21 known-bad: the smoke journal's shape -- one sealed proof, a run
+    """Known-bad: the smoke journal's shape -- one sealed proof, a run
     span saying a second node failed -- re-rendered as PASS, because only
     proven nodes have records and the run span was never read."""
     record = _sealed("n1", True, [])
@@ -398,7 +398,7 @@ def test_render_journal_transcript_failed_run_span_is_fail() -> None:
 
 
 def test_render_journal_transcript_passed_run_span_stays_pass() -> None:
-    """T3-21 known-good: a run span that exited 0 changes nothing."""
+    """Known-good: a run span that exited 0 changes nothing."""
     record = _sealed("n1", True, [])
     spans = [_run_span(0, "1 proven, 0 failed, 0 undispatched, merge exit 0")]
     assert "- Verdict: PASS\n" in render_journal_transcript([record], spans, "/tmp/proofs.jsonl")
@@ -415,7 +415,7 @@ def test_render_journal_transcript_last_run_span_governs() -> None:
 
 
 def test_render_event_plan_record_lists_every_node() -> None:
-    """T6-13: `saddle tail` shows what was asked as soon as it is sealed."""
+    """`saddle tail` shows what was asked as soon as it is sealed."""
     from saddle.journal import PlanNode, PlanRecord
 
     plan = PlanRecord(

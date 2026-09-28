@@ -36,9 +36,9 @@ question -- so this checks both halves, on real inputs:
   the first two checks and is killed only by this one.
 
 A construct missing from the grammar is a file the worker cannot express,
-which is the exact failure the grammar exists to prevent. Under T6-62/A1
-that means file CONTENT, not diff syntax: the old corpus was this repo's
-own `git show` output, which the whole-file envelope refuses by design.
+which is the exact failure the grammar exists to prevent. Under the whole-file
+envelope that means file CONTENT, not diff syntax: the old corpus was this
+repo's own `git show` output, which the envelope refuses by design.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ MUST_REJECT = {
     "hunk without file lines": "diff --git a/x b/x\n@@ -0,0 +1 @@\n+b\n",
     # The envelope's own contract, all three halves. A write carries the
     # new file and nothing else, so there is no original side to drift
-    # against (T6-62/A1, F21.38).
+    # against.
     "context line in body": _W + "@@ -0,0 +1,2 @@\n+x = 1\n x = 2\n",
     "removal line in body": _W + "@@ -0,0 +1,2 @@\n+x = 1\n-x = 2\n",
     "anchor past line 1": _W + "@@ -0,0 +2,2 @@\n+x = 1\n",
@@ -122,7 +122,7 @@ SYNTHETIC = {
     "_write_blank_line": _W + "@@ -0,0 +1,3 @@\n+x = 1\n+\n+y = 2\n",
     "_write_noeol": (_W + "@@ -0,0 +1 @@\n+x = 1\n\\ No newline at end of file\n"),
     # Metadata git emits on a creation stays legal, and a write may carry
-    # `new file mode` -- it is simply no longer required (T6-62/A1).
+    # `new file mode` -- it is simply no longer required.
     "_write_with_meta": (
         "diff --git a/new.py b/new.py\nnew file mode 100644\n"
         "index 0000000..e69de29\n--- /dev/null\n+++ b/new.py\n"

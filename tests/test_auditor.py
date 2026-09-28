@@ -391,7 +391,7 @@ def test_cli_tiered_rev_mode_and_exit_codes(clean_tree: Path, tmp_path: Path) ->
     assert "no-such-base" in err
 
 
-# -- the mutation outcome is sealed beside its finding (PACKETHOOK) --------------
+# -- the mutation outcome is sealed beside its finding --------------------------
 
 
 def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
@@ -417,7 +417,7 @@ def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
     assert sorted(sealed["survivors"]) == [f"m{i}" for i in range(1, 6)]
     assert verify_journal(journal) == []
     assert describe_mutation(sealed).untested == 5
-    # SHORTLIST-2's per-mutant rows are sealed in the record shape the
+    # The shortlist's per-mutant rows are sealed in the record shape the
     # Findings and AuditResult dicts use, so describe_mutation places them.
     assert [(m["name"], m["status"]) for m in sealed["mutant_detail"]] == [
         (f"m{i}", "no tests") for i in range(1, 6)
@@ -430,7 +430,7 @@ def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
     assert all(not s.attempt_hash for s in others)
     row = next(r for r in compile_packet(journal).rows if r.key == "mutation")
     assert "5 sampled mutants sit in code no test runs [record: untested=5]" in row.summary
-    # With SHORTLIST-2's rows sealed, each survivor is described from its own
+    # With the shortlist's rows sealed, each survivor is described from its own
     # diff; the "no recorded diff" fallback no longer applies to any of them.
     assert "m1: `return 2` -> `return 3`" in row.summary
     assert "survived: nothing tests this [m1]" in row.summary
@@ -451,7 +451,7 @@ def test_tier1_seals_sources_and_changed_lines_beside_a_failing_coverage_finding
 ) -> None:
     """The `audit-tier1:coverage` finding that names uncovered lines carries a
     sealed sidecar with the text of each file it names and the changed set the
-    gate judged (PACKETHOOK), so the packet can render COVTEXT's English. The
+    gate judged, so the packet can render `coverage_text`'s English. The
     finding itself is unchanged."""
     from saddle.journal import attempt_sidecar_path
     from saddle.packet import compile_packet
@@ -544,9 +544,9 @@ def test_tier2_seals_nothing_when_the_gate_carries_no_outcome(
 def test_tier1_seals_a_not_proven_coverage_finding_under_shortlist_so_its_english_renders(
     uncovered_tree: Path, tmp_path: Path
 ) -> None:
-    """FEEDFIX (8): under `--tier2 shortlist` coverage is `not-proven`
-    (SHORTLIST-4), and it seals the same sidecar a failing one does, so the
-    packet renders COVTEXT's English for it."""
+    """Under `--tier2 shortlist` coverage is `not-proven`, and it seals the
+    same sidecar a failing one does, so the packet renders `coverage_text`'s
+    English for it."""
     from saddle.packet import compile_packet
 
     journal = tmp_path / "proofs.jsonl"

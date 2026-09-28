@@ -1,8 +1,8 @@
 """The mutation row in English (mutant_text): classifier, taxonomy, renderer.
 
 Every class has a known-good instance that lands in it and a known-bad
-instance that does not. The T5 fixtures are real CALIB outcomes
-(internal CALIB run records, not public), copied verbatim.
+instance that does not. The T5 fixtures are real calibration-run outcomes
+(internal run records, not public), copied verbatim.
 """
 
 from __future__ import annotations
@@ -390,7 +390,7 @@ def test_empty_record_renders_only_counts() -> None:
     )
 
 
-# -- the compact rendering: the recap must not scroll (PACKETHOOK-3) ---------------
+# -- the compact rendering: the recap must not scroll ---------------------------
 
 BOUNDARY = ("if a > b:", "if a >= b:")
 ACCUMULATION = ("total += x", "total = x")

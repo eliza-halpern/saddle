@@ -449,7 +449,7 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
 
 @media (max-width: 420px) {
   /* The send button already says busy. "needs you" is the one state that
-     asks for you, so it stays (UXREVIEW2 Q3). */
+     asks for you, so it stays. */
   .status:not(.needs) { display: none; }
 }
 

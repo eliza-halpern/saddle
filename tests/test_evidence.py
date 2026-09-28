@@ -64,14 +64,14 @@ from saddle.journal import SpanRecorder, read_spans
 
 _ALL_MUTANT_NAMES = re.compile(r"^\s*(\S+): ", re.MULTILINE)
 """Every name `mutmut results --all True` lines, whatever its verdict --
-used only to check `show_all_mutants`'s own completeness (P0-1),
+used only to check `show_all_mutants`'s own completeness,
 independent of `_parse_mutant_verdicts`'s verdict text."""
 
 
 def _git_subcommand(argv: Sequence[str]) -> str:
     """The subcommand in a `git -C <dir> [-c k=v ...] <sub> ...` argv.
 
-    Position stopped naming it when T6-56 put saddle's identity on the
+    Position stopped naming it when saddle's identity went onto the
     commit: two `-c` pairs now sit between `-C <dir>` and the subcommand.
     Reading it by shape rather than by index keeps the assertion pinned to
     which git runs, which is what it was ever about.
@@ -149,7 +149,7 @@ def test_run_shell_capture_splits_and_returns_output(tmp_path: Path) -> None:
 def test_run_shell_capture_ceilings_a_runaway_allocation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pair 4 (P1-14 contract B, key; M-Z3): tested code runs under an
+    """Pair 4 (contract B, key; M-Z3): tested code runs under an
     address-space ceiling. Red at 27dc53f: no ceiling, the 512 MiB bytearray
     succeeds and the command exits 0. The M1 audit of t7-untouched grew to
     20.3 GB the same way and was OOM-killed."""
@@ -163,7 +163,7 @@ def test_run_shell_capture_ceilings_a_runaway_allocation(
 
 
 def test_run_shell_capture_under_the_real_ceiling_is_unchanged(tmp_path: Path) -> None:
-    """Pair 5 (P1-14 contract B): normal code is unaffected by the real 6 GiB
+    """Pair 5 (contract B): normal code is unaffected by the real 6 GiB
     ceiling, and the span records the command, not the `prlimit` wrapper."""
     assert evidence_module.TEST_MEMORY_LIMIT_BYTES == 6 * 1024**3
     journal = tmp_path / "proofs.jsonl"
@@ -337,7 +337,7 @@ def test_git_changed_files_unknown_ref_raises(tmp_path: Path) -> None:
 
 def test_git_added_files_lists_staged_adds_and_ignores_untracked(tmp_path: Path) -> None:
     """A staged new file is the node's; an untracked one is the harness's
-    (journal, coverage data, bytecode) and must not fail node-scope (#65, T2-2)."""
+    (journal, coverage data, bytecode) and must not fail node-scope (#65)."""
     _git_repo(tmp_path)
     (tmp_path / "b.py").write_text("x = 1\n")
     assert run_argv(["git", "add", "b.py"], tmp_path) == 0
@@ -349,7 +349,7 @@ def test_git_added_files_lists_staged_adds_and_ignores_untracked(tmp_path: Path)
 
 
 def test_git_diff_helpers_see_a_staged_rename_as_both_paths(tmp_path: Path) -> None:
-    """Known-good (T3-14): a staged `git mv n.py m.py` is an add of `m.py`
+    """Known-good: a staged `git mv n.py m.py` is an add of `m.py`
     (so a `refactor` node fails node-scope) and touches both paths (so a
     `target_files` list must name the old file too). Git's default rename
     detection would fold it into one `R100` entry: `--diff-filter=A` then
@@ -371,7 +371,7 @@ def test_git_added_files_unknown_ref_raises(tmp_path: Path) -> None:
 
 
 def test_snapshot_baseline_freezes_the_worktree_without_moving_head(tmp_path: Path) -> None:
-    """Known-good (T3-8): the ref carries the worktree as the node found it --
+    """Known-good: the ref carries the worktree as the node found it --
     a staged add and an unstaged edit alike -- so nothing the earlier nodes
     left behind is a change against it, and `HEAD` and the branches stand."""
     _git_repo(tmp_path)
@@ -396,7 +396,7 @@ def test_snapshot_baseline_freezes_the_worktree_without_moving_head(tmp_path: Pa
 
 
 def test_snapshot_baseline_excludes_untracked_harness_artefacts(tmp_path: Path) -> None:
-    """Known-bad (T3-8): `.coverage.tier1` and stray bytecode are the
+    """Known-bad: `.coverage.tier1` and stray bytecode are the
     harness's, not the node's baseline. `add -u` stages tracked files only,
     so an untracked file cannot enter the tree -- and a node that creates
     that same path later is still charged with creating it."""
@@ -415,7 +415,7 @@ def test_snapshot_baseline_excludes_untracked_harness_artefacts(tmp_path: Path) 
 def test_snapshot_baseline_lists_a_later_staged_add_against_its_ref(tmp_path: Path) -> None:
     """Tracked-ness comes from the index, not from the ref: a file the node
     stages after its snapshot is still an add against it, so node-scope and
-    target-scope still see the node's own file creation (T2-2, T3-2)."""
+    target-scope still see the node's own file creation."""
     _git_repo(tmp_path)
     (tmp_path / "a.py").write_text("x = 1\n")
     assert run_argv(["git", "add", "a.py"], tmp_path) == 0
@@ -428,7 +428,7 @@ def test_snapshot_baseline_lists_a_later_staged_add_against_its_ref(tmp_path: Pa
 
 
 def test_snapshot_baseline_names_an_illegal_node_id_by_digest(tmp_path: Path) -> None:
-    """Known-good (T3-8): an id git's ref parser rejects still gets a
+    """Known-good: an id git's ref parser rejects still gets a
     resolvable ref. Nothing in the DAG schema makes a node id ref-safe, and
     a naming failure must not be how a node dies."""
     _git_repo(tmp_path)
@@ -439,11 +439,11 @@ def test_snapshot_baseline_names_an_illegal_node_id_by_digest(tmp_path: Path) ->
 
 
 def test_attempt_ref_names_the_node_and_the_attempt_separately() -> None:
-    """T6-34 known-good: the attempt number is its own ref component, so N
+    """Known-good: the attempt number is its own ref component, so N
     attempts of one node are N refs. Known-bad: a ref without it is one ref
-    the last attempt overwrites, which is the failure this item exists to
+    the last attempt overwrites, which is the failure this naming exists to
     fix -- round 3d's attempt-1 trees were recoverable only from
-    `lost-found` (F21.15). The digest fallback is `proven_ref`'s, because
+    `lost-found`. The digest fallback is `proven_ref`'s, because
     `check-ref-format` decides a component at a time.
     """
     assert attempt_ref("n2", 1) == "refs/saddle/attempt/n2/1"
@@ -453,7 +453,7 @@ def test_attempt_ref_names_the_node_and_the_attempt_separately() -> None:
 
 
 def test_snapshot_baseline_outside_a_repo_raises(tmp_path: Path) -> None:
-    """Known-bad (T3-8): no silent ref. A caller handed `HEAD` back for a
+    """Known-bad: no silent ref. A caller handed `HEAD` back for a
     failed snapshot would gate the node against the wrong tree and say
     nothing; the argv that failed is named so the transcript can explain it."""
     with pytest.raises(RuntimeError, match=r"git -C .* add -u failed: fatal: not a git"):
@@ -478,7 +478,7 @@ def test_snapshot_baseline_records_one_span_per_git_run(tmp_path: Path) -> None:
         "commit-tree",
         "update-ref",
     ]
-    # And the identity rides on the commit alone (T6-56): a snapshot that
+    # And the identity rides on the commit alone: a snapshot that
     # only stages and hashes needs none, and a run that carried it
     # everywhere would still read as four named git runs here.
     assert [tuple(span.argv[3:7]) == SADDLE_COMMIT_IDENTITY for span in spans] == [
@@ -490,7 +490,7 @@ def test_snapshot_baseline_records_one_span_per_git_run(tmp_path: Path) -> None:
 
 
 def test_restore_baseline_drops_a_staged_edit_and_a_staged_add(tmp_path: Path) -> None:
-    """Known-good (T3-23): a staged edit and a staged new file since the
+    """Known-good: a staged edit and a staged new file since the
     ref are both gone from worktree and index; `HEAD` and the branches stand."""
     _git_repo(tmp_path)
     (tmp_path / "a.py").write_text("x = 1\n")
@@ -772,15 +772,15 @@ def test_mutation_sample_filters_scopes_and_counts(
         total=4,
         generated=6,
         survivors=("m_hit2",),
-        # T6-29c: the survivor is located in the caller's own spelling.
+        # The survivor is located in the caller's own spelling.
         survivor_lines=((str(workdir / "a.py"), 1),),
-        # P1-6: two kills, one survivor, one timeout (also a kill).
+        # Two kills, one survivor, one timeout (also a kill).
         statuses=(("killed", 2), ("survived", 1), ("timeout", 1)),
     )
-    # P0-8 flip: `max_mutants=2` no longer truncates the scoped population
+    # flip: `max_mutants=2` no longer truncates the scoped population
     # to its first two names. Before this change the call below returned
     # killed=1, total=2 -- the cap discarding two already-decided kills
-    # (T6-61's reproduction: three killed mutants dropped at zero margin).
+    # (the cap bug's reproduction: three killed mutants dropped at zero margin).
     # It now agrees with the max_mutants=10 call above on every field.
     sampled = mutation_sample(workdir, changed, 2, test_files={"tests/test_a.py"})
     assert sampled == MutationOutcome(
@@ -823,7 +823,7 @@ def _name_order_outcome(
 def test_mutation_sample_ignores_which_mutant_name_sorts_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-8 pair 3: at `max_mutants=3`, `m_a1..m_a3` sorting ahead of
+    """Pair 3: at `max_mutants=3`, `m_a1..m_a3` sorting ahead of
     `m_b1..m_b3` must not decide which trio the verdict is scored on.
 
     Before this change, `scoped[:max_mutants]` always kept the `m_a*`
@@ -894,7 +894,7 @@ def _text_only_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Mutat
 def test_mutation_sample_counts_a_text_only_mutant_the_suite_killed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F21.32: a killed text-only mutant is evidence the suite discriminates.
+    """A killed text-only mutant is evidence the suite discriminates.
 
     `text_only_mutant` cannot tell a message from a currency code or a
     `Decimal` exponent -- round 3h excluded `currency == "XXJPYXX"` and
@@ -910,7 +910,7 @@ def test_mutation_sample_counts_a_text_only_mutant_the_suite_killed(
 def test_mutation_sample_still_excludes_a_text_only_mutant_that_survived(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T6-33's purpose, kept: round 3d's 34 message survivors stay out.
+    """The text-only exclusion's purpose, kept: round 3d's 34 message survivors stay out.
 
     A survivor whose only change is string text cannot be killed by a
     spec-derived test, so it is not a missing test and does not count
@@ -924,9 +924,9 @@ def test_mutation_sample_still_excludes_a_text_only_mutant_that_survived(
 def test_mutation_sample_excludes_an_untested_text_only_mutant_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-3: the text-only exclusion covers every not-killed status.
+    """The text-only exclusion covers every not-killed status.
 
-    T6-33's argument -- no spec-derived test can kill a message-only
+    The exclusion's argument -- no spec-derived test can kill a message-only
     mutant without pinning wording -- does not depend on whether a test
     runs the function, so an untested text-only mutant stays out exactly
     as a surviving one does, rather than counting as a survivor.
@@ -959,7 +959,7 @@ def test_mutmut_scratch_config_exact() -> None:
 
 
 def test_mutmut_scratch_config_appends_run_tests_to_pytest_args() -> None:
-    """`run_tests` are collection paths after the fixed flags, sorted (T3-3)."""
+    """`run_tests` are collection paths after the fixed flags, sorted."""
     assert _mutmut_scratch_config(["a.py"], run_tests={"test_z.py", "test_a.py"}) == (
         "[tool.mutmut]\n"
         'source_paths = ["a.py"]\n'
@@ -968,7 +968,7 @@ def test_mutmut_scratch_config_appends_run_tests_to_pytest_args() -> None:
 
 
 def test_mutmut_scratch_config_keeps_a_declared_scope_in_order() -> None:
-    """F21.12a: a declared scope is a sequence and its `-k expr` pair
+    """A declared scope is a sequence and its `-k expr` pair
     survives; sorting would put `-k` before the path and split the pair."""
     assert _mutmut_scratch_config(["a.py"], run_tests=("tests/test_a.py", "-k", "slow")) == (
         "[tool.mutmut]\n"
@@ -981,7 +981,7 @@ def test_mutmut_scratch_config_keeps_a_declared_scope_in_order() -> None:
 def _without_stubbed_mutmut(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drop the conftest `mutmut` stub from PATH so the real engine runs.
 
-    Also restores the production `show_all_mutants` (P0-1): the autouse
+    Also restores the production `show_all_mutants`: the autouse
     `_stub_mutmut` fixture points it at a PATH-stub replay that never
     touches a real mutmut installation's meta files, so a test using the
     real engine must undo that too, or the lookup finds nothing.
@@ -999,8 +999,9 @@ def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
     choose what runs, `run_tests` does. Session 21's probe: a property with
     no discriminating power beside an example that has it, mutant
     `return 2 -> return 3`. With the example alone collected the mutant is
-    killed; with the property alone it survives. Before T3-3 both calls
-    reported the kill, because pytest always collected the whole tree.
+    killed; with the property alone it survives. Before the run was scoped to
+    the declared tests both calls reported the kill, because pytest always
+    collected the whole tree.
     """
     _without_stubbed_mutmut(monkeypatch)
     workdir = tmp_path / "work"
@@ -1034,7 +1035,7 @@ def test_mutation_sample_run_tests_restricts_which_tests_the_engine_runs(
 def test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F21.12a against the real engine, round 3c's arms A and B. Known-bad:
+    """The declared scope against the real engine, round 3c's arms A and B. Known-bad:
     with no `run_tests` mutmut's stats run collects the red sibling
     specification and the tool fails before any mutant is judged.
     Known-good: the declared scope alone baselines and kills.
@@ -1061,7 +1062,7 @@ def test_mutation_sample_scoped_run_baselines_past_a_red_sibling_specification(
 def test_mutation_sample_names_a_red_suite_instead_of_blaming_the_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T6-63. mutmut exits 1 both when the engine is broken and when the
+    """mutmut exits 1 both when the engine is broken and when the
     node's own suite is red, and every red suite was read as a broken
     engine: round 3c's three impl attempts all died on "failed to collect
     stats" (runner.py says so at the call site) and the brief handed the
@@ -1069,7 +1070,7 @@ def test_mutation_sample_names_a_red_suite_instead_of_blaming_the_tool(
 
     Known-bad: the suite the tests gate just ran was red, so the outcome
     names the suite and not the engine. Known-good: the same mutmut exit
-    with a suite that passed still names the engine -- T3-20's contract,
+    with a suite that passed still names the engine -- the failed-run contract,
     which the red-sibling test above exercises unchanged.
     """
     _without_stubbed_mutmut(monkeypatch)
@@ -1123,7 +1124,7 @@ def test_property_modules_selects_property_bearing_modules_that_import_a_change(
 
 
 def test_pytest_scope_is_the_arguments_after_pytest() -> None:
-    """F21.12a. Known-good: the declared command's arguments after `pytest`,
+    """Known-good: the declared command's arguments after `pytest`,
     in order, whatever precedes the module (`coverage run -m pytest`).
     Known-bad: a command that never names pytest yields nothing, so the
     engine runs its whole tree as before, and `pytest` itself is never
@@ -1139,7 +1140,7 @@ def test_pytest_scope_is_the_arguments_after_pytest() -> None:
 
 
 def test_scoped_targets_keeps_only_what_the_declared_scope_collects() -> None:
-    """F21.65. Known-good: a target the node's own pytest arguments would
+    """Known-good: a target the node's own pytest arguments would
     collect survives -- by exact path, and by directory prefix, since a
     directory argument collects everything under it. Known-bad: a target
     outside every argument is dropped, which is the whole point (the
@@ -1174,8 +1175,8 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
     A recording fake (not the shell stub) observes the invocation shape the
     stub cannot see: exact argv per call, a saddle-mutation- scratch cwd
     carrying the config and deep tree but no __pycache__, and recorder
-    pass-through on every call. Updated pin (P0-1), not a flip: the third
-    call used to be a per-name `mutmut show`; this task removes that call
+    pass-through on every call. Updated pin, not a flip: the third
+    call used to be a per-name `mutmut show`; this change removes that call
     and replaces it with the one batched lookup subprocess, so the pin now
     names that call instead -- `sys.executable -c <script carrying the
     saddle-mutant-lookup marker>` -- while `show_all_mutants` itself is
@@ -1234,7 +1235,7 @@ def test_mutation_sample_invocation_shape(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_mutmut_run_is_ceilinged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pair 6 (P1-14 contract B; M-Z4): `mutmut run` executes the tested code
+    """Pair 6 (contract B; M-Z4): `mutmut run` executes the tested code
     in forked workers that inherit the launcher's limit, so the launch carries
     `memory_limit == TEST_MEMORY_LIMIT_BYTES`. The bookkeeping calls after it
     do not."""
@@ -1341,7 +1342,7 @@ def test_mutation_sample_skips_test_file_mutants(
     )
 
 
-# --- P0-1: batch the mutant lookup ------------------------------------------
+# --- batch the mutant lookup ------------------------------------------------
 #
 # `mutation_sample` used to run one `mutmut show NAME` subprocess per decided
 # mutant; it now runs one `show_all_mutants` lookup subprocess per call. The
@@ -1350,7 +1351,7 @@ def test_mutation_sample_skips_test_file_mutants(
 
 
 def _mutant_shapes_workdir(root: Path) -> Path:
-    """A tiny real tree with each mutant shape P0-1 names: a module-level
+    """A tiny real tree with each mutant shape the lookup must name: a module-level
     function, a method, a string-literal-only mutant, and a second module
     ("c.py") no test imports (its mutants come back "no tests")."""
     workdir = root / "work"
@@ -1396,7 +1397,7 @@ def _build_real_scratch(workdir: Path, scratch: Path, tests: set[str]) -> None:
 def test_show_all_mutants_matches_mutmut_show_byte_for_byte(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (P0-1), real engine (CONTRIBUTING.md): `show_all_mutants` is
+    """Known-good, real engine (CONTRIBUTING.md): `show_all_mutants` is
     byte-identical to `mutmut show NAME` for every name `mutmut results
     --all True` lists, across a module-level function, a method, a
     string-literal mutant and a module no test imports ("no tests").
@@ -1507,7 +1508,7 @@ def test_show_all_mutants_returns_a_mutant_of_every_status_mutmut_records(
 def test_mutation_sample_matches_the_per_name_replay_at_unit_scale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (P0-1), real engine: `mutation_sample` gives an identical
+    """Known-good, real engine: `mutation_sample` gives an identical
     `MutationOutcome` whether the lookup is the production batched
     subprocess or the old per-name `mutmut show` loop -- "same verdicts"
     at the level `mutation_sample` itself operates.
@@ -1531,7 +1532,7 @@ def test_mutation_sample_matches_the_per_name_replay_at_unit_scale(
 def test_mutation_sample_uses_one_lookup_subprocess_not_one_per_mutant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad (P0-1), real engine: a per-mutant `mutmut show` subprocess
+    """Known-bad, real engine: a per-mutant `mutmut show` subprocess
     must not reappear. A recording spy wraps the real `run_capture` (not a
     fake) so this exercises the actual mutmut subprocess protocol. Must
     fail on d04ede8, on the `mutmut show` calls (red-first, recorded in
@@ -1577,10 +1578,10 @@ def test_mutation_sample_uses_one_lookup_subprocess_not_one_per_mutant(
 def test_mutation_sample_names_a_failed_lookup_instead_of_reading_no_mutants(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad (P0-1), real engine: a batched-lookup subprocess failure is
+    """Known-bad, real engine: a batched-lookup subprocess failure is
     named, never silently read as "no mutants" (CONTRIBUTING.md: a lookup
-    failure must never read as absence, per T3-20's rule for `mutmut
-    run`). `sys.executable` is the seam `show_all_mutants` shells out
+    failure must never read as absence, the rule a failed `mutmut
+    run` follows too). `sys.executable` is the seam `show_all_mutants` shells out
     through for the lookup; breaking it is harmless to `mutmut run` and
     `mutmut results`, both spawned by bare name via PATH and each its own
     OS process with its own interpreter, so the same test also runs
@@ -1639,14 +1640,14 @@ def test_show_all_mutants_raises_when_stdout_is_not_a_string_mapping(
         show_all_mutants(tmp_path)
 
 
-# P0-2: `_mutant_lines` used to match a removed hunk line against the
+# `_mutant_lines` used to match a removed hunk line against the
 # *whole file*. A method's own line never matched (mutmut renders the
 # extracted def at column 0, so the line is dedented one level relative to
 # the file); an identical line anywhere else in the file matched instead,
 # so `survivor_lines` could name the wrong function; and a continuation
 # line of a multi-line statement could never intersect `changed`, which
 # only ever holds first lines (`statement_lines`). The three pairs below
-# are the spec's own minimal reproduction (P0-2-locator.md), against the
+# are the defect's own minimal reproduction, against the
 # real engine (CONTRIBUTING.md): a module-level `f`/`g` sharing a body line, a
 # method `K.m`, and a multi-line `return sum([a, b + 1])` inside `total`.
 
@@ -1700,7 +1701,7 @@ def _locator_workdir(root: Path) -> Path:
 def test_mutation_sample_excludes_a_survivor_located_only_via_duplicate_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad pair 1 (P0-2-locator.md): `changed` names only `f`'s line
+    """Known-bad pair 1: `changed` names only `f`'s line
     (2), and `g` has an identical body line (6) but no discriminating
     test. Before this task the whole-file match let `g`'s survivors in,
     located on `f`'s line -- must fail on be99efe (red-first, recorded in
@@ -1753,7 +1754,7 @@ def test_mutation_sample_admits_a_continuation_line_mutant_via_its_statement(
 
 
 def test_mutant_name_parses_like_mutmuts_own_orig_names_from_key() -> None:
-    """`_MUTANT_NAME`'s local parse (P0-2: no import of mutmut into
+    """`_MUTANT_NAME`'s local parse (no import of mutmut into
     saddle's process at runtime) agrees with mutmut's own
     `orig_function_and_class_names_from_key`, used here only as the test
     oracle, across both production shapes: a function, a method, a
@@ -1821,7 +1822,7 @@ def test_mutant_lines_reindents_two_space_class_bodies() -> None:
 
 def test_mutant_lines_a_decorated_functions_range_starts_at_the_decorator() -> None:
     """The search range runs from the first decorator line, not the `def`
-    line (P0-2-locator.md), so a mutant on the decorator itself (mutmut
+    line, so a mutant on the decorator itself (mutmut
     can mutate a decorator call's own arguments) still matches -- and
     maps to the `def` line, `statement_lines`'s own coordinate for the
     whole decorated function, since no nested statement covers a
@@ -1863,14 +1864,14 @@ def test_mutant_lines_unparseable_source_with_a_parsed_name_returns_empty() -> N
 
 
 def test_mutant_lines_a_dedented_string_content_line_is_not_its_own() -> None:
-    """Known-bad for A (X-L6, P1-6): a mutant inside method `m` removes its
+    """Known-bad for A (X-L6): a mutant inside method `m` removes its
     own body line (`        return x`, 8 spaces -- mutmut's rendering adds
     that level back at `indent + snippet`). The method also holds a
     multi-line string whose content line, once dedented, reads exactly
     the same as the mutant's removed line with the indent stripped
     (`    return x`, 4 spaces) -- the bare
     ``lines[lineno - 1] == snippet`` form matched that string line too,
-    attributing the mutant to a statement it never touched. P0-2's own
+    attributing the mutant to a statement it never touched. The locator's own
     contract rules this out ("a mutant whose text merely repeats a
     changed line elsewhere ... does not"). Red at the base: `{3, 6}`,
     line 3 being the `s = ...` triple-quoted-string statement.
@@ -2025,7 +2026,7 @@ def test_run_argv_missing_tool_journals_the_reason(tmp_path: Path) -> None:
 def test_mutation_sample_failed_run_names_the_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T3-20 known-bad: `mutmut run` exiting non-zero is the tool failing.
+    """Known-bad: `mutmut run` exiting non-zero is the tool failing.
 
     The smoke run's mutmut 3.8 refused a package named `src` and exited 1
     in 658 ms; the outcome read "no mutants decided" because the run's exit
@@ -2053,7 +2054,7 @@ def test_mutation_sample_failed_run_names_the_tool(
 
 
 def test_ruff_findings_parse_the_engine_and_render_human_lines(tmp_path: Path) -> None:
-    """T6-3 against the real engine: the JSON run yields findings keyed by
+    """The ruff gate against the real engine: the JSON run yields findings keyed by
     source line and a captured run whose stdout is one human line each;
     a clean file yields none and exit 0."""
     (tmp_path / "m.py").write_text("import os\n\nx = 1\n")
@@ -2068,7 +2069,7 @@ def test_ruff_findings_parse_the_engine_and_render_human_lines(tmp_path: Path) -
 
 
 def test_ruff_gate_runs_isolated_on_saddle_rules_not_the_installed_default(tmp_path: Path) -> None:
-    """T6-37 known-bad from round 3e (F21.16): `%`-formatting, the idiom the
+    """Known-bad from round 3e: `%`-formatting, the idiom the
     task's own baseline uses, failed the ruff gate under ruff 0.16.7's
     default rule set (UP031) although no config existed anywhere; a
     workdir config selecting everything must not reach the gate either.
@@ -2128,7 +2129,7 @@ def test_ruff_version_reads_the_engine_and_says_when_it_cannot(
 def test_ruff_findings_tolerates_bad_json_and_unreadable_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T6-3 edges: output that is not JSON yields no findings (the exit code
+    """Ruff-gate edges: output that is not JSON yields no findings (the exit code
     still says the tool failed); a non-object entry is skipped; a finding
     whose file cannot be read carries an empty source line."""
     import saddle.evidence as evidence_module
@@ -2151,7 +2152,7 @@ def test_ruff_findings_tolerates_bad_json_and_unreadable_sources(
 
 
 def test_text_only_mutant_classifies_string_edits_and_nothing_else() -> None:
-    """T6-33 known-good: a mutant that changes only the text inside a string
+    """Known-good: a mutant that changes only the text inside a string
     literal (a message, an f-string body) is text-only. Known-bad: a value
     change, an operator change, a string that gains an operand, a line that
     does not tokenize on its own, an empty or unbalanced diff."""
@@ -2176,7 +2177,7 @@ def test_text_only_mutant_classifies_string_edits_and_nothing_else() -> None:
 def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T6-33 end to end on the stub engine: two survivors, one a message edit,
+    """The text-only exclusion end to end on the stub engine: two survivors, one a message edit,
     one a value change. The text-only one leaves the population (total
     and survivors exclude it) and is counted; the behavioural one stays."""
     workdir = _mutation_workdir(tmp_path)
@@ -2206,8 +2207,8 @@ def test_mutation_sample_leaves_text_only_mutants_out_of_the_population(
     )
 
 
-# --- P0-3: count every mutmut-decided status, not just the four the old
-# parser recognized -----------------------------------------------------
+# --- count every mutmut-decided status, not just the four the old parser
+# recognized ------------------------------------------------------------
 #
 # Contract: every decided mutant on a changed line enters the population.
 # Only `killed` and `timeout` count as killed; `not checked` stays
@@ -2235,7 +2236,7 @@ def _monotonicity_workdir(root: Path, *, include_test_b: bool) -> Path:
 def test_mutation_sample_deleting_a_modules_tests_lowers_the_rate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-3 pair 1 (known-bad, the plan's own), real engine: deleting a
+    """Pair 1 (known-bad, the plan's own), real engine: deleting a
     module's only test must lower its rate, not remove its mutants from
     the population.
 
@@ -2261,7 +2262,7 @@ def test_mutation_sample_deleting_a_modules_tests_lowers_the_rate(
 def test_mutation_sample_a_fully_tested_tree_does_not_move(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-3 pair 2 (known-good): the same tree with `test_b.py` present
+    """Pair 2 (known-good): the same tree with `test_b.py` present
     gives the identical `MutationOutcome` before and after this task --
     pin the value: 4 of 4. Deliberately does not reference `.untested`
     (a field this task adds): the spec's red-first list has this pair
@@ -2298,7 +2299,7 @@ by type check", -11/-9: "segfault"}` -- ten distinct strings."""
 
 
 def test_parse_mutant_verdicts_keeps_every_status() -> None:
-    """P0-3 pair 3a (known-bad): parser unit test. Every one of mutmut's
+    """Pair 3a (known-bad): parser unit test. Every one of mutmut's
     ten decided statuses, the multi-word ones included, plus a status
     mutmut has not shipped yet, all come back with their full verdict
     text. Must fail on 45416a1: `_MUTANT_VERDICT`'s alternation
@@ -2346,7 +2347,7 @@ each a numeric-literal edit (never text-only)."""
 def test_mutation_sample_counts_every_decided_status_by_the_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-3 pair 3b (known-bad): stubbed engine, one mutant per decided
+    """Pair 3b (known-bad): stubbed engine, one mutant per decided
     status plus one `not checked`, none text-only, all on a changed
     line. Only `killed` and `timeout` count as killed; `not checked`
     stays out of `total`; every other status -- `no tests` included --
@@ -2384,7 +2385,7 @@ def test_mutation_sample_counts_every_decided_status_by_the_contract(
     }
 
 
-# --- P1-6: `MutationOutcome.statuses` -----------------------------------
+# --- `MutationOutcome.statuses` -----------------------------------------
 #
 # Contract B: every scored mutant is counted by the status string mutmut
 # gave it, and the counts sum to `total`. Nothing in `gates` reads it;
@@ -2475,7 +2476,7 @@ def test_mutation_sample_statuses_exclude_text_only_and_not_checked(
 def test_mutation_sample_run_tests_restriction_does_not_erase_an_unexecuted_survivor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-3 pair 4 (known-bad), real engine: the second, latent
+    """Pair 4 (known-bad), real engine: the second, latent
     consequence the spec names (`survivors.keep_candidate`'s scoped
     re-run via `slice._candidate_runner`). `test_b.py` calls `h(3)` but
     asserts nothing, so with both test files collected `h`'s mutants
@@ -2539,7 +2540,7 @@ def _author_of(root: Path, ref: str) -> str:
 
 
 def test_snapshot_baseline_commits_where_git_will_not_guess_an_identity(tmp_path: Path) -> None:
-    """Known-bad (T6-56): the host supplies no identity and will not invent
+    """Known-bad: the host supplies no identity and will not invent
     one. `commit-tree` takes no `--author`, so without an identity of its own
     the snapshot exits 128 -- and it is the first thing a node does, so the
     run dies before any gate can name what went wrong."""
@@ -2551,7 +2552,7 @@ def test_snapshot_baseline_commits_where_git_will_not_guess_an_identity(tmp_path
 
 
 def test_snapshot_baseline_does_not_borrow_the_operators_identity(tmp_path: Path) -> None:
-    """Known-good (T6-56): the host does supply an identity, and the snapshot
+    """Known-good: the host does supply an identity, and the snapshot
     still is not signed with it. A saddle ref is saddle's own bookkeeping; the
     operator did not author it, and a run that reads the same either way does
     not depend on git config it never set."""
@@ -2583,7 +2584,7 @@ def _diff_of(root: Path, before: dict[str, str], after: dict[str, str | None]) -
 
 
 def test_changed_statements_ignores_blank_and_comment_lines_inside_a_body(tmp_path: Path) -> None:
-    """P1-1 known-bad: an inserted comment or blank line is not a change to the `def`.
+    """Known-bad: an inserted comment or blank line is not a change to the `def`.
 
     The innermost statement containing them is the `FunctionDef`, so
     without the skip its first line (1) would enter `changed`.
@@ -2598,7 +2599,7 @@ def test_changed_statements_ignores_blank_and_comment_lines_inside_a_body(tmp_pa
 
 
 def test_changed_statements_maps_a_decorator_line_to_its_def_not_its_class(tmp_path: Path) -> None:
-    """P1-1 known-bad: `@classmethod` on line 2 belongs to the `def` on line 3.
+    """Known-bad: `@classmethod` on line 2 belongs to the `def` on line 3.
 
     `_statement_start` alone returns the enclosing `class` line, 1.
     """
@@ -2640,7 +2641,7 @@ def test_changed_statements_maps_a_continuation_line_to_its_statement(tmp_path: 
 
 
 def test_changed_statements_exempts_a_docstring_continuation_line(tmp_path: Path) -> None:
-    """P1-1 known-good: the middle line of a docstring is not a statement."""
+    """Known-good: the middle line of a docstring is not a statement."""
     diff = _diff_of(
         tmp_path,
         {"n.py": 'def f():\n    """First.\n    old\n    Last."""\n    return 1\n'},
@@ -2651,7 +2652,7 @@ def test_changed_statements_exempts_a_docstring_continuation_line(tmp_path: Path
 
 
 def test_changed_statements_keeps_first_lines_in_the_runners_spelling(tmp_path: Path) -> None:
-    """P1-1 known-good: `return 1` -> `return 2` is `(str(workdir / rel), line)`."""
+    """Known-good: `return 1` -> `return 2` is `(str(workdir / rel), line)`."""
     diff = _diff_of(
         tmp_path,
         {"n.py": "def f():\n    return 1\n"},
@@ -2676,7 +2677,7 @@ def test_mutation_sample_statuses_are_sorted_by_status_not_by_mutant_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`statuses` is ordered by status string, whatever order the mutants'
-    names put them in (checker probe X-P1-6-1: pair 3's names happen to
+    names put them in (a review probe: pair 3's names happen to
     sort into status order, so dropping the `sorted` survived it).
     """
     workdir = _every_status_workdir(tmp_path)

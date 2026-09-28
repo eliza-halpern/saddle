@@ -1,4 +1,4 @@
-"""Rule D in the run path (P2-3): the plan-time census and the verdict after the gates.
+"""Rule D in the run path: the plan-time census and the verdict after the gates.
 
 `saddle run --rule-d` reads a frozen S1-c reference store (`saddle.refstore`)
 and an answer book (`saddle.answer_book`), and does two things the run did
@@ -349,7 +349,7 @@ def sealed_fields(result: rule_d.DifferentialResult, loaded: Loaded) -> dict[str
 
 
 def asked_inputs(result: rule_d.DifferentialResult) -> dict[str, Any]:
-    """Every asked class with its channel's inputs and each input's provenance (P2-3 seal).
+    """Every asked class with its channel's inputs and each input's provenance.
 
     `band` (a question: the references agree, the tree does not) carries every input with the
     tree's and the references' answers; `questions` (split, spec-silent) carries every input

@@ -395,7 +395,7 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     """Replace one exact occurrence. Ambiguity is refused, never guessed at.
 
     Rewriting a whole file to change three lines is expensive and, on a long
-    file, is the generation shape this model degenerates on (F21.17). An
+    file, is the generation shape this model degenerates on. An
     `old` that matches twice is refused rather than applied to the first
     hit: the caller meant one of them and the tool cannot know which.
     """

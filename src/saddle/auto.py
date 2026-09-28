@@ -3,7 +3,7 @@
 This is Phase 2's executor, `engine.run_turn`, run with no human turn.
 Arm E runs it with no auditor; arms E+A and E+A+F (the default) attach a
 `feed.AuditFeed` that audits each checkpoint and the finished tree.
-It is not a second tool loop (T5-7, clause 2): it sets up a worktree,
+It is not a second tool loop: it sets up a worktree,
 turns on the tier-0 guards and a budget, and hands one turn to the same engine the chat uses.
 
 - The run happens in a fresh `git worktree` under
@@ -180,9 +180,10 @@ class AutoOptions:
     reported as information, never delivered as a failure, never refusing
     `finish`. Sealed in the start span and the outcome sidecar."""
     tier2: Tier2Mode = "score"
-    """`--tier2`: "score" (default) is the auditor as before SHORTLIST, byte for
-    byte; "shortlist" is the per-survivor gate (`auditor.AuditorConfig.tier2`).
-    Sealed in the outcome sidecar only when "shortlist"."""
+    """`--tier2`: "score" (default) is the auditor as it was before the
+    per-survivor gate, byte for byte; "shortlist" is that gate
+    (`auditor.AuditorConfig.tier2`). Sealed in the outcome sidecar only
+    when "shortlist"."""
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
     """`--mutant-shortlist N`: how many surviving mutants a finish refusal names
     (`--tier2 shortlist` only). Sealed with it."""
@@ -408,7 +409,7 @@ def run_auto(
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
-    # ANCHOR: the outcome span's hash, outside the ledger, as the last paragraph.
+    # The anchor: the outcome span's hash, outside the ledger, as the last paragraph.
     ledger = journal.relative_to(root).as_posix()
     message += f"\n\n{anchor_trailers(outcome_hash(journal, start.span_id), ledger)}"
     _git(worktree, "commit", "-q", "--allow-empty", "--no-verify", "-m", message)

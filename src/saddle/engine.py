@@ -200,7 +200,7 @@ FINISH_SURFACED: Final = (
     "change ends the run finished.\n\n"
 )
 """Prefix of `finish`'s result when the audit accepts it and surfaces
-not-proven findings (`feed.AuditFeed.final`, FEEDFIX item 7). Not an
+not-proven findings (`feed.AuditFeed.final`). Not an
 error and not a refusal: `finish_refusals` and the cap are untouched."""
 
 DEFAULT_FINISH_REFUSAL_CAP: Final = 3
@@ -210,7 +210,7 @@ token budget ran out). Tightened: the loop is bounded; the tree is never
 marked finished."""
 
 UNCHANGED: Final = "unchanged"
-"""The third ending (FEEDFIX item 5): `finish` on a tree equal to the
+"""The third ending: `finish` on a tree equal to the
 baseline. Not accepted (not `finished`), not a refusal (no count, no cap),
 sealed as `auto:unchanged`."""
 
@@ -263,7 +263,7 @@ class AutoRun:
     The engine fills `outcome`: "finished" only when the model called
     `finish`; "stopped" for a budget, a model error or a cancel; and, with
     an auditor, "unchanged" when `finish` is called on a tree equal to the
-    baseline (FEEDFIX item 5). A stop never reads as done, and neither
+    baseline. A stop never reads as done, and neither
     does an unchanged tree.
 
     `feed`, when set (arms E+A and E+A+F), is called before and after each
@@ -321,11 +321,11 @@ class AutoRun:
     them as `guarded_paths`."""
     prompt_check: Callable[[], dict[str, object]] | None = None
     """`prompt_constants.check` over the run's tree, called once at the seal
-    and sealed as `prompt_constants` (FEEDFIX item 1); None when the task
+    and sealed as `prompt_constants`; None when the task
     names no constant, and then nothing is sealed."""
     waivers: list[str] | None = None
     """`feed.waivers` of the last accepted finish audit; None until one is.
-    Sealed on a finished run with an auditor (FEEDFIX item 6)."""
+    Sealed on a finished run with an auditor."""
     last_test: tuple[str, str] | None = None
     """The newest test command the run ran and its full result, for the
     compaction state block (`memory.run_state`)."""
@@ -393,11 +393,12 @@ class TurnOptions:
     journal: Path = Path(".saddle/chat.jsonl")
     max_tokens: int | None = None
     """`None` means size it from the window left after the conversation, the
-    way `saddle run` has since T6-17. A flat 8192 was the old chat default
-    and it was stingy: this server reports a 175,000-token window, and a
-    turn reasoning at `xhigh` can spend 40,000-80,000 tokens thinking before
-    it writes a word. A reply truncated mid-thought is the single most
-    annoying failure a chat UI has."""
+    way `saddle run` does: reasoning is not budgeted apart from the reply.
+    A flat 8192 was the old chat default and it was stingy: this server
+    reports a 175,000-token window, and a turn reasoning at `xhigh` can
+    spend 40,000-80,000 tokens thinking before it writes a word. A reply
+    truncated mid-thought is the single most annoying failure a chat UI
+    has."""
     temperature: float = CHAT_TEMPERATURE
     reasoning_effort: str = "medium"
     system_prompt: str = ""
@@ -620,7 +621,7 @@ def run_turn(
             taken += 1
             # Before every request, not once per turn: an autonomous run is
             # one turn, so a compaction before the loop only ever saw
-            # [system, task] (COMPACTRES F0; pi-blackhole's CHANGELOG #38
+            # [system, task] (pi-blackhole's CHANGELOG #38
             # fixed the same defect, OpenHands condenses at every step).
             yield from _compact(messages, options, node_id)
             parts: list[str] = []
@@ -1252,14 +1253,14 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "audit": auto.feed.last() if auto.feed is not None else None,
     }
     if auto.prompt_check is not None:
-        # FEEDFIX (1): reporting only; no verdict reads it.
+        # Reporting only; no verdict reads it.
         evidence["prompt_constants"] = auto.prompt_check()
     if auto.outcome == "finished" and auto.waivers is not None:
-        # FEEDFIX (6): every accepted finish seals what it stood on, [] if
+        # Every accepted finish seals what it stood on, [] if
         # nothing; arm E and ended-unaccepted runs seal the keys as before.
         evidence["waivers"] = auto.waivers
     if auto.surfaced is not None:
-        # FEEDFIX (7): only when an accepted finish surfaced not-proven
+        # Only when an accepted finish surfaced not-proven
         # findings, so every other run seals the same keys as before.
         evidence["finish_surfaced"] = True
     if auto.check_tool and auto.feed is not None:

@@ -1,4 +1,4 @@
-"""Survivor-driven test generation: locate, stub, brief, filter (T6-29b).
+"""Survivor-driven test generation: locate, stub, brief, filter.
 
 A node can seal with a surviving mutant or an uncovered changed line:
 the gates it passed are thresholds, not proofs, so code it wrote can
@@ -21,8 +21,8 @@ one decision:
 - `keep_candidate` decides, over injected runs, whether a candidate
   bought anything.
 
-Nothing here runs a worker or touches the node loop; that splice is
-T6-29c. This module imports from `dag`, `evidence` and `runner` and
+Nothing here runs a worker or touches the node loop; that splice is in
+`slice`. This module imports from `dag`, `evidence` and `runner` and
 edits none of them (layering: `dag -> gates -> evidence -> runner ->
 slice`).
 """
@@ -279,9 +279,10 @@ Injected rather than imported, so the decision below is a pure function
 of two observations (`gates` holds the predicates, runners arrive at the
 boundary). An implementation runs only the candidate file, and against
 the real tree also re-runs `evidence.mutation_sample` with `run_tests`
-scoped to that file. Since P0-8 (T6-61) that scores every decided
-mutant on a changed line, so the candidate and the original gate score
-the same population, reporting the lines the run executed alongside.
+scoped to that file. Since the sample cap stopped choosing the
+population, that scores every decided mutant on a changed line, so the
+candidate and the original gate score the same population, reporting
+the lines the run executed alongside.
 
 A runner that reports `survivors=()` without having re-run the sample
 makes every previously surviving mutant read as killed. Reporting the
@@ -296,7 +297,7 @@ class Verdict:
 
     `kept` passed all three filters. `failing` is a claim about the
     implementation rather than about the test, so it is returned instead
-    of dropped: T6-29c hands it to an impl node. `dropped` pins nothing.
+    of dropped: `slice` hands it to an impl node. `dropped` pins nothing.
     """
 
     decision: Literal["kept", "dropped", "failing"]
@@ -332,8 +333,8 @@ def keep_candidate(
     still reports, because `MutationOutcome` names survivors and never
     kills; `covered` is the executed lines that were in the gap.
 
-    Measure-first result (T6-29a, ten reasoning-off draws on round 3d's
-    gap): pending T6-29a.
+    Measure-first result (ten reasoning-off draws on round 3d's gap):
+    two of ten passed all three filters, and neither killed a survivor.
     """
     against_stub = run(stub_tree, candidate_file)
     if against_stub.exit_code == 0:

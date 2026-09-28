@@ -1,4 +1,4 @@
-"""Search/replace edit blocks: what a worker emits instead of a diff (T6-75).
+"""Search/replace edit blocks: what a worker emits instead of a diff.
 
 `DIFF_GRAMMAR` could express only whole-file writes -- every section was
 `--- /dev/null` with a `@@ -0,0 +1,N @@` anchor and a body of `+` lines --
@@ -193,7 +193,7 @@ def _first_divergence(source: str, search: str) -> str:
     block: `runs/g1-a876595` node-1 attempt 3 held thirteen lines, twelve
     of them right, and lost the thirteenth's `]`. It could not tell which
     one, retried, and failed the same way -- three of that run's six
-    attempts went this way (F21.51). The block is still refused; what
+    attempts went this way. The block is still refused; what
     changes is that the next attempt is told where to look.
 
     Blank lines are skipped because `loose_spans` does not match on them,

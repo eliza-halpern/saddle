@@ -71,8 +71,9 @@ from saddle.vllm import DiffProposal, VllmAuthError, VllmRequestError, VllmRespo
 def _git_subcommand(argv: Sequence[str]) -> str:
     """The subcommand in a `git -C <dir> [-c k=v ...] <sub> ...` argv.
 
-    Position stopped naming it when T6-56 put saddle's identity on the
-    commit: two `-c` pairs now sit between `-C <dir>` and the subcommand.
+    Position stopped naming it when saddle began putting its own identity
+    on every commit it creates: two `-c` pairs now sit between `-C <dir>`
+    and the subcommand.
     Reading it by shape rather than by index keeps the assertion pinned to
     which git runs, which is what it was ever about.
     """
@@ -99,7 +100,7 @@ def _git_repo(root: Path) -> None:
     assert run_argv(["git", "commit", "-m", "base"], root) == 0
 
 
-# Every tool name the global allowlist carries (T3-4). A node listing all
+# Every tool name the global allowlist carries. A node listing all
 # four behaves exactly as it did before each name was bound to a harness
 # behaviour, so this is the fixtures' known-good default; a test that pins
 # one binding passes a shorter list.
@@ -118,7 +119,7 @@ def _node_dict(
             {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]}
         ],
         "execution_constraints": {
-            # All four by default (T3-4): these nodes create test files and
+            # All four by default: these nodes create test files and
             # read the suite output back on a failed attempt, which is what
             # they did before each name was bound to a behaviour.
             "reasoning_budget": "low",
@@ -155,7 +156,7 @@ def _slice_repo(root: Path) -> None:
 
 
 def whole_file(path: str, *lines: str) -> str:
-    """One write section: the envelope the worker grammar admits (T6-62/A1).
+    """One write section: the envelope the worker grammar admits.
 
     The inverse of `slice._payload_sections`. Tests spell payloads through
     this rather than by hand so that a change to the envelope breaks in
@@ -266,13 +267,14 @@ def test_apply_diff_garbage_raises(tmp_path: Path) -> None:
 
 def test_apply_diff_that_does_not_match_the_tree_raises(tmp_path: Path) -> None:
     """A well-formed diff git rejects in every tolerance mode is named as a
-    failed apply. Until T3-23 this path was covered only by accident: a
+    failed apply. Until a failed node's work was restored out of the
+    worktree, this path was covered only by accident: a
     replacement node's diff written against the tree its failed
     predecessor left behind, which the restore now makes apply."""
     _git_repo(tmp_path)
     diff = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 9\n+x = 2\n"
     expected = f"worker diff did not apply cleanly in {str(tmp_path)!r} (last rung three-way: "
-    # T6-27: the failure names the last rung and git's last stderr line, so
+    # The failure names the last rung and git's last stderr line, so
     # the attempt's record says which line git rejected, not only that it did.
     with pytest.raises(RuntimeError, match=re.escape(expected) + r"error: .*") as caught:
         _apply_diff(tmp_path, diff)
@@ -294,7 +296,7 @@ def test_apply_diff_header_without_hunk_raises(tmp_path: Path) -> None:
         _apply_diff(tmp_path, "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n")
 
 
-# --- T6-62/A1: the whole-file envelope ---------------------------------------
+# --- The whole-file envelope -------------------------------------------------
 
 
 def _staged(root: Path) -> list[str]:
@@ -381,7 +383,7 @@ def test_write_files_deletes_what_a_delete_section_names(tmp_path: Path) -> None
 
 
 def test_write_files_forgives_one_enclosing_markdown_fence(tmp_path: Path) -> None:
-    """T6-48's packaging rule still holds: the wrapper comes off before
+    """The apply ladder's packaging rule still holds: the wrapper comes off before
     anything judges the content, so both paths see the same bytes."""
     _git_repo(tmp_path)
     fenced = "\n\n```diff\n" + whole_file("n.py", "x = 9").rstrip("\n") + "\n```"
@@ -393,7 +395,7 @@ def test_write_files_refuses_a_context_line(tmp_path: Path) -> None:
     """Known-bad, and the one that matters most. Silently keeping only the
     `+` lines of a patch would write a file holding just the additions --
     destroying content the model never saw, which is exactly the hazard
-    T6-62 named when it priced a whole-file rung."""
+    named when a whole-file rung was first priced."""
     _git_repo(tmp_path)
     patchy = (
         "diff --git a/n.py b/n.py\n--- /dev/null\n+++ b/n.py\n"
@@ -417,7 +419,7 @@ def test_write_files_refuses_a_removal_line(tmp_path: Path) -> None:
 
 
 def test_write_files_refuses_the_same_path_twice(tmp_path: Path) -> None:
-    """Known-bad, F21.9's b-s1: nine `fees.py` sections in one emission,
+    """Known-bad, a round 3b draw: nine `fees.py` sections in one emission,
     legal because `root ::= section+` repeats. A diff refused the second
     copy loudly; whole files would let the last one win in silence."""
     _git_repo(tmp_path)
@@ -505,16 +507,16 @@ def test_write_files_refuses_a_header_line_that_names_no_file(tmp_path: Path) ->
     assert _staged(tmp_path) == []
 
 
-# --- T6-48: packaging is not content ----------------------------------------
+# --- Packaging is not content ------------------------------------------------
 
 _PACKAGED = "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
 
 
 def test_apply_diff_forgives_a_missing_final_newline(tmp_path: Path) -> None:
-    """T6-48 known-good, loosened with proof. `git apply` calls a patch whose
+    """Known-good, loosened with proof. `git apply` calls a patch whose
     last line has no newline `corrupt patch at line N`, and four of the nine
     unconstrained round 3e draws died there with nothing else wrong -- a
-    final `\n` and they apply on `strict` (F21.18). The bytes the model sent
+    final `\n` and they apply on `strict`. The bytes the model sent
     are still what the sidecar records; only the ladder sees the repair.
     """
     _git_repo(tmp_path)
@@ -523,7 +525,7 @@ def test_apply_diff_forgives_a_missing_final_newline(tmp_path: Path) -> None:
 
 
 def test_apply_diff_forgives_one_enclosing_markdown_fence(tmp_path: Path) -> None:
-    """T6-48 known-good: three of the nine grammar-off draws wrapped the whole
+    """Known-good: three of the nine grammar-off draws wrapped the whole
     diff in a ```diff fence, which the structural precheck rejected before git
     ran at all."""
     _git_repo(tmp_path)
@@ -533,7 +535,7 @@ def test_apply_diff_forgives_one_enclosing_markdown_fence(tmp_path: Path) -> Non
 
 
 def test_apply_diff_still_refuses_a_fenced_diff_with_prose_around_it(tmp_path: Path) -> None:
-    """T6-48 known-bad: the allowance is one fence enclosing the whole content.
+    """Known-bad: the allowance is one fence enclosing the whole content.
     Prose beside it is a worker that ignored "output ONLY the diff", which is
     the thing a fresh attempt can fix, so it stays a named precheck failure."""
     _git_repo(tmp_path)
@@ -544,7 +546,7 @@ def test_apply_diff_still_refuses_a_fenced_diff_with_prose_around_it(tmp_path: P
 
 
 def test_apply_diff_still_refuses_two_fenced_blocks(tmp_path: Path) -> None:
-    """T6-48 known-bad, and the one a lazy regex gets wrong: a non-greedy match
+    """Known-bad, and the one a lazy regex gets wrong: a non-greedy match
     would splice two blocks into one body with a stray fence inside it. Two
     blocks are two answers, not packaging."""
     _git_repo(tmp_path)
@@ -555,7 +557,7 @@ def test_apply_diff_still_refuses_two_fenced_blocks(tmp_path: Path) -> None:
 
 
 def test_a_fenced_round3e_draw_unwraps_to_the_bytes_inside_its_fence() -> None:
-    """T6-48 on real bytes, not a hand-written case. The fixture is round 3e
+    """The packaging rule on real bytes, not a hand-written case. The fixture is round 3e
     n2 attempt 1's seed-0 draw with `DIFF_GRAMMAR` off, verbatim from
     the internal round-3e probe record (not public): two leading
     blank lines, a ```diff fence, and no final newline. Unwrapping must
@@ -572,9 +574,9 @@ def test_a_fenced_round3e_draw_unwraps_to_the_bytes_inside_its_fence() -> None:
 
 
 def test_whole_file_reconstruction_reads_the_new_side_of_a_line_1_hunk() -> None:
-    """T6-62 (C). Every apply-failure in rounds 3h and 3i is one hunk per
+    """Every apply-failure in rounds 3h and 3i is one hunk per
     file anchored at line 1 whose context lines carry the model's intended
-    output (F21.38), so the candidate is recoverable from the diff the
+    output, so the candidate is recoverable from the diff the
     ladder refused.
 
     Known-good: round 3i n1.r2 attempt 1 draw 0, frozen byte for byte --
@@ -588,7 +590,7 @@ def test_whole_file_reconstruction_reads_the_new_side_of_a_line_1_hunk() -> None
     assert [recovered[name]["parses"] for name in sorted(recovered)] == [True, True]
     # The NEW side, and read off the body rather than the header. The
     # header declares `@@ -1,95 +1,113 @@` and the body holds 136 lines
-    # (F21.38 measured the same 136): the declared count is the model's
+    # (the round's own analysis counted 136 too): the declared count is the model's
     # own miscount, which is why `--recount` exists and why nothing here
     # trusts the arithmetic. What comes back is the rewrite, not the
     # 73-line accounts.py the model was shown -- no whitespace flag
@@ -672,7 +674,7 @@ def test_autofix_fixes_what_ruff_can_fix(tmp_path: Path) -> None:
 
     A repair attempt spent on `ruff format --check` is one not spent on
     the correctness defect, which is how T7 finished with an infinite
-    loop untouched (F13).
+    loop untouched.
     """
     _git_repo(tmp_path)
     (tmp_path / "n.py").write_text("import os\nx     =    1\n")
@@ -749,7 +751,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         journal_path=journal,
         propose=lambda node, failure, seed: DiffProposal(GOOD_DIFF, "return two instead"),
         # This test pins the exact tool-span sequence and mocks perf_counter
-        # with four ticks; the merge-time suite (T2-3) is exercised on its own.
+        # with four ticks; the merge-time suite is exercised on its own.
         merge_command=None,
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
@@ -763,12 +765,12 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "## Node n1\n" in result.transcript
     assert "- Gate syntax: PASS (2 file(s) parsed)\n" in result.transcript
     # Only n.py is in the diff -- test_n.py is unchanged from the impl
-    # node's own baseline (T2-2a), so it is not in ruff's changed-file scope.
+    # node's own baseline, so it is not in ruff's changed-file scope.
     assert "- Gate ruff: PASS (1 file(s) clean)\n" in result.transcript
     assert "- Gate tests: PASS ('pytest test_n.py' exited 0)\n" in result.transcript
     assert "- Gate coverage: PASS (every changed line runs)\n" in result.transcript
     assert "- Gate red-phase: PASS (fail pre-change, pass post-change)\n" in result.transcript
-    # flip (T6-89): `n1` is an impl node, and every clause of the binding
+    # flip: `n1` is an impl node, and every clause of the binding
     # gate reads tests it may not write, so the transcript renders the
     # exemption rather than a count. The judged wording is pinned on the
     # kinds that can answer it, in test_gates.py and test_runner.py.
@@ -783,7 +785,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "- Issues: none (ledger verifies)\n" in result.transcript
     assert read_records(journal)[0].thinking == "return two instead"
     assert "  - thought: return two instead\n" in result.transcript
-    # T6-62/A1: the worker path writes files and stages them; `git apply`
+    # The worker path writes files and stages them; `git apply`
     # is no longer in it, so the span that proves the write happened is
     # the staging one.
     assert re.search(
@@ -801,7 +803,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     spans = read_spans(journal)
     tools = [span for span in spans if span.kind == "tool"]
     assert [span.name for span in tools] == [
-        # T3-8: the node's own baseline -- `add -u`, `write-tree`,
+        # The node's own baseline -- `add -u`, `write-tree`,
         # `commit-tree`, `update-ref` -- taken before any proposal is drawn,
         # so every ref below is this node's snapshot and not `HEAD`.
         *["git"] * 4,
@@ -815,32 +817,32 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "ruff",
         "git",
         "git",
-        # T6-34: the tree the gate is about to judge -- `add -u`,
+        # The tree the gate is about to judge -- `add -u`,
         # `write-tree`, `commit-tree`, `update-ref` -- taken after autofix
         # and before the gate, journaled like the other two snapshots.
         *["git"] * 4,
-        # T2-2: the staged-adds probe behind node-scope's file-creation rule.
+        # The staged-adds probe behind node-scope's file-creation rule.
         "git",
-        # T3-2: changed-files list for target-scope.
+        # Changed-files list for target-scope.
         "git",
         "coverage",
         "git",
-        # T6-3: the ruff baseline leg on the snapshot.
+        # The ruff baseline leg on the snapshot.
         "ruff",
         # One per red-phase baseline sample (#54): this node's test is
-        # unchanged from its own baseline (T2-2a's honest impl fixture), so
+        # unchanged from its own baseline (the honest impl fixture), so
         # `tests_changed` is False and only one sample is taken.
         *["coverage"] * 1,
-        # T6-3: both ruff legs on the current tree run in the runner, before
+        # Both ruff legs on the current tree run in the runner, before
         # the mutation sample, not inside the gate predicate.
         "ruff",
         "ruff",
         "timeout",
-        # `results` (#49). The per-mutant `show` spans are gone (P0-1): the
+        # `results` (#49). The per-mutant `show` spans are gone: the
         # batched lookup runs through the conftest replay, which journals
         # nothing; its production span is pinned in test_evidence.
         "mutmut",
-        # T3-10: the tree the gate passed on -- `add -u`, `write-tree`,
+        # The tree the gate passed on -- `add -u`, `write-tree`,
         # `commit-tree`, `update-ref` again -- taken after the verdict and
         # before the record is sealed, so the proof names its worktree.
         *["git"] * 4,
@@ -851,7 +853,7 @@ def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # The seal records sampling agreement: the correlation signal is
     # only useful if it is written down (#59). Known-bad-for-diversity: a
     # constant proposer still dedups to one distinct sample.
-    # A passing seal carries the sampling count and nothing after it (T3-25).
+    # A passing seal carries the sampling count and nothing after it.
     assert worker.detail == f"1 distinct of {PROPOSAL_SAMPLES} sample(s)"
     assert worker.parent_id == run.span_id
     assert all(span.parent_id == worker.span_id for span in tools)
@@ -897,7 +899,7 @@ def test_run_slice_pass_end_to_end_records_distinct_sample_count(
 
 
 def test_run_slice_merge_suite_gate_runs_once_and_is_journaled(tmp_path: Path) -> None:
-    """Known-good (T2-3, #60): after every node is proven, the unscoped merge
+    """Known-good (#60): after every node is proven, the unscoped merge
     command runs once in the workdir and seals a `merge-suite` tool span
     under the run span; exit 0 keeps the run passing."""
     _slice_repo(tmp_path)
@@ -923,7 +925,7 @@ def test_run_slice_merge_suite_gate_runs_once_and_is_journaled(tmp_path: Path) -
     assert merge.parent_id == run.span_id
     assert run.exit_code == 0
     assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 0"
-    # T2-4: the sealed record says what each verdict rested on.
+    # The sealed record says what each verdict rested on.
     (record,) = read_records(journal)
     basis = {output.name: output.basis for output in record.gate_outputs}
     assert basis["mutation"] == "sampled n=5"
@@ -932,7 +934,7 @@ def test_run_slice_merge_suite_gate_runs_once_and_is_journaled(tmp_path: Path) -
 
 
 def test_run_slice_merge_suite_failure_fails_the_run_not_the_node(tmp_path: Path) -> None:
-    """Known-bad (T2-3, #60): a node can pass its own scoped gate while the
+    """Known-bad (#60): a node can pass its own scoped gate while the
     union of diffs breaks the suite. The merge command's non-zero exit fails
     the run; the node's proof record stays, because its verdict was earned."""
     _slice_repo(tmp_path)
@@ -986,11 +988,11 @@ def test_run_slice_merge_suite_is_skipped_when_nothing_was_proven(tmp_path: Path
 def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> None:
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("a", []), _node_dict("b", ["a"])]})
-    # Private, so `dead-code` reaches it. T6-90 defers the coverage failure
+    # Private, so `dead-code` reaches it. Coverage now defers the failure
     # this used to rely on, and `check_dead_additions` skips a public name
     # by design, so the node keeps a failure it owns rather than one that
     # belongs to a test it may not write. The public spelling stays in
-    # T6-53's own exhibit below, where the deferral is the subject.
+    # the deferral's own exhibit below, where the deferral is the subject.
     bad_diff = GOOD_DIFF.replace(
         "+    return 2\n",
         "+    return 2\n+\n+\n+def _unused():\n+    return 3\n",
@@ -1025,7 +1027,7 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert "- Gate dead-code: FAIL" in result.transcript
     assert "- Timeline:\n" in result.transcript
     assert "thought:" not in result.transcript
-    # T6-62/A1: the worker path writes files and stages them; `git apply`
+    # The worker path writes files and stages them; `git apply`
     # is no longer in it, so the span that proves the write happened is
     # the staging one.
     assert re.search(
@@ -1050,7 +1052,7 @@ def test_run_slice_gate_fail_leaves_dependent_undispatched(tmp_path: Path) -> No
     assert tools
     # Every gate run hangs off the attempt that applied the diff; what hangs
     # off the halting attempt is the restore that undoes it and the two
-    # diffs proving the tree is back at the baseline (T3-23).
+    # diffs proving the tree is back at the baseline.
     assert {tool.parent_id for tool in tools} == {first.span_id, second.span_id}
     assert [tool.name for tool in tools if tool.parent_id == second.span_id] == [
         "restore-baseline",
@@ -1083,7 +1085,7 @@ def test_run_slice_unappliable_diff_fails_without_checks(tmp_path: Path) -> None
     # before the first `git apply`, so no apply span is recorded at all.
     assert [span for span in spans if "apply" in span.argv] == []
     # The node's baseline snapshot is the only `git` that runs, once, before
-    # the first proposal is drawn (T3-8): four runs, named rather than
+    # the first proposal is drawn: four runs, named rather than
     # counted, so a fifth git run could not hide behind the total.
     git_runs = [span for span in spans if span.name == "git"]
     assert [_git_subcommand(span.argv) for span in git_runs] == [
@@ -1136,7 +1138,7 @@ def test_run_slice_distinct_unappliable_diffs_exhaust_attempts(tmp_path: Path) -
     assert [span.parent_id for span in workers] == [run.span_id] * 3
     # Prose short-circuits before the ladder, so the only git spans parented
     # to a worker attempt are the baseline snapshot's, taken once on attempt
-    # 1 and reused by attempts 2..N (T3-8).
+    # 1 and reused by attempts 2..N.
     assert [_git_subcommand(span.argv) for span in git_runs] == [
         "add",
         "write-tree",
@@ -1173,7 +1175,7 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
     # gate evidence (#59).
     failure = next(entry for entry in seen_failures if entry is not None)
     assert failure is not None
-    # BAD_DIFF's fault now lives in n.py (T2-2a), so the changed line no
+    # BAD_DIFF's fault now lives in n.py, so the changed line no
     # longer matches the conftest mutmut stub's fixed "n.py:2 was return 2"
     # location; the mutation gate correctly finds no evidence there, on top
     # of tests and red-phase failing -- three gates, not two.
@@ -1199,7 +1201,7 @@ def test_run_slice_retry_repairs_failing_tests(tmp_path: Path) -> None:
 def test_run_slice_withholds_suite_output_from_a_node_without_run_tests(
     tmp_path: Path,
 ) -> None:
-    """T3-4 end to end: the node's own `allowed_tools` reach the repair prompt.
+    """End to end: the node's own `allowed_tools` reach the repair prompt.
 
     Known-good is `test_run_slice_retry_repairs_failing_tests` directly
     above, whose node lists all four and whose recovery prompt carries
@@ -1231,9 +1233,9 @@ def test_run_slice_withholds_suite_output_from_a_node_without_run_tests(
     assert failure is not None
     assert "Attempt 1 of 3 failed 3 gate(s):" in failure
     assert "- tests: 'pytest test_n.py' exited 1" in failure
-    # flip (T6-31, F21.13d): the tests gate failed, so its output reaches
-    # this `lint`-only node; before, it was withheld and the worker repaired
-    # only what it could see. The passed-gate half of T3-4 is pinned in
+    # flip: the tests gate failed, so its output reaches this `lint`-only
+    # node; before, it was withheld and the worker repaired only what it
+    # could see. The passed-gate half of the tool binding is pinned in
     # test_repair_prompt_withholds_output_of_a_passed_gate_without_its_tool.
     assert "FAILED" in failure
     assert "coverage run" in failure
@@ -1271,16 +1273,16 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
     assert "- Attempts: 3\n" in result.transcript
     assert "- Gate tests: FAIL" in result.transcript
     agents = [span for span in read_spans(journal) if span.kind == "agent"]
-    # BAD_DIFF's fault now lives in n.py (T2-2a), which also breaks the
+    # BAD_DIFF's fault now lives in n.py, which also breaks the
     # conftest mutmut stub's location match (see the retry test above), and
     # JUNK1_DIFF/JUNK2_DIFF's new files stay permanently uncovered on top of
     # that -- one more failing gate at every attempt than before. Each seal
-    # names its failed gates in check order (T3-25): the node has no proof
+    # names its failed gates in check order: the node has no proof
     # record and the transcript renders the last attempt only, so this is
     # the one place attempt 1's verdict survives.
     assert [span.detail for span in agents] == [
         "attempt 1/3: 3 gate(s) failed: tests, red-phase, mutation",
-        # flip (T6-90): coverage leaves this list, because it no longer
+        # flip: coverage leaves this list, because it no longer
         # fails an impl node for a line no node that may write a test
         # remains to reach. The other three gates are unchanged.
         "attempt 2/3: 3 gate(s) failed: tests, red-phase, mutation",
@@ -1290,7 +1292,7 @@ def test_run_slice_exhausted_retries_fail_with_attempts(tmp_path: Path) -> None:
 
 
 def test_run_slice_exhausted_node_leaves_its_baseline_tree_behind(tmp_path: Path) -> None:
-    """A node that gave up takes its work with it (T3-23).
+    """A node that gave up takes its work with it.
 
     The exhausted-retries fixture applies `BAD_DIFF` to `n.py` and stages
     two new files. Before the restore, all three stayed in the worktree
@@ -1339,7 +1341,7 @@ def test_run_slice_exhausted_node_leaves_its_baseline_tree_behind(tmp_path: Path
 
 
 def test_run_slice_replacement_starts_from_the_failed_nodes_baseline(tmp_path: Path) -> None:
-    """Known-good (T3-23): the 20b run in miniature, with the restore in place.
+    """Known-good: the 20b run in miniature, with the restore in place.
 
     `n1` proposes the right edit to the wrong file for its declared
     scope: `GOOD_DIFF` turns the suite green but `target-scope` rejects
@@ -1445,12 +1447,12 @@ def test_run_node_identical_after_nonapply_reports_unappliable(tmp_path: Path) -
 def test_run_node_attaches_the_reconstruction_when_a_diff_will_not_apply(
     tmp_path: Path,
 ) -> None:
-    """T6-62 (C) end-to-end: a refused whole-file draw leaves its candidate
+    """End-to-end: a refused whole-file draw leaves its candidate
     in the sidecar, on BOTH paths that record an apply failure.
 
     Attempt 1's failure is recorded on the sample. A retry's is recorded
     on the ATTEMPT, while its own sample still reads "retry draw, gated in
-    place" (F21.38a) -- a reader filtering on sample outcome misses it
+    place" -- a reader filtering on sample outcome misses it
     entirely, which is how five rounds of candidates went unexamined.
 
     Known-good: a whole-file draw the ladder refuses leaves a parsing
@@ -1584,7 +1586,7 @@ def test_run_node_every_worker_call_truncated_fails_the_node(tmp_path: Path) -> 
 def test_retry_sidecar_reports_its_own_draw_not_the_first_attempts_samples(
     tmp_path: Path,
 ) -> None:
-    """T6-24a known-bad. Attempt 1 draws PROPOSAL_SAMPLES and fails; attempt
+    """Known-bad. Attempt 1 draws PROPOSAL_SAMPLES and fails; attempt
     2 makes one call and seals. Round 3c's n2 carried attempt 1's
     `samples` byte for byte into attempts 2 and 3 (identical SHA-256), so
     the sidecar said three draws where the attempt made one. A sidecar's
@@ -1618,7 +1620,7 @@ def test_retry_sidecar_reports_its_own_draw_not_the_first_attempts_samples(
 
 
 def test_failed_retry_call_sidecar_carries_no_earlier_samples(tmp_path: Path) -> None:
-    """T6-24a, the path a retry's own assignment cannot cover: attempt 2's
+    """The path a retry's own assignment cannot cover: attempt 2's
     single worker call fails before any proposal exists. Its sidecar has
     no draws to report, and must not report attempt 1's.
     """
@@ -1653,7 +1655,7 @@ def test_failed_retry_call_sidecar_carries_no_earlier_samples(tmp_path: Path) ->
 
 
 def test_first_attempt_draws_its_samples_concurrently(tmp_path: Path) -> None:
-    """T6-25 known-good. Every sample call waits at a barrier sized for
+    """Known-good. Every sample call waits at a barrier sized for
     all PROPOSAL_SAMPLES draws: the node seals only if the draws were in
     flight together. Serial sampling parks the first call alone until the
     barrier breaks, and the node fails.
@@ -1681,7 +1683,7 @@ def test_first_attempt_draws_its_samples_concurrently(tmp_path: Path) -> None:
 
 
 def test_samples_are_evaluated_in_seed_order_not_arrival_order(tmp_path: Path) -> None:
-    """T6-25 known-good. Seed 0's draw is slow and passes; the last seed's
+    """Known-good. Seed 0's draw is slow and passes; the last seed's
     draw is instant and also passes, with different bytes. The sealed
     diff is seed 0's: evaluation order is the seed order, so the record
     does not depend on which request the server answered first.
@@ -1721,7 +1723,7 @@ SLOPPY_DIFF = GOOD_DIFF.replace("+    return 2\n", "+    return  2\n")
 
 
 def test_sampler_scores_a_candidate_the_way_the_gate_will_see_it(tmp_path: Path) -> None:
-    """T6-24b known-bad. The only thing wrong with the sample is spacing
+    """Known-bad. The only thing wrong with the sample is spacing
     `ruff format` repairs; the live path runs `autofix` before the gate,
     so the node passes on the first draw. The sampler scored it one gate
     red (round 3c: delta one on three of four nodes) and drew all
@@ -1747,7 +1749,7 @@ def test_sampler_scores_a_candidate_the_way_the_gate_will_see_it(tmp_path: Path)
         now=lambda: "2026-09-16T00:00:00+00:00",
     )
     assert result.passed is True, result.transcript
-    # All k draws are paid up front (T6-25); what autofix-aware scoring
+    # All k draws are paid up front; what autofix-aware scoring
     # buys is that the first sample is seen to pass and nothing after it
     # is evaluated -- before, every sample scored one gate red.
     assert calls == [None] * PROPOSAL_SAMPLES
@@ -1765,7 +1767,7 @@ def _tree_at(root: Path, ref: str) -> str:
 def test_a_gated_attempt_leaves_a_ref_for_the_autofixed_tree_the_gate_saw(
     tmp_path: Path,
 ) -> None:
-    """T6-34 known-good. `SLOPPY_DIFF` is the one case where the applied
+    """Known-good. `SLOPPY_DIFF` is the one case where the applied
     text and the graded text differ: `autofix` reformats it before the
     gate runs. The ref holds what the gate was given, so it carries the
     single space, and the sidecar's recorded tree is that same tree --
@@ -1789,13 +1791,12 @@ def test_a_gated_attempt_leaves_a_ref_for_the_autofixed_tree_the_gate_saw(
 
 
 def test_each_attempt_of_a_node_keeps_its_own_graded_tree(tmp_path: Path) -> None:
-    """T6-34 known-good and vacuity guard. Attempt 1 fails its gate and
+    """Known-good and vacuity guard. Attempt 1 fails its gate and
     attempt 2 repairs it in place, so the two trees differ by the one
     line the gate disagreed about. Both are named, both sidecars point
     at their own, and `/1` still resolves after `/2` is written -- a ref
     per node rather than per attempt reports the same two refs as one,
-    which is how round 3d's attempt-1 trees became `lost-found` blobs
-    (F21.15).
+    which is how round 3d's attempt-1 trees became `lost-found` blobs.
     """
     _slice_repo(tmp_path)
     node = Node.model_validate(_node_dict("n1", []))
@@ -1822,7 +1823,7 @@ GOOD_EDITS = "edit n.py\n-    return 1\n=======\n+    return 2\n>>>>>>>\n"
 def test_a_node_seals_on_an_edit_payload_the_way_it_does_on_a_file_payload(
     tmp_path: Path,
 ) -> None:
-    """T6-77 known-good, driven from the caller rather than the function.
+    """Known-good for edit dispatch, driven from the caller rather than the function.
 
     The dispatch's first home was `_apply_diff`, which nothing in `src`
     calls; its own tests were green while every draw of the first
@@ -1846,7 +1847,7 @@ def test_a_node_seals_on_an_edit_payload_the_way_it_does_on_a_file_payload(
 
 
 def test_run_node_transport_failure_restores_the_tree_and_names_itself(tmp_path: Path) -> None:
-    """F21.12b known-bad. Attempt 1 applies a diff that fails its gate;
+    """Known-bad. Attempt 1 applies a diff that fails its gate;
     attempt 2's worker call dies in transport (round 3c: `request failed:
     timed out` after 1826 s). The error still fails the node, but the
     applied diff must not stay in the tree -- n2.r2 left 530 lines of
@@ -2021,7 +2022,7 @@ def test_format_attempt_failure_keeps_exact_boundary_output() -> None:
 
 
 def test_repair_prompt_withholds_test_output_without_run_tests() -> None:
-    """T3-4 known-bad: `run_tests` gates the suite output in the repair prompt.
+    """Known-bad: `run_tests` gates the suite output in the repair prompt.
 
     Before the binding, every non-zero captured run was inlined whatever
     the plan said, so `run_tests` cost nothing to omit and bought nothing
@@ -2037,9 +2038,9 @@ def test_repair_prompt_withholds_test_output_without_run_tests() -> None:
         ),
         CapturedRun(argv=("ruff", "check", "n.py"), exit_code=1, stdout="n.py:1:1 F401", stderr=""),
     ]
-    # T6-31: the tests gate FAILED in `_failed_result`, so its output is
+    # The tests gate FAILED in `_failed_result`, so its output is
     # the node's own evidence and reaches the worker whatever the plan
-    # declared (flip: this assertion said "withheld" until F21.13d showed
+    # declared (flip: this assertion said "withheld" until a measured round showed
     # ruff failing 2/2 on a brief that named no rule while the gates with
     # inline detail improved). The passed-gate half is the test below.
     text = format_attempt_failure(
@@ -2052,9 +2053,9 @@ def test_repair_prompt_withholds_test_output_without_run_tests() -> None:
 
 
 def test_repair_prompt_withholds_output_of_a_passed_gate_without_its_tool() -> None:
-    """T3-4 known-bad, kept under T6-31: a captured run whose gate PASSED
-    stays governed by `allowed_tools`. Here ruff failed and the suite
-    passed, so a `lint`-only node sees ruff and not the suite."""
+    """Known-bad, kept once failed-gate output was always shown: a captured
+    run whose gate PASSED stays governed by `allowed_tools`. Here ruff failed
+    and the suite passed, so a `lint`-only node sees ruff and not the suite."""
     result = Tier1Result(
         node_id="n1",
         passed=False,
@@ -2119,7 +2120,7 @@ def test_repair_prompt_withholds_lint_output_without_lint() -> None:
 def test_repair_prompt_binding_matches_how_a_plan_spells_the_command(
     argv: tuple[str, ...], governing: str | None
 ) -> None:
-    """T3-4 follow-up: the binding governs what ran, not how argv[0] was spelled.
+    """The binding governs what ran, not how argv[0] was spelled.
 
     `test_command` is a free string, so a plan could write `python3 -m
     pytest` and get the suite's output back without `run_tests`. Match on
@@ -2127,7 +2128,7 @@ def test_repair_prompt_binding_matches_how_a_plan_spells_the_command(
     to no binding (mutmut, git) is kept whatever the node listed.
     """
     captured = [CapturedRun(argv=argv, exit_code=1, stdout="RUN-MARKER", stderr="")]
-    # A failed gate that maps to no tool (T6-31 includes a failed gate's
+    # A failed gate that maps to no tool (a failed gate's output is
     # output whatever the plan says), so only the binding decides here.
     result = Tier1Result(
         node_id="n1",
@@ -2147,7 +2148,7 @@ def test_repair_prompt_binding_matches_how_a_plan_spells_the_command(
 
 
 def test_repair_prompt_keeps_both_when_the_node_declared_both() -> None:
-    """T3-4 known-good: all four names behaves exactly as it did before."""
+    """Known-good: all four names behaves exactly as it did before."""
     captured = [
         CapturedRun(
             argv=("coverage", "run", "-m", "pytest"),
@@ -2200,7 +2201,7 @@ def test_splice_replan_rewires_dependents_to_new_leaves() -> None:
 
 
 def test_splice_replan_numbers_past_ids_the_dag_already_holds() -> None:
-    """flip (T3-11): this pinned `ReplanFailedError("collides")` for a DAG
+    """flip: this pinned `ReplanFailedError("collides")` for a DAG
     that already held `a.r1`. `a.r1` is a legal, non-duplicate node id
     (`dag.py` rejects duplicates on its own), so the raise refused a
     legitimate input rather than guarding a contract; numbering past the
@@ -2213,7 +2214,7 @@ def test_splice_replan_numbers_past_ids_the_dag_already_holds() -> None:
 
 
 def test_splice_replan_numbers_past_taken_ids() -> None:
-    """Known-good (T3-11): ids sealed in a journal count as taken even when
+    """Known-good: ids sealed in a journal count as taken even when
     the DAG does not carry them, and two replacements skip together."""
     dag = Dag.model_validate({"nodes": [_node_dict("a", []), _node_dict("b", ["a"])]})
     new = Dag.model_validate({"nodes": [_node_dict("m1", []), _node_dict("m2", ["m1"])]})
@@ -2280,7 +2281,7 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
 
     def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         # The replacement starts from `n1`'s baseline (`return 1`), not from
-        # the tree `n1`'s failed diff left behind (T3-23): it proposes the
+        # the tree `n1`'s failed diff left behind: it proposes the
         # whole fix, not a repair of `return 3`.
         return DiffProposal(BAD_DIFF if node.id == "n1" else GOOD_DIFF, "")
 
@@ -2314,12 +2315,12 @@ def test_run_slice_replan_recovers_failed_node(tmp_path: Path) -> None:
 def test_run_slice_replan_is_told_which_files_a_pending_node_still_owes(
     tmp_path: Path,
 ) -> None:
-    """T6-65: the scheduler computes the reserved set and hands it to the replanner.
+    """The scheduler computes the reserved set and hands it to the replanner.
 
     Round 3i's shape exactly -- `n2` depends on `n1`, `n1` fails, and
     `n2` has therefore not run. Without this argument the replanner is
     given the whole task and no way to know `n2` exists, and it plans
-    `n2`'s work a second time (F21.40).
+    `n2`'s work a second time.
 
     The assertion is on the value, not on the call: threading a constant
     through would satisfy a test that only checked the replanner was
@@ -2359,7 +2360,7 @@ def test_run_slice_replan_is_told_which_files_a_pending_node_still_owes(
 
 
 def test_run_slice_replan_across_resume_numbers_past_sealed_ids(tmp_path: Path) -> None:
-    """Known-good (T3-11): a journal that already seals `n1.r1` from an
+    """Known-good: a journal that already seals `n1.r1` from an
     earlier run's replan is not reused (the DAG has no `n1.r1` to compare
     with) and the `resume` span says why; the new replan is `n1.r2`, so
     the journal holds one record per id.
@@ -2475,7 +2476,7 @@ def test_run_slice_replan_continues_past_failed_emission(tmp_path: Path) -> None
     def propose(node: Node, failure: str | None, seed: int = 0) -> DiffProposal:
         if node.id in ("a", "b"):
             return DiffProposal(BAD_DIFF, "")
-        # `b.r1` starts from `b`'s baseline, not from `return 3` (T3-23).
+        # `b.r1` starts from `b`'s baseline, not from `return 3`.
         return DiffProposal(GOOD_DIFF, "")
 
     def replan(node: Node, history: str, reserved: Sequence[str] = ()) -> Dag:
@@ -2548,15 +2549,15 @@ def _first_run(tmp_path: Path) -> tuple[Path, SliceResult]:
 def test_run_slice_resumes_a_verified_journal_and_reuses_its_proofs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (T3-1): a verified journal seeds the proofs. The proven
+    """Known-good: a verified journal seeds the proofs. The proven
     node is never re-proposed, its sealed hash is reused as the parent of
     the new node, and the run counts both as proven.
 
     `n2` is a refactor that rewrites the statement `n1` proved, so it
     carries its own evidence: coverage of its changed line and killed
     mutants on it. It used to be a comment-only edit, which passed only
-    while `n2` was gated against `HEAD` and credited with `n1`'s work
-    (T3-8); against its own baseline that diff has no statement line and
+    while `n2` was gated against `HEAD` and credited with `n1`'s work;
+    against its own baseline that diff has no statement line and
     proves nothing (the known-bad below).
     """
     journal, first = _first_run(tmp_path)
@@ -2614,7 +2615,7 @@ class _Ticks:
 def test_run_slice_deadline_seals_what_it_has_and_resumes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (T6-9): two nodes, a deadline that fits one. `n1` runs
+    """Known-good: two nodes, a deadline that fits one. `n1` runs
     (one 5 s worker call; its first sample passes), then `n2` is not
     started: 3 s are left and the median node wall is 5 s. The run seals `n1`'s proof,
     exits 3 with `deadline:` in its span, leaves the tree holding proven
@@ -2654,7 +2655,7 @@ def test_run_slice_deadline_seals_what_it_has_and_resumes(
     assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
     assert verify_journal(journal) == []
     # Resume, no clock: n2 runs on the proven tree and the run passes. Its
-    # mutants sit on the line the refactor writes (as in the T3-8 tests).
+    # mutants sit on the line the refactor writes (as in the own-baseline tests).
     _refactor_mutmut(tmp_path / "stub", monkeypatch)
     second = run_slice(
         "Fix f.",
@@ -2673,9 +2674,9 @@ def test_run_slice_deadline_seals_what_it_has_and_resumes(
 
 
 def test_run_slice_deadline_lets_the_attempt_in_flight_finish_and_seal(tmp_path: Path) -> None:
-    """Known-bad half (T6-9): a node running at the deadline is not killed
+    """Known-bad half: a node running at the deadline is not killed
     mid-gate. The deadline (3 s) passes during `n1`'s first attempt (k
-    concurrent draws, 5 s each on this clock, T6-25); the attempt finishes,
+    concurrent draws, 5 s each on this clock); the attempt finishes,
     its gate passes and its proof is sealed; only then does the run stop,
     `n2` undispatched, with the deadline recorded."""
     _slice_repo(tmp_path)
@@ -2706,9 +2707,9 @@ def test_run_slice_deadline_lets_the_attempt_in_flight_finish_and_seal(tmp_path:
 
 
 def test_run_slice_deadline_starts_no_retry_and_restores_the_tree(tmp_path: Path) -> None:
-    """T6-9: attempt 1 fails its gate and the deadline has passed, so no
+    """Attempt 1 fails its gate and the deadline has passed, so no
     recovery attempt is proposed; the node gives up through the ordinary
-    path (T3-23): its diff leaves the worktree, the node counts as failed
+    path: its diff leaves the worktree, the node counts as failed
     after one attempt, and nothing is sealed as proven. Three identical
     samples at 5 s each put the clock at 15 s against a 10 s deadline."""
     _slice_repo(tmp_path)
@@ -2746,13 +2747,14 @@ def test_run_slice_deadline_starts_no_retry_and_restores_the_tree(tmp_path: Path
 
 
 def test_run_slice_resumed_comment_only_refactor_proves_nothing(tmp_path: Path) -> None:
-    """Known-bad (T3-8): the fixture the resume test used to run.
+    """Known-bad: the fixture the resume test used to run.
 
     A refactor whose diff is a comment has no changed statement line, so
     coverage has nothing to cover and mutation nothing to mutate; gated
     against its own baseline it fails red-phase for exactly that reason.
     Against `HEAD` it passed, credited with `n1`'s `return 2` -- which is
-    how this fixture stayed green from T3-1 until T3-8 measured it.
+    how this fixture stayed green from the day resume landed until nodes
+    were gated against their own baseline.
     """
     journal, first = _first_run(tmp_path)
     tidy = _node_dict("n2", ["n1"])
@@ -2802,12 +2804,12 @@ def test_run_slice_resume_with_nothing_left_runs_no_worker(tmp_path: Path) -> No
 
 
 def _resume_span(journal: Path) -> SpanRecord:
-    """The last `resume` span: what the seed decided, sealed (T3-9)."""
+    """The last `resume` span: what the seed decided, sealed."""
     return [span for span in read_spans(journal) if span.name == "resume"][-1]
 
 
 def test_run_slice_resume_span_names_the_proofs_it_reused(tmp_path: Path) -> None:
-    """Known-good (T3-9): same task, same node, so the proof is reused --
+    """Known-good: same task, same node, so the proof is reused --
     and the run says so in one agent span under the run span, rather than
     a silently shorter schedule. `saddle tail` keeps following, because
     `is_run_end` matches the run span alone."""
@@ -2836,7 +2838,7 @@ def test_run_slice_resume_span_names_the_proofs_it_reused(tmp_path: Path) -> Non
 
 
 def test_run_slice_refuses_a_journal_sealed_for_a_different_task(tmp_path: Path) -> None:
-    """Known-bad (T3-9a): the CLI's default journal is per repo, so a
+    """Known-bad: the CLI's default journal is per repo, so a
     second task run in the same checkout resumed onto the first task's
     proofs and counted every same-id node as already proven. It now stops
     before any node runs, naming both hashes and the way out."""
@@ -2869,7 +2871,7 @@ def test_run_slice_refuses_a_journal_sealed_for_a_different_task(tmp_path: Path)
 def test_run_slice_resume_reschedules_a_node_changed_since_its_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad (T3-9b): editing `n1`'s prompt and rerunning used to
+    """Known-bad: editing `n1`'s prompt and rerunning used to
     reuse the proof of the node as it was written before the edit.
 
     Both runs prove `n1` as a refactor, which is the only kind whose
@@ -2921,9 +2923,10 @@ def test_run_slice_resume_reschedules_a_node_changed_since_its_proof(
 
 
 def test_run_slice_resume_drops_a_record_that_predates_the_node_hash(tmp_path: Path) -> None:
-    """A journal sealed before T3-9 says nothing about which node it
-    proved, so it is not proof of this one: `n1` is scheduled again and
-    the empty `task_hash` is tolerated rather than fatal."""
+    """A journal sealed before records named their task and node says
+    nothing about which node it proved, so it is not proof of this one:
+    `n1` is scheduled again and the empty `task_hash` is tolerated rather
+    than fatal."""
     _slice_repo(tmp_path)
     journal = tmp_path / "proofs.jsonl"
     append_record(
@@ -2968,7 +2971,7 @@ def _tree_now(root: Path) -> str:
 
 
 def test_run_slice_resume_tree_hash_seals_the_worktree_it_proved(tmp_path: Path) -> None:
-    """Known-good (T3-10): the sealed `tree_hash` is the tree the gate
+    """Known-good: the sealed `tree_hash` is the tree the gate
     passed on, so the worktree the proof speaks for is nameable."""
     journal, _first = _first_run(tmp_path)
     record = read_records(journal)[-1]
@@ -2979,7 +2982,7 @@ def test_run_slice_resume_tree_hash_seals_the_worktree_it_proved(tmp_path: Path)
 
 
 def test_run_slice_resume_tree_check_passes_on_the_proven_worktree(tmp_path: Path) -> None:
-    """Known-good (T3-10): an untouched worktree still hashes to the tree
+    """Known-good: an untouched worktree still hashes to the tree
     the proof was sealed against, so the resume proceeds as before."""
     journal, first = _first_run(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
@@ -3003,7 +3006,7 @@ def test_run_slice_resume_tree_check_passes_on_the_proven_worktree(tmp_path: Pat
 def test_run_slice_resume_tree_check_passes_after_the_proven_edits_are_committed(
     tmp_path: Path,
 ) -> None:
-    """Known-good (T3-10): the CLI flow after a crash. `_ensure_clean`
+    """Known-good: the CLI flow after a crash. `_ensure_clean`
     refuses the dirty tree, the user commits the proven edits, and the
     resume still matches -- a commit names the tree, it does not change
     it."""
@@ -3032,7 +3035,7 @@ def test_run_slice_resume_tree_check_passes_after_the_proven_edits_are_committed
 def test_run_slice_resume_tree_refuses_a_worktree_missing_the_proven_edit(
     tmp_path: Path,
 ) -> None:
-    """Known-bad (T3-10): `git checkout HEAD -- n.py` throws away what `n1`
+    """Known-bad: `git checkout HEAD -- n.py` throws away what `n1`
     proved. The resume used to seed `n1` as proven and gate the next node
     against a tree without its change; it now stops before any node runs,
     naming both trees and the way back."""
@@ -3068,7 +3071,7 @@ def test_run_slice_resume_tree_refuses_a_worktree_missing_the_proven_edit(
 
 
 def test_run_slice_resume_tree_refuses_an_edit_to_an_unrelated_file(tmp_path: Path) -> None:
-    """Known-bad (T3-10): strict equality. The proof is about one tree,
+    """Known-bad: strict equality. The proof is about one tree,
     not about `n1`'s files alone, so an edit anywhere in the tracked tree
     ends the resume; a fresh `--journal` is the escape hatch."""
     journal, _first = _first_run(tmp_path)
@@ -3093,7 +3096,7 @@ def test_run_slice_resume_tree_refuses_an_edit_to_an_unrelated_file(tmp_path: Pa
 
 
 def test_run_slice_refuses_a_journal_that_does_not_verify(tmp_path: Path) -> None:
-    """Known-bad (T3-1): a tampered record breaks its hash, and resuming
+    """Known-bad: a tampered record breaks its hash, and resuming
     onto it raises before any node runs."""
     journal, _first = _first_run(tmp_path)
     text = journal.read_text()
@@ -3183,7 +3186,7 @@ def test_apply_diff_tolerates_whitespace_drift_in_context(tmp_path: Path) -> Non
 
     T1 spent two of three worker calls on diffs that would not apply and
     T7 lost an entire run to three consecutive failures, one lint fix
-    from passing (F4, F11, F13). The dominant cause is not a wrong edit:
+    from passing. The dominant cause is not a wrong edit:
     it is context the model reproduced from memory with whitespace that
     does not match byte-for-byte. The edit itself is unambiguous.
     """
@@ -3242,7 +3245,7 @@ def test_apply_diff_reports_which_mode_applied(tmp_path: Path) -> None:
 # The baseline `fees.py` of the round-3e T5 seed and the hunk one draw
 # wrote against it: sample 0 of node n2's first attempt, kept whole in
 # its sidecar. Its old side is the file with one blank line moved and
-# one dropped (F21.16 §5); every `git apply` rung refuses it.
+# one dropped; every `git apply` rung refuses it.
 ROUND_3E_FEES: Final = '''"""Flat USD fee schedule.
 
 Every transaction pays the same flat fee in US dollars. The fee is
@@ -3385,11 +3388,11 @@ def _git_repo_holding(root: Path, name: str, text: str) -> None:
 
 
 def test_apply_diff_reanchors_blank_line_drift_no_flag_reaches(tmp_path: Path) -> None:
-    """A hunk whose only error is where its blank lines fall applies (T6-38).
+    """A hunk whose only error is where its blank lines fall applies.
 
     `--ignore-whitespace` ignores whitespace within a line; a blank line
     the file has and the hunk lacks is a line-level insertion, and this
-    was every `did not apply` loss in rounds 3d and 3e (F21.16 §5). The
+    was every `did not apply` loss in rounds 3d and 3e. The
     rung re-derives the blank context from the file and applies strictly,
     so the result's non-blank lines are exactly the hunk's new side.
     """
@@ -3491,7 +3494,7 @@ def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Pa
 
     On T7 recovery drove the node from four failing gates to one and then
     spent its whole budget on ruff while an infinite loop sat untouched
-    (F13). SpecBench measures the same thing: "additional search steps
+    SpecBench measures the same thing: "additional search steps
     did not reliably reduce gaps... longer search increases the severity
     of reward hacking".
 
@@ -3519,7 +3522,7 @@ def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Pa
     )
 
     # Sampling stops as soon as one candidate gates clean: k is a budget,
-    # not a quota, and model calls are the dominant cost (F8).
+    # not a quota, and model calls are the dominant cost.
     assert 0 < len(seen_failures) <= PROPOSAL_SAMPLES
     # Independent: none of the samples was conditioned on a rejection.
     assert seen_failures == [None] * len(seen_failures)
@@ -3528,12 +3531,12 @@ def test_first_attempt_draws_independent_samples_and_takes_the_best(tmp_path: Pa
     assert (tmp_path / "n.py").read_text() == "def f():\n    return 2\n"
 
 
-# --- T3-8: a node is gated against its own baseline, so slices can be wide ---
+# --- A node is gated against its own baseline, so slices can be wide ---
 
 M_DIFF = whole_file("m.py", "def g():", "    return 2")
 
 # The `test` node's whole diff: one new file holding a failing specification
-# with a hypothesis property, which is what a `test` node must ship (T3-7a).
+# with a hypothesis property, which is what a `test` node must ship.
 SPEC_DIFF = (
     "diff --git a/test_n.py b/test_n.py\n"
     "new file mode 100644\n"
@@ -3597,7 +3600,7 @@ def _declares_both_requirements(node: dict[str, object]) -> dict[str, object]:
     from the ones the node's scoped command runs, so `test_m.py`'s
     `REQ-002` tag counts as cited for `n1` too. A fixture that declared it
     on `n2` alone would fail `n1` with "undeclared requirements cited:
-    REQ-002" -- the orphan rule doing its job, not a T3-8 defect.
+    REQ-002" -- the orphan rule doing its job, not an own-baseline defect.
     """
     node["requirements"] = [
         {"id": "REQ-001", "statement": "REQ-001 holds.", "accepts": ["2"], "rejects": ["3"]},
@@ -3646,9 +3649,9 @@ def _survivor_mutmut(
 ) -> None:
     """One mutant surviving on the branch `BRANCH_DIFF` leaves unreached.
 
-    T6-90 took `coverage` out of an impl node's failure set and
+    Coverage deferral took `coverage` out of an impl node's failure set and
     `_survivor_gap` admits only `{coverage, mutation}`, so `mutation` is
-    the one trigger a survivor round still has (F21.67). These fixtures
+    the one trigger a survivor round still has. These fixtures
     reach the machinery through it; what they assert -- the brief, the
     candidate filter, the round limit, a transport failure mid-round --
     is unchanged.
@@ -3688,7 +3691,7 @@ def _two_module_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     conftest's autouse stub locates every mutant at `n.py:2`, so the node
     whose changed line lives in `m.py` would find no mutants in scope and
-    fail the mutation gate for a fixture reason rather than a T3-8 one.
+    fail the mutation gate for a fixture reason rather than an own-baseline one.
     Each node still only counts the mutants that land on its own changed
     lines: the other module's are skipped before the file is read.
     """
@@ -3720,7 +3723,7 @@ def _refactor_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (T3-8): the second node's gates see the second node's diff.
+    """Known-good: the second node's gates see the second node's diff.
 
     `_run_node` applies, autofixes, gates and seals but never commits, so
     when `n2` runs, `n1`'s proven edit to `n.py` is still staged. Gated
@@ -3756,7 +3759,7 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     )
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["n1", "n2"]
-    # k draws per node, paid up front (T6-25); the first sample of each
+    # k draws per node, paid up front; the first sample of each
     # gated clean, so nothing after it was evaluated and no retry ran.
     # Against `HEAD` the first sample would score `target-scope` red.
     assert calls == ["n1"] * PROPOSAL_SAMPLES + ["n2"] * PROPOSAL_SAMPLES
@@ -3779,13 +3782,13 @@ def test_run_slice_two_nodes_are_gated_against_their_own_baselines(
     assert not any("HEAD" in span.argv for span in name_only)
     refs = run_capture(["git", "for-each-ref", "--format=%(refname)", "refs/saddle/"], tmp_path)
     assert refs.stdout.split() == [
-        # T6-34: the tree each attempt was graded on, numbered by attempt.
+        # The tree each attempt was graded on, numbered by attempt.
         # Both nodes passed on attempt 1, so there is one apiece.
         "refs/saddle/attempt/n1/1",
         "refs/saddle/attempt/n2/1",
         "refs/saddle/baseline/n1",
         "refs/saddle/baseline/n2",
-        # T3-10: one proven tree per sealed node, beside its baseline.
+        # One proven tree per sealed node, beside its baseline.
         "refs/saddle/proven/n1",
         "refs/saddle/proven/n2",
     ]
@@ -3796,7 +3799,7 @@ STRAY_DIFF = M_DIFF + whole_file("n.py", "def f():", "    return 2", "# stray")
 
 
 def test_run_slice_second_node_own_stray_still_fails_target_scope(tmp_path: Path) -> None:
-    """Known-bad (T3-8): narrowing the ref does not narrow the check.
+    """Known-bad: narrowing the ref does not narrow the check.
 
     `n2` declares `target_files=["m.py"]` and edits `m.py` *and* `n.py`.
     `n1`'s proven edit to `n.py` is no longer charged to `n2`, but `n2`'s own
@@ -3833,8 +3836,8 @@ def test_run_slice_second_node_own_stray_still_fails_target_scope(tmp_path: Path
 
 
 def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
-    """Deferred from T3-7a, unblocked by T3-8: a `test` node writes the
-    specification, the `impl` node that depends on it makes it pass, and both
+    """Deferred until nodes were gated against their own baseline: a `test`
+    node writes the specification, the `impl` node that depends on it makes it pass, and both
     prove. Against `HEAD` the impl node failed `node-scope` with "impl node
     changed test file(s): test_n.py", because the spec the test node had just
     created was staged and counted as the impl node's own edit.
@@ -3866,12 +3869,12 @@ def test_run_slice_test_node_then_impl_node_both_prove(tmp_path: Path) -> None:
     assert "- Gate tests: PASS (red specification: 1 failing test(s))\n" in result.transcript
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
-    # The property `t1` specified bites on `n1` (T3-3): its record says so.
+    # The property `t1` specified bites on `n1`: its record says so.
     outputs = {o.name: o for o in read_records(journal)[1].gate_outputs}
     assert outputs["property-coverage"].basis == "oracle: killed 5 of 5 mutant(s) by test_n.py"
 
 
-# --- T3-17: the merge suite runs the way the node gates run tests ---------
+# --- The merge suite runs the way the node gates run tests ---------------
 
 PKG_DIFF = whole_file("pkg/m.py", "def g():", "    return 2")
 
@@ -3929,7 +3932,7 @@ def _packaged_slice(
 def test_run_slice_merge_suite_runs_as_the_node_gates_do(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T3-17 known-good: the node proves under `coverage run -m pytest` and
+    """Known-good: the node proves under `coverage run -m pytest` and
     the merge suite, under the same interpreter form, imports the same
     package and passes."""
     result = _packaged_slice(tmp_path, monkeypatch)
@@ -3943,7 +3946,7 @@ def test_run_slice_merge_suite_runs_as_the_node_gates_do(
 def test_run_slice_bare_pytest_merge_cannot_import_what_the_gates_could(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T3-17 known-bad, kept so the reason for the default stays load-bearing:
+    """Known-bad, kept so the reason for the default stays load-bearing:
     the same proven tree fails a bare `pytest -q` merge with a collection
     error (exit 2) that no node gate could observe."""
     result = _packaged_slice(tmp_path, monkeypatch, merge_command="pytest -q")
@@ -3953,13 +3956,13 @@ def test_run_slice_bare_pytest_merge_cannot_import_what_the_gates_could(
     assert run.detail == "1 proven, 0 failed, 0 undispatched, merge exit 2"
 
 
-# --- T3-24: a citation of a requirement another node of the plan declares ---
+# --- A citation of a requirement another node of the plan declares ---
 
 
 def test_run_slice_distinct_ids_first_node_sees_the_second_nodes_citation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (T3-24): the T3-8 two-node fixture with distinct ids.
+    """Known-good: the own-baseline two-node fixture with distinct ids.
 
     `n1` declares `REQ-001` alone and `n2` `REQ-002` alone; the committed
     `test_m.py` cites `REQ-002`. Binding reads every discovered test
@@ -3995,9 +3998,9 @@ def test_run_slice_distinct_ids_first_node_sees_the_second_nodes_citation(
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["n1", "n2"]
     bound = "- Gate requirement-binding: PASS (1 requirement(s) bound)\n"
-    # flip (T6-89): both nodes of this plan are impl nodes, and every
+    # flip: both nodes of this plan are impl nodes, and every
     # clause of the binding gate reads tests neither may write, so both
-    # render the exemption and neither is judged. T3-24's subject --
+    # render the exemption and neither is judged. The plan-wide citation --
     # an id the plan declares one node later is planned, not
     # hallucinated -- is pinned where it can still be observed, in
     # test_runner.py::test_run_node_gate_planned_requirements_reach_the
@@ -4022,7 +4025,7 @@ SPEC_DIFF_TWO_IDS = SPEC_DIFF.replace(
 def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     tmp_path: Path,
 ) -> None:
-    """Session 20b in miniature (T3-24): the `test` node `t1` declares
+    """Session 20b in miniature: the `test` node `t1` declares
     `REQ-001` and writes a specification citing `REQ-001` and `REQ-002`; the
     `impl` node `n1` that depends on it declares `REQ-002`. With the orphan
     set drawn from each node's own ids, `t1` fails "undeclared requirements
@@ -4055,15 +4058,15 @@ def test_run_slice_test_node_may_cite_the_id_its_dependent_impl_node_declares(
     assert result.passed is True, result.transcript
     assert list(result.proofs) == ["t1", "n1"]
     bound = "- Gate requirement-binding: PASS (1 requirement(s) bound"
-    # flip (T6-89): only the spec node is judged. Every clause of the
+    # flip: only the spec node is judged. Every clause of the
     # binding gate reads the tests, and the impl node may not write one,
     # so its line renders the exemption instead of a count. The subject
-    # here -- T3-24's plan-wide ids -- lives on the spec node's line.
+    # here -- plan-wide ids -- lives on the spec node's line.
     assert result.transcript.count(bound) == 1
     assert (
         result.transcript.count("not judged: every clause reads tests this node may not write") == 1
     )
-    # The spec node's line also counts the examples it asserted on (T6-4).
+    # The spec node's line also counts the examples it asserted on.
     assert result.transcript.count(bound + ", 2 example(s) asserted)\n") == 1
     run = [span for span in read_spans(journal) if span.name == "run"][-1]
     assert run.detail == "2 proven, 0 failed, 0 undispatched, merge exit 0"
@@ -4077,7 +4080,7 @@ def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any]:
 
 
 def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path: Path) -> None:
-    """Known-good (T6-13): the journal's first entry is the plan, sealed
+    """Known-good: the journal's first entry is the plan, sealed
     before any worker call; a replan seals its replacement naming the
     failed node; `verify` is clean and the proofs match the plans."""
     _slice_repo(tmp_path)
@@ -4109,7 +4112,7 @@ def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path
     plans = read_plans(journal)
     # A replan record carries the whole post-replan plan, not just the
     # replacement: the failed node stays put and every rewired dependent
-    # has a new hash to plan (T6-72).
+    # has a new hash to plan.
     assert [(p.replaces, [n.id for n in p.nodes]) for p in plans] == [
         ("", ["n1"]),
         ("n1", ["n1", "n1.r1"]),
@@ -4121,7 +4124,7 @@ def test_run_slice_seals_the_plan_before_the_first_node_and_each_replan(tmp_path
 
 
 def test_run_slice_every_attempt_leaves_a_sidecar_with_its_evidence(tmp_path: Path) -> None:
-    """Known-good (T6-12): a failed attempt keeps its reasoning, gate
+    """Known-good: a failed attempt keeps its reasoning, gate
     outcomes, samples and diff hash beside the journal, hashed into its
     span; the sealing attempt keeps the same. Known-bad was round-3 T5:
     three failed attempts, 160k tokens, nothing journaled."""
@@ -4176,7 +4179,7 @@ def test_run_slice_every_attempt_leaves_a_sidecar_with_its_evidence(tmp_path: Pa
 
 
 def test_run_slice_truncated_attempt_keeps_its_partial_reasoning(tmp_path: Path) -> None:
-    """Known-bad shape (T6-12, F21.4): the most expensive failure used to
+    """Known-bad shape: the most expensive failure used to
     leave nothing. A truncated call's sidecar carries the finish reason,
     the cap, the usage and the partial reasoning; the transcript line names
     the cap."""
@@ -4222,12 +4225,12 @@ def test_run_slice_truncated_attempt_keeps_its_partial_reasoning(tmp_path: Path)
 
 
 def test_every_attempt_sidecar_carries_the_call_and_the_diff(tmp_path: Path) -> None:
-    """T6-27 known-good, end to end. Attempt 1 fails its gate, attempt 2
+    """Known-good, end to end. Attempt 1 fails its gate, attempt 2
     seals. Both sidecars retain the diff text, the prompt, the seed, the
     temperature, the start time and the wall of the call that drew them,
     beside the hashes; both worker spans carry an argv that names the
     attempt and the prompt's hash, so their `args_hash` differ; every
-    span, tool or agent, has a `started_at`. Known-bad, the pre-T6-27
+    span, tool or agent, has a `started_at`. Known-bad, the earlier
     shape: an empty argv hashing to sha256("[]") and no absolute time.
     """
     _slice_repo(tmp_path)
@@ -4287,7 +4290,7 @@ def test_every_attempt_sidecar_carries_the_call_and_the_diff(tmp_path: Path) -> 
 
 
 def test_a_recorded_attempt_replays_to_the_same_diff_hash(tmp_path: Path) -> None:
-    """T6-27 known-good for the contract's purpose: a fake client keyed on
+    """Known-good for the contract's purpose: a fake client keyed on
     (prompt, seed, temperature) handed the sidecar's own fields reproduces
     the sealed diff hash. Known-bad: with the seed withheld the replay is a
     different draw.
@@ -4321,10 +4324,10 @@ def test_a_recorded_attempt_replays_to_the_same_diff_hash(tmp_path: Path) -> Non
 
 
 def test_a_recorded_attempt_names_the_effort_it_ran_at(tmp_path: Path) -> None:
-    """T6-47 known-good: a replay keyed on the sidecar's own effort draws the
+    """Known-good: a replay keyed on the sidecar's own effort draws the
     arm the attempt drew; keyed on a guess, it draws a different one.
 
-    Known-bad, and it is on the record (F21.18). The sidecar had no such
+    Known-bad, and it is on the record. The sidecar had no such
     field, so round 3e's grammar cell had to guess the effort. It guessed
     `xhigh` against an attempt that ran at `low`, billed 10 627 prompt
     tokens against the attempt's 10 615, and neither arm reproduced the
@@ -4367,7 +4370,7 @@ def test_a_recorded_attempt_names_the_effort_it_ran_at(tmp_path: Path) -> None:
 
 
 def test_failed_worker_call_sidecar_keeps_the_call_the_client_attached(tmp_path: Path) -> None:
-    """T6-27: a transport failure's sidecar carries prompt, seed, temperature
+    """A transport failure's sidecar carries prompt, seed, temperature
     and start from the error's `evidence`, and the span's argv names the
     prompt's hash, so the 2494 s timeout of round 3d would not be blank."""
     _slice_repo(tmp_path)
@@ -4399,7 +4402,7 @@ def test_failed_worker_call_sidecar_keeps_the_call_the_client_attached(tmp_path:
     assert workers[-1].argv[3] == "prompt_sha256=" + hashlib.sha256(b"p1").hexdigest()
 
 
-# --- T6-29c: survivor-driven test node, the splice ---------------------------
+# --- Survivor-driven test node, the splice ----------------------------------
 
 BRANCH_DIFF = whole_file(
     "n.py", "def f(flag=0):", "    if flag == 1:", "        return 5", "    return 2"
@@ -4420,7 +4423,7 @@ THREE_BRANCH_DIFF = whole_file(
 
 
 def _candidate_diff(source: str, path: str = "tests/test_REQ-001_s0.py") -> str:
-    """A creation diff the way the grammar shapes one (T6-32)."""
+    """A creation diff the way the grammar shapes one."""
     body = "".join(f"+{line}\n" for line in source.splitlines())
     count = source.count("\n")
     return (
@@ -4434,7 +4437,7 @@ def _candidate_diff(source: str, path: str = "tests/test_REQ-001_s0.py") -> str:
 
 
 def _flag_test(flag: int, expect: int) -> str:
-    """A candidate pinning one branch, with the property a test node must state (T3-3)."""
+    """A candidate pinning one branch, with the property a test node must state."""
     return (
         "from hypothesis import given\n"
         "from hypothesis import strategies as st\n"
@@ -4465,7 +4468,7 @@ def _survivor_span(journal: Path, node_id: str) -> SpanRecord:
 def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-good (T6-29c): an impl node fails coverage on a branch nothing
+    """Known-good: an impl node fails coverage on a branch nothing
     reaches; the recovery draws k test candidates from a brief that names
     the untested function and never the code, keeps the one that is red on
     stubs, green on the real tree and covers the gap, drops the rest with
@@ -4513,13 +4516,13 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(
     assert "one section, one hunk" in brief
     assert "test_REQ-001_r1_s0.py" in brief
     # The implementation's bodies never reach the brief: a worker shown
-    # `return 5` writes the test of the code (T6-29b).
+    # `return 5` writes the test of the code.
     assert "return 5" not in brief
     assert "flag == 1" not in brief
     span = _survivor_span(journal, "n1")
     assert span.argv == ["survivor-tests", "n1", "round=1", "drawn=7", "kept=1", "dropped=6"]
     assert span.exit_code == 0
-    # flip (T6-90): the trigger is now a surviving mutant rather than an
+    # flip: the trigger is now a surviving mutant rather than an
     # uncovered line, so the kept candidate kills one. That it CAN kill
     # is the point -- a candidate that closed nothing would leave the
     # retried node exactly as it was.
@@ -4534,7 +4537,7 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(
     assert kept.read_text() == _flag_test(1, 5)
     assert not (tmp_path / "test_REQ-001_r1_s2.py").exists()
     plans = read_plans(journal)
-    # The whole post-replan plan, failed node included (T6-72).
+    # The whole post-replan plan, failed node included.
     assert [(p.replaces, [n.id for n in p.nodes]) for p in plans] == [
         ("", ["n1"]),
         ("n1", ["n1", "n1.r1", "n1.r2"]),
@@ -4556,7 +4559,7 @@ def test_run_slice_survivor_round_seals_a_test_node_then_the_impl_node(
 def test_run_slice_survivor_recovery_starts_no_third_round(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad (T6-29c): two rounds per requirement. Each round's kept
+    """Known-bad: two rounds per requirement. Each round's kept
     test covers one more branch and the retried impl node still fails;
     after the second retry nothing is drawn and the node stays failed."""
     _slice_repo(tmp_path)
@@ -4586,7 +4589,7 @@ def test_run_slice_survivor_recovery_starts_no_third_round(
     )
     assert result.passed is False
     assert len(draws) == 2 * k
-    # Round 2 replaces the retried node, so its ids nest under it (T3-11).
+    # Round 2 replaces the retried node, so its ids nest under it.
     assert list(result.proofs) == ["n1.r1", "n1.r2.r1"]
     assert "## Node n1.r2.r2\n" in result.transcript
     assert "## Node n1.r2.r2.r1\n" not in result.transcript
@@ -4600,7 +4603,7 @@ def test_run_slice_survivor_recovery_starts_no_third_round(
 def test_run_slice_gap_cited_by_a_sealed_test_retries_as_today(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad (T6-29c): the sealed test node `t1` wrote `test_n.py`,
+    """Known-bad: the sealed test node `t1` wrote `test_n.py`,
     which names `f`; `n1`'s gap is inside `f`, so nothing is drawn and the
     node replans exactly as before."""
     _spec_slice_repo(tmp_path)
@@ -4658,7 +4661,7 @@ EXAMPLES_ONLY_SPEC = (
 )
 
 # A delete carries no body: the contents of a file being removed are not
-# evidence of anything (T6-62/A1).
+# evidence of anything.
 DELETE_GONE = (
     "diff --git a/test_gone.py b/test_gone.py\n"
     "deleted file mode 100644\n"
@@ -4670,8 +4673,8 @@ DELETE_GONE = (
 def test_run_slice_survivor_round_that_keeps_nothing_leaves_the_node_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad (T6-29c): every draw is a plausible test that is wrong on
-    the real tree (F21.14); nothing is kept, the round is journaled with
+    """Known-bad: every draw is a plausible test that is wrong on
+    the real tree; nothing is kept, the round is journaled with
     exit 1, nothing is spliced and the node stays failed."""
     _slice_repo(tmp_path)
     _survivor_mutmut(tmp_path / "stub", monkeypatch)
@@ -4718,7 +4721,7 @@ def test_survivor_gap_admits_impl_gate_failures_on_coverage_or_mutation_only() -
 
 
 def test_run_slice_survivor_recovery_leaves_other_gate_failures_alone(tmp_path: Path) -> None:
-    """Known-bad (T6-29c): a node that fails its tests gate is not a
+    """Known-bad: a node that fails its tests gate is not a
     coverage or mutation gap; nothing is drawn and it replans as today."""
     _slice_repo(tmp_path)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
@@ -4786,7 +4789,7 @@ def test_cut_to_last_test_keeps_what_parses() -> None:
 
 
 def test_run_slice_defers_an_uncovered_line_while_a_test_node_is_owed(tmp_path: Path) -> None:
-    """The wiring, not the predicate (T6-53).
+    """The wiring, not the predicate.
 
     Known-bad is the run above, `..._gate_fail_leaves_dependent_undispatched`:
     the identical diff and the identical uncovered `unused`, in a plan
@@ -4796,7 +4799,7 @@ def test_run_slice_defers_an_uncovered_line_while_a_test_node_is_owed(tmp_path: 
     record shape `tests/test_store.py` exercises, owned by a node that
     had not been dispatched.
 
-    This half is also the admission T6-53 makes, exhibited: `unused`
+    This half is also the admission the deferral makes, exhibited: `unused`
     really is code nothing runs, and it seals. Coverage keeps full force
     the moment nothing is owed, which the sibling test pins.
     """
@@ -4832,7 +4835,7 @@ def test_run_slice_defers_an_uncovered_line_while_a_test_node_is_owed(tmp_path: 
 
 
 def test_replan_record_carries_every_node_of_the_post_replan_plan(tmp_path: Path) -> None:
-    """T6-72. `splice_replan` rewires a failed node's dependents onto the
+    """`splice_replan` rewires a failed node's dependents onto the
     new leaves, which changes those dependents' `node_hash`. The replan
     record journaled only the generated nodes, so a rewired survivor's
     proof sealed against a hash that appeared in no plan record and
@@ -4886,7 +4889,7 @@ def test_replan_record_carries_every_node_of_the_post_replan_plan(tmp_path: Path
 def test_a_draws_transport_failure_does_not_discard_its_completed_siblings(
     tmp_path: Path,
 ) -> None:
-    """T6-73 known-good. One draw's timeout loses that draw, not the others.
+    """Known-good. One draw's timeout loses that draw, not the others.
 
     `draw` caught only `VllmResponseError`, and `VllmRequestError` is a
     sibling class rather than a subclass, so a transport failure escaped
@@ -4933,7 +4936,7 @@ def test_a_draws_transport_failure_does_not_discard_its_completed_siblings(
 def test_a_rejected_api_key_fails_the_node_rather_than_becoming_a_sample(
     tmp_path: Path,
 ) -> None:
-    """T6-73 known-bad. Widening `draw`'s except must not swallow auth.
+    """Known-bad. Widening `draw`'s except must not swallow auth.
 
     A rejected key is not a per-draw condition -- every sibling and every
     retry fails the same way -- so it must keep failing the node through
@@ -4966,13 +4969,13 @@ def test_a_rejected_api_key_fails_the_node_rather_than_becoming_a_sample(
 def test_a_survivor_draws_transport_failure_does_not_discard_its_siblings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T6-73 known-good, the survivor drawer's copy of the same defect.
+    """Known-good, the survivor drawer's copy of the same defect.
 
     `one` catches what `_best_of_samples`'s `draw` catches, so it carried
     the same gap: a transport failure in one candidate discarded every
     candidate drawn beside it and failed the recovery, where a truncation
     in the same position is already recorded per draw (`s4: dropped` in
-    the T6-29c known-good).
+    the survivor-splice known-good).
     """
     _slice_repo(tmp_path)
     _survivor_mutmut(tmp_path / "stub", monkeypatch)
@@ -5003,7 +5006,7 @@ def test_a_survivor_draws_transport_failure_does_not_discard_its_siblings(
 def test_an_attempt_that_applied_nothing_carries_the_last_gate_failure_forward(
     tmp_path: Path,
 ) -> None:
-    """T6-79 known-good: attempt 1 fails a gate; attempt 2's call truncates
+    """Known-good: attempt 1 fails a gate; attempt 2's call truncates
     and so writes nothing. Attempt 3 is therefore still looking at the tree
     attempt 1's gate judged, and must be told what that gate said.
     """
@@ -5039,7 +5042,7 @@ def test_an_attempt_that_applied_nothing_carries_the_last_gate_failure_forward(
 def test_a_first_attempt_that_applied_nothing_carries_no_gate_failure(
     tmp_path: Path,
 ) -> None:
-    """T6-79 known-bad, the half that matters: a node whose first attempt
+    """Known-bad, the half that matters: a node whose first attempt
     truncates has no gate verdict yet, and must not be handed one.
     """
     _slice_repo(tmp_path)
@@ -5069,7 +5072,7 @@ def test_a_first_attempt_that_applied_nothing_carries_no_gate_failure(
 def test_candidate_runner_covers_a_statement_whose_only_changed_line_is_a_continuation(
     tmp_path: Path,
 ) -> None:
-    """P1-1 known-bad: the survivor round's runner had the runner's blind spot.
+    """Known-bad: the survivor round's runner had the runner's blind spot.
 
     The diff changes line 4, the message of the `raise ValueError(` on line
     3. A candidate that reaches the `raise` must show line 3 as covered;
@@ -5109,7 +5112,7 @@ def test_candidate_runner_covers_a_statement_whose_only_changed_line_is_a_contin
 
 
 def test_prompt_shape_is_read_off_the_prompt_start() -> None:
-    """P2-1 Contract D: the sealed shape is what the sent text was. Known-good:
+    """The sealed shape is what the sent text was. Known-good:
     a prompt opening with the preamble is task-first. Known-bad: the same
     sentence anywhere but the start, or absent, is structured."""
     assert slice_module.prompt_shape(slice_module.TASK_FIRST_PREAMBLE + "\n\nTask: x") == (

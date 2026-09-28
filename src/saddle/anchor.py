@@ -1,4 +1,4 @@
-"""An autonomous run's ledger, anchored outside itself in its branch (ANCHOR).
+"""An autonomous run's ledger, anchored outside itself in its branch.
 
 `saddle verify` holds a run's tool spans to the list its outcome span seals
 (CHAIN), but nothing in the ledger is keyed: someone who deletes a span,

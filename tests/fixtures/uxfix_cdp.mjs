@@ -1,4 +1,4 @@
-// UXREVIEW2 fixes, driven in headless Chrome over CDP; prints one JSON line.
+// Fixes from the second UX review, driven in headless Chrome over CDP; prints one JSON line.
 // Used by tests/test_uxfix.py; node >= 22 and Chrome only.
 //
 // usage: node uxfix_cdp.mjs <base-url> <step> <session-id> [other-session-id] [shot-dir]

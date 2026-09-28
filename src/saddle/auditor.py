@@ -14,7 +14,7 @@ call at a checkpoint and `saddle audit --tiered` calls over any diff:
   tier2=False)` run, which skips the mutation run, the property oracle and
   all but one red-phase sample.
 - **tier 2, asynchronous** (`Auditor.tier2(tree)`): `mutation` (untested
-  mutants counted as survivors, `evidence.mutation_sample` since P0-3),
+  mutants counted as survivors, `evidence.mutation_sample`),
   `property-coverage`, `red-phase`, `requirement-binding` and `full-suite`
   (the `tests` check of the same full `runner.run_node_gate` run: with no
   plan the audit's test command is the whole suite). Tier 2 never runs on a
@@ -171,7 +171,7 @@ _JOURNAL_EXIT: Final[dict[Verdict, int]] = {
 
 @dataclass(frozen=True)
 class Survivor:
-    """One surviving changed-line mutant, as a shortlist names it (SHORTLIST)."""
+    """One surviving changed-line mutant, as a shortlist names it."""
 
     path: str
     line: int
@@ -275,7 +275,7 @@ class AuditorConfig:
     blanket exemption: a finding naming any other test still fails."""
     tier2: Tier2Mode = "score"
     """`--tier2`: "score" (default) is the 85% kill-rate verdict, byte for byte
-    as before SHORTLIST. "shortlist" decides tier 2 on open survivors
+    as before the shortlist mode existed. "shortlist" decides tier 2 on open survivors
     (`gates.check_mutation_shortlist`), makes coverage a locator
     (`not-proven`, never a refusal) and turns on the finish-time behaviour in
     `feed` (format, cheap-route checks, way-out claims)."""
@@ -310,7 +310,7 @@ def sanction(finding: Finding, sanctioned: Sequence[str]) -> Finding:
 
     A finding the auditor marked `GREEN_ON_BASELINE` is never reclassed:
     a sanctioned rewrite is accepted only if it is red on the baseline's
-    sources (FEEDFIX item 4)."""
+    sources."""
     if finding.gate != "assertion-preservation" or finding.verdict != "fail":
         return finding
     if GREEN_ON_BASELINE in finding.detail:
@@ -344,7 +344,7 @@ def green_on_baseline(
 ) -> list[str]:
     """Which of the rewritten tests `names` PASS with the baseline's sources.
 
-    The negative control SANCTIONS-LIB (1)(b) recommends: a sanctioned
+    A behavioural negative control: a sanctioned
     rewrite is the task's order to assert the *redefined* behaviour, so it
     must fail on the code before the change. One that passes there did not
     assert it (`construct/vacuous`: `assert True`; or it kept the old
@@ -407,7 +407,7 @@ COVERAGE_GAP_PREFIX: Final = "no test runs"
 
 
 def coverage_evidence(copy: Path, baseline: str, detail: str) -> dict[str, Any] | None:
-    """What `coverage_text` needs beside a failing coverage finding (PACKETHOOK).
+    """What `coverage_text` needs beside a failing coverage finding.
 
     The text of every file the detail names, as it stood in the audited
     tree, and the changed-statement set the gate judged, spelled relative
@@ -614,7 +614,7 @@ class Auditor:
 
     def _journal(self, result: Findings, sidecars: Mapping[str, Mapping[str, Any]]) -> None:
         """One span per finding. `sidecars` maps a gate to evidence sealed as
-        that finding's sidecar (PACKETHOOK): the tier-2 mutation finding's
+        that finding's sidecar: the tier-2 mutation finding's
         `MutationOutcome`, a failing tier-1 coverage finding's sources and
         changed set (`coverage_evidence`), so the packet can say which
         mutants survived and which lines no test runs, not only how many. A
@@ -720,7 +720,7 @@ class Auditor:
                     for c in gated.checks
                 }
             if self.config.tier2 == "shortlist" and statuses.get("coverage", ("",))[0] == "fail":
-                # SHORTLIST-4: coverage is a locator. An uncovered changed line is
+                # Under the shortlist, coverage is a locator. An uncovered changed line is
                 # "not proven", never a refusal; the detail keeps its lines.
                 statuses["coverage"] = ("not-proven", *statuses["coverage"][1:])
             survivors: tuple[Survivor, ...] = ()
@@ -746,10 +746,10 @@ class Auditor:
                     survivors = _survivors(outcome, sources)
             sidecars: dict[str, Mapping[str, Any]] = {}
             if gated.mutation is not None:
-                # SHORTLIST-2 records `mutant_detail` as (name, status, show)
+                # The shortlist records `mutant_detail` as (name, status, show)
                 # tuples; the sidecar seals the record shape Findings.to_dict
                 # and feed.AuditResult.to_dict already use, which is what
-                # mutant_text.describe_mutation reads (INTEG3 semantic merge).
+                # mutant_text.describe_mutation reads.
                 sidecars["mutation"] = {
                     **dataclasses.asdict(gated.mutation),
                     "mutant_detail": [
@@ -766,7 +766,7 @@ class Auditor:
                 and (named := rewritten(rewrote[1]))
                 and named <= sanctioned
             ):
-                # FEEDFIX (4): a sanctioned rewrite must be red on the baseline.
+                # A sanctioned rewrite must be red on the baseline.
                 green = green_on_baseline(copy, resolved, sorted(named), self.config.test_command)
                 if green:
                     statuses["assertion-preservation"] = (
@@ -776,14 +776,14 @@ class Auditor:
                     )
             if tier == 1:
                 status, detail, basis = statuses["coverage"]
-                # A not-proven coverage finding (SHORTLIST-4) names the same
-                # lines; its sidecar is what COVTEXT renders (FEEDFIX item 8).
+                # A not-proven coverage finding names the same lines;
+                # its sidecar is what `coverage_text` renders.
                 sealed = (
                     coverage_evidence(copy, resolved, detail)
                     if status in ("fail", "not-proven")
                     else None
                 )
-                # FEEDFIX (3): the baseline definitions coverage did not judge,
+                # The baseline definitions coverage did not judge,
                 # sealed whatever the verdict (a pass is where they hide).
                 spared = spared_definitions(basis or "")
                 if spared:

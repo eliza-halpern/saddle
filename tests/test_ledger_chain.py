@@ -355,7 +355,7 @@ def test_a_deleted_span_prints_no_ok_line_and_its_issue_names_the_span(repo: Pat
 
 
 def test_a_finished_runs_transcript_names_its_task_and_its_outcome(repo: Path) -> None:
-    """out/DOCS/report.md: verify printed `Task: (unknown)` / `Verdict: FAIL`
+    """A docs review found verify printing `Task: (unknown)` / `Verdict: FAIL`
     for a finished autonomous run. The task is the start span's; the verdict
     is the outcome span's, never the slice rule's proof-and-gate count."""
     code, text = verify_text(run(repo).journal)
@@ -446,7 +446,7 @@ def test_an_untouched_audited_run_verifies_and_seals_every_audit_record(repo: Pa
 
 @pytest.mark.parametrize("name", ["audit:lint", "audit:withheld"])
 def test_a_deleted_audit_record_fails_verify_naming_its_hash(repo: Path, name: str) -> None:
-    """out/DOCS/report.md finding 5: a deleted audit record went undetected."""
+    """A docs review found a deleted audit record going undetected."""
     result = run_audited(repo)
     rows = lines(result.journal)
     gone = rows.pop(index_of(rows, name))
@@ -472,7 +472,7 @@ def test_a_deleted_audit_record_resealed_out_of_the_list_is_caught_by_the_anchor
     repo: Path,
 ) -> None:
     """Rewriting the list means resealing the outcome, which moves its hash
-    off the branch's Saddle-Outcome trailer (ANCHOR)."""
+    off the branch's Saddle-Outcome trailer."""
     result = run_audited(repo)
     rows, at, path = outcome_and_sidecar(result)
     gone = rows.pop(index_of(rows, "audit:lint"))

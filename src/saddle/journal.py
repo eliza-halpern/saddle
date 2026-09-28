@@ -37,7 +37,7 @@ class GateOutput(BaseModel):
     name: str
     passed: bool
     detail: str
-    # Evidence basis (T2-4): "sampled n=<mutants>" for the mutation check,
+    # Evidence basis: "sampled n=<mutants>" for the mutation check,
     # None elsewhere. Optional so a journal written before this field
     # parses unchanged; verification hashes with exclude_unset=True, so a
     # record that never carried the key still matches its sealed hash.
@@ -56,7 +56,7 @@ class ProofRecord(BaseModel):
     requirement_ids: list[str]
     thinking: str
     attempts: int = 1
-    # What this proof is a proof *of* (T3-9). Sealed inside the hash, and
+    # What this proof is a proof *of*. Sealed inside the hash, and
     # defaulted so a journal written before they existed still parses and
     # still reproduces its own hash (verification dumps with
     # `exclude_unset=True`, as `basis` above relies on too).
@@ -64,7 +64,7 @@ class ProofRecord(BaseModel):
     node_hash: str = ""
     kind: str = ""
     target_files: list[str] = Field(default_factory=list)
-    # The worktree the gate passed on (T3-10): the `git write-tree` id of
+    # The worktree the gate passed on: the `git write-tree` id of
     # the tracked files, kept at `refs/saddle/proven/<node>`. A resume
     # compares the tree it was handed with this one; defaulted for the
     # same reason as the fields above.
@@ -73,7 +73,7 @@ class ProofRecord(BaseModel):
 
 
 class PlanNode(BaseModel):
-    """One node as planned: what was asked of it, sealed before it runs (T6-13)."""
+    """One node as planned: what was asked of it, sealed before it runs."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -84,14 +84,14 @@ class PlanNode(BaseModel):
     reasoning_budget: str
     max_context_tokens: int
     node_hash: str
-    # What the node may do (T6-27): round 3d's F21.13d could not say
+    # What the node may do: a round 3d lint failure could not say
     # whether the plan declared `lint`, because nothing recorded it.
-    # Unset on plans sealed before T6-27.
+    # Unset on plans sealed before this field existed.
     allowed_tools: list[str] = []
 
 
 class PlanRecord(BaseModel):
-    """The plan a run executed, in the chain beside its outcomes (T6-13).
+    """The plan a run executed, in the chain beside its outcomes.
 
     Round-3 T5 timed out with a journal of spans and an empty log: nothing
     said which kind its node was, what effort it ran at, or which files it
@@ -123,15 +123,15 @@ class SpanRecord(BaseModel):
     duration_ms: int
     exit_code: int
     detail: str
-    # UTC ISO-8601 start of the span (T6-27). Round 3d's journal held no
+    # UTC ISO-8601 start of the span. Round 3d's journal held no
     # absolute time anywhere, so nothing in it could be joined to a server
     # log, and three concurrent draws had no recoverable order. Unset on
-    # spans sealed before T6-27.
+    # spans sealed before this field existed.
     started_at: str = ""
     # sha256 of the attempt sidecar `attempts/<span_id>.json` beside the
-    # journal (T6-12): the attempt's reasoning, finish reason, token usage,
+    # journal: the attempt's reasoning, finish reason, token usage,
     # the cap it was sent, and its failure. Empty for tool spans and for
-    # spans sealed before T6-12.
+    # spans sealed before attempt sidecars existed.
     attempt_hash: str = ""
     record_hash: str
 
@@ -276,7 +276,7 @@ def build_span(
 
 
 def build_plan(nodes: Sequence[Node], *, task_hash: str, replaces: str = "") -> PlanRecord:
-    """Seal what was asked: every node's kind, scope, budgets and hash (T6-13)."""
+    """Seal what was asked: every node's kind, scope, budgets and hash."""
     payload: dict[str, Any] = {
         "record_type": "plan",
         "task_hash": task_hash,
@@ -308,10 +308,10 @@ def attempt_sidecar_path(journal_path: Path, span_id: str) -> Path:
 
 
 def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[str, Any]) -> str:
-    """Write one attempt's evidence and return its sha256 for the span (T6-12).
+    """Write one attempt's evidence and return its sha256 for the span.
 
     The evidence is what a failed attempt used to lose: the worker's
-    reasoning (redacted, and whole -- T6-51), the finish reason, the
+    reasoning (redacted, and whole), the finish reason, the
     token usage the server reported, the cap the call was sent, and the
     failure. It lives beside the journal rather than in it so the chain
     and `saddle tail` stay small; the span's `attempt_hash` is what makes
@@ -326,12 +326,12 @@ def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[st
 
 
 # Sidecar text retained VERBATIM: neither capped nor redacted. A `diff`
-# has to hash to its `diff_hash` or T6-27's check fails the journal
-# (T6-36), and `_proposal_evidence` takes that hash before this module
+# has to hash to its `diff_hash` or the `sidecar-diff-hash` check fails
+# the journal, and `_proposal_evidence` takes that hash before this module
 # sees the text, so any rewrite here breaks the invariant. Redaction did
 # rewrite it: `_NAMED_PATTERN` matched `Token = namedtuple(...)` in a
 # tokenizer's own source and the journal failed `sidecar-diff-hash` on a
-# run whose every gate had passed (T6-70). A diff is source code, and it
+# run whose every gate had passed. A diff is source code, and it
 # is already in the worktree and in git by the time the sidecar is
 # authored, so scrubbing this copy protects nothing the tree does not
 # already expose.
@@ -339,7 +339,7 @@ _RETAINED_VERBATIM: Final = frozenset({"diff"})
 
 # Sidecar text that is retained whole but still redacted: a prompt is what
 # a replay needs verbatim and can carry an injected key, and `thinking` is
-# the reasoning every reading of a failed attempt starts from (T6-51).
+# the reasoning every reading of a failed attempt starts from.
 # Every other string is capped. The journal's own entries are unaffected --
 # they cap thinking through `scrub_thinking`, and these sets are read only
 # by `write_attempt_sidecar`, so `proofs.jsonl` and `saddle tail` stay
@@ -350,14 +350,14 @@ _RETAINED_WHOLE: Final = frozenset({"prompt", "thinking"})
 def _scrub_evidence(key: str, value: Any) -> Any:
     """Redact every string in `value`, at any depth; cap all but the retained keys.
 
-    Round 3e (F21.16): the scrub was one level deep and capped every
+    Round 3e: the scrub was one level deep and capped every
     string, so a 4001+ character `diff` no longer hashed to its
     `diff_hash` -- every large attempt failed verification, the run
     aborted on its own journal and `saddle explain` refused it -- while
     the nested `samples[i]` text, where nearly all of the sidecar lives,
     was neither capped nor redacted.
 
-    Round 3f (F21.20): going recursive carried the cap *into* that nested
+    Round 3f: going recursive carried the cap *into* that nested
     text, and `samples[i].thinking` is where a draw's reasoning lives.
     Three samples lost 31 911, 58 927 and 45 345 characters, so the first
     step of reading a failed attempt -- what did the model think it was
@@ -405,7 +405,7 @@ def utc_now() -> datetime:
 
 
 def started_before(duration_ms: int, now: datetime) -> str:
-    """The UTC ISO-8601 instant `duration_ms` before `now` (T6-27)."""
+    """The UTC ISO-8601 instant `duration_ms` before `now`."""
     return (now - timedelta(milliseconds=duration_ms)).isoformat()
 
 
@@ -416,7 +416,7 @@ class SpanRecorder:
     path: Path
     node_id: str
     parent_id: str | None = None
-    # Wall clock for `started_at` (T6-27); injectable so a test can pin it.
+    # Wall clock for `started_at`; injectable so a test can pin it.
     clock: Callable[[], datetime] = utc_now
 
     def record(
@@ -431,7 +431,7 @@ class SpanRecorder:
         """Seal and append one completed tool invocation.
 
         `name` overrides the tool name derived from `argv`, for a git run
-        whose purpose the journal should show (`restore-baseline`, T3-23).
+        whose purpose the journal should show (`restore-baseline`).
         """
         append_span(
             self.path,
@@ -477,7 +477,7 @@ def _load_journal(
 ) -> tuple[list[ProofRecord], list[SpanRecord], list[JournalIssue], list[JournalEntry]]:
     """Read and verify: recompute every hash, check every parent link.
 
-    Also (T6-12, T6-13): an agent span carrying `attempt_hash` must have
+    Also: an agent span carrying `attempt_hash` must have
     its sidecar beside the journal hashing to it, and once a journal
     holds a plan record, every proof's `node_hash` must be one the plan
     records name -- a proof for a node nobody planned is a chain error.
@@ -544,7 +544,7 @@ def _load_journal(
                         )
                     )
                 elif _sidecar_diff_mismatch(sidecar):
-                    # T6-27: a retained diff that does not hash to the
+                    # A retained diff that does not hash to the
                     # sealed `diff_hash` is a sidecar telling two stories.
                     issues.append(
                         JournalIssue(
@@ -570,7 +570,7 @@ def _load_journal(
         if entry.kind.startswith(AUTO_PROOF_PREFIX):
             auto_proofs.append((number, entry))
         # Only a proof sealed after a plan record is judged against plans:
-        # earlier proofs predate T6-13 or were resumed from a journal that
+        # earlier proofs predate plan records or were resumed from a journal that
         # never had one.
         if planned_hashes:
             proof_lines.append((number, entry))
@@ -612,7 +612,7 @@ those as the run's start, spend and outcome; not a tool span, so the chain
 does not hold it to the outcome's tool list."""
 AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
 """A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
-FEEDFIX item 5's third ending (finish on a tree equal to the baseline). Not `auto:spend`,
+the third ending (finish on a tree equal to the baseline). Not `auto:spend`,
 which USAGE seals under the start span once per round."""
 AUDIT_SPAN_PREFIXES: Final = ("audit:", "audit-tier")
 """Audit records a run's journal also holds: the feed's `audit:delivered` /
@@ -862,7 +862,7 @@ def _listed_hashes(path: Path, outcome: SpanRecord, key: str) -> list[str] | Non
 
 
 def _sidecar_diff_mismatch(sidecar: Path) -> bool:
-    """Whether a hashing sidecar retains a `diff` that is not its `diff_hash` (T6-27)."""
+    """Whether a hashing sidecar retains a `diff` that is not its `diff_hash`."""
     try:
         evidence = json.loads(sidecar.read_bytes())
     except (OSError, ValueError):
@@ -921,7 +921,7 @@ def proven_records(path: Path) -> dict[str, ProofRecord]:
     Last verified record per node id, in journal order; same corruption
     policy as `rebuild_proven`, which keeps its narrower contract for
     callers that only need the hashes. A resume needs the record itself
-    to see which task and which node the proof was sealed for (T3-9).
+    to see which task and which node the proof was sealed for.
     """
     return {record.node_id: record for record in _verified_records(path)}
 
@@ -982,8 +982,8 @@ def build_from_gate(
     The record names what it proves, not only that something passed:
     `task_hash` is the task the run was given, `node_hash` the node as
     validated, and `kind`/`target_files` the same facts spelled readably
-    for an auditor (T3-9). `tree_hash` is the worktree the gate passed
-    on, so a resume can check it is resuming onto that tree (T3-10).
+    for an auditor. `tree_hash` is the worktree the gate passed
+    on, so a resume can check it is resuming onto that tree.
     """
     return build_record(
         evidence_id=evidence_id,

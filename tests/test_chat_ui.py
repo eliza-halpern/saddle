@@ -99,7 +99,7 @@ def test_compaction_stops_rather_than_emptying_a_list_of_protected_messages() ->
 
 
 def test_compaction_names_a_dropped_text_turn_by_its_first_line() -> None:
-    # The text-only twin of the image test below (P0-4's known-good pair):
+    # The text-only twin of the image test below (its known-good pair):
     # a dropped plain-text user turn is named in the summary, and the note
     # takes the slot right after the system prompt.
     messages: list[dict[str, object]] = [{"role": "system", "content": "you are saddle"}]

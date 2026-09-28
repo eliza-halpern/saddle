@@ -1,11 +1,11 @@
-"""UXREVIEW2: defects found reviewing the merged chat UI from screenshots.
+"""Defects found reviewing the merged chat UI from screenshots.
 
-F1 -- the run card's budget after Extend. Contract: every state event a run
+Defect 1 -- the run card's budget after Extend. Contract: every state event a run
 publishes carries the budget the run is working to, which is the budget its
 outcome sidecar seals. Extend doubles the budget mid-run
 (`engine._offer_budget`); the card read "~1.0k of 1.0k" at the end while the
 packet's Cost row, compiled from the sealed sidecar, said "of 2.0k"
-(out/UXREVIEW2/shots/05-run-card-after-extend-*.png, 08-packet-cost-*.png).
+(the review's screenshots of the run card after Extend and of the Cost row).
 
 Known-good: Extend -> the final state event says 2000, as sealed. Known-bad
 (the other half): Stop at limit -> 1000, as sealed; the state event must not
@@ -74,7 +74,7 @@ def test_the_runs_state_event_carries_the_budget_its_outcome_sealed(
     assert final.time_budget_s == sealed["time_budget_s"]
 
 
-# F2 -- a session switch carried the last session's run state along.
+# Defect 2 -- a session switch carried the last session's run state along.
 # Contract: the header pill, the send button and what submitting does belong
 # to the session on screen. Seen in shots/13-needs-you-from-another-session:
 # a session with no run showed "? needs you" and a stop square, and the
@@ -107,7 +107,7 @@ def test_switching_sessions_leaves_the_other_runs_state_behind(
     assert got["backOnA"]["send"] == "■"
 
 
-# F3 -- the "↓ newest" pill sat on the composer. Contract: when shown, the
+# Defect 3 -- the "↓ newest" pill sat on the composer. Contract: when shown, the
 # pill is wholly above the composer and inside the viewport, at 400 px and
 # at desktop width. It was placed at a fixed `bottom: 96px` of <main>, and
 # the composer is taller than that (shots/04-question-card-400.png: the pill

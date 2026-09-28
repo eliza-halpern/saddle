@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe what vLLM 0.28 constrains, and when (WORKPLAN T4-4, precedes D14).
+"""Probe what vLLM 0.28 constrains, and when (settles a question before D14).
 
 Three things the workflow could not settle by reading:
 

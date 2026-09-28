@@ -35,7 +35,7 @@ SHELL_TIMEOUT: Final = 124
 # reason: T1 v2 failed with no gate lines in the transcript, the only
 # evidence being a journal span reading "[Errno 2] ... 'coverage'".
 TOOL_UNAVAILABLE: Final = 127
-# How many introduced ruff findings the gate detail names before eliding (T6-3).
+# How many introduced ruff findings the gate detail names before eliding.
 RUFF_NAMED_FINDINGS: Final = 5
 # Baseline runs sampled per red-phase check. Red-phase is the only gate
 # that reasons over two runs, so its evidence is worth exactly what the
@@ -108,7 +108,7 @@ def check_syntax(sources: Mapping[str, str]) -> GateCheck:
 
 @dataclass(frozen=True)
 class RuffFinding:
-    """One ruff diagnostic, keyed for matching across trees (T6-3).
+    """One ruff diagnostic, keyed for matching across trees.
 
     `line` is the stripped source line the finding sits on, so a finding
     the baseline already carried is the same finding after the node's
@@ -131,7 +131,7 @@ class RuffFinding:
 def introduced_findings(
     current: Sequence[RuffFinding], baseline: Sequence[RuffFinding]
 ) -> tuple[list[RuffFinding], int]:
-    """Split the current findings into (introduced, inherited count) (T6-3).
+    """Split the current findings into (introduced, inherited count).
 
     A current finding is inherited when the baseline holds one with the
     same (code, path, source line) not already claimed by an earlier
@@ -159,7 +159,7 @@ def check_ruff(
     lint_exit: int,
     format_exit: int,
 ) -> GateCheck:
-    """The ruff gate (T6-3): a node fails for lint its own diff introduced.
+    """The ruff gate: a node fails for lint its own diff introduced.
 
     `introduced` are the current tree's findings absent from the node's
     baseline, `inherited` how many the baseline already carried;
@@ -169,7 +169,7 @@ def check_ruff(
     that was finally accepted was a `noqa` on code it never wrote).
     Formatting is unchanged: the harness formats the diff, so a format
     failure is always the node's. The detail names the rules, file and
-    line (F21.13d: `ruff check exited 1` told the worker nothing).
+    line (a bare `ruff check exited 1` told the worker nothing).
     """
     ordered = sorted(files)
     if not ordered:
@@ -225,7 +225,7 @@ def _missing_module(output: str) -> str | None:
 def _red_specification(
     test_command: str, exit_code: int, output: str, workdir_modules: Collection[str]
 ) -> GateCheck:
-    """The `test`-kind tests verdict: the node's tests must fail now (T3-7a).
+    """The `test`-kind tests verdict: the node's tests must fail now.
 
     A test node writes the specification the impl node depending on it
     must satisfy, so a suite that passes against the current code
@@ -376,7 +376,7 @@ def compelled_lines(
     multi-currency, and coverage then failed it on exactly those lines.
     Attempts 1 and 3 kept them and failed coverage; attempt 2 deleted
     them and failed public-deletions; the node was unprovable and took
-    the run's two remaining nodes with it (T6-75).
+    the run's two remaining nodes with it.
 
     So what one gate compels, another must not punish. The exemption is
     that narrow on purpose: it covers only definitions the BASELINE
@@ -386,17 +386,17 @@ def compelled_lines(
     `mutation` still read those lines, and the node does not choose
     which members its baseline carries.
 
-    `covered` narrows it further, and must (T6-86). A definition whose
+    `covered` narrows it further, and must. A definition whose
     BODY any test reaches is not exempt at all: it is judged line by
-    line, exactly as before T6-75. Without that, the exemption swallows
+    line, exactly as before this exemption. Without that, the exemption swallows
     the gate for the commonest node shape there is -- an impl node
     editing a public function its baseline already had -- because every
     changed line then leaves the denominator, `judged` empties, and
     coverage returns pass having measured nothing. Eleven `run_slice`
     tests flipped from "every changed line runs" to that pass the moment
     the exemption began to fire, which is what a hollow gate looks like
-    from the outside. The exemption is for the case T6-75 actually
-    described -- a public definition NOTHING calls, which the node may
+    from the outside. The exemption is for the case it was actually
+    built for -- a public definition NOTHING calls, which the node may
     not delete and cannot cover -- and reachability is what separates
     the two.
 
@@ -407,7 +407,7 @@ def compelled_lines(
     that way. `check_changed_line_coverage` intersects the two, so
     without the prefix the intersection is empty and this exemption
     fires for nothing: it fired zero times in 48 runs, and `g1-79cd848`
-    reproduced T6-75's own trap on a tree carrying T6-75's fix (T6-86).
+    reproduced the very trap this exemption exists for on a tree carrying it.
     """
     compelled: set[tuple[str, int]] = set()
     for lines in compelled_definitions(baseline_sources, sources, prefix, covered).values():
@@ -424,7 +424,7 @@ def compelled_definitions(
     """`compelled_lines`, per definition: "<file>:<qualified name>" to its lines.
 
     The names are what `check_changed_line_coverage` writes into `basis`
-    for each definition it spared (FEEDFIX item 3), so a sealed pass says
+    for each definition it spared, so a sealed pass says
     which baseline definitions it did not judge rather than only how many
     lines. The file is spelled as `baseline_sources` spells it (relative);
     the lines are keyed with `prefix`, as `compelled_lines` keys them.
@@ -467,12 +467,12 @@ def check_changed_line_coverage(
     """Every changed line must be executed; `minimum` is the node threshold.
 
     `detail` is routed to the worker by `format_attempt_failure`, so it
-    names the lines no test runs and carries no ratio (T6-44). A
+    names the lines no test runs and carries no ratio. A
     percentage is satisfiable by a call that runs the line and asserts
     nothing; the lines themselves are the evidence. The counts stay in
     `basis`, which is sealed rather than worker-facing.
 
-    `owed` is the nodes the plan still expects tests from (T6-53). When
+    `owed` is the nodes the plan still expects tests from. When
     it is non-empty the uncovered lines are **deferred** rather than
     failed: the node seals, and `basis` records what was set aside. An
     `impl` node may not write tests, so with a test node still owed the
@@ -483,12 +483,12 @@ def check_changed_line_coverage(
     belonging to a node that had not run.
 
     `compelled` is the lines `public-deletions` will not let the node
-    drop (T6-75). They are removed from the judgement entirely, because
+    drop. They are removed from the judgement entirely, because
     failing a node for not covering code it was forbidden to delete asks
     it for a diff that does not exist -- see `compelled_lines`. Given per
     definition (`compelled_definitions`), `basis` also names each one a
     changed line was spared from, `spared-defs=<file>:<name>,...`: a pass
-    that judged nothing in them says which (FEEDFIX item 3).
+    that judged nothing in them says which.
 
     Deferral does not fail the run later. A line still uncovered when
     the DAG drains is uncovered against the arm's own suite, and the
@@ -504,7 +504,7 @@ def check_changed_line_coverage(
         )
     # Lines `public-deletions` compels are not judged here at all -- they
     # leave the denominator, not just the shortfall, or the percentage
-    # sinks the node for code it was required to carry (T6-75).
+    # sinks the node for code it was required to carry.
     by_def = compelled if isinstance(compelled, Mapping) else {"": compelled}
     lines = {line for group in by_def.values() for line in group}
     spared = changed & lines
@@ -537,14 +537,14 @@ def check_changed_line_coverage(
                 ),
             )
         if not writable:
-            # T6-53 asked whether the SCHEDULE could still cover the
+            # Deferral asks whether the SCHEDULE could still cover the
             # line and deferred when it could. It never asked the
             # other half: whether THIS node could, and an `impl` node
             # never can. With no test node owed the two answers
             # diverge, which is the commonest plan the planner draws,
             # and the node's only way to green is to delete the branch
             # the task requires -- a pass the oracle then fails, which
-            # is Goal G1's own definition of a gate defect (F21.66).
+            # is a gate refusing correct work: a gate defect.
             return GateCheck(
                 name="coverage",
                 passed=True,
@@ -693,7 +693,7 @@ def _public_definitions(source: str) -> set[str] | None:
 def check_public_deletions(
     baseline_sources: Mapping[str, str], sources: Mapping[str, str]
 ) -> GateCheck:
-    """A node may not delete a public definition its baseline had (T6-42).
+    """A node may not delete a public definition its baseline had.
 
     Round 3d's n2 attempt 2 is the first draw in either round whose
     reasoning names the gates -- mutation 26 times, coverage 14, against
@@ -777,7 +777,7 @@ _CLAUSE_RE: Final = re.compile(r";|\band\b|\bthen\b", re.IGNORECASE)
 
 
 def plan_prescribes_deletion(plan: str, baseline_sources: Mapping[str, str]) -> str | None:
-    """A recovery plan instruction that takes out public API (T6-54).
+    """A recovery plan instruction that takes out public API.
 
     Returns the offending line, or `None` when the plan is safe to route.
 
@@ -827,7 +827,7 @@ def plan_prescribes_deletion(plan: str, baseline_sources: Mapping[str, str]) -> 
     return None
 
 
-# A requirement may not restate the gate (T6-58). An offending clause
+# A requirement may not restate the gate. An offending clause
 # pairs a change-word with a line-word under an execution or coverage
 # verb -- "every changed line executed by tests/test_accounts.py" -- or
 # names a coverage ratio. Three word classes rather than one phrase,
@@ -851,7 +851,7 @@ _RATIO_RE: Final = re.compile(r"\b\d{1,3}(?:\.\d+)?\s*%")
 
 
 def plan_retargets_reserved_files(nodes: Sequence[Node], reserved: Collection[str]) -> str | None:
-    """A subplan node declaring a file a still-pending node owns (T6-65).
+    """A subplan node declaring a file a still-pending node owns.
 
     Returns the offence, or `None` when the subplan stays out of the way.
     `reserved` comes from `reserved_target_files`, which already excludes
@@ -876,21 +876,21 @@ def plan_retargets_reserved_files(nodes: Sequence[Node], reserved: Collection[st
 
 
 def plan_restates_the_gate(nodes: Sequence[Node]) -> str | None:
-    """A node description or requirement statement that restates a gate (T6-58).
+    """A node description or requirement statement that restates a gate.
 
     Returns the offending clause, or `None` when every node states
-    behaviour. Goal G1 names the shape: a requirement satisfiable by a
+    behaviour. The shape to refuse is a requirement satisfiable by a
     no-op. "Every changed line executed by tests/test_accounts.py" is
     satisfied by calling a function whose body is `pass`; "fee_for
     returns the fee for a positive amount below the fee" is not.
 
-    T6-44 removed the execution proxy from saddle's own worker rule but
-    not from the instruction that regenerates it, so it still reached the
-    worker laundered through the plan. Round 3g's `n2.r1` prompt, whose
-    run has `e52912b` (T6-44) as an ancestor, carries it twice -- in the
-    node description and inside REQ-002, under the heading "each test
-    must fail if its statement is violated". Both are frozen beside this
-    as fixtures.
+    Stating requirements as behaviour removed the execution proxy from
+    saddle's own worker rule but not from the instruction that
+    regenerates it, so it still reached the worker laundered through the
+    plan. Round 3g's `n2.r1` prompt, whose run has `e52912b` (that change)
+    as an ancestor, carries it twice -- in the node description and
+    inside REQ-002, under the heading "each test must fail if its
+    statement is violated". Both are frozen beside this as fixtures.
 
     The judgement is textual and keys on the CLAIM, never on the gate's
     test-file names: a test node's requirement legitimately says "when
@@ -919,7 +919,7 @@ def check_dead_additions(
     suite_passed: bool,
     run_without: Callable[[Mapping[str, str]], int],
 ) -> GateCheck:
-    """Code nothing depends on is not an implementation (T6-41).
+    """Code nothing depends on is not an implementation.
 
     Round 3e's n2 attempt 1 emitted a 21-line block sixty times, taking
     `fees.py` from 41 lines to 1337, and nine of eleven gates passed it --
@@ -934,7 +934,7 @@ def check_dead_additions(
     and the duplication begins in the content tokens after it. The
     worker's prompt states the requirement behaviourally already ("every
     changed line must be executed by the new tests" -- the rule as it then
-    stood; T6-44 has since replaced it with the mutation form) and that
+    stood; it has since been replaced with the mutation form) and that
     phrasing did not help, because execution is a proxy under any wording.
     The emitted docstrings paraphrase that very line, which is why it
     changed and why this check does not rely on the change.
@@ -949,7 +949,7 @@ def check_dead_additions(
 
     The general form of the defect is that a line counts as exercised when
     a test fails if its behaviour changes, not when it runs; this check
-    reaches one shape of that and T6-42 carries the rest.
+    reaches one shape of that and `public-deletions` carries the rest.
     """
     if not suite_passed:
         return GateCheck(
@@ -1087,8 +1087,8 @@ def check_red_phase(
     """
     # A test node has no differential: its tests are the specification
     # and they must fail now, which the tests check already observed, so
-    # red-phase mirrors that verdict (`red_spec`) and has no baseline leg
-    # (T3-7a). The impl node that depends on it takes the real differential.
+    # red-phase mirrors that verdict (`red_spec`) and has no baseline leg.
+    # The impl node that depends on it takes the real differential.
     if kind == "test":
         if red_spec is not None and red_spec.passed:
             return GateCheck(
@@ -1183,7 +1183,7 @@ def _raises(stmt: ast.With) -> bool:
 
 
 def _rejects_an_input(source: str) -> bool:
-    """True when some `@given` property in the module rejects an input (T6-5).
+    """True when some `@given` property in the module rejects an input.
 
     A property is negative when it asserts `not f(x)`, `f(x) is False`,
     `f(x) == False`, or runs under `pytest.raises`. Everything else is
@@ -1254,27 +1254,27 @@ def check_property_coverage(
     that cover edge cases". Two happy-path examples over an unbounded
     domain is the predicted output, and it is what T1 produced: a regex
     accepting `.u@example.com` and `user@example..com` behind 7/7 green
-    gates (F1).
+    gates.
 
     Properties are invariants over generated inputs rather than pairs the
     author chose, so the cases they probe are not the cases the author
     already had in mind. A `test` node is bound by presence. An `impl`
-    node is bound by the oracle (T3-3): `targets` are the property-bearing
+    node is bound by the oracle: `targets` are the property-bearing
     modules that import a changed module, and `oracle` is a mutation
     sample run with those modules alone as the test set; the property
     must kill at least one of the node's changed-line mutants, or it has
-    no discriminating power over the code that implements it (F1's regex
+    no discriminating power over the code that implements it (T1's regex
     shipped behind a property that could not tell it from a correct one).
     No targets means no property claims this change and the check is not
     required; targets with no oracle means the runner did not run what it
     should have, which fails rather than passes. A refactor preserves the
     tests it moves and is not bound.
 
-    Presence is floored by polarity (T6-5): at least one of the `test`
+    Presence is floored by polarity: at least one of the `test`
     node's properties must reject an input, because T1's single property
     was positive and a validator that accepts everything satisfied it.
     Known limit: a lazy negative generator passes this floor; behavioural
-    mutation (T6-6) is the real defence.
+    mutation is the real defence.
     """
     if kind == "impl":
         return _check_property_oracle(oracle, tuple(targets), tuple(out_of_scope))
@@ -1313,7 +1313,7 @@ def _check_property_oracle(
         # A pass over an empty judgement set records that it judged
         # nothing, and which empty it is: no property claims this change
         # at all, or the node's own scope excludes the ones that do --
-        # what F21.65's narrowing now admits, said out loud rather than
+        # what narrowing the oracle to the node's test scope admits, said out loud rather than
         # left as a silent pass.
         if out_of_scope:
             outside = ", ".join(out_of_scope)
@@ -1338,7 +1338,7 @@ def _check_property_oracle(
     if oracle.total == 0:
         # The engine failing and the engine finding nothing are different
         # facts, and `survivors` carried the first one all along while
-        # this check reported only the second (F21.65). The mutation gate
+        # this check reported only the second. The mutation gate
         # names its tool failures; so does this one now.
         cause = f": {oracle.survivors[0]}" if oracle.survivors else ""
         return GateCheck(
@@ -1429,7 +1429,7 @@ def check_node_scope(
     """A node stays on its own side of the test/implementation split, and
     creates files only if it declared `write_file`.
 
-    F5 and #44 are one defect: the worker authors the implementation and
+    The defect behind #44: the worker authors the implementation and
     the tests, so a misreading of the contract is encoded twice and the
     suite it is graded by is the suite it just rewrote. T4's worker fixed
     the wrong module, rewrote the behaviour-pinning test to match, and
@@ -1441,12 +1441,12 @@ def check_node_scope(
     the first node red with nothing able to fix it -- but it may not create
     a file: that is the `impl`/`test` split done under the exempt name (#65).
 
-    `may_create` is the `write_file` binding (T3-4) and it binds every
+    `may_create` is the `write_file` binding and it binds every
     kind, ahead of the kind branches: `allowed_tools` was validated
     against the global allowlist and then consumed by nothing, so a plan
     that withheld `write_file` still got a node that could add whatever it
-    liked. The probe is T2-2's staged adds, already collected; no new
-    subprocess runs for this.
+    liked. The probe is the staged adds the runner already collects; no
+    new subprocess runs for this.
     """
     if added_files and not may_create:
         return GateCheck(
@@ -1520,9 +1520,9 @@ def _performed_calls(source: str) -> set[tuple[str, frozenset[str]]]:
     way `_asserted_literals` spells what it finds, so an example's
     arguments and a call's arguments are comparable.
 
-    Only a test that asserts something counts (T6-69). Requiring an
+    Only a test that asserts something counts. Requiring an
     `Assert` or a `With` somewhere in the function is what keeps the
-    tightening half of T6-50: a function that performs the operation and
+    tightening half of the call-shaped example rule: a function that performs the operation and
     makes no claim about it binds nothing.
     """
     try:
@@ -1614,7 +1614,7 @@ def _example_unbound(
 ) -> str | None:
     """Why no test binds `text`, as a detail suffix, or `None` when one does.
 
-    T6-50, from round 3f (F21.20). The literal rule alone could not be
+    From round 3f: the literal rule alone could not be
     satisfied by any real test: planners write examples as calls,
     `_asserted_literals` collects constants, and a call expression is
     never a constant. Its one satisfying source was a test that quoted
@@ -1624,7 +1624,7 @@ def _example_unbound(
     the test that performs that operation and asserts on the values it
     was given, and the quoting escape closes with it.
 
-    T6-69, from round 3j (F21.41): "asserts on the values" was read as
+    From round 3j: "asserts on the values" was read as
     "the constants appear inside an `assert`", which is not where Python
     puts the arguments of the call a test exercises. A reject is spelled
     `with pytest.raises(...): deposit("0.001", "USD")` -- a `With`, which
@@ -1637,9 +1637,9 @@ def _example_unbound(
     test that calls with different values while the example's constants
     sit in an unrelated assert, which the proxy bound.
 
-    T6-66, from round 3j (F21.41): a STRUCTURED example -- the planner's
+    Also from round 3j: a STRUCTURED example -- the planner's
     version-2 store record -- is not a call, so it fell to the literal
-    rule and inherited exactly the defect T6-50 repaired next door. That
+    rule and inherited exactly the defect repaired next door for calls. That
     rule bound it only to a test quoting the whole blob as one string,
     which inverted the gate: the suite that saved a ledger and asserted
     the written JSON equals the record was refused, while a test that
@@ -1683,17 +1683,17 @@ def check_requirement_binding(
     nobody declared is a hallucinated requirement, and detecting it is
     what stops the binding being satisfiable in both directions. A
     worker free to invent IDs can tag whatever it likes and the gate
-    still reads green -- F5's circularity, which survives adding
+    still reads green -- the circularity of a worker grading itself, which survives adding
     statements unless citations are constrained to the declared set.
 
     `planned_ids` widens that set to the ids other nodes of the same plan
-    declare (T3-24): the test sources are read suite-wide, so a plan that
+    declare: the test sources are read suite-wide, so a plan that
     gives its `test` node `REQ-001` and its `impl` node `REQ-002` cites
     both ids in one file, and with the node's own ids alone no node of
     such a plan can pass (session 20b). The first half is untouched: an
     id the node itself declares must be cited, whatever the plan holds.
 
-    `examples` (T6-4) are the `(id, "accepts"|"rejects", text)` triples the
+    `examples` are the `(id, "accepts"|"rejects", text)` triples the
     node's requirements cite; each must be bound by some test in `suite`
     (the tests as the node leaves them; `flipped_tests` when the caller
     passes none). A statement can be cited without being tested -- T1's
@@ -1702,10 +1702,10 @@ def check_requirement_binding(
 
     An example spelled as a literal is bound by a test that asserts on
     it. An example spelled as a **call** is bound by a test that performs
-    that operation and asserts on the constants it was handed (T6-50):
+    that operation and asserts on the constants it was handed:
     binding it to the literal rule made it unsatisfiable by any test that
     asserts behaviour, and satisfiable only by one that quotes the
-    example and asserts nothing (F21.20).
+    example and asserts nothing.
     """
     unbound = sorted(
         req
@@ -1716,7 +1716,7 @@ def check_requirement_binding(
         # Every clause here is a function of the tests and the plan.
         # A node that may not edit tests cannot move any of them, so
         # the gate reads the same whatever it writes -- it judges the
-        # test node's output and bills this one for it (F21.66). The
+        # test node's output and bills this one for it. The
         # examples clause was already exempted on this argument; the
         # other two were not. The gap is recorded, not lost.
         note = f" unbound={','.join(unbound)}" if unbound else ""
@@ -1771,7 +1771,7 @@ class Tier1Inputs:
 
     sources: Mapping[str, str]
     ruff_files: Collection[str]
-    # The two ruff legs, already run by the runner (T6-3): the current
+    # The two ruff legs, already run by the runner: the current
     # tree's findings the baseline did not carry, how many it did, and
     # the exits of `ruff check` (current) and `ruff format --check`.
     ruff_introduced: tuple[RuffFinding, ...]
@@ -1788,38 +1788,38 @@ class Tier1Inputs:
     current_runner: Callable[[], int]
     flipped_tests: Mapping[str, str]
     mutation: MutationOutcome
-    # T6-41: the lines the node added, per changed non-test module, and a
+    # The dead-code check's input: the lines the node added, per changed non-test module, and a
     # runner that re-runs the suite over sources with some of them gone.
     added_lines: Mapping[str, tuple[int, ...]]
     dead_code_runner: Callable[[Mapping[str, str]], int]
     baseline_sources: Mapping[str, str]
     # The workdir `changed` and `covered` are keyed against, so
-    # `compelled_lines` can speak the same spelling (T6-86). Empty means
+    # `compelled_lines` can speak the same spelling. Empty means
     # those sets are already workdir-relative.
     workdir: str = ""
-    # T6-53: nodes the plan still owes tests from. Non-empty defers an
+    # Nodes the plan still owes tests from. Non-empty defers an
     # uncovered changed line instead of failing the node for it.
     owed_tests: tuple[str, ...] = ()
     added_files: Collection[str] = ()
-    # Repo-relative paths of every file the node changed or added (T3-2).
+    # Repo-relative paths of every file the node changed or added.
     touched_files: Collection[str] = ()
     # The current suite run's captured text and the worktree's importable
     # top-level names; read only by a `test` node's red-specification
-    # verdict (T3-7a).
+    # verdict.
     test_output: str = ""
     workdir_modules: Collection[str] = ()
     # Every id some node of the plan declares; the orphan half of
     # requirement-binding subtracts these before rejecting a citation
-    # (T3-24). Empty means the node's own ids are the whole plan.
+    # Empty means the node's own ids are the whole plan.
     planned_requirements: tuple[str, ...] = ()
-    # The property oracle (T3-3): `property_targets` are the property-bearing
+    # The property oracle: `property_targets` are the property-bearing
     # test modules that import a changed module, and `property_oracle` is the
     # mutation sample run with those modules alone, or None when the runner
     # did not run it. Read only for `impl` nodes.
     property_oracle: MutationOutcome | None = None
     property_targets: tuple[str, ...] = ()
     # Property modules the change qualifies that the node's declared
-    # pytest scope excludes, so a pass by vacuity names them (F21.65).
+    # pytest scope excludes, so a pass by vacuity names them.
     property_out_of_scope: tuple[str, ...] = ()
 
 
@@ -1830,13 +1830,13 @@ class Tier1Result:
     node_id: str
     passed: bool
     checks: tuple[GateCheck, ...]
-    # What the verdict left unpinned (T6-29c): every surviving mutant by
+    # What the verdict left unpinned: every surviving mutant by
     # name, and every changed line no test executed or a survivor sits on,
     # in the runner's own spelling. A recovery briefs a test node from
     # these without re-running the gate that found them.
     survivors: tuple[str, ...] = ()
     gaps: tuple[tuple[str, int], ...] = ()
-    # The sampled-mutation evidence itself (P1-2): killed, total, untested
+    # The sampled-mutation evidence itself: killed, total, untested
     # and the survivors, which the mutation check's detail string only
     # summarises. Carried for a caller that must compare numbers; nothing in
     # `gates` reads it.
@@ -1852,25 +1852,25 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     premise is false: mutmut only mutates function bodies, so a
     module-scope `_RE = re.compile(...)` yields 0 mutants where the same
     expression inline yields 7. T7 added a 218-line module, generated
-    nothing, and the gate passed an infinite loop (F12).
+    nothing, and the gate passed an infinite loop.
 
     The threshold cannot rescue a thin sample either. T1's four-line
     regex admitted 2 mutants, two shallow tests killed both, and the gate
-    read 100% over a validator that accepts `user@example..com` (F1).
+    read 100% over a validator that accepts `user@example..com`.
     Below MIN_SIGNIFICANT_MUTANTS a percentage is noise, so every mutant
     must die -- fewer mutants means a stricter bar, not a cheaper one.
     """
     if outcome.total == 0:
         if outcome.survivors:
             cause = ", ".join(sorted(outcome.survivors)[:5])
-            # A tool that never ran is named as such (T3-20); "no mutants
+            # A tool that never ran is named as such; "no mutants
             # decided" describes a run that happened.
             failed_tool = any(s.startswith("mutmut run exited") for s in outcome.survivors)
             # mutmut baselines by running the suite, so a red tree fails
             # collection with the same exit a broken engine gives. Round
             # 3c's three impl attempts all died on "failed to collect
             # stats" and were reported as a tool failure the worker could
-            # do nothing about (T6-63); evidence marks the suite's case.
+            # do nothing about; evidence marks the suite's case.
             red_suite = any(s.startswith("suite is red") for s in outcome.survivors)
             if red_suite:
                 detail = f"mutation not measured: {cause}"
@@ -1896,9 +1896,9 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
     required = 100.0 if small else threshold
     excluded = f"; {outcome.text_only} text-only mutant(s) excluded" if outcome.text_only else ""
     if percent < required:
-        # The count, then the first five names. F21.14 read five names as
-        # the whole set and called the gap an order of magnitude; F21.15
-        # re-measured it: 13 survivors on the gate's own population
+        # The count, then the first five names. An earlier reading took five
+        # names as the whole set and called the gap an order of magnitude;
+        # re-measured: 13 survivors on the gate's own population
         # against 66 on the tree, so the prefix showed 5 of 13, not 5 of
         # 66. The count is here because five names is not the set, and
         # the two numbers are different populations -- `mutation_sample`
@@ -1907,7 +1907,7 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
         names = sorted(outcome.survivors)
         shown = ", ".join(names[:5]) + (", ..." if len(names) > 5 else "")
         note = f" (small sample: {outcome.total} mutant(s), all must die)" if small else ""
-        # P0-3: a mutant no test runs at all is a missing test, not an
+        # A mutant no test runs at all is a missing test, not an
         # absence of evidence, so a failing detail names how many of the
         # survivors above are `no tests` rather than actually surviving a
         # run. Only on a fail, and only when there is at least one --
@@ -1957,7 +1957,7 @@ def shortlist_order(details: Sequence[SurvivorDetail]) -> list[SurvivorDetail]:
 
 
 SET_ASIDE_KINDS: Final = ("equivalent", "text")
-"""`mutant_text.classify` kinds the shortlist sets aside by static rule (SHORTLIST-3)."""
+"""`mutant_text.classify` kinds the shortlist sets aside by static rule."""
 
 
 def set_aside_kind(detail: SurvivorDetail) -> str | None:
@@ -1979,11 +1979,11 @@ def check_mutation_shortlist(
 ) -> GateCheck:
     """Pass iff no surviving mutant on a changed line lacks an accepted reason.
 
-    Scope narrowed (SHORTLIST): the kill-rate against `threshold` is still
+    Scope narrowed: the kill-rate against `threshold` is still
     computed and recorded in `basis`, but it no longer decides. No source
     calibrates an 85% bar on changed-line mutants, and correct T5 trees
     scored 63-76% (M3F). What decides is each survivor -- `no tests` ones
-    included, since a mutant no test runs is a missing test (P0-3) --
+    included, since a mutant no test runs is a missing test --
     either dying or sitting on a line in `accepted` (a checked reason,
     `verify_untested_claims`). A survivor whose every change sits in the
     argument of a raised exception or a logging call
@@ -2058,7 +2058,7 @@ def check_mutation_shortlist(
 
 
 def _not_required(name: str) -> GateCheck:
-    """A `test` node changes no source, so source-only evidence is moot (T3-7a)."""
+    """A `test` node changes no source, so source-only evidence is moot."""
     return GateCheck(
         name=name, passed=True, detail="not required: no source changed", basis="test node"
     )
@@ -2067,7 +2067,7 @@ def _not_required(name: str) -> GateCheck:
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
     """Run all thirteen Tier-1 checks against `node`'s gate spec and aggregate.
 
-    A `test` node is a red specification (T3-7a): its tests check inverts,
+    A `test` node is a red specification: its tests check inverts,
     red-phase mirrors that verdict, and the three source-only checks
     (coverage, dead-code, mutation) are substituted with "not required" so
     the order pin and the count stay the same for every kind.
@@ -2153,7 +2153,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             node.requirement_ids,
             inputs.flipped_tests,
             planned_ids=inputs.planned_requirements,
-            # A test node asserts the examples (T6-4); an impl node cannot
+            # A test node asserts the examples; an impl node cannot
             # edit tests and a refactor preserves them, so neither is asked.
             examples=node.requirement_examples if is_spec else (),
             suite={**inputs.baseline_tests, **inputs.flipped_tests},

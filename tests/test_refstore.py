@@ -304,7 +304,7 @@ def test_reference_set_id_argument_is_required_and_checked(tmp_path: Path) -> No
         load_reference_set(store, "0" * 64)
 
 
-# ------------------------------------------------------------ vendored into saddle (P2-3)
+# ------------------------------------------------------------------ vendored into saddle
 # Known-bad pairs for the checks the S1-c tests left unexercised: each defect is
 # built on a valid store, resealed so only the named check can catch it.
 

@@ -25,8 +25,8 @@ about auditing (the engine imports no auditor):
   checkpoint) and tier 2 run synchronously on the finished tree. With
   feedback on, any `fail` or `blocked` finding refuses `finish` and the
   findings are its tool result; the run continues within its budgets
-  (tightened: a run cannot end finished with a failing audit). Tier 0 at
-  finish is LINTFINISH (F21.81 finding 1, Rec 97): the M3 EAF-t5 trees all
+  (tightened: a run cannot end finished with a failing audit). Tier 0 runs at
+  finish because the M3 EAF-t5 trees all
   finished with a passing in-run audit and were refused post hoc for
   `ruff format --check` and B904/F401, because only tiers 1 and 2 ran
   here. The contract now: a tree `finish` accepts is a tree the post-hoc
@@ -143,7 +143,7 @@ class AuditResult:
     """A failing or not-proven coverage finding in `coverage_text`'s words
     (function, its docstring's first line, the lines), read off the audited
     snapshot; what `render` shows the model in place of the bare line list.
-    Sealed under `coverage_text` when non-empty (FEEDFIX item 2)."""
+    Sealed under `coverage_text` when non-empty."""
 
     @property
     def passed(self) -> bool:
@@ -179,14 +179,14 @@ SANCTIONED_REWRITE: Final = "sanctioned test rewrite: "
 
 
 def waivers(result: AuditResult) -> list[str]:
-    """What let `result` pass that a plain audit would not have (SANCTIONSLIB (3)).
+    """What let `result` pass that a plain audit would not have.
 
     One entry per test a `sanctioned` finding names (a rewrite the task
     ordered, `auditor.sanction`), sorted, and the "nothing to audit" note
     if the audit carried one. Sealed on every accepted finish so an accept
     that stood on a waiver says so in the ledger; an accept with none
-    seals []. The engine never ends an unchanged tree finished (FEEDFIX
-    item 5), so the note reaches the field only from a hand-built result.
+    seals []. The engine never ends an unchanged tree finished, so
+    the note reaches the field only from a hand-built result.
     """
     names = sorted(
         {n for f in result.findings if f.reason == "sanctioned" for n in rewritten(f.detail)}
@@ -203,8 +203,8 @@ def _worded(result: AuditResult, finding: Finding) -> str:
     The coverage finding reads in `coverage_text`'s words when the audit
     could place its lines (`AuditResult.coverage`): which function each
     uncovered line is in and what that function is for, then the lines,
-    rather than "no test runs money.py:131, money.py:132, ..." (DETECT16-LIB
-    C2; FEEDFIX item 2). Every other finding, and a coverage finding with
+    rather than "no test runs money.py:131, money.py:132, ...".
+    Every other finding, and a coverage finding with
     nothing placed, reads its detail as before.
     """
     text = result.coverage if finding.gate == "coverage" and result.coverage else finding.detail
@@ -330,7 +330,7 @@ class AuditFeed:
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten; see `auditor.sanction`."""
     tier2: Tier2Mode = "score"
-    """`--tier2`; "shortlist" turns on this module's SHORTLIST behaviour too."""
+    """`--tier2`; "shortlist" turns on this module's shortlist behaviour too."""
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
     """How many survivors a mutation finding names (`--mutant-shortlist`)."""
     auditor: AuditorLike | None = None
@@ -513,8 +513,7 @@ class AuditFeed:
         when finish is accepted (the model never reads that result).
 
         An accepted finish returns its audit's text once per run, the first
-        time that audit carries a `not-proven` finding (FEEDFIX item 7;
-        EAFSPREP ADDENDUM-2 §4.6, option (c)): the surviving mutants and
+        time that audit carries a `not-proven` finding: the surviving mutants and
         uncovered lines the shortlist surfaces reach the model as feedback,
         journaled `audit:delivered`. The verdict is not changed by it: the
         finish is accepted, nothing counts as a refusal, and the engine
@@ -523,8 +522,7 @@ class AuditFeed:
 
         A tree equal to the baseline ("nothing to audit") is never accepted,
         in either arm: it returns (False, "") and `unchanged()` is True, so
-        the engine ends the run `unchanged` rather than refusing (FEEDFIX
-        item 5; SANCTIONS S10, `construct/nothing_to_audit_probe.py`).
+        the engine ends the run `unchanged` rather than refusing.
         """
         self._await()
         pending = self._take()
@@ -534,13 +532,13 @@ class AuditFeed:
         with self._lock:
             self.results.append(result)
         if result.note.startswith(NOTHING_TO_AUDIT):
-            # FEEDFIX (5): no verdict, so no accept; `engine._finish` ends the
+            # No verdict, so no accept; `engine._finish` ends the
             # run `unchanged` (read off `unchanged()`), never as a refusal.
             self._record(pending, delivered=False)
             self._record([result], delivered=False)
             return False, ""
         refuse = self.feedback and not result.passed
-        # FEEDFIX (7): the first accepted finish that carries not-proven
+        # The first accepted finish that carries not-proven
         # findings delivers them; the accept itself is unchanged.
         surface = (
             self.feedback
@@ -574,9 +572,9 @@ class AuditFeed:
     def unchanged(self) -> bool:
         """The last audit found nothing to audit: the tree equals the baseline.
 
-        `engine._finish` ends such a run `unchanged` (FEEDFIX item 5): not
+        `engine._finish` ends such a run `unchanged`: not
         accepted, not a refusal. Before, the empty finding set passed
-        vacuously and the run ended `finished` (SANCTIONS S10).
+        vacuously and the run ended `finished`.
         """
         return bool(self.results) and self.results[-1].note.startswith(NOTHING_TO_AUDIT)
 
@@ -619,8 +617,8 @@ class AuditFeed:
         finding in full and, for an audit that ran tier 2, every scored
         mutant's (name, status, show). The span's detail is capped at 500
         characters in the journal, so without it only the final audit's
-        rows survived (EAFSPREP ADDENDUM-2 §4.1-2); with it a reader can
-        count the survivors killed between two audits (FEEDFIX item 8).
+        rows survived; with it a reader can
+        count the survivors killed between two audits.
         """
         span_id = uuid.uuid4().hex
         digest = write_attempt_sidecar(self.journal, span_id, result.to_dict())

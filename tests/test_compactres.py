@@ -1,4 +1,4 @@
-"""COMPACTRES: red tests for what an autonomous run needs from compaction.
+"""Red tests for what an autonomous run needs from compaction.
 
 Each test states one property the agent needs to keep continuity once its
 conversation outgrows the window, and is expected to FAIL on phase2-final
@@ -109,7 +109,7 @@ def _compacted_request(tmp_path: Path, rounds: int = 8, ctx: int = 40_000) -> li
     return cast(list[dict[str, Any]], client.asked[0]["messages"])
 
 
-# -- F0: an auto run never compacts after its first request --------------------
+# -- an auto run never compacts after its first request ------------------------
 
 
 def test_f0_auto_run_keeps_every_request_under_the_compaction_limit(repo: Path) -> None:  # noqa: F811
@@ -162,7 +162,7 @@ def test_d2_note_does_not_tell_an_auto_run_to_ask_the_user(tmp_path: Path) -> No
 
 
 def test_d3_edited_files_survive_compaction(repo: Path) -> None:  # noqa: F811
-    # Respelled (COMPACTFIX) to the real caller's shape: run_auto is the only
+    # Respelled to the real caller's shape: run_auto is the only
     # caller that sets `changed_files`; the hand-built history had none.
     # Expectation unchanged: the edited path is in the compacted request.
     (repo / "big.py").write_text(BIG)
@@ -180,7 +180,7 @@ def test_d3_edited_files_survive_compaction(repo: Path) -> None:  # noqa: F811
 
 
 def test_d3_latest_audit_finding_survives_compaction(repo: Path) -> None:  # noqa: F811
-    # Respelled (COMPACTFIX) to the real caller's shape: the finding reaches
+    # Respelled to the real caller's shape: the finding reaches
     # the model through the audit feed (arm E+A+F), which the hand-built
     # history never had. Expectation unchanged: the finding is in the request
     # after the message that delivered it is gone.

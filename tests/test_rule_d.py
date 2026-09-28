@@ -1,4 +1,4 @@
-"""Rule D's known-good / known-bad pairs (S1a-final.md, pairs 1-30).
+"""Rule D's known-good / known-bad pairs (the rule D spec's pairs 1-30).
 
 Numbering follows the spec: `test_differential_p01_*` is pair 1. Pair 8 and
 the baseline half of pair 9 are the draft's (`baseline_verdict`, contract
@@ -548,7 +548,7 @@ def test_differential_p26_every_input_either_is_not_applicable() -> None:
     assert (res.verdict, res.either) == ("not-applicable", (s,))  # below the floor too
 
 
-# ---- final: row 2, spec beats user unless the user overrides a named clause
+# ---- final: spec beats user unless the user overrides a named clause
 
 
 def test_differential_p27_a_user_label_on_a_decided_input_must_name_the_clause() -> None:
@@ -609,7 +609,7 @@ def test_differential_p28_reference_pins_have_their_own_slot() -> None:
     res = consensus_verdict("m.f", [s], {s: T}, refs_const(3, {s: F}), authorities=pin, classes={})
     assert res.verdict == "refuse"  # a pin decides below the floor too
     # the overload S3-4 proposed is NOT equivalent: as a user label on a spec-decided input
-    # it raises (row 2)
+    # it raises
     nl = "user@domain.com\n"
     over = Authorities(
         user={nl: Label(F, "references-pin:cd34")}, spec={nl: Label(F, "T1-NL")}, spec_id="sha256:p"

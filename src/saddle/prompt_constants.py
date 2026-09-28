@@ -1,7 +1,7 @@
-"""The constants a task prompt names, checked against the source (FEEDFIX item 1).
+"""The constants a task prompt names, checked against the source.
 
-A reporting-only row, never a verdict. SURVIVORRES (out/SURVIVORRES/report.md)
-found the T5 rounding bug invisible to every survivor ordering on the broken
+A reporting-only row, never a verdict. A study of mutation survivors found
+the T5 rounding bug invisible to every survivor ordering on the broken
 tree -- the bug replaces `ROUND_HALF_UP` with `ROUND_HALF_EVEN`, and the
 surviving mutant there is equivalent -- but directly visible as a *sibling
 constant*: the source names a constant of the same family as one the prompt
@@ -25,8 +25,9 @@ correct T5 trees legitimately drop. The family of a constant with an
 underscore is its first segment (`ROUND_`); a one-word constant has no
 siblings and is only checked for presence.
 
-Fitted after seeing the 13 DETECT16 C1 trees; see the FEEDFIX (1) commit
-for what it has and has not been measured on.
+Fitted after seeing the 13 known-bad T5 trees whose rounding bug every gate
+missed; see the commit that added this module for what it has and has not
+been measured on.
 """
 
 from __future__ import annotations

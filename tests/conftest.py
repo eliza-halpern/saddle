@@ -58,7 +58,7 @@ def _no_real_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def _replay_show_all_mutants(
     scratch: Path, *, recorder: SpanRecorder | None = None
 ) -> dict[str, str]:
-    """Stand-in for `evidence.show_all_mutants` under a PATH-stub `mutmut` (P0-1).
+    """Stand-in for `evidence.show_all_mutants` under a PATH-stub `mutmut`.
 
     None of the ten PATH-stub `mutmut` scripts across the suite write a
     `mutants/` directory, so the production lookup subprocess -- which reads
@@ -97,7 +97,7 @@ def _stub_mutmut(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     that path, which is how load-bearing the fail-open had become (#49).
     Tests needing other verdicts still override PATH.
 
-    `show_all_mutants` is patched to `_replay_show_all_mutants` (P0-1): the
+    `show_all_mutants` is patched to `_replay_show_all_mutants`: the
     production lookup shells out to a real mutmut installation's meta files,
     which this stub (and the other nine PATH stubs across the suite) never
     creates.

@@ -2,7 +2,7 @@
 
 All IO is stream-injected so every path is unit-testable without a terminal.
 The rich live display wraps ProgressReporter later (scheduler issue).
-Nodes run one at a time, not concurrently (see F7).
+Nodes run one at a time, not concurrently.
 """
 
 from __future__ import annotations

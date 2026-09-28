@@ -26,7 +26,7 @@ What the packet can and cannot say for an executor-only run (arm E):
 - A tier-0 finding (`audit-tier0:<gate>`: syntax, ruff, imports on one
   edited file) is an edit check, not an audit verdict. It is counted on its
   own "Edit checks" row, never in the Audit row or the verdict line
-  (PACKETFIX-1: a run with 9 verdicts and 3 edit checks read "12 of 12").
+  (a run with 9 verdicts and 3 edit checks once read "12 of 12").
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ class Row:
     span seals a `MutationOutcome`, the Audit row's coverage English
     (`coverage_text.render_coverage`) when a failing coverage finding seals
     its sources; "" otherwise, and then left out of the payload, so a packet
-    without one is byte-identical to before (PACKETHOOK). This is the FULL
+    without one is byte-identical to before this field. This is the FULL
     rendering: the web packet's fold shows it, and only the fold."""
     recap: str = ""
     """The same summary's COMPACT rendering (`compact=True`): what the
@@ -235,7 +235,7 @@ def _killers(outcome: dict[str, Any]) -> dict[str, str] | None:
 def _sealed(journal: Path, span: SpanRecord | None, *keys: str) -> dict[str, Any] | None:
     """A finding span's sealed sidecar when it holds every one of `keys`, else None.
 
-    The auditor seals evidence beside a finding (`Auditor._journal`, PACKETHOOK):
+    The auditor seals evidence beside a finding (`Auditor._journal`):
     `asdict(MutationOutcome)` on `audit-tier2:mutation`, `{"sources", "changed"}`
     on a failing `audit-tier1:coverage`. `_sidecar` refuses one that does not
     hash. A record with none (a seam span, a blocked tier, an older ledger)
@@ -248,7 +248,7 @@ def _sealed(journal: Path, span: SpanRecord | None, *keys: str) -> dict[str, Any
 
 
 def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.MutationSummary | None:
-    """The mutation finding's summary (MUTSUMMARY) from the outcome sealed in its span."""
+    """The mutation finding's summary from the outcome sealed in its span."""
     outcome = _sealed(journal, span, "killed", "total")
     if outcome is None:
         return None
@@ -258,7 +258,7 @@ def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.Mut
 def _coverage_summary(
     journal: Path, span: SpanRecord | None, mutation: mutant_text.MutationSummary | None
 ) -> coverage_text.CoverageSummary | None:
-    """A failing coverage finding's summary (COVTEXT), from the sources and
+    """A failing coverage finding's summary, from the sources and
     changed set sealed in its span; None when nothing is sealed there."""
     sealed = _sealed(journal, span, "sources", "changed")
     if sealed is None or span is None:
@@ -416,7 +416,7 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
 def _status(audit: _Audit) -> Status:
     """A finding's row status. Its verdict first: `not-proven` journals exit
     0 like `pass` (`auditor._JOURNAL_EXIT`), so the exit code alone would
-    call an open shortlist survivor proven (FEEDFIX item 9, DOCS3)."""
+    call an open shortlist survivor proven."""
     if audit.verdict == "not-proven":
         return "not-proven"
     return "proven" if audit.exit_code == 0 else "failed"
@@ -434,7 +434,7 @@ def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
 _MARK: Final[dict[str, str]] = {"proven": "✓", "failed": "✗", "not-proven": "?"}
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
-"""FEEDCAP's stop reason (`engine.AUDIT_UNRESOLVED`): finish refused on an
+"""The finish-refusal cap's stop reason (`engine.AUDIT_UNRESOLVED`): finish refused on an
 unchanged finding set until the cap. Spelled here, not imported, to keep
 the packet a reader of the ledger rather than of the engine."""
 
@@ -486,7 +486,7 @@ def _spend(evidence: dict[str, Any]) -> _Spend | None:
 
 
 def _unresolved(evidence: dict[str, Any]) -> list[str]:
-    """FEEDCAP's `unresolved_findings` as "gate (reason)", skipping malformed entries."""
+    """The capped stop's `unresolved_findings` as "gate (reason)", skipping malformed entries."""
     found = evidence.get("unresolved_findings")
     return [
         f"{f.get('gate', '?')} ({f.get('reason', '?')})"
@@ -544,7 +544,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     """The packet for one run, from its ledger alone. No model call.
 
     With `anchor_repo`, the Reproduce row also reports the check of the
-    ledger's outcome against its branch's `Saddle-Outcome` trailer (ANCHOR).
+    ledger's outcome against its branch's `Saddle-Outcome` trailer.
     """
     run_id = run_id or journal.parent.name
     if not journal.exists():
@@ -576,7 +576,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
-    # The list is the last refusal's; only FEEDCAP's stop makes it the verdict.
+    # The list is the last refusal's; only the capped stop makes it the verdict.
     capped = outcome is not None and outcome.detail.startswith(f"stopped: {AUDIT_UNRESOLVED}")
     unresolved = _unresolved(evidence) if capped and evidence is not None else []
     task = start.argv[1] if start is not None and len(start.argv) > 1 else ""
@@ -604,7 +604,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     elif outcome.name == "auto:finished":
         # A blocked finding never ran (tier 2 after a tier-1 failure on that
         # tree): it is reported as blocked, and only gates that ran and
-        # failed count as failed (PACKETFIX-2).
+        # failed count as failed.
         blocked = [a for a in audits if a.verdict == "blocked"]
         failed_audits = [a for a in audits if a.exit_code != 0 and a.verdict != "blocked"]
         verdict = "finished"
@@ -775,7 +775,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     # -- audit (the seam) ---------------------------------------------------------
     if audits:
         other = [a for a in audits if a not in test_audits and a not in mutation]
-        # A failing coverage finding's English (COVTEXT), from what the auditor
+        # A failing coverage finding's English, from what the auditor
         # sealed beside it, beneath the Audit row's items (inside its fold on
         # the web). A passing or absent finding, or one with nothing sealed,
         # adds nothing; there is no Coverage row of its own.
@@ -874,7 +874,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         )
     if audits and not mutation:
         # The Mutation row above says "No mutation record"; Not proven must
-        # not then read "Nothing is left unproven" beside it (UXREVIEW2 Q4).
+        # not then read "Nothing is left unproven" beside it.
         gaps.append("Changed lines were not mutation-tested: no mutation record.")
     if outcome is not None and outcome.name == "auto:stopped":
         gaps.append(
@@ -885,7 +885,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     if outcome is not None and outcome.name == "auto:unchanged":
         gaps.append("No change was made: the tree equals the baseline, so nothing was audited.")
         gap_cites.append(outcome.record_hash)
-    # FEEDFIX (3): each baseline definition the coverage gate did not judge
+    # Each baseline definition the coverage gate did not judge
     # (sealed by the auditor from the gate's `spared-defs` basis), whatever
     # the finding's verdict: a pass is where they would otherwise hide.
     for cov in [a for a in audits if a.name == "audit:coverage"][-1:]:
@@ -925,7 +925,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         )
     )
 
-    # -- prompt constants (FEEDFIX item 1; reporting only) ---------------------------
+    # -- prompt constants (reporting only) --------------------------------------------
     constants = evidence.get("prompt_constants") if evidence is not None else None
     if isinstance(constants, dict) and outcome is not None:
         unnamed = prompt_constants.items(constants)
@@ -1047,7 +1047,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
 
 
 def render_packet_text(packet: Packet) -> str:
-    """The packet as plain text: the recap a chat's context gets (T5-7 (3), T5-9).
+    """The packet as plain text: the recap a chat's context gets.
 
     Deterministic, so the same ledger always gives the same bytes. A row's
     summary is printed in its COMPACT form (`Row.recap`): the recap must not

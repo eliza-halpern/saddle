@@ -275,7 +275,7 @@ class TaskPhase(Event):
 
 @dataclass(frozen=True)
 class TaskLine(Event):
-    """One sealed ledger entry of a run, as a session line (T5-6)."""
+    """One sealed ledger entry of a run, as a session line."""
 
     run_id: str
     mark: str

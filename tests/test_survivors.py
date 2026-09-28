@@ -1,4 +1,4 @@
-"""T6-29b: the survivor-driven test machinery, each contract pinned twice.
+"""The survivor-driven test machinery, each contract pinned twice.
 
 Every contract below gets an instance it must accept and one it must
 reject; asserting that a filter exists would pin nothing (CONTRIBUTING.md).

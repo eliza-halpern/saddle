@@ -81,7 +81,7 @@ def _stub_module(source: str) -> str:
     because a module the node creates cannot be imported before it
     exists. That is clearable on demand: any new code in a new module
     with a new test produces an import error naming a changed source, so
-    the gate passes whatever the test asserts (F2).
+    the gate passes whatever the test asserts.
 
     Materializing a stub instead gives the pre-change run something to
     import. A test that exercises the new code then fails for a real
@@ -125,12 +125,11 @@ def run_node_gate(
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
     `planned_requirements` is every id the node's plan declares, which the
-    binding gate's orphan half subtracts before rejecting a citation
-    (T3-24); a single node gated on its own leaves it empty.
+    binding gate's orphan half subtracts before rejecting a citation;
+    a single node gated on its own leaves it empty.
     `owed_tests` is the nodes the plan still expects tests from, which
     defers an uncovered changed line rather than failing the node for a
-    question no node has yet been able to answer (T6-53); empty is the
-    pre-T6-53 behaviour.
+    question no node has yet been able to answer; empty defers nothing.
 
     `tier2=False` (the auditor's checkpoint tier, `saddle.auditor`) skips
     the three evidence legs only tier 2 reads -- the mutation run, the
@@ -155,7 +154,7 @@ def run_node_gate(
     added = git_added_files(workdir, baseline, recorder=recorder)
     # Every file the diff names (git decides, so deletions and non-Python
     # files count, and a staged new file is already among them -- tracked-
-    # ness comes from the index), for the opt-in target-scope check (T3-2).
+    # ness comes from the index), for the opt-in target-scope check.
     touched = sorted(git_changed_files(workdir, baseline, recorder=recorder))
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
@@ -173,7 +172,7 @@ def run_node_gate(
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp)
         materialize_baseline(workdir, baseline, dest, recorder=recorder)
-        # The ruff baseline leg (T6-3), on the untouched baseline tree
+        # The ruff baseline leg, on the untouched baseline tree
         # before red-phase writes stubs and tests into it: findings the
         # node inherited are reported, not charged to it.
         at_baseline = [rel for rel in ruff_files if (dest / rel).exists()]
@@ -181,10 +180,11 @@ def run_node_gate(
             ruff_findings(dest, at_baseline, recorder=recorder)[1] if at_baseline else []
         )
         baseline_tests = read_sources(dest, "test_*.py") | read_sources(dest, "*_test.py")
-        # Captured before the two loops below write into `dest`: T6-42
-        # asks what the baseline defined, and after those loops `dest`
-        # also holds stubs of modules the node created and the node's own
-        # new test files -- neither of which the baseline had.
+        # Captured before the two loops below write into `dest`: the check
+        # that a repair deleted nothing it measured asks what the baseline
+        # defined, and after those loops `dest` also holds stubs of modules
+        # the node created and the node's own new test files -- neither of
+        # which the baseline had.
         baseline_modules = {
             rel: text
             for rel, text in read_sources(dest, "*.py").items()
@@ -197,7 +197,7 @@ def run_node_gate(
         # Modules the node creates do not exist at baseline, so the
         # pre-change run cannot import them and red-phase falls back to
         # accepting a collection error -- clearable on demand, whatever
-        # the test asserts (F2, #53). A signature-preserving stub gives
+        # the test asserts (#53). A signature-preserving stub gives
         # the run something to import, so a test that exercises the new
         # code fails for a real reason and a tautological one passes
         # pre-change and is rejected.
@@ -219,7 +219,7 @@ def run_node_gate(
         # exits, and three extra suite runs per refactor node is real
         # wall-clock for evidence nothing consumes.
         # A test node has no baseline leg: its red-phase mirrors the tests
-        # verdict (T3-7a), so the samples would be evidence nothing reads.
+        # verdict, so the samples would be evidence nothing reads.
         samples = (
             0 if node.kind == "test" else (RED_PHASE_SAMPLES if tests_changed and tier2 else 1)
         )
@@ -250,9 +250,9 @@ def run_node_gate(
 
     sample = gate.mutation_sample
     # A test node changes no source, so there is nothing to mutate and the
-    # check is substituted with "not required" (T3-7a): skip the mutmut run.
+    # check is substituted with "not required": skip the mutmut run.
     # The engine runs the node's declared scope, the same tests the tests
-    # gate ran above (F21.12a): a TDD plan's test node writes every module's
+    # gate ran above: a TDD plan's test node writes every module's
     # specification red up front, so the whole suite is red until the last
     # impl node lands, and mutmut cannot baseline against a red suite --
     # round 3c's three impl attempts all died on `failed to collect stats`
@@ -272,13 +272,13 @@ def run_node_gate(
             recorder=recorder,
         )
     )
-    # The property oracle (T3-3), `impl` nodes only: the property-bearing
+    # The property oracle, `impl` nodes only: the property-bearing
     # test modules that import a changed module run alone against the same
     # changed-line mutants, with the same exclusion set; `run_tests` narrows
     # what pytest collects, which `test_files` never did. `None` when no
     # module qualifies, so the check can tell "no targets" from "not run".
     # Scoped to the node's own tests, exactly as the mutation gate above
-    # is (F21.65). Unscoped, g1-79cd848's node-2 drew test_store.py --
+    # is. Unscoped, g1-79cd848's node-2 drew test_store.py --
     # node-4's specification, red because node-4 had not run -- and the
     # oracle reported "no mutants sampled" on all three attempts. The
     # same tree scoped: killed 85 of 100.
@@ -309,7 +309,7 @@ def run_node_gate(
         """The node's own test command over the tree minus `edited`'s losses.
 
         A copy, so the gate that asks the question cannot answer it by
-        changing the tree every later gate measures (T6-41).
+        changing the tree every later gate measures.
         """
         with tempfile.TemporaryDirectory(prefix="saddle-dead-code-") as tmp:
             sandbox = Path(tmp) / "tree"

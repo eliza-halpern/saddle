@@ -1,4 +1,4 @@
-"""Audit a tree against a baseline with the Tier-1 battery and no plan (P1-2).
+"""Audit a tree against a baseline with the Tier-1 battery and no plan.
 
 `audit_tree(tree, baseline)` gates `tree` against `baseline` and returns one
 verdict: `nothing-to-audit` when the staged tree equals the baseline's tree,
@@ -15,7 +15,7 @@ a `pass` would be a claim nothing measured. The remaining checks run exactly
 as `runner.run_node_gate` runs them, on a synthesized `refactor` node: the
 one kind whose coverage gate has full force.
 
-With `cache=<dir>` (P1-4), `audit_tree` serves a stored `AuditResult` only
+With `cache=<dir>`, `audit_tree` serves a stored `AuditResult` only
 when the staged tree, the resolved baseline, `test_command` and the gate
 surface (`gate_surface()`: a hash of the gate modules' bytes plus the shelled-
 out tools' versions) all match a stored key exactly. Any other file state --
@@ -23,7 +23,7 @@ a missing file, unparseable JSON, a mismatched key -- is a miss, never a
 verdict and never an exception. `nothing-to-audit` is never cached.
 
 Layering: this module imports `dag`, `evidence`, `gates` and `runner`; only the
-CLI (P1-5) and `saddle.auditor` (Phase 2) import it.
+CLI and `saddle.auditor` import it.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from saddle.runner import run_node_gate
 
 AUDIT_TEST_COMMAND: Final = "python -m pytest -q"
 
-# The CLI (P1-5) expands and uses this; the library never defaults to it.
+# The CLI expands and uses this; the library never defaults to it.
 DEFAULT_AUDIT_CACHE: Final = Path("~/.cache/saddle/audit")
 
 # The modules whose bytes decide a verdict, and the tools the gates shell out
@@ -72,7 +72,7 @@ SURFACE_TOOLS: Final[tuple[str, ...]] = ("mutmut", "ruff", "coverage")
 _COPY_IGNORE_ANY_DEPTH: Final[frozenset[str]] = frozenset(
     {"__pycache__", ".pytest_cache", ".hypothesis", ".ruff_cache", ".mutmut-cache"}
 )
-# Noise saddle and mutmut write only at the tree's own top level (P1-4): a
+# Noise saddle and mutmut write only at the tree's own top level: a
 # pattern here must not eat a tracked file of the same name deeper in the
 # tree (`pkg/mutants/__init__.py`) or a same-prefixed one at the top
 # (`.coveragerc`, a project's own coverage config, is not `.coverage.*`).
@@ -211,8 +211,8 @@ def _audit_ignore(root: Path) -> Callable[[str, list[str]], set[str]]:
     `git ls-files`. A tracked file is part of the baseline, and a copy without
     it reads as a deletion, so an unchanged tree stops being `nothing-to-audit`.
     21 of the 88 labelled bench trees (every T2, T3 and T4 tree) track
-    `__pycache__`/`*.pyc`; P1-4 fixed `.coveragerc` by pattern, this is the rule
-    it was an instance of.
+    `__pycache__`/`*.pyc`; the top-level list fixed `.coveragerc` by pattern,
+    this is the rule it was an instance of.
     """
     root_str = os.fspath(root)
     listed = run_capture(["git", "ls-files", "-z"], root)
@@ -316,7 +316,7 @@ def _cache_write(cache: Path, path: Path, key: Mapping[str, str], result: AuditR
 def _spelled_from_the_root(
     checks: tuple[AuditCheck, ...], mutation: MutationOutcome | None, copy: Path
 ) -> tuple[tuple[AuditCheck, ...], MutationOutcome | None]:
-    """Rewrite every path the gates spelled inside `copy` relative to the tree's root (P1-13).
+    """Rewrite every path the gates spelled inside `copy` relative to the tree's root.
 
     The gates gate a temporary copy and name files as `<copy>/accounts.py:84`,
     a directory deleted when the audit returns and named differently every
@@ -410,7 +410,7 @@ def audit_tree(
 ) -> AuditResult:
     """Gate `tree`, as it is on disk, against `baseline`; `tree` is never written to.
 
-    With `cache=None`, exactly P1-2's behaviour, plus `surface` and `cached` on
+    With `cache=None`, exactly the uncached audit's behaviour, plus `surface` and `cached` on
     the result. With a directory, a stored result is served only on a key hit
     (see the module docstring); `nothing-to-audit` is never cached.
     """

@@ -1,8 +1,8 @@
 """The coverage finding in English (coverage_text): function map, phrase, renderer.
 
-The E-t5-s1 fixture is real: the sealed coverage finding from CALIB's
-E-t5-s1 audit, money.py and store.py at the audited rev, and the diff from
-baseline for those two files (internal CALIB run records, not public).
+The E-t5-s1 fixture is real: the sealed coverage finding from a calibration
+run's E-t5-s1 audit, money.py and store.py at the audited rev, and the diff
+from baseline for those two files (internal run records, not public).
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ def test_never_rendered_as_failed(t5_changed: Changed) -> None:
 
 def test_every_sentence_cites_the_record(t5_changed: Changed) -> None:
     """Every bullet ends in a `[lines ...]` tag naming lines the finding
-    names; a quoted source line (`      <n>: text`, PACKETHOOK) is not a
+    names; a quoted source line (`      <n>: text`) is not a
     sentence and carries no tag of its own, but its number must be one the
     bullet above it tagged."""
     s = describe_coverage(t5_finding(), t5_sources(), t5_changed, t5_mutation())
@@ -247,7 +247,7 @@ def test_blank_docstring_is_no_docstring() -> None:
     assert g.doc is None
 
 
-# -- the uncovered lines' own text under each bullet (PACKETHOOK) ---------------
+# -- the uncovered lines' own text under each bullet ---------------------------
 
 
 def test_t5_convert_bullet_is_followed_by_the_text_of_its_uncovered_lines(
@@ -280,7 +280,7 @@ def test_line_text_is_an_option_and_off_prints_bullets_only(t5_changed: Changed)
 
 
 def test_a_missing_source_is_not_placed_and_prints_no_line_text() -> None:
-    """Known-bad: a file the tree did not hold keeps COVTEXT's "not placed"
+    """Known-bad: a file the tree did not hold keeps the renderer's "not placed"
     line and no text is invented for it."""
     s = describe_coverage({"detail": "no test runs gone.py:5, here.py:2", "cites": []},
                           {"here.py": "x = 1\ny = 2\n"})  # fmt: skip
@@ -292,7 +292,7 @@ def test_a_missing_source_is_not_placed_and_prints_no_line_text() -> None:
     assert [g.text for g in s.gaps] == [((2, "y = 2"),)]
 
 
-# -- the compact rendering: the recap must not scroll (PACKETHOOK-3) ---------------
+# -- the compact rendering: the recap must not scroll ---------------------------
 
 
 def test_compact_caps_functions_at_five_with_two_lines_each(t5_changed: Changed) -> None:

@@ -255,8 +255,8 @@ class Feed:
         return ""
 
     def final(self) -> tuple[bool, str]:
-        # An accepted finish returns no text unless it surfaces findings
-        # (FEEDFIX 7); this fake surfaces none.
+        # An accepted finish returns no text unless it surfaces not-proven
+        # findings; this fake surfaces none.
         return self.ok, "" if self.ok else "coverage FAIL"
 
     def waivers(self) -> list[str]:

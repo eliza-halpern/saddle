@@ -304,7 +304,7 @@ def test_diff_payload_carries_the_grammar_the_caller_chose() -> None:
 
 
 def test_diff_payload_carries_the_seed_when_given() -> None:
-    """T6-25: concurrent draws are told apart by seed; a call without one
+    """Concurrent draws are told apart by seed; a call without one
     sends no `seed` key (the server's default), as before."""
     client, seen = _json_client(_ok_body(content=REAL_DIFF))
     client.propose_diff("Do x.", seed=7)
@@ -337,10 +337,10 @@ def test_diff_missing_or_blank_content_fails() -> None:
 
 
 def test_no_content_response_names_itself_and_keeps_the_reasoning() -> None:
-    """T6-18 known-good (F21.10 b-s2): `content: null`, `finish_reason:
+    """Known-good (a recorded draw, seed b-s2): `content: null`, `finish_reason:
     "stop"`, a long think block cut mid-word. The error says what happened
     and carries the reasoning, usage, cap and finish reason out, like a
-    truncation does (T6-12). Known-bad: the bare message with the reasoning
+    truncation does. Known-bad: the bare message with the reasoning
     discarded, which is what every such response got before."""
     reasoning = "x" * 45428
     body = _ok_body(content=None, reasoning=reasoning, finish_reason="stop")
@@ -428,7 +428,7 @@ def test_list_models_returns_served_ids() -> None:
 
 
 def test_max_model_len_reads_the_served_models_context_length() -> None:
-    """T6-17 known-good: vLLM's /models entry carries `max_model_len`; the
+    """Known-good: vLLM's /models entry carries `max_model_len`; the
     client returns the served model's. Known-bad: an entry without it, a
     non-integer, or another model's value gives None, not a guess."""
     payload = {
@@ -757,7 +757,7 @@ def test_diff_schema_admits_a_real_diff() -> None:
     and replans.
 
     The previous test here asserted the pattern *existed* and called the
-    class leak-free (F9). Existence was never the question: a constraint
+    class leak-free. Existence was never the question: a constraint
     is only verified once a known-good instance is shown to satisfy it.
     """
     assert _decoder_admits({"properties": {"diff": {"type": "string"}}}, REAL_DIFF)
@@ -821,7 +821,7 @@ def test_diff_grammar_requires_the_file_lines_before_a_hunk() -> None:
 
 
 def test_diff_grammar_admits_only_whole_file_writes() -> None:
-    """T6-62/A1 structural pin (xgrammar decides acceptance in the
+    """Structural pin (xgrammar decides acceptance in the
     container; tools/diff_grammar_check.py carries the corpus). A write
     carries the complete new file: a body line is new content and nothing
     else, and the anchor is line 1 BY CONSTRUCTION rather than by check --
@@ -829,7 +829,7 @@ def test_diff_grammar_admits_only_whole_file_writes() -> None:
 
     scope narrowed, deliberately: `new file mode` is no longer mandatory.
     It was required because `--- /dev/null` with no mode line let
-    `git apply` read `/dev/null` as a path (F21.14, round 3d probe).
+    `git apply` read `/dev/null` as a path (a round 3d probe).
     `git apply` no longer sees worker output at all, so that hazard cannot
     occur, and under whole-file semantics every write is create-or-
     overwrite -- a "new file" marker on an overwrite is a lie. It stays
@@ -873,7 +873,7 @@ def test_grammar_check_corpus_carries_the_grammar_it_checks() -> None:
     The container has xgrammar and nothing else: `/tmp/check.py` has no
     `src/` beside it, so importing `saddle.vllm` there raised
     `ModuleNotFoundError` the first time the tool's own docstring lines
-    were actually run (T3-18, 2026-09-19). The corpus is the only thing
+    were actually run (2026-09-19). The corpus is the only thing
     that crosses into the container, so the grammar travels inside it,
     byte-identical to this checkout's.
     """
@@ -911,7 +911,7 @@ def test_parse_diff_response_passes_prose_through_to_the_apply_backstop() -> Non
 
 
 def test_diff_truncation_names_the_cap_it_hit() -> None:
-    """T6-14: the message states the cap and no longer advises a retry the
+    """The message states the cap and no longer advises a retry the
     caller may not make; escalation is the caller's contract."""
     client, _ = _json_client(_ok_body(content="diff --git a/x", finish_reason="length"))
     with pytest.raises(VllmResponseError) as info:
@@ -920,7 +920,7 @@ def test_diff_truncation_names_the_cap_it_hit() -> None:
 
 
 def test_truncation_error_carries_the_partial_reasoning_and_usage() -> None:
-    """T6-12: what did arrive is not lost with the exception."""
+    """What did arrive is not lost with the exception."""
     body = _ok_body(content="diff --git a/x", reasoning="thought so far", finish_reason="length")
     body["usage"] = {
         "prompt_tokens": 1000,
@@ -947,7 +947,7 @@ def test_truncation_error_carries_the_partial_reasoning_and_usage() -> None:
 
 
 def test_diff_proposal_carries_usage_and_cap_without_changing_equality() -> None:
-    """T6-12: a sealed attempt records what its call cost and was allowed."""
+    """A sealed attempt records what its call cost and was allowed."""
     body = _ok_body(content=REAL_DIFF)
     body["usage"] = {"completion_tokens": 77, "ignored": "text"}
     client, _ = _json_client(body)
@@ -958,7 +958,7 @@ def test_diff_proposal_carries_usage_and_cap_without_changing_equality() -> None
 
 
 def test_diff_proposal_carries_the_call_that_produced_it() -> None:
-    """T6-27 known-good: prompt, seed, temperature, start and wall ride on
+    """Known-good: prompt, seed, temperature, start and wall ride on
     the proposal so the sidecar can replay the draw; equality still
     compares the two text fields only."""
     client, _ = _json_client(_ok_body(content=REAL_DIFF))
@@ -971,7 +971,7 @@ def test_diff_proposal_carries_the_call_that_produced_it() -> None:
 
 
 def test_failed_diff_call_carries_its_evidence() -> None:
-    """T6-27 known-bad: a transport failure has no envelope, so what the
+    """Known-bad: a transport failure has no envelope, so what the
     client knew (the call) is attached to the error instead of lost."""
     client = _failing_client(httpx.ReadTimeout("timed out"))
     with pytest.raises(VllmRequestError) as caught:
@@ -988,7 +988,7 @@ def test_failed_diff_call_carries_its_evidence() -> None:
 
 @pytest.mark.parametrize("effort", ["low", "xhigh"])
 def test_a_proposal_records_the_effort_its_own_request_carried(effort: str) -> None:
-    """T6-47 known-good: the retained effort is the one in the payload the
+    """Known-good: the retained effort is the one in the payload the
     client sent, so a cell rebuilt from the record reaches the server the
     same way it was reached. Two values, and neither is
     `DEFAULT_REASONING_EFFORT`, because a single value would pass against a
@@ -1001,7 +1001,7 @@ def test_a_proposal_records_the_effort_its_own_request_carried(effort: str) -> N
 
 
 def test_a_failed_diff_call_carries_the_effort_it_ran_at() -> None:
-    """T6-47: the draw most worth replaying is often the one that failed --
+    """The draw most worth replaying is often the one that failed --
     round 3e's zero-content emission is a `VllmResponseError` -- so the
     effort rides on the error's evidence, not only on a proposal that came
     back.
@@ -1017,7 +1017,7 @@ def test_a_failed_diff_call_carries_the_effort_it_ran_at() -> None:
 
 
 def test_server_version_reads_the_version_endpoint() -> None:
-    """T6-27: the served version, or None when the endpoint has none."""
+    """The served version, or None when the endpoint has none."""
     client, seen = _json_client({"version": "0.28.0"})
     assert client.server_version() == "0.28.0"
     assert seen[0].url.path == "/version"
@@ -1038,7 +1038,7 @@ def test_server_version_reads_the_version_endpoint() -> None:
     ids=["default", "trailing slash", "no api segment", "mounted under a prefix"],
 )
 def test_server_version_asks_beside_the_api_root_not_under_it(base_url: str, expected: str) -> None:
-    """T6-45: /version is a sibling of the /v1 API root, not a child of it.
+    """/version is a sibling of the /v1 API root, not a child of it.
 
     Known-bad: the live server answers 200 at its root and 404 at
     `/v1/version`, so a request built relative to the API root seals

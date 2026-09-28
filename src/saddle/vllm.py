@@ -60,17 +60,17 @@ REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
 # `--- ` and `+++ ` are required (`from to`), not optional `meta`: a hunk
 # that follows the `diff --git` line directly is the shape behind every
 # one of the smoke run's 16 `patch fragment without header at line 3`
-# apply failures (WORKPLAN T3-18, smoke record S2). Hunk line counts stay
-# unenforceable -- a CFG cannot count -- so this closes the header half of
-# that class, not the count half. Re-run in the container for this
-# tightening on 2026-09-19: 53/53 (44 admit, 6 reject with the headerless
-# section refused at its `@@`, 2 must-not-stop, 1 must-stop).
-# A section is a WRITE or a DELETE (T6-62/A1). A write carries the
-# complete new contents of one file and nothing else: there is no
-# original side to reproduce, no context to match, and the only hunk
-# header the grammar admits is the one anchored at line 1. That is the
-# whole point of the envelope. F21.38 measured what the diff envelope
-# cost: the model writes its *intended output* onto the context lines --
+# apply failures. Hunk line counts stay unenforceable -- a CFG cannot
+# count -- so this closes the header half of that class, not the count
+# half. Re-run in the container for this tightening on 2026-09-19: 53/53
+# (44 admit, 6 reject with the headerless section refused at its `@@`,
+# 2 must-not-stop, 1 must-stop).
+# A section is a WRITE or a DELETE. A write carries the complete new
+# contents of one file and nothing else: there is no original side to
+# reproduce, no context to match, and the only hunk header the grammar
+# admits is the one anchored at line 1. That is the
+# whole point of the envelope. Rounds 3h and 3i measured what the diff
+# envelope cost: the model writes its *intended output* onto the context lines --
 # its reproduction of `accounts.py` ran 105 lines against the file's 73,
 # similarity 0.652, every divergence an edit it meant to make -- and no
 # git flag reaches that, because the context is not a transcription
@@ -86,7 +86,7 @@ REASONING_EFFORTS: Final[tuple[str, ...]] = ("none", "low", "medium", "xhigh")
 #
 # SCOPE NARROWED, not loosened: `new file mode` is no longer required on a
 # write. It was required because `--- /dev/null` with no mode line let
-# `git apply` read `/dev/null` as a path (round 3d probe, F21.14:
+# `git apply` read `/dev/null` as a path (round 3d probe:
 # `error: dev/null: No such file or directory`). `git apply` no longer
 # sees worker output at all, so the hazard that rule existed for cannot
 # occur; and under whole-file semantics every write is create-or-
@@ -122,7 +122,7 @@ line       ::= [^\n]*
 class VllmError(Exception):
     """Base error for guided-emission failures.
 
-    `evidence` (T6-27) is what the failed call was: prompt, seed,
+    `evidence` is what the failed call was: prompt, seed,
     temperature, start time and wall, attached by the method that made the
     call so the attempt's sidecar can hold them whatever the failure type.
     Round 3d's 2494 s timeout sealed nothing the client knew.
@@ -142,7 +142,7 @@ class VllmRequestError(VllmError):
 class VllmResponseError(VllmError):
     """Server replied 200 with a malformed or non-JSON envelope.
 
-    A truncation carries what did arrive (T6-12): the partial reasoning
+    A truncation carries what did arrive: the partial reasoning
     and content, the usage the server reported, and the cap the call
     sent, so the attempt's sidecar can hold them instead of the journal
     losing the most expensive failure's only evidence.
@@ -179,7 +179,7 @@ class DagEmission:
 class DiffProposal:
     """One guided diff plus the worker reasoning that produced it.
 
-    `usage` and `max_tokens` (T6-12) are the server's token accounting and
+    `usage` and `max_tokens` are the server's token accounting and
     the cap the call was sent; they ride along so the attempt's sidecar
     can record them. Equality on the two text fields is what callers and
     tests compare, so the extras are excluded from it.
@@ -189,18 +189,19 @@ class DiffProposal:
     reasoning: str
     usage: dict[str, int] = field(default_factory=dict, compare=False)
     max_tokens: int | None = field(default=None, compare=False)
-    # The call that produced it (T6-27): enough to rebuild the request.
+    # The call that produced it: enough to rebuild the request.
     prompt: str = field(default="", compare=False)
     seed: int | None = field(default=None, compare=False)
     temperature: float | None = field(default=None, compare=False)
     started_at: str = field(default="", compare=False)
     wall_s: float | None = field(default=None, compare=False)
-    # T6-47. The effort is part of the request, not a detail of it: the
+    # The effort is part of the request, not a detail of it: the
     # served chat template injects a different instruction sentence per
     # effort, so two draws at different efforts are different prompts.
     # Without this field a cell rebuilt from the record has to guess, and
-    # F21.18 is what guessing cost -- a `low` attempt replayed at `xhigh`,
-    # 12 prompt tokens apart, neither arm reproducing the draw.
+    # a round 3e replay showed what guessing cost -- a `low` attempt
+    # replayed at `xhigh`, 12 prompt tokens apart, neither arm reproducing
+    # the draw.
     reasoning_effort: str = field(default="", compare=False)
 
 
@@ -331,7 +332,7 @@ def _build_diff_payload(
         "include_reasoning": True,
         "structured_outputs": {"grammar": grammar},
     }
-    # Concurrent draws of one prompt are told apart by seed (T6-25); a
+    # Concurrent draws of one prompt are told apart by seed; a
     # call without one leaves the key out and the server picks, as before.
     if seed is not None:
         payload["seed"] = seed
@@ -442,7 +443,7 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
     A truncation names the cap it hit when the caller passes it. It no
     longer advises "retry with more max_tokens": for a year no caller did,
     and a message that names a remedy nothing applies is a claim the
-    mechanism cannot back (T6-14). Escalation is the caller's contract.
+    mechanism cannot back. Escalation is the caller's contract.
     """
     if not isinstance(data, dict):
         msg = f"expected a JSON object envelope, got {type(data).__name__}"
@@ -474,7 +475,7 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
         raise VllmResponseError(msg)
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        # T6-18 (F21.10 b-s2): HTTP 200, `finish_reason: "stop"`, `content:
+        # Seen in a probe run: HTTP 200, `finish_reason: "stop"`, `content:
         # null`, 45k chars of reasoning cut mid-word. The think block ran
         # out and the turn ended with nothing emitted. Name it, and carry
         # the reasoning out so the attempt sidecar shows what happened.
@@ -592,7 +593,7 @@ def _sibling_url(base_url: httpx.URL, endpoint: str) -> httpx.URL:
 
 
 def _version_url(base_url: httpx.URL) -> httpx.URL:
-    """The version endpoint beside the API root, not under it (T6-45).
+    """The version endpoint beside the API root, not under it.
 
     vLLM serves its version at the server root while the OpenAI-compatible
     API is mounted under `/v1`, so a request built relative to the API root
@@ -826,7 +827,7 @@ class VllmClient:
         return _model_ids(self._models())
 
     def server_version(self) -> str | None:
-        """The server's version string, or None when it has none (T6-27, T6-45)."""
+        """The server's version string, or None when it has none."""
         try:
             response = self._client.get(
                 _version_url(self._client.base_url), timeout=PREFLIGHT_TIMEOUT
@@ -839,7 +840,7 @@ class VllmClient:
         return version if isinstance(version, str) and version else None
 
     def max_model_len(self) -> int | None:
-        """The served model's context length as vLLM reports it, or None (T6-17)."""
+        """The served model's context length as vLLM reports it, or None."""
         return _model_context(self._models(), self._model)
 
     def count_tokens(

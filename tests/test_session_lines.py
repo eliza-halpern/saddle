@@ -1,4 +1,4 @@
-"""Session lines (T5-6): one ledger entry, one line on the task card.
+"""Session lines: one ledger entry, one line on the task card.
 
 The pass mark is drawn from an exit code only: a command that exited 1 is a
 failure line even though the tool that ran it succeeded. Every line cites

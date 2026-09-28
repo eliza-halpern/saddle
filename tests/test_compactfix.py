@@ -1,6 +1,6 @@
-"""COMPACTFIX: what an autonomous run keeps once its context is compacted.
+"""What an autonomous run keeps once its context is compacted.
 
-Each test names the recommendation it pins (R1..R8, COMPACTRES's report)
+Each test names the compaction recommendation it pins (R1..R8)
 and holds both halves: a known-good instance the contract keeps and a
 known-bad one it must not. The runs are real `run_auto` runs over a git
 repo, the only caller that sets `changed_files` and delivers audits, with a
@@ -695,9 +695,9 @@ def test_a_chat_note_names_files_edited_in_the_dropped_part() -> None:
 
 
 def test_r7_a_surfaced_finish_findings_count_as_delivered(tmp_path: Path) -> None:
-    """INTEG6: FEEDFIX item 7 delivers an accepted finish's not-proven findings
-    to the model; the state block's "latest audit delivered" must hold them,
-    as it does a refused finish's. A plain accepted finish delivers nothing."""
+    """An accepted finish delivers its not-proven findings to the model; the
+    state block's "latest audit delivered" must hold them, as it does a
+    refused finish's. A plain accepted finish delivers nothing."""
     from saddle.engine import FINISH_SURFACED, _note_round
     from saddle.tools import FINISH_TOOL
     from saddle.vllm import ToolCall

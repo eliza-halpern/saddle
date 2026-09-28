@@ -72,9 +72,9 @@ def test_a_finished_packet_leads_with_the_band_and_folds_the_rest(tmp_path: Path
     assert [(x["key"], x["tone"], x["glyph"]) for x in r["lines"]] == [
         ("tests", "ok", "✓"),
         ("mutation", "none", "○"),
-        # flip (UXFIX2 Q4): was ("not-proven", "ok", "✓"). The old pin held
+        # flip: was ("not-proven", "ok", "✓"). The old pin held
         # "Nothing is left unproven" two lines under "No mutation record"
-        # (out/UXREVIEW2/shots/19-merge-unproven-desktop.png, N6): it pinned
+        # (seen in a screenshot review of the merge screen): it pinned
         # the contradiction, not a contract. The item is named below.
         ("not-proven", "warn", "!"),
     ]
@@ -167,7 +167,7 @@ def test_ask_about_this_run_seeds_the_composer_with_the_recap(tmp_path: Path) ->
     # The session starts in Task, so the lane switch is what is under test:
     # "Ask about this run" must leave Task (where Enter opens the Run strip)
     # for Ask, the read-only talk lane, and never opt into unaudited Edit.
-    # The label pins the user's wording (UXFIX2 Q9): an outcome, in the lane's
+    # The label pins the user's wording: an outcome, in the lane's
     # own word, not a place.
     got, repo, _branch = page(tmp_path, "audited", "chat", mode="task")
     assert got["read"]["chat"] == {"text": "Ask about this run", "disabled": False}
@@ -188,7 +188,7 @@ def test_ask_about_this_run_seeds_the_composer_with_the_recap(tmp_path: Path) ->
         compile_packet(report.parent / "proofs.jsonl", run_id=report.parent.name)
     )
     # 23 lines with today's recap (the full render, minus Narrative). The
-    # user's bar is ~20: PACKETHOOK's compact rendering, not on this branch,
+    # user's bar is ~20: the compact recap rendering, not on this branch,
     # is what brings it under; this pins that nothing longer creeps in.
     assert len(lines) <= 25, len(lines)
 
@@ -203,7 +203,7 @@ def test_a_run_with_a_proven_mutation_row_merges_under_a_plain_label(tmp_path: P
 
 
 def test_edit_checks_are_their_own_line_not_in_the_audit_count(tmp_path: Path) -> None:
-    """PACKETFIX-1: the real auditor's three tier-0 records (syntax, ruff,
+    """The real auditor's three tier-0 records (syntax, ruff,
     imports) were folded into Audit ("4 of 4 passed"); they are one line of
     their own after it, and the Audit fold counts the one verdict it holds."""
     got, _repo, _branch = page(tmp_path, "edit-checked", "read")
@@ -218,9 +218,9 @@ def test_edit_checks_are_their_own_line_not_in_the_audit_count(tmp_path: Path) -
 
 
 def test_the_mutation_line_opens_to_the_english_summary(tmp_path: Path) -> None:
-    """PACKETHOOK: a mutation finding with a sealed outcome shows its count
+    """A mutation finding with a sealed outcome shows its count
     line as before and, inside the band's Mutation fold, the grouped English
-    (MUTSUMMARY) of what was left untested; the count line is not replaced."""
+    summary of what was left untested; the count line is not replaced."""
     got, _repo, _branch = page(tmp_path, "summarised", "mutation")
     m = got["mutation"]
     assert m["open"] is True

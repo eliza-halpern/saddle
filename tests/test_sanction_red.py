@@ -1,8 +1,8 @@
-"""FEEDFIX (4): a sanctioned test rewrite counts only if it is red on the baseline.
+"""A sanctioned test rewrite counts only if it is red on the baseline.
 
 `auditor.sanction` reclasses an assertion-preservation failure by test name
-alone (SANCTIONS S1: `construct/vacuous` rewrote all four T5 tests to
-`assert True` and was accepted). The contract now: the auditor runs the
+alone (a constructed probe rewrote all four T5 tests to `assert True`
+and was accepted). The contract now: the auditor runs the
 rewritten tests against the baseline's sources, and a rewrite that passes
 there did not assert the redefined behaviour, so it is not sanctioned.
 
@@ -65,7 +65,7 @@ def test_a_rewrite_that_asserts_the_new_behaviour_is_sanctioned(tmp_path: Path) 
 
 
 def test_a_vacuous_rewrite_is_not_sanctioned(tmp_path: Path) -> None:
-    """Known-bad (SANCTIONS construct/vacuous): `assert True` passes anywhere."""
+    """Known-bad (the vacuous-rewrite probe): `assert True` passes anywhere."""
     tests = OLD_TESTS.replace("assert fee(10) == 9", "assert True").replace("== 19", "== 18")
     finding = _preservation(_tree(tmp_path, tests))
     assert finding.verdict == "fail"

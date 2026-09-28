@@ -107,7 +107,7 @@ def seed(
         )
     if kind == "summarised":
         # The real auditor's tier-2 mutation finding, with the MutationOutcome
-        # it was decided from sealed beside it (PACKETHOOK): the CALIB tree
+        # it was decided from sealed beside it: the calibration tree
         # E-t5-s1's record, survivors and their diffs, verbatim.
         fixture = json.loads((FIXTURES / "mutant_text" / "E-t5-s1.json").read_text())
         sealed = {**fixture["outcome"], "survivor_detail": fixture["survivor_detail"]}

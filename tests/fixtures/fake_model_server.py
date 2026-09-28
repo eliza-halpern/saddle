@@ -1,4 +1,4 @@
-# Copied from the internal benchmark's M3 dry-run fake model server for the UXFIX2 e2e; ruff-formatted and type-annotated, logic unchanged.
+# Copied from the internal benchmark's M3 dry-run fake model server for the chat UI's end-to-end test; ruff-formatted and type-annotated, logic unchanged.
 # ruff: noqa: E401, E501, I001
 """Fake OpenAI-compatible model server for M3's dry run. NO model, NO GPU.
 

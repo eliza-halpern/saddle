@@ -37,7 +37,7 @@ from saddle.journal import SpanRecorder
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _MUTANT_VERDICT = re.compile(r"^\s*(\S+): (.+?)\s*$")
-"""Any status to end of line (P0-3): mutmut 3.8's `status_by_exit_code`
+"""Any status to end of line: mutmut 3.8's `status_by_exit_code`
 emits ten distinct strings (killed, survived, no tests, check was
 interrupted by user, not checked, skipped, suspicious, timeout, caught
 by type check, segfault), and the contract is that every one of them
@@ -48,7 +48,7 @@ counting as a survivor."""
 _MUTANT_NAME = re.compile(
     r"^(?:\w+\.)+x(?:_(?P<func>.+?)|ǁ(?P<cls>\w+)ǁ(?P<method>.+?))__mutmut_\d+$"
 )
-"""mutmut's two mangled-name shapes (P0-2), parsed locally so saddle never
+"""mutmut's two mangled-name shapes, parsed locally so saddle never
 imports mutmut into its own process: `<dotted.module>.x_<func>__mutmut_<n>`
 for a function, `<dotted.module>.xǁ<Class>ǁ<method>__mutmut_<n>` for a
 method (ǁ is U+01C1). Checked against mutmut's own
@@ -164,8 +164,8 @@ def run_argv(
     return proc.returncode
 
 
-# The lint rules the ruff gate enforces (T6-37): defects, not style. Round
-# 3e (F21.16) was gated by ruff 0.16.7's *default* rule set -- no config
+# The lint rules the ruff gate enforces: defects, not style. Round 3e
+# was gated by ruff 0.16.7's *default* rule set -- no config
 # existed in the workdir or above it -- and UP031 failed a node for the
 # `%`-formatting its own baseline uses in 4 of 5 modules; a `pip install
 # -U ruff` would have changed the verdict. Every ruff call runs
@@ -197,7 +197,7 @@ def ruff_version() -> str:
 def ruff_findings(
     workdir: Path, files: Sequence[str], *, recorder: SpanRecorder | None = None
 ) -> tuple[CapturedRun, list[RuffFinding]]:
-    """Run `ruff check --output-format json` on `files` in `workdir` (T6-3).
+    """Run `ruff check --output-format json` on `files` in `workdir`.
 
     Returns the run (exit code as ruff gave it; stdout replaced by one
     human line per finding, `path:row:col: CODE message`, so a repair
@@ -261,7 +261,7 @@ def run_stdin(
 def run_stdin_capture(
     argv: Sequence[str], cwd: Path, text: str, *, recorder: SpanRecorder | None = None
 ) -> tuple[int, str]:
-    """Run `argv` with `text` on stdin; return its exit code and stderr (T6-27)."""
+    """Run `argv` with `text` on stdin; return its exit code and stderr."""
     start = perf_counter()
     proc = subprocess.run(argv, input=text, cwd=cwd, capture_output=True, text=True)
     _record(recorder, argv, start, proc)
@@ -447,7 +447,7 @@ def git_ls_files(cwd: Path) -> list[str]:
 def git_changed_files(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> list[str]:
     """Worktree-relative paths differing from `ref`, for scoping autofixes.
 
-    `--no-renames` (T3-14): with git's default rename detection a staged
+    `--no-renames`: with git's default rename detection a staged
     `git mv n.py m.py` prints only `m.py`, so the path a node deleted
     never reached target-scope and a `target_files` list naming the new
     path alone let the rename through. Both paths are the node's.
@@ -498,13 +498,13 @@ BASELINE_REF_PREFIX: Final = "refs/saddle/baseline/"
 
 
 PROVEN_REF_PREFIX: Final = "refs/saddle/proven/"
-"""Namespace for the tree each proof was sealed against (T3-10). Same
+"""Namespace for the tree each proof was sealed against. Same
 properties as `BASELINE_REF_PREFIX`: writing one moves no branch, no tag
 and not `HEAD`."""
 
 
 ATTEMPT_REF_PREFIX: Final = "refs/saddle/attempt/"
-"""Namespace for the tree each attempt was graded on (T6-34). Same
+"""Namespace for the tree each attempt was graded on. Same
 properties as `BASELINE_REF_PREFIX`: writing one moves no branch, no tag
 and not `HEAD`."""
 
@@ -530,7 +530,7 @@ def _ref_slug(node_id: str) -> str:
 
 
 def proven_ref(node_id: str) -> str:
-    """The ref holding the tree `node_id`'s proof was sealed against (T3-10).
+    """The ref holding the tree `node_id`'s proof was sealed against.
 
     Same slug rule as the baseline refs: `check-ref-format` decides a ref
     component by component, so an id git accepts under one
@@ -546,7 +546,7 @@ def attempt_ref(node_id: str, attempt: int) -> str:
     pre-node tree and a proven ref exists only for a pass, so `git gc`
     pruned the only copy of what the gates actually judged. Session 41
     had to rebuild round 3d's attempt trees out of `lost-found` dangling
-    blobs to re-score them (F21.15), and two of those blobs differed from
+    blobs to re-score them, and two of those blobs differed from
     each other only by autofix.
 
     The attempt number is its own ref component, so attempts 1..N of one
@@ -558,14 +558,14 @@ def attempt_ref(node_id: str, attempt: int) -> str:
     return f"{ATTEMPT_REF_PREFIX}{_ref_slug(node_id)}/{attempt}"
 
 
-# The identity every commit saddle creates is authored under (T6-56).
+# The identity every commit saddle creates is authored under.
 # `commit-tree` takes no identity of its own, so it falls back to git's
 # auto-derived `user@host` -- which is not a fallback at all when the host
 # has no domain: `unable to auto-detect email address (got
 # 'user@host.(none)')`, exit 128. Round 3h died on that at its first
 # node, 16 ms into the slice, and the transcript reported a node with no
 # proof and no gate naming it, because no gate ran. `_ensure_repo` already
-# committed the baseline under this name; the snapshots T6-34 added did
+# committed the baseline under this name; the attempt snapshots did
 # not, so a run's survival depended on the operator's git config and on
 # DNS. Nothing here is a user identity: a run's refs are saddle's own.
 SADDLE_COMMIT_IDENTITY: Final = (
@@ -683,7 +683,7 @@ def materialize_baseline(
 
 
 def restore_baseline(cwd: Path, ref: str, *, recorder: SpanRecorder | None = None) -> None:
-    """Put the worktree and index at `cwd` back to git `ref` (T3-23).
+    """Put the worktree and index at `cwd` back to git `ref`.
 
     A node that gave up leaves its applied diffs staged; a replacement
     node would snapshot them as its own baseline and the merge suite
@@ -719,7 +719,7 @@ def pytest_scope(test_command: str) -> tuple[str, ...]:
     """The arguments a declared `test_command` hands to pytest, in order.
 
     Everything after the first `pytest` token, so the mutation gate's
-    engine collects the same tests the tests gate ran (F21.12a). A
+    engine collects the same tests the tests gate ran. A
     command that never names pytest yields nothing, and the engine runs
     its whole tree as before.
     """
@@ -730,7 +730,7 @@ def pytest_scope(test_command: str) -> tuple[str, ...]:
 
 
 def scoped_targets(targets: Collection[str], scope: Collection[str]) -> tuple[str, ...]:
-    """`targets` the declared pytest `scope` would itself collect (F21.65).
+    """`targets` the declared pytest `scope` would itself collect.
 
     The property oracle runs its targets ALONE against the node's
     mutants, and mutmut baselines by running that selection, so one
@@ -775,21 +775,21 @@ class MutationOutcome:
     total: int
     generated: int
     survivors: tuple[str, ...]
-    # Mutants whose only change is inside string literals (T6-33): no test
+    # Mutants whose only change is inside string literals: no test
     # derived from a requirement can kill one without pinning wording, so
     # they leave the population and are counted here instead.
     text_only: int = 0
-    # Where each survivor sits (T6-29c): the changed lines its removed hunk
+    # Where each survivor sits: the changed lines its removed hunk
     # lines matched, spelled as the caller spelled `changed`, so a recovery
     # can name the enclosing function without re-running the engine.
     survivor_lines: tuple[tuple[str, int], ...] = ()
-    # How many sampled mutants (P0-3) decided "no tests": no test executes
+    # How many sampled mutants decided "no tests": no test executes
     # the mutated function at all (mutmut's own exit codes 33 and 5). Their
     # names are already in `survivors` and their lines in `survivor_lines`,
     # so a repair round can target them; this is only the count for the
     # gate's own detail string.
     untested: int = 0
-    # Every scored mutant's status string (P1-6), counted after the
+    # Every scored mutant's status string, counted after the
     # text-only exclusion and the `not checked` drop, so the counts
     # always sum to `total`. Nothing in `gates` reads this; it is
     # calibration evidence for the SIGKILL/SIGSEGV question (mutmut 3.8
@@ -797,7 +797,7 @@ class MutationOutcome:
     # question the raw status distribution can answer without decoding
     # exit codes. An engine failure (`total == 0`) leaves it empty.
     statuses: tuple[tuple[str, int], ...] = ()
-    # One row per survivor (SHORTLIST): (name, status, path as the caller
+    # One row per survivor: (name, status, path as the caller
     # spelled it, the first changed line it locates to, the mutation as
     # mutmut shows it -- its removed and added hunk lines only -- and
     # whether `message_only_mutant` holds). The same population as
@@ -935,7 +935,7 @@ def _mutated_source(show_output: str, source: str, mutant_name: str) -> str | No
 def message_only_mutant(show_output: str, source: str, mutant_name: str) -> bool:
     """Every AST difference the mutant makes is inside a message argument.
 
-    SHORTLIST (CALIB's read of E-t8 s5): a mutant that swaps the argument
+    Seen in a calibration read of the E-t8 s5 tree: a mutant that swaps the argument
     of a raised exception or of a logging call -- `ValueError(f"...")` to
     `ValueError(None)`, `KeyError(sku)` to `KeyError(None)` -- changes only
     what a message says. Decided by comparing the module's AST before and
@@ -989,7 +989,7 @@ def property_modules(
     its imports names a changed file: the dotted name, as a path, equals
     the changed file's path without `.py` (a package's `__init__.py` is
     its directory) or ends it at a `/` boundary. These are the modules
-    the property oracle runs alone against the node's mutants (T3-3).
+    the property oracle runs alone against the node's mutants.
     """
     targets: set[str] = set()
     for path in changed_files:
@@ -1018,8 +1018,8 @@ def property_modules(
 def _parse_mutant_verdicts(text: str) -> dict[str, str]:
     """Mutant name to verdict from `mutmut results --all True` output.
 
-    Every decided status, not only killed/survived/timeout/not-checked
-    (P0-3): a status this parser cannot match is a status that silently
+    Every decided status, not only killed/survived/timeout/not-checked,
+    because a status this parser cannot match is a status that silently
     leaves both `total` and `killed` in `mutation_sample`.
     """
     verdicts = {}
@@ -1064,10 +1064,10 @@ def _tokens_modulo_strings(line: str) -> list[tuple[int, str]] | None:
 
 
 def text_only_mutant(show_output: str) -> bool:
-    """Whether a `mutmut show` diff changes nothing but string-literal text (T6-33).
+    """Whether a `mutmut show` diff changes nothing but string-literal text.
 
     Round 3d's n2 was asked to kill 66 survivors of which 34 edited only a
-    message (`"cannot convert"` to `"XXcannot convertXX"`, F21.14). Pairwise:
+    message (`"cannot convert"` to `"XXcannot convertXX"`). Pairwise:
     the removed and added lines must tokenize identically once string
     contents are blanked, and at least one string must differ. Anything that
     does not tokenize line by line stays in the population (fail closed).
@@ -1077,7 +1077,7 @@ def text_only_mutant(show_output: str) -> bool:
     the code. t5's rule 1 requires the `ValueError` message to name all
     three currencies, and a string can equally be a currency code or a
     `Decimal` exponent -- round 3h classified `currency == "XXJPYXX"` and
-    `Decimal("XX1XX")` as text-only, and the suite killed both (F21.32).
+    `Decimal("XX1XX")` as text-only, and the suite killed both.
     So `mutation_sample` consults this only for SURVIVORS, where an
     exclusion costs nothing it could have learned; a killed mutant of any
     shape is evidence the suite discriminates and stays in the population.
@@ -1111,7 +1111,7 @@ def _mutant_def(
     """The `def` mutmut mutated, from `_MUTANT_NAME`'s parse of `mutant_name`.
 
     A method resolves only inside its own top-level `ClassDef`'s direct
-    children (P0-2's M-L5: name alone is not enough -- two classes, or a
+    children (name alone is not enough -- two classes, or a
     module-level function sharing a method's name, must not collide). A
     function resolves only among top-level `def`s, matching the spec's
     "the top-level def named <func>".
@@ -1141,8 +1141,8 @@ def _statement_start(tree: ast.Module, line: int) -> int | None:
     uses, built by taking the enclosing statement with the smallest span --
     a nested statement's range is always a subset of its parents', so the
     smallest one containing `line` is the innermost. Walking the whole
-    module rather than just the resolved def's own subtree is deliberate
-    (P0-2's M-L1): the def's own search range is what keeps a duplicate
+    module rather than just the resolved def's own subtree is deliberate:
+    the def's own search range is what keeps a duplicate
     line elsewhere in the file out of `matched` in the first place, and
     this function must not independently re-derive that scoping, or a
     mutant that widens the range to the whole file stops being
@@ -1170,8 +1170,8 @@ def changed_statements(workdir: Path, diff: str) -> set[tuple[str, int]]:
     inside the statement's span; a decorator line belongs to the `def` or
     `class` it decorates. Docstrings stay exempt (`statement_lines`), and the
     spelling is `(str(workdir / rel), line)`, the one `changed` has always
-    used. Only `.py` files that exist under `workdir` and parse contribute
-    (P1-1). Before P1-1 a changed line that was not a statement's first line,
+    used. Only `.py` files that exist under `workdir` and parse contribute.
+    Before continuation lines counted, a changed line that was not a statement's first line,
     such as the message of a multi-line `raise`, vanished, and a diff confined
     to such lines passed coverage with "no changed lines".
     """
@@ -1212,7 +1212,7 @@ def changed_statements(workdir: Path, diff: str) -> set[tuple[str, int]]:
 def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
     """Statement-start line numbers the mutant's removed (`-`) hunk lines locate to.
 
-    Scoped to the function mutmut actually mutated (P0-2's contract): a
+    Scoped to the function mutmut actually mutated: a
     method mutant on a changed line enters the population, a mutant on a
     continuation line of a changed statement enters it, and a mutant whose
     text merely repeats a changed line elsewhere in the file does not.
@@ -1223,14 +1223,14 @@ def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
     can match, at the def's own indentation added back (mutmut renders
     the extracted function at column 0, so every line including a
     continuation loses that one level of dedent -- verified against a
-    real method mutant on a continuation line, see the report). The
-    unreindented form is gone (P1-6, scope narrowed): it matched a
+    real method mutant on a continuation line). The unreindented
+    form is gone (scope narrowed): it matched a
     multi-line string's dedented content line against the wrong
     statement, and a no-effect check against real mutmut on the s1/s3/s4
     trees found no mutant whose outcome depended on it. Restricting
     `matched` to the def's own range is the only thing standing between a
-    duplicate line elsewhere in the file and a wrong attribution (P0-2's
-    M-L1): `_statement_start` looks up the innermost statement over the
+    duplicate line elsewhere in the file and a wrong attribution:
+    `_statement_start` looks up the innermost statement over the
     *whole* module, not just this def's subtree, so a matched line is
     trusted to belong to this def only because the range already
     confined it there. A matched line the whole module covers by no
@@ -1282,9 +1282,9 @@ def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) 
     `run_tests` are pytest arguments appended after the fixed flags, so
     only what they collect runs against each mutant; empty means the
     whole scratch tree, as before. A kill scored by a narrowed set
-    belongs to that set (T3-3), which the unrestricted run cannot say.
+    belongs to that set, which the unrestricted run cannot say.
     A sequence keeps its order (a declared scope's `-k expr` must stay a
-    pair, F21.12a); an unordered collection is sorted for a stable file.
+    pair); an unordered collection is sorted for a stable file.
     """
     quoted = ", ".join(json.dumps(source) for source in sources)
     ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
@@ -1297,11 +1297,11 @@ class MutantLookupError(RuntimeError):
     """The batched mutant-lookup subprocess failed or gave unparseable output.
 
     A lookup failure must be named, never silently read as "no mutants"
-    (T3-20's rule for `mutmut run`, extended to this lookup).
+    (the rule for `mutmut run`, extended to this lookup).
     """
 
 
-# First line is the marker the journal is grepped for (P0-1): argv for this
+# First line is the marker the journal is grepped for: argv for this
 # call is `[sys.executable, "-c", _MUTANT_LOOKUP_SCRIPT]`, so the marker
 # lands in the recorded span's argv and a census can count "one lookup
 # subprocess" instead of one `mutmut show` per mutant. Reads every mutant's
@@ -1350,7 +1350,7 @@ def _lookup_failure(run: CapturedRun) -> MutantLookupError:
 
 
 def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> dict[str, str]:
-    """`mutmut show NAME`'s stdout for every mutant, in one subprocess (P0-1).
+    """`mutmut show NAME`'s stdout for every mutant, in one subprocess.
 
     Runs `_MUTANT_LOOKUP_SCRIPT` with `cwd=scratch`: mutmut's `config()` is a
     process-global cache read from `./pyproject.toml` and
@@ -1390,17 +1390,17 @@ def mutation_sample(
     timeout, not a truncation: see `max_mutants` below). `max_mutants` is
     kept as a parameter only because the plan schema and its callers
     still pass it; it no longer samples or truncates the population
-    (P0-8, T6-61), so no verdict depends on which mutants sort first by
+    (every scoped mutant is scored), so no verdict depends on which mutants sort first by
     name. `test_files` are excluded from mutation scope (mutating tests
     pollutes the rate);
     `run_tests` restricts which tests pytest collects against each mutant
-    and leaves the scope alone -- the two are different sets (T3-3: a
+    and leaves the scope alone -- the two are different sets (a
     session read the first as the second and built a vacuous oracle).
-    Text-only mutants are excluded only when they did NOT kill (F21.32,
-    widened by P0-3 from "survived" alone to every not-killed status).
+    Text-only mutants are excluded only when they did NOT kill (widened
+    from "survived" alone to every not-killed status).
     Timeouts count as killed (behavior changed), and missing mutmut
     fails closed. Every decided mutant on a changed line enters the
-    population (P0-3): `killed` and `timeout` are the only killed
+    population: `killed` and `timeout` are the only killed
     statuses, `not checked` stays undecided, and everything else --
     `no tests` included -- is a survivor; `no tests` ones are also
     counted in `MutationOutcome.untested`.
@@ -1440,7 +1440,7 @@ def mutation_sample(
             memory_limit=tree_memory_limit(),
         )
         # `mutmut run` exits 0 even when mutants survive, so any other exit
-        # is the tool failing, not a verdict (T3-20): the smoke run's mutmut
+        # is the tool failing, not a verdict: the smoke run's mutmut
         # 3.8 refused a package named `src` and exited 1 in 658 ms, and the
         # gate read "no mutants decided" -- the absence of a verdict, not
         # the tool. SHELL_TIMEOUT is the budget binding and keeps its path.
@@ -1448,7 +1448,7 @@ def mutation_sample(
             output = (ran.stderr.strip() or ran.stdout.strip()).splitlines()
             last = output[-1].strip() if output else "no output"
             # The same exit covers two causes and only the caller can tell
-            # them apart (T6-63): mutmut baselines by running the suite, so
+            # them apart: mutmut baselines by running the suite, so
             # a red suite fails collection exactly as a broken engine does.
             # `suite_passed` is the tests gate's own verdict on this tree;
             # when it is False the suite is the cause and the engine is not.
@@ -1464,7 +1464,7 @@ def mutation_sample(
         try:
             shows = show_all_mutants(scratch, recorder=recorder)
         except MutantLookupError as exc:
-            # A lookup failure is named, never read as "no mutants" (T3-20's
+            # A lookup failure is named, never read as "no mutants" (the
             # rule for `mutmut run`, extended to the batched lookup).
             msg = f"mutant lookup failed: {exc}"
             return MutationOutcome(killed=0, total=0, generated=0, survivors=(msg,))
@@ -1496,9 +1496,9 @@ def mutation_sample(
             hit = _mutant_lines(shown_stdout, target.read_text(), name) & lines
             if not hit:
                 continue
-            # F21.32: only a mutant that did NOT kill is excluded as
-            # text-only (P0-3 widens this from "survived" alone to every
-            # not-killed status, since T6-33's argument -- no spec-derived
+            # Only a mutant that did NOT kill is excluded as
+            # text-only (widened from "survived" alone to every
+            # not-killed status, since the text-only argument -- no spec-derived
             # test can kill a message-only mutant without pinning wording
             # -- does not depend on whether a test currently runs the
             # function). The tokenizer cannot tell a message from a
@@ -1517,7 +1517,7 @@ def mutation_sample(
                 message_only[name] = message_only_mutant(shown_stdout, target.read_text(), name)
     sample = scoped
     killed = sum(1 for _, verdict, _, _ in sample if verdict in ("killed", "timeout"))
-    # Every not-killed status is a survivor (P0-3's contract), not only
+    # Every not-killed status is a survivor, not only
     # "survived": `no tests`, `suspicious`, `segfault` and the rest all
     # count against the node exactly as a survived mutant does.
     survivors = tuple(

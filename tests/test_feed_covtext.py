@@ -1,8 +1,8 @@
-"""FEEDFIX item 2: the checkpoint's coverage finding in `coverage_text`'s words.
+"""The checkpoint's coverage finding in `coverage_text`'s words.
 
 The feed showed the model a failing coverage finding as the gate wrote it,
-"no test runs u.py:3", a bare line list. DETECT16-LIB C2 recommends the
-COVTEXT wording in the feed event itself: which function each uncovered
+"no test runs u.py:3", a bare line list. This puts the `coverage_text`
+wording in the feed event itself: which function each uncovered
 line is in and what that function says it is for. The packet already had
 it; the model, who can act on it, did not. Wording only: no verdict moves.
 """

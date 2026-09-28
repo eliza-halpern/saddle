@@ -16,7 +16,7 @@ from saddle.gates import RED_PHASE_SAMPLES, GateCheck
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import _stub_module, read_sources, run_node_gate
 
-# Every tool name the global allowlist carries (T3-4). A node listing all
+# Every tool name the global allowlist carries. A node listing all
 # four behaves exactly as it did before each name was bound to a harness
 # behaviour, so this is the fixtures' known-good default; a test that pins
 # one binding passes a shorter list.
@@ -43,7 +43,7 @@ def _node(
             ],
             "execution_constraints": {
                 "reasoning_budget": "low",
-                # All four by default (T3-4). Several tests below create a
+                # All four by default. Several tests below create a
                 # test file at baseline; without `write_file` node-scope
                 # would fail them for a reason they do not assert on, and
                 # the extra red would sit silent behind the check they do.
@@ -82,7 +82,7 @@ def _worktree(
         assert run_argv(argv, root) == 0
     (root / "n.py").write_text(baseline_code)
     # Any test file already in `root` is earlier sealed work: it goes in
-    # the baseline commit, not the node's diff (F21.12a fixture).
+    # the baseline commit, not the node's diff.
     for earlier in sorted(root.glob("test_*.py")):
         assert run_argv(["git", "add", earlier.name], root) == 0
     assert run_argv(["git", "add", "n.py"], root) == 0
@@ -139,9 +139,9 @@ def _continuation_coverage(root: Path, kind: str) -> GateCheck:
 def test_run_node_gate_coverage_fails_a_statement_whose_only_changed_line_is_a_continuation(
     tmp_path: Path,
 ) -> None:
-    """P1-1 known-bad: the diff touches line 4 of the `raise` on line 3, which no test runs.
+    """Known-bad: the diff touches line 4 of the `raise` on line 3, which no test runs.
 
-    Before P1-1 `changed` held first lines only, so line 4 vanished and
+    When `changed` held first lines only, so line 4 vanished and
     the `raise` was never judged. A `refactor` node may write the missing
     test (an `impl` node may not, and a `test` node is not judged on
     coverage), so the gap fails it and names the statement's first line.
@@ -154,9 +154,9 @@ def test_run_node_gate_coverage_fails_a_statement_whose_only_changed_line_is_a_c
 def test_run_node_gate_coverage_names_a_continuation_statement_an_impl_node_cannot_reach(
     tmp_path: Path,
 ) -> None:
-    """P1-1 known-bad: an `impl` node defers the gap (F21.66) but must name it.
+    """Known-bad: an `impl` node defers the gap it cannot close but must name it.
 
-    Before P1-1 the verdict was "every changed line runs" and the `raise`
+    When `changed` held first lines only, the verdict was "every changed line runs" and the `raise`
     was not among the lines judged.
     """
     coverage = _continuation_coverage(tmp_path, "impl")
@@ -187,12 +187,12 @@ def _mutmut_that_cannot_baseline(root: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_run_node_gate_mutation_names_a_red_suite_not_the_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T6-63: the runner hands the collector the tests gate's own verdict.
+    """The runner hands the collector the tests gate's own verdict.
 
     Known-bad: the node's suite is red, the engine fails for that reason,
     and the detail names the suite -- something the worker can act on.
     Known-good: the same engine failure over a suite that passed still
-    names the engine, so T3-20 survives. Round 3c died here: three impl
+    names the engine, so a broken tool is still named. Round 3c died here: three impl
     attempts all read "mutation tool failed" and the engine was fine.
     """
     body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == %s\n"
@@ -282,25 +282,25 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     spans = read_spans(journal)
     assert [span.name for span in spans] == [
         "git",
-        # T2-2: the staged-adds probe behind node-scope's file-creation rule.
+        # The staged-adds probe behind node-scope's file-creation rule.
         "git",
-        # T3-2: the changed-files list behind target-scope.
+        # The changed-files list behind target-scope.
         "git",
         "coverage",
         "git",
-        # T6-3: the ruff baseline leg on the snapshot, before red-phase
+        # The ruff baseline leg on the snapshot, before red-phase
         # writes stubs and tests into it.
         "ruff",
         # One coverage span per red-phase baseline sample: the pre-change
         # leg is observed RED_PHASE_SAMPLES times so a flaky failure
         # cannot pass as a genuine red.
         *["coverage"] * RED_PHASE_SAMPLES,
-        # T6-3: both ruff legs on the current tree run in the runner, before
+        # Both ruff legs on the current tree run in the runner, before
         # the mutation sample, not inside the gate predicate.
         "ruff",
         "ruff",
         "timeout",
-        # `results`. The per-mutant `show` spans are gone (P0-1): the one
+        # `results`. The per-mutant `show` spans are gone: the one
         # batched lookup replaces them, and here it runs through the conftest
         # replay, which journals nothing. Its production span is pinned in
         # test_evidence (exactly one lookup span, real engine).
@@ -344,7 +344,7 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
     # not touch tests at all); kept a `refactor` node so that deliberate
     # test edit does not trip node-scope on top of what this test means to
     # exercise. The test exists at baseline: a refactor may edit it but
-    # (T2-2) may not create it.
+    # may not create it.
     passing = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
@@ -359,7 +359,7 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
     os.utime(target, (mtime, mtime))
     # Stage the edited test only: `git add -A` would also stage the first
     # run's .coverage.tier1 and bytecode as new files, which node-scope
-    # now rightly rejects for a refactor node (T2-2) but is not the point.
+    # now rightly rejects for a refactor node but is not the point.
     assert run_argv(["git", "add", "test_n.py"], tmp_path) == 0
     result = run_node_gate(_node(kind="refactor"), tmp_path)
     assert result.passed is False
@@ -374,7 +374,7 @@ def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
 
 
 def test_run_node_gate_fails_a_node_whose_addition_nothing_depends_on(tmp_path: Path) -> None:
-    """T6-41 end to end: the private helper is executed and still carries nothing.
+    """End to end: the private helper is executed and still carries nothing.
 
     `_touched()` runs at import, so every one of its lines is covered and
     the coverage gate is satisfied; it admits no mutant, so the mutation
@@ -399,7 +399,7 @@ def test_run_node_gate_fails_a_node_whose_addition_nothing_depends_on(tmp_path: 
 
 
 def test_run_node_gate_fails_a_node_that_deleted_a_public_definition(tmp_path: Path) -> None:
-    """T6-42 end to end: round 3d's repair shape, with every other gate green.
+    """End to end: round 3d's repair shape, with every other gate green.
 
     `g` is public, the suite never names it, and removing it is therefore
     invisible to tests, coverage, mutation and dead-code alike -- the
@@ -495,7 +495,7 @@ def test_run_node_gate_keeps_a_private_helper_its_tests_need(tmp_path: Path) -> 
 
 
 def test_run_node_gate_target_files_binds_end_to_end(tmp_path: Path) -> None:
-    """T3-2, #64: the same honest impl node passes when it names the file
+    """#64: the same honest impl node passes when it names the file
     it changes and fails, naming the stray, when it names a different one.
     Paths are repo-relative, whatever the runner's absolute convention."""
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
@@ -512,7 +512,7 @@ def test_run_node_gate_target_files_binds_end_to_end(tmp_path: Path) -> None:
 
 
 def test_run_node_gate_target_files_names_a_staged_new_file(tmp_path: Path) -> None:
-    """T3-16(a): `git diff --name-only <ref>` already lists a staged new
+    """`git diff --name-only <ref>` already lists a staged new
     file (tracked-ness comes from the index), so target-scope must name a
     stray file added outside target_files with no separate union needed."""
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
@@ -528,9 +528,9 @@ def test_run_node_gate_target_files_names_a_staged_new_file(tmp_path: Path) -> N
 def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
     """A node that MAY write the citation is still failed for its absence.
 
-    `refactor`, not `impl`: since T6-89 the gate is not asked of a
+    `refactor`, not `impl`: the gate is not asked of a
     node that may not edit tests, because every clause of it reads
-    the tests and an `impl` node cannot move one (F21.66). The rule
+    the tests and an `impl` node cannot move one. The rule
     is unchanged for the parties who can answer it, and the impl
     half is pinned by its own test below.
     """
@@ -546,14 +546,14 @@ def test_run_node_gate_unbound_requirement_fails(tmp_path: Path) -> None:
 def test_run_node_gate_impl_node_is_not_judged_on_a_citation_it_cannot_write(
     tmp_path: Path,
 ) -> None:
-    """T6-89 known-good, built the way the production caller builds it.
+    """Known-good for that exemption, built the way the production caller builds it.
 
     The same tree as the test above -- a declared REQ-001 no test cites --
     reaches the gate through `run_node_gate` on an `impl` node, and seals.
     Every clause of `check_requirement_binding` reads the tests and the
     plan; `check_node_scope` forbids an `impl` node from touching a test
     file, so the verdict is fixed before the node starts and billing it
-    to this node judges the test node's output (F21.66). `basis` keeps
+    to this node judges the test node's output. `basis` keeps
     the count the gate would have failed on, so the gap is recorded and
     not lost -- the detail routed to the worker names no line it cannot
     act on.
@@ -570,7 +570,7 @@ def test_run_node_gate_impl_node_is_not_judged_on_a_citation_it_cannot_write(
 
 
 def test_run_node_gate_planned_requirements_reach_the_binding_gate(tmp_path: Path) -> None:
-    """End to end (T3-24): a suite citing an id another node of the plan
+    """End to end: a suite citing an id another node of the plan
     declares fails the node gated alone and passes once the plan's ids are
     handed in; the node's own REQ-001 is still the one counted as bound."""
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2  # REQ-002\n"
@@ -589,9 +589,9 @@ def test_run_node_gate_planned_requirements_reach_the_binding_gate(tmp_path: Pat
 def test_run_node_gate_uncovered_line_fails(tmp_path: Path) -> None:
     """Coverage keeps full force on a node that may write the test.
 
-    `refactor`, not `impl`: since T6-90 an uncovered changed line is
+    `refactor`, not `impl`: an uncovered changed line is
     deferred when no node that may write a test remains, because an
-    `impl` node's only route to green is deleting the line (F21.66).
+    `impl` node's only route to green is deleting the line.
     A `refactor` may edit both sides, so the question is answerable
     and the gate still asks it.
     """
@@ -608,16 +608,16 @@ def test_run_node_gate_uncovered_line_fails(tmp_path: Path) -> None:
 def test_run_node_gate_impl_node_defers_a_line_no_remaining_node_can_reach(
     tmp_path: Path,
 ) -> None:
-    """T6-90 known-good, built the way the production caller builds it.
+    """Known-good for that deferral, built the way the production caller builds it.
 
     The same tree as the test above -- a changed line no test runs, and no
     test node owed -- reaches the gate through `run_node_gate` on an
-    `impl` node, and seals. T6-53 deferred on whether the SCHEDULE could
+    `impl` node, and seals. The first half asked whether the SCHEDULE could
     still cover the line; this is the other half, whether THIS node could,
     and `check_node_scope` answers no for every `impl` node. The line is
     still named in `detail` and counted in `basis`: the node is told what
     is unreached, and is not failed for the one route it had to green,
-    which is deleting the branch the task requires (F21.66).
+    which is deleting the branch the task requires.
     """
     fixed = "def f():\n    return 2\n\n\ndef unused():\n    return 3\n"
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
@@ -626,7 +626,7 @@ def test_run_node_gate_impl_node_defers_a_line_no_remaining_node_can_reach(
     coverage = next(check for check in result.checks if check.name == "coverage")
     assert coverage.passed is True
     # Absolute, because `runner.py` builds `changed` as `str(workdir / path)`
-    # -- the spelling T6-86 found T6-75's exemption on the wrong side of.
+    # -- the spelling that once left the compelled-line exemption inert.
     assert coverage.detail == (
         f"deferred, no node that may write a test remains to reach {tmp_path}/n.py:6"
     )
@@ -661,14 +661,14 @@ def test_run_node_gate_lint_dirty_fails(tmp_path: Path) -> None:
     assert result.passed is False
     ruff = next(check for check in result.checks if check.name == "ruff")
     assert ruff.passed is False
-    # T6-3: the detail names the rule, file and line.
+    # The detail names the rule, file and line.
     assert ruff.detail.startswith("introduced 1 finding(s): n.py:1 F401 ")
 
 
 def test_run_node_gate_inherited_lint_does_not_fail_and_a_shift_is_still_inherited(
     tmp_path: Path,
 ) -> None:
-    """T6-3 known-good: the baseline ships `n.py` with an unused import; the
+    """Known-good: the baseline ships `n.py` with an unused import; the
     node adds a clean function below it (the finding moves down) and
     passes with `inherited: 1`. Known-bad: a diff that adds its own
     unused import to the same file fails naming that finding only."""
@@ -847,7 +847,7 @@ def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> No
 def test_stub_module_keeps_the_api_and_empties_the_bodies() -> None:
     """Greenfield red-phase needs a baseline the tests can actually run.
 
-    F2: a new module cannot be imported at baseline, so red-phase accepts
+    A new module cannot be imported at baseline, so red-phase accepts
     a collection error naming a changed source. That is reachable on
     demand -- any new code in a new module with a new test clears it
     regardless of what the test asserts. Stubbing the module instead
@@ -884,7 +884,7 @@ def test_stub_module_empties_async_bodies_too() -> None:
 def test_run_node_gate_greenfield_tautology_no_longer_clears_red_phase(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The greenfield path was clearable by any new module (F2, #53).
+    """The greenfield path was clearable by any new module (#53).
 
     The node creates `helper.py` and a test that never calls it. Before
     stubbing, the baseline run failed to *import* the module, red-phase
@@ -917,7 +917,7 @@ def test_run_node_gate_greenfield_tautology_no_longer_clears_red_phase(
     assert "pass pre-change" in red.detail
 
 
-# --- T3-7a: the first `test`-kind nodes that can pass Tier-1 -----------------
+# --- a `test` node is a red specification, and can pass Tier-1 -------------
 
 _SPEC_CODE: Final = "def f():\n    return 1\n"
 SPEC_TEST: Final = (
@@ -941,7 +941,7 @@ def _spec_worktree(root: Path, test_body: str) -> None:
 
 
 def test_run_node_gate_test_node_passes_as_a_red_specification(tmp_path: Path) -> None:
-    """T3-7a known-good, end to end: before it, no test node could pass (T3-7)."""
+    """Known-good, end to end: before red specifications, no test node could pass."""
     _spec_worktree(tmp_path, SPEC_TEST)
     recorder = SpanRecorder(path=tmp_path / "proofs.jsonl", node_id="n1")
     result = run_node_gate(_node(kind="test"), tmp_path, recorder=recorder)
@@ -973,8 +973,8 @@ def test_run_node_gate_test_node_greenfield_import_is_red(tmp_path: Path) -> Non
 
 
 def test_run_node_gate_test_node_whose_tests_pass_specifies_nothing(tmp_path: Path) -> None:
-    """T3-7a known-bad: the tautological spec fails tests and red-phase, nothing else."""
-    # The examples stay asserted on (T6-4): the only defect is that it passes.
+    """Known-bad: the tautological spec fails tests and red-phase, nothing else."""
+    # The examples stay asserted on: the only defect is that it passes.
     _spec_worktree(tmp_path, SPEC_TEST.replace("assert f() == 2", "assert f() in (1, 2)"))
     result = run_node_gate(_node(kind="test"), tmp_path)
     assert result.passed is False
@@ -984,7 +984,7 @@ def test_run_node_gate_test_node_whose_tests_pass_specifies_nothing(tmp_path: Pa
 
 
 def test_run_node_gate_impl_node_property_oracle_passes_with_basis(tmp_path: Path) -> None:
-    """T3-3 known-good, end to end: `n1` implements the specification `t1`
+    """Known-good, end to end: `n1` implements the specification `t1`
     wrote (`SPEC_TEST`: an example and a property over `n`). The conftest
     stub kills every mutant on every call, so the oracle -- a second
     `mutmut run` -- passes and the record carries its basis.
@@ -1001,13 +1001,13 @@ def test_run_node_gate_impl_node_property_oracle_passes_with_basis(tmp_path: Pat
 
 
 def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mutmut stub that can answer the two calls differently (T3-3).
+    """A mutmut stub that can answer the two calls differently.
 
     The gate's run comes first and the oracle's second (`runner.py`
     calls `mutation_sample` in that order); every call gets a fresh
     scratch copy, so the marker lives beside the stub: `run` sets it on
     its second call and `results` then reports survivors; the first call
-    reports kills. Since F21.12a both runs carry the node's declared
+    reports kills. Since the gate was scoped, both runs carry the node's declared
     scope, so the two `pyproject.toml`s no longer tell the calls apart
     (here the scope and the property target are the same file); the
     conftest stub never could, so a fixture built on it could never fail
@@ -1033,10 +1033,10 @@ def _oracle_aware_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 def test_run_node_gate_impl_node_property_that_cannot_discriminate_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T3-3 known-bad, end to end: the same fixture, with a stub whose
+    """Known-bad, end to end: the same fixture, with a stub whose
     narrowed run reports every mutant survived. The main mutation gate
     still passes on the unrestricted run, so the failing set is exactly
-    the property oracle -- the verdict F1 never received.
+    the property oracle -- a verdict the gates never gave before it.
     """
     _worktree(tmp_path, SPEC_TEST, baseline_test=SPEC_TEST)
     _oracle_aware_mutmut(tmp_path / "stub", monkeypatch)
@@ -1051,7 +1051,7 @@ def test_run_node_gate_impl_node_property_that_cannot_discriminate_fails(
 
 
 def _scope_checking_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mutmut stub shaped like round 3c's arms A and B (F21.12a).
+    """A mutmut stub shaped like round 3c's arms A and B.
 
     `run` reads the scratch `pyproject.toml`: unless `pytest_add_cli_args`
     names the node's declared scope (`test_n.py`) it behaves as real
@@ -1077,7 +1077,7 @@ def _scope_checking_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_run_node_gate_mutation_runs_the_declared_scope_not_the_red_suite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F21.12a, end to end. Known-good: an impl node whose declared scope
+    """End to end. Known-good: an impl node whose declared scope
     is green while a sibling specification (`test_other.py`, written red
     by an earlier test node) still fails. The tests gate already honours
     the scope; the mutation gate must baseline against the same scope,
@@ -1110,7 +1110,7 @@ LATER_SPEC: Final = (
 
 
 def _red_sibling_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mutmut stub that answers by the selection it is handed (F21.65).
+    """A mutmut stub that answers by the selection it is handed.
 
     `mutmut run` baselines by running its selection, so a selection
     naming `test_store.py` -- red until the node implementing it lands --
@@ -1139,9 +1139,9 @@ def _red_sibling_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None
 def test_run_node_gate_property_oracle_runs_the_declared_scope_not_a_later_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F21.65 known-good, end to end: the oracle collects the node's scope.
+    """Known-good, end to end: the oracle collects the node's scope.
 
-    F21.12a scoped the mutation gate to the node's declared tests; the
+    An earlier fix scoped the mutation gate to the node's declared tests; the
     oracle, added later, kept passing `property_modules(...)` whole. On a
     TDD plan the test node writes every module's specification up front,
     so a property-bearing module the node does not implement is red by
@@ -1166,13 +1166,13 @@ def test_run_node_gate_property_oracle_runs_the_declared_scope_not_a_later_spec(
 def test_run_node_gate_property_oracle_names_a_tool_failure_apart_from_an_empty_sample(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F21.65's second half: "no mutants sampled" was one sentence for two
+    """The scoping fix's second half: "no mutants sampled" was one sentence for two
     facts. `mutation_sample` records `mutmut run exited ...` in
     `survivors` when the engine never started, and `_check_property_oracle`
     branched on `total` alone and dropped it -- so a broken tool and a
     property with nothing to bite on read identically, and the run that
     reset the count to zero looked like the second when it was the first.
-    The mutation gate has named its tool failures since T3-20 (above).
+    The mutation gate already names its tool failures (above).
     """
     _worktree(tmp_path, SPEC_TEST, baseline_test=SPEC_TEST)
     stub_dir = tmp_path / "stub"
@@ -1199,14 +1199,14 @@ def test_run_node_gate_property_oracle_names_a_tool_failure_apart_from_an_empty_
 def test_run_node_gate_property_oracle_is_vacuous_when_every_property_is_out_of_scope(
     tmp_path: Path,
 ) -> None:
-    """What F21.65's narrowing now admits, exhibited (CONTRIBUTING.md, loosening).
+    """What the oracle's scope narrowing now admits, exhibited (CONTRIBUTING.md, loosening).
 
     The node's own tests carry no property, and the only module that does
     is outside its declared scope, so the oracle does not run and the
     check passes having judged nothing. That is the cost of scoping, and
     it is the same cost the mutation gate already pays; what must not
     happen is paying it silently, so the pass names the module it did not
-    run and the basis records the empty set (F21.64 recommendation 69).
+    run and the basis records the empty set.
     """
     (tmp_path / "test_store.py").write_text(LATER_SPEC)
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
@@ -1223,7 +1223,7 @@ def test_run_node_gate_property_oracle_is_vacuous_when_every_property_is_out_of_
 def test_run_node_gate_failed_mutmut_run_is_named_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T3-20: the gate detail carries the tool's last line, so recovery
+    """The gate detail carries the tool's last line, so recovery
     reads a broken tool rather than a missing test."""
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
@@ -1263,7 +1263,7 @@ _COMPELLED_BASELINE = (
 
 
 def test_run_node_gate_spares_a_compelled_line_the_suite_never_reaches(tmp_path: Path) -> None:
-    """T6-75's exemption, exercised through the runner's own key spelling (T6-86).
+    """The compelled-line exemption, exercised through the runner's own key spelling.
 
     `tests/test_gates.py` already proves `run_tier1` passes `compelled`
     to the coverage gate, but it hand-builds `changed={("n1.py", 2)}`.
@@ -1296,16 +1296,16 @@ def test_run_node_gate_spares_a_compelled_line_the_suite_never_reaches(tmp_path:
 def test_run_node_gate_still_fails_an_uncovered_line_the_baseline_never_had(
     tmp_path: Path,
 ) -> None:
-    """The other half, and it pins the spelling the worker is shown (T6-86).
+    """The other half, and it pins the spelling the worker is shown.
 
     `g` is new, so nothing compels it; an uncovered new line must still
     fail. The detail names the file workdir-relative -- while `changed`
     was absolute the worker was handed the bench operator's own
     filesystem paths, which are unreproducible and not in its tree.
 
-    `refactor` since T6-90: an `impl` node's uncovered lines defer, so
+    `refactor` since an `impl` node's uncovered lines defer, so
     the exemption's second half is now pinned on a kind that may write
-    the test. What T6-86 decides -- which lines are JUDGED -- is the
+    the test. What the exemption decides -- which lines are JUDGED -- is the
     same for both kinds, and it still decides the `unreachable-lines`
     an impl node's basis records.
     """
@@ -1325,7 +1325,7 @@ def test_run_node_gate_still_fails_an_uncovered_line_the_baseline_never_had(
 
 
 def test_run_node_gate_judges_a_compelled_definition_a_test_does_reach(tmp_path: Path) -> None:
-    """The exemption's known-bad: reachable code stays judged (T6-86).
+    """The exemption's known-bad: reachable code stays judged.
 
     `f` is public and in the baseline, so `public-deletions` forbids
     dropping it and `compelled_lines` would spare every line of it. But a
@@ -1334,8 +1334,8 @@ def test_run_node_gate_judges_a_compelled_definition_a_test_does_reach(tmp_path:
     node there is. Without the reachability narrowing the whole of `f`
     leaves the denominator and this passes with nothing measured.
 
-    `refactor` since T6-90, which defers an `impl` node's uncovered
-    lines: the denominator is what T6-86 decides and is unchanged by
+    `refactor` since the coverage gate defers an `impl` node's uncovered
+    lines: the denominator is what the exemption decides and is unchanged by
     kind, so this still pins it, and on an impl node the same tree
     reports `unreachable-lines=1` rather than `changed-lines=3`
     with nothing judged.

@@ -1,4 +1,4 @@
-"""Tests for saddle.audit: the Tier-1 battery over a tree with no plan (P1-2).
+"""Tests for saddle.audit: the Tier-1 battery over a tree with no plan.
 
 Every fixture's changed source line is exactly `    return 2`: the conftest's
 autouse `mutmut` stub reports five killed mutants located on that line, so a
@@ -245,7 +245,7 @@ def test_audit_node_is_a_valid_refactor_node() -> None:
     assert audit_node().deterministic_gate.test_command == AUDIT_TEST_COMMAND
 
 
-# ---------------------------------------- checker additions (X-P1-2-1/2/3/4-8/13/17)
+# ---------------------------------------- additions from an independent review
 
 
 @pytest.mark.parametrize(
@@ -293,7 +293,7 @@ def test_the_recorder_is_threaded_into_the_gate(clean_tree: Path, tmp_path: Path
     assert [span for span in read_spans(journal) if span.kind == "tool"]
 
 
-# ---------------------------------------- P1-4: the audit's verdict cache
+# ---------------------------------------- the audit's verdict cache
 
 
 def _the_only_cache_file(cache: Path) -> Path:
@@ -421,7 +421,7 @@ def test_a_tracked_coveragerc_is_not_noise(tmp_path: Path) -> None:
 
 
 def test_tracked_bytecode_is_not_noise(tmp_path: Path) -> None:
-    """Pair 1 (P1-14 contract A): a tracked `__pycache__/*.pyc` is not noise (M-Z1).
+    """Pair 1 (contract A): a tracked `__pycache__/*.pyc` is not noise (M-Z1).
 
     Red at 27dc53f: `_audit_ignore` drops `__pycache__` and `*.pyc` at any
     depth by name alone, so the copy lacks a file the baseline tracks, git
@@ -441,7 +441,7 @@ def test_tracked_bytecode_is_not_noise(tmp_path: Path) -> None:
 
 
 def test_audit_ignore_tells_tracked_and_untracked_siblings_apart(tmp_path: Path) -> None:
-    """Pair 2 (P1-14 contract A): one directory, a tracked and an untracked
+    """Pair 2 (contract A): one directory, a tracked and an untracked
     `.pyc`. The directory is kept because a tracked file lives beneath it (M-Z2:
     the ancestor set), the untracked sibling is still dropped, the tracked one
     is kept, and an untracked `__pycache__` elsewhere is still dropped."""
@@ -481,7 +481,7 @@ def test_mutants_and_saddle_below_top_level_are_real_files(tmp_path: Path) -> No
 
 def test_a_matching_key_over_a_malformed_result_is_a_miss(clean_tree: Path, tmp_path: Path) -> None:
     """A parseable cache file whose key matches but whose result cannot be
-    rebuilt is a miss, never an exception (contract; checker probe X-P1-4-1:
+    rebuilt is a miss, never an exception (contract; a review probe found
     `from_dict` raised KeyError here and the audit crashed)."""
     cache = tmp_path / "cache"
     audit_tree(clean_tree, cache=cache)
@@ -494,7 +494,7 @@ def test_a_matching_key_over_a_malformed_result_is_a_miss(clean_tree: Path, tmp_
     assert result.cached is False
 
 
-# ------------------------------- P1-13: results name real paths, not the copy
+# ------------------------------- results name real paths, not the copy
 
 
 def _surviving_mutmut(stub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:

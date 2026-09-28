@@ -1,6 +1,6 @@
 """UI3: Chat and Task are modes a session is in, not a button beside Send.
 
-Known-good: a session starts in ask (LANECHIP; it was chat); PATCH mode=task persists and comes
+Known-good: a session starts in ask (it used to start in chat); PATCH mode=task persists and comes
 back on reconnect in `session.info`; in a real browser, Enter in Task mode
 opens the confirm strip and starts nothing, and a second Enter starts the
 run; the description under the composer names the selected mode.

@@ -94,7 +94,7 @@ TASK = "Fix f to return 2 and add a passing test."
 
 
 def whole_file(path: str, *lines: str) -> str:
-    """One write section: the envelope the worker grammar admits (T6-62/A1).
+    """One write section: the envelope the worker grammar admits.
 
     The inverse of `slice._payload_sections`. Tests spell payloads through
     this rather than by hand so that a change to the envelope breaks in
@@ -138,8 +138,8 @@ def _node_dict(
         "id": node_id,
         "kind": "impl",
         "dependencies": [],
-        # Declared scope is required of an impl node since T6-8 (the planner
-        # cannot leave it empty); the fixture's diff touches `n.py` alone.
+        # Declared scope is required of an impl node (the planner cannot
+        # leave it empty); the fixture's diff touches `n.py` alone.
         "target_files": ["n.py"],
         "task_prompt": "Fix f and test it.",
         "requirements": [
@@ -147,7 +147,7 @@ def _node_dict(
         ],
         "execution_constraints": {
             "reasoning_budget": budget,
-            # All four by default: T3-4 binds each name to a behaviour, and
+            # All four by default: each name is bound to a behaviour, and
             # the default fixture is the known-good "behaves exactly as
             # today" node. Tests that pin a binding pass a shorter list.
             "allowed_tools": tools if tools is not None else list(RUN_ALLOWLIST),
@@ -168,7 +168,7 @@ def _node_dict(
 
 def _expected_cap(call: dict[str, Any], window: int = DEFAULT_CONTEXT_WINDOW) -> int:
     """The `max_tokens` a worker call earns: the window left after its own
-    prompt (T6-17); nothing is held back for reasoning."""
+    prompt; nothing is held back for reasoning."""
     return window - len(_prompt(call)) // PROMPT_CHARS_PER_TOKEN - OUTPUT_MARGIN
 
 
@@ -223,7 +223,7 @@ def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -
     really was asked k times and really did say the same thing.
     """
     pending: list[int] = [0]
-    # The k draws of one sampling round arrive concurrently (T6-25); the
+    # The k draws of one sampling round arrive concurrently; the
     # counter and the script are shared state, so the handler serialises.
     lock = threading.Lock()
 
@@ -321,7 +321,7 @@ def test_build_emit_prompt_names_task_and_rules() -> None:
     assert "may not create or rename files" in prompt
     assert 'never start one with "/"' in prompt
     assert 'never use "/"' not in prompt
-    # The four rules the 20a/20b smoke runs showed the planner needs (T3-12).
+    # The four rules the 20a/20b smoke runs showed the planner needs.
     assert 'Never name a package "src"' in prompt
     assert "cite the requirement id of every node they specify" in prompt
     assert "every file the node will create as well as edit" in prompt
@@ -361,9 +361,9 @@ def test_build_worker_prompt_covers_format_rules_and_files() -> None:
     assert "m.py" in prompt
     assert "--- n.py ---\nx = 1\n" in prompt
     assert 'diff --git a/<file> b/<file>" header line' in prompt
-    # The envelope's own rules, each the half a worker could get wrong
-    # (T6-62/A1). A brief that asks for whole files but still says "patch"
-    # is the defect this pins.
+    # The envelope's own rules, each the half a worker could get wrong. A
+    # brief that asks for whole files but still says "patch" is the defect
+    # this pins.
     assert "COMPLETE NEW CONTENTS" in prompt
     assert 'each prefixed with "+"' in prompt
     assert 'A line starting with " " or "-" is' in prompt
@@ -407,8 +407,8 @@ def test_build_worker_prompt_joins_requirements_and_context() -> None:
     assert "  REQ-001: REQ-001 holds.\n    accepts: '2'\n    rejects: '3'\n" in prompt
     assert "  REQ-002: REQ-002 holds.\n    accepts: '2'\n    rejects: '3'\n" in prompt
     assert "--- a.py ---\n1\n\n\n--- b.py ---\n2\n" in prompt
-    # The worker hears both T6-4 (assert on each example) and T6-5 (one
-    # property rejects an input), as rules it can follow.
+    # The worker hears both rules (assert on each example; one property
+    # rejects an input), as rules it can follow.
     assert "binds every listed accept and reject, and the gate\n  fails one" in prompt
     assert "PERFORMS that operation and asserts on the\n  constant values" in prompt
     assert "At least one property must reject an\n  input" in prompt
@@ -615,7 +615,7 @@ def test_run_task_end_to_end_pass(tmp_path: Path) -> None:
         "worker:n1",
         "run",
     ]
-    # One planner call, then k concurrent worker draws (T6-25), all at the node's effort.
+    # One planner call, then k concurrent worker draws, all at the node's effort.
     assert [call["reasoning_effort"] for call in seen] == ["medium", *["low"] * PROPOSAL_SAMPLES]
     assert seen[0]["max_tokens"] == 8192
     assert seen[0]["temperature"] == 0.0
@@ -647,7 +647,7 @@ def test_run_task_worker_output_budget_is_not_the_context_ceiling(tmp_path: Path
     """Regression: spending the read ceiling as the output cap truncated work.
 
     `max_context_tokens` bounds what the worker reads; generation gets
-    the rest of the window (T6-17).
+    the rest of the window.
     """
 
     _git_repo(tmp_path)
@@ -673,7 +673,7 @@ def test_run_task_worker_effort_overrides_node_budget(tmp_path: Path) -> None:
     options = _options(tmp_path, worker_effort="xhigh")
     code, _ = _run(options, client)
     assert code == 0
-    # One planner call, then k concurrent worker draws (T6-25), all at the node's effort.
+    # One planner call, then k concurrent worker draws, all at the node's effort.
     assert [call["reasoning_effort"] for call in seen] == ["medium", *["xhigh"] * PROPOSAL_SAMPLES]
 
 
@@ -753,8 +753,8 @@ def test_run_task_retries_invalid_emissions(tmp_path: Path) -> None:
 
 
 def test_run_task_redraws_a_plan_whose_requirement_restates_the_gate(tmp_path: Path) -> None:
-    """T6-58, the wiring. A predicate nothing calls protects nothing (the
-    T6-53/T6-54 lesson), so this pins the call site rather than the rule:
+    """The restated-gate rule, the wiring. A predicate nothing calls protects
+    nothing, so this pins the call site rather than the rule:
     the offending plan is refused, the reason reaches the planner as a
     validation error, and the redraw is what runs. The statement is round
     3g's `n2.r1` REQ-002, frozen."""
@@ -787,12 +787,12 @@ def test_run_task_redraws_a_plan_whose_requirement_restates_the_gate(tmp_path: P
 def test_emit_valid_dag_redraws_a_subplan_that_takes_a_pending_node_s_file(
     tmp_path: Path,
 ) -> None:
-    """T6-65, the wiring. A predicate nothing calls protects nothing.
+    """The reserved-files rule, the wiring. A predicate nothing calls protects nothing.
 
     Round 3i's shape: the subplan replacing `n1` declares `accounts.py`,
     which pending `n2` still owes. The first emission is refused, the
     reason reaches the planner as a validation error naming the file,
-    and the redraw is what comes back (F21.40).
+    and the redraw is what comes back.
     """
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
@@ -842,7 +842,7 @@ def test_emit_valid_dag_reserves_nothing_for_the_first_plan(tmp_path: Path) -> N
 
 
 def test_emit_prompt_states_the_coverage_field_without_restating_it() -> None:
-    """T6-58's instruction half. The bullet that taught the proxy said
+    """The restated-gate rule's instruction half. The bullet that taught the proxy said
     "every line you change must be executed by a test"; the planner wrote
     that back into two strings the worker reads as binding (round 3g).
     A prompt change alone would be decorative, so this is the half the
@@ -1043,7 +1043,7 @@ def test_run_task_retry_repairs_failing_tests(tmp_path: Path) -> None:
 def test_run_task_sample_temperature_routes_first_attempt_vs_recovery(
     tmp_path: Path,
 ) -> None:
-    """flip (T6-15, F21.10 arm (c)): this test pinned T2-1's greedy recovery
+    """flip: this test pinned the greedy recovery
     -- a retry diff at `--temperature`, 0.0 by default. Three seeds at 0.0
     were one byte-identical sample and truncated 3/3, so a retry after a
     degenerate attempt walked the same way. Retries now sample at
@@ -1075,7 +1075,7 @@ def test_run_task_sample_temperature_routes_first_attempt_vs_recovery(
 
 
 def test_run_task_recovery_temperature_flag_sets_the_retry_temperature(tmp_path: Path) -> None:
-    """T6-15 known-good: `--recovery-temperature 0.4` is what retry diff
+    """Known-good: `--recovery-temperature 0.4` is what retry diff
     calls sample at; first attempts keep `--sample-temperature`. Known-bad:
     the old routing (retries at `--temperature`, 0.3 here) is gone."""
     _git_repo(tmp_path)
@@ -1105,7 +1105,7 @@ def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
     seen: list[dict[str, Any]] = []
     bad = DIFF.replace("+    return 2\n", "+    return 3\n")
     # The replacement starts from `n1`'s baseline (`return 1`), not from the
-    # tree `n1`'s failed diff left behind (T3-23), so it proposes the whole fix.
+    # tree `n1`'s failed diff left behind, so it proposes the whole fix.
     script = [
         _emit_response({"nodes": [_node_dict()]}),
         _diff_response(bad),
@@ -1134,7 +1134,7 @@ def test_run_task_replan_recovers_exhausted_node(tmp_path: Path) -> None:
 
 
 def test_run_task_replan_is_refused_for_taking_a_pending_node_s_file(tmp_path: Path) -> None:
-    """T6-65 end to end: the reserved set the scheduler computes reaches the planner.
+    """End to end: the reserved set the scheduler computes reaches the planner.
 
     The two predicates and the scheduler's call are each tested alone;
     this pins the one link between them -- `replan` forwarding `reserved`
@@ -1200,7 +1200,7 @@ def test_run_task_zero_budget_maps_to_none(tmp_path: Path) -> None:
     client = _scripted_client(script, seen)
     code, _ = _run(_options(tmp_path), client)
     assert code == 0
-    # One planner call, then k concurrent worker draws (T6-25), all at the node's effort.
+    # One planner call, then k concurrent worker draws, all at the node's effort.
     assert [call["reasoning_effort"] for call in seen] == ["medium", *["none"] * PROPOSAL_SAMPLES]
 
 
@@ -2189,7 +2189,7 @@ def test_run_tail_streams_cold_journal_without_sleeping(tmp_path: Path) -> None:
 
 
 def test_run_tail_reads_a_cold_journal_with_two_complete_runs(tmp_path: Path) -> None:
-    """T3-16(b): a run-end span ends the tail only when it is the last
+    """A run-end span ends the tail only when it is the last
     entry read, not the first one seen -- a cold journal already holding
     two finished runs must render and exit past both, not stop at the
     first run's end span while the second run's lines sit unread below."""
@@ -2204,7 +2204,7 @@ def test_run_tail_reads_a_cold_journal_with_two_complete_runs(tmp_path: Path) ->
 
 
 def test_run_tail_keeps_following_past_a_finished_run(tmp_path: Path) -> None:
-    """T3-16(b), known-bad: with the old first-is_run_end-wins condition,
+    """Known-bad: with the old first-is_run_end-wins condition,
     a finished run followed by a second run already in progress would stop
     at the first run's end span and never render the second run's lines."""
     journal = tmp_path / "proofs.jsonl"
@@ -2644,7 +2644,7 @@ def test_worker_prompt_restates_the_node_task_at_the_tail() -> None:
 
 
 def test_worker_prompt_inlines_contents_for_a_node_with_read_file() -> None:
-    """T3-4 known-good: all four names behaves exactly as it did before."""
+    """Known-good: all four names behaves exactly as it did before."""
     node = Node.model_validate(_node_dict("n1", "low"))
     prompt = build_worker_prompt(
         task="Do the thing.", node=node, files=["n.py"], contents={"n.py": "MARKER = 1\n"}
@@ -2655,7 +2655,7 @@ def test_worker_prompt_inlines_contents_for_a_node_with_read_file() -> None:
 
 
 def test_worker_prompt_withholds_contents_without_read_file() -> None:
-    """T3-4 known-bad: `read_file` is what buys the file bodies.
+    """Known-bad: `read_file` is what buys the file bodies.
 
     `allowed_tools` was validated against the global allowlist and then
     consumed by nothing, so a plan that omitted `read_file` still had the
@@ -2718,7 +2718,7 @@ def _captured(argv: tuple[str, ...], marker: str) -> list[CapturedRun]:
 
 
 def _failed_gate() -> Tier1Result:
-    # A failed gate that maps to no tool: under T6-31 a failed tests or
+    # A failed gate that maps to no tool: a failed tests or
     # ruff gate's output reaches the worker regardless, so the probes
     # below must measure the binding on a gate that passed.
     return Tier1Result(
@@ -2757,7 +2757,7 @@ _TOOL_BEHAVIOUR_PROBES: dict[str, Callable[[], bool]] = {
 
 
 def test_every_registry_name_is_a_behaviour_the_harness_honours() -> None:
-    """T3-4's own guard: a name with no binding fails the suite.
+    """The allowlist's own guard: a name with no binding fails the suite.
 
     `RUN_ALLOWLIST` used to be four strings validated against emissions
     and consumed nowhere, so adding a fifth would have cost nothing and
@@ -2794,7 +2794,7 @@ def test_worker_prompt_asks_test_nodes_for_a_property() -> None:
 
 
 def test_emit_prompt_states_the_example_rule_with_the_run_counter_example() -> None:
-    """T6-4 (T3-12 style): the planner hears the near-miss rule with the
+    """The planner hears the near-miss rule with the
     bar the validator enforces and T1's own `"user"` as the counter-example."""
     prompt = build_emit_prompt("Do the thing.")
     assert '- Each requirement also carries "accepts" and "rejects"' in prompt
@@ -2805,7 +2805,7 @@ def test_emit_prompt_states_the_example_rule_with_the_run_counter_example() -> N
 
 
 def test_emit_prompt_says_a_test_node_is_expected_to_fail() -> None:
-    """T3-7a: the planner is told a test node's suite must be red when it runs,
+    """The planner is told a test node's suite must be red when it runs,
     or it keeps planning test nodes whose tests pass and specify nothing."""
     prompt = build_emit_prompt("Do the thing.")
     assert "expected to fail" in prompt
@@ -2813,7 +2813,7 @@ def test_emit_prompt_says_a_test_node_is_expected_to_fail() -> None:
 
 
 def test_emit_prompt_lists_the_repository_and_the_existing_file_rule() -> None:
-    """T3-19 known-good: the planner sees what it is planning for."""
+    """Known-good: the planner sees what it is planning for."""
     prompt = build_emit_prompt("Make f return twice x.", ["n.py", "tests/test_n.py"])
     assert "Repository files (tracked):\nn.py\ntests/test_n.py\n" in prompt
     assert "changes that file" in prompt
@@ -2828,7 +2828,7 @@ def test_emit_prompt_caps_the_listing_like_the_worker_prompt() -> None:
 
 
 def test_emit_prompt_without_files_says_so() -> None:
-    """T3-19 known-bad: an empty listing is stated, and the rule still stands."""
+    """Known-bad: an empty listing is stated, and the rule still stands."""
     prompt = build_emit_prompt("Do the thing.")
     assert "Repository files (tracked):\n(no tracked files)\n" in prompt
     assert "changes that file" in prompt
@@ -2870,7 +2870,7 @@ def _truncated_response() -> httpx.Response:
 
 
 def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any]:
-    """The attempt sidecar a span seals, checked against its hash (T6-12)."""
+    """The attempt sidecar a span seals, checked against its hash."""
     path = attempt_sidecar_path(journal, span.span_id)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == span.attempt_hash
     loaded: dict[str, Any] = json.loads(path.read_bytes())
@@ -2878,7 +2878,7 @@ def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any]:
 
 
 def _no_content_response(reasoning: str) -> httpx.Response:
-    """F21.10 b-s2: HTTP 200, `finish_reason: "stop"`, `content: null`, all reasoning."""
+    """Seen in a probe run: HTTP 200, `finish_reason: "stop"`, `content: null`, all reasoning."""
     body = {
         "choices": [
             {
@@ -2895,7 +2895,7 @@ def _no_content_response(reasoning: str) -> httpx.Response:
 def test_run_task_no_content_response_is_a_named_failure_with_its_reasoning_kept(
     tmp_path: Path,
 ) -> None:
-    """T6-18 known-good (F21.10 b-s2): a worker response with no content
+    """Known-good: a worker response with no content
     fails the attempt with a message that says so, the run retries, and
     the attempt's sidecar holds the reasoning that ran out. Known-bad was
     the bare "message has no text content" with the think block discarded."""
@@ -2933,7 +2933,7 @@ def test_run_task_no_content_response_is_a_named_failure_with_its_reasoning_kept
 
 
 def test_run_task_deadline_seals_what_it_has_and_exits_3(tmp_path: Path) -> None:
-    """T6-9 wiring: a deadline that leaves no room starts no node; the run
+    """Deadline wiring: a deadline that leaves no room starts no node; the run
     still writes its plan and run span, says `deadline:` in the span, and
     exits 3, not 0 or 1."""
     _git_repo(tmp_path)
@@ -2949,7 +2949,7 @@ def test_run_task_deadline_seals_what_it_has_and_exits_3(tmp_path: Path) -> None
 
 
 def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path) -> None:
-    """Known-good (T6-14): attempt 1's samples and its fallback all come back
+    """Known-good: attempt 1's samples and its fallback all come back
     `finish_reason=length`; attempt 2 -- the recovery plan and the diff --
     runs one ladder step up. Known-bad was the old `propose`: every call
     recomputed the same cap, so round-3 T5 truncated three attempts in a
@@ -2975,7 +2975,7 @@ def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path)
     assert "- Attempts: 2\n" in out
     diff_calls = [call for call in seen if _is_diff_request(call)]
     assert len(diff_calls) == truncate_first + 1
-    # T6-17: no ladder. Every call, the retry included, is given the window
+    # No ladder. Every call, the retry included, is given the window
     # left after its own prompt; the repair brief is longer, so the retry
     # has slightly less room, never a "step up" that was fiction anyway.
     assert [call["max_tokens"] for call in diff_calls] == [_expected_cap(c) for c in diff_calls]
@@ -2989,7 +2989,7 @@ def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path)
 
 
 def test_worker_max_tokens_is_the_window_left_after_the_prompt() -> None:
-    """T6-17 known-good: F21.10's 24739-char prompt against the container's
+    """Known-good: a recorded 24739-char prompt against the container's
     175000 window gets everything but the over-counted prompt and the
     margin; the old cap for that node (20256) is nowhere in sight. A prompt
     that fills the window still gets the margin, never zero or less.
@@ -3022,7 +3022,7 @@ class _WindowClient:
 
 
 def test_server_context_window_prefers_the_flag_then_the_server_then_the_default() -> None:
-    """T6-17: the server's `max_model_len` sizes worker calls unless the
+    """The server's `max_model_len` sizes worker calls unless the
     user overrides it; a server that does not report one, or cannot be
     asked, falls back to the container's 175000."""
     assert server_context_window(cast("VllmClient", _WindowClient(131072)), None) == 131072
@@ -3033,7 +3033,7 @@ def test_server_context_window_prefers_the_flag_then_the_server_then_the_default
 
 
 def test_run_task_sizes_worker_calls_from_the_context_window_it_is_given(tmp_path: Path) -> None:
-    """T6-17 known-good: the window `main` resolved (here 100000, as a
+    """Known-good: the window `main` resolved (here 100000, as a
     server reporting `max_model_len` would give) is what every worker call
     is sized against; the default is not used when a window is known."""
     _git_repo(tmp_path)
@@ -3049,7 +3049,7 @@ def test_run_task_sizes_worker_calls_from_the_context_window_it_is_given(tmp_pat
 def test_main_run_takes_the_context_window_from_the_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """T6-17: `GET /models` reports `max_model_len`; `run` sizes against it,
+    """`GET /models` reports `max_model_len`; `run` sizes against it,
     and `--context-window` overrides it."""
     _FakeClient.calls.clear()
     monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
@@ -3069,7 +3069,7 @@ def test_main_run_takes_the_context_window_from_the_server(
 
 
 def test_run_task_emission_rejects_an_undeclared_scope_and_replans(tmp_path: Path) -> None:
-    """Known-bad (T6-8): the planner's first plan leaves `target_files` empty
+    """Known-bad: the planner's first plan leaves `target_files` empty
     on an impl node; it is fed back as `undeclared-scope` and the second
     plan, which declares, runs."""
     _git_repo(tmp_path)
@@ -3085,13 +3085,13 @@ def test_run_task_emission_rejects_an_undeclared_scope_and_replans(tmp_path: Pat
 
 
 def test_run_task_emission_rejects_a_node_too_large_before_any_worker_call(tmp_path: Path) -> None:
-    """Known-bad (T6-8): a node whose declared files cannot be diffed within
+    """Known-bad: a node whose declared files cannot be diffed within
     the largest cap the harness sends is rejected at planning time with the
     estimate and budget named; no worker call happens for it. Round-3 T5's
     plan (four modules, 249 lines) is NOT this case -- its failure was the
-    cap, T6-14 -- so the fixture declares a genuinely oversized file: 11000
+    cap -- so the fixture declares a genuinely oversized file: 11000
     lines is 178048 tokens against the 164952 the default window leaves a
-    node that reads 8000 (T6-17; the old 8000-line fixture, 130048, now
+    node that reads 8000 (the old 8000-line fixture, 130048, now
     fits, because nothing is held back for reasoning any more)."""
     _git_repo(tmp_path)
     (tmp_path / "big.py").write_text("x = 1\n" * 11000)
@@ -3117,7 +3117,7 @@ def test_run_task_emission_rejects_a_node_too_large_before_any_worker_call(tmp_p
 
 def test_file_lines_skips_files_that_do_not_read_as_text(tmp_path: Path) -> None:
     """A binary or missing file has no line count to size a diff from, so
-    it contributes nothing rather than failing the plan (T6-8)."""
+    it contributes nothing rather than failing the plan."""
     (tmp_path / "n.py").write_text("a\nb\n")
     (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00\x80")
     assert _file_lines(tmp_path, ["n.py", "blob.bin", "missing.py"]) == {"n.py": 2}
@@ -3126,15 +3126,15 @@ def test_file_lines_skips_files_that_do_not_read_as_text(tmp_path: Path) -> None
 def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree(
     tmp_path: Path,
 ) -> None:
-    """Known-bad (F21.9a, round 3b): attempt 1 applied 699 lines of
+    """Known-bad (round 3b): attempt 1 applied 699 lines of
     degenerate output and failed `syntax`; attempt 2's cap was then sized
-    from the bloated tree and rose from 21536 to 32624. Since T6-17 a call
+    from the bloated tree and rose from 21536 to 32624. Now a call
     is given the window left after its own prompt, and the prompt shows the
     live tree: a bloated tree costs the next attempt room, it never buys
     any. Here attempt 1 bloats `n.py` by 300 lines and fails syntax;
     attempt 2's cap must be below attempt 1's.
 
-    flip: this test's `Gate syntax: FAIL` assertion (T6-62/A1). It held
+    flip: this test's `Gate syntax: FAIL` assertion (whole-file writes). It held
     because attempt 2's modify-diff could not apply to the tree attempt 1
     had bloated, so the node never recovered and the run's verdict WAS
     attempt 1's failure. A whole-file write does not care what the tree
@@ -3147,7 +3147,7 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
     # Still 300 bodiless defs, so the tree is still bloated and still
-    # fails `syntax`; only the envelope changed (T6-62/A1).
+    # fails `syntax`; only the envelope changed.
     bloat = whole_file("n.py", "def f():", "    return 2", *[f"def g{i}():" for i in range(300)])
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -3170,7 +3170,7 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
 
 
 def test_run_verify_prints_the_plan_a_run_sealed(tmp_path: Path) -> None:
-    """T6-13: `saddle verify` shows what was asked before what happened."""
+    """`saddle verify` shows what was asked before what happened."""
     _git_repo(tmp_path)
     script = [_emit_response({"nodes": [_node_dict()]}), _diff_response()]
     code, _ = _run(_options(tmp_path), _scripted_client(script, []))
@@ -3184,7 +3184,7 @@ def test_run_verify_prints_the_plan_a_run_sealed(tmp_path: Path) -> None:
 
 
 def test_run_task_flushes_the_plan_line_before_any_node_runs(tmp_path: Path) -> None:
-    """T5-1/F21.3: a killed run (SIGTERM from `timeout`) took its buffered
+    """A killed run (SIGTERM from `timeout`) took its buffered
     log with it; the plan line reaches the file before the first worker call."""
     _git_repo(tmp_path)
     flushed_at: list[str] = []
@@ -3204,7 +3204,7 @@ def test_run_task_flushes_the_plan_line_before_any_node_runs(tmp_path: Path) -> 
 
 
 def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> None:
-    """T6-27: model, server version, temperatures, window and efforts are
+    """Model, server version, temperatures, window and efforts are
     the run span's argv, so two rounds can be compared on record."""
     _git_repo(tmp_path)
     seen: list[dict[str, Any]] = []
@@ -3229,7 +3229,7 @@ def test_run_task_seals_the_runs_settings_on_the_run_span(tmp_path: Path) -> Non
         "worker_effort=node budget",
     ]
     assert ruff_version() != "unavailable"
-    # The k draws arrive in any order (T6-25); each carries its own seed.
+    # The k draws arrive in any order; each carries its own seed.
     assert sorted(call["seed"] for call in seen[1:]) == list(range(PROPOSAL_SAMPLES))
 
 
@@ -3258,7 +3258,7 @@ def _json_client_cli(payload: Any) -> tuple[VllmClient, list[httpx.Request]]:
 
 
 def test_run_explain_is_redacted_by_default_and_raw_for_one_attempt(tmp_path: Path) -> None:
-    """T6-27 known-good: the default tier names times, seeds, tokens and
+    """Known-good: the default tier names times, seeds, tokens and
     verdicts and never a prompt, a diff or the reasoning; `--attempt`
     prints one sidecar whole. Known-bad: an ambiguous or unknown attempt
     prefix is refused, not guessed."""
@@ -3307,7 +3307,7 @@ def test_explain_command_is_wired_and_needs_no_key(
 
 
 def test_run_explain_handles_spans_without_sidecars_and_bare_sidecars(tmp_path: Path) -> None:
-    """T6-27 edges: a worker span sealed before T6-12 has no sidecar and is
+    """Edges: a worker span sealed before attempts had sidecars has none and is
     listed from its span alone; a sidecar with no samples prints no
     samples line; `--attempt` on a span whose sidecar file is gone is an
     error, not a crash."""
@@ -3357,11 +3357,11 @@ def test_run_explain_handles_spans_without_sidecars_and_bare_sidecars(tmp_path: 
     assert out.getvalue().startswith("error: journal ")
 
 
-# --- T6-29c: the survivor-test drawer -----------------------------------------
+# --- the survivor-test drawer ------------------------------------------------
 
 
 def test_survivor_drawer_runs_at_low_effort_under_the_token_cap(tmp_path: Path) -> None:
-    """Known-good (T6-29c, F21.14): a candidate test draw is one diff call
+    """Known-good: a candidate test draw is one diff call
     at the survivor effort (`low` by default), capped at the survivor token
     budget, at the sample temperature, with its own seed."""
     seen: list[dict[str, Any]] = []
@@ -3395,7 +3395,7 @@ def test_run_parses_the_survivor_knobs() -> None:
 
 
 def test_build_repair_prompt_omits_the_section_when_no_plan_survives() -> None:
-    """A withheld plan leaves no `Recovery plan:` heading behind (T6-54).
+    """A withheld plan leaves no `Recovery plan:` heading behind.
 
     The worker fixes forward on the failure alone rather than being
     handed an empty heading, which reads as a diagnosis that found
@@ -3429,7 +3429,7 @@ def test_build_repair_prompt_omits_the_section_when_no_plan_survives() -> None:
 def test_run_task_withholds_a_recovery_plan_that_prescribes_a_deletion(
     tmp_path: Path, plan: str, routed: bool
 ) -> None:
-    """The wiring, not the predicate (T6-54).
+    """The wiring, not the predicate.
 
     Known-bad is round 3g's attempt 2: the diagnosis step answered a
     coverage failure with "remove the `to_dict()`, `from_dict()`,
@@ -3465,7 +3465,7 @@ def test_run_task_withholds_a_recovery_plan_that_prescribes_a_deletion(
 
 
 def test_ensure_repo_baselines_where_git_will_not_guess_an_identity(tmp_path: Path) -> None:
-    """Known-bad (T6-56): an initialised repo with no HEAD, on a host that
+    """Known-bad: an initialised repo with no HEAD, on a host that
     supplies no identity and will not invent one. `saddle run` creates the
     baseline commit itself, so if it has no identity of its own the command
     fails before a plan is ever drawn."""
@@ -3570,7 +3570,7 @@ def test_chat_and_web_are_the_same_command(tmp_path: Path, monkeypatch: pytest.M
 def test_web_on_a_non_loopback_host_prints_and_opens_a_token_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P0-6: a bind address beyond loopback needs a token, so the printed
+    """A bind address beyond loopback needs a token, so the printed
     link -- and the one this opens in a browser -- has to carry it, and the
     same value has to be the one `serve` is told to require."""
     import webbrowser
@@ -3729,7 +3729,7 @@ def test_an_explicit_workdir_still_wins_and_is_created(
     assert wanted.is_dir()
 
 
-# --- `saddle audit` (P1-5) ---------------------------------------------------
+# --- `saddle audit` ---------------------------------------------------------
 #
 # Every fixture's changed source line is exactly `    return 2`: the conftest's
 # autouse `mutmut` stub reports its killed mutants on that line, so a healthy
@@ -3955,13 +3955,13 @@ def test_audit_parser_defaults() -> None:
     assert args.cache == audit_module.DEFAULT_AUDIT_CACHE
 
 
-# --- checker probes (X-P1-5-*) -----------------------------------------------
+# --- checker probes for `saddle audit` ---------------------------------------
 
 
 def test_audit_test_command_reaches_the_audit_in_both_modes(
     audit_two_commits: tuple[Path, str, str], tmp_path: Path
 ) -> None:
-    """X-P1-5-1/2: `--test-command` is the audit's command, working-tree or REV mode."""
+    """`--test-command` is the audit's command, working-tree or REV mode."""
     root, c1, c2 = audit_two_commits
     command = "python -m pytest -q -p no:cacheprovider"
     for extra in (("--baseline", c1), (c2,)):
@@ -3973,7 +3973,7 @@ def test_audit_test_command_reaches_the_audit_in_both_modes(
 def test_audit_rev_mode_uses_the_cache(
     audit_two_commits: tuple[Path, str, str], tmp_path: Path
 ) -> None:
-    """X-P1-5-3: the verdict cache serves a REV-mode rerun (its key holds no path)."""
+    """The verdict cache serves a REV-mode rerun (its key holds no path)."""
     root, _c1, c2 = audit_two_commits
     first = _audit_main(tmp_path, root, c2)
     second = _audit_main(tmp_path, root, c2)
@@ -3987,7 +3987,7 @@ def test_audit_rev_mode_accepts_a_relative_repo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """X-P1-5-5: `--repo .` (the default) must survive the clone running elsewhere."""
+    """`--repo .` (the default) must survive the clone running elsewhere."""
     root, _c1, c2 = audit_two_commits
     monkeypatch.chdir(root)
     out, err = io.StringIO(), io.StringIO()
@@ -4003,7 +4003,7 @@ def test_audit_rev_mode_accepts_a_relative_repo(
 def test_chat_with_an_empty_token_file_is_a_clean_error_and_never_serves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P1-13, contract B: `chat_token()` refuses an empty file with a message
+    """Contract B: `chat_token()` refuses an empty file with a message
     that names the path and the remedy; the CLI shows that one line and exits
     2 instead of a traceback, before any URL, browser or server."""
     import webbrowser
@@ -4031,7 +4031,7 @@ def test_chat_with_an_empty_token_file_is_a_clean_error_and_never_serves(
 
 
 def _p2_1_node(kind: str = "impl") -> Node:
-    """P2-1 fixture: two requirements with literals, a gate, one target file."""
+    """Task-first fixture: two requirements with literals, a gate, one target file."""
     data = _node_dict()
     data["kind"] = kind
     data["target_files"] = ["validators.py"]
@@ -4074,9 +4074,9 @@ def _p2_1_prompt(kind: str = "impl", failure: str | None = None) -> str:
 
 
 def test_first_impl_attempt_prompt_is_task_first() -> None:
-    """P2-1 Contract A known-good: task, node, file body, wire format and
+    """Task-first contract A known-good: task, node, file body, wire format and
     scope line, preceded by the system sentence; no requirement ids, literals,
-    gate command or working rules (F21.77). Known-bad is the next test: the
+    gate command or working rules. Known-bad is the next test: the
     same node's repair prompt carries every one of them."""
     prompt = _p2_1_prompt()
     assert prompt.startswith(TASK_FIRST_PREAMBLE + "\n")
@@ -4116,7 +4116,7 @@ def test_first_impl_attempt_prompt_is_task_first() -> None:
 
 
 def test_repair_and_retry_prompts_stay_structured() -> None:
-    """P2-1 Contract B known-bad for the first-attempt test: every string
+    """Task-first contract B known-bad for the first-attempt test: every string
     that test requires absent is present in the retry prompts, beside the
     failure, and the preamble that marks the task-first shape is not."""
     kwargs: dict[str, Any] = {
@@ -4145,7 +4145,7 @@ def test_repair_and_retry_prompts_stay_structured() -> None:
 
 
 def test_test_and_refactor_nodes_keep_the_structured_first_prompt() -> None:
-    """P2-1 Contract C: only an impl node's first attempt changes shape (U2)."""
+    """Task-first contract C: only an impl node's first attempt changes shape (U2)."""
     for kind in ("test", "refactor"):
         prompt = _p2_1_prompt(kind)
         assert "Requirements" in prompt
@@ -4155,7 +4155,7 @@ def test_test_and_refactor_nodes_keep_the_structured_first_prompt() -> None:
 
 
 def test_task_first_prompt_withholds_contents_without_read_file() -> None:
-    """The T3-4 binding holds on the task-first prompt too: names, no bodies."""
+    """The `read_file` binding holds on the task-first prompt too: names, no bodies."""
     data = _node_dict(tools=["write_file"])
     prompt = build_task_first_prompt(
         task="T", node=Node.model_validate(data), files=["n.py"], contents={"n.py": "MARKER = 1\n"}
@@ -4174,7 +4174,7 @@ def test_task_first_prompt_withholds_contents_without_read_file() -> None:
 
 
 def test_run_seals_prompt_shape_per_attempt(tmp_path: Path) -> None:
-    """P2-1 Contract D through the real caller: `saddle run`'s propose sends
+    """Task-first contract D through the real caller: `saddle run`'s propose sends
     the task-first prompt on attempt 1 of an impl node and the structured
     repair prompt on attempt 2, and each attempt's sidecar says which.
     Known-bad: attempt 2's sidecar does not read "task-first"."""

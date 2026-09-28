@@ -205,7 +205,7 @@ def test_without_usage_the_same_run_is_not_stopped_by_tokens(repo: Path) -> None
     result = _run(repo, server, tokens=1000)
     # Not stopped by tokens: the run reaches its finish call. The script edits
     # nothing, so under the default auditor arm that finish ends `unchanged`,
-    # not `finished` (FEEDFIX item 5).
+    # not `finished`.
     assert result.outcome == "unchanged"
     assert len(server.payloads) == 2
 

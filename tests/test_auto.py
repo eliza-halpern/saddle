@@ -527,7 +527,7 @@ def test_the_command_exits_zero_only_when_finished(repo: Path) -> None:
 
 @pytest.mark.parametrize("finished", [True, False])
 def test_the_command_prints_the_packet_after_its_outcome_lines(repo: Path, finished: bool) -> None:
-    # UXREVIEW2 Q7: the terminal printed three lines and no packet. Contract:
+    # The terminal once printed three lines and no packet. Contract:
     # after "ledger <path>" comes render_packet_text of the ledger's packet,
     # the same bytes the chat card's recap gets, for a finish and for a stop.
     from saddle.packet import compile_packet, render_packet_text

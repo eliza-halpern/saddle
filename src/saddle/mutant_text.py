@@ -15,7 +15,7 @@ prose about the code.
 
 What the record holds today (phase2-integ 913f4d2): `MutationOutcome` keeps
 survivor *names*, a status tally and survivor lines, but no `mutmut show`
-diff and no killing test. The CALIB harness recorded `survivor_detail`
+diff and no killing test. The calibration harness recorded `survivor_detail`
 (survivors only) beside the outcome. So a killed mutant can only be counted,
 never described, until the record carries a `mutant_detail` for every scored
 mutant and a `killers` map; both are proposals, read here when present.
@@ -251,7 +251,7 @@ def describe_mutation(
 
     `outcome` is `asdict(MutationOutcome)` plus a detail list under
     `mutant_detail` (proposed: every scored mutant) or `survivor_detail`
-    (what CALIB recorded: survivors only). Each detail is `{name, status,
+    (what the calibration harness recorded: survivors only). Each detail is `{name, status,
     show}`.
     """
     killers = killers or {}

@@ -1,4 +1,4 @@
-"""SHORTLIST: the tier-2 mutation verdict as a per-line survivor shortlist.
+"""The tier-2 mutation verdict as a per-line survivor shortlist.
 
 Contract (scope narrowed from an 85% score): the audit's mutation finding
 passes iff no surviving -- or untested -- mutant on a changed line lacks an
@@ -230,7 +230,8 @@ def test_tier2_surfaces_one_survivor_at_a_95_percent_score_as_not_proven(
     _stub(tmp_path, monkeypatch, results, SHOW3)
     found = Auditor(tree, config=SHORTLIST).tier2()
     mutation = next(f for f in found.findings if f.gate == "mutation")
-    # flip (SHORTLIST-5): was "fail"; out/SHORTRESEARCH/report.md section 3.
+    # flip: was "fail". As a refusal the shortlist turned away 18 of 27 correct
+    # trees, each for an untested boundary: a missing test, surfaced, not refused.
     assert mutation.verdict == "not-proven", mutation.detail
     assert "- n.py:3 `return 2`: mutant s1 (survived)" in mutation.detail
     assert mutation.cites == (
@@ -243,7 +244,7 @@ def test_tier2_surfaces_one_survivor_at_a_95_percent_score_as_not_proven(
     assert found.survivors[0].behaviour == "`f`: Return the answer."
     assert found.survivors[0].mutation == "-    return 2\n+    return 3"
     assert Findings.from_dict(found.to_dict()).survivors == found.survivors
-    assert found.passed  # flip (SHORTLIST-5): was `not found.passed`
+    assert found.passed  # flip: was `not found.passed`; a survivor is surfaced
 
 
 def test_tier2_passes_with_every_mutant_killed(tree: Path) -> None:
@@ -360,22 +361,22 @@ def test_saddle_audit_tier2_shortlist_implies_tiered(
         [*argv, "--tier2", "shortlist", "--mutant-shortlist", "1"], stdout=out, stderr=err
     )
     payload = json.loads(out.getvalue())
-    assert code == 0, err.getvalue()  # flip (SHORTLIST-5): was 1; the survivor is surfaced
+    assert code == 0, err.getvalue()  # flip: was 1; the survivor is surfaced
     mutation = next(f for t in payload["tiers"] for f in t["findings"] if f["gate"] == "mutation")
     assert "- n.py:3 `return 2`: mutant s1 (survived)" in mutation["detail"]
     out = io.StringIO()
     assert cli.main([*argv, "--tiered"], stdout=out, stderr=err) == 0
 
 
-# -- message-only survivors are excluded by AST (CALIB, E-t8 s5) --------------
+# -- message-only survivors are excluded by AST (E-t8 s5) ----------------------
 
 FIXTURES = Path(__file__).parent / "fixtures" / "shortlist"
 """E-t8 s5's sealed tree (`stockbook.py` at 2e849d6) and its 7 survivors as
-`mutmut show` printed them (out/CALIB/results/E-t8-s5.tiered.json)."""
+`mutmut show` printed them in its tiered audit record."""
 
 
 def test_e_t8_s5_message_mutants_are_excluded_and_the_rest_stay() -> None:
-    """Known-good: CALIB classified 5 of the 7 as message swaps (4 raised
+    """Known-good: a calibration pass classified 5 of the 7 as message swaps (4 raised
     `ValueError(f"...")` -> `ValueError(None)`, 1 `KeyError(sku)` ->
     `KeyError(None)`); the field-name swap in `_check_int(percent, ...)` and
     the equivalent `Decimal(1)` -> `Decimal(2)` stay."""
@@ -459,7 +460,7 @@ def test_message_only_survivors_leave_the_shortlist_counted() -> None:
     assert only.passed
 
 
-# -- mutant_detail: recorded for every scored mutant (MUTSUMMARY's input) -----
+# -- mutant_detail: recorded for every scored mutant (the summary's input) -----
 
 
 def test_mutant_detail_records_killed_mutants_and_omits_unscored_ones(
@@ -507,7 +508,7 @@ def test_tiered_json_leaves_mutant_detail_out(
     assert "mutant_detail" not in out.getvalue()
 
 
-# -- SHORTLIST-3: statically equivalent / text survivors are set aside ---------
+# -- statically equivalent / text survivors are set aside ----------------------
 
 
 def _fixture_details() -> list[SurvivorDetail]:
@@ -527,7 +528,7 @@ def _fixture_details() -> list[SurvivorDetail]:
 
 
 def test_e_t8_s5_is_admitted_once_equivalent_and_text_survivors_are_set_aside() -> None:
-    """Known-good: a correct CALIB T8 tree whose only non-message survivors are
+    """Known-good: a correct calibration T8 tree whose only non-message survivors are
     the `_check_int` field-name swap (text) and the quantize `Decimal(1)` ->
     `Decimal(2)` (equivalent) passes, and the finding names both with the rule."""
     details = _fixture_details()
@@ -562,7 +563,7 @@ def test_a_behaviour_survivor_beside_set_aside_ones_stays_open() -> None:
     assert "mutant m.x_f__mutmut_1 (survived)" in got.detail
 
 
-# -- SHORTLIST-4: coverage is a locator (not-proven) under --tier2 shortlist ---
+# -- coverage is a locator (not-proven) under --tier2 shortlist ----------------
 
 
 @pytest.fixture
@@ -600,11 +601,11 @@ def test_shortlist_coverage_is_not_proven_and_tier2_admits_when_nothing_survives
 def test_shortlist_with_uncovered_lines_still_names_a_behaviour_survivor(
     uncovered: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Known-bad: the survivor is still named (surfaced, SHORTLIST-5)."""
+    """Known-bad: the survivor is still named (surfaced, not refused)."""
     _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
     found = Auditor(uncovered, config=SHORTLIST).tier2()
     mutation = next(f for f in found.findings if f.gate == "mutation")
-    assert mutation.verdict == "not-proven"  # flip (SHORTLIST-5): was "fail"
+    assert mutation.verdict == "not-proven"  # flip: was "fail"; surfaced, not refused
     assert "mutant s1 (survived)" in mutation.detail
 
 
@@ -621,7 +622,7 @@ def test_not_proven_renders_as_not_proven_and_does_not_refuse() -> None:
     assert "passed or not applicable" not in text
 
 
-# -- SHORTLIST-5: an open survivor is surfaced (not-proven), never a refusal ----
+# -- an open survivor is surfaced (not-proven), never a refusal ----------------
 
 
 def test_open_survivors_are_surfaced_with_every_row_and_the_finish_is_accepted(
@@ -660,7 +661,7 @@ def test_score_mode_still_fails_on_the_same_survivors(
     assert not found.passed
 
 
-# -- FEEDFIX (9): the packet reads a not-proven finding as not proven ------------
+# -- the packet reads a not-proven finding as not proven -----------------------
 
 
 def _mutation_row(tree: Path, tmp_path: Path) -> tuple[str, str]:

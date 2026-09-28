@@ -1,4 +1,4 @@
-"""Rule D: the differential verdict on a tree's answers (S1-a final, 2026-09-25).
+"""Rule D: the differential verdict on a tree's answers.
 
 `consensus_verdict` decides by authority, then by band, then by question:
 
@@ -7,7 +7,7 @@
    contract A0), and disagreeing with an authority refuses at any d (A2');
 2. on inputs no authority decides, the usable references decide only when
    they are unanimous; a disagreement there is a band disagreement, and the
-   tree is refused only through MEASURE §M1-G's band, d / u >= F_REFUSE
+   tree is refused only through the refusal band, d / u >= F_REFUSE
    (contract B). Below the band the verdict is `question`;
 3. a split input (comparable reference answers that differ) is never
    refused: it is asked, one `Question` per class id (A3').
@@ -18,8 +18,8 @@ The functions are pure: no I/O, no state, and nothing from `evidence` at
 runtime (layering `dag -> gates -> evidence -> runner -> slice`; this
 module sits beside `gates`). Every label and class id is handed in as data;
 the rule follows the label it is given and computes none (pair 15).
-Docstrings cite MEASURE §M1-D, §M1-G and the Rule D calibration report's
-per-input rule table (S1a-final.md).
+The contract labels (A0-A6, B, E, P) are those of the Rule D calibration's
+per-input rule table.
 """
 
 from __future__ import annotations
@@ -29,13 +29,13 @@ from dataclasses import dataclass, field
 from typing import Final, Literal
 
 MIN_VALID_REFERENCES: Final = 8
-"""MEASURE §M1-C/§M1-E stop rule: fewer usable references read nothing."""
+"""Calibration stop rule: fewer usable references read nothing."""
 
 MIN_UNANIMOUS_SHARE: Final = 0.40
-"""MEASURE Case 3; DECISIONS-2026-09-25 row 1 (an inference from the 0.45 and 0.84 points)."""
+"""Below both measured T1 shares (0.45 and 0.84): an inference from two points, not an optimum."""
 
 F_REFUSE: Final = 0.05
-"""MEASURE §M1-G band, frozen before G-b (phase1/tools/m1g_apply_d.F_REFUSE); inclusive."""
+"""The refusal band, fixed before the confirmation run on unseen trees; inclusive."""
 
 AnswerKind = Literal["value", "raise", "opaque"]
 UnusableReason = Literal["missing", "import-error", "arity", "timeout", "crashed"]
@@ -86,7 +86,7 @@ class Label:
     answer: Answer
     cite: str
     overrides: str = ""
-    """User labels only: the cite of the spec/convention clause the user overrode (row 2)."""
+    """User labels only: the cite of the spec/convention clause the user overrode."""
 
 
 @dataclass(frozen=True)
@@ -268,7 +268,7 @@ def consensus_verdict(
     authorities: Authorities | None = None,
     classes: Mapping[str, str],
 ) -> DifferentialResult:
-    """The consensus form (MEASURE §M1-D; §M1-G band; S1a-final A0-A6, B, E, P).
+    """The consensus form (refusal band; rule table A0-A6, B, E, P).
 
     Order: check the authority tables (P); dedupe `inputs` (A6); split the
     references; find each checked input's source (A0) and compare (A2', B,

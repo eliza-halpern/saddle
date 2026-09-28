@@ -3,7 +3,7 @@
 Runs one validated DAG through scheduler, Tier-1 gates, and journal, then
 renders the transcript from the sealed records. Emission and validation
 stay caller-side: this module is the deterministic schedule→gate→seal→
-transcribe path. Nodes run one at a time, not concurrently (see F7); wider
+transcribe path. Nodes run one at a time, not concurrently; wider
 graphs ride the same path.
 """
 
@@ -98,7 +98,7 @@ class NodeGateFailedError(Exception):
     """A node worker failed its Tier-1 gate; carries the verdict.
 
     `applied` is every diff the node's attempts applied, in order, and
-    `baseline` the ref they applied onto (T6-29c): the tree the gate
+    `baseline` the ref they applied onto: the tree the gate
     judged is restored before this leaves `_run_node`, and a survivor
     round has to rebuild it to judge candidate tests against it.
     """
@@ -133,7 +133,7 @@ class NodeUnappliableError(RuntimeError):
 
 
 class NodeQuestionError(Exception):
-    """Rule D asked instead of deciding (P2-3): the node halts with the question.
+    """Rule D asked instead of deciding: the node halts with the question.
 
     Not a gate failure, so neither a survivor round nor a replan takes it up:
     the answer has to come from the user, and a redraw cannot supply one.
@@ -157,18 +157,18 @@ class ReplanFailedError(Exception):
 Proposer = Callable[[Node, str | None, int], DiffProposal]
 """Propose a diff for a node; `failure` carries prior-attempt evidence."""
 
-# T6-65: the third argument is the files pending siblings still owe. The
+# The third argument is the files pending siblings still owe. The
 # replan prompt states the whole task, so without it a subplan re-plans
-# work another node already owns -- round 3i, F21.40.
+# work another node already owns, as it did in round 3i.
 Replanner = Callable[[Node, str, Sequence[str]], Dag]
 """Re-emit a failed node's scope; history carries the failure evidence."""
 
 MAX_RECOVERY_RETRIES: Final = 2
-# Exit code of a run its deadline stopped (T6-9): not 0 (nothing is
+# Exit code of a run its deadline stopped: not 0 (nothing is
 # claimed proven that is not), not 1 (nothing failed), and the run span
 # carries the same verdict so `verify` can tell the two apart.
 DEADLINE_EXIT: Final = 3
-# Exit code of a run that halted on a rule D question (P2-3) and failed
+# Exit code of a run that halted on a rule D question and failed
 # nothing else: not 0 (nothing asked about is proven), not 1 (asking is not
 # a failure: the answer has to come from the user), not 2 (argparse's usage
 # error) and not 3 (the deadline). The run span and the transcript carry
@@ -178,7 +178,7 @@ QUESTION_EXIT: Final = 4
 # conditions each sample on the last rejection, which optimises against
 # whichever gate pushes back hardest: on T7 recovery drove the node from
 # four failing gates to one and then spent its budget on ruff while an
-# infinite loop sat untouched (F13). SpecBench measures the same effect
+# infinite loop sat untouched. SpecBench measures the same effect
 # -- "longer search increases the severity of reward hacking". Drawing
 # unconditioned samples and keeping the best is the parallel half of the
 # compute-optimal split; sequential recovery still follows.
@@ -188,12 +188,12 @@ RECOVERY_OUTPUT_CHARS: Final = 4000
 # node's tests gate (`coverage run -m pytest ...`): the module form puts
 # the working directory on `sys.path`, bare `pytest` does not, and a repo
 # whose tests import a top-level package without packaging passes every
-# gate and fails the merge for a reason no gate can observe (T3-17; the
+# gate and fails the merge for a reason no gate can observe (the
 # smoke run of 2026-09-19: `pytest -q` exit 2 `No module named 'src'`,
 # `python -m pytest -q` 6 passed on the same tree).
 MERGE_COMMAND: Final = "python -m pytest -q"
 # Which `allowed_tools` name governs a captured run's output in the repair
-# prompt (T3-4), keyed by the executable's basename or, for `python -m X`,
+# prompt, keyed by the executable's basename or, for `python -m X`,
 # by X (`_captured_run_tool`). The suite runs under `coverage run -m
 # pytest`, so the executable the node's `test_command` names is not always
 # argv[0]. A run that resolves to no key is governed by no binding and is
@@ -208,12 +208,12 @@ CAPTURED_RUN_TOOL: Final[dict[str, str]] = {
 
 
 class _DeadlineSkipError(Exception):
-    """A node not dispatched because the run's deadline leaves no room for it (T6-9)."""
+    """A node not dispatched because the run's deadline leaves no room for it."""
 
 
 @dataclass
 class _Deadline:
-    """A run's clock (T6-9): when it ends, and how long nodes have taken so far."""
+    """A run's clock: when it ends, and how long nodes have taken so far."""
 
     at: float
     clock: Callable[[], float]
@@ -266,15 +266,15 @@ def _elapsed_ms(start: float) -> int:
 # Progressively tolerant `git apply` modes, strictest first. Each is
 # deterministic and costs no model call, which is the point: T1 spent two
 # of three worker calls on diffs that would not apply and T7 lost a whole
-# run to three consecutive failures one lint fix from passing (F4, F11,
-# F13). The dominant cause is context reproduced from memory with drifted
+# run to three consecutive failures one lint fix from passing.
+# The dominant cause is context reproduced from memory with drifted
 # whitespace, not a wrong edit. Order matters -- a strict apply is tried
 # first so a fuzzy mode never pre-empts an exact match. `--ignore-whitespace`
 # only reaches whitespace *within* a line; a blank line the file has and
 # the hunk lacks (or the reverse) is a line-level drift no git flag
-# addresses, and it was the whole loss on `fees.py` in rounds 3d and 3e
-# (F21.16). The last rung, `blank-lines`, is not a flag: it re-derives
-# each hunk's blank context from the file and applies the result strictly.
+# addresses, and it was the whole loss on `fees.py` in rounds 3d and 3e.
+# The last rung, `blank-lines`, is not a flag: it re-derives each hunk's
+# blank context from the file and applies the result strictly.
 _APPLY_MODES: Final = (
     ("strict", ()),
     ("ignore-whitespace", ("--ignore-whitespace",)),
@@ -341,7 +341,7 @@ def _reanchor_hunk(
 
 
 def _reanchor_blank_lines(workdir: Path, diff: str) -> str | None:
-    """`diff` with every hunk against an existing file re-anchored (T6-38).
+    """`diff` with every hunk against an existing file re-anchored.
 
     Hunks against files the diff creates, or that are not in the tree,
     pass through untouched. None when any hunk cannot be re-anchored, so
@@ -385,12 +385,12 @@ _FENCE = re.compile(r"```[A-Za-z]*\n(?P<body>.*)\n```", re.S)
 
 
 def _unwrapped(diff: str) -> str:
-    """Strip the packaging a worker response arrives in (T6-48).
+    """Strip the packaging a worker response arrives in.
 
     Two things are packaging and not content. A missing final newline:
     `git apply` calls such a patch `corrupt patch at line N`, and four of
     the nine unconstrained round 3e draws failed on exactly that with
-    nothing else wrong (F21.18). And one markdown fence around the whole
+    nothing else wrong. And one markdown fence around the whole
     answer: three more draws carried one, and the structural precheck
     rejected them before git ran.
 
@@ -424,7 +424,7 @@ def whole_file_reconstruction(diff: str) -> dict[str, str]:
     context lines already carry the new content. That is not a guess
     about the model: every apply-failure in rounds 3h and 3i has this
     shape, and reconstructing from it produced implementations the hidden
-    oracle passed 16 of 16 (F21.38, F21.38a). The ladder still refuses
+    oracle passed 16 of 16. The ladder still refuses
     those diffs -- `--recount` fixes counts and `--ignore-whitespace`
     fixes whitespace, but neither reaches context that is a rewrite --
     so the candidate is discarded with the envelope.
@@ -476,12 +476,12 @@ def whole_file_reconstruction(diff: str) -> dict[str, str]:
 def _reconstruction_evidence(diff: str) -> dict[str, Any]:
     """What a refused diff still proves, assembled once at failure time.
 
-    Recommendation 36 already landed in both halves -- the last rung's
-    stderr rides in the failure message (T6-27) and the draw itself is
+    Keeping that evidence already landed in both halves -- the last rung's
+    stderr rides in the failure message and the draw itself is
     `samples[i].diff` -- so the evidence is not lost, it is unassembled.
     Recovering what a rejected draw proposed still meant reading the
     diff, reconstructing the file its context lines describe and staging
-    it by hand, five times across F21.38 and F21.38a. This does that
+    it by hand, five times across rounds 3h and 3i. This does that
     once, and says whether the result is a tree at all, so a reader can
     tell a recoverable candidate from junk without staging anything.
 
@@ -523,7 +523,7 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
     # structure is checked here, where a violation is deterministic,
     # inspectable and retryable -- prose is exactly the case a fresh
     # attempt can fix, and a fatal parse error would throw the run away.
-    # T6-48: the packaging comes off before anything judges the content,
+    # The packaging comes off before anything judges the content,
     # so the precheck and every rung see the same bytes.
     diff = _unwrapped(diff)
     if not diff.lstrip().startswith("diff --git "):
@@ -554,7 +554,7 @@ def _apply_diff(workdir: Path, diff: str, *, recorder: SpanRecorder | None = Non
         )
         if exit_code == 0:
             return mode
-    # The last rung's stderr rides in the failure (T6-27): the tool spans
+    # The last rung's stderr rides in the failure: the tool spans
     # carry each rung's, but the attempt's own record used to say only
     # "did not apply", and a reader had to go and find which line git
     # rejected.
@@ -576,7 +576,7 @@ def _payload_sections(payload: str) -> list[tuple[str, str | None]]:
     The path comes from the `diff --git a/X b/Y` header's new side, which
     is the only place it appears in a form the caller can use -- and note
     that `header ::= "diff --git " line` leaves it UNCONSTRAINED by the
-    grammar. The grammar constrains form, not content (F21.9c); every
+    grammar. The grammar constrains form, not content; every
     check on the path itself therefore has to happen in `_write_files`.
     """
     sections: list[tuple[str, str | None]] = []
@@ -606,7 +606,7 @@ def _payload_sections(payload: str) -> list[tuple[str, str | None]]:
                 # keeping only the `+` lines would write a file holding
                 # just the additions and silently delete everything else.
                 # Silently destroying content the model never saw is the
-                # known-bad T6-62 named; the grammar forbids these lines,
+                # known-bad case; the grammar forbids these lines,
                 # but the grammar is enforced by the server and this is
                 # the only check that holds when it is not.
                 kind = "removal" if line.startswith("-") else "context"
@@ -631,7 +631,7 @@ def _resolved_target(workdir: Path, name: str) -> Path:
     climbing out of the tree, and refused it for free. Writing files
     directly gives that up, so the check is re-established here: this is
     the only thing standing between a worker's header line and the rest
-    of the filesystem (T6-62/A1).
+    of the filesystem.
     """
     root = workdir.resolve()
     target = (root / name).resolve()
@@ -650,8 +650,8 @@ _EDIT_HEAD: Final = re.compile(r"^(?:edit|create|delete) [^/\n]")
 def _write_files(workdir: Path, payload: str, *, recorder: SpanRecorder | None = None) -> None:
     """Write what a worker payload carries, and stage it.
 
-    The whole-file envelope replaces `git apply` on the worker path
-    (T6-62/A1): the new side IS the file, so there is no context to match
+    The whole-file envelope replaces `git apply` on the worker path:
+    the new side IS the file, so there is no context to match
     and nothing to reject for arithmetic. What remains is an envelope
     check, and every refusal here is a retryable `RuntimeError` for the
     same reason the old one was -- prose is exactly what a fresh attempt
@@ -670,7 +670,7 @@ def _write_files(workdir: Path, payload: str, *, recorder: SpanRecorder | None =
         # site it changes instead of restating the whole file, so the
         # emission costs the change's size rather than the file's -- the
         # reason round 3e lost all three of an attempt's draws to
-        # whole-file emission (F21.43). What lands is staged the same way
+        # whole-file emission. What lands is staged the same way
         # and every gate downstream still reads the worktree, so nothing
         # below this point can tell which envelope arrived.
         try:
@@ -693,7 +693,7 @@ def _write_files(workdir: Path, payload: str, *, recorder: SpanRecorder | None =
         raise RuntimeError(msg)
     # A repeated path is the one failure the diff envelope caught for
     # free and this one does not: `root ::= section+` lets the model emit
-    # the same file twice, and F21.9's b-s1 emitted NINE copies of
+    # the same file twice, and one recorded draw emitted NINE copies of
     # `fees.py`. Under a diff the second copy failed to apply, loudly.
     # Here the last write would simply win and nothing would say so.
     repeated = sorted({name for name, _ in sections if [n for n, _ in sections].count(name) > 1})
@@ -719,7 +719,7 @@ def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | N
     refinement follows the cheapest feedback signal, not the most
     important defect: lint emits precise localised errors while a failing
     property emits a counterexample that needs diagnosis. T7 spent its
-    budget on ruff with an infinite loop untouched (F13), and the v3 T1
+    budget on ruff with an infinite loop untouched, and the v3 T1
     re-run reproduced it -- 4 gates failing, then 2, with ruff red
     throughout. Formatting is entirely machine-solvable and most lint
     findings carry safe fixes, so spending a stochastic worker call on
@@ -753,8 +753,8 @@ def _captured_run_tool(argv: Sequence[str]) -> str | None:
     The match is on the executable's basename and, for `python -m X`, on
     the module X: nothing constrains how a plan spells `test_command`, so
     `python3 -m pytest` and `.venv/bin/pytest` have to be `run_tests` as
-    surely as `pytest` is, or omitting the name withholds nothing (T3-4
-    follow-up; the same class as T3-13's unmatched spellings).
+    surely as `pytest` is, or omitting the name withholds nothing (the
+    same class as `target_files` spellings the gate could never match).
     """
     if not argv:
         return None
@@ -764,7 +764,7 @@ def _captured_run_tool(argv: Sequence[str]) -> str | None:
     return CAPTURED_RUN_TOOL.get(name)
 
 
-# Which `allowed_tools` name a failed gate's output belongs to (T6-31): a
+# Which `allowed_tools` name a failed gate's output belongs to: a
 # captured run whose gate failed is the node's own evidence and reaches
 # the worker whatever the plan declared.
 GATE_TOOL: Final[dict[str, str]] = {
@@ -778,8 +778,8 @@ GATE_TOOL: Final[dict[str, str]] = {
 def _run_is_allowed(
     run: CapturedRun, tools: Collection[str], failed_gates: Collection[str]
 ) -> bool:
-    """Is this run's output a capability the node asked for (T3-4), or the
-    output of a gate the node failed (T6-31)?
+    """Is this run's output a capability the node asked for, or the
+    output of a gate the node failed?
 
     Round 3d's n2 saw `ruff check exited 1, format exited 0` twice and
     nothing else, because its plan had not declared `lint`; the gates
@@ -801,7 +801,7 @@ def _carrying(own: str, gate_failure: str | None) -> str:
     the last GATE ruled on -- and that gate's detail is the only thing
     that describes it. Keeping only the newer message told attempt 3 of
     `runs/g1-0f6b83d` node-1 that a call had truncated, and nothing
-    about the `requirement-binding` verdict it then failed again (T6-79).
+    about the `requirement-binding` verdict it then failed again.
 
     A node whose FIRST attempt fails this way has no gate verdict yet,
     and says so by carrying nothing rather than inventing one.
@@ -824,7 +824,7 @@ def format_attempt_failure(
     `tools` is the node's `allowed_tools`, and it decides which captured
     output the worker gets back for gates that passed: `run_tests` for
     the suite, `lint` for ruff. The output of a gate the node failed is
-    always included (T6-31). The gate verdict lines are unconditional --
+    always included. The gate verdict lines are unconditional --
     they are the node's own result, not a tool's.
     """
     failed = [check for check in result.checks if not check.passed]
@@ -847,11 +847,11 @@ def format_attempt_failure(
 TASK_FIRST_PREAMBLE: Final = (
     "You are an expert coding assistant. Read the task and the files, then write the finished code."
 )
-"""The opening line of the task-first worker prompt (P2-1), and its mark."""
+"""The opening line of the task-first worker prompt, and its mark."""
 
 
 def prompt_shape(prompt: str) -> str:
-    """Which worker prompt a draw came from, read off the prompt itself (P2-1).
+    """Which worker prompt a draw came from, read off the prompt itself.
 
     Read from the text the call sent, not from the caller's intent, so the
     sealed field cannot say "task-first" about a draw that was not.
@@ -860,11 +860,11 @@ def prompt_shape(prompt: str) -> str:
 
 
 def _proposal_evidence(proposal: DiffProposal) -> dict[str, Any]:
-    """What a proposal leaves behind for its attempt's sidecar (T6-12)."""
+    """What a proposal leaves behind for its attempt's sidecar."""
     return {
         "thinking": proposal.reasoning,
         "diff_hash": hashlib.sha256(proposal.diff.encode()).hexdigest(),
-        # The diff itself and the call that drew it (T6-27): a failed
+        # The diff itself and the call that drew it: a failed
         # attempt's diff used to survive only as a hash, and no attempt
         # could be replayed because its seed and temperature were not
         # written down.
@@ -888,7 +888,7 @@ def _prompt_hash(prompt: str) -> str:
 
 
 def _call_evidence(exc: BaseException) -> dict[str, Any]:
-    """The call a failed worker request was, when the client attached it (T6-27)."""
+    """The call a failed worker request was, when the client attached it."""
     evidence = getattr(exc, "evidence", None)
     return dict(evidence) if isinstance(evidence, dict) else {}
 
@@ -897,9 +897,9 @@ def _error_evidence(exc: BaseException) -> dict[str, Any]:
     """What a failed worker call leaves behind.
 
     A truncation keeps its partial text, the usage the server reported
-    and the cap the call sent (T6-12). Any other failure has no envelope
+    and the cap the call sent. Any other failure has no envelope
     -- a transport timeout arrives with nothing but its message -- so the
-    sidecar names the exception type beside the detail (F21.12b): round
+    sidecar names the exception type beside the detail: round
     3c's 1826 s timeout sealed four keys that could not say what it was.
     """
     evidence: dict[str, Any] = {"error_type": type(exc).__name__, **_call_evidence(exc)}
@@ -918,7 +918,7 @@ def _error_evidence(exc: BaseException) -> dict[str, Any]:
 
 @dataclass
 class _AttemptCtx:
-    """One attempt's identity for its seal (T6-27): id, clocks, number, prompt."""
+    """One attempt's identity for its seal: id, clocks, number, prompt."""
 
     worker_id: str
     start: float
@@ -938,12 +938,12 @@ def _seal_attempt(
 ) -> None:
     """Append one attempt's agent span under the run span, with its sidecar.
 
-    The span's argv names the attempt and the prompt's hash (T6-27):
+    The span's argv names the attempt and the prompt's hash:
     every worker span used to be appended with an empty argv, so its
     `args_hash` was the hash of `[]` and could not tell two calls apart.
 
     Every attempt, sealed or not, leaves `attempts/<span_id>.json` beside
-    the journal (T6-12): round-3 T5 spent 160k output tokens on three
+    the journal: round-3 T5 spent 160k output tokens on three
     failed attempts and journaled none of their reasoning, because
     `thinking` was written only onto proof records. The sidecar's hash is
     sealed in the span, so `verify` catches a missing or edited one.
@@ -1011,7 +1011,7 @@ def _evaluate_candidate(
         # The live path runs `autofix` before the gate; a candidate scored
         # without it read one gate redder than the tree the node would
         # actually be gated on, and `failures == 0` never ended sampling
-        # (round 3c, F21.12c: delta one on three of four nodes).
+        # (round 3c: delta one on three of four nodes).
         autofix(candidate, baseline=baseline)
         return (
             run_node_gate(
@@ -1035,7 +1035,7 @@ def _best_of_samples(
 ) -> tuple[DiffProposal | None, int, list[dict[str, Any]]]:
     """Draw PROPOSAL_SAMPLES unconditioned proposals concurrently; keep the best.
 
-    The k worker calls go out together, each with its own seed (T6-25):
+    The k worker calls go out together, each with its own seed:
     the model is local and the server batches, so k draws cost about one
     draw's wall where drawing them one after another cost k -- round 3c's
     n1 spent 1028 s on three serial samples every other node waited on.
@@ -1048,7 +1048,7 @@ def _best_of_samples(
     agreement is the correlation signal: LLM samples "often fail on the
     same inputs", so k buys little when they agree, and recording it
     means rho is measured rather than assumed -- and one summary per
-    sample for the attempt's sidecar (T6-12): a sample that failed its
+    sample for the attempt's sidecar: a sample that failed its
     gates or did not apply used to vanish with its reasoning.
     """
 
@@ -1057,7 +1057,7 @@ def _best_of_samples(
         # independent, so one bad packet is not evidence about the rest.
         # A transport failure is per-draw too, and catching only the
         # response error let one draw's timeout discard its COMPLETED
-        # siblings (T6-73): `VllmRequestError` is a sibling class, not a
+        # siblings: `VllmRequestError` is a sibling class, not a
         # subclass, so it escaped `pool.map` and took them with it.
         # `VllmAuthError` stays uncaught on purpose -- a rejected key is
         # not a per-draw condition, and letting a sibling seal the node
@@ -1097,7 +1097,7 @@ def _best_of_samples(
         if unappliable is not None or result is None:
             summary["outcome"] = f"did not apply: {unappliable}"
             # What the refused draw still proves, assembled here rather
-            # than by hand five rounds later (T6-62 C).
+            # than by hand five rounds later.
             summary.update(_reconstruction_evidence(proposal.diff))
             continue
         failures = sum(1 for check in result.checks if not check.passed)
@@ -1120,7 +1120,7 @@ def _best_of_samples(
 def _abandon(
     workdir: Path, baseline: str | None, applied: Sequence[str], recorder: SpanRecorder
 ) -> None:
-    """Undo a failed node's applied diffs before its failure leaves `_run_node` (T3-23).
+    """Undo a failed node's applied diffs before its failure leaves `_run_node`.
 
     Every give-up path passes here. With at least one diff applied, the
     worktree and index go back to the node's own baseline ref, so a
@@ -1152,9 +1152,9 @@ async def _run_node(
     """Execute one node: propose, apply, gate, seal — with bounded recovery.
 
     `planned` is every requirement id the node's plan declares, handed to
-    each gate run so a citation of another node's id is not an orphan
-    (T3-24). `task_hash` is the run's task, sealed into the record so a
-    later resume can tell whose proof this is (T3-9).
+    each gate run so a citation of another node's id is not an orphan.
+    `task_hash` is the run's task, sealed into the record so a
+    later resume can tell whose proof this is.
 
     A failed gate (or a diff that does not apply) retries in a fresh
     worker call carrying the failure evidence, at most
@@ -1174,10 +1174,10 @@ async def _run_node(
     attempt = 0
     while attempt < max_attempts:
         # A sidecar's `samples` are the calls this attempt made: round 3c's
-        # retries carried attempt 1's three draws byte for byte (F21.12c).
+        # retries carried attempt 1's three draws byte for byte.
         samples = []
         # The attempt in flight runs to its end and may seal; the next one
-        # is not started past the deadline (T6-9). The give-up path below
+        # is not started past the deadline. The give-up path below
         # then restores the tree exactly as on any other exhaustion.
         if attempt and deadline is not None and deadline.expired():
             failure = f"deadline reached after {attempt} of {max_attempts} attempt(s); {failure}"
@@ -1191,7 +1191,7 @@ async def _run_node(
             if baseline is None:
                 # This node's own baseline, taken before any proposal is
                 # drawn, so every gate below diffs this node's work and not
-                # the staged edits of the nodes that ran before it (T3-8).
+                # the staged edits of the nodes that ran before it.
                 # Under this attempt's recorder: the four `git` spans must
                 # hang off a sealed attempt, as `_evaluate_candidate`
                 # explains. Attempts 2..N keep the ref: a recovery diff
@@ -1262,9 +1262,9 @@ async def _run_node(
                 failure = _carrying(own, gate_failure)
                 # A retry's apply-failure is recorded HERE, in the
                 # attempt, while its own sample reads "retry draw, gated
-                # in place" -- a filter on sample outcome misses it
-                # (F21.38a). The reconstruction rides with the failure so
-                # both paths carry it.
+                # in place" -- a filter on sample outcome misses it.
+                # The reconstruction rides with the failure so both paths
+                # carry it.
                 _seal_attempt(
                     journal_path,
                     node.id,
@@ -1281,7 +1281,7 @@ async def _run_node(
                 continue
             applied.append(proposal.diff)
             autofix(workdir, baseline=baseline, recorder=recorder)
-            # T6-34: the tree the gate is about to judge, named before it
+            # The tree the gate is about to judge, named before it
             # runs. A failed attempt otherwise leaves nothing a `git gc`
             # cannot prune, and the sidecar's diff is the pre-autofix text,
             # so the graded tree was recoverable only from dangling blobs.
@@ -1296,7 +1296,7 @@ async def _run_node(
                 planned_requirements=planned,
                 owed_tests=owed,
             )
-            # Rule D after the gates (P2-3), only with `--rule-d` and only on a
+            # Rule D after the gates, only with `--rule-d` and only on a
             # tree every gate passed: the gates judge the diff, rule D the
             # function's answers against the references and the answer book.
             decision = rule_d(node.kind, workdir) if rule_d is not None and result.passed else None
@@ -1324,7 +1324,7 @@ async def _run_node(
                 )
             if result.passed:
                 # The tree the gate just passed on, sealed into the record
-                # and kept at its own ref (T3-10): a later resume has to
+                # and kept at its own ref: a later resume has to
                 # land on this tree, and `git restore --source` is how the
                 # user puts it back when it does not.
                 tree = snapshot_tree(workdir, proven_ref(node.id), recorder=recorder)
@@ -1367,7 +1367,7 @@ async def _run_node(
                 tools=node.execution_constraints.allowed_tools,
             )
             gate_failure = failure
-            # The seal names the failed gates in check order (T3-25): a
+            # The seal names the failed gates in check order: a
             # failed node has no proof record and the transcript renders
             # its last attempt only, so the journal is the one place an
             # earlier attempt's verdict can be read back from.
@@ -1414,7 +1414,7 @@ async def _run_node(
             # cancelled task, a bug) still fails the node, and a failed
             # node leaves the tree at its baseline: round 3c's n2.r2 timed
             # out after applying 530 lines and the oracle graded them
-            # unproven (F21.12b). Seal first so the restore span hangs off
+            # unproven. Seal first so the restore span hangs off
             # the attempt that failed, as on the other give-up paths.
             _seal_attempt(
                 journal_path,
@@ -1442,7 +1442,7 @@ def splice_replan(
     """Replace `failed_id` with `new`'s nodes, rewiring dependents to new leaves.
 
     New ids are namespaced under the failed id and numbered past every id
-    the DAG or `taken` already holds (T3-11): a resumed run whose journal
+    the DAG or `taken` already holds: a resumed run whose journal
     sealed `n2.r1` replans `n2` as `n2.r2`, so one journal never carries
     two records under one id and `rebuild_proven`'s last-record-wins
     cannot shadow a proof. New roots inherit the failed node's
@@ -1578,7 +1578,7 @@ def _seed_proofs(
     """Which journalled proofs this run may reuse, and what it decided.
 
     A proof is reusable only for the task and the node it was sealed
-    against (T3-9): a journal from task A run against task B's DAG used to
+    against: a journal from task A run against task B's DAG used to
     count every same-id node as proven and never schedule it, and the CLI
     default journal is per repo, so that was the default flow for a second
     task. A record sealed for a different task is fatal -- the run stops
@@ -1586,12 +1586,12 @@ def _seed_proofs(
     A record whose node no longer hashes the same, or that predates these
     fields, is simply not reused: the node is scheduled again. A record
     for an id the DAG does not contain (an earlier run's replacement) is
-    dropped too, and named as such (T3-11).
+    dropped too, and named as such.
 
     Returns the seed, a one-line summary (`None` when the journal held no
     proof and there was nothing to decide), and the last record actually
     reused -- whose `tree_hash` says which worktree the caller must be
-    resuming onto (T3-10).
+    resuming onto.
     """
     candidates = list(proven_records(journal_path).values())
     expected = {node.id: hash_node(node) for node in dag.nodes}
@@ -1613,7 +1613,7 @@ def _seed_proofs(
             reused = record
             decided.append(f"reused {record.node_id}")
         elif record.node_id not in expected:
-            # A replan's leftover from an earlier run (T3-11): the DAG being
+            # A replan's leftover from an earlier run: the DAG being
             # run has no node to compare the hash with, so it is not proof
             # of anything scheduled here -- and the reader should not
             # mistake it for an edited node.
@@ -1627,13 +1627,13 @@ def _seed_proofs(
     return proofs, "; ".join(decided) if candidates else None, reused
 
 
-# --- T6-29c: survivor-driven test node ---------------------------------------
+# --- Survivor-driven test node -----------------------------------------------
 
 TestDrawer = Callable[[Node, str, int], DiffProposal]
-"""Draw one candidate test file for a node from a brief, at a seed (T6-29c)."""
+"""Draw one candidate test file for a node from a brief, at a seed."""
 
 SURVIVOR_SAMPLES: Final = 10
-"""Candidate draws per survivor round (T6-29a's k); `run_slice` takes it as a parameter."""
+"""Candidate draws per survivor round, k; `run_slice` takes it as a parameter."""
 
 SURVIVOR_ROUNDS: Final = 2
 """Survivor rounds per failed node's lineage: a third is never started."""
@@ -1677,7 +1677,7 @@ def _created_file(diff: str) -> tuple[str, str] | None:
 def _cut_to_last_test(source: str) -> str | None:
     """`source` cut back to its last complete top-level definition.
 
-    F21.14: a capped draw stops mid-function, and a syntax error must not
+    A capped draw stops mid-function, and a syntax error must not
     score as "fails against the stub". The longest prefix ending at a
     top-level `def`, `class` or decorator that parses is kept, provided
     it still holds a test function; a file that never parses, or parses
@@ -1701,7 +1701,7 @@ def _cut_to_last_test(source: str) -> str | None:
 
 
 def _create_diff(path: str, source: str) -> str:
-    """A creation diff for `source` at `path`, in the shape the grammar admits (T6-32)."""
+    """A creation diff for `source` at `path`, in the shape the grammar admits."""
     lines = source.splitlines()
     return (
         f"diff --git a/{path} b/{path}\n"
@@ -1715,7 +1715,7 @@ def _create_diff(path: str, source: str) -> str:
 def _candidate_path(node: Node, round_no: int, seed: int) -> str:
     """Where a round's candidate lands: beside the node's declared tests.
 
-    T6-29b names candidates `tests/test_<req>_s<seed>.py`; the directory
+    Candidates are named `tests/test_<req>_s<seed>.py`; the directory
     follows the first test file the node's gate command runs, so a flat
     suite's candidate imports what that suite imports. The round is part
     of the name: a second round's files never collide with the first's.
@@ -1738,8 +1738,8 @@ def _sealed_test_names(
 ) -> set[str]:
     """Every identifier the test files sealed test nodes of this run wrote.
 
-    The sidecars of a proven test node's attempts retain its diffs
-    (T6-27); the files those diffs created or changed, as they stand in
+    The sidecars of a proven test node's attempts retain its diffs;
+    the files those diffs created or changed, as they stand in
     the worktree, are the run's own specification. A gap inside a
     function one of them names is that specification's miss, not a hole
     no test was ever asked to fill, and the node retries as before.
@@ -1786,12 +1786,12 @@ def _recovered_tree(workdir: Path, applied: Sequence[str], baseline: str, dest: 
 
 
 def _candidate_runner(real_tree: Path, baseline: str, node: Node) -> CandidateRunner:
-    """T6-29b's injected runner: pytest on either tree, the sample on the real one.
+    """The survivor round's injected runner: pytest on either tree, the sample on the real one.
 
     The candidate file alone runs under coverage; against `real_tree` a
     green run also re-runs `mutation_sample` over the node's changed
     lines with pytest scoped to that file, scoring every decided mutant
-    on a changed line (P0-8), so the survivors it still reports are the
+    on a changed line, so the survivors it still reports are the
     ones the candidate failed to kill. The stub tree contributes its
     exit code and nothing else.
     """
@@ -1830,15 +1830,15 @@ def _survivor_round(
 ) -> tuple[Dag, DiffProposal] | None:
     """One survivor round: brief, draw k, filter, and plan the splice.
 
-    The tree the gate judged is rebuilt in a scratch copy and stubbed
-    (T6-29b); the brief names the untested functions and the modules'
+    The tree the gate judged is rebuilt in a scratch copy and stubbed;
+    the brief names the untested functions and the modules'
     signatures, never their bodies. k draws go out together, each with
     its own seed, and are judged in seed order: a draw that is not one
     created file, does not parse (cut back to its last complete test
     first), cites no requirement, or repeats an earlier draw is dropped
     before anything runs; the rest pass through `keep_candidate`. A
     candidate red on the real tree is dropped and recorded, never handed
-    to the impl node as a brief (F21.14: three of ten such draws were
+    to the impl node as a brief (in a ten-draw measurement three such draws were
     simply wrong). Every verdict is journaled as one `survivor-tests`
     tool span under the failed node.
 
@@ -1874,7 +1874,7 @@ def _survivor_round(
             )
 
             def one(seed: int) -> DiffProposal | VllmError:
-                # Per-draw, transport failures included (T6-73): the
+                # Per-draw, transport failures included: the
                 # siblings are independent candidates and a timeout in
                 # one is not evidence about the rest.
                 try:
@@ -1958,7 +1958,7 @@ def _judge_candidate(
     gaps_real: tuple[tuple[str, int], ...],
     runner: CandidateRunner,
 ) -> tuple[str, str, str]:
-    """(decision, detail, source) for one draw; parse-first, then T6-29b's filters."""
+    """(decision, detail, source) for one draw; parse-first, then the survivor filters."""
     if isinstance(outcome, VllmError):
         return "dropped", f"worker call failed: {outcome}", ""
     created = _created_file(outcome.diff)
@@ -2008,7 +2008,7 @@ def _schedule_until_done(
 
     Returns the final DAG (after any replan splices), every node's
     terminal failure, the set of node ids replanned away (excused from
-    `failed_unexcused`), and whether the deadline stopped the run (T6-9):
+    `failed_unexcused`), and whether the deadline stopped the run:
     a node is not started when the time left is under the median node
     wall so far, or gone; a node that was skipped for that reason is
     undispatched, not failed, and nothing is replanned past the deadline.
@@ -2018,7 +2018,7 @@ def _schedule_until_done(
     generated: set[str] = set()
     ever_failed: dict[str, BaseException] = {}
     deadline_hit = False
-    # Survivor rounds (T6-29c): the diff each spliced test node applies,
+    # Survivor rounds: the diff each spliced test node applies,
     # which original node a retried impl node descends from, and how many
     # rounds that lineage has had.
     prepared: dict[str, DiffProposal] = {}
@@ -2037,9 +2037,9 @@ def _schedule_until_done(
         # proof record must cite every parent, so run the original node.
         original = next(candidate for candidate in remaining.nodes if candidate.id == node.id)
         # From the plan as it stands: a replacement node's ids are planned
-        # too, and a replaced node's are not (T3-24).
+        # too, and a replaced node's are not.
         planned = planned_requirement_ids(remaining)
-        # T6-53: what the plan still owes tests from, as it stands. A node
+        # What the plan still owes tests from, as it stands. A node
         # already proven writes nothing further, so a line only defers
         # while some node that may write tests has yet to run.
         owed = pending_test_nodes(remaining, proofs)
@@ -2113,8 +2113,8 @@ def _schedule_until_done(
                 # `splice_replan` rewires every dependent of the failed node
                 # onto the new leaves, which changes their `hash_node` too. A
                 # record holding only `gen_ids` leaves those rewired survivors
-                # unplanned, and T6-27's check then reads their proofs as
-                # `unplanned-proof` (T6-72). `verify` accumulates planned
+                # unplanned, and `verify`'s plan check then reads their proofs as
+                # `unplanned-proof`. `verify` accumulates planned
                 # hashes across records, so restating the unchanged nodes is
                 # free.
                 append_plan(
@@ -2158,8 +2158,7 @@ def _schedule_until_done(
             except ReplanFailedError:
                 continue
             # The whole post-replan plan: a rewired dependent's hash moved
-            # too, and a record naming only `gen_ids` leaves it unplanned
-            # (T6-72).
+            # too, and a record naming only `gen_ids` leaves it unplanned.
             append_plan(
                 journal_path,
                 build_plan(remaining.nodes, task_hash=task_hash, replaces=node_id),
@@ -2228,11 +2227,11 @@ def _seal_run(
 ) -> SliceResult:
     """Write the run's terminal span and verdict, and render its transcript.
 
-    `settings` (T6-27) are the run's knobs the journal never held -- served
+    `settings` are the run's knobs the journal never held -- served
     model and server version, temperatures, context window -- sealed as
     the run span's argv so rounds can be compared on more than faith.
 
-    A run the deadline stopped (T6-9) seals exit code 3 and says so in
+    A run the deadline stopped seals exit code 3 and says so in
     the span, so `verify` and the transcript distinguish "ran out of
     time" from "failed"; proofs already sealed stay sealed and a later
     `saddle run` on the same journal resumes them.
@@ -2328,15 +2327,15 @@ def run_slice(
 ) -> SliceResult:
     """Run one validated DAG through gates and journal; return its transcript.
 
-    A journal that verifies is resumed, not refused (T3-1): its proven
+    A journal that verifies is resumed, not refused: its proven
     nodes seed `proofs`, so only unproven nodes are scheduled and a crash
     loses at most the in-flight node, as `proven_records` promises. What
-    a proof is a proof *of* bounds that reuse (T3-9): a record sealed for
+    a proof is a proof *of* bounds that reuse: a record sealed for
     another task raises before any node runs, a record whose node has
     changed is dropped and the node scheduled again, and when the journal
     held any proof the decision is sealed as a `resume` span under the run
     span so the transcript and `saddle tail` show it. So does the tree the
-    proof was sealed on (T3-10): if any proof is reused, the tracked
+    proof was sealed on: if any proof is reused, the tracked
     worktree must hash to the `tree_hash` of the last one, or the run
     raises naming both ids and the `git restore` that puts the proven tree
     back. A journal that does not verify raises before anything runs.
@@ -2344,7 +2343,7 @@ def run_slice(
     When `replan` is given, each exhausted node recompiles once into a
     replacement subgraph; replanned nodes that fail again stay failed.
 
-    With `survivor_draw` (T6-29c), an impl node that fails only coverage
+    With `survivor_draw`, an impl node that fails only coverage
     or mutation is first answered with tests rather than a retry: k =
     `survivor_samples` candidate test files are drawn from a brief that
     names the untested functions and the modules' signatures, filtered
@@ -2360,7 +2359,7 @@ def run_slice(
     `merge-suite` under the run span, and a non-zero exit fails the run
     without revisiting any per-node verdict. `None` disables it.
 
-    With `deadline_s` (T6-9) the run is on a clock: no node is started
+    With `deadline_s` the run is on a clock: no node is started
     that the time left cannot fit (median node wall so far), no attempt
     is started past the deadline, the attempt in flight finishes and may
     seal, a node that gives up restores its tree as on any other give-up,
@@ -2376,11 +2375,11 @@ def run_slice(
     deadline = _Deadline(at=clock() + deadline_s, clock=clock) if deadline_s is not None else None
     run_span_id = uuid.uuid4().hex
     proofs, resumed, reused = _seed_proofs(journal_path, dag, task_hash)
-    # What was asked, sealed before anything is done about it (T6-13): a
+    # What was asked, sealed before anything is done about it: a
     # run that dies leaves its plan in the chain, not in a buffered log.
     append_plan(journal_path, build_plan(dag.nodes, task_hash=task_hash))
     if reused is not None:
-        # A proof is a proof about one worktree (T3-10). `rebuild_proven`
+        # A proof is a proof about one worktree. `rebuild_proven`
         # promises a crash loses at most the in-flight node, which holds
         # only while the tree still carries the proven edits: reverting
         # one and resuming used to gate the next node against code the

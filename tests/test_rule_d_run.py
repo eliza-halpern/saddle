@@ -1,4 +1,4 @@
-"""Rule D in the run path (P2-3): known-good and known-bad pairs.
+"""Rule D in the run path: known-good and known-bad pairs.
 
 Every store here is a real S1-c store written with `write_reference_set` and
 loaded through its sealed id; every tree is real code run in a subprocess.

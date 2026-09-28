@@ -1,12 +1,12 @@
 """A task started from the chat: `saddle auto`, watched from a card.
 
-T5-7, decided: a chat turn that asks for a task starts a gated episode on
+A chat turn that asks for a task starts a gated episode on
 the *same* code path the command line uses. So this module owns no loop.
 It calls `auto.run_auto` -- the function `saddle auto` calls -- and turns
 what that run does into things the chat can show:
 
 - engine events, wrapped as `TaskEvent`, for what is happening right now;
-- the run's ledger, tailed and rendered as `TaskLine` session lines (T5-6),
+- the run's ledger, tailed and rendered as `TaskLine` session lines,
   so every line on the card is a sealed record with a hash to cite;
 - `TaskState` whenever the card's state changes: running, needs_you,
   finished, stopped, unchanged, failed.
@@ -17,7 +17,7 @@ task as finished without a finish record.
 
 When the run ends the chat journal gets a `run-ref` span naming the run's
 journal and verdict, and the chat's own context gets the packet's text
-recap (T5-9), never the run's transcript.
+recap, never the run's transcript.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ RECAP_PREFIX: Final = "[saddle task "
 recognises it and draws the task card in its place on reload."""
 
 RUN_REF: Final = "run-ref"
-"""The chat-journal span that references a run (T5-7 (3)). Not `run`:
+"""The chat-journal span that references a run. Not `run`:
 `transcript.is_run_end` and `saddle tail` read a span named `run` as the
 end of a slice run."""
 

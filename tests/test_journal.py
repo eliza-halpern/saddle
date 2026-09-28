@@ -64,12 +64,12 @@ def test_build_record_seals_independently_verifiable_hash() -> None:
         "node_id": "n1",
         "diff_hash": hashlib.sha256(b"diff --git a/n.py b/n.py\n").hexdigest(),
         "parent_proofs": [],
-        # T2-4: a new record dumps `basis` even when None; the hash covers it.
+        # A new record dumps `basis` even when None; the hash covers it.
         "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok", "basis": None}],
         "requirement_ids": ["REQ-001"],
         "thinking": "",
         "attempts": 1,
-        # T3-9: a record built without them still dumps the four, so the
+        # A record built without them still dumps the four, so the
         # hash a caller recomputes and the one build_record sealed agree.
         "task_hash": "",
         "node_hash": "",
@@ -120,7 +120,7 @@ def test_build_record_seals_thinking_into_hash() -> None:
         "node_id": "n1",
         "diff_hash": hashlib.sha256(b"diff\n").hexdigest(),
         "parent_proofs": [],
-        # T2-4: a new record dumps `basis` even when None; the hash covers it.
+        # A new record dumps `basis` even when None; the hash covers it.
         "gate_outputs": [{"name": "tests", "passed": True, "detail": "ok", "basis": None}],
         "requirement_ids": ["REQ-001"],
         "thinking": "extract the helper",
@@ -174,8 +174,8 @@ def test_pre_basis_journal_still_verifies(tmp_path: Path) -> None:
     may only be regenerated at that revision: its records carry no `basis`
     key, so the field parses
     unset and the verification payload (exclude_unset=True) omits it,
-    reproducing the hash that was sealed at the time (T2-4, known-good for
-    the compatibility half of the contract).
+    reproducing the hash that was sealed at the time (known-good for the
+    compatibility half of the contract).
     """
     raw = PRE_BASIS_JOURNAL.read_text().splitlines()
     proofs = [json.loads(line) for line in raw if json.loads(line)["record_type"] == "proof"]
@@ -189,7 +189,7 @@ def test_pre_basis_journal_still_verifies(tmp_path: Path) -> None:
 
 
 def _proof_node(**overrides: object) -> Node:
-    """A validated node: what a proof record has to name (T3-9)."""
+    """A validated node: what a proof record has to name."""
     spec: dict[str, object] = {
         "id": "n1",
         "kind": "impl",
@@ -225,7 +225,7 @@ def _passing_result() -> Tier1Result:
 
 
 def test_build_from_gate_seals_the_task_hash_node_hash_and_kind(tmp_path: Path) -> None:
-    """Known-good (T3-9): a sealed record names what it is a proof *of*.
+    """Known-good: a sealed record names what it is a proof *of*.
 
     Before this the record held `node_id` and nothing that said which
     task was being worked on or what the node said, so a journal from
@@ -255,7 +255,7 @@ def test_build_from_gate_seals_the_task_hash_node_hash_and_kind(tmp_path: Path) 
 
 
 def test_build_from_gate_seals_the_tree_hash_it_was_proven_on(tmp_path: Path) -> None:
-    """Known-good (T3-10): the record names the worktree its gate passed
+    """Known-good: the record names the worktree its gate passed
     on, so a resume can tell whether it is resuming onto that tree rather
     than assuming the edits are still there.
 
@@ -284,7 +284,7 @@ def test_build_from_gate_seals_the_tree_hash_it_was_proven_on(tmp_path: Path) ->
 
 
 def test_altering_a_sealed_task_hash_fails_verification(tmp_path: Path) -> None:
-    """Known-bad (T3-9c): the new fields are inside the hash, so a record
+    """Known-bad: the new fields are inside the hash, so a record
     re-pointed at another task is corruption, not a reusable proof."""
     record = build_from_gate(
         _proof_node(), "diff n1\n", _passing_result(), [], "e1", thinking="", task_hash="a" * 64
@@ -313,7 +313,7 @@ def test_node_hash_pins_the_serialisation_a_resume_keys_on(tmp_path: Path) -> No
 
 def test_proven_records_returns_the_last_record_per_node(tmp_path: Path) -> None:
     """`rebuild_proven` keeps its narrower contract; this one hands back
-    the whole record, which is what a resume needs to check it (T3-9)."""
+    the whole record, which is what a resume needs to check it."""
     path = tmp_path / "proofs.jsonl"
     first = _record("n1")
     append_record(path, first)
@@ -639,7 +639,7 @@ def test_spans_round_trip_beside_proofs(tmp_path: Path) -> None:
     assert read_spans(path) == [span]
     assert read_records(path) == [proof]
     lines = path.read_text().splitlines()
-    # Unset fields stay off the line (T6-12: `attempt_hash` is written only
+    # Unset fields stay off the line (`attempt_hash` is written only
     # when an attempt sidecar exists), so the sealed payload and the line agree.
     assert lines[0] == json.dumps(span.model_dump(exclude_unset=True), sort_keys=True)
 
@@ -812,7 +812,7 @@ def _plan_node(node_id: str = "n1", *, files: list[str] | None = None) -> Node:
 
 
 def test_plan_record_seals_what_was_asked_and_round_trips(tmp_path: Path) -> None:
-    """Known-good (T6-13): the plan is in the chain before any outcome, with
+    """Known-good: the plan is in the chain before any outcome, with
     every node's kind, scope, budgets and hash; a replan names what it
     replaces; `verify` accepts it and `read_plans` returns it in order."""
     path = tmp_path / "proofs.jsonl"
@@ -846,9 +846,9 @@ def test_plan_record_seals_what_was_asked_and_round_trips(tmp_path: Path) -> Non
 
 
 def test_verify_rejects_a_tampered_plan_and_a_proof_no_plan_asked_for(tmp_path: Path) -> None:
-    """Known-bad (T6-13): editing a plan record breaks its hash; a proof
+    """Known-bad: editing a plan record breaks its hash; a proof
     sealed after a plan whose node hash no plan names is `unplanned-proof`.
-    A proof sealed before any plan predates T6-13 and is not judged."""
+    A proof sealed before any plan predates plan records and is not judged."""
     path = tmp_path / "proofs.jsonl"
     node = _plan_node()
     legacy = build_record(
@@ -901,9 +901,9 @@ def test_verify_rejects_a_tampered_plan_and_a_proof_no_plan_asked_for(tmp_path: 
 
 
 def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_path: Path) -> None:
-    """T6-36, from round 3e (F21.16): the scrub capped the top-level `diff`
+    """From round 3e: the scrub capped the top-level `diff`
     at MAX_THINKING_CHARS, so every sidecar whose diff was longer than
-    4000 characters failed T6-27's `sidecar-diff-hash` check, the run
+    4000 characters failed the `sidecar-diff-hash` check, the run
     aborted on its own journal and `saddle explain` refused it; and the
     scrub was one level deep, so nested `samples[i]` text was neither
     capped nor redacted. Known-good: a diff five times the cap is stored
@@ -912,12 +912,12 @@ def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_p
     that is not retained is still capped, which is what says the scrub
     reaches the nesting at all.
 
-    flip: the two `thinking` assertions, from capped to whole (T6-51,
-    F21.20). The old expectation pinned a defect -- the cap reaching
-    nested reasoning -- not a contract; the contract it was accidentally
-    protecting is that the scrub descends and redacts, and that is now
-    carried by `usage.note`, which is capped and redacted at the same
-    depth."""
+    flip: the two `thinking` assertions, from capped to whole (round 3f
+    lost a draw's reasoning to the cap). The old expectation pinned a
+    defect -- the cap reaching nested reasoning -- not a contract; the
+    contract it was accidentally protecting is that the scrub descends and
+    redacts, and that is now carried by `usage.note`, which is capped and
+    redacted at the same depth."""
     journal = tmp_path / "proofs.jsonl"
     diff = "diff --git a/n.py b/n.py\n" + "+x\n" * (MAX_THINKING_CHARS)
     long_thought = "t" * (MAX_THINKING_CHARS + 5)
@@ -968,7 +968,7 @@ def test_attempt_sidecar_keeps_a_large_diff_whole_and_scrubs_every_nesting(tmp_p
 
 
 def test_attempt_sidecar_keeps_reasoning_whole_at_every_depth(tmp_path: Path) -> None:
-    """T6-51, from round 3f (F21.20): the recursive scrub capped
+    """From round 3f: the recursive scrub capped
     `samples[i].thinking`, where a draw's reasoning lives, so three
     samples lost 31 911, 58 927 and 45 345 characters and the first step
     of reading a failed attempt could not be taken from the record.
@@ -1010,7 +1010,7 @@ def test_attempt_sidecar_keeps_reasoning_whole_at_every_depth(tmp_path: Path) ->
 
 
 def test_attempt_sidecar_is_sealed_into_its_span_and_verified(tmp_path: Path) -> None:
-    """Known-good (T6-12): the sidecar's hash rides in the agent span and
+    """Known-good: the sidecar's hash rides in the agent span and
     `verify` checks it; known-bad: one edited byte, or a missing file, is
     an `attempt-sidecar` issue naming the span."""
     path = tmp_path / "proofs.jsonl"
@@ -1065,10 +1065,11 @@ def test_verify_rejects_a_malformed_plan_line(tmp_path: Path) -> None:
 
 
 def test_span_started_at_is_sealed_when_given_and_absent_when_not() -> None:
-    """T6-27 known-good: a span built with `started_at` carries it under the
+    """Known-good: a span built with `started_at` carries it under the
     hash, so editing it fails verification; known-bad for compatibility:
     a span built without one has no such key, which is what keeps every
-    pre-T6-27 journal (and the pre-basis fixture) verifying.
+    journal sealed before spans carried a start (and the pre-basis fixture)
+    verifying.
     """
     when = "2026-09-20T17:22:00+00:00"
     stamped = build_span(
@@ -1090,7 +1091,7 @@ def test_span_started_at_is_sealed_when_given_and_absent_when_not() -> None:
 
 
 def test_recorder_stamps_tool_spans_with_the_start_derived_from_its_clock(tmp_path: Path) -> None:
-    """T6-27: a tool span's start is the recorder's clock less its duration."""
+    """A tool span's start is the recorder's clock less its duration."""
     fixed = datetime(2026, 9, 20, 17, 22, 10, tzinfo=UTC)
     journal = tmp_path / "proofs.jsonl"
     recorder = SpanRecorder(journal, "n1", None, clock=lambda: fixed)
@@ -1102,7 +1103,8 @@ def test_recorder_stamps_tool_spans_with_the_start_derived_from_its_clock(tmp_pa
 
 
 def test_plan_record_carries_each_nodes_allowed_tools() -> None:
-    """T6-27: F21.13d could not be settled because the plan omitted the tools."""
+    """The plan seals each node's allowed tools, which decide what failure output
+    reaches its worker; a plan without them left that unanswerable."""
     node = _plan_node()
     plan = build_plan([node], task_hash="t")
     assert plan.nodes[0].allowed_tools == list(node.execution_constraints.allowed_tools)
@@ -1110,10 +1112,10 @@ def test_plan_record_carries_each_nodes_allowed_tools() -> None:
 
 
 def test_verify_flags_a_retained_diff_that_does_not_hash_to_its_diff_hash(tmp_path: Path) -> None:
-    """T6-27 known-bad: a sidecar retaining a diff whose sha256 is not the
+    """Known-bad: a sidecar retaining a diff whose sha256 is not the
     sealed `diff_hash` is a sidecar telling two stories, and verify says
     so with its own code. Known-good: a matching diff verifies clean, and a
-    sidecar with no retained diff (pre-T6-27) is not judged.
+    sidecar with no retained diff (an older journal) is not judged.
     """
     journal = tmp_path / "proofs.jsonl"
     diff = "diff --git a/n.py b/n.py\n"
@@ -1146,7 +1148,7 @@ def test_verify_flags_a_retained_diff_that_does_not_hash_to_its_diff_hash(tmp_pa
 
 
 def test_sidecar_diff_check_ignores_sidecars_that_are_not_json_objects(tmp_path: Path) -> None:
-    """T6-27: the retained-diff check judges only a JSON object; a sidecar
+    """The retained-diff check judges only a JSON object; a sidecar
     that is not JSON, or is a JSON list, hashes as sealed and is left to
     the sidecar-hash check alone."""
     journal = tmp_path / "proofs.jsonl"
@@ -1174,7 +1176,7 @@ def test_sidecar_diff_check_ignores_sidecars_that_are_not_json_objects(tmp_path:
 def test_sidecar_retains_a_diff_verbatim_even_when_its_code_looks_like_a_secret(
     tmp_path: Path,
 ) -> None:
-    """T6-70. Known-bad, from `regress-99e3986/t6/t6-saddle` at `99e3986`:
+    """Known-bad, from `regress-99e3986/t6/t6-saddle` at `99e3986`:
     a tokenizer's diff contains `Token = namedtuple(...)` and `"unexpected
     token: %s"`, both of which `_NAMED_PATTERN` rewrites to `name=***`.
     `_proposal_evidence` hashes the raw diff and `write_attempt_sidecar`

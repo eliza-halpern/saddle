@@ -82,7 +82,7 @@ function paintDot(sid, runState) {
 
 /* On a phone the sidebar is a closed drawer, so a run that needs you in a
    session other than the one on screen is shown on the ☰ button: a dot,
-   and the sessions' names in its label (UXREVIEW2 Q3). */
+   and the sessions' names in its label. */
 function paintMenu() {
   const menu = document.getElementById("menu");
   if (!menu) return;

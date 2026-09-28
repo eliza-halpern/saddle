@@ -621,7 +621,7 @@ function actionRow(card, packet) {
     if (!recap) {
       recap = `verdict: ${packet.verdict} — ${packet.verdict_text}`;
     }
-    // Leave Task for the read-only talk lane; Edit stays an explicit choice (LANECHIP).
+    // Leave Task for the read-only talk lane; Edit stays an explicit choice.
     if (typeof setMode === "function" && state.mode !== "ask") await setMode("ask");
     const input = document.querySelector("#input");
     // The compact recap, then where the full packet is on disk: the Ask
@@ -753,7 +753,7 @@ function taskTurn(task) {
   return turn;
 }
 
-/* A run's recap is stored as a message so the chat's model sees it (T5-9).
+/* A run's recap is stored as a message so the chat's model sees it.
    On reload, that message is drawn as the card it stands for. */
 const RECAP = /^\[saddle task ([0-9a-f]+)\] ([^\n]*)/;
 

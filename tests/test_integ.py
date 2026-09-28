@@ -239,7 +239,7 @@ def test_an_old_sidecar_is_never_read_as_zero_measured_tokens(tmp_path: Path) ->
     assert any("estimate" in item for item in rows["not-proven"].items)
 
 
-# -- the finish-refusal cap (FEEDCAP): "audit unresolved" --------------------------
+# -- the finish-refusal cap: "audit unresolved" ------------------------------------
 
 
 def test_an_unresolved_audit_stop_names_its_findings_on_the_card_and_packet(

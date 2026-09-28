@@ -1,4 +1,4 @@
-"""T6-75: the search/replace emission format, parser and applier."""
+"""The search/replace emission format, parser and applier."""
 
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ def test_apply_refuses_a_path_outside_the_worktree(tmp_path: Path) -> None:
 def test_an_edit_costs_the_size_of_the_change_not_the_size_of_the_file(
     tmp_path: Path,
 ) -> None:
-    """Known-good, and the reason the format exists (T6-75).
+    """Known-good, and the reason the format exists.
 
     Under `DIFF_GRAMMAR` the only way to touch a file was to re-emit it
     whole, so a one-line change to a 2 000-line module cost 2 000 lines of
@@ -353,7 +353,7 @@ def test_a_block_unique_among_lines_applies_though_its_text_sits_inside_another(
 
     The other occurrence is the tail of a deeper-indented line, which a
     block of whole lines cannot have meant. Counting it refused a correct
-    edit -- the T6-66 shape, an applier turning down work that was right.
+    edit -- a gate refusing correct work, here an applier turning down a right edit.
     """
     body = "class C:\n    def f(self):\n        return None\n\n\ndef g():\n    return None\n"
     (tmp_path / "m.py").write_text(body)
@@ -418,7 +418,7 @@ def test_the_edit_lands_on_the_line_that_was_counted(tmp_path: Path) -> None:
 
 
 def test_a_refused_search_block_names_the_line_that_diverged(tmp_path: Path) -> None:
-    """Known-good diagnostic (F21.51): every line right but one, which is
+    """Known-good diagnostic: every line right but one, which is
     a bracket short. The block is still refused; what the refusal now
     carries is which line diverged and what the file holds there."""
     (tmp_path / "m.py").write_text('a = 1\ndata = {"k": [{"x": "1"}]}\nb = 2\n')
