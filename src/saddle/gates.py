@@ -529,6 +529,35 @@ lines it did not judge because no passing pytest run executes them
 (`never_run_test_lines`)."""
 
 
+PACKAGING_SCRIPT: Final = "setup.py"
+"""The repository-root file `check_changed_line_coverage` does not judge."""
+
+
+PACKAGING_LINES: Final = "packaging-lines="
+"""The `basis` field of `check_changed_line_coverage` counting the changed
+lines of the root packaging script it did not judge
+(`packaging_script_lines`)."""
+
+
+def packaging_script_lines(
+    changed: Collection[tuple[str, int]], prefix: str = ""
+) -> set[tuple[str, int]]:
+    """The changed lines of the repository-root `setup.py`.
+
+    A build frontend runs that file in its own environment; a test cannot
+    import it without running a build, so a pytest coverage run never
+    executes it and asking coverage to see it run asks for a tree that
+    deletes it. `check_changed_line_coverage` leaves these lines out of its
+    judgement and counts them. What that admits, stated plainly: logic
+    placed in the root `setup.py` is no longer coverage-judged. A
+    `setup.py` anywhere below the root is an ordinary module and stays
+    judged, as does every other file. Keys are spelled as `changed` spells
+    them, with `prefix` (the workdir).
+    """
+    root = str(PurePath(prefix) / PACKAGING_SCRIPT) if prefix else PACKAGING_SCRIPT
+    return {(path, line) for path, line in changed if path == root}
+
+
 SPARED_DEFS: Final = "spared-defs="
 """The `basis` field of `check_changed_line_coverage` naming each baseline
 definition whose changed lines it did not judge (`compelled_definitions`)."""
@@ -550,6 +579,7 @@ def check_changed_line_coverage(
     compelled: Collection[tuple[str, int]] | Mapping[str, Collection[tuple[str, int]]] = (),
     writable: bool = True,
     never_run: Collection[tuple[str, int]] = (),
+    packaging: Collection[tuple[str, int]] = (),
 ) -> GateCheck:
     """Every changed line must be executed; `minimum` is the node threshold.
 
@@ -582,6 +612,12 @@ def check_changed_line_coverage(
     and `basis` counts them: requiring one to run is requiring the code
     under test to be wrong.
 
+    `packaging` is the changed lines of the root packaging script
+    (`packaging_script_lines`). They leave the judgement too, and are
+    counted twice over: in `basis` as `packaging-lines=N` and at the end
+    of every `detail` as "N packaging lines not judged (root setup.py)",
+    so a reader of either sees what was set aside.
+
     Deferral does not fail the run later. A line still uncovered when
     the DAG drains is uncovered against the arm's own suite, and the
     hidden suite that decides the task is a different one, so failing on
@@ -609,7 +645,13 @@ def check_changed_line_coverage(
     unrunnable = (changed - spared) & set(never_run)
     if unrunnable:
         note += f" {EXEMPT_TEST_LINES}{len(unrunnable)}"
-    judged = changed - spared - unrunnable
+    packaged = (changed - spared - unrunnable) & set(packaging)
+    aside = ""
+    if packaged:
+        note += f" {PACKAGING_LINES}{len(packaged)}"
+        plural = "line" if len(packaged) == 1 else "lines"
+        aside = f"; {len(packaged)} packaging {plural} not judged (root {PACKAGING_SCRIPT})"
+    judged = changed - spared - unrunnable - packaged
     if not judged:
         return GateCheck(
             name="coverage",
@@ -618,7 +660,10 @@ def check_changed_line_coverage(
                 "every changed line is compelled or a test line no passing pytest run executes"
                 if unrunnable
                 else "every changed line is inside a definition the baseline already had"
-            ),
+                if spared
+                else "every changed line is in the root packaging script"
+            )
+            + aside,
             basis=f"changed-lines={len(changed)}{note}",
         )
     missing = sorted(judged - covered)
@@ -629,7 +674,7 @@ def check_changed_line_coverage(
             return GateCheck(
                 name="coverage",
                 passed=True,
-                detail=f"deferred, no test node has run that can reach {gaps}",
+                detail=f"deferred, no test node has run that can reach {gaps}{aside}",
                 basis=(
                     f"changed-lines={len(changed)} deferred-lines={len(missing)}"
                     f"{note} owed={','.join(sorted(owed))}"
@@ -647,19 +692,19 @@ def check_changed_line_coverage(
             return GateCheck(
                 name="coverage",
                 passed=True,
-                detail=f"deferred, no node that may write a test remains to reach {gaps}",
+                detail=f"deferred, no node that may write a test remains to reach {gaps}{aside}",
                 basis=(f"changed-lines={len(changed)} unreachable-lines={len(missing)}{note}"),
             )
         return GateCheck(
             name="coverage",
             passed=False,
-            detail=f"no test runs {gaps}",
+            detail=f"no test runs {gaps}{aside}",
             basis=f"changed-lines={len(changed)}{note}",
         )
     return GateCheck(
         name="coverage",
         passed=True,
-        detail="every changed line runs",
+        detail=f"every changed line runs{aside}",
         basis=f"changed-lines={len(changed)}{note}",
     )
 
@@ -2205,6 +2250,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             ),
             writable=may_write_tests,
             never_run=never_run_test_lines(inputs.sources, inputs.workdir),
+            packaging=packaging_script_lines(inputs.changed, inputs.workdir),
         )
     )
     checks = (

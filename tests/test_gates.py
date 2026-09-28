@@ -10,6 +10,7 @@ from typing import Final
 
 import pytest
 
+from saddle.coverage_text import uncovered_lines
 from saddle.dag import DeterministicGate, Node
 from saddle.evidence import MutationOutcome
 from saddle.gates import (
@@ -38,6 +39,7 @@ from saddle.gates import (
     compelled_lines,
     introduced_findings,
     never_run_test_lines,
+    packaging_script_lines,
     plan_prescribes_deletion,
     plan_restates_the_gate,
     plan_retargets_reserved_files,
@@ -2944,3 +2946,137 @@ def test_coverage_exemption_admits_an_uncollected_test_of_only_failure_lines() -
     covered = {("test_t.py", 1)}
     assert not check_changed_line_coverage(changed, covered, 100.0).passed
     assert check_changed_line_coverage(changed, covered, 100.0, never_run=never).passed
+
+
+def test_packaging_script_lines_names_exactly_the_root_setup_py() -> None:
+    """Known-good and known-bad in one set, spelled as the runner spells `changed`.
+
+    Only `<workdir>/setup.py` is the packaging script. A `setup.py` below
+    the root, a test named after it and a module whose name merely ends in
+    it are ordinary files.
+    """
+    changed = {
+        ("/w/setup.py", 4),
+        ("/w/setup.py", 6),
+        ("/w/pkg/setup.py", 1),
+        ("/w/test_setup.py", 1),
+        ("/w/mysetup.py", 1),
+        ("/w/m.py", 1),
+    }
+    assert packaging_script_lines(changed, "/w") == {("/w/setup.py", 4), ("/w/setup.py", 6)}
+    # Without a prefix the keys are workdir-relative.
+    relative = {("setup.py", 2), ("pkg/setup.py", 2), ("m.py", 1)}
+    assert packaging_script_lines(relative) == {("setup.py", 2)}
+
+
+def test_coverage_counts_each_packaging_line_it_does_not_judge() -> None:
+    """The count is the number of root-setup.py lines set aside, not a label.
+
+    One line, then three, then three of which one is compelled (a line
+    `public-deletions` already took out of the judgement is not counted
+    twice): the detail and `basis` carry the same number each time, and
+    the other files are judged exactly as before.
+    """
+    covered = {("m.py", 1)}
+    one = {("m.py", 1), ("setup.py", 4)}
+    three = {("m.py", 1), ("setup.py", 4), ("setup.py", 6), ("setup.py", 7)}
+
+    single = check_changed_line_coverage(one, covered, 100.0, packaging=packaging_script_lines(one))
+    triple = check_changed_line_coverage(
+        three, covered, 100.0, packaging=packaging_script_lines(three)
+    )
+    shared = check_changed_line_coverage(
+        three,
+        covered,
+        100.0,
+        compelled={("setup.py", 7)},
+        packaging=packaging_script_lines(three),
+    )
+
+    assert single.passed
+    assert triple.passed
+    assert shared.passed
+    assert single.detail == "every changed line runs; 1 packaging line not judged (root setup.py)"
+    assert single.basis == "changed-lines=2 packaging-lines=1"
+    assert triple.detail == "every changed line runs; 3 packaging lines not judged (root setup.py)"
+    assert triple.basis == "changed-lines=4 packaging-lines=3"
+    assert shared.detail == "every changed line runs; 2 packaging lines not judged (root setup.py)"
+    assert shared.basis == "changed-lines=4 compelled-lines=1 packaging-lines=2"
+    # With nothing set aside nothing is said.
+    plain = check_changed_line_coverage({("m.py", 1)}, covered, 100.0, packaging=set())
+    assert plain.detail == "every changed line runs"
+    assert plain.basis == "changed-lines=1"
+
+
+def test_coverage_still_names_every_other_gap_beside_the_packaging_count() -> None:
+    """Known-bad: the exemption is the root setup.py's lines and nothing else.
+
+    A source line and a test line no test runs still fail the gate, and the
+    detail's consumer (`coverage_text.uncovered_lines`) reads back exactly
+    those two gaps: the count's words add no `file:line` of their own.
+    """
+    changed = {("m.py", 1), ("m.py", 2), ("test_m.py", 5), ("setup.py", 4), ("setup.py", 6)}
+    covered = {("m.py", 1)}
+    check = check_changed_line_coverage(
+        changed, covered, 100.0, packaging=packaging_script_lines(changed)
+    )
+
+    assert not check.passed
+    assert check.detail == (
+        "no test runs m.py:2, test_m.py:5; 2 packaging lines not judged (root setup.py)"
+    )
+    assert uncovered_lines(check.detail) == [("m.py", 2), ("test_m.py", 5)]
+    assert check.basis == "changed-lines=5 packaging-lines=2"
+
+
+def test_coverage_says_so_when_only_the_packaging_script_changed() -> None:
+    """A diff touching nothing but the root setup.py passes and says why."""
+    changed = {("setup.py", 4), ("setup.py", 6)}
+    check = check_changed_line_coverage(
+        changed, set(), 100.0, packaging=packaging_script_lines(changed)
+    )
+    assert check.passed
+    assert check.detail == (
+        "every changed line is in the root packaging script"
+        "; 2 packaging lines not judged (root setup.py)"
+    )
+    assert check.basis == "changed-lines=2 packaging-lines=2"
+
+
+def test_coverage_deferrals_carry_the_packaging_count() -> None:
+    """The two deferral paths also say what they set aside."""
+    changed = {("m.py", 1), ("setup.py", 4)}
+    packaging = packaging_script_lines(changed)
+    owed = check_changed_line_coverage(changed, set(), 100.0, owed=["n2"], packaging=packaging)
+    unwritable = check_changed_line_coverage(
+        changed, set(), 100.0, writable=False, packaging=packaging
+    )
+    assert owed.detail == (
+        "deferred, no test node has run that can reach m.py:1"
+        "; 1 packaging line not judged (root setup.py)"
+    )
+    assert owed.basis == "changed-lines=2 deferred-lines=1 packaging-lines=1 owed=n2"
+    assert unwritable.detail == (
+        "deferred, no node that may write a test remains to reach m.py:1"
+        "; 1 packaging line not judged (root setup.py)"
+    )
+    assert unwritable.basis == "changed-lines=2 unreachable-lines=1 packaging-lines=1"
+
+
+def test_coverage_exemption_admits_untested_logic_in_the_root_setup_py() -> None:
+    """What the loosening lets through, exhibited.
+
+    Logic placed in the root setup.py -- here a version computed by a
+    branch no test runs -- was named before and is not now. The gate
+    passes it, and the count is the only trace.
+    """
+    changed = {("m.py", 1), ("setup.py", 3), ("setup.py", 4), ("setup.py", 5)}
+    covered = {("m.py", 1)}
+    before = check_changed_line_coverage(changed, covered, 100.0)
+    after = check_changed_line_coverage(
+        changed, covered, 100.0, packaging=packaging_script_lines(changed)
+    )
+    assert not before.passed
+    assert before.detail == "no test runs setup.py:3, setup.py:4, setup.py:5"
+    assert after.passed
+    assert after.detail == "every changed line runs; 3 packaging lines not judged (root setup.py)"

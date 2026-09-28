@@ -1449,3 +1449,60 @@ def test_run_node_gate_still_judges_a_test_line_a_passing_suite_could_run(
     assert "test_n.py:7" in coverage.detail, coverage.detail
     assert "n.py:3" in coverage.detail, "f's raise is not a test line"
     assert "n.py:8" in coverage.detail, "a source module's __main__ stays judged"
+
+
+_ROOT_SETUP_PY = (
+    '"""Fallback for legacy (pre-PEP 660) tooling; the real metadata lives in\n'
+    'pyproject.toml."""\n'
+    "\n"
+    "from setuptools import setup\n"
+    "\n"
+    "setup()\n"
+)
+"""A root packaging script of the shape a correct tree carried: lines 4 and 6
+are statements, and no test can import the file without running a build."""
+
+_COVERED_TEST = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
+
+
+def test_run_node_gate_does_not_judge_the_root_setup_py(tmp_path: Path) -> None:
+    """Known-good: a correct tree the coverage gate refused for its setup.py.
+
+    The suite is green and every line of `n.py` and `test_n.py` runs. The
+    only lines no test runs are the root `setup.py`'s import and its
+    `setup()` call, which run under a build frontend, never under pytest.
+    Coverage used to name them; now it leaves them out and says how many.
+    """
+    (tmp_path / "setup.py").write_text(_ROOT_SETUP_PY)
+    _worktree(tmp_path, _COVERED_TEST)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
+    tests = next(check for check in result.checks if check.name == "tests")
+    coverage = next(check for check in result.checks if check.name == "coverage")
+
+    assert tests.passed, tests.detail
+    assert coverage.passed, coverage.detail
+    assert coverage.detail == (
+        "every changed line runs; 2 packaging lines not judged (root setup.py)"
+    )
+    assert coverage.basis is not None
+    assert "packaging-lines=2" in coverage.basis.split(), coverage.basis
+
+
+def test_run_node_gate_still_judges_a_setup_py_below_the_root(tmp_path: Path) -> None:
+    """Known-bad: only the repository-root setup.py is a packaging script.
+
+    The same text under `tools/` is an ordinary module nothing runs, and
+    coverage names it, alongside the root one's count.
+    """
+    (tmp_path / "setup.py").write_text(_ROOT_SETUP_PY)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "setup.py").write_text(_ROOT_SETUP_PY)
+    _worktree(tmp_path, _COVERED_TEST)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+
+    assert not coverage.passed
+    assert coverage.detail == (
+        f"no test runs {tmp_path}/tools/setup.py:4, {tmp_path}/tools/setup.py:6"
+        "; 2 packaging lines not judged (root setup.py)"
+    )
