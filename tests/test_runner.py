@@ -1354,3 +1354,98 @@ def test_run_node_gate_judges_a_compelled_definition_a_test_does_reach(tmp_path:
     assert coverage.detail.endswith("n.py:4"), coverage.detail
     assert coverage.basis is not None
     assert "compelled-lines=" not in coverage.basis
+
+
+_RAISES_CODE = "def f(x):\n    if x < 0:\n        raise ValueError(x)\n    return x\n"
+"""Correct code for the idioms below: `f(-1)` raises, so their failure lines never run."""
+
+_FAILURE_IDIOMS_TEST = (
+    "import pytest\n"
+    "from n import f\n"
+    "\n"
+    "\n"
+    "def test_f():  # REQ-001\n"
+    "    assert f(2) == 2\n"
+    "    try:\n"
+    "        f(-1)\n"
+    "        assert False, 'expected ValueError'\n"
+    "    except ValueError:\n"
+    "        pass\n"
+    "    try:\n"
+    "        f(-2)\n"
+    "        raise AssertionError(\n"
+    "            'expected ValueError'\n"
+    "        )\n"
+    "    except ValueError:\n"
+    "        pass\n"
+    "    try:\n"
+    "        f(-3)\n"
+    "        pytest.fail('expected ValueError')\n"
+    "    except ValueError:\n"
+    "        pass\n"
+    "\n"
+    "\n"
+    "if __name__ == '__main__':\n"
+    "    test_f()\n"
+    "    print('ok')\n"
+)
+"""A correct test module whose failure lines and script entry no pytest run executes.
+
+Line 9 is `assert False`, 14-16 `raise AssertionError(...)`, 21 `pytest.fail`
+and 27-28 the body of `if __name__ == '__main__':`. Each failure line runs
+only when `f` is wrong, and pytest imports the module under its own name.
+"""
+
+
+def test_run_node_gate_does_not_ask_a_passing_suite_to_run_its_own_failure_lines(
+    tmp_path: Path,
+) -> None:
+    """Known-good: a correct tree the coverage gate used to refuse.
+
+    The suite is green and every line of `n.py` runs. Coverage refused it
+    anyway, naming the test module's `assert False`, `raise AssertionError`,
+    `pytest.fail` and `__main__` lines: the only way to run those under
+    pytest is for `f` to be wrong, which the tests gate then refuses. A
+    worker handed that refusal on a correct tree has no correct diff left.
+    """
+    _worktree(tmp_path, _FAILURE_IDIOMS_TEST, fixed_code=_RAISES_CODE)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
+    tests = next(check for check in result.checks if check.name == "tests")
+    coverage = next(check for check in result.checks if check.name == "coverage")
+
+    assert tests.passed, tests.detail
+    assert coverage.passed, coverage.detail
+    assert coverage.detail == "every changed line runs"
+    # Every exempted statement is counted, so a pass says what it set aside.
+    assert "exempt-test-lines=5" in str(coverage.basis), coverage.basis
+
+
+def test_run_node_gate_still_judges_a_test_line_a_passing_suite_could_run(
+    tmp_path: Path,
+) -> None:
+    """Known-bad: a reachable test line the suite skips is still refused.
+
+    `assert x > 0` in a branch the data never takes can run on correct
+    code; only the test's choice of inputs keeps it dark, so coverage
+    still names it. The same goes for a `__main__` block in a module
+    pytest does not collect as a test.
+    """
+    test_body = (
+        "from n import f\n"
+        "\n"
+        "\n"
+        "def test_f():  # REQ-001\n"
+        "    for x in (1, 2):\n"
+        "        if x > 5:\n"
+        "            assert f(x) > 0\n"
+        "        assert f(x) == x\n"
+    )
+    fixed = _RAISES_CODE + "\n\nif __name__ == '__main__':\n    print(f(1))\n"
+    _worktree(tmp_path, test_body, fixed_code=fixed)
+    result = run_node_gate(_node(kind="refactor"), tmp_path)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+
+    assert not coverage.passed
+    assert "test_n.py:7" in coverage.detail, coverage.detail
+    assert "n.py:3" in coverage.detail, "f's raise is not a test line"
+    assert "n.py:8" in coverage.detail, "a source module's __main__ stays judged"
