@@ -8,12 +8,16 @@ and look at them from the outside.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tarfile
+import tomllib
 from pathlib import Path
 
 import pytest
+
+from saddle.audit import SURFACE_TOOLS
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -49,3 +53,19 @@ def test_the_sdist_carries_every_tracked_file(tmp_path: Path) -> None:
     with tarfile.open(sdist) as archive:
         members = {m.name.partition("/")[2] for m in archive.getmembers() if m.isfile()}
     assert sorted(tracked - members) == []
+
+
+def _declared() -> set[str]:
+    """The distribution names `[project].dependencies` declares, lowercased."""
+    project = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]
+    return {
+        re.split(r"[<>=!~;\[ ]", spec, maxsplit=1)[0].lower() for spec in project["dependencies"]
+    }
+
+
+def test_every_gate_tool_is_a_runtime_dependency() -> None:
+    """Contract: an install with only the declared dependencies has every tool
+    the gates run or `gate_surface` reads. A tool left in the dev group is
+    absent from a `uv tool install`, and the audit cannot run."""
+    gate_tools = {*SURFACE_TOOLS, "pytest"}
+    assert sorted(gate_tools - _declared()) == []

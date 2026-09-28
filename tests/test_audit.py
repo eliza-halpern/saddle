@@ -8,6 +8,7 @@ tree with healthy tests passes the mutation gate for the stated reason.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -17,12 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from saddle import audit
+from saddle import audit, cli
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     NOT_APPLICABLE,
     AuditError,
     AuditResult,
+    GateSetupError,
     audit_node,
     audit_tree,
     gate_surface,
@@ -577,3 +579,46 @@ def test_a_basis_that_names_the_copy_is_spelled_from_the_root(tmp_path: Path) ->
         ("clean", "changed-lines=1"),
     ]
     assert mutation is None
+
+
+# ------------------------- a missing gate tool is a setup error, not a verdict
+
+
+def _without_metadata(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+    """`importlib.metadata.version` as an install lacking `missing` answers it."""
+    real = importlib.metadata.version
+
+    def version(name: str) -> str:
+        if name == missing:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", version)
+
+
+def test_gate_surface_reads_every_installed_tool() -> None:
+    """Known-good: with every gate tool installed, the surface is a digest."""
+    assert re.fullmatch(r"[0-9a-f]{64}", gate_surface())
+
+
+@pytest.mark.parametrize("missing", audit.SURFACE_TOOLS)
+def test_a_tool_without_metadata_is_a_setup_error_naming_it(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    """Known-bad: an install without `missing` raises a setup error that names
+    it, not `PackageNotFoundError`'s bare traceback."""
+    _without_metadata(monkeypatch, missing)
+    with pytest.raises(GateSetupError, match=rf"setup: the gate tool {missing!r} is not installed"):
+        gate_surface()
+
+
+def test_saddle_audit_reports_a_missing_tool_as_an_error_not_a_verdict(
+    clean_tree: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI exits "could not audit" with the tool named, and prints no verdict."""
+    _without_metadata(monkeypatch, "mutmut")
+    code = cli.main(["audit", "--repo", str(clean_tree), "--no-cache"])
+    out, err = capsys.readouterr()
+    assert code == cli.AUDIT_COULD_NOT_AUDIT
+    assert "'mutmut'" in err
+    assert "verdict" not in out

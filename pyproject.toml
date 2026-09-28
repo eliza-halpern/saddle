@@ -18,6 +18,13 @@ dependencies = [
     "starlette>=0.41",
     "uvicorn>=0.32",
     "python-multipart>=0.0.12",
+    # The gates run these, and `audit.gate_surface` reads their versions, so
+    # an install without them cannot audit anything. The mutmut bound is
+    # the release the batched mutant lookup was measured against: it imports
+    # mutmut's internal modules (`evidence._MUTANT_LOOKUP_SCRIPT`).
+    "mutmut>=3.8",
+    "pytest>=8.3",
+    "ruff>=0.8",
 ]
 
 [dependency-groups]
@@ -25,11 +32,8 @@ dev = [
     "hypothesis>=6.130",
     "jinja2>=3.1.6",
     "jsonschema>=4.26.0",
-    "mutmut>=3.0",
     "mypy>=1.14",
-    "pytest>=8.3",
     "pytest-cov>=6.0",
-    "ruff>=0.8",
 ]
 
 [project.scripts]

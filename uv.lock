@@ -1139,9 +1139,12 @@ source = { editable = "." }
 dependencies = [
     { name = "coverage" },
     { name = "httpx" },
+    { name = "mutmut" },
     { name = "pydantic" },
+    { name = "pytest" },
     { name = "python-multipart" },
     { name = "rich" },
+    { name = "ruff" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -1151,20 +1154,20 @@ dev = [
     { name = "hypothesis" },
     { name = "jinja2" },
     { name = "jsonschema" },
-    { name = "mutmut" },
     { name = "mypy" },
-    { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "coverage", specifier = ">=7.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "mutmut", specifier = ">=3.8" },
     { name = "pydantic", specifier = ">=2.13.5" },
+    { name = "pytest", specifier = ">=8.3" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "rich", specifier = ">=13.9" },
+    { name = "ruff", specifier = ">=0.8" },
     { name = "starlette", specifier = ">=0.41" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]
@@ -1174,11 +1177,8 @@ dev = [
     { name = "hypothesis", specifier = ">=6.130" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "jsonschema", specifier = ">=4.26.0" },
-    { name = "mutmut", specifier = ">=3.0" },
     { name = "mypy", specifier = ">=1.14" },
-    { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-cov", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]

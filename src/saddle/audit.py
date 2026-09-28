@@ -36,6 +36,7 @@ import json
 import os
 import platform
 import shutil
+import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -89,6 +90,14 @@ NOT_APPLICABLE: Final[Mapping[str, str]] = {
 
 class AuditError(RuntimeError):
     """An unresolvable baseline, or a tree that is not a git repository."""
+
+
+class GateSetupError(AuditError):
+    """saddle's own installation cannot run a gate: a tool is missing.
+
+    Never a verdict. A gate that cannot run has measured nothing about the
+    tree, so reporting it as `refuse` would refuse correct work for a fault
+    in the install."""
 
 
 @dataclass(frozen=True)
@@ -262,7 +271,7 @@ def gate_surface(
             Path(cast(str, importlib.import_module(name).__file__)) for name in SURFACE_MODULES
         ]
     if versions is None:
-        versions = {tool: importlib.metadata.version(tool) for tool in SURFACE_TOOLS}
+        versions = {tool: _installed_version(tool) for tool in SURFACE_TOOLS}
     digest = hashlib.sha256()
     for path in files:
         digest.update(Path(path).read_bytes())
@@ -270,6 +279,18 @@ def gate_surface(
         digest.update(f"{tool}={version}\n".encode())
     digest.update(platform.python_version().encode())
     return digest.hexdigest()
+
+
+def _installed_version(tool: str) -> str:
+    """`tool`'s installed version, or a `GateSetupError` naming it."""
+    try:
+        return importlib.metadata.version(tool)
+    except importlib.metadata.PackageNotFoundError as exc:
+        msg = (
+            f"setup: the gate tool {tool!r} is not installed beside saddle"
+            f" ({sys.executable}); reinstall saddle-harness with its dependencies"
+        )
+        raise GateSetupError(msg) from exc
 
 
 def _cache_key(tree: str, baseline: str, test_command: str, surface: str) -> dict[str, str]:
