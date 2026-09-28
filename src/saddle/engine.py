@@ -42,6 +42,7 @@ from saddle.events import (
     TurnEnd,
     TurnStart,
 )
+from saddle.installs import INSTALL, INSTALL_REFUSED, REFUSE_INSTALL, Installs
 from saddle.journal import (
     AUDIT_SPAN_HASHES,
     COMPACTION_SPAN,
@@ -65,6 +66,7 @@ from saddle.memory import (
 from saddle.tools import (
     CHECK_TOOL,
     FINISH_TOOL,
+    INSTALL_TOOL,
     REFUSED,
     TOOLS,
     ToolContext,
@@ -332,6 +334,11 @@ class AutoRun:
     and 1). Off, the tool is not offered and a `check` call is an unknown tool."""
     asked: set[str] = field(default_factory=set)
     """Which of the run's own questions ("test-edits", "budget") were put; each at most once."""
+    installs: Installs | None = None
+    """`saddle auto --allow-installs`: an `install` call is checked by
+    `installs.plan`, put to the user as a question every time, and carried
+    out only on Install (`_install`). None: the tool is not offered, and a
+    call to it is an unknown tool."""
     surfaced: str | None = None
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
@@ -860,6 +867,8 @@ def run_turn(
                     and call.name == CHECK_TOOL
                 ):
                     result = auto.feed.check()
+                elif auto is not None and auto.installs is not None and call.name == INSTALL_TOOL:
+                    result = yield from _install(auto, options.journal, node_id, call.arguments)
                 else:
                     result = execute_tool(call, workdir=options.workdir, context=ctx)
                 duration_ms = int((perf_counter() - start) * 1000)
@@ -1144,6 +1153,27 @@ def _ask(
     append_span(journal, answered)
     yield Answered(id=question.id, text=detail, span_id=answered.span_id)
     return reply
+
+
+def _install(
+    auto: AutoRun, journal: Path, node_id: str, arguments: str
+) -> Generator[Event, None, str]:
+    """An `install` call: checked, asked, and installed only on the user's Install.
+
+    A request that fails a check (not a plain requirement, a wheel missing
+    from the folder, a missing or empty folder) is refused without asking.
+    Every other request is a question of its own, whose default, Refuse, is
+    what an unanswered or stopped run takes (`_ask`)."""
+    assert auto.installs is not None
+    plan = auto.installs.plan(arguments)
+    if isinstance(plan, str):
+        return plan
+    qid, text = auto.installs.question(plan)
+    question = Question(id=qid, text=text, options=[INSTALL, REFUSE_INSTALL])
+    choice = yield from _ask(auto, journal, node_id, question, default=REFUSE_INSTALL)
+    if choice != INSTALL:
+        return f"{INSTALL_REFUSED}the user did not approve it. Nothing was installed."
+    return auto.installs.install(plan)
 
 
 def _offer_budget(auto: AutoRun, journal: Path, node_id: str) -> Generator[Event, None, None]:

@@ -39,9 +39,10 @@ from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOp
 from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
+from saddle.installs import Installs, WheelFolder
 from saddle.journal import append_span, build_span
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
-from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, TOOLS, ToolContext
+from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, INSTALL_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
 
 DEFAULT_TIME_BUDGET_S: Final = 1800
@@ -196,6 +197,13 @@ class AutoOptions:
     `check` tool that runs audit tiers 0 and 1 on demand (`feed.AuditFeed.check`).
     Off by default; off, the tool list, prompt and sealed records are those
     of a run without it."""
+    wheels: WheelFolder | None = None
+    """`--allow-installs`: the wheel folder approved installs come from
+    (`installs`). Set, the model is offered an `install` tool; each call is
+    put to the user, and an approved one installs into an overlay on the
+    project venv under the run's own state, removed when the run ends. The
+    run needs a project venv and a folder holding wheels, or it does not
+    start. None (the default): no tool, and records as before."""
 
 
 @dataclass(frozen=True)
@@ -326,6 +334,18 @@ def run_auto(
     problem = sandbox.project_env_problem(project) if project is not None else None
     if problem is not None and options.arm != "E":
         raise AutoError(problem)
+    if options.wheels is not None:
+        if project is None:
+            msg = (
+                "--allow-installs: approved installs go into an environment layered on the "
+                "project's virtualenv, and there is none (a .venv or venv with a pyvenv.cfg "
+                "in the folder, or an active VIRTUAL_ENV)"
+            )
+            raise AutoError(msg)
+        folder_problem = options.wheels.problem()
+        if folder_problem is not None:
+            msg = f"--allow-installs: {folder_problem}"
+            raise AutoError(msg)
     with sandbox.using_project_env(project):
         environment = sandbox.gate_environment()
     run_id = options.run_id or uuid.uuid4().hex[:12]
@@ -345,7 +365,14 @@ def run_auto(
         f"budgets {options.time_budget_s:.0f}s, "
         f"{options.token_budget} generated tokens; test edits "
         f"{'allowed' if options.allow_test_edits else 'refused'}; "
-        f"environment {environment}" + ("; check tool offered" if options.check_tool else ""),
+        f"environment {environment}"
+        + ("; check tool offered" if options.check_tool else "")
+        + (
+            "; "
+            + f"installs from {options.wheels.path} ({options.wheels.source})".replace(";", "%3B")
+            if options.wheels is not None
+            else ""
+        ),
         kind="agent",
     )
     append_span(journal, start)
@@ -366,6 +393,7 @@ def run_auto(
         )
     )
     guard = self_guard(worktree)
+    installed: list[str] = []
     auto = AutoRun(
         budget=RunBudget(
             time_s=options.time_budget_s, tokens=options.token_budget, clock=options.clock
@@ -394,6 +422,11 @@ def run_auto(
             **({"self_guard": True} if guard is not None else {}),
             **({"check_tool": True} if options.check_tool else {}),
             **(
+                {"installs": {"wheel_dir": str(options.wheels.path), "installed": installed}}
+                if options.wheels is not None
+                else {}
+            ),
+            **(
                 {"tier2": "shortlist", "mutant_shortlist": options.mutant_shortlist}
                 if options.tier2 == "shortlist"
                 else {}
@@ -420,7 +453,12 @@ def run_auto(
         system_prompt=SYSTEM_PROMPT.format(tests=tests)
         + (CHECK_PROMPT if options.check_tool else ""),
         context_tokens=options.context_tokens,
-        tools=[*TOOLS, FINISH_SCHEMA, *([CHECK_SCHEMA] if options.check_tool else [])],
+        tools=[
+            *TOOLS,
+            FINISH_SCHEMA,
+            *([CHECK_SCHEMA] if options.check_tool else []),
+            *([INSTALL_SCHEMA] if options.wheels is not None else []),
+        ],
         auto=auto,
         keep_reasoning=options.keep_reasoning,
     )
@@ -435,12 +473,35 @@ def run_auto(
         protected_tests=roots,
         syntax_guard=True,
     )
+    if options.wheels is not None:
+        assert project is not None  # checked before the run started
+        box = context.sandbox
+        assert box is not None
+
+        def use_overlay(overlay: Path) -> None:
+            """From now on the gates and the model's commands run on `overlay`."""
+            if feed is not None:
+                feed.project_env = overlay
+            box.env = {**COMMAND_ENV, **sandbox.project_command_env(overlay)}
+            box.expose = sandbox.default_expose(sandbox.command_env(box.env))
+
+        auto.installs = Installs(
+            folder=options.wheels,
+            project=project,
+            overlay=journal.parent / "overlay",
+            on_ready=use_overlay,
+            installed=installed,
+        )
     events: Iterator[Event] = run_turn(
         client, [], options.task, turn_options, turn=1, context=context, cancel=cancel
     )
-    for event in events:
-        if on_event is not None:
-            on_event(event)
+    try:
+        for event in events:
+            if on_event is not None:
+                on_event(event)
+    finally:
+        if auto.installs is not None:
+            auto.installs.remove()
     _git(worktree, "add", "-A", "--", *UNSTAGED)
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:

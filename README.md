@@ -120,6 +120,19 @@ first `python` on your PATH; with none, a `python3` on PATH that can import all 
 your project's packages (#113). `saddle audit` does not look for the project venv:
 activate it first.
 
+A Task run can also install a package the task turns out to need, if you allow it.
+Start it with `--allow-installs` (on `saddle auto` or `saddle web`) and put the wheels
+in a local folder: `--wheel-dir`, else `SADDLE_WHEEL_DIR` (exported or in the same env
+file), else `~/.local/share/saddle/wheels`. The model then has an `install` tool, and
+every request is put to you as a question (Install or Refuse; a run nobody can answer,
+such as `saddle auto` in a terminal, takes Refuse). An approved install goes into an
+environment of the run's own, under `.saddle/runs/<run-id>/overlay`, layered on the
+project venv and removed when the run ends; your project venv is never written. pip
+runs with `--no-index --find-links <folder> --only-binary=:all:` inside `bwrap` with
+no network, so nothing is downloaded and no package's build code runs. A package with
+no wheel in the folder is refused as missing, and a run with installs allowed does not
+start without a project venv or with a missing or empty wheel folder.
+
 [docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
 evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle
 doctor`, `dag`, `run`, `auto`, `audit`, `tail`, `verify`, `explain`, `chat` (alias

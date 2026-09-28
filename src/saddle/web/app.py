@@ -57,6 +57,7 @@ from saddle.events import (
 )
 from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
+from saddle.installs import WheelFolder
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import Packet, compile_packet, render_packet_text
@@ -321,6 +322,7 @@ class ChatServer:
         feed_auditor: FeedAuditorFactory = default_auditor,
         allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
         keep_reasoning: bool = True,
+        wheels: WheelFolder | None = None,
     ) -> None:
         self.store = store
         self.client_factory = client_factory
@@ -340,6 +342,9 @@ class ChatServer:
         """The confirm strip's default for "Allow test edits"; each run may override it."""
         self.keep_reasoning = keep_reasoning
         """Whether a chat-started run keeps its reasoning (`AutoOptions.keep_reasoning`)."""
+        self.wheels = wheels
+        """`saddle web --allow-installs`: the wheel folder every chat-started run
+        may install from, with the user's approval (`AutoOptions.wheels`)."""
         self.index_lock = threading.Lock()
         self.indexed: dict[str, str] = {}
         """run id -> the state last written to the run index."""
@@ -491,6 +496,7 @@ class ChatServer:
                     feed_auditor=self.feed_auditor,
                     allow_test_edits=run.allow_test_edits,
                     keep_reasoning=self.keep_reasoning,
+                    wheels=self.wheels,
                 )
             if recap is not None:
                 messages = self.store.load_messages(session_id)
@@ -517,6 +523,7 @@ def build_app(
     feed_auditor: FeedAuditorFactory = default_auditor,
     allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
     keep_reasoning: bool = True,
+    wheels: WheelFolder | None = None,
 ) -> ASGIApp:
     server = ChatServer(
         store,
@@ -527,6 +534,7 @@ def build_app(
         feed_auditor=feed_auditor,
         allow_test_edits=allow_test_edits,
         keep_reasoning=keep_reasoning,
+        wheels=wheels,
     )
 
     async def index(_: Request) -> Response:
@@ -1234,6 +1242,7 @@ def serve(
     sessions_root: Path | None = None,
     token: str | None = None,
     keep_reasoning: bool = True,
+    wheels: WheelFolder | None = None,
 ) -> None:
     import uvicorn
 
@@ -1247,6 +1256,11 @@ def serve(
     # omission the way the CLI's own resolution does deliberately.
     resolved = (token or chat_token()) if needs_token(host) else None
     app = build_app(
-        store, factory, default_workdir=workdir, token=resolved, keep_reasoning=keep_reasoning
+        store,
+        factory,
+        default_workdir=workdir,
+        token=resolved,
+        keep_reasoning=keep_reasoning,
+        wheels=wheels,
     )
     uvicorn.run(app, host=host, port=port, log_level="warning")

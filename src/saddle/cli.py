@@ -53,6 +53,7 @@ from saddle.gates import (
     plan_restates_the_gate,
     plan_retargets_reserved_files,
 )
+from saddle.installs import DEFAULT_WHEEL_DIR, WHEEL_DIR_ENV, WheelFolder
 from saddle.journal import (
     AUTO_START,
     JournalIssue,
@@ -1516,6 +1517,38 @@ def _add_server_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=None, help=f"Model id (else ${MODEL_ENV}).")
 
 
+def _add_install_flags(parser: argparse.ArgumentParser) -> None:
+    """`--allow-installs` and `--wheel-dir`, the same on `auto` and `web`."""
+    parser.add_argument(
+        "--allow-installs",
+        action="store_true",
+        help="Offer the model an `install` tool: each request is put to you, and an "
+        "approved one installs from your local wheel folder into an environment of the "
+        "run's own, layered on the project's virtualenv, which is never changed. No "
+        "network is used. Off by default.",
+    )
+    parser.add_argument(
+        "--wheel-dir",
+        default=None,
+        help=f"With --allow-installs: the folder of wheels installs come from (else "
+        f"${WHEEL_DIR_ENV}, else {DEFAULT_WHEEL_DIR}).",
+    )
+
+
+def wheel_folder(args: argparse.Namespace) -> WheelFolder | None:
+    """The wheel folder `--allow-installs` installs from, or None without the flag.
+
+    Resolved like the server settings (`resolve_setting`): the flag, the
+    environment, the key file, the default. Whether it exists and holds
+    wheels is checked when the run starts, which refuses to start without."""
+    if not args.allow_installs:
+        return None
+    found = resolve_setting(
+        args.wheel_dir, option="--wheel-dir", env=WHEEL_DIR_ENV, default=DEFAULT_WHEEL_DIR
+    )
+    return WheelFolder(Path(found.value).expanduser(), found.source)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -1727,6 +1760,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Chat-started task runs send each round's reasoning back to the model, "
         "as `saddle auto` does (on by default; --no-keep-reasoning drops it).",
     )
+    _add_install_flags(web)
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
     up.add_argument(
@@ -1818,6 +1852,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Offer the model a `check` tool that runs audit tiers 0 and 1 on the current "
         "tree before finish (arm E+A+F only; off by default).",
     )
+    _add_install_flags(auto)
     _add_server_flags(auto)
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     auto.add_argument(
@@ -1849,6 +1884,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         finish_refusal_cap=args.finish_refusal_cap,
         keep_reasoning=args.keep_reasoning,
         check_tool=args.check_tool,
+        wheels=wheel_folder(args),
         tier2=args.tier2,
         mutant_shortlist=args.mutant_shortlist,
     )
@@ -2071,6 +2107,7 @@ def main(
             sessions_root=Path(args.sessions) if args.sessions else None,
             token=token,
             keep_reasoning=args.keep_reasoning,
+            wheels=wheel_folder(args),
         )
         return 0
     if args.command == "auto":
