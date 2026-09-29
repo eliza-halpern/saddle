@@ -47,7 +47,6 @@ from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_PREFIXES,
     AUTO_OUTCOMES,
-    JOURNAL_QUESTION_EXIT,
     P1_EXTRACT_SPAN,
     SEALED_CUT,
     ProofRecord,
@@ -412,14 +411,11 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
     seam: list[tuple[int, _Audit]] = []
     latest: dict[str, tuple[int, _Audit]] = {}
     for order, span in enumerate(spans):
-        finding = tier_finding(span.name, span.detail)
+        # A line that does not parse reads its verdict from its exit code.
+        finding = tier_finding(span.name, span.detail, span.exit_code)
         if finding is not None:
             if (finding.tier == 0) != edit_checks:
                 continue
-            if finding.verdict == "unreadable" and span.exit_code == JOURNAL_QUESTION_EXIT:
-                # A question sealed before its JSON was fitted to the line
-                # (`auditor.sealed_finding`): its exit code still says question.
-                finding = dataclasses.replace(finding, verdict="question")
             latest[finding.gate] = (
                 order,
                 _Audit(

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 from saddle.gates import GateCheck
@@ -325,27 +325,75 @@ class TierFinding:
     detail: str
 
 
-def tier_finding(name: str, detail: str) -> TierFinding | None:
+EXIT_VERDICT: Final[Mapping[int, str]] = {
+    0: "not-proven",
+    1: "fail",
+    2: "blocked",
+    JOURNAL_QUESTION_EXIT: "question",
+}
+"""The verdict a finding span's exit code seals (`auditor._JOURNAL_EXIT`), read
+when its detail does not parse or names no verdict: a line cut at
+`journal.MAX_SPAN_DETAIL_CHARS` before the auditor fitted findings to it
+loses `verdict`, the last of its sorted keys. Exit 1, 2 and 4 are one verdict
+each. Exit 0 seals a pass, a not-applicable and a not-proven finding alike;
+a reader that cannot tell which vouches for none of them, so it reads not
+proven, never proven."""
+
+LINE_CUT: Final = " [the ledger line ends here]"
+"""What a detail read back from a cut finding line ends with (`tier_finding`)."""
+
+_DETAIL_KEY: Final = '"detail": "'
+
+
+def _cut_detail(line: str) -> str:
+    """What a finding line that does not parse still holds of its `detail`, or "".
+
+    The auditor seals a finding as JSON with sorted keys, `cites` then
+    `detail`, so a line cut at the ledger's cap most often ends inside one
+    of the two. The detail's text up to the cut is read, escapes decoded,
+    and marked `LINE_CUT`; a detail that ended before the cut is read whole.
+    """
+    at = line.find(_DETAIL_KEY)
+    if at < 0:
+        return ""
+    quote = at + len(_DETAIL_KEY) - 1
+    try:
+        return str(json.JSONDecoder().raw_decode(line, quote)[0])
+    except ValueError:
+        pass
+    rest = line[quote + 1 :]
+    # A cut can fall inside an escape (a \u escape is six characters): drop
+    # what is left of it, never more.
+    for end in range(len(rest), max(len(rest) - 6, 0) - 1, -1):
+        try:
+            text = str(json.loads(f'"{rest[:end]}"')).rstrip()
+        except ValueError:
+            continue
+        return text + LINE_CUT if text else ""
+    return ""
+
+
+def tier_finding(name: str, detail: str, exit_code: int | None = None) -> TierFinding | None:
     """The finding an auditor span seals, or None if `name` is not one.
 
-    The span's detail is the `auditor.Finding` as JSON; a detail that does
-    not parse still names its gate and tier, with the raw text as detail.
+    The span's detail is the `auditor.Finding` as JSON. A detail that does
+    not parse, or names no verdict, still names its gate and tier; its
+    verdict is then the one its `exit_code` seals (`EXIT_VERDICT`), never
+    "unreadable" when the code is given, and its detail whatever the line
+    still holds (`_cut_detail`), else the raw text.
     """
     match = AUDIT_TIER.fullmatch(name)
     if match is None:
         return None
+    gate, tier = match.group(2), int(match.group(1))
     try:
         body = json.loads(detail)
     except ValueError:
         body = None
+    sealed = "unreadable" if exit_code is None else EXIT_VERDICT.get(exit_code, "unreadable")
     if not isinstance(body, dict):
-        return TierFinding(match.group(2), int(match.group(1)), "unreadable", detail)
-    return TierFinding(
-        match.group(2),
-        int(match.group(1)),
-        str(body.get("verdict", "unreadable")),
-        str(body.get("detail", "")),
-    )
+        return TierFinding(gate, tier, sealed, _cut_detail(detail) or detail)
+    return TierFinding(gate, tier, str(body.get("verdict", sealed)), str(body.get("detail", "")))
 
 
 def start_field(detail: str, key: str) -> str:
@@ -417,13 +465,7 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             "refused",
             cite,
         )
-    finding = tier_finding(name, entry.detail)
-    if (
-        finding is not None
-        and finding.verdict == "unreadable"
-        and entry.exit_code == JOURNAL_QUESTION_EXIT
-    ):
-        finding = replace(finding, verdict="question")
+    finding = tier_finding(name, entry.detail, entry.exit_code)
     if finding is not None and finding.verdict == "question":
         # Neither a pass nor a fail: a person must decide it.
         return SessionLine(
