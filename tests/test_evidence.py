@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tomllib
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
@@ -2700,3 +2701,40 @@ def test_mutation_sample_statuses_are_sorted_by_status_not_by_mutant_name(
     changed = {(str(workdir / "a.py"), line) for _, _, line in reordered}
     outcome = mutation_sample(workdir, changed, 20, test_files={"tests/test_a.py"})
     assert outcome.statuses == (("killed", 1), ("no tests", 1), ("segfault", 1), ("survived", 1))
+
+
+def test_mutation_sample_mutates_only_the_files_with_changed_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before: mutmut was handed every non-test .py file, so on saddle's own
+    repo a one-line change never got past generating mutants for 59 files.
+    A changed-line mutant can only live in a changed file, so the verdict is
+    the same; the other files are copied unmutated so the tests still import."""
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    _stub_mutmut(stub_dir, "", {})
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    written: list[str] = []
+    real = evidence_module._mutmut_scratch_config
+
+    def keep(*args: object, **kwargs: object) -> str:
+        text = real(*args, **kwargs)  # type: ignore[arg-type]
+        written.append(text)
+        return text
+
+    monkeypatch.setattr(evidence_module, "_mutmut_scratch_config", keep)
+    changed = {
+        (str(workdir / "a.py"), 1),
+        (str(workdir / "tests" / "test_a.py"), 1),
+        (str(workdir / "ghost.py"), 1),
+    }
+    mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
+    table = tomllib.loads(written[-1])["tool"]["mutmut"]
+    assert table["source_paths"] == ["a.py"]
+    assert table["also_copy"] == ["b.py", "src/deep/nested/deep.py"]
+    both = {(str(workdir / "a.py"), 1), (str(workdir / "src" / "deep" / "nested" / "deep.py"), 1)}
+    mutation_sample(workdir, both, 10, test_files={"tests/test_a.py"})
+    table = tomllib.loads(written[-1])["tool"]["mutmut"]
+    assert table["source_paths"] == ["a.py", "src/deep/nested/deep.py"]
+    assert table["also_copy"] == ["b.py"]

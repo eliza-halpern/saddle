@@ -1732,7 +1732,9 @@ def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
     return {(_statement_start(tree, lineno) or node.lineno) for lineno in matched}
 
 
-def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) -> str:
+def _mutmut_scratch_config(
+    sources: list[str], run_tests: Collection[str] = (), also_copy: Sequence[str] = ()
+) -> str:
     """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
 
     `run_tests` are pytest arguments appended after the fixed flags, so
@@ -1746,7 +1748,12 @@ def _mutmut_scratch_config(sources: list[str], run_tests: Collection[str] = ()) 
     ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
     args = ["-q", "-x", "-p", "no:cacheprovider", *ordered]
     joined = ", ".join(json.dumps(arg) for arg in args)
-    return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
+    copied = (
+        "also_copy = [" + ", ".join(json.dumps(path) for path in also_copy) + "]\n"
+        if also_copy
+        else ""
+    )
+    return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n{copied}"
 
 
 class MutantLookupError(RuntimeError):
@@ -1881,14 +1888,25 @@ def mutation_sample(
             dest = scratch / source.relative_to(workdir)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, dest)
-        production = sorted(
+        # Only the files holding a changed line: a mutant on a changed line
+        # lives in one of them, so the verdict is the same, and mutmut is not
+        # asked to generate and run the whole tree (on saddle's own repo that
+        # never finished: one module alone took 431 s to generate).
+        # The rest are copied beside them unmutated (mutmut's work area holds
+        # only what it is told about, and the tests import them).
+        touched = {Path(key).as_posix() for key in by_line}
+        every = sorted(
             path.relative_to(scratch).as_posix()
             for path in scratch.rglob("*.py")
             if path.relative_to(scratch).as_posix() not in tests
         )
+        production = [path for path in every if path in touched]
+        untouched = [path for path in every if path not in touched]
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
-        (scratch / "pyproject.toml").write_text(_mutmut_scratch_config(production, run_tests))
+        (scratch / "pyproject.toml").write_text(
+            _mutmut_scratch_config(production, run_tests, untouched)
+        )
         ran = run_capture(
             ["timeout", str(timeout_s), "mutmut", "run"],
             scratch,
