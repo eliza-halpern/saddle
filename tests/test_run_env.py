@@ -294,3 +294,23 @@ def test_a_resumed_run_continues_the_recorded_conversation_in_its_own_worktree(
     assert f"cd {worktree} && cat n.py" in sent[2]["tool_calls"][0]["function"]["arguments"]
     assert "return 3" in _command_details(result)[0]
     assert "from before" in _command_details(result)[0]
+
+
+def test_the_prompt_says_how_many_workers_the_audit_runs_the_suite_on(tmp_path: Path) -> None:
+    """Red before: a resumed watched run ran saddle's whole suite serially
+    (about twenty minutes) while the audit uses eight workers, because
+    nothing said so. Said only when the project sets `test-workers` and its
+    environment has pytest-xdist to honour `-n`."""
+    said: dict[str, bool] = {}
+    for name, workers, xdist in (("both", 8, True), ("no-xdist", 8, False), ("serial", 1, True)):
+        repo = _repo(tmp_path / name, src=False)
+        (repo / "pyproject.toml").write_text(f"[tool.saddle]\ntest-workers = {workers}\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "workers")
+        make_venv(repo / ".venv")
+        if xdist:
+            (next((repo / ".venv").glob("lib/python*/site-packages")) / "xdist").mkdir()
+        client = Scripted([finish()])
+        auto(repo, client)
+        said[name] = f"pass `-n {workers}` too" in _system(client)
+    assert said == {"both": True, "no-xdist": False, "serial": False}

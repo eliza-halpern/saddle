@@ -43,7 +43,7 @@ from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
-from saddle.evidence import src_layout_env
+from saddle.evidence import SuiteLimitError, src_layout_env, suite_workers
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
@@ -99,7 +99,7 @@ ENVIRONMENT_PROMPT: Final = (
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
     "first. This run has {minutes} and {tokens} generated tokens; it stops at "
-    "either limit, so leave room to call finish.{coverage}{feed}"
+    "either limit, so leave room to call finish.{workers}{coverage}{feed}"
 )
 
 FEED_PROMPT: Final = (
@@ -170,6 +170,17 @@ def environment_prompt(
         else ""
     )
     minutes = max(1, math.ceil(time_budget_s / 60))
+    try:
+        count = suite_workers(worktree, "HEAD").count
+    except SuiteLimitError:
+        count = 1
+    xdist = project is not None and any(project.glob("lib/python*/site-packages/xdist"))
+    workers = (
+        f" The audit runs that suite on {count} workers; when you run the whole suite, "
+        f"pass `-n {count}` too, or it runs on one core and takes far longer."
+        if count > 1 and xdist
+        else ""
+    )
     return ENVIRONMENT_PROMPT.format(
         worktree=worktree,
         python=python,
@@ -178,6 +189,7 @@ def environment_prompt(
         minutes=f"{minutes} minute{'s' if minutes != 1 else ''}",
         tokens=f"{token_budget:,}",
         coverage=coverage,
+        workers=workers,
         feed=FEED_PROMPT if feed else "",
     )
 
