@@ -595,6 +595,79 @@ def test_a_data_file_outside_the_tree_runs_serially(tmp_path: Path) -> None:
     assert suite_run(root, COMMAND, 1) == SuiteRun()
 
 
+# -- the schedule: an idle worker takes queued tests; a project's own mode stays --
+
+QUICK: Final = 40
+
+BEHIND_A_SLOW_TEST: Final = (
+    "import time\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\n\n\n"
+    "def test_slow():\n"
+    "    deadline = time.monotonic() + 30\n"
+    f"    while len(list(ROOT.glob('*.ran'))) < {QUICK - 1} and time.monotonic() < deadline:\n"
+    "        time.sleep(0.05)\n"
+    "    (ROOT / 'seen').write_text(str(len(list(ROOT.glob('*.ran')))))\n"
+    + "".join(
+        f"\n\ndef test_quick_{i:02}():\n    (ROOT / '{i:02}.ran').touch()\n" for i in range(QUICK)
+    )
+)
+"""`test_slow` first in the file, then forty quick tests. `test_slow` waits
+(30 s at most) until all but one of them have run, and writes how many had.
+Its worker holds one quick test as the next item, which nothing can take;
+every other quick test sent to it must be taken by the idle worker."""
+
+
+def _schedule_project(root: Path, tests: str, addopts: str | None = None) -> Path:
+    root.mkdir(parents=True)
+    (root / "pyproject.toml").write_text(_pyproject(addopts=addopts))
+    (root / "tests").mkdir()
+    (root / "tests/test_schedule.py").write_text(tests)
+    return root
+
+
+def test_an_idle_worker_takes_the_tests_queued_behind_a_slow_one(tmp_path: Path) -> None:
+    """`--dist worksteal`: 39 of the 40 quick tests run while `test_slow`
+    waits. Under xdist's default `load` its worker keeps the first chunk it
+    was sent (`test_slow` and four quick tests) and nothing else can run
+    them: 36, after the whole 30 s wait."""
+    root = _schedule_project(tmp_path / "p", BEHIND_A_SLOW_TEST)
+    run = suite_run(root, COMMAND, 2)
+    assert (run.workers, run.dist) == (2, "")
+    done = run_suite_capture(run, COMMAND, root, str(root / ".coverage.gate"), timeout=120)
+    assert done.exit_code == 0, done.stdout + done.stderr
+    assert (root / "seen").read_text() == str(QUICK - 1)
+    assert len(list(root.glob("*.ran"))) == QUICK
+
+
+ONE_FILE: Final = (
+    "import os\nfrom pathlib import Path\n\nROOT = Path(__file__).resolve().parents[1]\n"
+    "WORKER = os.environ['PYTEST_XDIST_WORKER']\n"
+    + "".join(
+        f"\n\ndef test_{i:02}():\n    (ROOT / f'{{WORKER}}.{i:02}').touch()\n" for i in range(QUICK)
+    )
+)
+"""Forty tests in one file, each leaving a file named for its worker."""
+
+
+@pytest.mark.parametrize(
+    ("addopts", "workers"), [(None, 2), ("--dist loadfile", 1)], ids=["worksteal", "loadfile"]
+)
+def test_a_distribution_mode_the_project_chooses_is_kept(
+    tmp_path: Path, addopts: str | None, workers: int
+) -> None:
+    """Known-good: a project whose options say `--dist loadfile` (its tests
+    must share a worker per file) runs every test of the file on one worker.
+    Known-bad: the same file without it is split between the two workers,
+    as `worksteal` splits it; a `--dist worksteal` added over the project's
+    own mode split it too."""
+    root = _schedule_project(tmp_path / "p", ONE_FILE, addopts)
+    run = suite_run(root, COMMAND, 2)
+    done = run_suite_capture(run, COMMAND, root, str(root / ".coverage.gate"), timeout=120)
+    assert done.exit_code == 0, done.stdout + done.stderr
+    ran = [path.name.split(".")[0] for path in root.iterdir() if path.name.startswith("gw")]
+    assert len(ran) == QUICK
+    assert len(set(ran)) == workers
+
+
 # -- the gate: one tree, two runs, the same verdicts ----------------------------
 
 
@@ -763,7 +836,7 @@ def test_a_new_test_red_on_the_baseline_is_red_on_workers(tmp_path: Path) -> Non
 def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     """The red-phase samples and the dead-code rerun reach the same verdicts
     either way, so only the journal shows how they ran: each run of the
-    suite is `-n 2`, the suite and the samples under pytest-cov (the probe,
+    suite is `-n 2 --dist worksteal`, the suite and the samples under pytest-cov (the probe,
     run once in the tree and once in the baseline copy, collects nothing)."""
     root = _project(tmp_path / "p", _pyproject())
     (root / "src/pkg/calc.py").write_text(CALC_CHANGED + "\n\ndef _spare():\n    return 3\n")
@@ -783,7 +856,8 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     probes = [argv for argv in runs if "saddle_workers_probe" in argv]
     suites = [argv for argv in runs if argv not in probes]
     assert len(probes) == 2
-    covered = [*COMMAND.split(), "-n", "2", "--cov-report=", "--cov=.", "--cov-fail-under=0"]
+    workers = ["-n", "2", "--dist", "worksteal"]
+    covered = [*COMMAND.split(), *workers, "--cov-report=", "--cov=.", "--cov-fail-under=0"]
     # the suite, the red-phase samples, the dead-code rerun without `_spare`;
     # a sample runs only the changed test file, every other one ignored
     ignored = sorted(
@@ -795,7 +869,7 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     samples = [red] * RED_PHASE_SAMPLES
     # the tree's own suite also records which test ran each line (tier 2)
     current = [*covered, "--cov-context=test"]
-    assert suites == [current, *samples, [*COMMAND.split(), "-n", "2"]]
+    assert suites == [current, *samples, [*COMMAND.split(), *workers]]
 
 
 def _spec_node() -> Node:

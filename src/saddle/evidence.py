@@ -669,6 +669,7 @@ def pytest_cmdline_main(config):
         "cov_blocked": plugins.is_blocked("pytest_cov"),
         "no_cov": bool(getattr(config.option, "no_cov", False)),
         "cov_source": bool(getattr(config.option, "cov_source", None)),
+        "dist": str(getattr(config.option, "dist", "no")),
         "data_file": "",
     }}
     if report["cov"]:
@@ -687,7 +688,9 @@ Asking pytest, not the filesystem: an installed pytest-xdist that the
 project disables with `-p no:xdist` would make `-n` a usage error, and
 `pytest -VV` still lists xdist's looponfail plugin in that case. It also
 reports the data file pytest-cov will record into, read from the project's
-coverage config exactly as pytest-cov's controller reads it."""
+coverage config exactly as pytest-cov's controller reads it, and the
+pytest-xdist distribution mode (`--dist`) the project's options choose
+("no" when they choose none)."""
 
 WORKERS_PROBE_TIMEOUT_S: Final = 120.0
 """How long the probe may take. It starts pytest and imports the project's
@@ -712,6 +715,14 @@ class SuiteRun:
     measures what `coverage run` measures (the coverage config's `source`,
     else everything).
 
+    Such a run also asks for `--dist worksteal`: a worker that runs out of
+    tests takes the ones still queued on a busy worker. Under xdist's
+    default `load`, tests already sent to a worker stay there, and the last
+    minutes of each run of saddle's own suite had one to three of eight
+    workers busy while the rest waited. A mode the project's own pytest
+    options choose (`dist`, such as `loadfile` for tests that must share a
+    worker) is kept instead.
+
     Whenever pytest-cov runs, the gate adds `--cov-fail-under=0`: no
     coverage total decides the tests, red-phase or dead-code checks, as
     none does under `coverage run`. Coverage is the coverage check's, over
@@ -735,6 +746,7 @@ class SuiteRun:
     project_cov: bool = False
     note: str = ""
     data_file: str = ""
+    dist: str = ""
 
     @property
     def parallel(self) -> bool:
@@ -745,6 +757,12 @@ class SuiteRun:
         """Whether pytest-cov, not `coverage run`, records the run."""
         return self.parallel or self.project_cov
 
+    def _on_workers(self) -> list[str]:
+        """`-n workers --dist worksteal` for a parallel run (the project's own mode kept)."""
+        if not self.parallel:
+            return []
+        return ["-n", str(self.workers), *([] if self.dist else ["--dist", "worksteal"])]
+
     def covered(self, test_command: str, data_file: str, *, contexts: bool = False) -> str:
         """The command that runs the suite with coverage recorded: into
         `data_file` under `coverage run`, else into `self.data_file`.
@@ -752,7 +770,7 @@ class SuiteRun:
         which `covering_tests` reads."""
         if not self.by_pytest_cov:
             return under_coverage(test_command, data_file)
-        extra = ["-n", str(self.workers)] if self.parallel else []
+        extra = self._on_workers()
         if not self.project_cov:
             extra += ["--cov-report="]
         # The whole tree, whatever the project reports on: its coverage
@@ -770,7 +788,7 @@ class SuiteRun:
         The project's own pytest-cov still runs if its options start it, and
         its total must not decide this run either: a rerun failed on the total
         reads as "the suite fails without them" and passes dead code."""
-        extra = ["-n", str(self.workers)] if self.parallel else []
+        extra = self._on_workers()
         if self.project_cov:
             extra += ["--cov-fail-under=0"]
         if not extra:
@@ -898,7 +916,13 @@ def suite_run(
         return SuiteRun(
             project_cov=project_cov, note=note, data_file=data_file if project_cov else ""
         )
-    return SuiteRun(workers=workers, project_cov=project_cov, data_file=data_file)
+    dist = str(report.get("dist") or "no")
+    return SuiteRun(
+        workers=workers,
+        project_cov=project_cov,
+        data_file=data_file,
+        dist="" if dist == "no" else dist,
+    )
 
 
 def run_suite_capture(

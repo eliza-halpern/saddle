@@ -79,7 +79,9 @@ the same table:
 test-workers = 8
 ```
 
-- The auditor then runs the suite once as `pytest -n 8` under pytest-cov, and the
+- The auditor then runs the suite once as `pytest -n 8 --dist worksteal` under
+  pytest-cov (a worker that runs out of tests takes the ones still queued on another; a
+  `--dist` mode your own pytest options choose is kept instead), and the
   `tests` and `coverage` findings both read that one run. Each red-phase sample and each
   dead-code rerun uses the same workers. This holds for the checkpoints and the finish
   audit of `saddle auto` and the chat's Task runs, and for `saddle audit`; `saddle run`
