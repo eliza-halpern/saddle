@@ -26,6 +26,7 @@ from saddle.evidence import (
     SuiteRun,
     changed_statements,
     covered_lines,
+    covering_tests,
     drop_test_caches,
     git_added_files,
     git_changed_files,
@@ -224,11 +225,15 @@ def run_node_gate(
         data_file,
         recorder=recorder,
         timeout=test_timeout,
+        contexts=tier2,
     )
     if capture is not None:
         capture.append(suite)
     current_exit = suite.exit_code
     covered = covered_lines(data_file, changed_files)
+    # The tests that ran a changed line are all a changed-line mutant can
+    # meet, so mutmut runs those, not the whole scope (tier 2 only).
+    covering = covering_tests(data_file, changed) if tier2 else ()
     test_sources = read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")
     ruff_files = [
         Path(path).relative_to(workdir).as_posix() for path in changed_files if path.endswith(".py")
@@ -359,7 +364,7 @@ def run_node_gate(
             changed,
             sample.max_mutants,
             test_files=test_sources,
-            run_tests=pytest_scope(gate.test_command),
+            run_tests=covering or pytest_scope(gate.test_command),
             suite_passed=current_exit == 0,
             recorder=recorder,
         )

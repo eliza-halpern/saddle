@@ -691,9 +691,11 @@ class SuiteRun:
         """Whether pytest-cov, not `coverage run`, records the run."""
         return self.parallel or self.project_cov
 
-    def covered(self, test_command: str, data_file: str) -> str:
+    def covered(self, test_command: str, data_file: str, *, contexts: bool = False) -> str:
         """The command that runs the suite with coverage recorded: into
-        `data_file` under `coverage run`, else into `self.data_file`."""
+        `data_file` under `coverage run`, else into `self.data_file`.
+        `contexts` also records which test ran each line (pytest-cov only),
+        which `covering_tests` reads."""
         if not self.by_pytest_cov:
             return under_coverage(test_command, data_file)
         extra = ["-n", str(self.workers)] if self.parallel else []
@@ -704,6 +706,8 @@ class SuiteRun:
         # and the coverage check then refused every changed test line as
         # never run. `--cov=.` adds the tree to the project's own sources.
         extra += ["--cov=.", "--cov-fail-under=0"]
+        if contexts:
+            extra += ["--cov-context=test"]
         return shlex.join([*shlex.split(test_command), *extra])
 
     def plain(self, test_command: str) -> str:
@@ -851,6 +855,7 @@ def run_suite_capture(
     *,
     recorder: SpanRecorder | None = None,
     timeout: float | None,
+    contexts: bool = False,
 ) -> CapturedRun:
     """Run the suite as `run` says, recording coverage into `data_file`.
 
@@ -860,8 +865,9 @@ def run_suite_capture(
     one it did not write (a copy of the tree carries whatever the tree
     holds) must not add lines no test ran. After the run its data file, if
     it wrote one, becomes `data_file`. The serial `coverage run` is
-    `run_shell_capture` of `under_coverage`, unchanged."""
-    command = run.covered(test_command, data_file)
+    `run_shell_capture` of `under_coverage`, unchanged. `contexts`: see
+    `SuiteRun.covered`."""
+    command = run.covered(test_command, data_file, contexts=contexts)
     recorded = Path(run.data_file) if run.by_pytest_cov and run.data_file else None
     if run.by_pytest_cov:
         for target in {Path(data_file), *([recorded] if recorded is not None else [])}:
@@ -2108,6 +2114,37 @@ def covered_lines(data_file: str, files: Collection[str]) -> set[tuple[str, int]
         for number in data.lines(measured) or ():
             covered.add((filename, number))
     return covered
+
+
+def covering_tests(data_file: str, changed: Collection[tuple[str, int]]) -> tuple[str, ...]:
+    """The tests (pytest node ids) that ran a changed line, read from a data
+    file recorded with per-test contexts (`SuiteRun.covered(contexts=True)`).
+
+    Empty when the file holds no such context (unreadable, recorded without
+    contexts, or no test ran a changed line): the caller then keeps its
+    whole scope. A mutant on a changed line only runs where that line runs,
+    so these are the tests mutmut needs; its baseline and stats passes over
+    the whole suite, on one core, were what a large project's mutation
+    budget ran out on.
+    """
+    cov = coverage.Coverage(data_file=data_file, config_file=False)
+    try:
+        cov.load()
+    except coverage.CoverageException:
+        return ()
+    data = cov.get_data()
+    by_realpath = {os.path.realpath(measured): measured for measured in data.measured_files()}
+    lines: dict[str, set[int]] = {}
+    for path, line in changed:
+        measured = by_realpath.get(os.path.realpath(path))
+        if measured is not None:
+            lines.setdefault(measured, set()).add(line)
+    found: set[str] = set()
+    for measured, wanted in lines.items():
+        for number, contexts in data.contexts_by_lineno(measured).items():
+            if number in wanted:
+                found.update(context.rsplit("|", 1)[0] for context in contexts if context)
+    return tuple(sorted(found))
 
 
 def _docstring_lines(tree: ast.Module) -> set[int]:

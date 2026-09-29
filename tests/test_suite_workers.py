@@ -29,12 +29,13 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import coverage
 import pytest
 
 from saddle import evidence
+from saddle import runner as runner_module
 from saddle.audit import AuditError, audit_node, audit_tree, staged_copy
 from saddle.auditor import Auditor, Finding, Findings
 from saddle.dag import Node
@@ -45,6 +46,7 @@ from saddle.evidence import (
     SuiteRun,
     SuiteWorkers,
     covered_lines,
+    covering_tests,
     run_argv,
     run_suite_capture,
     suite_limit,
@@ -947,3 +949,47 @@ def test_changed_test_lines_are_measured_whatever_the_projects_coverage_source(
     assert f"tests/test_part1.py:{never}" in covered.detail
     for line in ran:
         assert f"tests/test_part1.py:{line}" not in covered.detail, covered.detail
+
+
+ADD_TESTS: Final = tuple(sorted(f"tests/test_part{i}.py::test_add_{i}" for i in range(1, 5)))
+"""The tests that run `add`, whose body CALC_CHANGED edits (calc.py lines 2-4)."""
+
+
+def test_covering_tests_names_only_the_tests_that_ran_a_changed_line(tmp_path: Path) -> None:
+    """Instances from a real pytest-cov run with per-test contexts: the add
+    tests ran the changed lines; the sub and lazy tests did not; a line no
+    test ran names nobody, and a run recorded without contexts names nobody."""
+    root = _project(tmp_path / "p", _pyproject())
+    run = suite_run(root, COMMAND, 2)
+    assert run.by_pytest_cov
+    calc = str(root / "src/pkg/calc.py")
+    changed = {(calc, 2), (calc, 3), (calc, 4)}
+    data = str(tmp_path / "contexts.data")
+    assert run_suite_capture(run, COMMAND, root, data, timeout=300, contexts=True).exit_code == 0
+    assert covering_tests(data, changed) == ADD_TESTS
+    assert covering_tests(data, {(calc, 99)}) == ()
+    plain = str(tmp_path / "plain.data")
+    assert run_suite_capture(run, COMMAND, root, plain, timeout=300).exit_code == 0
+    assert covering_tests(plain, changed) == ()
+
+
+def test_the_gates_mutation_run_is_handed_the_tests_that_ran_a_changed_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before: mutmut got the whole scope, so its baseline and stats
+    passes ran every test on one core, and on saddle's own repository that
+    outlasted the mutation budget before a mutant was tried."""
+    root = _project(tmp_path / "p", _pyproject())
+    handed: list[object] = []
+    real = evidence.mutation_sample
+
+    def spy(*args: Any, **kwargs: Any) -> evidence.MutationOutcome:
+        handed.append(kwargs.get("run_tests"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "mutation_sample", spy)
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        run_node_gate(audit_node(), copy, baseline=resolved, test_workers=2)
+    # and test_lazy: it imports lazy.py inside its body, which runs the added
+    # `def unreached` line; the sub tests ran no changed line
+    assert handed[0] == tuple(sorted([*ADD_TESTS, "tests/test_lazy.py::test_lazy"]))
