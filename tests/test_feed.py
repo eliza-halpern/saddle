@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from test_audit import VENV_TEST, _files_outside_git
 
 from saddle import cli, engine, feed
 from saddle.auditor import AuditorConfig, Finding, Findings, sanction
@@ -623,6 +624,56 @@ def test_snapshot_mirrors_additions_and_deletions(repo: Path, tmp_path: Path) ->
     tree = snapshot(repo, repo, tmp_path / "snap")
     listed = git(tmp_path / "snap", "ls-tree", "-r", "--name-only", tree).splitlines()
     assert listed == ["calc.py", "new.py"]
+
+
+class SeesFiles(FakeAuditor):
+    """Records, at each tier-1 audit, every file of the tree it is handed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.trees: list[set[str]] = []
+
+    def tier1(self, tree: Path | None = None) -> Findings:
+        assert tree is not None
+        self.trees.append(_files_outside_git(tree))
+        return super().tier1(tree)
+
+
+def test_no_audited_tree_holds_a_path_git_ignores_and_each_holds_every_untracked_file(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Contract: every tree the feed audits -- a checkpoint's, through its
+    frozen copy, and a check's or finish's, straight from the worktree --
+    holds no path git ignores in the worktree and every untracked file git
+    does not ignore.
+
+    Red at 0dd289d: both copies took everything but `.git`, so a gitignored
+    `.venv` the model made was copied twice per checkpoint, the first time on
+    the model's critical path, and was handed to the audit."""
+    worktree = tmp_path / "worktree"
+    git(repo, "worktree", "add", "-q", "-b", "run", str(worktree), "HEAD")
+    assert (worktree / ".git").is_file()  # linked, as `auto` makes a run's worktree
+    (worktree / ".gitignore").write_text(".venv/\n")
+    (worktree / VENV_TEST).parent.mkdir(parents=True)
+    (worktree / VENV_TEST).write_text("def test_x():\n    pass\n")
+    (repo / ".git" / "info").mkdir(exist_ok=True)
+    (repo / ".git" / "info" / "exclude").write_text("scratch.txt\n")  # shared by worktrees
+    (worktree / "scratch.txt").write_text("ignored by the repository's info/exclude\n")
+    (worktree / "new.py").write_text("x = 1\n")
+    seen = SeesFiles()
+    f = AuditFeed(
+        worktree=worktree,
+        baseline=git(worktree, "rev-parse", "HEAD"),
+        journal=tmp_path / "j.jsonl",
+        run_span="s",
+        auditor=seen,
+    )
+    f.after_tool("edit_file", ok=True)
+    f.before_tool("run_command")  # a checkpoint: the frozen copy, then its snapshot
+    f.check()  # the worktree's own snapshot, once the checkpoint is done
+    f.close()
+    expected = {".gitignore", "calc.py", "new.py", "tests/test_calc.py"}
+    assert seen.trees == [expected, expected]
 
 
 @pytest.fixture

@@ -58,14 +58,17 @@ verdict is recorded beside the outcome. "E" (`--no-audit`) constructs no
 Snapshots: the run's worktree is a linked worktree whose `.git` is a file,
 which `audit.staged_copy` refuses (it would write the shared index). A
 snapshot is a `git clone --shared --no-checkout` of the worktree (so the
-baseline commit resolves) with the worktree's files copied over; its
-`git add -A && git write-tree` is the tree id every finding is reported
-against, and equals the tree `auto` commits when nothing changed after it.
+baseline commit resolves) with the worktree's files copied over, less every
+path git ignores there (a `.venv` the model made is neither copied nor
+audited); its `git add -A && git write-tree` is the tree id every finding is
+reported against, and equals the tree `auto` commits when nothing changed
+after it.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import os
 import shutil
 import subprocess
 import tempfile
@@ -78,7 +81,7 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 
 from saddle import coverage_text, sandbox
-from saddle.audit import AuditError
+from saddle.audit import AuditError, git_ignored
 from saddle.auditor import (
     TASK_REQUIREMENTS,
     Auditor,
@@ -314,12 +317,28 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 def _copy_files(source: Path, into: Path) -> None:
-    shutil.copytree(
-        source,
-        into,
-        ignore=lambda d, names: [".git"] if Path(d) == source else [],
-        dirs_exist_ok=True,
-    )
+    """Copy `source` into `into`, less its top-level `.git` and, when `source`
+    is a git checkout (it has a `.git`: the run's worktree), every path git
+    ignores there (`audit.git_ignored`).
+
+    A gitignored `.venv`, cache or build output the model made is no part of
+    the tree `auto` commits; copied, it cost a copy on the model's critical
+    path at every checkpoint and was handed to the audit. A directory with no
+    `.git` (a checkpoint's frozen copy, filtered when it was taken) is copied
+    whole.
+    """
+    ignored = git_ignored(source) if (source / ".git").exists() else frozenset()
+    root = os.fspath(source)
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        below = os.path.relpath(directory, root)
+        prefix = "" if below == "." else f"{below}/"
+        skip = {name for name in names if f"{prefix}{name}" in ignored}
+        if Path(directory) == source:
+            skip.add(".git")
+        return skip
+
+    shutil.copytree(source, into, ignore=ignore, dirs_exist_ok=True)
 
 
 def snapshot(worktree: Path, files: Path, into: Path) -> str:
