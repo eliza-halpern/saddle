@@ -24,6 +24,7 @@ turns on the tier-0 guards and a budget, and hands one turn to the same engine t
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 import tomllib
@@ -88,17 +89,29 @@ ENVIRONMENT_PROMPT: Final = (
     " Your working directory is a fresh git worktree of the repository; your "
     "commands run in it inside a sandbox with no network, so tools installed "
     "elsewhere (uv, for one) may not be reachable. {python} {src}The audit runs "
-    "the tests with `{test_command}` in this worktree."
+    "the tests with `{test_command}` in this worktree. The whole suite can take "
+    "many minutes in some projects, so run the test files that cover your change "
+    "first. This run has {minutes} and {tokens} generated tokens; it stops at "
+    "either limit, so leave room to call finish."
 )
 """What the run's commands actually see, from facts saddle already holds
 (`environment_prompt`). A dogfood run on saddle's own repo spent seven rounds
 finding a Python that could import the project, because none of this was said."""
 
 
-def environment_prompt(worktree: Path, project: Path | None, env: dict[str, str]) -> str:
+def environment_prompt(
+    worktree: Path,
+    project: Path | None,
+    env: dict[str, str],
+    time_budget_s: float,
+    token_budget: int,
+) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
-    whether `src/` leads their import path, and the audit's test command."""
+    whether `src/` leads their import path, the audit's test command, and the
+    run's budgets as they stand at the start. A dogfood run spent ten of its
+    thirty minutes on a whole-suite baseline and had not edited a file at
+    minute eighteen: nothing had told it how long it had."""
     if project is not None:
         python = f"`python` on PATH is the project's own environment ({project})."
     else:
@@ -118,7 +131,14 @@ def environment_prompt(worktree: Path, project: Path | None, env: dict[str, str]
         if "PYTHONPATH" in src_layout_env(worktree)
         else ""
     )
-    return ENVIRONMENT_PROMPT.format(python=python, src=src, test_command=AUDIT_TEST_COMMAND)
+    minutes = max(1, math.ceil(time_budget_s / 60))
+    return ENVIRONMENT_PROMPT.format(
+        python=python,
+        src=src,
+        test_command=AUDIT_TEST_COMMAND,
+        minutes=f"{minutes} minute{'s' if minutes != 1 else ''}",
+        tokens=f"{token_budget:,}",
+    )
 
 
 CHECK_PROMPT: Final = (
@@ -651,7 +671,9 @@ def run_auto(
         temperature=options.temperature,
         reasoning_effort=options.reasoning_effort,
         system_prompt=SYSTEM_PROMPT.format(tests=tests)
-        + environment_prompt(worktree, project, run_env)
+        + environment_prompt(
+            worktree, project, run_env, options.time_budget_s, options.token_budget
+        )
         + (CHECK_PROMPT if options.check_tool else ""),
         context_tokens=options.context_tokens,
         tools=[

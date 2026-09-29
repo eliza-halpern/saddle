@@ -93,3 +93,22 @@ def test_the_prompt_says_so_when_there_is_no_project_venv_and_no_src(tmp_path: P
     assert "project's own environment" not in system
     assert "no virtual environment of its own" in system
     assert "PYTHONPATH" not in system
+
+
+def test_the_prompt_states_the_runs_budgets_as_given(tmp_path: Path) -> None:
+    """Red before: the model was never told its time or token budget. Two
+    budgets, two sentences: the numbers come from the run, not the text."""
+    short = Scripted([finish()])
+    auto(_repo(tmp_path / "a", src=False), short, time_budget_s=600.0, token_budget=5_000)
+    long = Scripted([finish()])
+    auto(_repo(tmp_path / "b", src=False), long, time_budget_s=5_400.0, token_budget=120_000)
+    assert "This run has 10 minutes and 5,000 generated tokens" in _system(short)
+    assert "This run has 90 minutes and 120,000 generated tokens" in _system(long)
+    assert "run the test files that cover your change first" in _system(short)
+
+
+def test_a_budget_under_a_minute_still_reads_as_one_minute(tmp_path: Path) -> None:
+    repo = _repo(tmp_path / "repo", src=False)
+    client = Scripted([finish()])
+    auto(repo, client, time_budget_s=20.0)
+    assert "This run has 1 minute and " in _system(client)
