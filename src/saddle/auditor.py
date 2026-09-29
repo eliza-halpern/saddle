@@ -12,7 +12,7 @@ call at a checkpoint and `saddle audit --tiered` calls over any diff:
   `dead-code`, `public-deletions`, `node-scope`, `target-scope` and
   `assertion-preservation`, read off one `runner.run_node_gate(...,
   tier2=False)` run, which skips the mutation run, the property oracle and
-  all but one red-phase sample.
+  the red-phase samples, so the suite runs once.
 - **tier 2, asynchronous** (`Auditor.tier2(tree)`): `mutation` (untested
   mutants counted as survivors, `evidence.mutation_sample`),
   `property-coverage`, `red-phase`, `requirement-binding` and `full-suite`

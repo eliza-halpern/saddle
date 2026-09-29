@@ -51,6 +51,7 @@ from saddle.evidence import (
     suite_run,
     suite_workers,
 )
+from saddle.gates import RED_PHASE_SAMPLES
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import run_node_gate
 
@@ -507,14 +508,16 @@ def test_a_coverage_file_left_in_the_tree_adds_no_line(
 # -- the gate: one tree, two runs, the same verdicts ----------------------------
 
 
-def _gate_both_ways(root: Path) -> tuple[dict[str, tuple[bool, str, str | None]], ...]:
+def _gate_both_ways(
+    root: Path, *, tier2: bool = False
+) -> tuple[dict[str, tuple[bool, str, str | None]], ...]:
     """`run_node_gate` over one staged copy of `root`, serially and on two
     workers: each result's checks by name, then its uncovered lines."""
     results = []
     with staged_copy(root, "HEAD") as (copy, _staged, resolved):
         for workers in (1, 2):
             gated = run_node_gate(
-                audit_node(), copy, baseline=resolved, tier2=False, test_workers=workers
+                audit_node(), copy, baseline=resolved, tier2=tier2, test_workers=workers
             )
             checks = {c.name: (c.passed, c.detail, c.basis) for c in gated.checks}
             results.append((checks, gated.gaps))
@@ -590,21 +593,21 @@ def test_a_new_test_red_on_the_baseline_is_red_on_workers(tmp_path: Path) -> Non
     (root / "tests/test_new.py").write_text(
         "from pkg.calc import mul\n\n\ndef test_mul_negative():\n    assert mul(3, -1) == -3\n"
     )
-    serial, parallel = _gate_both_ways(root)
+    serial, parallel = _gate_both_ways(root, tier2=True)
     assert parallel["red-phase"] == serial["red-phase"]
     assert parallel["red-phase"][:2] == (True, "fail pre-change, pass post-change")
     (root / "tests/test_new.py").write_text(
         "from pkg.calc import mul\n\n\ndef test_mul_zero():\n    assert mul(3, 0) == 0\n"
     )
-    serial, parallel = _gate_both_ways(root)
+    serial, parallel = _gate_both_ways(root, tier2=True)
     assert parallel["red-phase"] == serial["red-phase"]
     assert parallel["red-phase"][:2] == (False, "tests pass pre-change; prove nothing")
 
 
 def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
-    """The red-phase sample and the dead-code rerun reach the same verdicts
+    """The red-phase samples and the dead-code rerun reach the same verdicts
     either way, so only the journal shows how they ran: each run of the
-    suite is `-n 2`, the suite and the sample under pytest-cov (the probe,
+    suite is `-n 2`, the suite and the samples under pytest-cov (the probe,
     run once in the tree and once in the baseline copy, collects nothing)."""
     root = _project(tmp_path / "p", _pyproject())
     (root / "src/pkg/calc.py").write_text(CALC_CHANGED + "\n\ndef _spare():\n    return 3\n")
@@ -618,7 +621,6 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
             copy,
             baseline=resolved,
             recorder=SpanRecorder(path=journal, node_id="n"),
-            tier2=False,
             test_workers=2,
         )
     runs = [span.argv for span in read_spans(journal) if "pytest" in span.argv]
@@ -626,8 +628,9 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     suites = [argv for argv in runs if argv not in probes]
     assert len(probes) == 2
     covered = [*COMMAND.split(), "-n", "2", "--cov", "--cov-report=", "--cov-fail-under=0"]
-    # the suite, the one red-phase sample, the dead-code rerun without `_spare`
-    assert suites == [covered, covered, [*COMMAND.split(), "-n", "2"]]
+    # the suite, the red-phase samples, the dead-code rerun without `_spare`
+    samples = [covered] * RED_PHASE_SAMPLES
+    assert suites == [covered, *samples, [*COMMAND.split(), "-n", "2"]]
 
 
 def _spec_node() -> Node:

@@ -33,7 +33,8 @@ edits when tests are read-only. Ruff and imports are not checked at edit time.
 
 ## Tier 1: per checkpoint
 
-One `runner.run_node_gate(..., tier2=False)` run.
+One `runner.run_node_gate(..., tier2=False)` run, which runs the project's suite once:
+the red-phase baseline samples are taken at tier 2, the only tier that reports red-phase.
 
 | Gate | Reason | Proves |
 |---|---|---|

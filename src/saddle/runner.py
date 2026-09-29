@@ -156,11 +156,10 @@ def run_node_gate(
 
     `tier2=False` (the auditor's checkpoint tier, `saddle.auditor`) skips
     the three evidence legs only tier 2 reads -- the mutation run, the
-    property oracle and all but one red-phase baseline sample
-    (`check_red_phase` cannot run on none) -- so the
+    property oracle and every red-phase baseline sample -- so the
     `mutation`, `property-coverage` and `red-phase` checks in the result
-    are computed over a placeholder and must not be read. The default
-    is the full battery, unchanged.
+    are placeholders and must not be read. The suite then runs once. The
+    default is the full battery, unchanged.
 
     The current-tree suite runs once under coverage and its exit code
     serves both the tests check and the red-phase post leg; the baseline
@@ -267,9 +266,11 @@ def run_node_gate(
         # exits, and three extra suite runs per refactor node is real
         # wall-clock for evidence nothing consumes.
         # A test node has no baseline leg: its red-phase mirrors the tests
-        # verdict, so the samples would be evidence nothing reads.
+        # verdict, so the samples would be evidence nothing reads. Nor does
+        # tier 1 (`tier2=False`): the auditor's checkpoint tier reports no
+        # red-phase, and one sample is one more run of the whole suite.
         samples = (
-            0 if node.kind == "test" else (RED_PHASE_SAMPLES if tests_changed and tier2 else 1)
+            0 if node.kind == "test" or not tier2 else (RED_PHASE_SAMPLES if tests_changed else 1)
         )
         baseline_exits: list[int] = []
         baseline_output = ""

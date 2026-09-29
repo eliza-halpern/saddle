@@ -1197,6 +1197,10 @@ def _check_behaviour_preserved(coverage: GateCheck, mutation: MutationOutcome) -
     )
 
 
+RED_PHASE_NOT_SAMPLED: Final = "not measured: no baseline sample at tier 1"
+"""`check_red_phase`'s detail for a run that took no baseline sample."""
+
+
 def check_red_phase(
     baseline_exits: Sequence[int],
     run_current: Callable[[], int],
@@ -1253,6 +1257,10 @@ def check_red_phase(
     # evidence is how T4 passed while fixing the wrong module.
     if not tests_changed and kind == "refactor":
         return _check_behaviour_preserved(coverage, mutation)
+    if not baseline_exits:
+        # Tier 1 samples no baseline (`runner.run_node_gate(tier2=False)`):
+        # red-phase is a tier-2 finding, and this placeholder is never read.
+        return GateCheck(name="red-phase", passed=False, detail=RED_PHASE_NOT_SAMPLED)
     if len(set(baseline_exits)) > 1:
         seen = ", ".join(str(code) for code in baseline_exits)
         return GateCheck(
