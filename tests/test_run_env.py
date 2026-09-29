@@ -142,3 +142,19 @@ def test_the_prompt_warns_about_coverage_in_addopts_only_when_it_is_there(
         auto(root, client)
         said[name] = "--no-cov" in _system(client)
     assert said == {"toml": True, "list": True, "ini": True, "none": False, "broken": False}
+
+
+def test_the_prompt_names_the_worktree_and_not_the_checkout_it_hides(tmp_path: Path) -> None:
+    """Red before: the prompt printed the project venv's absolute path, inside
+    the main checkout; a watched run `cd`'d there, found it hidden by the
+    sandbox, and lost two rounds asking where it was."""
+    repo = _repo(tmp_path / "repo", src=True)
+    make_venv(repo / ".venv")
+    client = Scripted([finish()])
+    auto(repo, client)
+    system = _system(client)
+    worktree = system.split("Your working directory is ", 1)[1].split(",", 1)[0]
+    assert "/.saddle/worktrees/" in worktree
+    assert Path(worktree).is_absolute()
+    assert str((repo / ".venv").resolve()) not in system
+    assert "not visible" in system

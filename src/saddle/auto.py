@@ -87,9 +87,11 @@ SYSTEM_PROMPT: Final = (
 )
 
 ENVIRONMENT_PROMPT: Final = (
-    " Your working directory is a fresh git worktree of the repository; your "
-    "commands run in it inside a sandbox with no network, so tools installed "
-    "elsewhere (uv, for one) may not be reachable. {python} {src}The audit runs "
+    " Your working directory is {worktree}, a fresh git worktree of the "
+    "repository; your commands run in it inside a sandbox with no network. The "
+    "repository's own checkout outside this worktree is not visible to them, so "
+    "work only here, and tools installed elsewhere (uv, for one) may not be "
+    "reachable. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
     "first. This run has {minutes} and {tokens} generated tokens; it stops at "
@@ -114,7 +116,7 @@ def environment_prompt(
     thirty minutes on a whole-suite baseline and had not edited a file at
     minute eighteen: nothing had told it how long it had."""
     if project is not None:
-        python = f"`python` on PATH is the project's own environment ({project})."
+        python = "`python` on PATH is the project's own environment."
     else:
         path = sandbox.command_env(env)["PATH"]
         found = shutil.which("python", path=path)
@@ -141,6 +143,7 @@ def environment_prompt(
     )
     minutes = max(1, math.ceil(time_budget_s / 60))
     return ENVIRONMENT_PROMPT.format(
+        worktree=worktree,
         python=python,
         src=src,
         test_command=AUDIT_TEST_COMMAND,
