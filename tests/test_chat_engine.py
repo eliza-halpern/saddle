@@ -745,7 +745,10 @@ def test_compaction_waits_for_the_real_token_count_not_the_estimate(
     85,550 real tokens this way and then re-read what it had lost."""
     options.context_tokens = 175_000
     messages = [{"role": "user", "content": "x" * 20_000} for _ in range(20)]
-    events = run(_RealCounts(3_000), options, messages=messages)
+    # 21 x 5,000 = 105,000 real tokens: over the old ceiling (compaction_limit,
+    # about 80,000), under the real one (140,184). Only the real one keeps it.
+    assert options.compaction_limit() < 105_000 <= options.compaction_limit_exact()
+    events = run(_RealCounts(5_000), options, messages=messages)
     assert not those(events, Compaction)
     assert len(messages) >= 21
 
