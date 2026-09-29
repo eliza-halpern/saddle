@@ -866,7 +866,8 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
         for path in (root / "tests").glob("test_*.py")
         if path.name != "test_new.py"
     )
-    samples = [[*COMMAND.split(), *ignored, *workers]] * RED_PHASE_SAMPLES
+    # one sample: `test_mul_zero` passes on the original code, which ends the sampling
+    samples = [[*COMMAND.split(), *ignored, *workers]]
     # the tree's own suite also records which test ran each line (tier 2)
     current = [*covered, "--cov-context=test"]
     assert suites == [current, *samples, [*COMMAND.split(), *workers]]

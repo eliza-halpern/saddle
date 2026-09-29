@@ -1249,7 +1249,9 @@ def check_red_phase(
     one. They must agree: a test that fails on one pre-change run and
     passes on the next yields "fail pre-change, pass post-change" with no
     causal relation to the diff, which is a vacuous red that looks exactly
-    like a genuine one.
+    like a genuine one. The runner stops at a first observation of 0: any
+    run of samples that starts with a pass is refused, whether the rest
+    agree or not, so `(0,)` alone reads as "tests pass pre-change".
 
     The planner cannot waive this: whether it binds is read off the diff.
     A node that leaves every test AST untouched preserved behaviour by

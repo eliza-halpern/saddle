@@ -360,6 +360,13 @@ def run_node_gate(
             baseline_exits.append(baseline_run.exit_code)
             if sample_index == 0:
                 baseline_output = baseline_run.stdout + baseline_run.stderr
+            # A first sample that passes decides red-phase: samples that all
+            # pass and samples that disagree are both refused, so whatever
+            # the rest would say, it is a refusal ("tests pass pre-change").
+            # The rest run only after a first failure, where their agreement
+            # is what tells a genuine red from a flake.
+            if baseline_exits == [0]:
+                break
 
     if ruff_files:
         lint_run, current_findings = ruff_findings(workdir, ruff_files, recorder=recorder)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import itertools
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -703,6 +704,36 @@ def test_red_phase_nondeterministic_baseline_proves_nothing() -> None:
     )
     assert check.passed is False
     assert "nondeterministic" in check.detail.lower()
+
+
+def _red_phase_over(exits: tuple[int, ...], kind: str, tests_changed: bool) -> GateCheck:
+    """`check_red_phase` on `exits`, with a passing post-change run."""
+    return check_red_phase(
+        exits,
+        lambda: 0,
+        baseline_output="collecting n.py",
+        changed_files=["n.py"],
+        tests_changed=tests_changed,
+        kind=kind,
+        coverage=GateCheck(name="coverage", passed=True),
+        mutation=MutationOutcome(generated=1, total=1, killed=1, survivors=()),
+    )
+
+
+def test_red_phase_refuses_a_first_passing_sample_whatever_the_rest_would_say() -> None:
+    """Why the runner may stop at a first sample that exits 0: every run of
+    samples starting with a pass is refused (all pass, or they disagree), as
+    is that one pass alone, for each kind and path that reads the samples.
+    Stopping there changes the reason at most, never the verdict."""
+    codes = (0, PYTEST_TESTS_FAILED, PYTEST_COLLECTION_ERROR, 4, 5, SHELL_TIMEOUT, TOOL_UNAVAILABLE)
+    for kind, changed in (("impl", True), ("impl", False), ("refactor", True)):
+        for rest in itertools.product(codes, repeat=RED_PHASE_SAMPLES - 1):
+            assert not _red_phase_over((0, *rest), kind, changed).passed, (kind, rest)
+        assert _red_phase_over((0,), kind, changed) == GateCheck(
+            name="red-phase", passed=False, detail="tests pass pre-change; prove nothing"
+        )
+        # the same call passes a genuine red: the refusals above are the first 0's
+        assert _red_phase_over((PYTEST_TESTS_FAILED,) * RED_PHASE_SAMPLES, kind, changed).passed
 
 
 def test_red_phase_unanimous_baseline_still_passes() -> None:

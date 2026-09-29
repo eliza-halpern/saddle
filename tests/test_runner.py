@@ -817,26 +817,35 @@ def test_run_node_gate_changed_assertion_takes_the_red_phase_path(tmp_path: Path
     assert red.detail == "fail pre-change, pass post-change"
 
 
+_FLAKY_COUNTER: Final = (
+    "_COUNTER = pathlib.Path(__file__).parent / '.flake_count'\n\n\n"
+    "def test_f_flaky():  # REQ-001\n"
+    "    n = int(_COUNTER.read_text()) if _COUNTER.exists() else 0\n"
+    "    _COUNTER.write_text(str(n + 1))\n"
+)
+FLAKY_FIRST_PASS: Final = "import pathlib\n\n" + _FLAKY_COUNTER + "    assert n % 2 == 0\n"
+"""Passes on every other run, starting with a pass, on either tree."""
+FLAKY_FIRST_FAIL: Final = (
+    "import pathlib\n\nfrom n import f\n\n" + _FLAKY_COUNTER + "    assert f() == 2 or n % 2 == 1\n"
+)
+"""Passes on the fixed tree; on the original code, every other run, starting
+with a failure."""
+
+
 def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> None:
     """A genuinely nondeterministic pre-change leg must fail the gate.
 
     Pins the *behaviour*, not the constant: a single observation cannot
     distinguish a flake from a genuine red, so RED_PHASE_SAMPLES must be
     greater than one for this to be detectable at all. The counter file
-    survives drop_test_caches, so the test alternates across samples.
+    survives drop_test_caches, so the test alternates across samples. It
+    fails first: a first sample that passes ends the sampling, as
+    test_a_first_sample_that_passes_ends_the_sampling shows.
 
     test_n.py is new-at-baseline on purpose (the node must be judged on its
     own new test), so this stays a `refactor` node.
     """
-    flaky = (
-        "import pathlib\n\n"
-        "_COUNTER = pathlib.Path(__file__).parent / '.flake_count'\n\n\n"
-        "def test_f_flaky():  # REQ-001\n"
-        "    n = int(_COUNTER.read_text()) if _COUNTER.exists() else 0\n"
-        "    _COUNTER.write_text(str(n + 1))\n"
-        "    assert n % 2 == 0\n"
-    )
-    _worktree(tmp_path, flaky)
+    _worktree(tmp_path, FLAKY_FIRST_FAIL)
     result = run_node_gate(_node(kind="refactor"), tmp_path)
 
     red = next(check for check in result.checks if check.name == "red-phase")
@@ -889,7 +898,70 @@ def test_run_node_gate_red_phase_runs_only_the_tests_the_node_changed(tmp_path: 
         if line.startswith("COLLECTED")
     ]
     assert collected.count("COLLECTED test_n.py test_wants_fix.py") == 1, collected
-    assert collected.count("COLLECTED test_n.py") == RED_PHASE_SAMPLES, collected
+    # one sample: it passed, which ends the sampling
+    assert collected.count("COLLECTED test_n.py") == 1, collected
+
+
+@pytest.mark.parametrize(
+    ("test_body", "samples", "verdict"),
+    [
+        (
+            "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n",
+            1,
+            (False, "tests pass pre-change; prove nothing"),
+        ),
+        (FLAKY_FIRST_PASS, 1, (False, "tests pass pre-change; prove nothing")),
+        (
+            "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n",
+            RED_PHASE_SAMPLES,
+            (True, "fail pre-change, pass post-change"),
+        ),
+        (
+            FLAKY_FIRST_FAIL,
+            RED_PHASE_SAMPLES,
+            (False, "baseline nondeterministic across 3 runs (exits 1, 0, 1); prove nothing"),
+        ),
+    ],
+    ids=["passes", "flaky-passes-first", "red", "flaky-fails-first"],
+)
+def test_a_first_sample_that_passes_ends_the_sampling(
+    tmp_path: Path, test_body: str, samples: int, verdict: tuple[bool, str]
+) -> None:
+    """Red before: a new test the original code already passes was run on it
+    RED_PHASE_SAMPLES times, though its first pass decides red-phase (any
+    run of samples starting with a pass is refused). Now that pass is the
+    only sample, and a flaky test that passes first is refused as passing
+    pre-change, not as nondeterministic. A first failure is still sampled
+    RED_PHASE_SAMPLES times: their agreement is what tells a red from a
+    flake."""
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, tmp_path) == 0
+    (tmp_path / "n.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "conftest.py").write_text(_REPORTS_COLLECTION)
+    (tmp_path / "test_other.py").write_text("def test_other():\n    assert True\n")
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], tmp_path) == 0
+    (tmp_path / "n.py").write_text("def f():\n    return 2\n")
+    (tmp_path / "test_n.py").write_text(test_body)
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    result = run_node_gate(_node("pytest", kind="refactor"), tmp_path, recorder=recorder)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert (red.passed, red.detail) == verdict
+    collected = [
+        line
+        for span in read_spans(journal)
+        for line in span.detail.splitlines()
+        if line.startswith("COLLECTED")
+    ]
+    # the tree's own suite runs both files; each baseline sample only the new one
+    assert collected.count("COLLECTED test_n.py test_other.py") == 1, collected
+    assert collected.count("COLLECTED test_n.py") == samples, collected
 
 
 def test_a_serial_red_phase_sample_keeps_the_tree_root_importable(tmp_path: Path) -> None:
