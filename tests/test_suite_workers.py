@@ -791,7 +791,9 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     )
     red = [*COMMAND.split(), *ignored, *covered[len(COMMAND.split()) :]]
     samples = [red] * RED_PHASE_SAMPLES
-    assert suites == [covered, *samples, [*COMMAND.split(), "-n", "2"]]
+    # the tree's own suite also records which test ran each line (tier 2)
+    current = [*covered, "--cov-context=test"]
+    assert suites == [current, *samples, [*COMMAND.split(), "-n", "2"]]
 
 
 def _spec_node() -> Node:
@@ -994,3 +996,11 @@ def test_the_gates_mutation_run_is_handed_the_tests_that_ran_a_changed_line(
     # `def unreached` line; the sub tests ran no changed line
     # and only the lines they run are mutated
     assert handed[0] == (tuple(sorted([*ADD_TESTS, "tests/test_lazy.py::test_lazy"])), True)
+
+
+def test_an_unreadable_data_file_names_no_covering_test(tmp_path: Path) -> None:
+    """A data file coverage cannot read hands mutmut nothing narrower: the
+    gate then keeps its whole scope, the run as it was before contexts."""
+    broken = tmp_path / "broken.data"
+    broken.write_bytes(b"not a coverage database")
+    assert covering_tests(str(broken), {(str(tmp_path / "a.py"), 1)}) == ()
