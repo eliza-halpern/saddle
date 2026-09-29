@@ -4,9 +4,10 @@
 verdict: `nothing-to-audit` when the staged tree equals the baseline's tree,
 `accept` when every applicable check passed, `refuse` otherwise. The tree is
 taken as it is on disk: untracked files count (a new module is the least-
-tested code in a tree, and `git diff` never shows it) and ignored noise does
-not. The audit works on a copy, so the audited tree -- its files and its
-`.git/index` alike -- is never written to.
+tested code in a tree, and `git diff` never shows it), and what git ignores
+does not: it is never even copied, so no gate reads a project's `.venv`. The
+audit works on a copy, so the audited tree -- its files and its `.git/index`
+alike -- is never written to.
 
 Four checks are plan-relative: `node-scope`, `target-scope`,
 `requirement-binding` and `property-coverage` each need something only a plan
@@ -239,6 +240,13 @@ def _audit_ignore(root: Path) -> Callable[[str, list[str]], set[str]]:
     21 of the 88 labelled bench trees (every T2, T3 and T4 tree) track
     `__pycache__`/`*.pyc`; the top-level list fixed `.coveragerc` by pattern,
     this is the rule it was an instance of.
+
+    Every path git ignores in the tree (`git_ignored`) is dropped as well, at
+    any depth. `git add -A` never stages one, so it is no part of the tree a
+    verdict is keyed by, and a gate that reads the copy's files must not see
+    it: a project's gitignored `.venv` put its site-packages `test_*.py` files
+    in the copy, the runner read them as changed tests the baseline lacks, and
+    red-phase refused a correct refactor.
     """
     root_str = os.fspath(root)
     listed = run_capture(["git", "ls-files", "-z"], root)
@@ -252,20 +260,47 @@ def _audit_ignore(root: Path) -> Callable[[str, list[str]], set[str]]:
         for parent in PurePosixPath(name).parents
         if str(parent) != "."
     }
+    ignored = git_ignored(root)
 
     def ignore(directory: str, names: list[str]) -> set[str]:
-        skip = {name for name in names if name in _COPY_IGNORE_ANY_DEPTH or name.endswith(".pyc")}
+        below = os.path.relpath(directory, root_str)
+        prefix = "" if below == "." else f"{below}/"
+        skip = {
+            name
+            for name in names
+            if name in _COPY_IGNORE_ANY_DEPTH
+            or name.endswith(".pyc")
+            or f"{prefix}{name}" in ignored
+        }
         if directory == root_str:
             skip |= {
                 name
                 for name in names
                 if name in _COPY_IGNORE_TOP_LEVEL or name.startswith(".coverage.")
             }
-        below = os.path.relpath(directory, root_str)
-        prefix = "" if below == "." else f"{below}/"
         return {name for name in skip if f"{prefix}{name}" not in kept}
 
     return ignore
+
+
+def git_ignored(root: Path) -> frozenset[str]:
+    """Every path under `root` that git ignores there, posix-relative.
+
+    `git ls-files --others --ignored --exclude-standard --directory`: the
+    `.gitignore` files at every depth, `.git/info/exclude` and the user's
+    excludes file all count; a directory ignored whole is named once (`.venv`,
+    never its files); a tracked file is never named, since git ignores only
+    untracked ones. An `AuditError` when git cannot say: a failed lookup must
+    not read as "nothing is ignored", which would copy a project's venv again.
+    """
+    listed = run_capture(
+        ["git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+        root,
+    )
+    if listed.exit_code != 0:
+        msg = f"git ls-files failed: {listed.stderr.strip()}"
+        raise AuditError(msg)
+    return frozenset(name.rstrip("/") for name in listed.stdout.split("\0") if name)
 
 
 def gate_surface(
@@ -406,6 +441,8 @@ def _spelled_from_the_root(
 def staged_copy(tree: Path, baseline: str) -> Iterator[tuple[Path, str, str]]:
     """A scratch copy of `tree` with everything staged: `(copy, staged, resolved)`.
 
+    The copy leaves out what git ignores in `tree` and saddle's own run
+    noise (`_audit_ignore`), and holds every other file, tracked or not.
     `staged` is the copy's `git write-tree`, the key every audit verdict is
     stored under; `resolved` is the 40-hex commit `baseline` names. The
     copy is deleted on exit, so `tree` -- its files and `.git/index` -- is

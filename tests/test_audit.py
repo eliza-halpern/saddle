@@ -32,6 +32,7 @@ from saddle.audit import (
 from saddle.dag import Node
 from saddle.evidence import run_argv, run_capture
 from saddle.journal import SpanRecorder, read_spans
+from saddle.runner import read_sources
 
 BASE_CODE = "def f():\n    return 1\n"
 FIXED_CODE = "def f():\n    return 2\n"
@@ -494,6 +495,123 @@ def test_a_matching_key_over_a_malformed_result_is_a_miss(clean_tree: Path, tmp_
 
     result = audit_tree(clean_tree, cache=cache)
     assert result.cached is False
+
+
+# ------------------------------------------- what git ignores is never copied
+
+# A project venv as uv makes one, holding a site-packages test module.
+VENV_TEST = ".venv/lib/python3.12/site-packages/pkg/test_x.py"
+
+
+def _files_outside_git(root: Path) -> set[str]:
+    """Every file under `root` but its `.git`, posix-relative. `os.walk`, not
+    a glob: a glob can skip dot-directories, and `.venv` is one."""
+    found: set[str] = set()
+    for directory, dirs, files in os.walk(root):
+        if Path(directory) == root:
+            dirs[:] = [name for name in dirs if name != ".git"]
+        found |= {(Path(directory) / name).relative_to(root).as_posix() for name in files}
+    return found
+
+
+def test_the_copy_holds_no_path_git_ignores_and_every_untracked_file_it_does_not(
+    tmp_path: Path,
+) -> None:
+    """Contract: `staged_copy`'s copy never holds a path git ignores in the
+    tree, and holds every untracked file git does not ignore and every tracked
+    one (a tracked file under an ignored directory included). Its staged tree
+    is what `git add -A` stages over the whole tree, so no verdict key moves.
+
+    Red at 0dd289d: the copy held the gitignored `.venv`, and the runner's
+    `read_sources(copy, "test_*.py")` found its site-packages tests, which the
+    baseline lacks (392 in a copy of saddle after `uv sync --frozen`: 196
+    modules, twice through the venv's `lib64` link): every audit of a tree
+    beside its venv read as a test change.
+    """
+    tree = tmp_path / "tree"
+    _init(
+        tree,
+        {
+            ".gitignore": ".venv/\n*.log\nbuild/\ndata/*\n!data/keep.txt\n",
+            "n.py": BASE_CODE,
+            "test_n.py": TEST_BODY.format(value=1),
+        },
+    )
+    (tree / "build").mkdir()
+    (tree / "build" / "tracked.txt").write_text("tracked\n")
+    _git(tree, "add", "-f", "build/tracked.txt")
+    _git(tree, "commit", "-m", "a tracked file under an ignored directory")
+    (tree / ".git" / "info").mkdir(exist_ok=True)
+    (tree / ".git" / "info" / "exclude").write_text("scratch.txt\n")
+    (tree / "n.py").write_text(FIXED_CODE)
+    ignored = {
+        VENV_TEST: "def test_x():\n    pass\n",
+        "pkg/debug.log": "a nested ignored file beside a kept one\n",
+        "build/other.txt": "an ignored sibling of a tracked file\n",
+        "data/other.txt": "ignored by data/*\n",
+        "scratch.txt": "ignored by .git/info/exclude\n",
+    }
+    untracked = {
+        "pkg/new.py": "x = 1\n",
+        "test_new.py": "def test_new():\n    pass\n",
+        "data/keep.txt": "re-included by !data/keep.txt\n",
+    }
+    for name, text in {**ignored, **untracked}.items():
+        (tree / name).parent.mkdir(parents=True, exist_ok=True)
+        (tree / name).write_text(text)
+    twin = tmp_path / "twin"
+    shutil.copytree(tree, twin)
+    _git(twin, "add", "-A")
+    everything_staged = run_capture(["git", "write-tree"], twin).stdout.strip()
+
+    with audit.staged_copy(tree, "HEAD") as (copy, staged, _resolved):
+        assert _files_outside_git(copy) == {
+            ".gitignore",
+            "n.py",
+            "test_n.py",
+            "build/tracked.txt",
+            *untracked,
+        }
+        assert not (copy / ".venv").exists()
+        assert sorted(read_sources(copy, "test_*.py")) == ["test_n.py", "test_new.py"]
+        assert staged == everything_staged
+
+
+def test_a_gitignored_venvs_tests_do_not_make_a_refactor_a_test_change(tmp_path: Path) -> None:
+    """Known-good: a behaviour-preserving change that leaves every test as it
+    was is judged by the refactor rule (coverage and a mutation floor carry
+    the proof), with a gitignored `.venv` beside it as without one.
+
+    Red at 0dd289d: the venv's test module read as a changed test, so
+    red-phase took the differential leg; the baseline leg ignores every
+    unchanged test and collects nothing, and a correct change was refused."""
+    tree = tmp_path / "tree"
+    _init(
+        tree,
+        {
+            ".gitignore": ".venv/\n",
+            "n.py": "def f():\n    return 1 + 1\n",
+            "test_n.py": TEST_BODY.format(value=2),
+        },
+    )
+    (tree / "n.py").write_text(FIXED_CODE)
+    (tree / VENV_TEST).parent.mkdir(parents=True)
+    (tree / VENV_TEST).write_text("def test_x():\n    pass\n")
+    result = audit_tree(tree)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.status == "pass", red.detail
+    assert red.detail.startswith("tests unchanged (behaviour preserved)")
+    assert result.verdict == "accept", [
+        (c.name, c.detail) for c in result.checks if c.status == "fail"
+    ]
+
+
+def test_a_failed_lookup_of_what_git_ignores_is_an_audit_error(tmp_path: Path) -> None:
+    """A lookup that fails is named, never read as "git ignores nothing",
+    which would copy a venv again."""
+    (tmp_path / "plain").mkdir()
+    with pytest.raises(AuditError, match="git ls-files failed"):
+        audit.git_ignored(tmp_path / "plain")
 
 
 # ------------------------------- results name real paths, not the copy
