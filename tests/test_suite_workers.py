@@ -37,6 +37,7 @@ import pytest
 from saddle import evidence
 from saddle.audit import AuditError, audit_node, audit_tree, staged_copy
 from saddle.auditor import Auditor, Finding, Findings
+from saddle.dag import Node
 from saddle.evidence import (
     RAN_SERIALLY,
     SUITE_WORKERS_MAX,
@@ -292,8 +293,10 @@ def test_edits_after_the_rev_change_nothing(tmp_path: Path) -> None:
 
 
 def test_one_worker_asks_pytest_nothing(tmp_path: Path) -> None:
-    """A project that set nothing pays for no probe."""
+    """A serial run of a project whose options cannot start pytest-cov pays
+    for no probe: nothing in its test command or pytest config says `--cov`."""
     root = _project(tmp_path / "p", _pyproject())
+    (root / "tox.ini").mkdir()  # unreadable as a file: skipped, not an error
     journal = tmp_path / "spans.jsonl"
     recorder = SpanRecorder(path=journal, node_id="n")
     assert suite_run(root, COMMAND, 1, recorder=recorder) == SuiteRun()
@@ -302,14 +305,46 @@ def test_one_worker_asks_pytest_nothing(tmp_path: Path) -> None:
     assert len(journal.read_text().splitlines()) == 1
 
 
+@pytest.mark.parametrize(
+    ("config", "command", "project_cov"),
+    [
+        ({"pyproject.toml": _pyproject(addopts="--cov=pkg")}, COMMAND, True),
+        ({"setup.cfg": "[tool:pytest]\naddopts = --cov=pkg\n"}, COMMAND, True),
+        ({"pytest.ini": "[pytest]\naddopts = --cov=pkg --no-cov\n"}, COMMAND, False),
+        ({"tox.ini": "# --cov is only mentioned here\n"}, COMMAND, False),
+        ({}, f"{COMMAND} --cov=pkg", True),
+    ],
+    ids=["pyproject", "setup-cfg", "no-cov-wins", "comment-only", "command"],
+)
+def test_a_serial_run_asks_pytest_whenever_the_project_may_start_pytest_cov(
+    tmp_path: Path, config: dict[str, str], command: str, project_cov: bool
+) -> None:
+    """A mention of `--cov` only makes the gate ask; pytest's answer decides."""
+    root = _project(tmp_path / "p", _pyproject())
+    for name, text in config.items():
+        (root / name).write_text(text)
+    journal = tmp_path / "spans.jsonl"
+    found = suite_run(root, command, 1, recorder=SpanRecorder(path=journal, node_id="n"))
+    assert found == SuiteRun(project_cov=project_cov)
+    assert len(journal.read_text().splitlines()) == 1
+
+
 def test_with_both_plugins_the_suite_runs_on_workers(tmp_path: Path) -> None:
     root = _project(tmp_path / "p", _pyproject())
     assert suite_run(root, COMMAND, 3) == SuiteRun(workers=3, project_cov=False)
 
 
-def test_a_project_that_starts_pytest_cov_keeps_its_own_options(tmp_path: Path) -> None:
+def test_a_project_that_starts_pytest_cov_keeps_its_own_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = _project(tmp_path / "p", _pyproject(addopts="--cov=pkg --cov-report=term-missing"))
     assert suite_run(root, COMMAND, 2) == SuiteRun(workers=2, project_cov=True)
+    assert suite_run(root, COMMAND, 1) == SuiteRun(project_cov=True)
+    _env_without(tmp_path, monkeypatch, *NO_XDIST)
+    assert suite_run(root, COMMAND, 2) == SuiteRun(
+        project_cov=True,
+        note=f"test-workers = 2 set but pytest-xdist is not installed: {RAN_SERIALLY}",
+    )
 
 
 @pytest.mark.parametrize(
@@ -347,10 +382,11 @@ def test_each_way_a_plugin_is_missing_is_named(
 
 @pytest.mark.parametrize("command", ["make test", "", "coverage run -m pytest", "tox -e py"])
 def test_a_command_that_does_not_start_pytest_runs_serially(tmp_path: Path, command: str) -> None:
-    root = _project(tmp_path / "p", _pyproject())
+    root = _project(tmp_path / "p", _pyproject(addopts="--cov=pkg"))
     assert suite_run(root, command, 2) == SuiteRun(
         note=f"test-workers = 2 set but the test command does not start pytest: {RAN_SERIALLY}"
     )
+    assert suite_run(root, command, 1) == SuiteRun()
 
 
 @pytest.mark.parametrize(
@@ -386,6 +422,8 @@ def test_a_probe_that_does_not_answer_is_named_never_read_as_missing(
         note=f"test-workers = 2 set but pytest did not say which plugins it loads ({why}): "
         f"{RAN_SERIALLY}"
     )
+    (root / "pytest.ini").write_text("[pytest]\naddopts = --cov=pkg\n")
+    assert suite_run(root, COMMAND, 1) == SuiteRun()  # as before: `coverage run`
 
 
 # -- the run: the same lines, from the controller and every worker ----------------
@@ -415,12 +453,13 @@ def test_serial_and_parallel_runs_record_the_same_lines(tmp_path: Path) -> None:
 def test_a_project_starting_pytest_cov_records_what_its_serial_pytest_cov_records(
     tmp_path: Path,
 ) -> None:
-    """With the project's own `--cov=pkg`, the gate's serial `coverage run`
-    records nothing (pytest-cov displaces it), so the reference here is the
-    project's own serial pytest-cov run: the parallel run records the same."""
+    """With the project's own `--cov=pkg`, `coverage run` records nothing
+    (pytest-cov displaces its tracer), so the gate records such a suite by
+    the project's pytest-cov, serially and on workers; the reference is the
+    project's own serial pytest-cov run."""
     root = _project(tmp_path / "p", _pyproject(addopts="--cov=pkg"))
-    serial = _record(root, SuiteRun(workers=1), ".coverage.gate")
-    assert serial == set()
+    blind = _record(root, SuiteRun(), ".coverage.gate")
+    assert blind == set()
     reference = str(root / ".coverage.reference")
     env = {**os.environ, "COVERAGE_FILE": reference, "PYTHONPATH": str(root / "src")}
     subprocess.run(
@@ -432,23 +471,37 @@ def test_a_project_starting_pytest_cov_records_what_its_serial_pytest_cov_record
     )
     expected = covered_lines(reference, _python_files(root))
     assert expected
+    assert _record(root, SuiteRun(project_cov=True), ".coverage.serial") == expected
     parallel = _record(root, SuiteRun(workers=2, project_cov=True), ".coverage.parallel")
     assert parallel == expected
 
 
-def test_a_coverage_file_left_in_the_tree_adds_no_line(tmp_path: Path) -> None:
-    """Known-bad: a data file of the gate's name already in the tree (a
-    parallel-run suffix file pytest-cov would combine) cannot mark a line
-    no test runs as covered."""
-    root = _project(tmp_path / "p", _pyproject())
+@pytest.mark.parametrize(
+    ("addopts", "run"),
+    [
+        (None, SuiteRun(workers=2)),
+        ("--cov-append", SuiteRun(workers=2)),
+        ("--cov=pkg --cov-append", SuiteRun(workers=2, project_cov=True)),
+        ("--cov=pkg --cov-append", SuiteRun(project_cov=True)),
+    ],
+    ids=["parallel", "parallel-append", "project-cov-append", "serial-project-cov-append"],
+)
+def test_a_coverage_file_left_in_the_tree_adds_no_line(
+    tmp_path: Path, addopts: str | None, run: SuiteRun
+) -> None:
+    """Known-bad: a data file of the gate's name already in the tree (the
+    file itself, or a suffix file pytest-cov would combine) cannot mark a line
+    no test runs as covered, even under a project's `--cov-append`, which
+    keeps old data."""
+    root = _project(tmp_path / "p", _pyproject(addopts=addopts))
     lazy = str(root / "src/pkg/lazy.py")
-    for name in (".coverage.parallel", ".coverage.parallel.left.1.2"):
+    for name in (".coverage.gate", ".coverage.gate.left.1.2"):
         planted = coverage.CoverageData(basename=str(root / name))
         planted.add_lines({lazy: [10]})
         planted.write()
-    parallel = _record(root, SuiteRun(workers=2), ".coverage.parallel")
-    assert (lazy, 9) in parallel
-    assert (lazy, 10) not in parallel
+    recorded = _record(root, run, ".coverage.gate")
+    assert (lazy, 9) in recorded
+    assert (lazy, 10) not in recorded
 
 
 # -- the gate: one tree, two runs, the same verdicts ----------------------------
@@ -485,6 +538,27 @@ def test_the_gate_reads_the_same_lines_and_verdicts_on_workers(tmp_path: Path) -
     assert "calc.py" not in detail
     for name in ("dead-code", "public-deletions", "assertion-preservation", "red-phase"):
         assert parallel[name] == serial[name], name
+
+
+@pytest.mark.parametrize(
+    "addopts",
+    ["--cov=pkg", "--cov=pkg --cov-report=term-missing --cov-fail-under=50"],
+    ids=["cov", "cov-report-fail-under"],
+)
+def test_a_project_whose_options_start_pytest_cov_is_measured_serially_and_on_workers(
+    tmp_path: Path, addopts: str
+) -> None:
+    """Instances for the displaced `coverage run`: the gate names the same
+    unrun line (`unreached`'s `return 1`) and clears the same run ones as for
+    a project without pytest-cov in its options, serially and on workers."""
+    reference, _ = _gate_both_ways(_project(tmp_path / "a", _pyproject()))
+    serial, parallel = _gate_both_ways(_project(tmp_path / "b", _pyproject(addopts=addopts)))
+    assert serial["coverage"] == parallel["coverage"]
+    passed, detail, basis = serial["coverage"]
+    assert (passed, basis) == (False, reference["coverage"][2])
+    assert detail.startswith("no test runs ")
+    assert detail.endswith("/src/pkg/lazy.py:14")
+    assert serial["tests"] == (True, f"{COMMAND!r} exited 0", None)
 
 
 def test_a_failing_test_fails_the_tests_check_on_workers(tmp_path: Path) -> None:
@@ -556,6 +630,37 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     assert suites == [covered, covered, [*COMMAND.split(), "-n", "2"]]
 
 
+def _spec_node() -> Node:
+    """A `test` node: its tests are a red specification, read off the run's output."""
+    node = audit_node().model_dump()
+    node.update(id="spec", kind="test")
+    return Node.model_validate(node)
+
+
+def test_a_red_specification_is_read_off_a_serial_run(tmp_path: Path) -> None:
+    """A greenfield spec's collection error is exit 2 serially and exit 1
+    under xdist; the verdict reads the exit, so a `test` node never runs on
+    workers: with them asked for, it gets the serial verdict."""
+    root = tmp_path / "p"
+    _commit(root, {"pyproject.toml": _pyproject(), "src/pkg/__init__.py": ""})
+    (root / "tests").mkdir()
+    (root / "tests/test_spec.py").write_text(
+        "from newmod import thing\n\n\ndef test_thing():\n    assert thing() == 1\n"
+    )
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        verdicts = [
+            next(
+                (c.passed, c.detail, c.basis)
+                for c in run_node_gate(
+                    _spec_node(), copy, baseline=resolved, tier2=False, test_workers=workers
+                ).checks
+                if c.name == "tests"
+            )
+            for workers in (1, 2)
+        ]
+    assert verdicts == [(True, "red specification: module 'newmod' does not exist yet", None)] * 2
+
+
 # -- the audit: the setting at the baseline, the note in the finding --------------
 
 
@@ -568,6 +673,17 @@ def test_without_the_setting_the_tests_finding_is_unchanged(tmp_path: Path) -> N
     tests = _finding(_tier1(_project(tmp_path / "p", _pyproject())), "tests")
     assert (tests.verdict, tests.detail) == ("pass", f"{COMMAND!r} exited 0")
     assert tests.cites == ("saddle.gates.check_test_command",)
+
+
+def test_a_serial_audit_of_a_project_starting_pytest_cov_measures(tmp_path: Path) -> None:
+    """Without the setting too: the same unrun line is named, not passed as
+    unreached and not reported for every line."""
+    result = _tier1(_project(tmp_path / "p", _pyproject(addopts="--cov=pkg")))
+    tests = _finding(result, "tests")
+    assert (tests.verdict, tests.detail) == ("pass", f"{COMMAND!r} exited 0")
+    assert tests.cites == ("saddle.gates.check_test_command",)
+    covered = _finding(result, "coverage")
+    assert (covered.verdict, covered.detail) == ("fail", "no test runs src/pkg/lazy.py:14")
 
 
 def test_the_audit_runs_on_the_workers_its_baseline_asks_for(tmp_path: Path) -> None:

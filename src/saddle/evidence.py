@@ -634,16 +634,21 @@ initial conftests, and collects nothing."""
 class SuiteRun:
     """How a gate runs a project's suite (`suite_run` decides).
 
-    `workers` below 2 is the serial run exactly as it always was: the test
-    command under `coverage run` (`under_coverage`). From 2 up it is the
-    test command with `-n workers` (pytest-xdist), recorded by pytest-cov
-    into the gate's data file (`COVERAGE_FILE`), which pytest-cov combines
-    from the controller and every worker. `project_cov` says the project's
-    own options already start pytest-cov: its sources, report and
-    fail-under then stand, as they did inside the serial run. Otherwise
-    `--cov` with no source measures what `coverage run` measures (the
-    coverage config's `source`, else everything) and `--cov-fail-under=0`
-    enforces no total, as `coverage run` enforces none.
+    The default is the serial run exactly as it always was: the test
+    command under `coverage run` (`under_coverage`). `project_cov` says the
+    project's own pytest options start pytest-cov. Inside `coverage run`
+    that pytest-cov takes the tracer over and `coverage run` records
+    nothing, so such a suite is recorded by the project's pytest-cov itself:
+    the test command as written, with `COVERAGE_FILE` naming the gate's data
+    file; its sources, report and fail-under stand, as they did before.
+
+    From 2 `workers` up it is the test command with `-n workers`
+    (pytest-xdist), also recorded by pytest-cov into the gate's data file,
+    which pytest-cov combines from the controller and every worker. When
+    the project's options do not start pytest-cov, `--cov` with no source
+    measures what `coverage run` measures (the coverage config's `source`,
+    else everything) and `--cov-fail-under=0` enforces no total, as
+    `coverage run` enforces none.
 
     `note` says why a project that set `test-workers` got a serial run; it
     is appended to the `tests` finding, never dropped.
@@ -657,11 +662,16 @@ class SuiteRun:
     def parallel(self) -> bool:
         return self.workers >= 2
 
+    @property
+    def by_pytest_cov(self) -> bool:
+        """Whether pytest-cov, not `coverage run`, records the run."""
+        return self.parallel or self.project_cov
+
     def covered(self, test_command: str, data_file: str) -> tuple[str, dict[str, str]]:
         """The command that runs the suite recording into `data_file`, and its extra env."""
-        if not self.parallel:
+        if not self.by_pytest_cov:
             return under_coverage(test_command, data_file), {}
-        extra = ["-n", str(self.workers)]
+        extra = ["-n", str(self.workers)] if self.parallel else []
         if not self.project_cov:
             extra += ["--cov", "--cov-report=", "--cov-fail-under=0"]
         command = shlex.join([*shlex.split(test_command), *extra])
@@ -672,6 +682,10 @@ class SuiteRun:
         if not self.parallel:
             return test_command
         return shlex.join([*shlex.split(test_command), "-n", str(self.workers)])
+
+
+PYTEST_CONFIG_FILES: Final = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
+"""The files at a tree's root pytest reads its options from (`_may_start_pytest_cov`)."""
 
 
 def _starts_pytest(argv: Sequence[str]) -> bool:
@@ -685,29 +699,26 @@ def _starts_pytest(argv: Sequence[str]) -> bool:
     ]
 
 
-def suite_run(
-    tree: Path,
-    test_command: str,
-    workers: int,
-    *,
-    recorder: SpanRecorder | None = None,
-) -> SuiteRun:
-    """How to run `test_command`'s suite in `tree` when the project asks for `workers`.
+def _may_start_pytest_cov(tree: Path, test_command: str) -> bool:
+    """Whether the test command, or a pytest config file at `tree`'s root,
+    mentions `--cov`: a filter, so a serial run of a project whose options
+    cannot start pytest-cov asks pytest nothing and runs exactly as before.
+    `suite_run` asks pytest itself whenever this says yes."""
+    if "--cov" in test_command:
+        return True
+    for name in PYTEST_CONFIG_FILES:
+        try:
+            if "--cov" in (tree / name).read_text(errors="replace"):
+                return True
+        except OSError:
+            continue
+    return False
 
-    Parallel only when the test command starts pytest and pytest, started
-    exactly as the command starts it in the gate's sandbox and environment,
-    loads pytest-xdist and pytest-cov with neither disabled by the project's
-    options (`_WORKERS_PROBE_SOURCE`). Every other case is the serial run,
-    and when `workers` asked for more than one, `SuiteRun.note` says why:
-    a missing plugin must never be silent. A probe that does not answer
-    is such a case too, reported with its exit code.
-    """
-    if workers < 2:
-        return SuiteRun()
-    head = f"{SUITE_WORKERS_KEY} = {workers} set but"
-    argv = shlex.split(test_command)
-    if not _starts_pytest(argv):
-        return SuiteRun(note=f"{head} the test command does not start pytest: {RAN_SERIALLY}")
+
+def _probe_plugins(
+    tree: Path, argv: Sequence[str], recorder: SpanRecorder | None
+) -> dict[str, Any] | str:
+    """pytest's own report on its plugins (`_WORKERS_PROBE_SOURCE`), or why there is none."""
     with tempfile.TemporaryDirectory(prefix="saddle-workers-probe-") as scratch:
         (Path(scratch) / f"{WORKERS_PROBE_MODULE}.py").write_text(_WORKERS_PROBE_SOURCE)
         inherited = src_layout_env(tree).get("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
@@ -729,11 +740,46 @@ def suite_run(
         report = json.loads(said[-1]) if said and probe.exit_code == 0 else None
     except ValueError:
         report = None
-    if not isinstance(report, dict):
-        why = "timed out" if probe.timed_out else f"exit {probe.exit_code}"
-        return SuiteRun(
-            note=f"{head} pytest did not say which plugins it loads ({why}): {RAN_SERIALLY}"
-        )
+    if isinstance(report, dict):
+        return report
+    return "timed out" if probe.timed_out else f"exit {probe.exit_code}"
+
+
+def suite_run(
+    tree: Path,
+    test_command: str,
+    workers: int,
+    *,
+    recorder: SpanRecorder | None = None,
+) -> SuiteRun:
+    """How to run `test_command`'s suite in `tree` when the project asks for `workers`.
+
+    Parallel only when the test command starts pytest and pytest, started
+    exactly as the command starts it in the gate's sandbox and environment,
+    loads pytest-xdist and pytest-cov with neither disabled by the project's
+    options (`_WORKERS_PROBE_SOURCE`). Every other case is serial, and when
+    `workers` asked for more than one, `SuiteRun.note` says why: a missing
+    plugin must never be silent. A probe that does not answer is such a
+    case too, reported with its exit code.
+
+    Serial or not, the same report says whether the project's own options
+    start pytest-cov (`SuiteRun.project_cov`). A serial run asks only when
+    `_may_start_pytest_cov` says they might; otherwise it asks nothing.
+    """
+    head = f"{SUITE_WORKERS_KEY} = {workers} set but"
+    argv = shlex.split(test_command)
+    if not _starts_pytest(argv):
+        note = f"{head} the test command does not start pytest: {RAN_SERIALLY}"
+        return SuiteRun(note=note if workers >= 2 else "")
+    if workers < 2 and not _may_start_pytest_cov(tree, test_command):
+        return SuiteRun()
+    report = _probe_plugins(tree, argv, recorder)
+    if isinstance(report, str):
+        note = f"{head} pytest did not say which plugins it loads ({report}): {RAN_SERIALLY}"
+        return SuiteRun(note=note if workers >= 2 else "")
+    project_cov = bool(report.get("cov") and report.get("cov_source") and not report.get("no_cov"))
+    if workers < 2:
+        return SuiteRun(project_cov=project_cov)
     missing = []
     for plugin, name in (("xdist", "pytest-xdist"), ("cov", "pytest-cov")):
         if not report.get(plugin):
@@ -746,8 +792,9 @@ def suite_run(
     if report.get("cov") and report.get("no_cov"):
         missing.append("the project's pytest options disable pytest-cov (--no-cov)")
     if missing:
-        return SuiteRun(note=f"{head} {' and '.join(missing)}: {RAN_SERIALLY}")
-    return SuiteRun(workers=workers, project_cov=bool(report.get("cov_source")))
+        note = f"{head} {' and '.join(missing)}: {RAN_SERIALLY}"
+        return SuiteRun(project_cov=project_cov, note=note)
+    return SuiteRun(workers=workers, project_cov=project_cov)
 
 
 def run_suite_capture(
@@ -761,13 +808,14 @@ def run_suite_capture(
 ) -> CapturedRun:
     """Run the suite as `run` says, recording coverage into `data_file`.
 
-    A parallel run first removes `data_file` and any `data_file.*` left in
-    `cwd`: pytest-cov combines every file of that name, and one it did not
-    write (a copy of the tree carries whatever the tree holds) must not add
-    lines no test ran. The serial run is `run_shell_capture` of
-    `under_coverage`, unchanged."""
+    A run pytest-cov records first removes `data_file` and any
+    `data_file.*` left in `cwd`: pytest-cov combines every file of that name
+    and, under a project's `--cov-append`, keeps the old data too, so one it
+    did not write (a copy of the tree carries whatever the tree holds) must
+    not add lines no test ran. The serial `coverage run` is
+    `run_shell_capture` of `under_coverage`, unchanged."""
     command, env = run.covered(test_command, data_file)
-    if run.parallel:
+    if run.by_pytest_cov:
         target = Path(data_file)
         for stale in list(target.parent.iterdir()):
             if stale.name == target.name or stale.name.startswith(f"{target.name}."):
