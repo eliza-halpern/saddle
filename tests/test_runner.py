@@ -902,6 +902,37 @@ def test_run_node_gate_red_phase_runs_only_the_tests_the_node_changed(tmp_path: 
     assert collected.count("COLLECTED test_n.py") == 1, collected
 
 
+def test_a_refactor_that_changes_no_test_takes_no_baseline_sample(tmp_path: Path) -> None:
+    """Red before: a refactor node that changed no test ran one whole-suite
+    sample on the original code, which red-phase never reads: with no test
+    changed it judges a refactor on coverage and mutation alone. On saddle
+    that sample was about six minutes of every tier-2 audit of a source-only
+    diff (the audit's node is a refactor)."""
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, tmp_path) == 0
+    (tmp_path / "n.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "test_n.py").write_text("from n import f\n\n\ndef test_f():\n    assert f() == 1\n")
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], tmp_path) == 0
+    (tmp_path / "n.py").write_text("def f():\n    one = 1\n    return one\n")
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    journal = tmp_path / "proofs.jsonl"
+    result = run_node_gate(
+        _node("pytest", kind="refactor"),
+        tmp_path,
+        recorder=SpanRecorder(path=journal, node_id="n1"),
+    )
+    samples = [span for span in read_spans(journal) if any(".coverage.red" in a for a in span.argv)]
+    assert samples == []
+    # the verdict is the refactor's own, read off coverage and mutation
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.detail.startswith("tests unchanged"), red.detail
+
+
 @pytest.mark.parametrize(
     ("test_body", "samples", "verdict"),
     [

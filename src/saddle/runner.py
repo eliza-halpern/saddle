@@ -317,10 +317,12 @@ def run_node_gate(
         # A test node has no baseline leg: its red-phase mirrors the tests
         # verdict, so the samples would be evidence nothing reads. Nor does
         # tier 1 (`tier2=False`): the auditor's checkpoint tier reports no
-        # red-phase, and one sample is one more run of the whole suite.
-        samples = (
-            0 if node.kind == "test" or not tier2 else (RED_PHASE_SAMPLES if tests_changed else 1)
-        )
+        # red-phase, and one sample is one more run of the whole suite. Nor
+        # does a refactor that changed no test: `check_red_phase` judges it
+        # on coverage and mutation and never reads a sample, and on saddle
+        # that one unread sample was six minutes of every source-only audit.
+        unread = node.kind == "test" or (node.kind == "refactor" and not tests_changed)
+        samples = 0 if unread or not tier2 else (RED_PHASE_SAMPLES if tests_changed else 1)
         baseline_exits: list[int] = []
         baseline_output = ""
         baseline_mode = (
