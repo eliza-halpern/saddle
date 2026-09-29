@@ -19,11 +19,14 @@ const TASK_STATES = {
   needs_you: { word: "needs you", glyph: "?" },
   finished:  { word: "finished",  glyph: "✓" },
   stopped:   { word: "stopped",   glyph: "■" },
+  // Ended needing you: the finish audit asked a question. Not stopped, not
+  // failed, and nothing waits on an answer any more.
+  asked:     { word: "needs you", glyph: "?" },
   unchanged: { word: "unchanged", glyph: "=" },
   failed:    { word: "no outcome", glyph: "!" },
   loading:   { word: "loading",   glyph: "…" },
 };
-const ENDED = new Set(["finished", "stopped", "unchanged", "failed"]);
+const ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 
 const tasks = new Map();
 
@@ -477,6 +480,7 @@ function renderPacket(card, packet) {
     verdict.appendChild(meta);
   }
   box.appendChild(verdict);
+  if ((packet.questions || []).length) box.appendChild(askedBox(packet.questions));
 
   box.appendChild(actionRow(card, packet));
   box.appendChild(summaryBand(packet));
@@ -498,12 +502,14 @@ function renderPacket(card, packet) {
     fold.appendChild(packetRow(audit, packet));
     rows.appendChild(fold);
   }
+  // The task-text check (P1): whether it ran and what it judged, on the first screen.
+  if (byKey.has("p1")) rows.appendChild(packetRow(byKey.get("p1"), packet));
   // Tier-0 edit checks: their own line beside Audit, never in its count.
   if (byKey.has("edit-checks")) rows.appendChild(packetRow(byKey.get("edit-checks"), packet));
   box.appendChild(rows);
   const details = el("details", "packet-details");
   details.appendChild(el("summary", "details-summary", "Details"));
-  const placed = new Set(["tests", "mutation", "not-proven", "scope", "audit", "edit-checks"]);
+  const placed = new Set(["tests", "mutation", "not-proven", "scope", "audit", "p1", "edit-checks"]);
   for (const key of DETAIL_ORDER) {
     if (byKey.has(key)) details.appendChild(packetRow(byKey.get(key), packet));
   }
@@ -529,6 +535,27 @@ function paintSpend(card, spend) {
   if (spend.token_budget) card.tokenBudget = spend.token_budget;
   card.meters.hidden = false;
   tick(card);
+}
+
+/* The questions an ended run's audit asked: what the person decides. Never
+   drawn as a pass or a fail; "would refuse at full strength" is a tag. */
+const WOULD_REFUSE = "[would refuse at full strength]";
+
+function askedBox(questions) {
+  const box = el("div", "task-asked");
+  box.appendChild(el("div", "ask-kicker", `The audit asks you ${questions.length === 1 ? "a question" : `${questions.length} questions`}`));
+  for (const text of questions) {
+    const p = el("p", "ask-text");
+    const parts = text.split(WOULD_REFUSE);
+    parts.forEach((part, i) => {
+      if (part) p.appendChild(document.createTextNode(part));
+      if (i < parts.length - 1) p.appendChild(el("span", "asked-tag", "would refuse at full strength"));
+    });
+    box.appendChild(p);
+  }
+  box.appendChild(el("p", "asked-note",
+    "Not a pass and not a failure: the run ended so you can decide. Read the branch, then merge it, discard it, or run the task again with your answer."));
+  return box;
 }
 
 /* ---------- the packet's first screen ---------- */
@@ -951,7 +978,7 @@ function recapCard(turn, content) {
   loadPacket(card).then(() => {
     const verdict = card.packet.querySelector(".verdict");
     const cls = verdict ? [...verdict.classList].find((c) => c.startsWith("v-")) : null;
-    card.state = cls ? { "v-finished": "finished", "v-stopped": "stopped", "v-unchanged": "unchanged" }[cls] || "failed" : "failed";
+    card.state = cls ? { "v-finished": "finished", "v-stopped": "stopped", "v-unchanged": "unchanged", "v-needs_you": "asked" }[cls] || "failed" : "failed";
     paintState(card);
   });
   return true;
@@ -975,6 +1002,7 @@ function openRunConfirm() {
   $("#tc-folder").textContent = state.folder || "this folder";
   api("/api/task-policy").then((policy) => {
     $("#tc-test-edits").checked = !!policy.test_edits;
+    $("#tc-p1").hidden = !policy.task_text_check;
     paintTestPolicy();
   }).catch(() => {});
   $("#task-confirm").hidden = false;

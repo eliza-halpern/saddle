@@ -90,7 +90,15 @@ from saddle.gates import (
     shortlist_order,
     spared_definitions,
 )
-from saddle.journal import append_span, build_span, write_attempt_sidecar
+from saddle.journal import (
+    JOURNAL_QUESTION_EXIT,
+    MAX_SPAN_DETAIL_CHARS,
+    SEALED_CUT,
+    append_span,
+    build_span,
+    write_attempt_sidecar,
+)
+from saddle.task_examples import WOULD_REFUSE
 from saddle.task_requirements import check_tree
 
 Verdict = Literal["pass", "fail", "not-applicable", "blocked", "not-proven", "question"]
@@ -178,9 +186,49 @@ REASONS: Final[dict[str, Reason]] = {
 # claim about the code or its tests (gates.check_mutation's own wording).
 _TOOL_FAILURE_PREFIXES: Final = ("mutation tool failed", "mutation not measured")
 
-JOURNAL_QUESTION_EXIT: Final = 4
-"""A `question` finding's span exit code: not 0 (a pass), 1 (a fail) or 2
-(blocked). The same code a rule D run that halted on a question seals."""
+
+def sealed_finding(finding: Finding) -> str:
+    """The finding as the JSON its `audit-tier<N>:<gate>` span seals.
+
+    A span's detail is capped at `MAX_SPAN_DETAIL_CHARS`, and JSON cut
+    mid-string does not parse: the reader then sees verdict "unreadable"
+    and exit code 4, and a `question` read that way is shown as a failure.
+    So a `question` finding too long for the line is sealed with only its
+    first cite (the gate) and, if that is not enough, its detail cut to fit, marked `SEALED_CUT`,
+    keeping "would refuse at full strength" when the whole said it. The
+    whole finding is in the audit's own sidecar (`feed.AuditResult`). Other
+    verdicts are sealed as before: their exit code already says pass or fail.
+    """
+    text = json.dumps(dataclasses.asdict(finding), sort_keys=True)
+    if finding.verdict != "question" or len(text) <= MAX_SPAN_DETAIL_CHARS:
+        return text
+    body = {**dataclasses.asdict(finding), "cites": list(finding.cites[:1])}
+    text = json.dumps(body, sort_keys=True)
+    if len(text) <= MAX_SPAN_DETAIL_CHARS:
+        return text  # the gate's basis was what did not fit; the detail is whole
+    mark = SEALED_CUT + (f" [{WOULD_REFUSE}]" if WOULD_REFUSE in finding.detail else "")
+    detail = finding.detail
+    while True:
+        text = json.dumps({**body, "detail": detail + mark}, sort_keys=True)
+        over = len(text) - MAX_SPAN_DETAIL_CHARS
+        if over <= 0 or not detail:
+            return text
+        detail = detail[: max(0, len(detail) - over)]
+
+
+def p1_tally(check: TaskRequirementsCheck) -> dict[str, Any]:
+    """What the P1 finding's span seals beside it: every unjudged unit or
+    example named, and the counts a trial reads (`TaskRequirementsCheck.units`
+    and `.examples`), with the strength the gate ran at."""
+    total, judged, asked, unjudged = check.units
+    examples, passed, wrong, questions = check.examples
+    return {
+        "unjudged": list(check.unjudged),
+        "units": {"total": total, "judged": judged, "asked": asked, "unjudged": unjudged},
+        "examples": {"total": examples, "pass": passed, "code-wrong": wrong, "question": questions},
+        "strength": "full" if (check.basis or "").startswith("full strength") else "question",
+    }
+
 
 _JOURNAL_EXIT: Final[dict[Verdict, int]] = {
     "pass": 0,
@@ -775,7 +823,7 @@ class Auditor:
                     argv=["saddle-audit", f"tier{f.tier}", f.gate, result.key],
                     duration_ms=0,
                     exit_code=_JOURNAL_EXIT[f.verdict],
-                    detail=json.dumps(dataclasses.asdict(f), sort_keys=True),
+                    detail=sealed_finding(f),
                     name=f"audit-tier{f.tier}:{f.gate}",
                     span_id=span_id,
                     attempt_hash=attempt_hash,
@@ -951,8 +999,7 @@ class Auditor:
             if p1 is not None:
                 check = p1.result()
                 statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
-                if check.unjudged:
-                    sidecars[TASK_REQUIREMENTS] = {"unjudged": list(check.unjudged)}
+                sidecars[TASK_REQUIREMENTS] = p1_tally(check)
         wanted = TIER1 if tier == 1 else TIER2
         if TASK_REQUIREMENTS in statuses:
             wanted = (*wanted, TASK_REQUIREMENTS)

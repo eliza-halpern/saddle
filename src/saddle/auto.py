@@ -42,7 +42,7 @@ from saddle.events import Event, Question
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
-from saddle.journal import append_span, build_span
+from saddle.journal import P1_EXTRACT_SPAN, append_span, build_span, started_before, utc_now
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources
 from saddle.task_passes import extract as extract_requirements
@@ -337,11 +337,50 @@ P1_FILE: Final = "task-requirements.json"
 """Where `--extract-requirements` seals the file: beside the run's ledger."""
 
 
+def extraction_counts(record: dict[str, object]) -> str:
+    """What an extraction sealed, counted: the `p1:extract` span's detail."""
+
+    def n(key: str) -> int:
+        value = record.get(key)
+        return len(value) if isinstance(value, list) else 0
+
+    return (
+        f"{n('units')} candidate unit(s), {n('examples')} example(s), "
+        f"{n('not_executable')} not executable, {n('cut')} cut, "
+        f"{n('unanswered')} unanswered, {n('probes')} probe(s)"
+    )
+
+
+def _seal_extraction(journal: Path, run_span: str, began: float, code: int, detail: str) -> None:
+    """The `p1:extract` span: the extraction's wall time and what it sealed or why it failed."""
+    took = int((monotonic() - began) * 1000)
+    append_span(
+        journal,
+        build_span(
+            node_id="chat#1",
+            argv=[P1_EXTRACT_SPAN, P1_FILE],
+            duration_ms=took,
+            exit_code=code,
+            detail=detail,
+            kind="agent",
+            name=P1_EXTRACT_SPAN,
+            parent_id=run_span,
+            started_at=started_before(took, utc_now()),
+        ),
+    )
+
+
 def _requirements(
-    options: AutoOptions, client: VllmClient, worktree: Path, base: str, journal: Path
+    options: AutoOptions,
+    client: VllmClient,
+    worktree: Path,
+    base: str,
+    journal: Path,
+    run_span: str,
 ) -> tuple[Future[Path] | None, ThreadPoolExecutor | None]:
     """The run's P1 file as a future (done at once for `--task-requirements`),
-    and the pool an extraction runs on; (None, None) without P1."""
+    and the pool an extraction runs on; (None, None) without P1. An
+    extraction seals a `p1:extract` span when it ends, sealed or failed."""
     if options.task_requirements is not None:
         ready: Future[Path] = Future()
         ready.set_result(options.task_requirements.resolve())
@@ -351,13 +390,19 @@ def _requirements(
     target = journal.parent / P1_FILE
 
     def extract() -> Path:
-        record = extract_requirements(
-            options.task,
-            client,
-            sources=baseline_sources(worktree, base),
-            probes=[ProbeTree(r.resolve(), "user") for r in options.references],
-        )
-        target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        began = monotonic()
+        try:
+            record = extract_requirements(
+                options.task,
+                client,
+                sources=baseline_sources(worktree, base),
+                probes=[ProbeTree(r.resolve(), "user") for r in options.references],
+            )
+            target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        except Exception as exc:
+            _seal_extraction(journal, run_span, began, 1, f"{type(exc).__name__}: {exc}")
+            raise
+        _seal_extraction(journal, run_span, began, 0, extraction_counts(record))
         return target
 
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-p1-extract")
@@ -468,7 +513,7 @@ def run_auto(
         kind="agent",
     )
     append_span(journal, start)
-    p1, extraction = _requirements(options, client, worktree, base, journal)
+    p1, extraction = _requirements(options, client, worktree, base, journal, start.span_id)
     feed = (
         None
         if options.arm == "E"

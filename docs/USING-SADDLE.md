@@ -65,6 +65,16 @@ It looks in this order:
    venv yourself before merging. A request for a package with no wheel in the folder
    is refused as missing without asking; a run with installs allowed does not start
    without a project venv, or with a wheel folder that is missing or holds no wheels.
+
+   **The task-text check in the chat** (`saddle web --extract-requirements`, or
+   `SADDLE_EXTRACT_REQUIREMENTS=1` exported or in the env file). Every Task run the
+   chat starts then extracts the task text's examples beside the worker, as
+   `saddle auto --extract-requirements` does, and tier 1 runs them (P1). At question
+   strength a P1 finding asks, never refuses: a run whose finish audit asks ends
+   "needs you", and the card shows the question, marked "would refuse at full
+   strength" where that applies. The packet's Task text row says that P1 ran, the
+   extraction's wall time, and how many candidate units the last P1 finding judged,
+   asked about, or left unjudged. A per-task reference (`--reference`) is `auto`-only.
 2. **The first `python` on your PATH.**
 3. **A `python3` on your PATH, when there is no `python`** (Ubuntu without
    python-is-python3), used only if it imports `pytest`, `coverage` and `mutmut`

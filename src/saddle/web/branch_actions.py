@@ -99,7 +99,8 @@ def dirty(root: Path) -> str:
 def merge_refusal(packet: Packet) -> str:
     """Why this packet may not be merged, or "" if it may."""
     if packet.verdict != "finished":
-        return f"The run is {packet.verdict}, not finished; only a finished, audited run merges."
+        state = "needing you" if packet.verdict == "needs_you" else packet.verdict
+        return f"The run is {state}, not finished; only a finished, audited run merges."
     failed = [r.title for r in packet.rows if r.status == "failed"]
     if failed:
         return f"Failed on the record: {', '.join(failed)}."

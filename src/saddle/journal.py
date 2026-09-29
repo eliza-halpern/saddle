@@ -617,6 +617,25 @@ AUTO_OUTCOMES: Final = ("auto:finished", "auto:stopped", "auto:unchanged")
 """A run's outcome span names (`engine._seal_outcome`); `auto:unchanged` is
 the third ending (finish on a tree equal to the baseline). Not `auto:spend`,
 which the measured-usage record seals under the start span once per round."""
+JOURNAL_QUESTION_EXIT: Final = 4
+"""A `question` finding's span exit code (`auditor._JOURNAL_EXIT`): not 0 (a
+pass), 1 (a fail) or 2 (blocked). Readers that cannot parse a finding's
+detail still read this code as a question, never as a failure."""
+AUDIT_QUESTION_STOP: Final = "needs you: the audit asks "
+"""How the stop reason of a run whose finish audit asked a question opens
+(`engine.needs_you_reason`): the run ends needing you, not stopped on a fault."""
+SEALED_CUT: Final = " [cut to fit the ledger line; the audit sidecar holds it whole]"
+"""What a `question` finding's sealed detail ends with when it was cut to fit
+(`auditor.sealed_finding`)."""
+FEED_QUESTION_LINE: Final = "(question for a person, does not refuse)"
+"""How the audit text the model reads (`feed.render`) opens a `question`
+finding's line; the card reads a delivered audit holding one as a question."""
+P1_EXTRACT_SPAN: Final = "p1:extract"
+"""The span `saddle auto --extract-requirements` seals when P1's extraction
+ends (`auto._requirements`): its wall time as `duration_ms`, exit 0 with the
+file's counts, or exit 1 with why it failed. An agent span under the run's
+start, not a tool call; it may follow the outcome, since the run waits for
+an extraction still running before it commits."""
 AUDIT_SPAN_PREFIXES: Final = ("audit:", "audit-tier")
 """Audit records a run's journal also holds: the feed's `audit:delivered` /
 `audit:withheld`, the chat seam's `audit:<gate>`, and the auditor's own

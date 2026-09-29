@@ -133,6 +133,13 @@ no network, so nothing is downloaded and no package's build code runs. A package
 no wheel in the folder is refused as missing, and a run with installs allowed does not
 start without a project venv or with a missing or empty wheel folder.
 
+To have every Task run from the chat also check the task text's own examples (P1),
+start the chat with `saddle web --extract-requirements`, or put
+`SADDLE_EXTRACT_REQUIREMENTS=1` in the env file once. The examples are extracted
+beside the worker (extra model calls); their findings only ask, never refuse, and a run
+whose finish audit asks ends "needs you" with the question on the task card. The card's
+Task text row says how long the extraction took and how many units it judged.
+
 [docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
 evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle
 doctor`, `dag`, `run`, `auto`, `audit`, `tail`, `verify`, `explain`, `chat` (alias

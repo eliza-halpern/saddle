@@ -14,9 +14,9 @@
 
 const RUN_WORDS = {
   running: "running", needs_you: "needs you", finished: "finished",
-  stopped: "stopped", unchanged: "unchanged", failed: "no outcome", interrupted: "interrupted",
+  stopped: "stopped", unchanged: "unchanged", asked: "needs you", failed: "no outcome", interrupted: "interrupted",
 };
-const RUN_ENDED_STATES = new Set(["finished", "stopped", "unchanged", "failed"]);
+const RUN_ENDED_STATES = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 const UNDO_MS = 10000;
 const runsView = { rows: [], skew: 0, timer: 0, undoMs: UNDO_MS };
 

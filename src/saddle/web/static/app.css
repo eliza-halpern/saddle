@@ -578,7 +578,8 @@ main { position: relative; }
   margin: 12px 0 4px; border: 1px solid var(--line); border-left: 3px solid var(--tone);
   border-radius: 14px 18px 18px 14px; background: var(--card); overflow: hidden;
   animation: rise .22s cubic-bezier(.34,1.3,.64,1); }
-.task-card[data-state="needs_you"] { --tone: var(--ask); --wash: var(--wash-ask); }
+.task-card[data-state="needs_you"],
+.task-card[data-state="asked"]     { --tone: var(--ask); --wash: var(--wash-ask); }
 .task-card[data-state="finished"]  { --tone: var(--done); --wash: var(--wash-done); }
 .task-card[data-state="stopped"],
 .task-card[data-state="unchanged"],
@@ -720,6 +721,13 @@ main { position: relative; }
 .s-proven { --s: var(--done); }
 .s-observed, .s-cost { --s: var(--run); }
 .s-not-proven, .s-question { --s: var(--ask); }
+.task-asked { margin: 0 0 14px; padding: 11px 13px; border-radius: 11px;
+  border: 1px solid var(--ask); background: var(--wash-ask); }
+.task-asked .ask-text { overflow-wrap: anywhere; }
+.asked-tag { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ask); border: 1px dashed var(--ask); border-radius: 999px; padding: 0 8px; }
+.tc-p1 { margin: 2px 0 8px; font-size: 12.5px; color: var(--ask); }
+.asked-note { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-dim); }
 .s-failed { --s: var(--halt); }
 .s-narrative { --s: var(--lilac); }
 .prow-label { display: flex; flex-direction: column; gap: 3px; padding-left: 10px;
@@ -844,7 +852,7 @@ main { position: relative; }
            border: 1px solid currentColor; white-space: nowrap; }
 .run-dot::before { content: "●"; margin-right: 4px; font-size: 9px; }
 .run-dot.rs-running   { color: var(--sky); }
-.run-dot.rs-needs_you { color: var(--peach); background: #ffc49b1f; font-weight: 600; }
+.run-dot.rs-needs_you, .run-dot.rs-asked { color: var(--peach); background: #ffc49b1f; font-weight: 600; }
 .run-dot.rs-finished  { color: var(--mint); }
 .run-dot.rs-stopped, .run-dot.rs-failed { color: var(--bad); }
 .notify-toggle { margin: 4px 14px 8px; padding: 6px 10px; border-radius: 10px; font: inherit; font-size: 12.5px;
@@ -938,7 +946,7 @@ main { position: relative; }
 .run-time { grid-area: time; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .run-lane { grid-area: lane; font-size: 11px; color: var(--ink-faint); text-transform: lowercase; }
 .run-state-dot.rs-running { color: var(--sky); }
-.run-state-dot.rs-needs_you { color: var(--peach); }
+.run-state-dot.rs-needs_you, .run-state-dot.rs-asked { color: var(--peach); }
 .run-row.rs-needs_you .run-time { color: var(--peach); font-weight: 600; }
 .run-state-dot.rs-finished { color: var(--mint); }
 .run-state-dot.rs-stopped, .run-state-dot.rs-failed { color: var(--bad); }

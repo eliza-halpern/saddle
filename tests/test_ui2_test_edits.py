@@ -78,7 +78,10 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_the_small_lane_defaults_to_test_edits_allowed(tmp_path: Path) -> None:
     app = build_app(SessionStore(tmp_path), object, default_workdir=tmp_path)
     with TestClient(app) as client:
-        assert client.get("/api/task-policy").json() == {"test_edits": True}
+        assert client.get("/api/task-policy").json() == {
+            "test_edits": True,
+            "task_text_check": False,
+        }
     assert TaskRun("r", "s", "t", 1.0, 1).allow_test_edits is True
     html = (Path(tasks.__file__).parent / "static" / "index.html").read_text()
     assert 'id="tc-test-edits" checked' in html

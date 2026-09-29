@@ -323,6 +323,7 @@ class ChatServer:
         allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
         keep_reasoning: bool = True,
         wheels: WheelFolder | None = None,
+        extract_requirements: bool = False,
     ) -> None:
         self.store = store
         self.client_factory = client_factory
@@ -345,6 +346,10 @@ class ChatServer:
         self.wheels = wheels
         """`saddle web --allow-installs`: the wheel folder every chat-started run
         may install from, with the user's approval (`AutoOptions.wheels`)."""
+        self.extract_requirements = extract_requirements
+        """`saddle web --extract-requirements` (or its setting): every chat-started
+        run extracts the task text's examples beside the worker and runs P1 at
+        tier 1, at question strength (`AutoOptions.extract_requirements`)."""
         self.index_lock = threading.Lock()
         self.indexed: dict[str, str] = {}
         """run id -> the state last written to the run index."""
@@ -404,7 +409,7 @@ class ChatServer:
             last = self.indexed.get(run.run_id)
             if last != run.state:
                 run.state_since = time.time()
-                if run.state in ("finished", "stopped", "unchanged", "failed"):
+                if run.state in tasks.ENDED_STATES:
                     run.ended = run.state_since
                 self.indexed[run.run_id] = run.state
             try:
@@ -497,6 +502,7 @@ class ChatServer:
                     allow_test_edits=run.allow_test_edits,
                     keep_reasoning=self.keep_reasoning,
                     wheels=self.wheels,
+                    extract_requirements=self.extract_requirements,
                 )
             if recap is not None:
                 messages = self.store.load_messages(session_id)
@@ -524,6 +530,7 @@ def build_app(
     allow_test_edits: bool = SMALL_LANE_TEST_EDITS,
     keep_reasoning: bool = True,
     wheels: WheelFolder | None = None,
+    extract_requirements: bool = False,
 ) -> ASGIApp:
     server = ChatServer(
         store,
@@ -535,6 +542,7 @@ def build_app(
         allow_test_edits=allow_test_edits,
         keep_reasoning=keep_reasoning,
         wheels=wheels,
+        extract_requirements=extract_requirements,
     )
 
     async def index(_: Request) -> Response:
@@ -632,7 +640,12 @@ def build_app(
 
     async def task_policy(_: Request) -> JSONResponse:
         """What a chat-started run may do, so the confirm strip says it truly."""
-        return JSONResponse({"test_edits": server.allow_test_edits})
+        return JSONResponse(
+            {
+                "test_edits": server.allow_test_edits,
+                "task_text_check": server.extract_requirements,
+            }
+        )
 
     async def patch_settings(request: Request) -> JSONResponse:
         return JSONResponse(store.update_settings(**await request.json()))
@@ -1243,6 +1256,7 @@ def serve(
     token: str | None = None,
     keep_reasoning: bool = True,
     wheels: WheelFolder | None = None,
+    extract_requirements: bool = False,
 ) -> None:
     import uvicorn
 
@@ -1262,5 +1276,6 @@ def serve(
         token=resolved,
         keep_reasoning=keep_reasoning,
         wheels=wheels,
+        extract_requirements=extract_requirements,
     )
     uvicorn.run(app, host=host, port=port, log_level="warning")

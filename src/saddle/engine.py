@@ -44,6 +44,7 @@ from saddle.events import (
 )
 from saddle.installs import INSTALL, INSTALL_REFUSED, REFUSE_INSTALL, Installs
 from saddle.journal import (
+    AUDIT_QUESTION_STOP,
     AUDIT_SPAN_HASHES,
     COMPACTION_SPAN,
     append_record,
@@ -245,7 +246,7 @@ def needs_you_reason(asked: Sequence[str]) -> str:
     text = " | ".join(asked).replace(";", ",")
     if len(text) > QUESTION_REASON_CHARS:
         text = text[: QUESTION_REASON_CHARS - 3] + "..."
-    return f"needs you: the audit asks {len(asked)} question(s): {text}"
+    return f"{AUDIT_QUESTION_STOP}{len(asked)} question(s): {text}"
 
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"

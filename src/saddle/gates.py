@@ -2351,6 +2351,12 @@ class TaskRequirementsCheck(GateCheck):
     unjudged: tuple[str, ...] = ()
     """Every unit or example the gate did not judge, named: what the packet's
     Not proven row lists (a gate that can pass on an empty judgement set says so)."""
+    units: tuple[int, int, int, int] = (0, 0, 0, 0)
+    """Candidate units as (total, judged, asked, unjudged): judged = cited by a
+    `pass` or `code-wrong` example and by no `question`; asked = cited by a
+    `question` example; unjudged = the rest. Each unit is counted once."""
+    examples: tuple[int, int, int, int] = (0, 0, 0, 0)
+    """Examples as (total, pass, code-wrong, question)."""
 
 
 def _p1_example(row: Row) -> str:
@@ -2405,6 +2411,7 @@ def check_task_requirements(
     """
     allowed = P1_REFUSAL_LICENSED if licensed is None else licensed
     strength = "full strength" if allowed else "question strength: dev-probe floor unmet"
+    ids = {u.id for u in units.units}
     if cannot_run is not None:
         return TaskRequirementsCheck(
             name="task-requirements",
@@ -2412,6 +2419,8 @@ def check_task_requirements(
             detail=f"P1 could not run: {cannot_run}",
             basis=strength,
             verdict="question",
+            units=(len(ids), 0, 0, len(ids)),
+            examples=(len(examples), 0, 0, 0),
         )
     rows = []
     for example in examples:
@@ -2443,6 +2452,11 @@ def check_task_requirements(
     ]
     failing = [r for r in rows if r.status == "code-wrong"]
     asked = [r for r in rows if r.status == "question"]
+    asked_units = ids & {u for r in asked for u in r.example.units}
+    settled_units = ids & {
+        u for r in [*failing, *(r for r in rows if r.status == "pass")] for u in r.example.units
+    }
+    settled_units -= asked_units
     unproven = [r for r in rows if r.status in ("not-proven", "unknown")]
     verdict: Literal["pass", "fail", "question", "not-proven"]
     if failing:
@@ -2474,4 +2488,11 @@ def check_task_requirements(
         verdict=verdict,
         rows=tuple(rows),
         unjudged=unjudged,
+        units=(
+            len(ids),
+            len(settled_units),
+            len(asked_units),
+            len(ids) - len(settled_units) - len(asked_units),
+        ),
+        examples=(len(rows), counts["pass"], counts["code-wrong"], counts["question"]),
     )

@@ -56,6 +56,8 @@ REL_TOL: Final = 1e-9
 ROUTE_B_ABS_TOL: Final = 1e-12
 NEAR_MISS_REL: Final = 1e-6
 NEAR_MISS_ABS: Final = 1e-12
+WOULD_REFUSE: Final = "would refuse at full strength"
+"""A question row's reason when refusal is not licensed but the example would refuse."""
 
 PROBE_SOURCES: Final[tuple[str, ...]] = ("oracle-pass", "user")
 """Where a known-correct probe's correctness comes from, outside the model
@@ -963,7 +965,7 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
     if not klass.eligible:
         return Row(example, "question", klass.note, klass, shown)
     if not licensed:
-        return Row(example, "question", "would refuse at full strength", klass, shown)
+        return Row(example, "question", WOULD_REFUSE, klass, shown)
     return Row(example, "code-wrong", "differs from the expected outcome", klass, shown)
 
 

@@ -300,7 +300,23 @@ def recap_message(run: TaskRun, recap: str) -> dict[str, Any]:
 
 
 ENDED_VERDICTS: Final = ("finished", "stopped", "unchanged")
-"""Packet verdicts a card shows as they are; anything else is "failed"."""
+"""Packet verdicts a card shows as they are; `needs_you` shows as `ASKED`;
+anything else is "failed"."""
+
+ASKED: Final = "asked"
+"""The card state of a run that ENDED needing you: its finish audit asked a
+question (packet verdict `needs_you`). Worded "needs you" like the live
+state, but ended: nothing waits on an answer, and it is not stopped or failed."""
+
+ENDED_STATES: Final = (*ENDED_VERDICTS, ASKED, "failed")
+"""Every state a card ends in."""
+
+
+def ended_state(verdict: str) -> str:
+    """The card state a run's packet verdict ends it in."""
+    if verdict == "needs_you":
+        return ASKED
+    return verdict if verdict in ENDED_VERDICTS else "failed"
 
 
 def run_ref_span(run: TaskRun, verdict: str, detail: str, run_span: str) -> SpanRecord:
@@ -308,7 +324,7 @@ def run_ref_span(run: TaskRun, verdict: str, detail: str, run_span: str) -> Span
         node_id=f"task:{run.run_id}",
         argv=[RUN_REF, run.run_id, run.task, str(run.journal), run_span],
         duration_ms=0,
-        exit_code={"finished": 0, "stopped": 3, "unchanged": 3}.get(verdict, 1),
+        exit_code={"finished": 0, "stopped": 3, "unchanged": 3, "needs_you": 3}.get(verdict, 1),
         detail=f"{verdict}: {detail}",
         kind="agent",
         name=RUN_REF,
@@ -335,7 +351,7 @@ def latest_run_ref(chat_journal: Path) -> tuple[str, str] | None:
     The sidebar's memory of a run (`ChatServer.tasks`) dies with the process;
     the chat journal does not. A run that ended sealed a run-ref whose
     detail opens with its ledger verdict, so a restarted server shows the
-    run as it ended. A verdict outside `ENDED_VERDICTS` reads as "failed"
+    run as it ended (`ended_state`): a verdict outside `ENDED_VERDICTS` reads as "failed"
     (the card's "no outcome"), the same as `execute` would have published.
     A run that never ended -- no run-ref -- is not shown: nothing here can
     vouch for a state the ledger never sealed.
@@ -346,7 +362,7 @@ def latest_run_ref(chat_journal: Path) -> tuple[str, str] | None:
     for span in read_spans(chat_journal):
         if span.name == RUN_REF and len(span.argv) >= 3:
             verdict = span.detail.split(":", 1)[0]
-            state = verdict if verdict in ENDED_VERDICTS else "failed"
+            state = ended_state(verdict)
             found = (state, span.argv[2])
     return found
 
@@ -365,6 +381,7 @@ def execute(
     allow_test_edits: bool = False,
     keep_reasoning: bool = True,
     wheels: WheelFolder | None = None,
+    extract_requirements: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """Run the task to its end; return its ledger verdict and the recap message.
 
@@ -435,6 +452,7 @@ def execute(
         allow_test_edits=allow_test_edits,
         keep_reasoning=keep_reasoning,
         wheels=wheels,
+        extract_requirements=extract_requirements,
     )
     try:
         run_auto(
@@ -455,7 +473,7 @@ def execute(
         publish(line)
     packet = compile_packet(run.journal, run_id=run.run_id)
     run.end_spend(packet.spend)
-    run.state = packet.verdict if packet.verdict in ENDED_VERDICTS else "failed"
+    run.state = ended_state(packet.verdict)
     start = next((s for s in read_spans(run.journal) if s.name == "auto:start"), None)
     append_span(
         chat_journal,

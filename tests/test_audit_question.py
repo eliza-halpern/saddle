@@ -129,8 +129,11 @@ def test_a_finish_audit_with_a_question_ends_the_run_needing_you(repo: Path) -> 
     finishes = [s.detail for s in read_spans(result.journal) if s.argv[:1] == ["finish"]]
     assert finishes[-1].startswith(engine.FINISH_QUESTION)
     packet = compile_packet(result.journal)
-    assert packet.verdict == "stopped"
-    assert "needs you" in packet.verdict_text
+    # flip: was "stopped". The run ends needing you (spec D-6), neither
+    # finished nor stopped on a fault; the card read "stopped" before.
+    assert packet.verdict == "needs_you"
+    assert packet.verdict_text.startswith("Needs you: the audit asks 1 question(s)")
+    assert "did not finish" in packet.verdict_text
     audit = {r.key: r for r in packet.rows}["audit"]
     assert audit.status == "question"
     assert "1 need you" in audit.text

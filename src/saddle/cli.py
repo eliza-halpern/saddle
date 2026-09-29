@@ -1662,6 +1662,45 @@ def wheel_folder(args: argparse.Namespace) -> WheelFolder | None:
     return WheelFolder(Path(found.value).expanduser(), found.source)
 
 
+EXTRACT_REQUIREMENTS_ENV: Final = "SADDLE_EXTRACT_REQUIREMENTS"
+"""`saddle web`'s P1 switch as a setting: set it once instead of on every launch."""
+
+_ON: Final = frozenset({"1", "on", "true", "yes"})
+_OFF: Final = frozenset({"0", "off", "false", "no"})
+
+
+class SettingError(ValueError):
+    """A setting holds a value its option does not take."""
+
+
+def web_extract_requirements(args: argparse.Namespace) -> Setting:
+    """`saddle web`'s P1 switch, resolved like every setting (`resolve_setting`):
+    `--extract-requirements`/`--no-extract-requirements`, then
+    `$SADDLE_EXTRACT_REQUIREMENTS`, then the key file, then off. The value is
+    "on" or "off"; a value that is neither raises `SettingError` naming where
+    it came from, so a typo never silently leaves P1 off (or on).
+
+    `saddle auto` does not read the setting: benchmark and measurement runs
+    call it, and an exported variable must not change what they measure.
+    """
+    flag = (
+        None if args.extract_requirements is None else "on" if args.extract_requirements else "off"
+    )
+    found = resolve_setting(
+        flag, option="--extract-requirements", env=EXTRACT_REQUIREMENTS_ENV, default="off"
+    )
+    word = found.value.strip().lower()
+    if word in _ON:
+        return Setting("on", found.source)
+    if word in _OFF:
+        return Setting("off", found.source)
+    msg = (
+        f"{EXTRACT_REQUIREMENTS_ENV} {found.value!r} ({found.source}) is not one of "
+        "1/0, on/off, true/false, yes/no"
+    )
+    raise SettingError(msg)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -1911,6 +1950,15 @@ def build_parser() -> argparse.ArgumentParser:
         "as `saddle auto` does (on by default; --no-keep-reasoning drops it).",
     )
     _add_install_flags(web)
+    web.add_argument(
+        "--extract-requirements",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Every task run from the chat also checks the task text's own examples (P1): "
+        "it extracts them beside the worker (extra model calls) and runs them at tier 1. "
+        "Its findings ask you, never refuse. Off by default; else "
+        f"${EXTRACT_REQUIREMENTS_ENV} or the key file (1/0, on/off, true/false, yes/no).",
+    )
     up = sub.add_parser("up", help="Open an interactive streaming chat session.")
     up.add_argument("--workdir", default=".", help="Directory tools run in (default: .).")
     up.add_argument(
@@ -2260,10 +2308,20 @@ def main(
         except FileExistsError as exc:
             print(f"error: {exc}", file=stderr or sys.stderr)
             return 2
+        try:
+            p1 = web_extract_requirements(args)
+        except SettingError as exc:
+            print(f"error: {exc}", file=stderr or sys.stderr)
+            return 2
         url = f"http://{args.host}:{args.port}/"
         if token is not None:
             url = f"{url}?token={token}"
         print(f"saddle chat UI on {url}", file=stdout or sys.stdout)
+        if p1.value == "on":
+            print(
+                f"task runs check the task text's examples (P1, question strength; {p1.source})",
+                file=stdout or sys.stdout,
+            )
         if not args.no_open:
             import webbrowser
 
@@ -2279,6 +2337,7 @@ def main(
             token=token,
             keep_reasoning=args.keep_reasoning,
             wheels=wheel_folder(args),
+            extract_requirements=p1.value == "on",
         )
         return 0
     if args.command == "auto":

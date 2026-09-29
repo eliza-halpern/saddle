@@ -20,10 +20,11 @@ const RUN_LOOK = {
   needs_you: { glyph: "?", word: "needs you",  color: "#ff9d4d" },
   finished:  { glyph: "✓", word: "finished",   color: "#5fcf86" },
   stopped:   { glyph: "■", word: "stopped",    color: "#e8697a" },
+  asked:     { glyph: "?", word: "needs you",  color: "#ff9d4d" },
   failed:    { glyph: "!", word: "no outcome", color: "#e8697a" },
 };
 const RUN_LIVE = new Set(["running", "needs_you"]);
-const RUN_ENDED = new Set(["finished", "stopped", "unchanged", "failed"]);
+const RUN_ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 const NOTIFY_KEY = "saddle.notify";
 
 const runWatch = {

@@ -87,7 +87,7 @@ from saddle.auditor import (
     sanction,
 )
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
-from saddle.journal import append_span, build_span, write_attempt_sidecar
+from saddle.journal import FEED_QUESTION_LINE, append_span, build_span, write_attempt_sidecar
 from saddle.tools import CHECK_TOOL, FINISH_TOOL
 
 Arm = Literal["E", "E+A", "E+A+F"]
@@ -276,7 +276,7 @@ def render(result: AuditResult) -> str:
     asked = [f for f in result.findings if f.verdict == "question"]
     for f in asked:
         detail = _worded(result, f)
-        lines.append(f"(question for a person, does not refuse) {f.gate} (tier {f.tier}): {detail}")
+        lines.append(f"{FEED_QUESTION_LINE} {f.gate} (tier {f.tier}): {detail}")
     passed = len(result.findings) - len(bad) - len(allowed) - len(unproven) - len(asked)
     if passed:
         lines.append(f"({passed} other check(s) passed or not applicable)")

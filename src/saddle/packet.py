@@ -32,6 +32,7 @@ What the packet can and cannot say for an executor-only run (arm E):
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import json
 import re
@@ -43,8 +44,12 @@ from typing import Any, Final, Literal
 from saddle import coverage_text, mutant_text, prompt_constants
 from saddle.anchor import anchor_issues
 from saddle.journal import (
+    AUDIT_QUESTION_STOP,
     AUDIT_SPAN_PREFIXES,
     AUTO_OUTCOMES,
+    JOURNAL_QUESTION_EXIT,
+    P1_EXTRACT_SPAN,
+    SEALED_CUT,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
@@ -133,6 +138,10 @@ class Packet:
     offer_test_edits: bool = False
     """Stopped "audit unresolved" with tests read-only on a finding a test
     closes: the card offers the same task again with test edits allowed."""
+    questions: tuple[str, ...] = ()
+    """A run that ended needing you (verdict `needs_you`): each question its
+    finish audit asked, whole (`_asked`). Empty, and absent from the payload,
+    otherwise."""
     spend: dict[str, float] | None = None
     """The sealed outcome's own numbers -- `elapsed_s`, `time_budget_s`,
     `tokens`, `token_budget` -- for the card's meters; None without an
@@ -163,6 +172,7 @@ class Packet:
             "test_edits": self.test_edits,
             "offer_test_edits": self.offer_test_edits,
             "spend": self.spend,
+            **({"questions": list(self.questions)} if self.questions else {}),
         }
 
 
@@ -383,6 +393,8 @@ class _Audit:
     """An auditor finding's own verdict (pass, fail, blocked); "" for a seam span."""
     body: str = ""
     """An auditor finding's own detail, without the tier prefix."""
+    tier: int = -1
+    """An auditor finding's tier; -1 for a seam span."""
 
 
 def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_Audit]:
@@ -404,6 +416,10 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
         if finding is not None:
             if (finding.tier == 0) != edit_checks:
                 continue
+            if finding.verdict == "unreadable" and span.exit_code == JOURNAL_QUESTION_EXIT:
+                # A question sealed before its JSON was fitted to the line
+                # (`auditor.sealed_finding`): its exit code still says question.
+                finding = dataclasses.replace(finding, verdict="question")
             latest[finding.gate] = (
                 order,
                 _Audit(
@@ -413,11 +429,133 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
                     span.record_hash,
                     finding.verdict,
                     finding.detail,
+                    finding.tier,
                 ),
             )
         elif not edit_checks and span.name.startswith("audit:") and span.name not in FEED_SPANS:
             seam.append((order, _Audit(span.name, span.detail, span.exit_code, span.record_hash)))
     return [a for _, a in sorted([*seam, *latest.values()], key=lambda pair: pair[0])]
+
+
+def _whole(audits: list[_Audit], evidence: dict[str, Any] | None) -> list[_Audit]:
+    """Each finding its span sealed cut to fit (`SEALED_CUT`), read whole from
+    the outcome sidecar's final audit when that audit holds the same gate and
+    tier with the same verdict; every other finding as it was."""
+    final = evidence.get("audit") if evidence is not None else None
+    found = {
+        (str(f.get("gate")), f.get("tier")): f
+        for f in (final.get("findings") or [] if isinstance(final, dict) else [])
+        if isinstance(f, dict)
+    }
+    out = []
+    for a in audits:
+        whole = found.get((a.name.removeprefix("audit:"), a.tier))
+        if SEALED_CUT in a.body and whole is not None and whole.get("verdict") == a.verdict:
+            body = str(whole.get("detail", ""))
+            a = dataclasses.replace(a, body=body, detail=f"tier {a.tier}, {a.verdict}: {body}")
+        out.append(a)
+    return out
+
+
+P1_TITLE: Final = "Task text"
+
+
+def _p1_row(
+    journal: Path,
+    start: SpanRecord | None,
+    spans: list[SpanRecord],
+    audits: list[_Audit],
+    evidence: dict[str, Any] | None,
+    span_by_hash: dict[str, SpanRecord],
+) -> Row | None:
+    """What P1 did in this run, when `auto:start` says it was on; else None,
+    and the packet reads exactly as before.
+
+    Always `observed` (or `absent`): the Audit row carries P1's verdict; this
+    row is the measurement -- that it ran, how long the extraction took, and
+    how many candidate units the last P1 finding judged, asked about, or left
+    unjudged (`auditor.p1_tally`). A question is never a pass or a fail here.
+    """
+    if start is None or not start_field(start.detail, "task requirements"):
+        return None
+    extracted = [s for s in spans if s.name == P1_EXTRACT_SPAN][-1:]
+    p1 = [a for a in audits if a.name == "audit:task-requirements"][-1:]
+    final = evidence.get("audit") if evidence is not None else None
+    whole = next(
+        (
+            f
+            for f in (final.get("findings") or [] if isinstance(final, dict) else [])
+            if isinstance(f, dict) and f.get("gate") == "task-requirements"
+        ),
+        None,
+    )
+    said: list[str] = []
+    cites: list[str] = []
+    items: list[str] = []
+    strength = "question strength"
+    if extracted:
+        span = extracted[0]
+        cites.append(span.record_hash)
+        took = f"{span.duration_ms / 1000:.1f} s"
+        if span.exit_code == 0:
+            said.append(f"Extraction took {took}: {span.detail}.")
+        else:
+            said.append(f"Extraction failed after {took}.")
+            items.append(f"Extraction failed: {span.detail}")
+    else:
+        given = start_field(start.detail, "task requirements")
+        said.append(
+            "No extraction ran: a sealed file was given."
+            if not given.startswith("extracted")
+            else "The extraction left no record."
+        )
+    tally = _sealed(journal, span_by_hash.get(p1[0].record_hash), "units") if p1 else None
+    if tally is not None:
+        units = tally["units"]
+        cites.append(p1[0].record_hash)
+        strength = "full strength" if tally.get("strength") == "full" else strength
+        said.append(
+            f"The last P1 finding judged {units['judged']} of {units['total']} candidate "
+            f"unit(s), asked about {units['asked']}, and left {units['unjudged']} unjudged."
+        )
+    else:
+        said.append("No P1 finding judged any unit.")
+    if whole is not None and whole.get("verdict") == "question":
+        items.append(f"Asked: {whole.get('detail', '')}")
+    elif p1 and p1[0].verdict == "question":
+        items.append(f"Asked: {p1[0].body}")
+    head = (
+        f"P1 ran at {strength}: its findings ask a person, never refuse. "
+        if strength == "question strength"
+        else f"P1 ran at {strength}. "
+    )
+    return Row(
+        "p1",
+        P1_TITLE,
+        "observed" if cites else "absent",
+        head + " ".join(said),
+        tuple(cites),
+        tuple(items),
+    )
+
+
+def _asked(audits: list[_Audit], evidence: dict[str, Any] | None) -> tuple[str, ...]:
+    """The questions a finish audit asked, whole: from the outcome sidecar's
+    final audit (which also holds a question the feed raised itself, such as
+    P1's unfinished extraction), else from the ledger's question findings."""
+    final = evidence.get("audit") if evidence is not None else None
+    found = [
+        f"{f.get('gate')} (tier {f.get('tier')}): {f.get('detail', '')}"
+        for f in (final.get("findings") or [] if isinstance(final, dict) else [])
+        if isinstance(f, dict) and f.get("verdict") == "question"
+    ]
+    if found:
+        return tuple(found)
+    return tuple(
+        f"{a.name.removeprefix('audit:')} (tier {a.tier}): {a.body}"
+        for a in audits
+        if a.verdict == "question"
+    )
 
 
 def _status(audit: _Audit) -> Status:
@@ -616,6 +754,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     questions = [s for s in spans if s.name == "question"]
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
+    audits = _whole(audits, evidence)
     # The list is the last refusal's; only the capped stop makes it the verdict.
     capped = outcome is not None and outcome.detail.startswith(f"stopped: {AUDIT_UNRESOLVED}")
     unresolved = _unresolved(evidence) if capped and evidence is not None else []
@@ -665,6 +804,19 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         )
         if asked and not failed_audits and not blocked:
             verdict_text += f" {_n(asked, 'audit finding')} asked a question only you can answer."
+    elif outcome.name == "auto:stopped" and outcome.detail.startswith(
+        f"stopped: {AUDIT_QUESTION_STOP}"
+    ):
+        # The finish audit accepted the tree with a question: the run ends
+        # needing you. Neither finished (nothing says it is done) nor a stop
+        # on a fault or a budget.
+        verdict = "needs_you"
+        # The count only: the questions themselves are listed whole (`questions`).
+        asked_text = outcome.detail.split(";")[0].removeprefix("stopped: needs you: ")
+        verdict_text = (
+            f"Needs you: {asked_text.split(':')[0]}. The run did not finish: a question is "
+            "neither a pass nor a refusal, and only you can decide it."
+        )
     elif outcome.name == "auto:unchanged":
         verdict = "unchanged"
         verdict_text = (
@@ -891,6 +1043,11 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 )
             )
 
+    # -- task text (P1, when the run turned it on) -----------------------------------
+    p1_row = _p1_row(journal, start, spans, audits, evidence, span_by_hash)
+    if p1_row is not None:
+        rows.append(p1_row)
+
     # -- edit checks (tier 0: one edited file, at the edit; not a verdict) -------------
     if edit_checks:
         passed = sum(a.exit_code == 0 for a in edit_checks)
@@ -950,8 +1107,12 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         gaps.append("Changed lines were not mutation-tested: no mutation record.")
     if outcome is not None and outcome.name == "auto:stopped":
         gaps.append(
-            "The run stopped before finishing: "
-            f"{outcome.detail.split(';')[0].removeprefix('stopped: ')}."
+            (
+                "The run ended needing you before finishing: "
+                if verdict == "needs_you"
+                else "The run stopped before finishing: "
+            )
+            + f"{outcome.detail.split(';')[0].removeprefix('stopped: ')}."
         )
         gap_cites.append(outcome.record_hash)
     if outcome is not None and outcome.name == "auto:unchanged":
@@ -1115,6 +1276,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         narrative=sentences,
         test_edits=test_edits,
         offer_test_edits=offer_test_edits,
+        questions=_asked(audits, evidence) if verdict == "needs_you" and outcome else (),
         spend=_meters(evidence) if evidence is not None else None,
         records={
             h: _display(e)

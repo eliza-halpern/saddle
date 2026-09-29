@@ -321,4 +321,7 @@ def test_the_confirm_strip_is_told_the_servers_test_edit_policy(
         SessionStore(tmp_path), object, default_workdir=tmp_path, allow_test_edits=allowed
     )
     with TestClient(app) as client:
-        assert client.get("/api/task-policy").json() == {"test_edits": allowed}
+        assert client.get("/api/task-policy").json() == {
+            "test_edits": allowed,
+            "task_text_check": False,
+        }

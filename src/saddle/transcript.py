@@ -10,14 +10,18 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
 from saddle.gates import GateCheck
 from saddle.journal import (
+    AUDIT_QUESTION_STOP,
     AUTO_OUTCOMES,
     AUTO_START,
     COMPACTION_SPAN,
+    FEED_QUESTION_LINE,
+    JOURNAL_QUESTION_EXIT,
+    P1_EXTRACT_SPAN,
     JournalEntry,
     PlanRecord,
     ProofRecord,
@@ -387,6 +391,17 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
         return None  # a round's spend: the card's meters show it, not a line
     if name == COMPACTION_SPAN:
         return SessionLine("≈", f"context compacted · {_first_line(entry.detail)}", "info", cite)
+    if name == "auto:stopped" and entry.detail.startswith(f"stopped: {AUDIT_QUESTION_STOP}"):
+        # The finish audit asked a question: the run ends needing you, not failed.
+        return SessionLine("?", entry.detail.removeprefix("stopped: "), "ask", cite)
+    if name == P1_EXTRACT_SPAN:
+        took = _seconds(entry.duration_ms)
+        if entry.exit_code == 0:
+            return SessionLine("▸", f"task text extracted in {took} · {entry.detail}", "info", cite)
+        # A failed extraction refuses nothing: at finish it is a question.
+        return SessionLine(
+            "?", f"task text extraction failed after {took} · {entry.detail}", "ask", cite
+        )
     if name.startswith("auto:"):
         outcome = name.removeprefix("auto:")
         return SessionLine(
@@ -403,6 +418,12 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             cite,
         )
     finding = tier_finding(name, entry.detail)
+    if (
+        finding is not None
+        and finding.verdict == "unreadable"
+        and entry.exit_code == JOURNAL_QUESTION_EXIT
+    ):
+        finding = replace(finding, verdict="question")
     if finding is not None and finding.verdict == "question":
         # Neither a pass nor a fail: a person must decide it.
         return SessionLine(
@@ -428,6 +449,16 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             "audit:check": "returned by check",
         }.get(name, "withheld from the model")
         body = entry.detail.splitlines()
+        asked = [b for b in body if b.startswith(FEED_QUESTION_LINE)]
+        if ok and asked:
+            # Accepted, but with a question: not a pass, and not a fail.
+            return SessionLine(
+                "?",
+                f"audit {point} asks a question, {how} · "
+                f"{_first_line(asked[0].removeprefix(FEED_QUESTION_LINE).strip())}",
+                "ask",
+                cite,
+            )
         return SessionLine(
             "◆" if ok else "◇",
             f"audit {point} {'passed' if ok else 'failed'}, {how}"

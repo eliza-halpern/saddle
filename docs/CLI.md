@@ -131,8 +131,9 @@ Exit 0 prints the `OK: … ledger verifies …` line and a transcript. Exit 1 pr
 | `--no-open` | do not open a browser |
 | `--keep-reasoning` / `--no-keep-reasoning` | on: task runs the chat starts keep each round's reasoning, as `auto` does |
 | `--allow-installs`, `--wheel-dir DIR` | off, as for `auto`: with it, task runs the chat starts may install from the wheel folder, each request approved on the task card |
+| `--extract-requirements` / `--no-extract-requirements` | `$SADDLE_EXTRACT_REQUIREMENTS` (or that line in the env file; `1`/`0`, `on`/`off`, `true`/`false`, `yes`/`no`), else off: task runs the chat starts check the task text's own examples (P1) as `auto --extract-requirements` does, at question strength. A run whose finish audit asks ends "needs you" with the question on the card. Any other value stops the command with exit 2. `auto` does not read the variable |
 
-Exit 2 if the token file cannot be created (`FileExistsError`).
+Exit 2 if the token file cannot be created (`FileExistsError`), or if `$SADDLE_EXTRACT_REQUIREMENTS` holds a value that is not on or off.
 
 ## saddle up
 
