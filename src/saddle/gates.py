@@ -10,6 +10,7 @@ injected at the boundary, never embedded in the predicates.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ from typing import TYPE_CHECKING, Final
 
 from saddle.dag import Node
 from saddle.mutant_text import PHRASES, classify, function_of, parse_show
+from saddle.task_examples import Example, Row, TreeOutcome, judge
+from saddle.task_examples import classify as classify_example
+from saddle.task_units import Units
 
 if TYPE_CHECKING:
     from saddle.evidence import MutationOutcome, SurvivorDetail
@@ -2317,4 +2321,148 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         survivors=tuple(inputs.mutation.survivors),
         gaps=tuple(sorted(gaps)),
         mutation=inputs.mutation,
+    )
+
+
+# -- task-requirements (P1): the task text's own examples, run on the tree ------
+
+P1_REFUSAL_LICENSED: Final = False
+"""Whether a refusal-eligible example that the tree fails may refuse (`code-wrong`).
+
+False until a recorded dev-probe result meets the refusal floor with the
+known-correct probe in place: until then every would-be refusal is a
+question, "would refuse at full strength", and the gate's basis says it runs
+at question strength. Read at each call, never bound as a default."""
+
+P1_NAMED_LINES: Final = 5
+"""How many changed `file:line` entries a finding names per example."""
+
+
+@dataclass(frozen=True)
+class TaskRequirementsCheck(GateCheck):
+    """`check_task_requirements`'s result: a GateCheck with its four-way verdict.
+
+    `passed` is False only for `fail`; a `question` and a `not-proven` do not
+    refuse, and the auditor reports them as such, never as a pass.
+    """
+
+    verdict: str = "pass"
+    """pass, fail, question or not-proven."""
+    rows: tuple[Row, ...] = ()
+
+
+def _p1_example(row: Row) -> str:
+    setup = "; ".join(row.example.setup)
+    return f"{setup}; {row.example.call}" if setup else row.example.call
+
+
+def _p1_line(row: Row, units: Units) -> str:
+    unit = units.by_id(row.example.units[0]) if row.example.units else None
+    head = row.example.units[0] if row.example.units else row.example.id
+    if unit is not None:
+        label = f" [{unit.label}]" if unit.label else ""
+        text = unit.text if len(unit.text) <= 80 else unit.text[:77] + "..."
+        head = f'{unit.id}{label} "{text}"'
+    more = "".join(f" (+{u})" for u in row.example.units[1:])
+    expected = row.klass.expected.show() if row.klass.expected is not None else "(split)"
+    line = (
+        f"{head}{more} via {row.klass.note}: {_p1_example(row)} expected {expected}, got {row.got}"
+    )
+    if row.ran_changed:
+        line += f"; ran changed lines {', '.join(row.ran_changed)}"
+    return f"{line} [{row.why}]" if row.status != "code-wrong" else line
+
+
+def check_task_requirements(
+    results: Mapping[str, TreeOutcome],
+    units: Units,
+    examples: Sequence[Example],
+    *,
+    changed: Collection[str] = (),
+    not_executable: Sequence[tuple[str, str]] = (),
+    cut: Sequence[str] = (),
+    cannot_run: str | None = None,
+    licensed: bool | None = None,
+) -> TaskRequirementsCheck:
+    """The `task-requirements` gate over one tree's example outcomes.
+
+    `results` maps an example id to what the driver saw; `changed` holds
+    the tree's changed statements as `path:line`; `cannot_run` is why the
+    gate could not run at all. The verdict, strongest first:
+
+    - `fail` (`code-wrong`): a refusal-eligible example the tree fails,
+      matching no recorded reading, while refusal is licensed;
+    - `question`: P1 could not run (`cannot_run`), nothing could be judged,
+      or some example is a question (`task_examples.judge`);
+    - `not-proven`: some example could not be called, hung, or returned a
+      value the gate cannot compare;
+    - `pass`: every judged example matched.
+
+    Every example, unit and cut is accounted for in `basis`.
+    """
+    allowed = P1_REFUSAL_LICENSED if licensed is None else licensed
+    strength = "full strength" if allowed else "question strength: dev-probe floor unmet"
+    if cannot_run is not None:
+        return TaskRequirementsCheck(
+            name="task-requirements",
+            passed=True,
+            detail=f"P1 could not run: {cannot_run}",
+            basis=strength,
+            verdict="question",
+        )
+    rows = []
+    for example in examples:
+        row = judge(
+            example, classify_example(example, units), results.get(example.id), licensed=allowed
+        )
+        got = results.get(example.id)
+        hits = [r for r in (got.ran if got else ()) if r.split(" ")[0] in changed]
+        rows.append(dataclasses.replace(row, ran_changed=tuple(hits[:P1_NAMED_LINES])))
+    judged = [r for r in rows if r.status in ("pass", "code-wrong", "question")]
+    judged_units = {u for r in judged for u in r.example.units}
+    counts = {s: sum(r.status == s for r in rows) for s in ("pass", "code-wrong", "question")}
+    basis = [
+        strength,
+        f"{len(judged_units)} of {len(units.units)} candidate unit(s) judged; "
+        f"{len(judged)} of {len(rows)} example(s) judged: {counts['pass']} pass, "
+        f"{counts['code-wrong']} code-wrong, {counts['question']} question",
+        *(f"not executable {u}: {why}" for u, why in not_executable),
+        *(f"cut by the example cap: {u}" for u in cut),
+        *(
+            f"{r.status} {r.example.id} ({', '.join(r.example.units)}): {r.why}"
+            for r in rows
+            if r.status in ("not-proven", "unknown", "not-judged")
+        ),
+    ]
+    failing = [r for r in rows if r.status == "code-wrong"]
+    asked = [r for r in rows if r.status == "question"]
+    unproven = [r for r in rows if r.status in ("not-proven", "unknown")]
+    if failing:
+        verdict, lines = "fail", failing
+    elif not judged:
+        verdict, lines = "question", []
+    elif asked:
+        verdict, lines = "question", asked
+    elif unproven:
+        verdict, lines = "not-proven", unproven
+    else:
+        verdict, lines = "pass", []
+    if verdict == "question" and not judged:
+        detail = (
+            f"P1 could not run: no example could be judged ({len(rows)} example(s): "
+            f"{sum(r.status == 'not-proven' for r in rows)} could not call or compare, "
+            f"{sum(r.status == 'unknown' for r in rows)} HANG or missing, "
+            f"{sum(r.status == 'not-judged' for r in rows)} not judged)"
+        )
+    elif lines:
+        detail = "; ".join(_p1_line(r, units) for r in lines)
+    else:
+        detail = f"{counts['pass']} example(s) matched the task text"
+    return TaskRequirementsCheck(
+        name="task-requirements",
+        passed=verdict != "fail",
+        detail=detail,
+        basis="; ".join(basis),
+        verdict=verdict,
+        rows=tuple(rows),
     )
