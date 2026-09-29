@@ -2800,3 +2800,37 @@ def test_real_mutmut_mutates_only_the_lines_the_handed_tests_run(
     assert covered.untested == 0, covered
     assert 0 < covered.total < every.total, (covered, every)
     assert covered.killed > 0, covered
+
+
+def test_real_mutmut_decides_mutants_when_the_tests_read_files_beside_the_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before, on the enforcing engine: the mutation work area held only
+    `.py` files, so a test reading a fixture, or a module reading a data file
+    beside itself, failed there, and mutmut's run ended "failed to collect
+    stats": a watched run's finish audit refused on that alone."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    (workdir / "pkg").mkdir(parents=True)
+    (workdir / "tests" / "fixtures").mkdir(parents=True)
+    (workdir / "pkg" / "__init__.py").write_text("")
+    (workdir / "pkg" / "rate.txt").write_text("2\n")
+    (workdir / "pkg" / "calc.py").write_text(
+        "from pathlib import Path\n\n\ndef scaled(x):\n"
+        "    rate = int((Path(__file__).parent / 'rate.txt').read_text())\n"
+        "    return x * rate\n"
+    )
+    (workdir / "tests" / "fixtures" / "expected.txt").write_text("6\n")
+    (workdir / "tests" / "test_calc.py").write_text(
+        "from pathlib import Path\n\nfrom pkg.calc import scaled\n\n\ndef test_scaled():\n"
+        "    expected = int((Path(__file__).parent / 'fixtures' / 'expected.txt').read_text())\n"
+        "    assert scaled(3) == expected\n"
+    )
+    for argv in (["init", "-q"], ["add", "-A"]):
+        assert run_argv(["git", *argv], workdir) == 0
+    outcome = mutation_sample(
+        workdir, {(str(workdir / "pkg" / "calc.py"), 6)}, 10, test_files={"tests/test_calc.py"}
+    )
+    assert not [s for s in outcome.survivors if s.startswith("mutmut run exited")], outcome
+    assert outcome.total > 0, outcome
+    assert outcome.killed > 0, outcome

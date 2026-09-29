@@ -214,6 +214,60 @@ def ruff_argv(command: str, *args: str) -> list[str]:
     return argv
 
 
+FORMAT_KEYS: Final = ("line-length", "indent-width")
+"""Top-level ruff settings `ruff format` reads besides its own `format` table."""
+
+RUFF_CONFIGS: Final = ((".ruff.toml", ()), ("ruff.toml", ()), ("pyproject.toml", ("tool", "ruff")))
+"""Where ruff reads a project's settings, in its own order, and the table in each."""
+
+
+def _toml_value(value: object) -> str | None:
+    """`value` as a TOML literal for a `--config` override; None for a type it cannot be."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float, str)):
+        return json.dumps(value)
+    if isinstance(value, list):
+        items = [_toml_value(item) for item in value]
+        return None if None in items else "[" + ", ".join(str(item) for item in items) + "]"
+    return None
+
+
+def format_overrides(tree: Path, rev: str) -> tuple[str, ...]:
+    """`--config` overrides giving `ruff format` the project's settings committed at `rev`.
+
+    The gate runs ruff `--isolated`, so a tree cannot switch its rules off,
+    but `ruff format --check` then judged every project by ruff's defaults
+    (88 columns): saddle's own code, formatted to its committed 100, was
+    refused. The settings are read from the commit the task started from, as
+    `suite_limit` reads its own, so a tree cannot loosen them by editing its
+    config. Empty when no config sets them or the commit cannot be read.
+    """
+    for name, section in RUFF_CONFIGS:
+        shown = run_capture(["git", "show", f"{rev}:./{name}"], tree)
+        if shown.exit_code != 0:
+            continue
+        try:
+            data: object = tomllib.loads(shown.stdout)
+        except tomllib.TOMLDecodeError:
+            return ()
+        for key in section:
+            data = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            continue  # a pyproject.toml without [tool.ruff] is not ruff's config
+        settings = {key: data[key] for key in FORMAT_KEYS if key in data}
+        table = data.get("format")
+        if isinstance(table, dict):
+            settings.update({f"format.{key}": value for key, value in table.items()})
+        return tuple(
+            arg
+            for key, value in settings.items()
+            if (literal := _toml_value(value)) is not None
+            for arg in ("--config", f"{key} = {literal}")
+        )
+    return ()
+
+
 def ruff_version() -> str:
     """The installed ruff's version (`ruff --version`), or "unavailable"."""
     try:
@@ -1808,6 +1862,35 @@ def _mutmut_scratch_config(
     )
 
 
+def _tree_files(workdir: Path) -> list[str]:
+    """Every file of `workdir` git would commit, tracked or untracked and not
+    ignored, sorted and posix-relative; its `.py` files when git cannot say.
+
+    The mutation work area needs them all: mutmut runs the tests from it and
+    imports the mutated copy, so a fixture a test reads, or a data file a
+    module reads beside itself, must be there. With only the `.py` files, a
+    watched run's finish audit failed "failed to collect stats"."""
+    # saddle's own bookkeeping, not a gate command: plain git, unrecorded
+    listed = subprocess.run(
+        ["git", "-C", str(workdir), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode == 0:
+        names = (name for name in listed.stdout.split("\0") if name)
+        return sorted(
+            name
+            for name in names
+            if "__pycache__" not in PurePosixPath(name).parts and (workdir / name).is_file()
+        )
+    return sorted(
+        path.relative_to(workdir).as_posix()
+        for path in workdir.rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
+
+
 def _copyable(mutated: Collection[str], untouched: Collection[str]) -> list[str]:
     """`untouched` as entries mutmut's `also_copy` can copy.
 
@@ -1957,12 +2040,11 @@ def mutation_sample(
     tests = set(test_files)
     with tempfile.TemporaryDirectory(prefix="saddle-mutation-") as tmp:
         scratch = Path(tmp)
-        for source in sorted(workdir.rglob("*.py")):
-            if "__pycache__" in source.parts:
-                continue
-            dest = scratch / source.relative_to(workdir)
+        copied = _tree_files(workdir)
+        for name in copied:
+            dest = scratch / name
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, dest)
+            shutil.copy2(workdir / name, dest)
         # Only the files holding a changed line: a mutant on a changed line
         # lives in one of them, so the verdict is the same, and mutmut is not
         # asked to generate and run the whole tree (on saddle's own repo that
@@ -1970,11 +2052,7 @@ def mutation_sample(
         # The rest are copied beside them unmutated (mutmut's work area holds
         # only what it is told about, and the tests import them).
         touched = {Path(key).as_posix() for key in by_line}
-        every = sorted(
-            path.relative_to(scratch).as_posix()
-            for path in scratch.rglob("*.py")
-            if path.relative_to(scratch).as_posix() not in tests
-        )
+        every = [name for name in copied if name not in tests]
         production = [path for path in every if path in touched]
         untouched = [path for path in every if path not in touched]
         if not production:
