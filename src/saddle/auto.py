@@ -396,6 +396,8 @@ def _requirements(
                 options.task,
                 client,
                 sources=baseline_sources(worktree, base),
+                # The name the passes' requests carry, sealed with their replies.
+                model=client.model,
                 probes=[ProbeTree(r.resolve(), "user") for r in options.references],
             )
             target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")

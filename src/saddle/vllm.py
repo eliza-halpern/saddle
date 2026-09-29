@@ -642,6 +642,12 @@ class VllmClient:
             transport=transport,
         )
 
+    @property
+    def model(self) -> str:
+        """The model every request of this client names: what a record of a
+        call it made should name too (`auto._requirements`)."""
+        return self._model
+
     def _post(self, payload: dict[str, Any]) -> Any:
         """POST one chat payload; map transport and status failures to errors."""
         try:
