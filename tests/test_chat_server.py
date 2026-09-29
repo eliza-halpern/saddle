@@ -1856,7 +1856,12 @@ def test_an_edit_replaces_the_question_and_still_cleans_up(
             f"/api/sessions/{sid}/rewind",
             json={"index": asked, "text": "the second wording"},
         )
-        _settle(lambda: target.is_file() and target.read_text() == "from the second wording")
+        # The rewind marks the session busy before it answers, and the turn
+        # clears that only after it has saved its messages. The file below is
+        # written mid-turn, so waiting for it raced the save.
+        live = _server_of(app)._live(sid)
+        _settle(lambda: not live.busy, timeout=60.0)
+        assert target.read_text() == "from the second wording"
 
     users = [m["content"] for m in store.load_messages(sid) if m["role"] == "user"]
     assert users == ["the second wording"]  # the old wording is gone, not kept
