@@ -55,7 +55,8 @@ def test_the_models_commands_import_the_src_layout_package_from_the_worktree(
     result = auto(repo, Scripted([[call("run_command", "r1", command=PROBE)], finish()]))
     detail = _command_details(result)[0]
     assert "exit 0" in detail, detail
-    assert "/.saddle/worktrees/" in detail and "/src/pkg/__init__.py" in detail, detail
+    assert "/.saddle/worktrees/" in detail, detail
+    assert "/src/pkg/__init__.py" in detail, detail
 
 
 def test_a_flat_project_gets_no_src_entry_on_its_import_path(tmp_path: Path) -> None:
@@ -79,7 +80,8 @@ def test_the_prompt_states_the_worktree_the_python_and_the_audits_test_command(
     assert "worktree" in system
     assert f"`{AUDIT_TEST_COMMAND}`" in system
     assert "project's own environment" in system
-    assert "src/" in system and "PYTHONPATH" in system
+    assert "src/" in system
+    assert "PYTHONPATH" in system
 
 
 def test_the_prompt_says_so_when_there_is_no_project_venv_and_no_src(tmp_path: Path) -> None:

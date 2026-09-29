@@ -30,6 +30,7 @@ from saddle.auditor import TIER2_MODES, Auditor, AuditorConfig, Findings, Tier2M
 from saddle.auto import (
     DEFAULT_TIME_BUDGET_S,
     DEFAULT_TOKEN_BUDGET,
+    TASK_TEMPERATURE,
     AutoError,
     AutoOptions,
     run_auto,
@@ -2067,7 +2068,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_reference_flag(auto)
     _add_install_flags(auto)
     _add_server_flags(auto)
-    auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
+    auto.add_argument(
+        "--temperature",
+        type=float,
+        default=TASK_TEMPERATURE,
+        help="Sampling temperature (default: the model's recommended 1.0; 0.0 is greedy).",
+    )
     auto.add_argument(
         "--reasoning-effort",
         choices=list(REASONING_EFFORTS),

@@ -64,6 +64,16 @@ DEFAULT_TOKEN_BUDGET: Final = 100_000
 
 DEFAULT_TEST_ROOTS: Final = ("tests",)
 
+TASK_TEMPERATURE: Final = 1.0
+"""A task run's sampling temperature: the model's own recommendation (its
+generation_config samples at 1.0, with the server supplying its top_p 0.95
+and top_k 20), not greedy. Greedy decoding looped: two watched dogfood runs
+on saddle's own repo each spent six to twenty-nine minutes inside one
+reasoning reply without a tool call, the later minutes repeating the earlier
+text word for word, while the same task at 1.0 kept acting. Greedy was kept
+for byte-identical replays, which vLLM does not give anyway (batching makes
+greedy runs diverge). A measurement that wants greedy pins 0.0 itself."""
+
 SYSTEM_PROMPT: Final = (
     "You are working alone on one task in a git worktree of a repository. "
     "Nobody will answer questions. Read the code, make the change with the "
@@ -109,6 +119,7 @@ def environment_prompt(worktree: Path, project: Path | None, env: dict[str, str]
         else ""
     )
     return ENVIRONMENT_PROMPT.format(python=python, src=src, test_command=AUDIT_TEST_COMMAND)
+
 
 CHECK_PROMPT: Final = (
     " You may call check to run the audit's fast checks on the tree as it is now; "
@@ -212,9 +223,9 @@ class AutoOptions:
     time_budget_s: float = DEFAULT_TIME_BUDGET_S
     token_budget: int = DEFAULT_TOKEN_BUDGET
     allow_test_edits: bool = False
-    temperature: float = 0.0
-    """Greedy, as `saddle run` is: an arm is a measurement, and chat's 1.0
-    (engine.CHAT_TEMPERATURE) is argued there for conversation only."""
+    temperature: float = TASK_TEMPERATURE
+    """`TASK_TEMPERATURE`: the model's own recommended sampling. A measurement
+    that wants greedy decoding pins `--temperature 0.0` explicitly."""
     reasoning_effort: str = "medium"
     context_tokens: int = 175_000
     run_id: str = ""
