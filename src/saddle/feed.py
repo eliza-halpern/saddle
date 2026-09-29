@@ -76,6 +76,7 @@ from typing import Final, Literal, Protocol
 from saddle import coverage_text, sandbox
 from saddle.audit import AuditError
 from saddle.auditor import (
+    TASK_REQUIREMENTS,
     Auditor,
     AuditorConfig,
     Finding,
@@ -348,6 +349,15 @@ class AuditFeed:
     """The project's virtualenv (`sandbox.project_env`) every audit runs the
     tests on; None leaves the gates on saddle's PATH. Set per audit, inside
     `_audit`, because a checkpoint audit runs on the feed's own thread."""
+    p1: Future[Path] | None = None
+    """`saddle auto --task-requirements` / `--extract-requirements`: the sealed
+    P1 file, or the extraction still producing it. Until it is ready a
+    checkpoint reports `task-requirements` not proven ("examples pending"),
+    which refuses nothing; at `finish` the feed waits for it (`p1_wait`), and
+    one that failed or has still not finished is a question: the run ends
+    "needs you", never finished on a check that did not run."""
+    p1_wait: Callable[[], float] = field(default=lambda: 0.0)
+    """Seconds `final` may wait for a pending extraction: the run's remaining time."""
     auditor: AuditorLike | None = None
     results: list[AuditResult] = field(default_factory=list)
     """Every completed audit, in completion order; the last is the verdict."""
@@ -364,16 +374,39 @@ class AuditFeed:
     _ready: list[AuditResult] = field(default_factory=list)
     _pool: ThreadPoolExecutor | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _config: AuditorConfig | None = None
+    _p1_ready: bool = False
 
     def __post_init__(self) -> None:
+        self._config = AuditorConfig(
+            journal=self.journal,
+            sanctioned_test_rewrites=self.sanctioned_test_rewrites,
+            tier2=self.tier2,
+            mutant_shortlist=self.mutant_shortlist,
+        )
         if self.auditor is None:
-            config = AuditorConfig(
-                journal=self.journal,
-                sanctioned_test_rewrites=self.sanctioned_test_rewrites,
-                tier2=self.tier2,
-                mutant_shortlist=self.mutant_shortlist,
-            )
-            self.auditor = self.factory(self.worktree, self.baseline, config)
+            self.auditor = self.factory(self.worktree, self.baseline, self._config)
+
+    def _p1_state(self, *, final: bool) -> Finding | None:
+        """None once the P1 file is in the auditor's hands (or there is no P1);
+        else the finding that says why not: not proven at a checkpoint, a
+        question at finish, after waiting up to `p1_wait()` seconds."""
+        if self.p1 is None or self._p1_ready:
+            return None
+        if not final and not self.p1.done():
+            return _p1_finding("not-proven", P1_PENDING)
+        try:
+            path = self.p1.result(timeout=max(0.0, self.p1_wait()) if final else None)
+        except TimeoutError:
+            return _p1_finding("question", f"P1 could not run: {P1_UNFINISHED}")
+        except Exception as exc:  # the extraction's own failure, named
+            said = f"P1 could not run: the extraction failed: {type(exc).__name__}: {exc}"
+            return _p1_finding("question" if final else "not-proven", said)
+        assert self._config is not None
+        self._config = dataclasses.replace(self._config, task_requirements=path)
+        self.auditor = self.factory(self.worktree, self.baseline, self._config)
+        self._p1_ready = True
+        return None
 
     # -- the audit itself ------------------------------------------------------
 
@@ -408,12 +441,15 @@ class AuditFeed:
                 if tree == self._checked_tree:
                     return None
                 self._checked_tree = tree
+            pending = self._p1_state(final=point == "finish") if 1 in tiers else None
             found: list[Finding] = []
             detail: tuple[tuple[str, str, str], ...] = ()
             for tier in tiers:
                 got = self._tier(tier, scratch / "tree")
                 found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
                 detail = detail or got.mutant_detail
+                if tier == 1 and pending is not None:
+                    found.append(pending)
             words = _coverage_words(scratch / "tree", self.baseline, found)
             return AuditResult(point, tree, tuple(found), mutant_detail=detail, coverage=words)
         except AuditError as exc:
@@ -679,6 +715,22 @@ class AuditFeed:
                 attempt_hash=digest,
             ),
         )
+
+
+P1_PENDING: Final = "examples pending: the task-text extraction has not finished"
+P1_UNFINISHED: Final = "the task-text extraction had not finished when finish was called"
+
+
+def _p1_finding(verdict: Literal["not-proven", "question"], detail: str) -> Finding:
+    """The `task-requirements` finding the feed reports while P1 cannot run."""
+    return Finding(
+        gate=TASK_REQUIREMENTS,
+        tier=1,
+        verdict=verdict,
+        reason="unknown",
+        detail=detail,
+        cites=("saddle.feed.AuditFeed",),
+    )
 
 
 def _blocked(detail: str) -> Finding:

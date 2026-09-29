@@ -1954,6 +1954,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Offer the model a `check` tool that runs audit tiers 0 and 1 on the current "
         "tree before finish (arm E+A+F only; off by default).",
     )
+    p1 = auto.add_mutually_exclusive_group()
+    p1.add_argument(
+        "--task-requirements",
+        default=None,
+        metavar="FILE",
+        help="A sealed task-requirements file for this task: tier 1 also runs the task "
+        "text's examples (needs an auditor; off by default).",
+    )
+    p1.add_argument(
+        "--extract-requirements",
+        action="store_true",
+        help="Extract the task text's examples at run start, beside the worker (extra model "
+        "calls); finish waits for them (needs an auditor; off by default).",
+    )
     _add_install_flags(auto)
     _add_server_flags(auto)
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
@@ -1989,6 +2003,8 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         wheels=wheel_folder(args),
         tier2=args.tier2,
         mutant_shortlist=args.mutant_shortlist,
+        task_requirements=Path(args.task_requirements) if args.task_requirements else None,
+        extract_requirements=args.extract_requirements,
     )
 
     def show(event: Event) -> None:

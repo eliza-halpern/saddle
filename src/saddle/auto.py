@@ -23,10 +23,12 @@ turns on the tier-0 guards and a budget, and hands one turn to the same engine t
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tomllib
 import uuid
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -42,6 +44,8 @@ from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
 from saddle.journal import append_span, build_span
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
+from saddle.task_passes import baseline_sources
+from saddle.task_passes import extract as extract_requirements
 from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, INSTALL_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
 
@@ -197,6 +201,15 @@ class AutoOptions:
     `check` tool that runs audit tiers 0 and 1 on demand (`feed.AuditFeed.check`).
     Off by default; off, the tool list, prompt and sealed records are those
     of a run without it."""
+    task_requirements: Path | None = None
+    """`--task-requirements FILE`: a sealed P1 file for this task text
+    (`saddle requirements extract`); tier 1 then runs the task text's
+    examples. Needs an auditor (arm E+A or E+A+F). Off by default."""
+    extract_requirements: bool = False
+    """`--extract-requirements`: run P1's extraction at run start, beside the
+    worker, and seal the file in the run's own state; checkpoints before it
+    is ready report it pending, and `finish` waits for it up to the run's
+    remaining time. Needs an auditor. Off by default."""
     wheels: WheelFolder | None = None
     """`--allow-installs`: the wheel folder approved installs come from
     (`installs`). Set, the model is offered an `install` tool; each call is
@@ -302,6 +315,34 @@ def self_guard(worktree: Path) -> Callable[[], list[str]] | None:
     return lambda: sorted(p for p in changed_files(worktree) if p in GUARDED_PATHS)
 
 
+P1_FILE: Final = "task-requirements.json"
+"""Where `--extract-requirements` seals the file: beside the run's ledger."""
+
+
+def _requirements(
+    options: AutoOptions, client: VllmClient, worktree: Path, base: str, journal: Path
+) -> tuple[Future[Path] | None, ThreadPoolExecutor | None]:
+    """The run's P1 file as a future (done at once for `--task-requirements`),
+    and the pool an extraction runs on; (None, None) without P1."""
+    if options.task_requirements is not None:
+        ready: Future[Path] = Future()
+        ready.set_result(options.task_requirements.resolve())
+        return ready, None
+    if not options.extract_requirements:
+        return None, None
+    target = journal.parent / P1_FILE
+
+    def extract() -> Path:
+        record = extract_requirements(
+            options.task, client, sources=baseline_sources(worktree, base)
+        )
+        target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        return target
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-p1-extract")
+    return pool.submit(extract), pool
+
+
 def run_auto(
     options: AutoOptions,
     client: VllmClient,
@@ -325,6 +366,14 @@ def run_auto(
         raise AutoError(msg)
     if options.finish_refusal_cap < 1:
         msg = f"finish refusal cap must be at least 1, got {options.finish_refusal_cap}"
+        raise AutoError(msg)
+    if options.task_requirements is not None and options.extract_requirements:
+        msg = "--task-requirements and --extract-requirements: give one, not both"
+        raise AutoError(msg)
+    if (options.task_requirements is not None or options.extract_requirements) and (
+        options.arm == "E"
+    ):
+        msg = "P1 (--task-requirements/--extract-requirements) needs an auditor; arm E has none"
         raise AutoError(msg)
     if options.check_tool and options.arm != "E+A+F":
         msg = f"--check-tool needs arm E+A+F (it delivers audit findings); got {options.arm}"
@@ -372,10 +421,21 @@ def run_auto(
             + f"installs from {options.wheels.path} ({options.wheels.source})".replace(";", "%3B")
             if options.wheels is not None
             else ""
+        )
+        + (
+            "; task requirements "
+            + (
+                str(options.task_requirements).replace(";", "%3B")
+                if options.task_requirements is not None
+                else "extracted at run start"
+            )
+            if options.task_requirements is not None or options.extract_requirements
+            else ""
         ),
         kind="agent",
     )
     append_span(journal, start)
+    p1, extraction = _requirements(options, client, worktree, base, journal)
     feed = (
         None
         if options.arm == "E"
@@ -390,6 +450,8 @@ def run_auto(
             sanctioned_test_rewrites=options.sanctioned_test_rewrites,
             tier2=options.tier2,
             mutant_shortlist=options.mutant_shortlist,
+            p1=p1,
+            p1_wait=lambda: auto.budget.time_s - auto.budget.elapsed(),
         )
     )
     guard = self_guard(worktree)
@@ -421,6 +483,15 @@ def run_auto(
             "prompt_shape": {"keep_reasoning": options.keep_reasoning},
             **({"self_guard": True} if guard is not None else {}),
             **({"check_tool": True} if options.check_tool else {}),
+            **(
+                {
+                    "task_requirements": str(options.task_requirements)
+                    if options.task_requirements is not None
+                    else "extracted at run start"
+                }
+                if p1 is not None
+                else {}
+            ),
             **(
                 {"installs": {"wheel_dir": str(options.wheels.path), "installed": installed}}
                 if options.wheels is not None
@@ -502,6 +573,10 @@ def run_auto(
     finally:
         if auto.installs is not None:
             auto.installs.remove()
+        if extraction is not None:
+            # An extraction still running holds model calls; it is waited for,
+            # never abandoned mid-seal.
+            extraction.shutdown(wait=True)
     _git(worktree, "add", "-A", "--", *UNSTAGED)
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
