@@ -17,8 +17,9 @@ readings and known-correct probe outcomes sealed beside it at extraction
   route (a) (`literal`: the input and the outcome appear in a cited binding
   unit, with no negation between them) or route (b) (`executed-reference`:
   k of k predictions and their executed references agree, k is effectively
-  more than one, and every known-correct probe returns the outcome), or
-  only ask. The model can mark nothing eligible.
+  more than one, and every known-correct probe returns the outcome, from
+  at least `PROBES_NEEDED` probes of one source), or only ask. The model
+  can mark nothing eligible.
 - `judge` turns one tree outcome into one row: pass, code-wrong, question,
   not-proven (could not call, or a value it cannot compare), unknown (HANG)
   or not-judged.
@@ -55,6 +56,16 @@ REL_TOL: Final = 1e-9
 ROUTE_B_ABS_TOL: Final = 1e-12
 NEAR_MISS_REL: Final = 1e-6
 NEAR_MISS_ABS: Final = 1e-12
+
+PROBE_SOURCES: Final[tuple[str, ...]] = ("oracle-pass", "user")
+"""Where a known-correct probe's correctness comes from, outside the model
+(spec §4.5): an oracle-PASS tree of the same task (the bench), or a
+reference the user supplied (the product)."""
+
+PROBES_NEEDED: Final[Mapping[str, int]] = {"oracle-pass": 3, "user": 1}
+"""How many probes of one source route (b) needs, all agreeing: m = 3 on the
+bench (the top of the held-out k = 1-3 range), at least 1 user reference in
+the product. Fewer leave the example a question."""
 
 NOT_EXECUTABLE: Final[tuple[str, ...]] = (
     "packaging-or-install",
@@ -566,6 +577,18 @@ class Probe:
     status: str
     """`ran`, or why it could not (could not call, HANG, crash)."""
     outcome: Outcome | None = None
+    source: str = "oracle-pass"
+    """One of `PROBE_SOURCES`; the sealed file's probe list says which."""
+    raises: tuple[str, ...] = ()
+    """A raise outcome's class and its bases, by name, most derived first."""
+
+    def agrees(self, expected: Outcome) -> bool:
+        """It returned `expected`: the same value, or a raise of that type or a subclass."""
+        if self.outcome is None:
+            return False
+        if expected.kind == "raises" and self.outcome.kind == "raises":
+            return expected.text in (self.outcome.text, *self.raises)
+        return self.outcome.same(expected)
 
     @staticmethod
     def from_dict(data: Mapping[str, Any]) -> Probe:
@@ -574,6 +597,8 @@ class Probe:
             str(data["sha256"]),
             str(data["status"]),
             Outcome.from_dict(raw) if isinstance(raw, Mapping) else None,
+            source=str(data.get("source", "oracle-pass")),
+            raises=tuple(str(r) for r in data.get("raises", ())),
         )
 
 
@@ -800,11 +825,14 @@ def _with(base: Class, **changes: Any) -> Class:
 
 
 def _probed(base: Class, expected: Outcome, probes: Sequence[Probe]) -> Class:
-    """Route (b) is refusal-eligible only if every known-correct probe agrees (D-9)."""
+    """Route (b) is refusal-eligible only if every known-correct probe agrees (D-9),
+    and there are `PROBES_NEEDED` of one source. A probe that disagrees
+    rejects the example whatever the count: a known-correct implementation
+    says the example, not the tree, is suspect."""
     if not probes:
         return _with(base, note="no known-correct probe")
     for probe in probes:
-        if probe.status == "ran" and probe.outcome is not None and not probe.outcome.same(expected):
+        if probe.status == "ran" and probe.outcome is not None and not probe.agrees(expected):
             return _with(
                 base,
                 probe_rejected=f"known-correct probe {probe.sha256[:12]} gives "
@@ -812,7 +840,18 @@ def _probed(base: Class, expected: Outcome, probes: Sequence[Probe]) -> Class:
             )
     if any(p.status != "ran" or p.outcome is None for p in probes):
         return _with(base, note="no known-correct probe (a probe could not run on it)")
+    short = too_few_probes(probes)
+    if short:
+        return _with(base, note=f"too few known-correct probes ({short})")
     return _with(base, eligible=True, note=f"{base.note}, probe ({len(probes)}/{len(probes)})")
+
+
+def too_few_probes(probes: Sequence[Probe]) -> str:
+    """ "" when some source has its `PROBES_NEEDED`; else the counts, in words."""
+    have = {s: sum(p.source == s for p in probes) for s in PROBE_SOURCES}
+    if any(have[s] >= n for s, n in PROBES_NEEDED.items()):
+        return ""
+    return ", ".join(f"{have[s]} of {n} {s}" for s, n in PROBES_NEEDED.items())
 
 
 # -- one tree outcome -> one row ------------------------------------------------

@@ -198,3 +198,97 @@ def test_the_cli_flags_reach_the_options(repo: Path, monkeypatch: pytest.MonkeyP
         cli.build_parser().parse_args(
             ["auto", "t", "--task-requirements", "f", "--extract-requirements"]
         )
+
+
+# -- D-9 in the product: the user's reference is the only probe --------------------
+
+
+def product_run(repo: Path, references: tuple[Path, ...] = ()) -> tuple[Path, Path]:
+    """`saddle auto --extract-requirements [--reference DIR]` on the bag task; the sealed file."""
+    from test_task_requirements import BAG, BAG_INPUT, bag_predictions
+
+    client = Both([[FIX], [FINISH]], Scripted({"inputs": [BAG_INPUT]}, predict=bag_predictions))
+    options = AutoOptions(
+        task=BAG,
+        repo=repo,
+        run_id="p1-product",
+        auditor_factory=Factory(),
+        extract_requirements=True,
+        references=references,
+    )
+    result = run_auto(options, cast(VllmClient, client))
+    assert result.outcome == "finished"
+    return result.journal.parent / P1_FILE, result.journal
+
+
+def test_in_the_product_without_a_reference_route_b_never_refuses(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refusal is forced licensed here: even then, an agreeing route (b) example
+    on a tree that breaks it is a question, because the product has no probe."""
+    from test_task_requirements import make_bag_bad
+
+    from saddle import gates
+    from saddle.task_requirements import check_tree
+
+    audited = make_bag_bad(tmp_path)
+    sealed, _ = product_run(repo)
+    assert json.loads(sealed.read_text())["probes"] == []
+    monkeypatch.setattr(gates, "P1_REFUSAL_LICENSED", True)
+    check = check_tree(audited, "HEAD", sealed)
+    assert (check.verdict, check.passed) == ("question", True)
+    assert check.detail.endswith("[no known-correct probe]")
+
+
+def test_in_the_product_a_user_reference_is_sealed_and_lets_route_b_refuse(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_task_requirements import SORTED, bag_tree, make_bag_bad
+
+    from saddle import gates
+    from saddle.task_requirements import check_tree, tree_sha256
+
+    audited = make_bag_bad(tmp_path)
+    reference = bag_tree(tmp_path / "trusted", SORTED)
+    sealed, journal = product_run(repo, (reference,))
+    record = json.loads(sealed.read_text())
+    assert record["probes"] == [{"sha256": tree_sha256(reference), "source": "user"}]
+    monkeypatch.setattr(gates, "P1_REFUSAL_LICENSED", True)
+    check = check_tree(audited, "HEAD", sealed)
+    assert check.verdict == "fail"
+    assert "probe (1/1)" in check.detail
+    start = next(s for s in read_spans(journal) if s.name == "auto:start")
+    assert start.detail.endswith(
+        "; task requirements extracted at run start with 1 user reference(s)"
+    )
+
+
+def test_a_reference_needs_an_extraction_and_a_directory(repo: Path, tmp_path: Path) -> None:
+    with pytest.raises(AutoError, match="--reference needs --extract-requirements"):
+        run(repo, Both([], Scripted("x")), Factory(), references=(tmp_path,))
+    with pytest.raises(AutoError, match="is not a directory"):
+        run(
+            repo,
+            Both([], Scripted("x")),
+            Factory(),
+            extract_requirements=True,
+            references=(tmp_path / "absent",),
+        )
+
+
+def test_the_reference_flag_reaches_the_options(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[AutoOptions] = []
+
+    def spy(options: AutoOptions, client: Any, **kw: Any) -> AutoResult:
+        seen.append(options)
+        msg = "stop here"
+        raise AutoError(msg)
+
+    monkeypatch.setattr(cli, "run_auto", spy)
+    argv = ["auto", "t", "--repo", str(repo), "--extract-requirements"]
+    for flags in ([], ["--reference", "a", "--reference", "b"]):
+        args = cli.build_parser().parse_args([*argv, *flags])
+        assert cli.run_auto_command(args, cast(VllmClient, None), stdout=io.StringIO()) == 1
+    assert [o.references for o in seen] == [(), (Path("a"), Path("b"))]

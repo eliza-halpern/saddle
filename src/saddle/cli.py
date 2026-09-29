@@ -92,7 +92,7 @@ from saddle.slice import (
 )
 from saddle.task_passes import baseline_sources
 from saddle.task_passes import extract as extract_requirements
-from saddle.task_requirements import RequirementsError
+from saddle.task_requirements import ProbeTree, RequirementsError
 from saddle.task_requirements import load as requirements_load
 from saddle.task_units import task_units
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
@@ -1479,7 +1479,10 @@ def run_requirements(
     sealed file against the task text; a mismatch exits
     `REQUIREMENTS_MISMATCH` with the reason, which an audit would report as
     a question. `extract` runs the code-blind passes (`task_passes.extract`)
-    against the repository before the task and writes the sealed file.
+    against the repository before the task, runs every example on each
+    known-correct probe given (`--probe-tree`: a tree the task's oracle
+    passed; `--reference`: the user's own reference), and writes the sealed
+    file. Without a probe, route (b) examples can only ask.
     """
     text = Path(args.task).read_text(encoding="utf-8")
     if args.requirements_command == "census":
@@ -1495,24 +1498,47 @@ def run_requirements(
         stdout.write(
             f"file {req.sha256[:12]} checks out: {len(req.examples)} example(s), "
             f"{len(req.not_executable)} not executable, {len(req.unanswered)} unanswered, "
-            f"{len(req.cut)} cut\n"
+            f"{len(req.cut)} cut, {_probe_count(req.probes)}\n"
         )
         return 0
     assert client is not None
-    record = extract_requirements(
-        text,
-        client,
-        sources=baseline_sources(Path(args.repo), args.baseline),
-        model=args.model,
-    )
+    probes = [
+        *(ProbeTree(Path(p), "oracle-pass") for p in args.probe_tree),
+        *(ProbeTree(Path(p), "user") for p in args.reference),
+    ]
+    try:
+        record = extract_requirements(
+            text,
+            client,
+            sources=baseline_sources(Path(args.repo), args.baseline),
+            model=args.model,
+            probes=probes,
+        )
+    except RequirementsError as exc:
+        stdout.write(f"error: {exc}\n")
+        return REQUIREMENTS_BAD_PROBE
     out = Path(args.out)
     out.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    listed = tuple((p["sha256"], p["source"]) for p in record["probes"])
     stdout.write(
         f"sealed {out} ({record['file_sha256'][:12]}): {len(record['examples'])} example(s) "
         f"over {len(record['units'])} unit(s); {len(record['not_executable'])} not "
-        f"executable, {len(record['unanswered'])} unanswered, {len(record['cut'])} cut\n"
+        f"executable, {len(record['unanswered'])} unanswered, {len(record['cut'])} cut, "
+        f"{_probe_count(listed)}\n"
     )
     return 0
+
+
+REQUIREMENTS_BAD_PROBE: Final = 2
+"""`saddle requirements extract` with a probe that cannot be one; no model call is made."""
+
+
+def _probe_count(probes: Sequence[tuple[str, str]]) -> str:
+    if not probes:
+        return "no known-correct probe (route (b) can only ask)"
+    return f"{len(probes)} known-correct probe(s): " + ", ".join(
+        f"{src} {sha[:12]}" for sha, src in probes
+    )
 
 
 def _tiered_audit(
@@ -1577,6 +1603,19 @@ def _add_tier2(sub: argparse.ArgumentParser) -> None:
         help="Tier-2 mutation verdict: 'score' (default) is the 85%% kill-rate bar, "
         "unchanged; 'shortlist' refuses on any surviving changed-line mutant without "
         "a checked reason and names them, with coverage as a locator only.",
+    )
+
+
+def _add_reference_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--reference",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="A reference implementation of this task that you vouch for, such as an "
+        "earlier trusted version (repeatable). It is the only known-correct probe outside "
+        "the bench: without one, examples the task text does not state literally can only "
+        "ask, never refuse.",
     )
 
 
@@ -1750,6 +1789,15 @@ def build_parser() -> argparse.ArgumentParser:
     extract_cmd.add_argument(
         "--baseline", default="HEAD", help="The commit the task starts from (default HEAD)."
     )
+    extract_cmd.add_argument(
+        "--probe-tree",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="A known-correct probe: a tree of this task that the task's oracle passed "
+        "(repeatable; route (b) needs 3). Never a tree you will audit with this file.",
+    )
+    _add_reference_flag(extract_cmd)
     _add_server_flags(extract_cmd)
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
@@ -1968,6 +2016,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extract the task text's examples at run start, beside the worker (extra model "
         "calls); finish waits for them (needs an auditor; off by default).",
     )
+    _add_reference_flag(auto)
     _add_install_flags(auto)
     _add_server_flags(auto)
     auto.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
@@ -2005,6 +2054,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         mutant_shortlist=args.mutant_shortlist,
         task_requirements=Path(args.task_requirements) if args.task_requirements else None,
         extract_requirements=args.extract_requirements,
+        references=tuple(Path(r) for r in args.reference),
     )
 
     def show(event: Event) -> None:

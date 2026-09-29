@@ -15,6 +15,13 @@ run: ..."), never a pass, never `not-proven`, never a refusal.
 namespace, under a per-example timer (`EXAMPLE_TIMEOUT_S`), with the lines
 of the tree it ran traced. `check_tree` is the gate on one tree.
 
+The known-correct probes (D-9) run through the same driver, once, at
+extraction (`run_probes`): each probe tree is an implementation whose
+correctness comes from outside the model (`task_examples.PROBE_SOURCES`),
+named by its content hash (`tree_sha256`), and every example's outcome on
+it is sealed in the file. Nothing about a probe runs per audit, except the
+check that the tree under audit is not itself one of them.
+
 Layering: executes tree code through `evidence`, so it sits beside
 `rule_d_run`, above `gates`.
 """
@@ -24,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -45,8 +53,12 @@ from saddle.rule_d_run import TREE_TIMEOUT_S
 from saddle.task_examples import (
     EXAMPLE_TIMEOUT_S,
     NOT_EXECUTABLE,
+    PROBE_SOURCES,
     Example,
+    Outcome,
     TreeOutcome,
+    decode_value,
+    literal_text,
     snippet_problem,
 )
 from saddle.task_units import Units
@@ -111,6 +123,8 @@ class Requirements:
     sha256: str
     unanswered: tuple[str, ...] = ()
     """Units P-a gave neither an input nor a reason for: named, never dropped."""
+    probes: tuple[tuple[str, str], ...] = ()
+    """The sealed known-correct probes, as (sha256, source)."""
 
 
 MISMATCH: Final = "requirements file does not match the task"
@@ -149,7 +163,10 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
         msg = f"{MISMATCH}: the units differ from the task text's"
         raise RequirementsError(msg)
     try:
-        examples = tuple(Example.from_dict(e) for e in data.get("examples", ()))
+        probes = _sealed_probes(data)
+        examples = tuple(
+            Example.from_dict(_with_sources(e, dict(probes))) for e in data.get("examples", ())
+        )
         marks = tuple((str(m["unit"]), str(m["reason"])) for m in data.get("not_executable", ()))
         cut = tuple(str(u) for u in data.get("cut", ()))
         unanswered = tuple(str(u) for u in data.get("unanswered", ()))
@@ -160,7 +177,37 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
     if bad:
         msg = f"requirements file is malformed: not-executable reason {bad[0]!r} is not allowed"
         raise RequirementsError(msg)
-    return Requirements(text, units, examples, marks, cut, str(data["file_sha256"]), unanswered)
+    return Requirements(
+        text, units, examples, marks, cut, str(data["file_sha256"]), unanswered, probes
+    )
+
+
+def _sealed_probes(data: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    """The file's probe list, each probe once, each from a known source."""
+    probes = tuple((str(p["sha256"]), str(p["source"])) for p in data.get("probes", ()))
+    if len({sha for sha, _ in probes}) != len(probes):
+        msg = "the same probe tree is sealed twice"
+        raise ValueError(msg)
+    bad = [src for _, src in probes if src not in PROBE_SOURCES]
+    if bad:
+        msg = f"probe source {bad[0]!r} is not one of {', '.join(PROBE_SOURCES)}"
+        raise ValueError(msg)
+    return probes
+
+
+def _with_sources(example: Mapping[str, Any], sources: Mapping[str, str]) -> dict[str, Any]:
+    """`example` with each probe outcome's source from the file's probe list.
+
+    Every sealed probe must have exactly one outcome on every example: an
+    example missing one could hide the probe that disagrees with it."""
+    got = [str(p["sha256"]) for p in example.get("probes", ())]
+    if sorted(got) != sorted(sources):
+        msg = f"example {example.get('id')} does not carry one outcome per sealed probe"
+        raise ValueError(msg)
+    return {
+        **example,
+        "probes": [{**p, "source": sources[str(p["sha256"])]} for p in example.get("probes", ())],
+    }
 
 
 DRIVER_BODY: Final = r"""
@@ -318,6 +365,110 @@ def run_examples(
     return {**results, **parsed}
 
 
+# -- the known-correct probes (D-9), run once at extraction ----------------------
+
+PROBE_FILES: Final = (".py", ".toml", ".cfg")
+"""The files a probe tree is identified by: its source and its packaging."""
+_UNHASHED_DIRS: Final = frozenset({".git", "__pycache__", ".venv", "venv"})
+
+
+def tree_sha256(root: Path) -> str:
+    """A tree's identity: the sha256 over each `PROBE_FILES` file's relative
+    path and content hash, in sorted order. Caches, git data and build
+    leftovers do not change it."""
+    digest = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _UNHASHED_DIRS)
+        for name in sorted(n for n in filenames if n.endswith(PROBE_FILES)):
+            path = Path(dirpath) / name
+            content = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest.update(f"{path.relative_to(root).as_posix()}\0{content}\n".encode())
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class ProbeTree:
+    """A known-correct implementation of the task, and where its correctness comes from."""
+
+    path: Path
+    source: str
+    """One of `task_examples.PROBE_SOURCES`: `oracle-pass` (a bench tree the
+    task's oracle passed) or `user` (a reference the user supplied)."""
+
+
+def probe_listing(probes: Sequence[ProbeTree]) -> list[dict[str, str]]:
+    """The sealed probe list, `RequirementsError` for a probe that cannot be one.
+
+    Checked before any model call: a missing directory, an unknown source,
+    or one tree given twice (it would count as two probes) stops the
+    extraction."""
+    listed: list[dict[str, str]] = []
+    for probe in probes:
+        if probe.source not in PROBE_SOURCES:
+            msg = f"probe source {probe.source!r} is not one of {', '.join(PROBE_SOURCES)}"
+            raise RequirementsError(msg)
+        if not probe.path.is_dir():
+            msg = f"probe tree {probe.path} is not a directory"
+            raise RequirementsError(msg)
+        sha = tree_sha256(probe.path)
+        if any(p["sha256"] == sha for p in listed):
+            msg = f"probe tree {probe.path} is the same tree as an earlier probe"
+            raise RequirementsError(msg)
+        listed.append({"sha256": sha, "source": probe.source})
+    return listed
+
+
+def run_probes(
+    probes: Sequence[ProbeTree],
+    listed: Sequence[Mapping[str, str]],
+    examples: Sequence[Example],
+    *,
+    runner: Runner = run_capture,
+) -> dict[str, list[dict[str, Any]]]:
+    """Every example's sealed outcome on every probe: example id -> one record per probe.
+
+    Each probe runs in a private copy, through `run_examples` (the audit's
+    own driver, sandbox and caps). What could not run is recorded as why,
+    never as an outcome, so it can only leave an example a question."""
+    out: dict[str, list[dict[str, Any]]] = {e.id: [] for e in examples}
+    for probe, entry in zip(probes, listed, strict=True):
+        with tempfile.TemporaryDirectory(prefix="saddle-p1-probe-") as scratch:
+            private = Path(scratch) / "tree"
+            shutil.copytree(probe.path, private, ignore=shutil.ignore_patterns(".git"))
+            got = run_examples(private, examples, runner=runner) if examples else {}
+        for e in examples:
+            record = (
+                {"status": f"crashed: {got}"}
+                if isinstance(got, str)
+                else _probe_record(got.get(e.id))
+            )
+            out[e.id].append({"sha256": entry["sha256"], **record})
+    return out
+
+
+def _probe_record(got: TreeOutcome | None) -> dict[str, Any]:
+    if got is None:
+        return {"status": "no result"}
+    if got.kind == "raises" and got.raises and got.raises[0].isidentifier():
+        return {
+            "status": "ran",
+            "outcome": {"kind": "raises", "text": got.raises[0]},
+            "raises": list(got.raises),
+        }
+    if got.kind == "value":
+        try:
+            text = literal_text(decode_value(got.value))
+            Outcome.of("value", text)
+        except (ValueError, KeyError, TypeError):
+            return {"status": "not-canonical"}
+        return {"status": "ran", "outcome": {"kind": "value", "text": text}}
+    status = {"could-not-call": "could not call", "hang": "HANG"}.get(got.kind, got.kind)
+    return {"status": f"{status}: {got.detail}" if got.detail else status}
+
+
+PROBE_IS_TREE: Final = "the tree under audit is one of the sealed known-correct probes"
+
+
 def check_tree(
     copy: Path, baseline: str, requirements: Path, *, runner: Runner = run_capture
 ) -> TaskRequirementsCheck:
@@ -326,6 +477,9 @@ def check_tree(
         req = load(requirements)
     except RequirementsError as exc:
         return check_task_requirements({}, Units((), frozenset()), [], cannot_run=str(exc))
+    if req.probes and tree_sha256(copy) in {sha for sha, _ in req.probes}:
+        # A probe gates the examples; judging it with them would be tautological.
+        return check_task_requirements({}, req.units, req.examples, cannot_run=PROBE_IS_TREE)
     with tempfile.TemporaryDirectory(prefix="saddle-p1-tree-") as scratch:
         # A private copy: the examples run beside the tests (`Auditor`), and
         # nothing they write may reach the tree the tests are reading.

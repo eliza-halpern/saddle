@@ -46,6 +46,7 @@ from saddle.journal import append_span, build_span
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources
 from saddle.task_passes import extract as extract_requirements
+from saddle.task_requirements import ProbeTree
 from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, INSTALL_SCHEMA, TOOLS, ToolContext
 from saddle.vllm import VllmClient
 
@@ -222,6 +223,11 @@ class AutoOptions:
     worker, and seal the file in the run's own state; checkpoints before it
     is ready report it pending, and `finish` waits for it up to the run's
     remaining time. Needs an auditor. Off by default."""
+    references: tuple[Path, ...] = ()
+    """`--reference DIR` (repeatable, with `--extract-requirements`): reference
+    implementations the user vouches for, run as known-correct probes at
+    extraction and sealed by hash with source `user`. Without one, a route
+    (b) example can only ask: in the product only literal examples refuse."""
     wheels: WheelFolder | None = None
     """`--allow-installs`: the wheel folder approved installs come from
     (`installs`). Set, the model is offered an `install` tool; each call is
@@ -346,7 +352,10 @@ def _requirements(
 
     def extract() -> Path:
         record = extract_requirements(
-            options.task, client, sources=baseline_sources(worktree, base)
+            options.task,
+            client,
+            sources=baseline_sources(worktree, base),
+            probes=[ProbeTree(r.resolve(), "user") for r in options.references],
         )
         target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
         return target
@@ -381,6 +390,13 @@ def run_auto(
         raise AutoError(msg)
     if options.task_requirements is not None and options.extract_requirements:
         msg = "--task-requirements and --extract-requirements: give one, not both"
+        raise AutoError(msg)
+    if options.references and not options.extract_requirements:
+        msg = "--reference needs --extract-requirements (a sealed file already holds its probes)"
+        raise AutoError(msg)
+    missing = [str(r) for r in options.references if not r.is_dir()]
+    if missing:
+        msg = f"--reference {missing[0]} is not a directory"
         raise AutoError(msg)
     if (options.task_requirements is not None or options.extract_requirements) and (
         options.arm == "E"
@@ -440,6 +456,11 @@ def run_auto(
                 str(options.task_requirements).replace(";", "%3B")
                 if options.task_requirements is not None
                 else "extracted at run start"
+                + (
+                    f" with {len(options.references)} user reference(s)"
+                    if options.references
+                    else ""
+                )
             )
             if options.task_requirements is not None or options.extract_requirements
             else ""

@@ -22,8 +22,12 @@ signatures (`baseline_listing`); the docstring of every name the task text
 mentions is hidden (D-2). None sees the tree under audit or a test file.
 The model is called only through `VllmClient.complete`; every threshold
 (k, temperatures, seeds, caps, timeouts, allowlists) is a constant here or
-in `task_examples`, never the model's. Known-correct probes are not built
-here (a later step): the file seals none, so route (b) cannot refuse yet.
+in `task_examples`, never the model's.
+
+- **Probes** (D-9, no model): the known-correct implementations given to
+  `extract` run every example once (`task_requirements.run_probes`), and
+  their outcomes are sealed. With none, which is the product without a user
+  reference, route (b) can only ask.
 
 Layering: calls the model and runs subprocesses; above `task_requirements`.
 """
@@ -53,6 +57,7 @@ from saddle.task_examples import (
     REFERENCE_CALL_TIMEOUT_S,
     REFERENCE_MODULES,
     REFERENCE_TOTAL_TIMEOUT_S,
+    Example,
     Outcome,
     decode_value,
     encode_value,
@@ -61,7 +66,7 @@ from saddle.task_examples import (
     reference_problem,
 )
 from saddle.task_prompts import ALTERNATIVES, PREDICT, PROPOSE, SNIPPET_RULES
-from saddle.task_requirements import Runner, seal
+from saddle.task_requirements import ProbeTree, Runner, probe_listing, run_probes, seal
 from saddle.task_units import Units, task_units
 
 PROPOSE_TEMPERATURE: Final = 0.6
@@ -520,12 +525,16 @@ def extract(
     sources: Mapping[str, str] | None = None,
     model: str = "",
     runner: Runner = run_capture,
+    probes: Sequence[ProbeTree] = (),
 ) -> dict[str, Any]:
-    """Run P-a, P-b (with its mini-references) and P-c on `task_text`; the sealed record.
+    """Run P-a, P-b (with its mini-references) and P-c on `task_text`, then
+    every example on each known-correct probe; the sealed record.
 
     `sources` is the baseline's Python sources by path (`baseline_sources`);
-    None or {} for an empty repo.
+    None or {} for an empty repo. `probes` are checked before any model
+    call (`probe_listing`); a bad one is a `RequirementsError`.
     """
+    listed = probe_listing(probes)
     units = task_units(task_text)
     listing, hidden = baseline_listing(sources or {}, task_text)
     shown = {"task": task_text, "units": _units_text(units), "baseline": listing}
@@ -608,6 +617,9 @@ def extract(
         calls.append(alt)
         for a in (reply_json(alt.raw) or {}).get("alternatives", []):
             _add_alternative(a, by_id, units)
+    outcomes = run_probes(probes, listed, [Example.from_dict(e) for e in examples], runner=runner)
+    for e in examples:
+        e["probes"] = outcomes[e["id"]]
     return seal(
         {
             "task_text": task_text,
@@ -618,7 +630,7 @@ def extract(
             "model": model,
             "calls": [c.to_dict() for c in calls],
             "hidden_docstrings": hidden,
-            "probes": [],
+            "probes": listed,
         }
     )
 

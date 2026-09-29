@@ -110,6 +110,7 @@ def requirements(tmp_path: Path) -> Path:
             }
         ],
         "not_executable": [{"unit": "S-003", "reason": "environment"}],
+        "probes": [{"sha256": f"{i}" * 64, "source": "oracle-pass"} for i in range(3)],
     }
     path = tmp_path / "task-requirements.json"
     path.write_text(json.dumps(seal(record)))
@@ -291,3 +292,83 @@ def test_requirements_extract_seals_a_file_through_the_client(
     assert record["model"] == "m"
     # the passes saw the baseline's `Box` signature
     assert any("class Box" in prompt for _, prompt, _, _ in client.sent)
+
+
+def test_requirements_extract_runs_and_seals_the_probes_it_is_given(
+    good: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--probe-tree` seals an oracle-PASS tree and `--reference` a user one,
+    each by hash, with every example's outcome on it; a bad probe stops the
+    extraction before the model is called."""
+    from test_task_passes import Scripted
+
+    from saddle import cli
+    from saddle.task_requirements import tree_sha256
+
+    client = Scripted(
+        {
+            "inputs": [
+                {
+                    "units": ["S-002"],
+                    "setup": ["from box import Box", "b = Box([2, 1])", "b *= 2"],
+                    "call": "list(b)",
+                    "args": ["[2, 1]", "2"],
+                }
+            ]
+        }
+    )
+
+    class Client:
+        def __init__(self, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> Scripted:
+            return client
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(cli, "_api_key", lambda: "test-key")
+    monkeypatch.setattr(cli, "VllmClient", Client)
+    task = tmp_path / "task.md"
+    task.write_text(TASK)
+    target = tmp_path / "sealed.json"
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    (reference / "box.py").write_text(BASE + IMUL_GOOD)
+    argv = ["requirements", "extract", str(task), "--out", str(target), "--repo", str(good)]
+    out = io.StringIO()
+    code = main([*argv, "--probe-tree", str(good), "--reference", str(reference)], stdout=out)
+    assert code == 0
+    listed = [(tree_sha256(good), "oracle-pass"), (tree_sha256(reference), "user")]
+    assert (
+        out.getvalue()
+        .rstrip()
+        .endswith(
+            "0 cut, 2 known-correct probe(s): "
+            + ", ".join(f"{src} {sha[:12]}" for sha, src in listed)
+        )
+    )
+    record = json.loads(target.read_text())
+    assert [(p["sha256"], p["source"]) for p in record["probes"]] == listed
+    assert [p["outcome"]["text"] for p in record["examples"][0]["probes"]] == ["[1, 1, 2, 2]"] * 2
+    out = io.StringIO()
+    assert main(["requirements", "verify", str(target), str(task)], stdout=out) == 0
+    assert (
+        out.getvalue()
+        .rstrip()
+        .endswith(
+            "0 cut, 2 known-correct probe(s): "
+            + ", ".join(f"{src} {sha[:12]}" for sha, src in listed)
+        )
+    )
+    sent = len(client.sent)
+    out = io.StringIO()
+    assert main([*argv, "--reference", str(tmp_path / "absent")], stdout=out) == 2
+    assert out.getvalue().startswith("error: probe tree ")
+    assert len(client.sent) == sent  # no model call
+    out = io.StringIO()
+    assert main([*argv], stdout=out) == 0
+    assert (
+        out.getvalue().rstrip().endswith("0 cut, no known-correct probe (route (b) can only ask)")
+    )
