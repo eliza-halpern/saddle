@@ -96,6 +96,7 @@ from saddle.journal import (
     SEALED_CUT,
     append_span,
     build_span,
+    scrub_thinking,
     write_attempt_sidecar,
 )
 from saddle.task_examples import WOULD_REFUSE
@@ -187,33 +188,52 @@ REASONS: Final[dict[str, Reason]] = {
 _TOOL_FAILURE_PREFIXES: Final = ("mutation tool failed", "mutation not measured")
 
 
-def sealed_finding(finding: Finding) -> str:
-    """The finding as the JSON its `audit-tier<N>:<gate>` span seals.
+def _reads_back(text: str, finding: Finding) -> bool:
+    """`text` still parses, as `finding`'s gate and verdict, once the ledger
+    line has redacted and capped it (`journal.build_span`)."""
+    try:
+        body = json.loads(scrub_thinking(text)[:MAX_SPAN_DETAIL_CHARS])
+    except ValueError:
+        return False
+    return (
+        isinstance(body, dict)
+        and body.get("gate") == finding.gate
+        and body.get("verdict") == finding.verdict
+    )
 
-    A span's detail is capped at `MAX_SPAN_DETAIL_CHARS`, and JSON cut
-    mid-string does not parse: the reader then sees verdict "unreadable"
-    and exit code 4, and a `question` read that way is shown as a failure.
-    So a `question` finding too long for the line is sealed with only its
-    first cite (the gate) and, if that is not enough, its detail cut to fit, marked `SEALED_CUT`,
-    keeping "would refuse at full strength" when the whole said it. The
-    whole finding is in the audit's own sidecar (`feed.AuditResult`). Other
-    verdicts are sealed as before: their exit code already says pass or fail.
+
+def sealed_finding(finding: Finding) -> str:
+    """The finding as the JSON its `audit-tier<N>:<gate>` span seals: one that
+    parses on the ledger line, whatever the verdict, with its gate, tier,
+    verdict and reason whole.
+
+    A span's detail is redacted and capped at `MAX_SPAN_DETAIL_CHARS`
+    (`journal.build_span`), and JSON cut mid-string does not parse: a reader
+    then has only the exit code, which cannot tell a pass from a not-proven
+    finding (both exit 0). So a finding the line cannot hold is sealed with
+    only its first cite (the gate) and, if that is not enough, its detail cut
+    to fit, marked `SEALED_CUT`, keeping "would refuse at full strength"
+    when the whole said it. So is one whose line redaction would break (a
+    secret-shaped value last in a string eats the closing quote). A finding
+    the line holds is sealed as before, byte for byte. The whole finding is
+    in the audit's own sidecar (`feed.AuditResult`), and a coverage
+    finding's lines and basis in its span's sidecar (`coverage_evidence`).
     """
     text = json.dumps(dataclasses.asdict(finding), sort_keys=True)
-    if finding.verdict != "question" or len(text) <= MAX_SPAN_DETAIL_CHARS:
+    if _reads_back(text, finding):
         return text
     body = {**dataclasses.asdict(finding), "cites": list(finding.cites[:1])}
     text = json.dumps(body, sort_keys=True)
-    if len(text) <= MAX_SPAN_DETAIL_CHARS:
+    if _reads_back(text, finding):
         return text  # the gate's basis was what did not fit; the detail is whole
     mark = SEALED_CUT + (f" [{WOULD_REFUSE}]" if WOULD_REFUSE in finding.detail else "")
     detail = finding.detail
     while True:
         text = json.dumps({**body, "detail": detail + mark}, sort_keys=True)
-        over = len(text) - MAX_SPAN_DETAIL_CHARS
-        if over <= 0 or not detail:
+        if not detail or _reads_back(text, finding):
             return text
-        detail = detail[: max(0, len(detail) - over)]
+        over = len(text) - MAX_SPAN_DETAIL_CHARS
+        detail = detail[: len(detail) - max(1, over)]
 
 
 def p1_tally(check: TaskRequirementsCheck) -> dict[str, Any]:
@@ -498,15 +518,20 @@ COVERAGE_GAP_PREFIX: Final = "no test runs"
 """How `check_changed_line_coverage` begins a detail that names uncovered lines."""
 
 
-def coverage_evidence(copy: Path, baseline: str, detail: str) -> dict[str, Any] | None:
+def coverage_evidence(
+    copy: Path, baseline: str, detail: str, basis: str = ""
+) -> dict[str, Any] | None:
     """What `coverage_text` needs beside a failing coverage finding.
 
     The text of every file the detail names, as it stood in the audited
     tree, and the changed-statement set the gate judged, spelled relative
-    to the tree. None for a detail that names no uncovered line (a passing
-    finding, or the gate's other wordings): nothing is sealed then. A file
-    the detail names that cannot be read is left out, and `coverage_text`
-    lists its lines as "not placed".
+    to the tree; and the lines the detail names (`uncovered`), with the
+    gate's `basis`, whole: the finding's own line is fitted to the ledger
+    (`sealed_finding`), and a long one keeps only part of its list. None
+    for a detail that names no uncovered line (a passing finding, or the
+    gate's other wordings): nothing is sealed then. A file the detail names
+    that cannot be read is left out, and `coverage_text` lists its lines as
+    "not placed".
 
     Each file is sealed as a list of its lines, not one string:
     `write_attempt_sidecar` caps every string at `MAX_THINKING_CHARS`
@@ -514,15 +539,21 @@ def coverage_evidence(copy: Path, baseline: str, detail: str) -> dict[str, Any] 
     """
     if not detail.startswith(COVERAGE_GAP_PREFIX):
         return None
+    named = coverage_text.uncovered_lines(detail)
     sources: dict[str, list[str]] = {}
-    for rel in sorted({f for f, _ in coverage_text.uncovered_lines(detail)}):
+    for rel in sorted({f for f, _ in named}):
         try:
             sources[rel] = (copy / rel).read_text().splitlines()
         except (OSError, UnicodeDecodeError):
             continue
     changed = changed_statements(copy, git_diff(copy, baseline))
     relative = sorted((str(Path(path).relative_to(copy)), line) for path, line in changed)
-    return {"sources": sources, "changed": [[path, line] for path, line in relative]}
+    return {
+        "sources": sources,
+        "changed": [[path, line] for path, line in relative],
+        "uncovered": [[path, line] for path, line in named],
+        "basis": basis,
+    }
 
 
 def _finding(gate: str, tier: int, verdict: Verdict, detail: str, basis: str | None) -> Finding:
@@ -985,7 +1016,7 @@ class Auditor:
                 # A not-proven coverage finding names the same lines;
                 # its sidecar is what `coverage_text` renders.
                 sealed = (
-                    coverage_evidence(copy, resolved, detail)
+                    coverage_evidence(copy, resolved, detail, basis or "")
                     if status in ("fail", "not-proven")
                     else None
                 )

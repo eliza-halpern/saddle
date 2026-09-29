@@ -274,20 +274,29 @@ def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.Mut
 def _coverage_summary(
     journal: Path, span: SpanRecord | None, mutation: mutant_text.MutationSummary | None
 ) -> coverage_text.CoverageSummary | None:
-    """A failing coverage finding's summary, from the sources and
-    changed set sealed in its span; None when nothing is sealed there."""
+    """A failing coverage finding's summary, from the sources and changed
+    set sealed in its span, and the lines it names: whole from the same
+    sidecar (`auditor.coverage_evidence`), which the span's own line, fitted
+    to the ledger, may hold only part of; from the line itself in a ledger
+    sealed before that. None when nothing is sealed there."""
     sealed = _sealed(journal, span, "sources", "changed")
     if sealed is None or span is None:
         return None
-    try:
-        finding = json.loads(span.detail)
-    except ValueError:
-        return None
-    if not isinstance(finding, dict):
-        return None
+    named = sealed.get("uncovered")
+    lines: list[tuple[str, int]] | None = None
+    if isinstance(named, list):
+        finding: Any = {"cites": [str(sealed.get("basis", ""))]}
+        lines = [(str(f), int(n)) for f, n in named]
+    else:
+        try:
+            finding = json.loads(span.detail)
+        except ValueError:
+            return None
+        if not isinstance(finding, dict):
+            return None
     sources = _sealed_sources(sealed["sources"])
     changed = [(str(f), int(n)) for f, n in sealed["changed"]]
-    return coverage_text.describe_coverage(finding, sources, changed, mutation)
+    return coverage_text.describe_coverage(finding, sources, changed, mutation, lines=lines)
 
 
 def _sealed_sources(raw: Any) -> dict[str, str]:

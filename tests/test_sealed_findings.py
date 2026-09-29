@@ -17,17 +17,30 @@ import json
 from pathlib import Path
 
 import pytest
+from test_auditor import clean_tree
 
-from saddle.auditor import TASK_REQUIREMENTS, Finding
+from saddle import coverage_text
+from saddle.auditor import (
+    TASK_REQUIREMENTS,
+    Auditor,
+    AuditorConfig,
+    Finding,
+    Findings,
+    sealed_finding,
+)
 from saddle.journal import (
     JOURNAL_QUESTION_EXIT,
     MAX_SPAN_DETAIL_CHARS,
+    SEALED_CUT,
     append_span,
     build_span,
     read_spans,
+    verify_journal,
 )
 from saddle.packet import Row, compile_packet
 from saddle.transcript import LINE_CUT, session_line, tier_finding
+
+__all__ = ["clean_tree"]
 
 CUT_P1_LINE = (
     '{"cites": ["saddle.gates.check_task_requirements", "question strength: dev-probe floor '
@@ -191,3 +204,102 @@ def test_a_line_that_parses_but_names_no_verdict_reads_its_exit_code() -> None:
     other = tier_finding("audit-tier1:ruff", "not json", 3)  # no finding seals exit 3
     assert other is not None
     assert (other.verdict, other.detail) == ("unreadable", "not json")
+
+
+# -- the writer: every finding's line parses, by construction --------------------------
+
+VERDICTS = ("pass", "fail", "not-applicable", "blocked", "not-proven", "question")
+SECRET = "pass" + "word=" + "hunter2"  # built from fragments for the leak guard
+DETAILS = {
+    "short": "2 of 3 lines run",
+    "long": "no test runs " + ", ".join(f"money.py:{n}" for n in range(200)),
+    "huge": "y" * 50_000,
+    "escapes": 'quote " backslash \\ newline \n tab \t ' * 40,
+    "unicode": "é∑ " * 300,  # json.dumps escapes each to six characters
+    "secret-last": f"S105 hardcoded: {SECRET}",
+    "secret-long": "z" * 460 + f" {SECRET}",
+    "would-refuse": "S-001 expected [1], got [] [would refuse at full strength] " * 12,
+}
+CITES = {
+    "gate": ("saddle.gates.check_ruff",),
+    "basis": ("saddle.gates.check_ruff", "not executable S-009: environment; " * 60),
+}
+
+
+@pytest.mark.parametrize("verdict", VERDICTS)
+@pytest.mark.parametrize("shape", sorted(DETAILS))
+@pytest.mark.parametrize("cites", sorted(CITES))
+def test_every_finding_line_parses_as_its_verdict(verdict: str, shape: str, cites: str) -> None:
+    finding = Finding("ruff", 1, verdict, "code-wrong", DETAILS[shape], CITES[cites])  # type: ignore[arg-type]
+    text = sealed_finding(finding)
+    line = build_span(node_id="audit", argv=[], duration_ms=0, exit_code=0, detail=text).detail
+    body = json.loads(line)
+    assert (body["gate"], body["tier"], body["verdict"], body["reason"]) == (
+        "ruff",
+        1,
+        verdict,
+        "code-wrong",
+    )
+    assert body["cites"][0] == "saddle.gates.check_ruff"
+    whole = old_line(finding)
+    if len(whole) <= MAX_SPAN_DETAIL_CHARS and SECRET not in whole:
+        assert text == whole  # a finding the line holds is sealed as before, byte for byte
+    else:
+        assert text != whole
+    if body["detail"] != finding.detail and "would refuse at full strength" in finding.detail:
+        assert body["detail"].endswith("[would refuse at full strength]")
+
+
+def test_a_secret_last_in_a_short_detail_no_longer_breaks_its_line() -> None:
+    """Known-bad: redaction's `name=value` rule ate the detail's closing quote."""
+    finding = Finding("ruff", 1, "fail", "code-wrong", DETAILS["secret-last"], CITES["gate"])
+    broken = build_span(
+        node_id="audit", argv=[], duration_ms=0, exit_code=1, detail=old_line(finding)
+    ).detail
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(broken)
+    sealed = build_span(
+        node_id="audit", argv=[], duration_ms=0, exit_code=1, detail=sealed_finding(finding)
+    ).detail
+    assert json.loads(sealed)["verdict"] == "fail"
+    assert SECRET not in sealed
+
+
+def test_the_auditor_seals_long_findings_that_read_back(tmp_path: Path) -> None:
+    journal = tmp_path / "proofs.jsonl"
+    findings = (UNCOVERED, SURVIVORS, dataclasses.replace(UNCOVERED, gate="ruff", tier=1))
+    auditor = Auditor(tmp_path, config=AuditorConfig(journal=journal))
+    auditor._journal(Findings(tier=1, key="k", findings=findings), {})
+    spans = read_spans(journal)
+    assert [json.loads(s.detail)["verdict"] for s in spans] == ["fail", "not-proven", "fail"]
+    assert all(len(s.detail) <= MAX_SPAN_DETAIL_CHARS for s in spans)
+    assert all(SEALED_CUT in json.loads(s.detail)["detail"] for s in spans)
+    assert verify_journal(journal) == []
+    assert rows(journal)["mutation"].status == "not-proven"
+
+
+BIG = "def h():\n" + "".join(f"    v{i} = {i}\n" for i in range(70)) + "    return v0\n"
+
+
+def test_a_long_coverage_finding_keeps_every_line_in_the_packet(
+    clean_tree: Path, tmp_path: Path
+) -> None:
+    """The real tier-1 audit of a tree whose new module no test runs: the
+    finding names 72 lines, more than its ledger line can hold."""
+    (clean_tree / "big.py").write_text(BIG)
+    journal = tmp_path / "proofs.jsonl"
+    result = Auditor(clean_tree, config=AuditorConfig(journal=journal)).tier1()
+    coverage = next(f for f in result.findings if f.gate == "coverage")
+    assert coverage.verdict == "fail"
+    assert len(coverage_text.uncovered_lines(coverage.detail)) == 72
+    span = next(s for s in read_spans(journal) if s.name == "audit-tier1:coverage")
+    assert json.loads(span.detail)["verdict"] == "fail"  # the line parses: it was fitted
+    assert SEALED_CUT in json.loads(span.detail)["detail"]
+    assert verify_journal(journal) == []
+    audit = rows(journal)["audit"]
+    assert any(i.startswith("✗ coverage: tier 1, fail: no test runs big.py:") for i in audit.items)
+    assert audit.summary.startswith(
+        "Not proven by any test: 72 changed lines no test runs [record: detail names 72 lines; "
+        "changed-lines="
+    )
+    assert "big.py h: 72 of 72 changed lines never run -- nothing exercises h" in audit.summary

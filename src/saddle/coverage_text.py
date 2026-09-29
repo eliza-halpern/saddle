@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from saddle.evidence import statement_lines
@@ -134,15 +134,19 @@ def describe_coverage(
     sources: Mapping[str, str],
     changed: Collection[tuple[str, int]] | None = None,
     mutation: MutationSummary | None = None,
+    *,
+    lines: Sequence[tuple[str, int]] | None = None,
 ) -> CoverageSummary:
     """Group a sealed coverage finding's lines by enclosing function.
 
     `sources` maps each file the detail names to its text in the audited
     tree. `changed` is the node's changed-line set (`evidence.changed_statements`
     of the diff, the set the gate judged) when it is at hand; without it no "of M" is written.
-    `mutation` is `mutant_text`'s summary of the same tree, if any.
+    `mutation` is `mutant_text`'s summary of the same tree, if any. `lines`
+    are the lines the finding names, when they were sealed whole beside it
+    (`auditor.coverage_evidence`); else they are read from its detail.
     """
-    lines = uncovered_lines(str(finding.get("detail", "")))
+    lines = list(lines) if lines is not None else uncovered_lines(str(finding.get("detail", "")))
     parsed = {f: _scopes(sources[f]) for f in {f for f, _ in lines} if f in sources}
     survived = {(m.file, m.function) for m in mutation.gaps} if mutation else set()
     grouped: dict[tuple[str, str], list[int]] = {}
