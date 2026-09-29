@@ -24,6 +24,7 @@ turns on the tier-0 guards and a budget, and hands one turn to the same engine t
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tomllib
 import uuid
@@ -36,9 +37,11 @@ from typing import Final
 
 from saddle import prompt_constants, sandbox
 from saddle.anchor import anchor_trailers, outcome_hash
+from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
+from saddle.evidence import src_layout_env
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
@@ -70,6 +73,42 @@ SYSTEM_PROMPT: Final = (
     "changed and why. If it cannot be done honestly, call finish and say so. "
     "Your account is recorded as narrative; it does not count as proof."
 )
+
+ENVIRONMENT_PROMPT: Final = (
+    " Your working directory is a fresh git worktree of the repository; your "
+    "commands run in it inside a sandbox with no network, so tools installed "
+    "elsewhere (uv, for one) may not be reachable. {python} {src}The audit runs "
+    "the tests with `{test_command}` in this worktree."
+)
+"""What the run's commands actually see, from facts saddle already holds
+(`environment_prompt`). A dogfood run on saddle's own repo spent seven rounds
+finding a Python that could import the project, because none of this was said."""
+
+
+def environment_prompt(worktree: Path, project: Path | None, env: dict[str, str]) -> str:
+    """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
+    (the project venv, else whatever `python` or `python3` their PATH has),
+    whether `src/` leads their import path, and the audit's test command."""
+    if project is not None:
+        python = f"`python` on PATH is the project's own environment ({project})."
+    else:
+        path = sandbox.command_env(env)["PATH"]
+        found = shutil.which("python", path=path)
+        found3 = shutil.which("python3", path=path)
+        python = "The project has no virtual environment of its own" + (
+            f"; `python` on PATH is {found}."
+            if found is not None
+            else f", and there is no `python` on PATH: use `python3` ({found3})."
+            if found3 is not None
+            else ", and no Python is on PATH."
+        )
+    src = (
+        "This worktree's `src/` is first on PYTHONPATH, so importing the project's "
+        "package loads the code you edit. "
+        if "PYTHONPATH" in src_layout_env(worktree)
+        else ""
+    )
+    return ENVIRONMENT_PROMPT.format(python=python, src=src, test_command=AUDIT_TEST_COMMAND)
 
 CHECK_PROMPT: Final = (
     " You may call check to run the audit's fast checks on the tree as it is now; "
@@ -594,12 +633,14 @@ def run_auto(
         else f"Test files ({', '.join(r + '/' for r in roots)}, test_*.py, conftest.py) "
         "are read-only: an edit to one is refused."
     )
+    run_env = {**COMMAND_ENV, **sandbox.project_command_env(project), **src_layout_env(worktree)}
     turn_options = TurnOptions(
         workdir=worktree,
         journal=journal,
         temperature=options.temperature,
         reasoning_effort=options.reasoning_effort,
         system_prompt=SYSTEM_PROMPT.format(tests=tests)
+        + environment_prompt(worktree, project, run_env)
         + (CHECK_PROMPT if options.check_tool else ""),
         context_tokens=options.context_tokens,
         tools=[
@@ -615,7 +656,7 @@ def run_auto(
         workdir=worktree,
         sandbox=Sandbox.for_workdir(
             worktree,
-            env={**COMMAND_ENV, **sandbox.project_command_env(project)},
+            env=run_env,
             require_isolation=True,
             network="none",
         ),
@@ -631,7 +672,11 @@ def run_auto(
             """From now on the gates and the model's commands run on `overlay`."""
             if feed is not None:
                 feed.project_env = overlay
-            box.env = {**COMMAND_ENV, **sandbox.project_command_env(overlay)}
+            box.env = {
+                **COMMAND_ENV,
+                **sandbox.project_command_env(overlay),
+                **src_layout_env(worktree),
+            }
             box.expose = sandbox.default_expose(sandbox.command_env(box.env))
 
         auto.installs = Installs(
