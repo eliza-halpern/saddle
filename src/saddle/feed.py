@@ -13,7 +13,11 @@ about auditing (the engine imports no auditor):
   the model has stopped editing and started checking, reading or ending, so
   that tree is the checkpoint. The tree is snapshotted synchronously (a copy,
   so later edits cannot race the audit) and `Auditor.tier1` runs on it in a
-  background thread, off the model's critical path.
+  background thread, off the model's critical path. One checkpoint runs at a
+  time, and a tool call never waits for it: a burst that ends while one is
+  running is audited by the next checkpoint, which the first call after the
+  running one completes starts on the tree as it is then. On a project whose
+  suite takes minutes, waiting would stall the model that long per burst.
 - `collect()` -- called after every tool result and at every nudge. A
   checkpoint audit that has completed is journaled as a delivery span and,
   with feedback on, returned as text the engine appends to that tool result,
@@ -490,13 +494,18 @@ class AuditFeed:
     # -- engine hooks ----------------------------------------------------------
 
     def before_tool(self, name: str) -> None:
-        """Start a checkpoint audit if `name` ends a burst of edits."""
+        """Start a checkpoint audit if `name` ends a burst of edits and none is
+        in flight. The tool call never waits for one: a burst that ends while a
+        checkpoint is running stays dirty, and the first call after that audit
+        completes starts the next checkpoint on the tree as it is then."""
         if name in EDIT_TOOLS or not self._dirty:
             return
         if name in (FINISH_TOOL, CHECK_TOOL):
             return  # `final` / `check` audit this tree themselves; no checkpoint too
+        if self._pending is not None and not self._pending.done():
+            return  # one checkpoint in flight at a time; the auditor is not shared
         self._dirty = False
-        self._await()  # one checkpoint in flight at a time; the auditor is not shared
+        self._await()  # already done: collects the finished checkpoint's future
         self.checkpoints += 1
         point = f"checkpoint {self.checkpoints}"
         scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))

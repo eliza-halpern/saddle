@@ -23,6 +23,7 @@ import json
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -364,6 +365,47 @@ def test_the_checkpoint_audits_the_tree_as_it_was_when_the_burst_ended(
     assert fake.calls == [(1, BUGGY)]
     assert f.results[0].tree == git(repo, "rev-parse", "HEAD^{tree}")
     assert not f.results[0].passed
+
+
+def test_a_burst_that_ends_mid_audit_never_waits_and_is_audited_next(
+    repo: Path, tmp_path: Path
+) -> None:
+    latch = threading.Event()
+    fake = FakeAuditor(latch)
+    f = AuditFeed(
+        worktree=repo,
+        baseline=git(repo, "rev-parse", "HEAD"),
+        journal=tmp_path / "j.jsonl",
+        run_span="s",
+        auditor=fake,
+    )
+    f.after_tool("edit_file", ok=True)
+    f.before_tool("run_command")  # checkpoint 1, held by the latch
+    assert fake.started.wait(10)
+    passed_over = "def add(a, b):\n    return b - a\n"
+    fixed = "def add(a, b):\n    return a + b\n"
+    returned = threading.Event()
+
+    def two_bursts_end() -> None:
+        for text in (passed_over, fixed):
+            (repo / "calc.py").write_text(text)
+            f.after_tool("edit_file", ok=True)
+            f.before_tool("run_command")
+        returned.set()
+
+    threading.Thread(target=two_bursts_end, daemon=True).start()
+    try:
+        assert returned.wait(5)  # neither tool call waited for checkpoint 1
+        assert f.checkpoints == 1  # nor started a second audit beside it
+    finally:
+        latch.set()
+    deadline = time.monotonic() + 10
+    while f.checkpoints == 1 and time.monotonic() < deadline:
+        f.before_tool("read_file")  # the first call after checkpoint 1 completes
+        time.sleep(0.01)
+    f.close()
+    # scope narrowed: the newest tree is audited; the one it superseded never is
+    assert fake.calls == [(1, BUGGY), (1, fixed)]
 
 
 # -- async delivery ------------------------------------------------------------
