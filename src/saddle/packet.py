@@ -57,9 +57,11 @@ CHECK_SPAN: Final = "audit:check"
 """A `check` call's record (`feed.CHECK_SPAN`); spelled here so the packet
 stays a reader of the ledger."""
 
-Status = Literal["proven", "failed", "observed", "absent", "not-proven", "narrative", "cost"]
+Status = Literal[
+    "proven", "failed", "observed", "absent", "not-proven", "question", "narrative", "cost"
+]
 
-CLAIMS: Final = frozenset({"proven", "failed", "observed", "cost"})
+CLAIMS: Final = frozenset({"proven", "failed", "observed", "question", "cost"})
 """Statuses that assert something about the run. Each needs a cite."""
 
 NARRATIVE_LABEL: Final = "narrative, not evidence"
@@ -424,6 +426,8 @@ def _status(audit: _Audit) -> Status:
     call an open shortlist survivor proven."""
     if audit.verdict == "not-proven":
         return "not-proven"
+    if audit.verdict == "question":
+        return "question"  # exit 4: neither proven nor failed; a person decides
     return "proven" if audit.exit_code == 0 else "failed"
 
 
@@ -436,7 +440,7 @@ def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
     return f"Finished, but {', and '.join(said)}."
 
 
-_MARK: Final[dict[str, str]] = {"proven": "✓", "failed": "✗", "not-proven": "?"}
+_MARK: Final[dict[str, str]] = {"proven": "✓", "failed": "✗", "not-proven": "?", "question": "?"}
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The finish-refusal cap's stop reason (`engine.AUDIT_UNRESOLVED`): finish refused on an
@@ -642,7 +646,10 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         # tree): it is reported as blocked, and only gates that ran and
         # failed count as failed.
         blocked = [a for a in audits if a.verdict == "blocked"]
-        failed_audits = [a for a in audits if a.exit_code != 0 and a.verdict != "blocked"]
+        failed_audits = [
+            a for a in audits if a.exit_code != 0 and a.verdict not in ("blocked", "question")
+        ]
+        asked = sum(a.verdict == "question" for a in audits)
         verdict = "finished"
         verdict_text = (
             _finished_but(failed_audits, blocked)
@@ -656,6 +663,8 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             if any(a.verdict == "not-proven" for a in audits)
             else "The executor called finish, and every audit finding recorded passed."
         )
+        if asked and not failed_audits and not blocked:
+            verdict_text += f" {_n(asked, 'audit finding')} asked a question only you can answer."
     elif outcome.name == "auto:unchanged":
         verdict = "unchanged"
         verdict_text = (
@@ -850,13 +859,22 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         if other:
             statuses = [_status(a) for a in other]
             unproven = statuses.count("not-proven")
+            asked = statuses.count("question")
             rows.append(
                 Row(
                     "audit",
                     "Audit",
-                    "failed" if "failed" in statuses else "not-proven" if unproven else "proven",
+                    "failed"
+                    if "failed" in statuses
+                    else "question"
+                    if asked
+                    else "not-proven"
+                    if unproven
+                    else "proven",
                     f"{statuses.count('proven')} of {_n(len(other), 'finding')} passed"
-                    + (f", {unproven} not proven." if unproven else "."),
+                    + (f", {unproven} not proven" if unproven else "")
+                    + (f", {asked} need you" if asked else "")
+                    + ".",
                     tuple(a.record_hash for a in other),
                     tuple(
                         f"{_MARK[st]} {a.name.removeprefix('audit:')}: {a.detail}"

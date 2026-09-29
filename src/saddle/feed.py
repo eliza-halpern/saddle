@@ -149,11 +149,18 @@ class AuditResult:
     def passed(self) -> bool:
         return not any(failing(f) for f in self.findings)
 
+    @property
+    def needs_you(self) -> bool:
+        """Some finding is a `question`: it refuses nothing, and the run
+        cannot end on it silently."""
+        return any(f.verdict == "question" for f in self.findings)
+
     def to_dict(self) -> dict[str, object]:
         return {
             "point": self.point,
             "tree": self.tree,
             "passed": self.passed,
+            **({"needs_you": True} if self.needs_you else {}),
             "note": self.note,
             "findings": [dataclasses.asdict(f) for f in self.findings],
             **(
@@ -265,7 +272,11 @@ def render(result: AuditResult) -> str:
     for f in unproven:
         detail = _worded(result, f)
         lines.append(f"(not proven, does not refuse) {f.gate} (tier {f.tier}): {detail}")
-    passed = len(result.findings) - len(bad) - len(allowed) - len(unproven)
+    asked = [f for f in result.findings if f.verdict == "question"]
+    for f in asked:
+        detail = _worded(result, f)
+        lines.append(f"(question for a person, does not refuse) {f.gate} (tier {f.tier}): {detail}")
+    passed = len(result.findings) - len(bad) - len(allowed) - len(unproven) - len(asked)
     if passed:
         lines.append(f"({passed} other check(s) passed or not applicable)")
     return "\n".join(lines)
@@ -566,7 +577,10 @@ class AuditFeed:
         if surface:
             self.surfaced_tree = result.tree
         before = self._record(pending, delivered=refuse)
-        text = self._record([result], delivered=refuse or surface)
+        # A question ends the run "needs you" with this audit as finish's
+        # result (`engine._finish`), so the model is shown it.
+        asked = self.feedback and result.needs_you
+        text = self._record([result], delivered=refuse or surface or asked)
         if surface:
             return True, text
         if not refuse:
@@ -594,6 +608,18 @@ class AuditFeed:
         vacuously and the run ended `finished`.
         """
         return bool(self.results) and self.results[-1].note.startswith(NOTHING_TO_AUDIT)
+
+    def questions(self) -> list[str]:
+        """The last audit's `question` findings, one line each, for the
+        "needs you" stop; [] with feedback off (arm E+A records them in the
+        audit sidecar and changes nothing) or before any audit."""
+        if not self.feedback or not self.results:
+            return []
+        return [
+            f"{f.gate} (tier {f.tier}): {f.detail}"
+            for f in self.results[-1].findings
+            if f.verdict == "question"
+        ]
 
     def unresolved(self) -> list[dict[str, object]]:
         """The last audit's failing findings as (gate, reason, cites), sorted.

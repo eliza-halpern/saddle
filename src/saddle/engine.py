@@ -194,6 +194,7 @@ class AuditHooks(Protocol):
     def accepted_unchanged(self) -> bool: ...
     def unchanged(self) -> bool: ...
     def waivers(self) -> list[str]: ...
+    def questions(self) -> list[str]: ...
 
 
 FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
@@ -226,6 +227,26 @@ FINISH_UNCHANGED: Final = (
     "recorded as narrative, not as evidence."
 )
 """`finish`'s result when the run ends `unchanged`."""
+
+FINISH_QUESTION: Final = (
+    "finish recorded, but the audit asks a question only a person can answer, "
+    "so the run ends here, needs you. Your summary is recorded as narrative.\n\n"
+)
+"""`finish`'s result when the finish audit accepted the tree with a `question`."""
+
+QUESTION_REASON_CHARS: Final = 300
+"""How much of the questions the stop reason carries; the audit sidecar keeps them whole."""
+
+
+def needs_you_reason(asked: Sequence[str]) -> str:
+    """The stop reason for a finish whose audit asked `asked`: rule D's
+    "needs you: ..." form, with no semicolon, since the packet's verdict
+    line keeps only what precedes the first one."""
+    text = " | ".join(asked).replace(";", ",")
+    if len(text) > QUESTION_REASON_CHARS:
+        text = text[: QUESTION_REASON_CHARS - 3] + "..."
+    return f"needs you: the audit asks {len(asked)} question(s): {text}"
+
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The sealed stop reason when the finish refusal cap is reached."""
@@ -1366,6 +1387,12 @@ def _finish(auto: AutoRun, arguments: str) -> str:
                 )
             return f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
         auto.waivers = auto.feed.waivers()
+        asked = auto.feed.questions()
+        if asked:
+            # Accepted (a question refuses nothing), but a person must decide
+            # it: the run ends "needs you", never finished on it silently.
+            auto.stop(needs_you_reason(asked))
+            return f"{FINISH_QUESTION}{chr(10).join(asked)}"
         if findings:
             # Accepted, with not-proven findings the model has not read: it
             # reads them in its next round; a later finish ends the run.

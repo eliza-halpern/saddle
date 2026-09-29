@@ -403,6 +403,14 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             cite,
         )
     finding = tier_finding(name, entry.detail)
+    if finding is not None and finding.verdict == "question":
+        # Neither a pass nor a fail: a person must decide it.
+        return SessionLine(
+            "?",
+            f"audit tier {finding.tier} {finding.gate} question · {_first_line(finding.detail)}",
+            "ask",
+            cite,
+        )
     if finding is not None:
         ok = entry.exit_code == 0
         return SessionLine(

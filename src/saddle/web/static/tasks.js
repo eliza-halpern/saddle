@@ -396,7 +396,8 @@ async function stopTask(runId) {
 
 const STATUS_WORD = {
   proven: "proven", failed: "failed", observed: "recorded", absent: "no record",
-  "not-proven": "not proven", narrative: "narrative, not evidence", cost: "sealed",
+  "not-proven": "not proven", question: "needs you", narrative: "narrative, not evidence",
+  cost: "sealed",
 };
 
 function citeButton(hash, record, host) {

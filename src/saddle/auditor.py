@@ -89,7 +89,11 @@ from saddle.gates import (
 )
 from saddle.journal import append_span, build_span, write_attempt_sidecar
 
-Verdict = Literal["pass", "fail", "not-applicable", "blocked", "not-proven"]
+Verdict = Literal["pass", "fail", "not-applicable", "blocked", "not-proven", "question"]
+"""`question`: the gate could not decide, and a person must. It is neither a
+pass nor a refusal: it does not count against `Findings.passed` (so it
+neither blocks tier 2 nor refuses `finish`), and `Findings.needs_you` carries
+it so the run cannot end on it silently (`feed.AuditFeed.questions`)."""
 Tier2Mode = Literal["score", "shortlist"]
 TIER2_MODES: Final[tuple[Tier2Mode, ...]] = ("score", "shortlist")
 Reason = Literal["code-wrong", "evidence-thin", "scope", "unknown", "sanctioned"]
@@ -162,12 +166,17 @@ REASONS: Final[dict[str, Reason]] = {
 # claim about the code or its tests (gates.check_mutation's own wording).
 _TOOL_FAILURE_PREFIXES: Final = ("mutation tool failed", "mutation not measured")
 
+JOURNAL_QUESTION_EXIT: Final = 4
+"""A `question` finding's span exit code: not 0 (a pass), 1 (a fail) or 2
+(blocked). The same code a rule D run that halted on a question seals."""
+
 _JOURNAL_EXIT: Final[dict[Verdict, int]] = {
     "pass": 0,
     "fail": 1,
     "not-applicable": 0,
     "blocked": 2,
     "not-proven": 0,
+    "question": JOURNAL_QUESTION_EXIT,
 }
 
 
@@ -218,16 +227,25 @@ class Findings:
 
     @property
     def passed(self) -> bool:
+        """Nothing refuses: a `question` does not, so it is counted here and
+        reported by `needs_you` instead."""
         return all(
-            f.verdict in ("pass", "not-applicable", "not-proven") or f.reason == "sanctioned"
+            f.verdict in ("pass", "not-applicable", "not-proven", "question")
+            or f.reason == "sanctioned"
             for f in self.findings
         )
+
+    @property
+    def needs_you(self) -> bool:
+        """Some finding is a `question`: a person must decide it."""
+        return any(f.verdict == "question" for f in self.findings)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "tier": self.tier,
             "key": self.key,
             "passed": self.passed,
+            **({"needs_you": True} if self.needs_you else {}),
             "cached": self.cached,
             "findings": [dataclasses.asdict(f) for f in self.findings],
             **(

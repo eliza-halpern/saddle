@@ -262,6 +262,9 @@ class Feed:
     def waivers(self) -> list[str]:
         return []
 
+    def questions(self) -> list[str]:
+        return []
+
     def unchanged(self) -> bool:
         return False
 

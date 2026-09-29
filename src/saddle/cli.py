@@ -1362,7 +1362,9 @@ def run_tail(
         return 130
 
 
-AUDIT_EXIT_CODES: Final = {"accept": 0, "refuse": 1, "nothing-to-audit": 3}
+AUDIT_EXIT_CODES: Final = {"accept": 0, "refuse": 1, "nothing-to-audit": 3, "question": 4}
+"""`question` (`--tiered` only): nothing refused, but a finding is a question
+only a person can answer; never read as an accept."""
 AUDIT_COULD_NOT_AUDIT: Final = 2
 _AUDIT_STATUS_LABELS: Final = {"pass": "PASS", "fail": "FAIL", "not-applicable": "n/a"}
 
@@ -1477,8 +1479,16 @@ def _tiered_audit(
 
 
 def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]) -> int:
-    """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`."""
-    verdict = "accept" if all(r.passed for r in results) else "refuse"
+    """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`.
+
+    A refusal outranks a question, and a question outranks an accept."""
+    verdict = (
+        "refuse"
+        if not all(r.passed for r in results)
+        else "question"
+        if any(r.needs_you for r in results)
+        else "accept"
+    )
     if as_json:
         # mutant_detail is the audit span's record, not the CLI's:
         # dropped so `--json` stays byte-identical to what it was before it.

@@ -437,6 +437,9 @@ class StubFeed:
     def waivers(self) -> list[str]:
         return []
 
+    def questions(self) -> list[str]:
+        return []
+
 
 def test_r7_a_newer_delivered_audit_replaces_the_older_one(tmp_path: Path) -> None:
     (tmp_path / "big.py").write_text(BIG)

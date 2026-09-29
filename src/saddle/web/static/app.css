@@ -719,7 +719,7 @@ main { position: relative; }
 .prow:last-child { border-bottom: none; }
 .s-proven { --s: var(--done); }
 .s-observed, .s-cost { --s: var(--run); }
-.s-not-proven { --s: var(--ask); }
+.s-not-proven, .s-question { --s: var(--ask); }
 .s-failed { --s: var(--halt); }
 .s-narrative { --s: var(--lilac); }
 .prow-label { display: flex; flex-direction: column; gap: 3px; padding-left: 10px;
