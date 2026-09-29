@@ -16,7 +16,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from saddle.dag import Node
 from saddle.mutant_text import PHRASES, classify, function_of, parse_show
@@ -2346,9 +2346,11 @@ class TaskRequirementsCheck(GateCheck):
     refuse, and the auditor reports them as such, never as a pass.
     """
 
-    verdict: str = "pass"
-    """pass, fail, question or not-proven."""
+    verdict: Literal["pass", "fail", "question", "not-proven"] = "pass"
     rows: tuple[Row, ...] = ()
+    unjudged: tuple[str, ...] = ()
+    """Every unit or example the gate did not judge, named: what the packet's
+    Not proven row lists (a gate that can pass on an empty judgement set says so)."""
 
 
 def _p1_example(row: Row) -> str:
@@ -2422,11 +2424,7 @@ def check_task_requirements(
     judged = [r for r in rows if r.status in ("pass", "code-wrong", "question")]
     judged_units = {u for r in judged for u in r.example.units}
     counts = {s: sum(r.status == s for r in rows) for s in ("pass", "code-wrong", "question")}
-    basis = [
-        strength,
-        f"{len(judged_units)} of {len(units.units)} candidate unit(s) judged; "
-        f"{len(judged)} of {len(rows)} example(s) judged: {counts['pass']} pass, "
-        f"{counts['code-wrong']} code-wrong, {counts['question']} question",
+    unjudged = (
         *(f"not executable {u}: {why}" for u, why in not_executable),
         *(f"cut by the example cap: {u}" for u in cut),
         *(f"no example and no reason given: {u}" for u in unanswered),
@@ -2435,10 +2433,18 @@ def check_task_requirements(
             for r in rows
             if r.status in ("not-proven", "unknown", "not-judged")
         ),
+    )
+    basis = [
+        strength,
+        f"{len(judged_units)} of {len(units.units)} candidate unit(s) judged; "
+        f"{len(judged)} of {len(rows)} example(s) judged: {counts['pass']} pass, "
+        f"{counts['code-wrong']} code-wrong, {counts['question']} question",
+        *unjudged,
     ]
     failing = [r for r in rows if r.status == "code-wrong"]
     asked = [r for r in rows if r.status == "question"]
     unproven = [r for r in rows if r.status in ("not-proven", "unknown")]
+    verdict: Literal["pass", "fail", "question", "not-proven"]
     if failing:
         verdict, lines = "fail", failing
     elif not judged:
@@ -2467,4 +2473,5 @@ def check_task_requirements(
         basis="; ".join(basis),
         verdict=verdict,
         rows=tuple(rows),
+        unjudged=unjudged,
     )

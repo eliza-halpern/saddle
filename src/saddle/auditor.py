@@ -36,6 +36,7 @@ Layering: imports `audit`, `evidence`, `gates`, `journal` and `runner`;
 from __future__ import annotations
 
 import ast
+import contextvars
 import dataclasses
 import hashlib
 import importlib.util
@@ -49,6 +50,7 @@ import tempfile
 import tomllib
 import uuid
 from collections.abc import Callable, Mapping, Sequence, Set
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
@@ -79,6 +81,7 @@ from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
     GateCheck,
     RuffFinding,
+    TaskRequirementsCheck,
     check_mutation_shortlist,
     check_ruff,
     check_syntax,
@@ -88,6 +91,7 @@ from saddle.gates import (
     spared_definitions,
 )
 from saddle.journal import append_span, build_span, write_attempt_sidecar
+from saddle.task_requirements import check_tree
 
 Verdict = Literal["pass", "fail", "not-applicable", "blocked", "not-proven", "question"]
 """`question`: the gate could not decide, and a person must. It is neither a
@@ -102,6 +106,12 @@ tests the task itself declared rewritable (`AuditorConfig.sanctioned_test_rewrit
 The verdict stays `fail` -- the gate did see rewritten assertions -- but the
 finding does not count against `Findings.passed`, so it neither blocks tier 2
 nor refuses an autonomous run's `finish`."""
+
+TASK_REQUIREMENTS: Final = "task-requirements"
+"""P1's tier-1 gate (`task_requirements.check_tree`): emitted after `TIER1`,
+and only when the audit was given a requirements file
+(`AuditorConfig.task_requirements`); without one there is no task text to
+judge against, and no finding."""
 
 # Which gate runs at which tier; `Auditor` emits them in exactly this order.
 TIER0: Final[tuple[str, ...]] = ("syntax", "ruff", "imports")
@@ -139,6 +149,7 @@ REUSES: Final[dict[str, str]] = {
     "red-phase": "saddle.gates.check_red_phase",
     "requirement-binding": "saddle.gates.check_requirement_binding",
     "full-suite": "saddle.gates.check_test_command",
+    TASK_REQUIREMENTS: "saddle.gates.check_task_requirements",
 }
 
 # The calibration hook: what a failure of each gate claims about the change.
@@ -158,6 +169,7 @@ REASONS: Final[dict[str, Reason]] = {
     "property-coverage": "evidence-thin",
     "red-phase": "evidence-thin",
     "requirement-binding": "evidence-thin",
+    TASK_REQUIREMENTS: "code-wrong",
     "node-scope": "scope",
     "target-scope": "scope",
 }
@@ -301,6 +313,18 @@ class AuditorConfig:
     `feed` (format, cheap-route checks, way-out claims)."""
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
     """How many open survivors a mutation finding's detail names (`--mutant-shortlist`)."""
+    task_requirements: Path | None = None
+    """`--task-requirements`: a sealed P1 file. Tier 1 then runs the
+    `task-requirements` gate beside the tests, and the file's bytes join the
+    cache key, so a changed file never reuses a verdict."""
+
+
+def _file_sha(path: Path) -> str:
+    """The sha256 of `path`'s bytes, or "unreadable": part of a cache key."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "unreadable"
 
 
 _REWROTE: Final = " rewrote assertions in: "
@@ -695,6 +719,11 @@ class Auditor:
                     if self.config.sanctioned_test_rewrites
                     else []
                 ),
+                *(
+                    [TASK_REQUIREMENTS, _file_sha(self.config.task_requirements)]
+                    if self.config.task_requirements is not None
+                    else []
+                ),
             ]
         )
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -819,7 +848,24 @@ class Auditor:
                         "mutation", 2, "blocked", f"tier 1 failed ({failed}); tier 2 not run", None
                     )
                     return self._store(Findings(tier=2, key=key, findings=(blocked,)))
-            gated = runner.run_node_gate(self.node, copy, baseline=resolved, tier2=tier == 2)
+            p1: Future[TaskRequirementsCheck] | None = None
+            pool: ThreadPoolExecutor | None = None
+            if tier == 1 and self.config.task_requirements is not None:
+                # Beside the tests, not after them: it adds to the wall only if
+                # it outlasts them. The context carries the project environment.
+                pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-p1")
+                p1 = pool.submit(
+                    contextvars.copy_context().run,
+                    check_tree,
+                    copy,
+                    resolved,
+                    self.config.task_requirements,
+                )
+            try:
+                gated = runner.run_node_gate(self.node, copy, baseline=resolved, tier2=tier == 2)
+            finally:
+                if pool is not None:
+                    pool.shutdown(wait=True)
             # Every entry becomes a Finding verdict (`_finding` below), and the
             # shortlist paths write not-proven, so the table holds Verdicts.
             statuses: dict[str, tuple[Verdict, str, str | None]]
@@ -902,7 +948,14 @@ class Auditor:
                     sealed = {**(sealed or {}), "spared": spared}
                 if sealed is not None:
                     sidecars["coverage"] = sealed
+            if p1 is not None:
+                check = p1.result()
+                statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
+                if check.unjudged:
+                    sidecars[TASK_REQUIREMENTS] = {"unjudged": list(check.unjudged)}
         wanted = TIER1 if tier == 1 else TIER2
+        if TASK_REQUIREMENTS in statuses:
+            wanted = (*wanted, TASK_REQUIREMENTS)
         findings = []
         for gate in wanted:
             status, detail, basis = statuses["tests" if gate == "full-suite" else gate]

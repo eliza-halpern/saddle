@@ -90,6 +90,11 @@ from saddle.slice import (
     TestDrawer,
     run_slice,
 )
+from saddle.task_passes import baseline_sources
+from saddle.task_passes import extract as extract_requirements
+from saddle.task_requirements import RequirementsError
+from saddle.task_requirements import load as requirements_load
+from saddle.task_units import task_units
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
 from saddle.vllm import (
@@ -1401,11 +1406,17 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     cache = None if args.no_cache else Path(args.cache).expanduser()
     rev: str | None = args.rev
     shortlist = args.tier2 == "shortlist"
+    p1 = Path(args.task_requirements).resolve() if args.task_requirements else None
     audit_one = (
-        functools.partial(_tiered_audit, tier2="shortlist", mutant_shortlist=args.mutant_shortlist)
+        functools.partial(
+            _tiered_audit,
+            tier2="shortlist",
+            mutant_shortlist=args.mutant_shortlist,
+            task_requirements=p1,
+        )
         if shortlist
-        else _tiered_audit
-        if args.tiered
+        else functools.partial(_tiered_audit, task_requirements=p1)
+        if args.tiered or p1 is not None
         else audit_tree
     )
     try:
@@ -1454,6 +1465,56 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     return AUDIT_EXIT_CODES[result.verdict]
 
 
+REQUIREMENTS_MISMATCH: Final = 1
+"""`saddle requirements verify` on a file that does not check out."""
+
+
+def run_requirements(
+    args: argparse.Namespace, client: VllmClient | None, *, stdout: IO[str]
+) -> int:
+    """`saddle requirements census|verify|extract`.
+
+    `census` lists every unit of a task text with its flags and modality
+    (no model). `verify` recomputes the units and checks every hash of a
+    sealed file against the task text; a mismatch exits
+    `REQUIREMENTS_MISMATCH` with the reason, which an audit would report as
+    a question. `extract` runs the code-blind passes (`task_passes.extract`)
+    against the repository before the task and writes the sealed file.
+    """
+    text = Path(args.task).read_text(encoding="utf-8")
+    if args.requirements_command == "census":
+        stdout.write(task_units(text).census() + "\n")
+        return 0
+    if args.requirements_command == "verify":
+        try:
+            req = requirements_load(Path(args.file), text)
+        except RequirementsError as exc:
+            stdout.write(f"question: P1 could not run: {exc}\n")
+            return REQUIREMENTS_MISMATCH
+        stdout.write(f"{req.units.census()}\n")
+        stdout.write(
+            f"file {req.sha256[:12]} checks out: {len(req.examples)} example(s), "
+            f"{len(req.not_executable)} not executable, {len(req.unanswered)} unanswered, "
+            f"{len(req.cut)} cut\n"
+        )
+        return 0
+    assert client is not None
+    record = extract_requirements(
+        text,
+        client,
+        sources=baseline_sources(Path(args.repo), args.baseline),
+        model=args.model,
+    )
+    out = Path(args.out)
+    out.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    stdout.write(
+        f"sealed {out} ({record['file_sha256'][:12]}): {len(record['examples'])} example(s) "
+        f"over {len(record['units'])} unit(s); {len(record['not_executable'])} not "
+        f"executable, {len(record['unanswered'])} unanswered, {len(record['cut'])} cut\n"
+    )
+    return 0
+
+
 def _tiered_audit(
     tree: Path,
     baseline: str,
@@ -1462,11 +1523,14 @@ def _tiered_audit(
     cache: Path | None,
     tier2: Tier2Mode = "score",
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST,
+    task_requirements: Path | None = None,
 ) -> tuple[Findings, ...] | AuditResult:
     """`saddle audit --tiered`: tiers 0-2 (`saddle.auditor`) over the same tree
     `audit_tree` would gate; an unchanged tree is `nothing-to-audit` as there.
-    `--tier2 shortlist` implies `--tiered`."""
-    config = AuditorConfig(test_command=test_command, cache_dir=cache)
+    `--tier2 shortlist` and `--task-requirements` imply `--tiered`."""
+    config = AuditorConfig(
+        test_command=test_command, cache_dir=cache, task_requirements=task_requirements
+    )
     if tier2 == "shortlist":
         config = dataclasses.replace(config, tier2=tier2, mutant_shortlist=mutant_shortlist)
     auditor = Auditor(tree, baseline, config)
@@ -1650,6 +1714,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the tiered battery (tier 0 per changed file, tier 1, tier 2).",
     )
+    audit_cmd.add_argument(
+        "--task-requirements",
+        default=None,
+        metavar="FILE",
+        help="A sealed task-requirements file (`saddle requirements extract`): tier 1 "
+        "also runs the task text's examples on the tree. Implies --tiered.",
+    )
     _add_tier2(audit_cmd)
     audit_cmd.add_argument(
         "--mutant-shortlist",
@@ -1659,6 +1730,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --tier2 shortlist (which implies --tiered): how many surviving "
         f"mutants the mutation finding names (default: {DEFAULT_MUTANT_SHORTLIST}).",
     )
+    requirements = sub.add_parser(
+        "requirements", help="P1: extract, check or list a task text's requirement units."
+    )
+    req_sub = requirements.add_subparsers(dest="requirements_command", required=True)
+    census = req_sub.add_parser("census", help="List every unit of a task text, no model.")
+    census.add_argument("task", help="The task text file.")
+    check = req_sub.add_parser(
+        "verify", help="Check a sealed requirements file against its task text."
+    )
+    check.add_argument("file", help="The sealed task-requirements file.")
+    check.add_argument("task", help="The task text file it must have been sealed for.")
+    extract_cmd = req_sub.add_parser(
+        "extract", help="Run the code-blind passes on a task text and seal the file."
+    )
+    extract_cmd.add_argument("task", help="The task text file.")
+    extract_cmd.add_argument("--out", required=True, help="Where to write the sealed file.")
+    extract_cmd.add_argument("--repo", default=".", help="The repository before the task.")
+    extract_cmd.add_argument(
+        "--baseline", default="HEAD", help="The commit the task starts from (default HEAD)."
+    )
+    _add_server_flags(extract_cmd)
     run = sub.add_parser("run", help="Drive one mechanical task end to end.")
     run.add_argument("task", help="Task description to decompose and execute.")
     run.add_argument("--repo", default=".", help="Directory to work in (repo created if missing).")
@@ -2038,6 +2130,7 @@ def main(
         "web",
         "audit",
         "auto",
+        "requirements",
     ):
         return 0
     if args.command == "verify":
@@ -2056,6 +2149,8 @@ def main(
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     if args.command == "audit":
         return run_audit(args, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr)
+    if args.command == "requirements" and args.requirements_command != "extract":
+        return run_requirements(args, None, stdout=stdout or sys.stdout)
     key = _api_key()
     if not key:
         print(
@@ -2123,6 +2218,9 @@ def main(
     if args.command == "auto":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             return run_auto_command(args, client, stdout=stdout or sys.stdout)
+    if args.command == "requirements":
+        with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
+            return run_requirements(args, client, stdout=stdout or sys.stdout)
     if args.command == "up":
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             try:

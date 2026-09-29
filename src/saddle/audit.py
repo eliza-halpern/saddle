@@ -65,6 +65,9 @@ SURFACE_MODULES: Final[tuple[str, ...]] = (
     "saddle.gates",
     "saddle.evidence",
     "saddle.dag",
+    "saddle.task_units",
+    "saddle.task_examples",
+    "saddle.task_requirements",
 )
 SURFACE_TOOLS: Final[tuple[str, ...]] = ("mutmut", "ruff", "coverage")
 # The programs the gates start by bare name under the default test command

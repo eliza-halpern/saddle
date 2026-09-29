@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import shutil
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -197,8 +198,9 @@ def _local(frame, event, arg):
 
 
 def _global(frame, event, arg):
-    # A module body runs at import, not because the example called it.
-    if frame.f_code.co_name == "<module>":
+    # Module and class bodies run at import, not because the example called
+    # them: only function frames (CO_NEWLOCALS) are traced.
+    if not frame.f_code.co_flags & 0x2:
         return None
     return _local if _rel(frame.f_code.co_filename) is not None else None
 
@@ -324,7 +326,12 @@ def check_tree(
         req = load(requirements)
     except RequirementsError as exc:
         return check_task_requirements({}, Units((), frozenset()), [], cannot_run=str(exc))
-    results = run_examples(copy, req.examples, runner=runner)
+    with tempfile.TemporaryDirectory(prefix="saddle-p1-tree-") as scratch:
+        # A private copy: the examples run beside the tests (`Auditor`), and
+        # nothing they write may reach the tree the tests are reading.
+        private = Path(scratch) / "tree"
+        shutil.copytree(copy, private, ignore=shutil.ignore_patterns(".git"))
+        results = run_examples(private, req.examples, runner=runner)
     if isinstance(results, str):
         return check_task_requirements({}, req.units, req.examples, cannot_run=results)
     changed = {

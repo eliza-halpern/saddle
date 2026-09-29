@@ -968,6 +968,12 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "which the change may not delete and no test reaches."
             )
             gap_cites.append(cov.record_hash)
+    # What the task-text check (P1) did not judge, named one by one.
+    for p1 in [a for a in audits if a.name == "audit:task-requirements"][-1:]:
+        sealed_p1 = _sealed(journal, span_by_hash.get(p1.record_hash), "unjudged")
+        for entry in sealed_p1["unjudged"] if sealed_p1 is not None else []:
+            gaps.append(f"Not judged by the task-text check: {entry}.")
+            gap_cites.append(p1.record_hash)
     for q in unanswered:
         gaps.append(f"Unanswered question: {q.detail}")
         gap_cites.append(q.record_hash)
