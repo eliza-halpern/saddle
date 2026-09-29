@@ -600,6 +600,7 @@ project's own configuration. It prints one line and ends the run before
 anything is collected."""
 
 import json
+import os
 
 import pytest
 
@@ -614,7 +615,14 @@ def pytest_cmdline_main(config):
         "cov_blocked": plugins.is_blocked("pytest_cov"),
         "no_cov": bool(getattr(config.option, "no_cov", False)),
         "cov_source": bool(getattr(config.option, "cov_source", None)),
+        "data_file": "",
     }}
+    if report["cov"]:
+        # Where pytest-cov will record: its controller reads this config the same way.
+        import coverage
+
+        found = coverage.Coverage(config_file=config.option.cov_config).config.data_file
+        report["data_file"] = os.path.abspath(found)
     print({_WORKERS_PROBE_MARK!r} + json.dumps(report), flush=True)
     return 0
 '''
@@ -623,7 +631,9 @@ def pytest_cmdline_main(config):
 the project's `addopts` and the test command's own options are applied.
 Asking pytest, not the filesystem: an installed pytest-xdist that the
 project disables with `-p no:xdist` would make `-n` a usage error, and
-`pytest -VV` still lists xdist's looponfail plugin in that case."""
+`pytest -VV` still lists xdist's looponfail plugin in that case. It also
+reports the data file pytest-cov will record into, read from the project's
+coverage config exactly as pytest-cov's controller reads it."""
 
 WORKERS_PROBE_TIMEOUT_S: Final = 120.0
 """How long the probe may take. It starts pytest and imports the project's
@@ -638,9 +648,8 @@ class SuiteRun:
     command under `coverage run` (`under_coverage`). `project_cov` says the
     project's own pytest options start pytest-cov. Inside `coverage run`
     that pytest-cov takes the tracer over and `coverage run` records
-    nothing, so such a suite is recorded by the project's pytest-cov itself:
-    the test command with `COVERAGE_FILE` naming the gate's data file; its
-    sources and report stand.
+    nothing, so such a suite is recorded by the project's pytest-cov itself;
+    its sources and report stand.
 
     From 2 `workers` up it is the test command with `-n workers`
     (pytest-xdist), also recorded by pytest-cov into the gate's data file,
@@ -656,6 +665,14 @@ class SuiteRun:
     sandbox whenever its suite skips tests there (saddle's own skips the
     ones that need a user systemd manager), and it failed every run.
 
+    pytest-cov records into `data_file`, the project's own (the path its
+    coverage config gives, which the probe reports), and `run_suite_capture`
+    moves that file to the gate's. Not a `COVERAGE_FILE` naming the gate's
+    file: every process the tests start inherits it, so a test that runs its
+    own coverage wrote into the gate's data there, and pytest-cov's
+    combine then failed ("Can't combine branch coverage data with statement
+    data") on saddle's own suite.
+
     `note` says why a project that set `test-workers` got a serial run; it
     is appended to the `tests` finding, never dropped.
     """
@@ -663,6 +680,7 @@ class SuiteRun:
     workers: int = 1
     project_cov: bool = False
     note: str = ""
+    data_file: str = ""
 
     @property
     def parallel(self) -> bool:
@@ -673,16 +691,20 @@ class SuiteRun:
         """Whether pytest-cov, not `coverage run`, records the run."""
         return self.parallel or self.project_cov
 
-    def covered(self, test_command: str, data_file: str) -> tuple[str, dict[str, str]]:
-        """The command that runs the suite recording into `data_file`, and its extra env."""
+    def covered(self, test_command: str, data_file: str) -> str:
+        """The command that runs the suite with coverage recorded: into
+        `data_file` under `coverage run`, else into `self.data_file`."""
         if not self.by_pytest_cov:
-            return under_coverage(test_command, data_file), {}
+            return under_coverage(test_command, data_file)
         extra = ["-n", str(self.workers)] if self.parallel else []
         if not self.project_cov:
-            extra += ["--cov", "--cov-report="]
-        extra += ["--cov-fail-under=0"]
-        command = shlex.join([*shlex.split(test_command), *extra])
-        return command, {"COVERAGE_FILE": os.path.abspath(data_file)}
+            extra += ["--cov-report="]
+        # The whole tree, whatever the project reports on: its coverage
+        # `source` (saddle's own is ["saddle"]) leaves test files unmeasured,
+        # and the coverage check then refused every changed test line as
+        # never run. `--cov=.` adds the tree to the project's own sources.
+        extra += ["--cov=.", "--cov-fail-under=0"]
+        return shlex.join([*shlex.split(test_command), *extra])
 
     def plain(self, test_command: str) -> str:
         """The command that runs the suite with no coverage asked for (dead-code reruns).
@@ -792,8 +814,16 @@ def suite_run(
         note = f"{head} pytest did not say which plugins it loads ({report}): {RAN_SERIALLY}"
         return SuiteRun(note=note if workers >= 2 else "")
     project_cov = bool(report.get("cov") and report.get("cov_source") and not report.get("no_cov"))
+    data_file = str(report.get("data_file") or "")
+    inside = data_file.startswith(f"{os.path.realpath(tree)}{os.sep}") or data_file.startswith(
+        f"{os.path.abspath(tree)}{os.sep}"
+    )
+    if report.get("cov") and not inside:
+        # pytest-cov would record where the sandbox lets no run write.
+        why = f"pytest-cov records outside the tree ({data_file or 'nowhere'})"
+        return SuiteRun(note=f"{head} {why}: {RAN_SERIALLY}" if workers >= 2 else "")
     if workers < 2:
-        return SuiteRun(project_cov=project_cov)
+        return SuiteRun(project_cov=project_cov, data_file=data_file if project_cov else "")
     missing = []
     for plugin, name in (("xdist", "pytest-xdist"), ("cov", "pytest-cov")):
         if not report.get(plugin):
@@ -807,8 +837,10 @@ def suite_run(
         missing.append("the project's pytest options disable pytest-cov (--no-cov)")
     if missing:
         note = f"{head} {' and '.join(missing)}: {RAN_SERIALLY}"
-        return SuiteRun(project_cov=project_cov, note=note)
-    return SuiteRun(workers=workers, project_cov=project_cov)
+        return SuiteRun(
+            project_cov=project_cov, note=note, data_file=data_file if project_cov else ""
+        )
+    return SuiteRun(workers=workers, project_cov=project_cov, data_file=data_file)
 
 
 def run_suite_capture(
@@ -822,19 +854,24 @@ def run_suite_capture(
 ) -> CapturedRun:
     """Run the suite as `run` says, recording coverage into `data_file`.
 
-    A run pytest-cov records first removes `data_file` and any
-    `data_file.*` left in `cwd`: pytest-cov combines every file of that name
-    and, under a project's `--cov-append`, keeps the old data too, so one it
-    did not write (a copy of the tree carries whatever the tree holds) must
-    not add lines no test ran. The serial `coverage run` is
+    A run pytest-cov records first removes its data file and any `<it>.*`,
+    and the same for `data_file`: pytest-cov combines every file of that
+    name and, under a project's `--cov-append`, keeps the old data too, so
+    one it did not write (a copy of the tree carries whatever the tree
+    holds) must not add lines no test ran. After the run its data file, if
+    it wrote one, becomes `data_file`. The serial `coverage run` is
     `run_shell_capture` of `under_coverage`, unchanged."""
-    command, env = run.covered(test_command, data_file)
+    command = run.covered(test_command, data_file)
+    recorded = Path(run.data_file) if run.by_pytest_cov and run.data_file else None
     if run.by_pytest_cov:
-        target = Path(data_file)
-        for stale in list(target.parent.iterdir()):
-            if stale.name == target.name or stale.name.startswith(f"{target.name}."):
-                stale.unlink()
-    return run_shell_capture(command, cwd, recorder=recorder, timeout=timeout, extra_env=env)
+        for target in {Path(data_file), *([recorded] if recorded is not None else [])}:
+            for stale in list(target.parent.iterdir()):
+                if stale.name == target.name or stale.name.startswith(f"{target.name}."):
+                    stale.unlink()
+    done = run_shell_capture(command, cwd, recorder=recorder, timeout=timeout)
+    if recorded is not None and recorded.is_file():
+        os.replace(recorded, data_file)
+    return done
 
 
 def src_layout_env(tree: Path) -> dict[str, str]:

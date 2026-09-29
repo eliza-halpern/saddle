@@ -187,6 +187,11 @@ def _python_files(root: Path) -> list[str]:
     return sorted(found)
 
 
+def _own_data(root: Path) -> str:
+    """The data file pytest-cov records into for a project with no coverage config."""
+    return str(root.resolve() / ".coverage")
+
+
 def _env_without(root: Path, monkeypatch: pytest.MonkeyPatch, *prefixes: str) -> None:
     """Put first on PATH a virtualenv holding this one's packages except the
     site-packages entries starting with one of `prefixes`: a test environment
@@ -302,7 +307,9 @@ def test_one_worker_asks_pytest_nothing(tmp_path: Path) -> None:
     recorder = SpanRecorder(path=journal, node_id="n")
     assert suite_run(root, COMMAND, 1, recorder=recorder) == SuiteRun()
     assert not journal.exists()
-    assert suite_run(root, COMMAND, 3, recorder=recorder) == SuiteRun(workers=3)
+    assert suite_run(root, COMMAND, 3, recorder=recorder) == SuiteRun(
+        workers=3, data_file=_own_data(root)
+    )
     assert len(journal.read_text().splitlines()) == 1
 
 
@@ -326,25 +333,28 @@ def test_a_serial_run_asks_pytest_whenever_the_project_may_start_pytest_cov(
         (root / name).write_text(text)
     journal = tmp_path / "spans.jsonl"
     found = suite_run(root, command, 1, recorder=SpanRecorder(path=journal, node_id="n"))
-    assert found == SuiteRun(project_cov=project_cov)
+    own = _own_data(root) if project_cov else ""
+    assert found == SuiteRun(project_cov=project_cov, data_file=own)
     assert len(journal.read_text().splitlines()) == 1
 
 
 def test_with_both_plugins_the_suite_runs_on_workers(tmp_path: Path) -> None:
     root = _project(tmp_path / "p", _pyproject())
-    assert suite_run(root, COMMAND, 3) == SuiteRun(workers=3, project_cov=False)
+    assert suite_run(root, COMMAND, 3) == SuiteRun(workers=3, data_file=_own_data(root))
 
 
 def test_a_project_that_starts_pytest_cov_keeps_its_own_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _project(tmp_path / "p", _pyproject(addopts="--cov=pkg --cov-report=term-missing"))
-    assert suite_run(root, COMMAND, 2) == SuiteRun(workers=2, project_cov=True)
-    assert suite_run(root, COMMAND, 1) == SuiteRun(project_cov=True)
+    own = _own_data(root)
+    assert suite_run(root, COMMAND, 2) == SuiteRun(workers=2, project_cov=True, data_file=own)
+    assert suite_run(root, COMMAND, 1) == SuiteRun(project_cov=True, data_file=own)
     _env_without(tmp_path, monkeypatch, *NO_XDIST)
     assert suite_run(root, COMMAND, 2) == SuiteRun(
         project_cov=True,
         note=f"test-workers = 2 set but pytest-xdist is not installed: {RAN_SERIALLY}",
+        data_file=own,
     )
 
 
@@ -443,7 +453,9 @@ def test_serial_and_parallel_runs_record_the_same_lines(tmp_path: Path) -> None:
     root = _project(tmp_path / "p", _pyproject())
     assert len(_python_files(root)) == 10  # 4 source modules, 6 test modules
     serial = _record(root, SuiteRun(), ".coverage.serial")
-    parallel = _record(root, SuiteRun(workers=2), ".coverage.parallel")
+    run = suite_run(root, COMMAND, 2)
+    assert run.parallel
+    parallel = _record(root, run, ".coverage.parallel")
     assert parallel == serial
     lazy = str(root / "src/pkg/lazy.py")
     # `go`'s body runs only in a worker; `early_used` at conftest import.
@@ -472,23 +484,28 @@ def test_a_project_starting_pytest_cov_records_what_its_serial_pytest_cov_record
     )
     expected = covered_lines(reference, _python_files(root))
     assert expected
-    assert _record(root, SuiteRun(project_cov=True), ".coverage.serial") == expected
-    parallel = _record(root, SuiteRun(workers=2, project_cov=True), ".coverage.parallel")
-    assert parallel == expected
+    # flip: was `== expected`. The gate now measures the whole tree (`--cov=.`)
+    # beside the project's own sources, so it records every line the
+    # project's run records AND the test files that run (which the project's
+    # `--cov=pkg` leaves out); see
+    # test_changed_test_lines_are_measured_whatever_the_projects_coverage_source.
+    for recorded in (
+        _record(root, suite_run(root, COMMAND, 1), ".coverage.serial"),
+        _record(root, suite_run(root, COMMAND, 2), ".coverage.parallel"),
+    ):
+        assert expected <= recorded
+        extra = {path for path, _ in recorded - expected}
+        assert extra
+        assert all("/tests/" in path for path in extra), extra
 
 
 @pytest.mark.parametrize(
-    ("addopts", "run"),
-    [
-        (None, SuiteRun(workers=2)),
-        ("--cov-append", SuiteRun(workers=2)),
-        ("--cov=pkg --cov-append", SuiteRun(workers=2, project_cov=True)),
-        ("--cov=pkg --cov-append", SuiteRun(project_cov=True)),
-    ],
+    ("addopts", "workers"),
+    [(None, 2), ("--cov-append", 2), ("--cov=pkg --cov-append", 2), ("--cov=pkg --cov-append", 1)],
     ids=["parallel", "parallel-append", "project-cov-append", "serial-project-cov-append"],
 )
 def test_a_coverage_file_left_in_the_tree_adds_no_line(
-    tmp_path: Path, addopts: str | None, run: SuiteRun
+    tmp_path: Path, addopts: str | None, workers: int
 ) -> None:
     """Known-bad: a data file of the gate's name already in the tree (the
     file itself, or a suffix file pytest-cov would combine) cannot mark a line
@@ -496,13 +513,84 @@ def test_a_coverage_file_left_in_the_tree_adds_no_line(
     keeps old data."""
     root = _project(tmp_path / "p", _pyproject(addopts=addopts))
     lazy = str(root / "src/pkg/lazy.py")
-    for name in (".coverage.gate", ".coverage.gate.left.1.2"):
+    for name in (".coverage", ".coverage.left.1.2", ".coverage.gate", ".coverage.gate.left.1.2"):
         planted = coverage.CoverageData(basename=str(root / name))
         planted.add_lines({lazy: [10]})
         planted.write()
+    run = suite_run(root, COMMAND, workers)
+    assert run.by_pytest_cov
     recorded = _record(root, run, ".coverage.gate")
     assert (lazy, 9) in recorded
     assert (lazy, 10) not in recorded
+
+
+NESTED_TEST: Final = """import subprocess
+import sys
+
+
+def test_runs_its_own_coverage(tmp_path):
+    (tmp_path / "m.py").write_text("x = 1\\n")
+    (tmp_path / "test_m.py").write_text("import m\\n\\n\\ndef test_m():\\n    assert m.x == 1\\n")
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--cov=m"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout
+"""
+"""A test that runs pytest with coverage on a project of its own, in its own
+directory, with no data file named: statement data, and the default name."""
+
+
+@pytest.mark.parametrize(
+    ("addopts", "workers"),
+    [(None, 2), ("--cov=pkg", 1), ("--cov=pkg", 2)],
+    ids=["parallel", "serial-project-cov", "parallel-project-cov"],
+)
+def test_a_test_that_runs_its_own_coverage_leaves_the_gates_data_alone(
+    tmp_path: Path, addopts: str | None, workers: int
+) -> None:
+    """Known-bad for a data file named through the environment: the nested
+    run inherited it, wrote statement data beside the gate's branch data, and
+    pytest-cov's combine failed ("Can't combine branch coverage data with
+    statement data", exit 3) on saddle's own suite. The gate's lines are
+    still the suite's."""
+    pyproject = _pyproject(addopts=addopts) + "\n[tool.coverage.run]\nbranch = true\n"
+    root = _project(tmp_path / "p", pyproject)
+    (root / "tests/test_nested.py").write_text(NESTED_TEST)
+    run = suite_run(root, COMMAND, workers)
+    assert run.by_pytest_cov
+    recorded = _record(root, run, ".coverage.gate")
+    lazy = str(root / "src/pkg/lazy.py")
+    assert (lazy, 9) in recorded
+    assert (lazy, 10) not in recorded
+
+
+def test_the_projects_own_data_file_is_where_the_lines_are_read(tmp_path: Path) -> None:
+    """Known-good: a coverage config naming its own data file in a subfolder
+    is where pytest-cov records, and the gate reads the same lines from it."""
+    pyproject = _pyproject() + '\n[tool.coverage.run]\ndata_file = "cov/data"\n'
+    root = _project(tmp_path / "p", pyproject)
+    (root / "cov").mkdir()
+    run = suite_run(root, COMMAND, 2)
+    assert run == SuiteRun(workers=2, data_file=str(root.resolve() / "cov/data"))
+    assert _record(root, run, ".coverage.gate") == _record(root, SuiteRun(), ".coverage.serial")
+
+
+def test_a_data_file_outside_the_tree_runs_serially(tmp_path: Path) -> None:
+    """Known-bad: pytest-cov would record where the sandbox lets no run write."""
+    elsewhere = tmp_path / "elsewhere" / ".coverage"
+    pyproject = (
+        _pyproject(addopts="--cov=pkg") + f'\n[tool.coverage.run]\ndata_file = "{elsewhere}"\n'
+    )
+    root = _project(tmp_path / "p", pyproject)
+    why = f"pytest-cov records outside the tree ({elsewhere})"
+    assert suite_run(root, COMMAND, 2) == SuiteRun(
+        note=f"test-workers = 2 set but {why}: {RAN_SERIALLY}"
+    )
+    assert suite_run(root, COMMAND, 1) == SuiteRun()
 
 
 # -- the gate: one tree, two runs, the same verdicts ----------------------------
@@ -691,7 +779,7 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     probes = [argv for argv in runs if "saddle_workers_probe" in argv]
     suites = [argv for argv in runs if argv not in probes]
     assert len(probes) == 2
-    covered = [*COMMAND.split(), "-n", "2", "--cov", "--cov-report=", "--cov-fail-under=0"]
+    covered = [*COMMAND.split(), "-n", "2", "--cov-report=", "--cov=.", "--cov-fail-under=0"]
     # the suite, the red-phase samples, the dead-code rerun without `_spare`
     samples = [covered] * RED_PHASE_SAMPLES
     assert suites == [covered, *samples, [*COMMAND.split(), "-n", "2"]]
@@ -822,3 +910,33 @@ def test_the_flat_audit_runs_on_the_workers_its_baseline_asks_for(tmp_path: Path
         "fail",
         "no test runs src/pkg/lazy.py:14",
     )
+
+
+NEW_TESTS: Final = (
+    "\n\ndef test_new():\n    assert add(2, 2) == 4\n"
+    "\n\ndef test_never():\n    if False:\n        unused = 1\n"
+)
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_changed_test_lines_are_measured_whatever_the_projects_coverage_source(
+    tmp_path: Path, workers: int
+) -> None:
+    """Red before: with the project's coverage `source` set to its package (as
+    saddle's is) a pytest-cov run left test files unmeasured, and the coverage
+    check refused every changed test line. Known-bad half: a test line that
+    never runs is still named."""
+    source = '\n[tool.coverage.run]\nsource = ["pkg"]\nbranch = true\n'
+    table = _workers(workers) if workers > 1 else ""
+    root = _project(tmp_path / "p", _pyproject(table, addopts="--cov=pkg") + source)
+    part = root / "tests" / "test_part1.py"
+    text = part.read_text() + NEW_TESTS
+    part.write_text(text)
+    lines = text.splitlines()
+    ran = [lines.index("def test_new():") + 1, lines.index("    assert add(2, 2) == 4") + 1]
+    never = lines.index("        unused = 1") + 1
+    covered = _finding(_tier1(root), "coverage")
+    assert covered.verdict == "fail"
+    assert f"tests/test_part1.py:{never}" in covered.detail
+    for line in ran:
+        assert f"tests/test_part1.py:{line}" not in covered.detail, covered.detail
