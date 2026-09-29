@@ -8,6 +8,7 @@ sealed outcome says which shape ran. Interactive chat never keeps it.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import subprocess
@@ -217,8 +218,9 @@ def test_saddle_chat_has_the_same_default_and_off_switch(
         argv = ["chat", "--no-open", "--workdir", str(tmp_path), "--sessions", str(tmp_path / "s")]
         assert cli.main([*argv, *extra], stdout=io.StringIO()) == 0
     assert served == [True, False]
-    assert web_app.serve.__kwdefaults__ is not None
-    assert web_app.serve.__kwdefaults__["keep_reasoning"] is True
+    # Through the signature, which follows `__wrapped__`: in mutmut's work
+    # copy `serve` is a trampoline with no defaults of its own.
+    assert inspect.signature(web_app.serve).parameters["keep_reasoning"].default is True
 
 
 def test_interactive_chat_never_keeps_reasoning(tmp_path: Path) -> None:
