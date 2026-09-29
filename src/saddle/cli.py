@@ -1701,6 +1701,14 @@ def web_extract_requirements(args: argparse.Namespace) -> Setting:
     raise SettingError(msg)
 
 
+def chat_console(stdout: IO[str]) -> Console:
+    """The console `saddle up` draws its display on: rich's defaults, so its
+    colours follow the terminal, and a set, non-empty `NO_COLOR` turns them
+    off, the convention saddle also sets for every command it runs
+    (`sandbox.command_env`)."""
+    return Console(file=stdout)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="saddle", description="Deterministic harness for local LLMs."
@@ -2365,7 +2373,7 @@ def main(
                 chat_options,
                 client,
                 stdin=stdin or sys.stdin,
-                console=Console(file=stdout or sys.stdout),
+                console=chat_console(stdout or sys.stdout),
             )
     try:
         rule_d = rule_d_config(args)
