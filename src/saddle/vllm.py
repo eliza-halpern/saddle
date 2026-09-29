@@ -340,9 +340,15 @@ def _build_diff_payload(
 
 
 def _build_text_payload(
-    *, model: str, prompt: str, max_tokens: int, temperature: float, reasoning_effort: str
+    *,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+    reasoning_effort: str,
+    seed: int | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
@@ -350,6 +356,10 @@ def _build_text_payload(
         "reasoning_effort": reasoning_effort,
         "include_reasoning": True,
     }
+    # As `_build_diff_payload`: a call without a seed leaves the key out.
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
 
 
 def _build_chat_payload(
@@ -730,8 +740,12 @@ class VllmClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+        seed: int | None = None,
     ) -> str:
-        """One free-text completion for *prompt* (recovery planning).
+        """One free-text completion for *prompt* (recovery planning, P1's passes).
+
+        `seed` tells concurrent draws of one prompt apart (P1's blind
+        predictors); None leaves it to the server, as before.
 
         No guided schema: the plan is prose, so there is nothing to
         mis-parse — only envelope, truncation, and blank-content errors.
@@ -746,6 +760,7 @@ class VllmClient:
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            seed=seed,
         )
         return _parse_text_response(self._post(payload))
 

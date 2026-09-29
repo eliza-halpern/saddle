@@ -108,6 +108,8 @@ class Requirements:
     not_executable: tuple[tuple[str, str], ...]
     cut: tuple[str, ...]
     sha256: str
+    unanswered: tuple[str, ...] = ()
+    """Units P-a gave neither an input nor a reason for: named, never dropped."""
 
 
 MISMATCH: Final = "requirements file does not match the task"
@@ -149,6 +151,7 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
         examples = tuple(Example.from_dict(e) for e in data.get("examples", ()))
         marks = tuple((str(m["unit"]), str(m["reason"])) for m in data.get("not_executable", ()))
         cut = tuple(str(u) for u in data.get("cut", ()))
+        unanswered = tuple(str(u) for u in data.get("unanswered", ()))
     except (KeyError, TypeError, ValueError) as exc:
         msg = f"requirements file is malformed: {exc!r}"
         raise RequirementsError(msg) from exc
@@ -156,7 +159,7 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
     if bad:
         msg = f"requirements file is malformed: not-executable reason {bad[0]!r} is not allowed"
         raise RequirementsError(msg)
-    return Requirements(text, units, examples, marks, cut, str(data["file_sha256"]))
+    return Requirements(text, units, examples, marks, cut, str(data["file_sha256"]), unanswered)
 
 
 DRIVER_BODY: Final = r"""
@@ -335,4 +338,5 @@ def check_tree(
         changed=changed,
         not_executable=req.not_executable,
         cut=req.cut,
+        unanswered=req.unanswered,
     )

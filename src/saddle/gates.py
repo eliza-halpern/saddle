@@ -2381,6 +2381,7 @@ def check_task_requirements(
     changed: Collection[str] = (),
     not_executable: Sequence[tuple[str, str]] = (),
     cut: Sequence[str] = (),
+    unanswered: Sequence[str] = (),
     cannot_run: str | None = None,
     licensed: bool | None = None,
 ) -> TaskRequirementsCheck:
@@ -2428,6 +2429,7 @@ def check_task_requirements(
         f"{counts['code-wrong']} code-wrong, {counts['question']} question",
         *(f"not executable {u}: {why}" for u, why in not_executable),
         *(f"cut by the example cap: {u}" for u in cut),
+        *(f"no example and no reason given: {u}" for u in unanswered),
         *(
             f"{r.status} {r.example.id} ({', '.join(r.example.units)}): {r.why}"
             for r in rows

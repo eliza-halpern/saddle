@@ -385,6 +385,14 @@ def test_complete_honors_sampling_overrides() -> None:
     assert body["reasoning_effort"] == "xhigh"
 
 
+def test_complete_sends_a_seed_only_when_given_one() -> None:
+    client, seen = _json_client(_ok_body(content="a plan"))
+    client.complete("Do x.", seed=7)
+    client.complete("Do x.")
+    assert json.loads(seen[0].content)["seed"] == 7
+    assert "seed" not in json.loads(seen[1].content)
+
+
 def test_complete_rejects_bad_input() -> None:
     client, _ = _json_client(_ok_body(content="a plan"))
     with pytest.raises(ValueError, match="must not be empty") as prompt_info:
