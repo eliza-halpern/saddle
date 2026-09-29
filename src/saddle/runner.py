@@ -28,6 +28,7 @@ from saddle.evidence import (
     covered_lines,
     covering_tests,
     drop_test_caches,
+    format_overrides,
     git_added_files,
     git_changed_files,
     git_diff,
@@ -336,7 +337,9 @@ def run_node_gate(
     if ruff_files:
         lint_run, current_findings = ruff_findings(workdir, ruff_files, recorder=recorder)
         format_run = run_capture(
-            ruff_argv("format", "--check", *ruff_files), workdir, recorder=recorder
+            ruff_argv("format", "--check", *format_overrides(workdir, baseline), *ruff_files),
+            workdir,
+            recorder=recorder,
         )
         if capture is not None:
             capture.extend((lint_run, format_run))

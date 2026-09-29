@@ -43,6 +43,7 @@ from saddle.evidence import (
     changed_statements,
     covered_lines,
     drop_test_caches,
+    format_overrides,
     git_changed_files,
     git_diff,
     mutation_sample,
@@ -745,7 +746,11 @@ def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | N
     # ignored -- `ruff check --fix` reports what it could not fix, and
     # judging that is check_ruff's job.
     run_argv(ruff_argv("check", "--fix", *targets), workdir, recorder=recorder)
-    run_argv(ruff_argv("format", *targets), workdir, recorder=recorder)
+    run_argv(
+        ruff_argv("format", *format_overrides(workdir, "HEAD"), *targets),
+        workdir,
+        recorder=recorder,
+    )
     run_argv(["git", "add", "--", *targets], workdir, recorder=recorder)
 
 

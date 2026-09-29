@@ -75,6 +75,7 @@ from saddle.evidence import (
     MutationOutcome,
     SuiteLimitError,
     changed_statements,
+    format_overrides,
     git_diff,
     ruff_argv,
     ruff_findings,
@@ -899,7 +900,8 @@ class Auditor:
             (current / rel).parent.mkdir(parents=True)
             (current / rel).write_text(new_text)
             lint, found = ruff_findings(current, [rel])
-            fmt = run_capture(ruff_argv("format", "--check", rel), current)
+            overrides = format_overrides(self.repo, self.baseline_rev)
+            fmt = run_capture(ruff_argv("format", "--check", *overrides, rel), current)
             shown = run_capture(["git", "show", f"{self.baseline_rev}:{rel}"], self.repo)
             old: list[RuffFinding] = []
             if shown.exit_code == 0:

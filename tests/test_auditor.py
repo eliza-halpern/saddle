@@ -713,3 +713,22 @@ def test_tier1_seals_a_not_proven_coverage_finding_under_shortlist_so_its_englis
     assert verify_journal(journal) == []
     audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
     assert "  - m.py g: 2 of 2 changed lines never run -- nothing exercises g" in audit.summary
+
+
+def test_tier0_formats_by_the_projects_own_ruff_settings(tmp_path: Path) -> None:
+    """Red before: tier 0 ran `ruff format --check` in a bare temp dir, on
+    ruff's defaults (88 columns), so a watched run's files, formatted to the
+    project's 100, were refused as unformatted. Instances: a 95-column line
+    passes under the project's line-length; one past 100 still fails."""
+    tree = tmp_path / "tree"
+    _init(tree, {"pyproject.toml": "[tool.ruff]\nline-length = 100\n", "n.py": BASE_CODE})
+    auditor = Auditor(tree)
+    wide = "def f():\n    return " + " + ".join(["1"] * 22) + "\n"
+    assert 88 < max(len(line) for line in wide.splitlines()) <= 100
+    assert _verdicts(auditor.tier0("n.py", wide))["ruff"] == "pass"
+    too_wide = "def f():\n    return " + " + ".join(["1"] * 30) + "\n"
+    assert max(len(line) for line in too_wide.splitlines()) > 100
+    assert _verdicts(auditor.tier0("n.py", too_wide))["ruff"] == "fail"
+    # read from the commit: the tree loosening its own config changes nothing
+    (tree / "pyproject.toml").write_text("[tool.ruff]\nline-length = 200\n")
+    assert _verdicts(Auditor(tree).tier0("n.py", too_wide))["ruff"] == "fail"
