@@ -177,3 +177,48 @@ def test_the_prompt_explains_audit_notes_only_when_the_run_delivers_them(
         auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
         said[arm] = "audit checkpoint N on tree <id>, then PASS or FAIL" in _system(client)
     assert said == {"E+A+F": True, "E+A": False, "E": False}
+
+
+def test_a_file_one_command_leaves_in_tmp_is_there_for_the_next(tmp_path: Path) -> None:
+    """Red before: each command got an empty /tmp, and a watched run lost its
+    fix when the copies it had saved there were gone by the next command.
+    The run's /tmp sits beside its ledger and goes when the run ends."""
+    repo = _repo(tmp_path / "repo", src=False)
+    client = Scripted(
+        [
+            [call("run_command", "r1", command="echo kept > /tmp/scratch.txt")],
+            [call("run_command", "r2", command="cat /tmp/scratch.txt")],
+            finish(),
+        ]
+    )
+    result = auto(repo, client)
+    second = _command_details(result)[1]
+    assert "exit 0" in second, second
+    assert "kept" in second, second
+    assert not (result.journal.parent / "tmp").exists()
+
+
+def test_the_prompt_says_git_is_read_only_who_commits_and_where_scratch_goes(
+    tmp_path: Path,
+) -> None:
+    """Red before: a watched run's `git checkout` hit the read-only git
+    directory, its copies in /tmp were gone by the next command, and nothing
+    said saddle makes the commit from the finish summary."""
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)
+    system = _system(client)
+    assert "Git is read-only there" in system
+    assert "your finish summary in the commit message" in system
+    assert "/tmp is private to this run and lasts for all of it" in system
+
+
+def test_the_prompt_says_the_finish_audit_runs_new_tests_on_the_old_code(tmp_path: Path) -> None:
+    """Red before: a watched run undid its own fix to show its new tests
+    failing on the old code, a check the finish audit makes (red-phase).
+    Said only where that audit's findings reach the model (arm E+A+F)."""
+    said: dict[str, bool] = {}
+    for arm in ("E+A+F", "E"):
+        client = Scripted([finish()])
+        auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
+        said[arm] = "against the original code, where they must fail" in _system(client)
+    assert said == {"E+A+F": True, "E": False}

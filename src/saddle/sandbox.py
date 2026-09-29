@@ -540,10 +540,12 @@ def bwrap_argv(
     network: Network,
     expose: Sequence[tuple[Path, Path]],
     writable: Sequence[Path] = (),
+    tmp: Path | None = None,
 ) -> list[str]:
     """`argv` wrapped in bwrap: `root` (and each of `writable`) is the only
     writable place, and nothing else outside the system dirs, the
-    interpreter and `expose` exists."""
+    interpreter and `expose` exists. `/tmp` is empty, or `tmp` when given
+    (`Sandbox.tmp`); never the host's."""
     wrapped = ["bwrap"]
     for name in SYSTEM_DIRS:
         path = Path(name)
@@ -551,7 +553,8 @@ def bwrap_argv(
             wrapped += ["--symlink", os.readlink(path), name]
         else:
             wrapped += ["--ro-bind-try", name, name]
-    wrapped += ["--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+    wrapped += ["--dev", "/dev", "--proc", "/proc"]
+    wrapped += ["--tmpfs", "/tmp"] if tmp is None else ["--bind", str(tmp), "/tmp"]
     wrapped += ["--tmpfs", str(Path.home())]
     if network == "host":
         wrapped += ["--ro-bind-try", RESOLVER_DIR, RESOLVER_DIR]
@@ -713,6 +716,12 @@ class Sandbox:
     """Hard memory cap in bytes for each command and everything it starts
     (`memcap`); `for_workdir` sets it from `SADDLE_MEMORY_MAX`. There is no
     uncapped setting."""
+    tmp: Path | None = None
+    """A private directory every command sees as `/tmp`, so what one command
+    leaves there the next can read; None gives each command an empty `/tmp`.
+    An autonomous run keeps its scratch there, outside the audited worktree:
+    a watched run lost its own fix when a copy it saved in `/tmp` was gone
+    by the next command."""
 
     @classmethod
     def for_workdir(
@@ -724,6 +733,7 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         require_isolation: bool = False,
         network: Network = "host",
+        tmp: Path | None = None,
     ) -> Sandbox:
         """A sandbox for `root`; with `require_isolation`, never an unisolated one."""
         problem = isolation_problem() if prefer_bwrap else "bwrap is not installed"
@@ -738,6 +748,7 @@ class Sandbox:
             network=network,
             expose=default_expose(command_env(env or {})),
             memory_max=memcap.memory_max(),
+            tmp=tmp,
         )
 
     def _argv(self, command: str) -> list[str]:
@@ -745,7 +756,11 @@ class Sandbox:
         if self.isolation != "bwrap":
             return ["bash", "-lc", command]
         return bwrap_argv(
-            self.root, ["bash", "-lc", command], network=self.network, expose=self.expose
+            self.root,
+            ["bash", "-lc", command],
+            network=self.network,
+            expose=self.expose,
+            tmp=self.tmp,
         )
 
     def run(self, command: str, *, timeout: int = DEFAULT_TIMEOUT) -> Terminal:

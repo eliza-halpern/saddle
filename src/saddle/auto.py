@@ -91,7 +91,11 @@ ENVIRONMENT_PROMPT: Final = (
     "repository; your commands run in it inside a sandbox with no network. The "
     "repository's own checkout outside this worktree is not visible to them, so "
     "work only here, and tools installed elsewhere (uv, for one) may not be "
-    "reachable. {python} {src}The audit runs "
+    "reachable. Git is read-only there: status, diff, log and show work, but "
+    "commands that write (commit, checkout, stash, reset) fail. saddle commits "
+    "the worktree when the run ends, with your finish summary in the commit "
+    "message. /tmp is private to this run and lasts for all of it, so keep "
+    "scratch files there. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
     "first. This run has {minutes} and {tokens} generated tokens; it stops at "
@@ -105,14 +109,21 @@ FEED_PROMPT: Final = (
     "with any failing checks after it. It describes the tree at that snapshot, "
     "not the command it "
     "follows. Every file left in the worktree is audited, so remove scratch "
-    "files before you call finish, which runs the same audit on the final tree."
+    "files from it before you call finish, which runs the same audit on the "
+    "final tree. That final audit also runs your new and changed tests against "
+    "the original code, where they must fail, so you do not need to undo your "
+    "change to show that."
 )
 """Said only when the run delivers audits to the model (arm E+A+F). A watched
 dogfood run met its first checkpoint note inside its own script's output and
-spent a paragraph guessing where it came from ("the repo's conftest??")."""
+spent a paragraph guessing where it came from ("the repo's conftest??").
+Another undid its own fix to show its new tests failing on the old code, a
+check the finish audit makes itself (red-phase), and lost the fix."""
 """What the run's commands actually see, from facts saddle already holds
 (`environment_prompt`). A dogfood run on saddle's own repo spent seven rounds
-finding a Python that could import the project, because none of this was said."""
+finding a Python that could import the project, because none of this was said.
+The git and /tmp sentences: a watched run's `git checkout` hit the read-only
+git directory, and the copies it had saved in a per-command /tmp were gone."""
 
 
 def environment_prompt(
@@ -743,6 +754,10 @@ def run_auto(
         auto=auto,
         keep_reasoning=options.keep_reasoning,
     )
+    # The run's own /tmp, shared by all its commands and never audited: it
+    # sits beside the ledger, outside the worktree, and goes when the run ends.
+    run_tmp = journal.parent / "tmp"
+    run_tmp.mkdir(parents=True, exist_ok=True)
     context = ToolContext(
         workdir=worktree,
         sandbox=Sandbox.for_workdir(
@@ -750,6 +765,7 @@ def run_auto(
             env=run_env,
             require_isolation=True,
             network="none",
+            tmp=run_tmp,
         ),
         protected_tests=roots,
         syntax_guard=True,
@@ -785,6 +801,7 @@ def run_auto(
             if on_event is not None:
                 on_event(event)
     finally:
+        shutil.rmtree(run_tmp, ignore_errors=True)
         if auto.installs is not None:
             auto.installs.remove()
         if extraction is not None:

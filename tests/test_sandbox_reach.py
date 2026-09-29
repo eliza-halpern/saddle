@@ -225,6 +225,33 @@ def test_a_write_outside_the_workdir_fails_under_bwrap(work: Path, outside: Path
 
 
 @needs_bwrap
+def test_a_run_tmp_lasts_across_commands_and_is_never_the_hosts(work: Path, outside: Path) -> None:
+    """A run's commands share one private /tmp (`Sandbox.tmp`): a watched run
+    lost its own fix when the copies it saved in /tmp were gone by the next
+    command. Without `tmp` each command still gets an empty one, and neither
+    way shows a command the host's /tmp."""
+    host = Path(tempfile.mkdtemp(prefix="sandbox-host-tmp-", dir="/tmp"))
+    try:
+        run_tmp = outside / "run-tmp"
+        run_tmp.mkdir()
+        shared = Sandbox.for_workdir(work, tmp=run_tmp)
+        assert sh(shared, "echo kept > /tmp/scratch")[0] == 0
+        code, out = sh(shared, "cat /tmp/scratch")
+        assert code == 0, out
+        assert "kept" in out, out
+        assert (run_tmp / "scratch").read_text() == "kept\n"
+        assert host.name not in sh(shared, "ls -a /tmp")[1]
+        fresh = Sandbox.for_workdir(work)
+        sh(fresh, "echo lost > /tmp/scratch")
+        code, out = sh(fresh, "cat /tmp/scratch")
+        assert code != 0, out
+        assert "lost" not in out, out
+        assert host.name not in sh(fresh, "ls -a /tmp")[1]
+    finally:
+        shutil.rmtree(host, ignore_errors=True)
+
+
+@needs_bwrap
 def test_a_user_site_pth_cannot_be_planted_under_bwrap(
     work: Path, outside: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
