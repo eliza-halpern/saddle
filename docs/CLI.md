@@ -83,9 +83,11 @@ test-workers = 8
   pytest-cov (a worker that runs out of tests takes the ones still queued on another; a
   `--dist` mode your own pytest options choose is kept instead), and the
   `tests` and `coverage` findings both read that one run. Each red-phase sample and each
-  dead-code rerun uses the same workers. This holds for the checkpoints and the finish
-  audit of `saddle auto` and the chat's Task runs, and for `saddle audit`; `saddle run`
-  runs its node gates serially.
+  dead-code rerun uses the same workers. A red-phase sample records no coverage, since
+  only its exit and output are read: when your own options start pytest-cov, it runs
+  with `--no-cov`. This holds for the checkpoints and the finish audit of `saddle auto`
+  and the chat's Task runs, and for `saddle audit`; `saddle run` runs its node gates
+  serially.
 - It is read like `test-timeout`: from the commit the work starts from, never from the
   tree being judged. The value is a whole number from 1 to 64, and 1 or no key is a
   serial run. A value that is not usable, such as `"8"`, `true`, `8.0` or `"auto"`,

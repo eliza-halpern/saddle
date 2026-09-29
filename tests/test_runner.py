@@ -892,6 +892,37 @@ def test_run_node_gate_red_phase_runs_only_the_tests_the_node_changed(tmp_path: 
     assert collected.count("COLLECTED test_n.py") == RED_PHASE_SAMPLES, collected
 
 
+def test_a_serial_red_phase_sample_keeps_the_tree_root_importable(tmp_path: Path) -> None:
+    """Known-bad for a sample run as the bare test command: `coverage run -m
+    pytest` puts the tree's root on `sys.path` and `pytest` does not, so a
+    test in `tests/` importing a module at the root fails to collect there
+    on the baseline. That collection error names the changed module, which
+    red-phase reads as a greenfield red: a tautology would pass. Kept under
+    `coverage run`, the sample imports the module and the tautology passes
+    pre-change, so it is refused."""
+    for argv in (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    ):
+        assert run_argv(argv, tmp_path) == 0
+    (tmp_path / "mod.py").write_text("def f():\n    return 1\n")
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], tmp_path) == 0
+    (tmp_path / "mod.py").write_text("def f():\n    return 2\n")
+    (tmp_path / "tests").mkdir()
+    tautology = "from mod import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n"
+    (tmp_path / "tests" / "test_mod.py").write_text(tautology)
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    # The premise: the bare command cannot import `mod` from `tests/`.
+    assert run_argv(["pytest", "-q", "-p", "no:cacheprovider"], tmp_path) == 2
+    result = run_node_gate(_node("pytest -q", kind="refactor"), tmp_path)
+    by_name = {check.name: check for check in result.checks}
+    assert by_name["tests"].passed
+    red = by_name["red-phase"]
+    assert (red.passed, red.detail) == (False, "tests pass pre-change; prove nothing")
+
+
 def test_red_phase_command_leaves_a_command_it_cannot_extend_whole() -> None:
     """Known-good half: the whole suite, as before, whenever the command is
     not a plain pytest run or nothing is to be ignored."""

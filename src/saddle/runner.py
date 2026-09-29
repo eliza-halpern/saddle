@@ -209,9 +209,10 @@ def run_node_gate(
     and when `evidence.suite_run` finds pytest-xdist and pytest-cov in the
     tree's test environment, those same runs are `pytest -n test_workers`:
     the suite under pytest-cov, recorded into the one data file both the
-    tests and the coverage checks read, and so is each red-phase sample
-    (asked again of the baseline copy, whose pytest options are the
-    baseline's). The `tests` check's `basis` then says `test-workers=N`.
+    tests and the coverage checks read, and each red-phase sample with
+    nothing recorded (`SuiteRun.red_sample`; asked again of the baseline
+    copy, whose pytest options are the baseline's). The `tests` check's
+    `basis` then says `test-workers=N`.
     Otherwise every run is serial, as before, and the `tests` check's
     detail ends with why. A `test` node always runs serially: its verdict
     is read off the run's output.
@@ -345,13 +346,14 @@ def run_node_gate(
             if tests_changed
             else gate.test_command
         )
+        # Red-phase reads a sample's exit and output, never its coverage, so
+        # a sample pytest-cov would record records nothing (see `red_sample`
+        # for why a serial `coverage run` sample stays as it is).
         for sample_index in range(samples):
             drop_test_caches(dest)
-            baseline_run = run_suite_capture(
-                baseline_mode,
-                red_command,
+            baseline_run = run_shell_capture(
+                baseline_mode.red_sample(red_command, str(dest / ".coverage.red")),
                 dest,
-                str(dest / ".coverage.red"),
                 recorder=recorder,
                 timeout=test_timeout,
             )

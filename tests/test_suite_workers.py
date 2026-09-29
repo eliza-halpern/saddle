@@ -836,8 +836,9 @@ def test_a_new_test_red_on_the_baseline_is_red_on_workers(tmp_path: Path) -> Non
 def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     """The red-phase samples and the dead-code rerun reach the same verdicts
     either way, so only the journal shows how they ran: each run of the
-    suite is `-n 2 --dist worksteal`, the suite and the samples under pytest-cov (the probe,
-    run once in the tree and once in the baseline copy, collects nothing)."""
+    suite is `-n 2 --dist worksteal`, the suite under pytest-cov, the samples
+    and the rerun with no coverage asked for (the probe, run once in the tree
+    and once in the baseline copy, collects nothing)."""
     root = _project(tmp_path / "p", _pyproject())
     (root / "src/pkg/calc.py").write_text(CALC_CHANGED + "\n\ndef _spare():\n    return 3\n")
     (root / "tests/test_new.py").write_text(
@@ -865,11 +866,85 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
         for path in (root / "tests").glob("test_*.py")
         if path.name != "test_new.py"
     )
-    red = [*COMMAND.split(), *ignored, *covered[len(COMMAND.split()) :]]
-    samples = [red] * RED_PHASE_SAMPLES
+    samples = [[*COMMAND.split(), *ignored, *workers]] * RED_PHASE_SAMPLES
     # the tree's own suite also records which test ran each line (tier 2)
     current = [*covered, "--cov-context=test"]
     assert suites == [current, *samples, [*COMMAND.split(), *workers]]
+
+
+TRACED: Final = (
+    "import os\n\nimport coverage\n\n\n"
+    "def pytest_sessionstart(session):\n"
+    "    if coverage.Coverage.current() is not None:\n"
+    "        os.write(2, b'TRACED\\n')\n"
+)
+"""A root conftest that says on stderr, which the run's span keeps, when
+coverage is tracing the session: under `coverage run` and pytest-cov, in the
+controller and every worker. At session start pytest is not capturing, as it
+is while it imports the conftest."""
+
+
+@pytest.mark.parametrize(
+    ("addopts", "workers", "sample_traced"),
+    [(None, 2, False), ("--cov=pkg", 1, False), ("--cov=pkg", 2, False), (None, 1, True)],
+    ids=["parallel", "serial-project-cov", "parallel-project-cov", "serial-coverage-run"],
+)
+def test_a_red_phase_sample_records_no_coverage_where_pytest_cov_would(
+    tmp_path: Path, addopts: str | None, workers: int, sample_traced: bool
+) -> None:
+    """Red-phase reads a sample's exit and output, never its coverage. Where
+    pytest-cov would record a sample (on workers, or under the project's own
+    `--cov`), no tracer runs in it; on saddle's own test files tracing was
+    about a third of each sample's wall. The tree's own suite is still
+    traced, and the verdict is the same. A serial sample stays under
+    `coverage run` (`test_a_serial_red_phase_sample_keeps_the_tree_root_importable`
+    in test_runner.py says why)."""
+    root = tmp_path / "p"
+    _commit(root, {**_files(_pyproject(addopts=addopts)), "conftest.py": TRACED}, "baseline")
+    negative = "    if b < 0:\n        return -mul(a, -b)\n    total = 0\n"
+    (root / "src/pkg/calc.py").write_text(CALC.replace("    total = 0\n", negative))
+    (root / "tests/test_new.py").write_text(
+        "from pkg.calc import mul\n\n\ndef test_mul_negative():\n    assert mul(3, -1) == -3\n"
+    )
+    journal = tmp_path / "spans.jsonl"
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        gated = run_node_gate(
+            audit_node(),
+            copy,
+            baseline=resolved,
+            recorder=SpanRecorder(path=journal, node_id="n"),
+            test_workers=workers,
+        )
+    red = next(check for check in gated.checks if check.name == "red-phase")
+    assert (red.passed, red.detail) == (True, "fail pre-change, pass post-change")
+    runs = [
+        span
+        for span in read_spans(journal)
+        if "pytest" in span.argv and "saddle_workers_probe" not in span.argv
+    ]
+    # a sample runs only the new test file, every other one ignored
+    samples = [span for span in runs if any(a.startswith("--ignore=") for a in span.argv)]
+    assert len(samples) == RED_PHASE_SAMPLES
+    assert "TRACED" in runs[0].detail  # the tree's own suite
+    assert ["TRACED" in span.detail for span in samples] == [sample_traced] * RED_PHASE_SAMPLES
+
+
+def test_what_an_untraced_sample_admits_a_new_test_that_asserts_the_tracer(
+    tmp_path: Path,
+) -> None:
+    """The cost, exhibited: a new test asserting only that coverage traces it
+    fails on the untraced baseline sample and passes in the traced suite, so
+    red-phase reads it as red. Traced, as before, the sample passed it and
+    red-phase refused it ("tests pass pre-change")."""
+    root = _project(tmp_path / "p", _pyproject())
+    (root / "tests/test_new.py").write_text(
+        "import coverage\n\n\n"
+        "def test_traced():\n    assert coverage.Coverage.current() is not None\n"
+    )
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        gated = run_node_gate(audit_node(), copy, baseline=resolved, test_workers=2)
+    red = next(check for check in gated.checks if check.name == "red-phase")
+    assert (red.passed, red.detail) == (True, "fail pre-change, pass post-change")
 
 
 def _spec_node() -> Node:

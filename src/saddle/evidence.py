@@ -796,6 +796,27 @@ class SuiteRun:
             return test_command
         return shlex.join([*shlex.split(test_command), *extra])
 
+    def red_sample(self, test_command: str, data_file: str) -> str:
+        """The command a red-phase baseline sample runs: `covered`'s, with
+        nothing recorded wherever pytest-cov would record it.
+
+        Red-phase reads a sample's exit code and output, never its coverage.
+        Where pytest-cov records (`by_pytest_cov`), the sample is the test
+        command on the same workers, plus `--no-cov` when the project's own
+        options start pytest-cov: no tracer runs and no total can decide the
+        exit. A serial run that `coverage run` records keeps `covered`'s
+        command, `data_file` and all: `coverage run -m pytest` puts the
+        tree's root on `sys.path` and a bare `pytest` does not, so a test in
+        `tests/` importing a module at the root would fail to collect on the
+        baseline, which red-phase reads as a greenfield red when that module
+        is one the node changed."""
+        if not self.by_pytest_cov:
+            return self.covered(test_command, data_file)
+        extra = self._on_workers()
+        if self.project_cov:
+            extra += ["--no-cov"]
+        return shlex.join([*shlex.split(test_command), *extra])
+
 
 PYTEST_CONFIG_FILES: Final = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
 """The files at a tree's root pytest reads its options from (`_may_start_pytest_cov`)."""
