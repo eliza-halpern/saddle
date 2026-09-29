@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Final
+from typing import Any, Final
 
 from saddle import prompt_constants, sandbox
 from saddle.anchor import anchor_trailers, outcome_hash
@@ -368,6 +368,18 @@ class AutoOptions:
     project venv under the run's own state, removed when the run ends. The
     run needs a project venv and a folder holding wheels, or it does not
     start. None (the default): no tool, and records as before."""
+    resume_messages: Path | None = None
+    """Dev, `--resume-messages FILE`: a recorded request body (a relay's
+    `reqs/<n>.json`) to continue instead of starting from the task. Its
+    messages go to the model as they are, behind this run's system prompt,
+    with the recorded worktree path rewritten to this run's. None: from the
+    task, as before."""
+    resume_patch: Path | None = None
+    """Dev, `--resume-patch FILE`: a diff applied to the fresh worktree before
+    the model continues: the files as they stood at the recorded request."""
+    resume_tmp: Path | None = None
+    """Dev, `--resume-tmp DIR`: copied into the run's /tmp, what the recorded
+    run had left there."""
 
 
 @dataclass(frozen=True)
@@ -404,6 +416,26 @@ def guarded_test_roots(repo: Path) -> tuple[str, ...]:
     if isinstance(paths, list) and paths and all(isinstance(p, str) for p in paths):
         return tuple(paths)
     return DEFAULT_TEST_ROOTS
+
+
+def resumed(recorded: Path, worktree: Path, system_prompt: str) -> list[dict[str, Any]]:
+    """The messages of a recorded request body, to continue in `worktree`.
+
+    The recorded system prompt gives way to `system_prompt` (this harness's),
+    and every mention of the recorded run's worktree becomes `worktree`, so a
+    command the model repeats reaches this run's files. For resuming a watched
+    run at a chosen request instead of replaying the minutes before it."""
+    body = json.loads(recorded.read_text(encoding="utf-8"))
+    recorded_messages = list(body["messages"])
+    first = recorded_messages[0] if recorded_messages else {}
+    old_system = str(first.get("content") or "") if first.get("role") == "system" else ""
+    rest = recorded_messages[1:] if old_system else recorded_messages
+    text = json.dumps(rest)
+    marker = "Your working directory is "
+    if marker in old_system:
+        old = old_system.split(marker, 1)[1].split(",", 1)[0]
+        text = text.replace(json.dumps(old)[1:-1], json.dumps(str(worktree))[1:-1])
+    return [{"role": "system", "content": system_prompt}, *json.loads(text)]
 
 
 def create_worktree(repo: Path, run_id: str) -> tuple[Path, str]:
@@ -609,6 +641,8 @@ def run_auto(
     run_id = options.run_id or uuid.uuid4().hex[:12]
     base = run_base(repo)
     worktree, branch = create_worktree(repo, run_id)
+    if options.resume_patch is not None:
+        _git(worktree, "apply", str(options.resume_patch.resolve()))
     root = worktree.parent.parent.parent
     journal = ledger_path(root, run_id)
     start = build_span(
@@ -761,6 +795,8 @@ def run_auto(
     # sits beside the ledger, outside the worktree, and goes when the run ends.
     run_tmp = journal.parent / "tmp"
     run_tmp.mkdir(parents=True, exist_ok=True)
+    if options.resume_tmp is not None:
+        shutil.copytree(options.resume_tmp, run_tmp, dirs_exist_ok=True)
     context = ToolContext(
         workdir=worktree,
         sandbox=Sandbox.for_workdir(
@@ -796,8 +832,13 @@ def run_auto(
             on_ready=use_overlay,
             installed=installed,
         )
+    messages: list[dict[str, Any]] = []
+    text: str | None = options.task
+    if options.resume_messages is not None:
+        messages = resumed(options.resume_messages, worktree, turn_options.system_prompt or "")
+        text = None  # answer what is there: the recorded conversation's next step
     events: Iterator[Event] = run_turn(
-        client, [], options.task, turn_options, turn=1, context=context, cancel=cancel
+        client, messages, text, turn_options, turn=1, context=context, cancel=cancel
     )
     try:
         for event in events:

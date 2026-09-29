@@ -8,6 +8,7 @@ and its prompt never said where it was or how the audit runs the tests.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -234,3 +235,57 @@ def test_the_prompt_says_a_pinned_test_rewrite_is_put_to_a_person(tmp_path: Path
         auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
         said[arm] = "asks a person to approve it when the run ends" in _system(client)
     assert said == {"E+A+F": True, "E": False}
+
+
+def test_a_resumed_run_continues_the_recorded_conversation_in_its_own_worktree(
+    tmp_path: Path,
+) -> None:
+    """Dev resume: the recorded messages go to the model as they were, behind
+    this harness's system prompt, with the recorded worktree path rewritten
+    to this run's, and the recorded files applied before the model continues."""
+    repo = _repo(tmp_path / "repo", src=False)
+    old = "/old/run/.saddle/worktrees/abc123"
+    recorded = tmp_path / "request.json"
+    recorded.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": f"Old prompt. Your working directory is {old}, x",
+                    },
+                    {"role": "user", "content": "make add add"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "r0",
+                                "type": "function",
+                                "function": {
+                                    "name": "run_command",
+                                    "arguments": json.dumps({"command": f"cd {old} && cat n.py"}),
+                                },
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "r0", "content": "exit 0"},
+                ]
+            }
+        )
+    )
+    patch = tmp_path / "state.diff"
+    patch.write_text(
+        "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,2 +1,2 @@\n"
+        " def f():\n-    return 2\n+    return 3\n"
+    )
+    client = Scripted([[call("run_command", "r1", command="cat n.py")], finish()])
+    result = auto(repo, client, resume_messages=recorded, resume_patch=patch)
+    sent = client.asked[0]["messages"]
+    system = str(sent[0]["content"])
+    assert system.startswith("You are working alone")
+    worktree = system.split("Your working directory is ", 1)[1].split(",", 1)[0]
+    assert [m["role"] for m in sent[1:]] == ["user", "assistant", "tool"]
+    assert old not in json.dumps(sent)
+    assert f"cd {worktree} && cat n.py" in sent[2]["tool_calls"][0]["function"]["arguments"]
+    assert "return 3" in _command_details(result)[0]

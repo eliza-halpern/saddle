@@ -2029,6 +2029,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="A test function the task orders rewritten; its assertion-preservation "
         "finding is reported, not held against the run. Repeatable; sealed in the ledger.",
     )
+    # Dev: continue a recorded run at a chosen request (AutoOptions.resume_*).
+    auto.add_argument("--resume-messages", type=Path, default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--resume-patch", type=Path, default=None, help=argparse.SUPPRESS)
+    auto.add_argument("--resume-tmp", type=Path, default=None, help=argparse.SUPPRESS)
     auto.add_argument(
         "--keep-reasoning",
         action=argparse.BooleanOptionalAction,
@@ -2110,6 +2114,9 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
         sanctioned_test_rewrites=tuple(args.sanctioned_test_rewrite),
         finish_refusal_cap=args.finish_refusal_cap,
+        resume_messages=args.resume_messages,
+        resume_patch=args.resume_patch,
+        resume_tmp=args.resume_tmp,
         keep_reasoning=args.keep_reasoning,
         check_tool=args.check_tool,
         wheels=wheel_folder(args),
