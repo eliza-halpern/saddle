@@ -77,6 +77,14 @@ addopts = "--cov=saddle --cov-report=term-missing --cov-fail-under=100"
 source = ["saddle"]
 branch = true
 
+[tool.saddle]
+# How long one run of this repo's test suite may take under saddle's own test
+# gate, in seconds (docs/CLI.md, "The test time limit"). The built-in 300 s
+# refused this suite as a hang: `check.sh` runs it in 1209-1378 s, and the
+# gate's own sandboxed coverage run of it took about 2300 s in a 2-core slot.
+# Read from the commit a run or audit starts from, never from the tree it judges.
+test-timeout = 3600
+
 [tool.mutmut]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.
 # mutmut 3.x runs pytest in-process; coverage is disabled for mutant runs

@@ -22,6 +22,7 @@ import sys
 import tarfile
 import tempfile
 import tokenize
+import tomllib
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -59,9 +60,22 @@ name that does not match this shape is a hand-built test stub and takes
 _MUTATION_TIMEOUT_S = 600
 
 DEFAULT_TEST_TIMEOUT_S: Final = 300.0
-"""Wall-clock ceiling for a declared test command. Suites in scope run
-in seconds; this bounds non-termination without failing slow-but-sound
-runs."""
+"""Wall-clock ceiling for one run of a project's test command when the
+project sets none (`suite_limit`). The benchmark's suites run in seconds,
+so this bounds non-termination without failing them. A suite that is
+slow and sound -- saddle's own takes about twenty minutes -- sets its
+own limit instead: `[tool.saddle] test-timeout` in its `pyproject.toml`."""
+
+SUITE_LIMIT_FILE: Final = "pyproject.toml"
+SUITE_LIMIT_KEY: Final = "test-timeout"
+"""The project's own test time limit, in seconds: `test-timeout` in the
+`[tool.saddle]` table of its `pyproject.toml` (`suite_limit`)."""
+
+SUITE_LIMIT_MAX_S: Final = 86400.0
+"""The longest limit a project may set: a day. A hang must still end in a
+verdict, and far past this the wait itself fails: `Popen.communicate`
+raises `OverflowError` for a timeout of 2.2e6 s (about 25 days), which
+would read as a crashed audit instead of a hang."""
 
 TEST_MEMORY_LIMIT_BYTES: Final = memcap.DEFAULT_MEMORY_MAX
 """Default memory cap for every subprocess that executes the audited tree's
@@ -283,7 +297,10 @@ def run_shell(
     recorder: SpanRecorder | None = None,
     timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
 ) -> int:
-    """Run a `test_command` string via shlex splitting (never a shell)."""
+    """Run a `test_command` string via shlex splitting (never a shell).
+
+    The default `timeout` is the built-in one; a gate running a project's
+    tests passes that project's `suite_limit` instead."""
     return run_argv(shlex.split(command), cwd, recorder=recorder, timeout=timeout)
 
 
@@ -407,7 +424,8 @@ def run_shell_capture(
 ) -> CapturedRun:
     """Run a `test_command` string via shlex splitting, capturing output, under
     the memory cap (`tree_memory_limit`): it executes the tree's code, and
-    imports the tree's own package (`src_layout_env`)."""
+    imports the tree's own package (`src_layout_env`). The default `timeout`
+    is the built-in one; a gate passes the project's `suite_limit` instead."""
     return run_capture(
         shlex.split(command),
         cwd,
@@ -416,6 +434,87 @@ def run_shell_capture(
         memory_limit=tree_memory_limit(),
         extra_env=src_layout_env(cwd),
     )
+
+
+class SuiteLimitError(ValueError):
+    """The project sets a test time limit saddle cannot use."""
+
+
+@dataclass(frozen=True)
+class SuiteLimit:
+    """How long one run of a project's test command may take, and where that came from."""
+
+    seconds: float
+    source: str
+
+
+def suite_limit(tree: Path, rev: str) -> SuiteLimit:
+    """The project's test time limit as committed at `rev`, never as `tree` has it now.
+
+    `test-timeout = <seconds>` in the `[tool.saddle]` table of the
+    `pyproject.toml` in `tree`'s own directory sets it; with no file, no
+    table or no key it is `DEFAULT_TEST_TIMEOUT_S`. Every run of the
+    project's tests under a gate takes this limit: `runner.run_node_gate`'s
+    suite, red-phase and dead-code runs, `auditor.green_on_baseline`, and
+    `slice`'s candidate and merge-time runs.
+
+    `rev` is where the task started (the audit's baseline, a `saddle run`'s
+    `HEAD`), so the tree under audit cannot lift its own bar: an edit to its
+    `pyproject.toml`, staged or not, changes nothing for the run it is part
+    of. A value that cannot be used -- not TOML, not a table, not a number
+    of seconds in (0, `SUITE_LIMIT_MAX_S`], or a key in the table saddle
+    does not read -- raises `SuiteLimitError` naming the commit and the
+    value: a typo must not read as "no limit set" and leave the default in
+    force unannounced.
+    """
+    found = run_capture(["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], tree)
+    sha = found.stdout.strip()
+    if found.exit_code != 0 or not sha:
+        msg = f"cannot read the test time limit: {rev!r} is not a commit in {tree}"
+        raise SuiteLimitError(msg)
+    where = f"{SUITE_LIMIT_FILE} at {sha[:12]}"
+    default = f"built-in default {DEFAULT_TEST_TIMEOUT_S:g} s"
+    blob = f"{sha}:./{SUITE_LIMIT_FILE}"
+    if run_capture(["git", "cat-file", "-e", blob], tree).exit_code != 0:
+        return SuiteLimit(DEFAULT_TEST_TIMEOUT_S, f"{default} (no {where})")
+    shown = run_capture(["git", "cat-file", "blob", blob], tree)
+    if shown.exit_code != 0:
+        msg = f"cannot read the test time limit: {where} is not a file: {shown.stderr.strip()}"
+        raise SuiteLimitError(msg)
+    try:
+        data = tomllib.loads(shown.stdout)
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"cannot read the test time limit: {where} is not TOML ({exc})"
+        raise SuiteLimitError(msg) from exc
+    tool = data.get("tool")
+    table = tool.get("saddle", {}) if isinstance(tool, dict) else {}
+    if not isinstance(table, dict):
+        msg = f"cannot read the test time limit: {where}: [tool.saddle] is not a table"
+        raise SuiteLimitError(msg)
+    unknown = sorted(set(table) - {SUITE_LIMIT_KEY})
+    if unknown:
+        msg = (
+            f"cannot read the test time limit: {where}: [tool.saddle] holds "
+            f"{', '.join(unknown)}; the only key saddle reads there is {SUITE_LIMIT_KEY}"
+        )
+        raise SuiteLimitError(msg)
+    if SUITE_LIMIT_KEY not in table:
+        return SuiteLimit(DEFAULT_TEST_TIMEOUT_S, f"{default} (no {SUITE_LIMIT_KEY} in {where})")
+    value = table[SUITE_LIMIT_KEY]
+    # The comparison alone rejects nan and both infinities, and compares a
+    # huge TOML integer exactly (tomllib keeps it whole; `math.isfinite`
+    # would raise OverflowError on it).
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not 0 < value <= SUITE_LIMIT_MAX_S
+    ):
+        msg = (
+            f"cannot read the test time limit: {where}: {SUITE_LIMIT_KEY} = {value!r} "
+            f"is not a number of seconds above 0 and at most {SUITE_LIMIT_MAX_S:g}"
+        )
+        raise SuiteLimitError(msg)
+    return SuiteLimit(float(value), f"[tool.saddle] {SUITE_LIMIT_KEY} in {where}")
 
 
 def src_layout_env(tree: Path) -> dict[str, str]:

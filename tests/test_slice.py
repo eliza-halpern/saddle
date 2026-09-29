@@ -21,7 +21,13 @@ import pytest
 
 import saddle.slice as slice_module
 from saddle.dag import Dag, Node
-from saddle.evidence import CapturedRun, attempt_ref, run_argv, run_capture
+from saddle.evidence import (
+    DEFAULT_TEST_TIMEOUT_S,
+    CapturedRun,
+    attempt_ref,
+    run_argv,
+    run_capture,
+)
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, GateCheck, Tier1Result
 from saddle.journal import (
     GateOutput,
@@ -5106,7 +5112,10 @@ def test_candidate_runner_covers_a_statement_whose_only_changed_line_is_a_contin
         "        f(-1)\n"
     )
     node = Node.model_validate(_node_dict("n1", []))
-    result = slice_module._candidate_runner(tmp_path, "HEAD", node)(tmp_path, "test_cand.py")
+    runner = slice_module._candidate_runner(
+        tmp_path, "HEAD", node, test_timeout=DEFAULT_TEST_TIMEOUT_S
+    )
+    result = runner(tmp_path, "test_cand.py")
     assert result.exit_code == 0
     assert (str(tmp_path / "n.py"), 3) in result.covered
 

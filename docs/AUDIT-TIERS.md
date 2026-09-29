@@ -37,13 +37,22 @@ One `runner.run_node_gate(..., tier2=False)` run.
 
 | Gate | Reason | Proves |
 |---|---|---|
-| `tests` | code-wrong | the test command (`python -m pytest -q`) exits 0 |
+| `tests` | code-wrong | the test command (`python -m pytest -q`) exits 0 within the project's test time limit (below) |
 | `coverage` | evidence-thin | every changed line is run by some test, except lines set aside and counted in `basis`: lines `public-deletions` compels (`compelled-lines=N`), a test module's lines no passing pytest run executes (`exempt-test-lines=N`), and the repository-root `setup.py`, which a build frontend runs and pytest never does (`packaging-lines=N`, also written at the end of the detail as "N packaging lines not judged (root setup.py)"). Logic placed in the root `setup.py` is therefore not coverage-judged; a `setup.py` below the root is judged like any other module |
 | `dead-code` | evidence-thin | every private definition added is used elsewhere |
 | `public-deletions` | code-wrong | every public definition in the baseline still exists |
 | `node-scope` | scope | the diff fits its plan node's kind (`not-applicable` without a plan) |
 | `target-scope` | scope | only the plan's target files changed (`not-applicable` without a plan) |
 | `assertion-preservation` | evidence-thin | pre-existing tests keep their assertions |
+
+Every run of the test command is bounded by the project's test time limit
+(`evidence.suite_limit`): the suite, each red-phase sample, each dead-code rerun, and
+the baseline run that checks a sanctioned rewrite. It is 300 s unless the
+`pyproject.toml` committed at the baseline sets `[tool.saddle] test-timeout` (seconds;
+[CLI.md](CLI.md#the-test-time-limit)). A run past the limit is killed, and the `tests`
+finding reads `'python -m pytest -q' hangs: no verdict within the time limit`. The
+limit is read at the baseline, never from the tree audited, so a change cannot raise
+the limit it is judged under.
 
 ## Tier 2: before "done"
 
@@ -71,7 +80,7 @@ Each verdict is cached under a sha256 of these inputs:
 
 - the tier;
 - the tree id (`git write-tree` over the tree, untracked files staged);
-- the resolved baseline;
+- the resolved baseline (which also fixes the test time limit, read from it);
 - the test command and the plan node;
 - `audit.gate_surface()`: the gate modules' bytes, the tool versions and the Python
   version;

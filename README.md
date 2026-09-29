@@ -140,6 +140,13 @@ beside the worker (extra model calls); their findings only ask, never refuse, an
 whose finish audit asks ends "needs you" with the question on the task card. The card's
 Task text row says how long the extraction took and how many units it judged.
 
+The auditor gives each run of the project's tests 300 s and reports a suite that takes
+longer as a hang. A project whose suite needs longer sets its own limit in its
+`pyproject.toml`, as `test-timeout = <seconds>` under `[tool.saddle]` (saddle's own is
+3600). The limit is read from the commit the work starts from, so commit the setting
+first; nothing a run changes in its own tree can raise the limit it is judged under
+([docs/CLI.md](docs/CLI.md#the-test-time-limit)).
+
 [docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
 evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle
 doctor`, `dag`, `run`, `auto`, `audit`, `tail`, `verify`, `explain`, `chat` (alias

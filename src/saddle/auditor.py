@@ -24,7 +24,9 @@ Every verdict is keyed by the tree (`audit.staged_copy`'s `git write-tree`
 over the worktree with untracked files staged) plus the resolved baseline,
 the test command, the node and `audit.gate_surface()`, so an identical tree
 is never gated twice at the same tier. Tier 0 is keyed by the file's path
-and bytes instead, since it sees one file and no tree.
+and bytes instead, since it sees one file and no tree. Every run of the
+tests takes the project's time limit (`evidence.suite_limit`), read at the
+resolved baseline: the key names it, and the tree audited cannot move it.
 
 Without a plan node the four plan-relative checks are `not-applicable`
 (`audit.NOT_APPLICABLE`); with one (`AuditorConfig.node`), they run.
@@ -70,11 +72,13 @@ from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
     MutationOutcome,
+    SuiteLimitError,
     changed_statements,
     git_diff,
     ruff_argv,
     ruff_findings,
     run_capture,
+    suite_limit,
     tree_memory_limit,
 )
 from saddle.gates import (
@@ -432,7 +436,12 @@ def _test_side(path: str) -> bool:
 
 
 def green_on_baseline(
-    copy: Path, resolved: str, names: Sequence[str], test_command: str
+    copy: Path,
+    resolved: str,
+    names: Sequence[str],
+    test_command: str,
+    *,
+    timeout: float = DEFAULT_TEST_TIMEOUT_S,
 ) -> list[str]:
     """Which of the rewritten tests `names` PASS with the baseline's sources.
 
@@ -442,7 +451,8 @@ def green_on_baseline(
     assert it (`construct/vacuous`: `assert True`; or it kept the old
     value). The audited tree is copied, every changed non-test file is put
     back as the baseline has it (added ones removed, deleted ones restored),
-    and the named tests run there under the test command's limits. A name
+    and the named tests run there under the test command's limits (`timeout`
+    is the audit's `evidence.suite_limit`). A name
     is green when every test node it names passed; a name that did not
     collect or did not run on the baseline is red (it cannot pass there).
     """
@@ -466,7 +476,7 @@ def green_on_baseline(
         listed = run_capture(
             [*argv, "--collect-only", "--verbosity=-1", "-p", "no:cacheprovider"],
             base,
-            timeout=DEFAULT_TEST_TIMEOUT_S,
+            timeout=timeout,
             memory_limit=tree_memory_limit(),
         ).stdout.splitlines()
         wanted = set(names)
@@ -476,7 +486,7 @@ def green_on_baseline(
         ran = run_capture(
             [*argv, "--verbosity=-1", "-rA", "-p", "no:cacheprovider", *nodes],
             base,
-            timeout=DEFAULT_TEST_TIMEOUT_S,
+            timeout=timeout,
             memory_limit=tree_memory_limit(),
         ).stdout.splitlines()
     passed = {line.split(" ", 1)[1].split(" ")[0] for line in ran if line.startswith("PASSED ")}
@@ -882,6 +892,12 @@ class Auditor:
             hit = self._cached(key)
             if hit is not None:
                 return hit
+            try:
+                # Read at the resolved baseline, which `key` already names: the
+                # limit is a function of that commit, not of the tree audited.
+                limit = suite_limit(copy, resolved).seconds
+            except SuiteLimitError as exc:
+                raise AuditError(str(exc)) from exc
             if tier == 2:
                 first = self.tier1(copy)
                 if not first.passed:
@@ -910,7 +926,9 @@ class Auditor:
                     self.config.task_requirements,
                 )
             try:
-                gated = runner.run_node_gate(self.node, copy, baseline=resolved, tier2=tier == 2)
+                gated = runner.run_node_gate(
+                    self.node, copy, baseline=resolved, tier2=tier == 2, test_timeout=limit
+                )
             finally:
                 if pool is not None:
                     pool.shutdown(wait=True)
@@ -973,7 +991,9 @@ class Auditor:
                 and named <= sanctioned
             ):
                 # A sanctioned rewrite must be red on the baseline.
-                green = green_on_baseline(copy, resolved, sorted(named), self.config.test_command)
+                green = green_on_baseline(
+                    copy, resolved, sorted(named), self.config.test_command, timeout=limit
+                )
                 if green:
                     statuses["assertion-preservation"] = (
                         "fail",

@@ -37,6 +37,7 @@ from saddle.dag import (
 )
 from saddle.edits import EditError, apply_edits
 from saddle.evidence import (
+    DEFAULT_TEST_TIMEOUT_S,
     CapturedRun,
     attempt_ref,
     changed_statements,
@@ -55,6 +56,7 @@ from saddle.evidence import (
     run_stdin_capture,
     snapshot_baseline,
     snapshot_tree,
+    suite_limit,
     under_coverage,
 )
 from saddle.gates import SHELL_TIMEOUT, GateCheck, Tier1Result
@@ -982,6 +984,8 @@ def _evaluate_candidate(
     baseline: str,
     planned: tuple[str, ...],
     owed: tuple[str, ...],
+    *,
+    test_timeout: float,
 ) -> tuple[Tier1Result | None, str | None]:
     """Gate `diff` on a throwaway copy of `workdir`; never touches it.
 
@@ -1020,6 +1024,7 @@ def _evaluate_candidate(
                 baseline=baseline,
                 planned_requirements=planned,
                 owed_tests=owed,
+                test_timeout=test_timeout,
             ),
             None,
         )
@@ -1032,6 +1037,8 @@ def _best_of_samples(
     baseline: str,
     planned: tuple[str, ...],
     owed: tuple[str, ...],
+    *,
+    test_timeout: float,
 ) -> tuple[DiffProposal | None, int, list[dict[str, Any]]]:
     """Draw PROPOSAL_SAMPLES unconditioned proposals concurrently; keep the best.
 
@@ -1092,7 +1099,7 @@ def _best_of_samples(
             summary["outcome"] = "identical to an earlier sample"
             continue
         result, unappliable = _evaluate_candidate(
-            node, workdir, proposal.diff, baseline, planned, owed
+            node, workdir, proposal.diff, baseline, planned, owed, test_timeout=test_timeout
         )
         if unappliable is not None or result is None:
             summary["outcome"] = f"did not apply: {unappliable}"
@@ -1148,6 +1155,7 @@ async def _run_node(
     task_hash: str,
     deadline: _Deadline | None = None,
     rule_d: RuleDCheck | None = None,
+    test_timeout: float = DEFAULT_TEST_TIMEOUT_S,
 ) -> Proof:
     """Execute one node: propose, apply, gate, seal — with bounded recovery.
 
@@ -1206,7 +1214,7 @@ async def _run_node(
             try:
                 if attempt == 1:
                     best, distinct, samples = _best_of_samples(
-                        node, workdir, propose, baseline, planned, owed
+                        node, workdir, propose, baseline, planned, owed, test_timeout=test_timeout
                     )
                     proposal = (
                         best if best is not None else propose(node, failure, PROPOSAL_SAMPLES)
@@ -1295,6 +1303,7 @@ async def _run_node(
                 capture=captured,
                 planned_requirements=planned,
                 owed_tests=owed,
+                test_timeout=test_timeout,
             )
             # Rule D after the gates, only with `--rule-d` and only on a
             # tree every gate passed: the gates judge the diff, rule D the
@@ -1785,7 +1794,9 @@ def _recovered_tree(workdir: Path, applied: Sequence[str], baseline: str, dest: 
     autofix(dest, baseline=baseline)
 
 
-def _candidate_runner(real_tree: Path, baseline: str, node: Node) -> CandidateRunner:
+def _candidate_runner(
+    real_tree: Path, baseline: str, node: Node, *, test_timeout: float
+) -> CandidateRunner:
     """The survivor round's injected runner: pytest on either tree, the sample on the real one.
 
     The candidate file alone runs under coverage; against `real_tree` a
@@ -1802,7 +1813,9 @@ def _candidate_runner(real_tree: Path, baseline: str, node: Node) -> CandidateRu
     def run(tree: Path, candidate: str) -> CandidateRun:
         drop_test_caches(tree)
         data_file = str(tree / ".coverage.candidate")
-        ran = run_shell_capture(under_coverage(f"pytest {candidate}", data_file), tree)
+        ran = run_shell_capture(
+            under_coverage(f"pytest {candidate}", data_file), tree, timeout=test_timeout
+        )
         if ran.exit_code != 0 or tree != real_tree:
             return CandidateRun(exit_code=ran.exit_code)
         covered = covered_lines(data_file, changed_files)
@@ -1827,6 +1840,7 @@ def _survivor_round(
     round_no: int,
     requirements_text: Mapping[str, str],
     sealed_names: Collection[str],
+    test_timeout: float,
 ) -> tuple[Dag, DiffProposal] | None:
     """One survivor round: brief, draw k, filter, and plan the splice.
 
@@ -1885,7 +1899,7 @@ def _survivor_round(
             with ThreadPoolExecutor(max_workers=samples) as pool:
                 draws = list(pool.map(one, range(samples)))
             gaps_real = tuple((str(real / rel), line) for rel, line in gaps_rel)
-            runner = _candidate_runner(real, baseline, node)
+            runner = _candidate_runner(real, baseline, node, test_timeout=test_timeout)
             kept: list[tuple[str, str]] = []
             seen: dict[str, int] = {}
             verdicts: list[str] = []
@@ -2003,6 +2017,7 @@ def _schedule_until_done(
     survivor_draw: TestDrawer | None = None,
     survivor_samples: int = SURVIVOR_SAMPLES,
     rule_d: RuleDCheck | None = None,
+    test_timeout: float,
 ) -> tuple[Dag, dict[str, BaseException], set[str], bool]:
     """Run the schedule/replan loop until no node can progress further.
 
@@ -2057,6 +2072,7 @@ def _schedule_until_done(
                 task_hash=task_hash,
                 deadline=deadline,
                 rule_d=rule_d,
+                test_timeout=test_timeout,
             )
         finally:
             if deadline is not None:
@@ -2103,6 +2119,7 @@ def _schedule_until_done(
                     round_no=rounds.get(root, 0) + 1,
                     requirements_text=requirements_text,
                     sealed_names=sealed_names,
+                    test_timeout=test_timeout,
                 )
                 if spliced is None:
                     continue
@@ -2178,6 +2195,7 @@ def _merge_gate(
     proofs: dict[str, str],
     run_span_id: str,
     journal_path: Path,
+    test_timeout: float,
 ) -> tuple[int, bool]:
     """Run the unscoped merge-time suite once, after every node's own gate.
 
@@ -2190,7 +2208,7 @@ def _merge_gate(
     if merge_command is not None and proofs:
         merge_start = perf_counter()
         merge_started_at = _utcnow()
-        merge_exit = run_shell(merge_command, workdir)
+        merge_exit = run_shell(merge_command, workdir, timeout=test_timeout)
         timed_out = " (timed out)" if merge_exit == SHELL_TIMEOUT else ""
         append_span(
             journal_path,
@@ -2359,6 +2377,15 @@ def run_slice(
     `merge-suite` under the run span, and a non-zero exit fails the run
     without revisiting any per-node verdict. `None` disables it.
 
+    Every run of a test command here -- node gates, sampled candidates,
+    survivor candidates and the merge suite -- is bounded by the project's
+    `evidence.suite_limit`, read once from `workdir`'s `HEAD` before
+    anything runs. The run never commits (proven edits stay staged), so
+    `HEAD` is the tree the task started from, and no node's edit to the
+    project's config reaches the limit its own or a later node's gate runs
+    under. A limit the project sets but saddle cannot use raises
+    `SuiteLimitError` (a `ValueError`) before anything is journaled.
+
     With `deadline_s` the run is on a clock: no node is started
     that the time left cannot fit (median node wall so far), no attempt
     is started past the deadline, the attempt in flight finishes and may
@@ -2369,6 +2396,7 @@ def run_slice(
     with the process; a deadline saddle can see coming ends with a
     journal that resumes.
     """
+    test_timeout = suite_limit(workdir, "HEAD").seconds
     task_hash = hashlib.sha256(task.encode()).hexdigest()
     started = now()
     run_start = perf_counter()
@@ -2425,6 +2453,7 @@ def run_slice(
         survivor_draw=survivor_draw,
         survivor_samples=survivor_samples,
         rule_d=rule_d,
+        test_timeout=test_timeout,
     )
     merge_exit, merge_ran = _merge_gate(
         merge_command,
@@ -2432,6 +2461,7 @@ def run_slice(
         proofs=proofs,
         run_span_id=run_span_id,
         journal_path=journal_path,
+        test_timeout=test_timeout,
     )
     return _seal_run(
         remaining,

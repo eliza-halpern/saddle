@@ -17,6 +17,7 @@ from pathlib import Path, PurePath
 
 from saddle.dag import Node
 from saddle.evidence import (
+    DEFAULT_TEST_TIMEOUT_S,
     CapturedRun,
     MutationOutcome,
     changed_statements,
@@ -121,6 +122,7 @@ def run_node_gate(
     planned_requirements: tuple[str, ...] = (),
     owed_tests: tuple[str, ...] = (),
     tier2: bool = True,
+    test_timeout: float = DEFAULT_TEST_TIMEOUT_S,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -146,6 +148,12 @@ def run_node_gate(
     source counts once the suite flips red-to-green. When `capture` is
     given, the suite and ruff invocations (exits plus output) append to
     it in run order for recovery prompts.
+
+    `test_timeout` bounds every run of the node's test command here: the
+    suite, each red-phase sample and each dead-code rerun. Callers pass the
+    project's `evidence.suite_limit`, read where the task started -- never
+    at `baseline`, which in `slice` is a per-node snapshot that holds the
+    edits of the nodes before it.
     """
     gate = node.deterministic_gate
     sources = read_sources(workdir, "*.py")
@@ -159,7 +167,10 @@ def run_node_gate(
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
     suite = run_shell_capture(
-        under_coverage(gate.test_command, data_file), workdir, recorder=recorder
+        under_coverage(gate.test_command, data_file),
+        workdir,
+        recorder=recorder,
+        timeout=test_timeout,
     )
     if capture is not None:
         capture.append(suite)
@@ -231,6 +242,7 @@ def run_node_gate(
                 under_coverage(gate.test_command, str(dest / ".coverage.red")),
                 dest,
                 recorder=recorder,
+                timeout=test_timeout,
             )
             baseline_exits.append(baseline_run.exit_code)
             if sample_index == 0:
@@ -316,7 +328,9 @@ def run_node_gate(
             shutil.copytree(workdir, sandbox, ignore=shutil.ignore_patterns("__pycache__", ".git"))
             for rel, text in edited.items():
                 (sandbox / rel).write_text(text)
-            return run_shell_capture(gate.test_command, sandbox, recorder=recorder).exit_code
+            return run_shell_capture(
+                gate.test_command, sandbox, recorder=recorder, timeout=test_timeout
+            ).exit_code
 
     inputs = Tier1Inputs(
         sources=sources,

@@ -230,6 +230,10 @@ closes the strip.
    in a background thread. The model does not wait for it. When that audit completes,
    its failures are appended to the model's next tool result, for example
    `[audit checkpoint 1 on tree …: FAIL] - coverage (tier 1): fail, evidence-thin: …`.
+   Each run of the tests has the project's time limit: 300 s, unless the
+   `pyproject.toml` committed where the run started sets `[tool.saddle]`
+   `test-timeout` (CLI.md, "The test time limit"). A suite still running at the limit
+   is reported as a hang, and the run's own edits cannot raise it.
 5. **Finish audit.** When the model calls `finish`, tier 0 (syntax, ruff, imports, on
    each changed Python file: the same files the post-hoc `saddle audit --tiered` sends to
    tier 0), tier 1 and tier 2 run on the final tree.
