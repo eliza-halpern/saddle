@@ -439,6 +439,10 @@ this module -- so no measured path is affected. Session titling stays at
 0.0 on purpose: a name should not change each time it is asked for."""
 
 MIN_OUTPUT: Final = 8192
+REPLY_ROOM: Final = 32_768
+"""Real tokens kept free for the reply when the prompt is compacted: a
+working reply (reasoning plus a tool call) runs to many thousands of tokens,
+and MIN_OUTPUT is the floor a reply is refused below, not what it needs."""
 """Floor for a reply's budget even in a nearly-full window. Below this a
 reply gets cut mid-sentence, which is worse than compacting harder."""
 
@@ -506,6 +510,12 @@ class TurnOptions:
         left = self.context_tokens - self.input_tokens(messages, counter) - OUTPUT_MARGIN
         return max(left, MIN_OUTPUT)
 
+    def compaction_limit_exact(self) -> int:
+        """The compaction ceiling in real tokens (the server's count, tool
+        schemas included): the window less `REPLY_ROOM` for the reply and
+        `OUTPUT_MARGIN`. About 80% of a 175,000 window."""
+        return self.context_tokens - REPLY_ROOM - OUTPUT_MARGIN
+
     def compaction_limit(self) -> int:
         """Estimate-scale ceiling that still leaves room to answer.
 
@@ -519,7 +529,10 @@ class TurnOptions:
 
 
 def _reply_cap(
-    client: VllmClient, messages: list[dict[str, Any]], options: TurnOptions
+    client: VllmClient,
+    messages: list[dict[str, Any]],
+    options: TurnOptions,
+    counter: TokenCounter | None = None,
 ) -> tuple[int, str]:
     """The reply's `max_tokens`, and the cut it names if the reply reaches it.
 
@@ -531,7 +544,7 @@ def _reply_cap(
     the mark holds exactly, which a count of streamed text could not. The
     cut is "" when the context window, not a budget, set the cap.
     """
-    cap = options.budget(messages, getattr(client, "count_tokens", None))
+    cap = options.budget(messages, counter or getattr(client, "count_tokens", None))
     auto = options.auto
     if auto is None:
         return cap, ""
@@ -722,6 +735,10 @@ def run_turn(
     again gives a different answer, which is the point of the button.
     """
     ctx = context or ToolContext(workdir=options.workdir)
+    counter = getattr(client, "count_tokens", None)
+    once = _OnceCounter(counter) if counter is not None else None
+    if ctx.count_tokens is None and counter is not None:
+        ctx.count_tokens = lambda text: counter([{"role": "user", "content": text}])
     stop = cancel or (lambda: False)
     # A retry (text None) still answers a question; the turn's start and its
     # sealed proof both name that one.
@@ -765,12 +782,12 @@ def run_turn(
             # one turn, so a compaction before the loop only ever saw
             # [system, task] (pi-blackhole's CHANGELOG #38
             # fixed the same defect, OpenHands condenses at every step).
-            yield from _compact(messages, options, node_id)
+            yield from _compact(messages, options, node_id, once)
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []
             usage: StreamUsage | None = None
-            cap, cut = _reply_cap(client, messages, options)
+            cap, cut = _reply_cap(client, messages, options, once)
             timed_out = False
             sent = perf_counter()
             first: float | None = None
@@ -989,13 +1006,54 @@ def run_turn(
     yield TurnEnd(turn=turn, proof=proof)
 
 
-def _compact(messages: list[dict[str, Any]], options: TurnOptions, node_id: str) -> Iterator[Event]:
-    """Compact before one request; announce it, and seal it in a run's ledger."""
+class _OnceCounter:
+    """The server's count, asked once per distinct request: compaction and
+    the reply cap both measure the same messages before one request, and
+    the second question would only repeat the first."""
+
+    def __init__(self, counter: TokenCounter) -> None:
+        self._counter = counter
+        self._key: str | None = None
+        self._value: int | None = None
+
+    def __call__(self, messages: Any, *, tools: Any = None) -> int | None:
+        key = json.dumps([messages, tools], sort_keys=True, default=str)
+        if key != self._key:
+            self._key, self._value = key, self._counter(messages, tools=tools)
+        return self._value
+
+
+def _compact(
+    messages: list[dict[str, Any]],
+    options: TurnOptions,
+    node_id: str,
+    counter: TokenCounter | None = None,
+) -> Iterator[Event]:
+    """Compact before one request; announce it, and seal it in a run's ledger.
+
+    With the server's tokenizer at hand the limit and every measurement are
+    real tokens (`compaction_limit_exact`); without it, the old estimate. A
+    dogfood run compacted at 85,550 real tokens of a 175,000 window: the
+    estimate's safety factor had spent the other half."""
     auto = options.auto
-    before = estimate_tokens(messages)
+    exact = counter(messages, tools=options.tools) if counter is not None else None
+    before = exact if exact is not None else estimate_tokens(messages)
+    measure: Callable[[list[dict[str, Any]]], int] | None = None
+    limit = options.compaction_limit()
+    if exact is not None and counter is not None:
+        limit = options.compaction_limit_exact()
+        count = counter
+
+        def measure(msgs: list[dict[str, Any]]) -> int:
+            counted = count(msgs, tools=options.tools)
+            return counted if counted is not None else options.input_estimate(msgs)
+
+    if exact is not None and exact <= limit:
+        return
     dropped, summary = compact(
         messages,
-        limit_tokens=options.compaction_limit(),
+        limit_tokens=limit,
+        measure=measure,
         pin="first" if auto is not None else "last",
         hint=REREAD if auto is not None else ASK_USER,
         state=(lambda: _run_state(auto)) if auto is not None else None,
@@ -1011,7 +1069,8 @@ def _compact(messages: list[dict[str, Any]], options: TurnOptions, node_id: str)
             "kept": len(messages),
             "estimate_before": before,
             "estimate_after": estimate_tokens(messages),
-            "limit": options.compaction_limit(),
+            "limit": limit,
+            "measured": "tokens" if measure is not None else "estimate",
         }
         append_span(
             options.journal,

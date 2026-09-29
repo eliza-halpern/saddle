@@ -156,15 +156,103 @@ def test_execute_tool_rejects_an_unknown_tool(tmp_path: Path) -> None:
 # -- limits: what a tool does when the answer is too big ----------------------
 
 
-def test_an_enormous_file_is_truncated_rather_than_flooding_the_window(
+def _words(text: str) -> int:
+    """A stand-in tokenizer for the tests: one token per whitespace-split word."""
+    return len(text.split())
+
+
+def read(workdir: Path, counter: object = _words, **kwargs: object) -> str:
+    """`read_file` with a token counter in its context, as a run has."""
+    ctx = ToolContext(workdir=workdir, count_tokens=counter)  # type: ignore[arg-type]
+    call = ToolCall(id="c1", name="read_file", arguments=json.dumps(kwargs))
+    return execute_tool(call, workdir=workdir, context=ctx)
+
+
+def test_an_enormous_one_line_file_is_refused_rather_than_flooding_the_window(
     tmp_path: Path,
 ) -> None:
-    from saddle.tools import MAX_READ
+    """flip: was `test_an_enormous_file_is_truncated_rather_than_flooding_the_window`,
+    which cut the text at a character count. The protection it pinned (one
+    read cannot flood the context) is kept, measured in the model's own
+    tokens: a single line over `READ_TOKENS` is refused with where to look."""
+    from saddle.tools import READ_TOKENS
 
-    (tmp_path / "big.txt").write_text("x" * (MAX_READ + 5_000))
-    out = run("read_file", tmp_path, path="big.txt")
-    assert out.endswith(f"\n[... truncated at {MAX_READ} characters ...]")
-    assert len(out) < MAX_READ + 200
+    (tmp_path / "big.txt").write_text("w " * (READ_TOKENS + 5))
+    out = read(tmp_path, path="big.txt")
+    assert out.startswith("error: line 1 of big.txt alone is ")
+    assert f"over the {READ_TOKENS}-token limit" in out
+
+
+def test_a_window_over_the_token_limit_is_cut_to_fewer_lines(tmp_path: Path) -> None:
+    from saddle.tools import READ_TOKENS
+
+    line = "w " * 100 + "\n"  # 100 tokens a line under the stand-in
+    (tmp_path / "wide.txt").write_text(line * 300)
+    out = read(tmp_path, path="wide.txt")
+    head = out.splitlines()[0]
+    shown = int(head.split("lines 1-", 1)[1].split(" ", 1)[0])
+    assert 1 <= shown * 100 <= READ_TOKENS < 300 * 100
+    assert out.endswith(f"read_file with offset={shown + 1} to read on]")
+
+
+def test_a_short_file_read_whole_is_unchanged(tmp_path: Path) -> None:
+    """Known-good: at most `READ_LINES` lines and no window -> the bytes, as before."""
+    text = "".join(f"line {i}\n" for i in range(1, 51))
+    (tmp_path / "s.py").write_text(text)
+    assert read(tmp_path, path="s.py") == text
+    assert run("read_file", tmp_path, path="s.py") == text
+
+
+def test_a_long_file_comes_back_one_window_at_a_time(tmp_path: Path) -> None:
+    """Red before: a 2,600-line module came back whole (about 30k tokens in
+    one result), filling half the context by minute five of a dogfood run."""
+    from saddle.tools import READ_LINES
+
+    total = READ_LINES + 150
+    (tmp_path / "long.py").write_text("".join(f"x{i} = {i}\n" for i in range(1, total + 1)))
+    out = run("read_file", tmp_path, path="long.py")
+    lines = out.splitlines()
+    assert lines[0] == f"[long.py: lines 1-{READ_LINES} of {total}]"
+    assert lines[1] == "x1 = 1"
+    assert lines[READ_LINES] == f"x{READ_LINES} = {READ_LINES}"
+    assert lines[-1] == f"[150 more lines: read_file with offset={READ_LINES + 1} to read on]"
+
+
+def test_offset_and_limit_read_exactly_that_window(tmp_path: Path) -> None:
+    """Red before: offset and limit were silently dropped and the whole file
+    came back from line 1 (a model asked for lines 180-299 and got 612)."""
+    (tmp_path / "t.py").write_text("".join(f"v{i}\n" for i in range(1, 613)))
+    out = run("read_file", tmp_path, path="t.py", offset=180, limit=120)
+    assert out.splitlines()[0] == "[t.py: lines 180-299 of 612]"
+    assert out.splitlines()[1] == "v180"
+    assert out.splitlines()[120] == "v299"
+    assert out.endswith("[313 more lines: read_file with offset=300 to read on]")
+    as_text = run("read_file", tmp_path, path="t.py", offset="180", limit="120")
+    assert as_text == out  # numbers sent as strings are read the same
+    tail = run("read_file", tmp_path, path="t.py", offset=600)
+    assert tail.splitlines()[0] == "[t.py: lines 600-612 of 612]"
+    assert "more lines" not in tail
+
+
+def test_a_window_past_the_end_or_not_a_line_number_is_an_error(tmp_path: Path) -> None:
+    (tmp_path / "t.py").write_text("a\nb\n")
+    assert run("read_file", tmp_path, path="t.py", offset=9) == (
+        "error: offset 9 is past the end of t.py (2 lines)"
+    )
+    for bad in (0, -3, "abc", 1.5, True):
+        out = run("read_file", tmp_path, path="t.py", limit=bad)
+        assert out == "error: read_file limit must be a whole number of at least 1", bad
+
+
+def test_an_argument_a_tool_does_not_declare_is_refused_by_name(tmp_path: Path) -> None:
+    """Red before: unknown arguments were dropped without a word."""
+    (tmp_path / "t.py").write_text("a\n")
+    assert run("read_file", tmp_path, path="t.py", start_line=3) == (
+        "error: read_file does not take start_line; its arguments are limit, offset, path"
+    )
+    assert run("list_dir", tmp_path, path=".", recursive=True).startswith(
+        "error: list_dir does not take recursive; its arguments are "
+    )
 
 
 def test_an_enormous_new_file_is_shown_truncated_but_counted_in_full(

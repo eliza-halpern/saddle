@@ -264,6 +264,7 @@ def compact(
     pin: Pin = "last",
     hint: str = ASK_USER,
     state: Callable[[], str] | None = None,
+    measure: Callable[[list[dict[str, Any]]], int] | None = None,
 ) -> tuple[int, str]:
     """Bring `messages` under `limit_tokens` in place.
 
@@ -272,7 +273,8 @@ def compact(
     given (an autonomous run), is called once per compaction and its text
     goes in the note, which is rebuilt, not appended to, each time.
     """
-    if estimate_tokens(messages) <= limit_tokens:
+    size = measure or estimate_tokens
+    if size(messages) <= limit_tokens:
         return 0, ""
 
     keep = pinned_index(messages, pin)
@@ -292,7 +294,7 @@ def compact(
 
     old = next((i for i, m in enumerate(messages) if is_note(m)), None)
     block = state() if state is not None else ""
-    if estimate_tokens(messages) <= limit_tokens:
+    if size(messages) <= limit_tokens:
         if old is not None and state is not None:
             count, topics = _previous(messages[old])
             messages[old] = _note(count, topics, [], block, hint)
@@ -309,7 +311,7 @@ def compact(
     dropped = 0
     edited: list[str] = []
     fresh: list[str] = []
-    while estimate_tokens(messages) + reserve > limit_tokens:
+    while size(messages) + reserve > limit_tokens:
         oldest = next((i for i in range(len(messages)) if not protected(i)), None)
         if oldest is None:
             break  # nothing left that may be dropped; report what we managed
@@ -335,7 +337,7 @@ def compact(
 
     # Stage 3: still over (the protected tail itself is too big): shrink tool
     # results in the tail too, all but the latest round's.
-    if estimate_tokens(messages) + reserve > limit_tokens:
+    if size(messages) + reserve > limit_tokens:
         last = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
         for message in messages[:last]:
             content = message.get("content") or ""

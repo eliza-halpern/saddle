@@ -23,7 +23,10 @@ turns on the tier-0 guards and a budget, and hands one turn to the same engine t
 
 from __future__ import annotations
 
+import configparser
 import json
+import math
+import shutil
 import subprocess
 import tomllib
 import uuid
@@ -36,9 +39,11 @@ from typing import Final
 
 from saddle import prompt_constants, sandbox
 from saddle.anchor import anchor_trailers, outcome_hash
+from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
+from saddle.evidence import src_layout_env
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
@@ -61,6 +66,16 @@ DEFAULT_TOKEN_BUDGET: Final = 100_000
 
 DEFAULT_TEST_ROOTS: Final = ("tests",)
 
+TASK_TEMPERATURE: Final = 1.0
+"""A task run's sampling temperature: the model's own recommendation (its
+generation_config samples at 1.0, with the server supplying its top_p 0.95
+and top_k 20), not greedy. Greedy decoding looped: two watched dogfood runs
+on saddle's own repo each spent six to twenty-nine minutes inside one
+reasoning reply without a tool call, the later minutes repeating the earlier
+text word for word, while the same task at 1.0 kept acting. Greedy was kept
+for byte-identical replays, which vLLM does not give anyway (batching makes
+greedy runs diverge). A measurement that wants greedy pins 0.0 itself."""
+
 SYSTEM_PROMPT: Final = (
     "You are working alone on one task in a git worktree of a repository. "
     "Nobody will answer questions. Read the code, make the change with the "
@@ -70,6 +85,110 @@ SYSTEM_PROMPT: Final = (
     "changed and why. If it cannot be done honestly, call finish and say so. "
     "Your account is recorded as narrative; it does not count as proof."
 )
+
+ENVIRONMENT_PROMPT: Final = (
+    " Your working directory is {worktree}, a fresh git worktree of the "
+    "repository; your commands run in it inside a sandbox with no network. The "
+    "repository's own checkout outside this worktree is not visible to them, so "
+    "work only here, and tools installed elsewhere (uv, for one) may not be "
+    "reachable. {python} {src}The audit runs "
+    "the tests with `{test_command}` in this worktree. The whole suite can take "
+    "many minutes in some projects, so run the test files that cover your change "
+    "first. This run has {minutes} and {tokens} generated tokens; it stops at "
+    "either limit, so leave room to call finish.{coverage}{feed}"
+)
+
+FEED_PROMPT: Final = (
+    " While you work, saddle audits snapshots of this worktree in the "
+    "background and appends each result to your next tool result: a line in "
+    "square brackets reading audit checkpoint N on tree <id>, then PASS or FAIL, "
+    "with any failing checks after it. It describes the tree at that snapshot, "
+    "not the command it "
+    "follows. Every file left in the worktree is audited, so remove scratch "
+    "files before you call finish, which runs the same audit on the final tree."
+)
+"""Said only when the run delivers audits to the model (arm E+A+F). A watched
+dogfood run met its first checkpoint note inside its own script's output and
+spent a paragraph guessing where it came from ("the repo's conftest??")."""
+"""What the run's commands actually see, from facts saddle already holds
+(`environment_prompt`). A dogfood run on saddle's own repo spent seven rounds
+finding a Python that could import the project, because none of this was said."""
+
+
+def environment_prompt(
+    worktree: Path,
+    project: Path | None,
+    env: dict[str, str],
+    time_budget_s: float,
+    token_budget: int,
+    feed: bool = False,
+) -> str:
+    """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
+    (the project venv, else whatever `python` or `python3` their PATH has),
+    whether `src/` leads their import path, the audit's test command, and the
+    run's budgets as they stand at the start. A dogfood run spent ten of its
+    thirty minutes on a whole-suite baseline and had not edited a file at
+    minute eighteen: nothing had told it how long it had."""
+    if project is not None:
+        python = "`python` on PATH is the project's own environment."
+    else:
+        path = sandbox.command_env(env)["PATH"]
+        found = shutil.which("python", path=path)
+        found3 = shutil.which("python3", path=path)
+        python = "The project has no virtual environment of its own" + (
+            f"; `python` on PATH is {found}."
+            if found is not None
+            else f", and there is no `python` on PATH: use `python3` ({found3})."
+            if found3 is not None
+            else ", and no Python is on PATH."
+        )
+    src = (
+        "This worktree's `src/` is first on PYTHONPATH, so importing the project's "
+        "package loads the code you edit. "
+        if "PYTHONPATH" in src_layout_env(worktree)
+        else ""
+    )
+    coverage = (
+        " This project's pytest options add coverage, so a run of a few test files "
+        "reports a coverage failure that says nothing about your change: pass "
+        "`--no-cov` for those quick runs."
+        if "--cov" in pytest_addopts(worktree)
+        else ""
+    )
+    minutes = max(1, math.ceil(time_budget_s / 60))
+    return ENVIRONMENT_PROMPT.format(
+        worktree=worktree,
+        python=python,
+        src=src,
+        test_command=AUDIT_TEST_COMMAND,
+        minutes=f"{minutes} minute{'s' if minutes != 1 else ''}",
+        tokens=f"{token_budget:,}",
+        coverage=coverage,
+        feed=FEED_PROMPT if feed else "",
+    )
+
+
+def pytest_addopts(worktree: Path) -> str:
+    """The `addopts` a pytest run in `worktree` picks up from `pyproject.toml`
+    (`[tool.pytest.ini_options]`) or `pytest.ini` (`[pytest]`), joined; ""
+    when neither sets any or a file does not parse. A dogfood run on saddle's
+    own repo ran one test file and got the repo's `--cov-fail-under=100`
+    failure for the whole package."""
+    found: list[str] = []
+    try:
+        table = tomllib.loads((worktree / "pyproject.toml").read_text(encoding="utf-8"))
+        opts = table.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("addopts", "")
+        found.append(" ".join(opts) if isinstance(opts, list) else str(opts))
+    except (OSError, tomllib.TOMLDecodeError):
+        pass
+    ini = configparser.ConfigParser()
+    try:
+        ini.read_string((worktree / "pytest.ini").read_text(encoding="utf-8"))
+        found.append(ini.get("pytest", "addopts", fallback=""))
+    except (OSError, configparser.Error):
+        pass
+    return " ".join(part for part in found if part)
+
 
 CHECK_PROMPT: Final = (
     " You may call check to run the audit's fast checks on the tree as it is now; "
@@ -173,9 +292,9 @@ class AutoOptions:
     time_budget_s: float = DEFAULT_TIME_BUDGET_S
     token_budget: int = DEFAULT_TOKEN_BUDGET
     allow_test_edits: bool = False
-    temperature: float = 0.0
-    """Greedy, as `saddle run` is: an arm is a measurement, and chat's 1.0
-    (engine.CHAT_TEMPERATURE) is argued there for conversation only."""
+    temperature: float = TASK_TEMPERATURE
+    """`TASK_TEMPERATURE`: the model's own recommended sampling. A measurement
+    that wants greedy decoding pins `--temperature 0.0` explicitly."""
     reasoning_effort: str = "medium"
     context_tokens: int = 175_000
     run_id: str = ""
@@ -598,12 +717,21 @@ def run_auto(
         else f"Test files ({', '.join(r + '/' for r in roots)}, test_*.py, conftest.py) "
         "are read-only: an edit to one is refused."
     )
+    run_env = {**COMMAND_ENV, **sandbox.project_command_env(project), **src_layout_env(worktree)}
     turn_options = TurnOptions(
         workdir=worktree,
         journal=journal,
         temperature=options.temperature,
         reasoning_effort=options.reasoning_effort,
         system_prompt=SYSTEM_PROMPT.format(tests=tests)
+        + environment_prompt(
+            worktree,
+            project,
+            run_env,
+            options.time_budget_s,
+            options.token_budget,
+            feed=options.arm == "E+A+F",
+        )
         + (CHECK_PROMPT if options.check_tool else ""),
         context_tokens=options.context_tokens,
         tools=[
@@ -619,7 +747,7 @@ def run_auto(
         workdir=worktree,
         sandbox=Sandbox.for_workdir(
             worktree,
-            env={**COMMAND_ENV, **sandbox.project_command_env(project)},
+            env=run_env,
             require_isolation=True,
             network="none",
         ),
@@ -635,7 +763,11 @@ def run_auto(
             """From now on the gates and the model's commands run on `overlay`."""
             if feed is not None:
                 feed.project_env = overlay
-            box.env = {**COMMAND_ENV, **sandbox.project_command_env(overlay)}
+            box.env = {
+                **COMMAND_ENV,
+                **sandbox.project_command_env(overlay),
+                **src_layout_env(worktree),
+            }
             box.expose = sandbox.default_expose(sandbox.command_env(box.env))
 
         auto.installs = Installs(

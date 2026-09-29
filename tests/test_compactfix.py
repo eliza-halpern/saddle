@@ -44,6 +44,9 @@ from saddle.transcript import session_line
 from saddle.vllm import StreamToken, VllmClient
 
 BIG = "".join(f"def helper_{i}(x):\n    return x * {i}  # filler line {i}\n" for i in range(600))
+BIG_LINES = 1200
+"""Every line of BIG: these tests fill the window on purpose, so each read asks
+for the whole file rather than `read_file`'s default window."""
 """~33 KB: one read of it is ~8k estimated tokens."""
 TASK = "TASK-5e1d: make add() in calc.py return the sum instead of the difference"
 PY = shlex.quote(sys.executable)
@@ -58,7 +61,7 @@ def _commit_big(repo: Path) -> None:  # noqa: F811
 
 
 def _reads(n: int, prefix: str = "r") -> list[list[Any]]:
-    return [[call("read_file", f"{prefix}{i}", path="big.py")] for i in range(n)]
+    return [[call("read_file", f"{prefix}{i}", path="big.py", limit=BIG_LINES)] for i in range(n)]
 
 
 def _auto(
@@ -215,7 +218,9 @@ def test_r2_a_chat_keeps_the_question_it_is_answering(tmp_path: Path) -> None:
             {"role": "user", "content": f"old question {i} " + "q" * 8000},
             {"role": "assistant", "content": f"old answer {i}"},
         ]
-    client = Scripted([*_reads(6), [call("read_file", "z", path="big.py")]], tail=[])
+    client = Scripted(
+        [*_reads(6), [call("read_file", "z", path="big.py", limit=BIG_LINES)]], tail=[]
+    )
     options = TurnOptions(
         workdir=tmp_path,
         journal=tmp_path / "j.jsonl",

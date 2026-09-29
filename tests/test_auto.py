@@ -24,6 +24,7 @@ import pytest
 from saddle import cli
 from saddle.auto import (
     DEFAULT_TEST_ROOTS,
+    TASK_TEMPERATURE,
     AutoError,
     AutoOptions,
     AutoResult,
@@ -180,7 +181,7 @@ def test_finished_run_leaves_a_branch_a_verified_ledger_and_the_checkout_untouch
     asked = client.asked[0]
     assert "finish" in [t["function"]["name"] for t in asked["tools"]]
     assert "read-only" in asked["messages"][0]["content"]
-    assert asked["temperature"] == 0.0
+    assert asked["temperature"] == TASK_TEMPERATURE == 1.0
 
 
 def test_a_second_run_gets_its_own_worktree_and_branch(repo: Path) -> None:
@@ -561,7 +562,9 @@ def test_the_command_reports_setup_failure(tmp_path: Path) -> None:
 def test_parser_defaults_come_from_the_documented_budgets() -> None:
     args = cli.build_parser().parse_args(["auto", "t"])
     assert (args.time_budget, args.token_budget, args.allow_test_edits) == (1800, 100_000, False)
-    assert args.temperature == 0.0
+    assert args.temperature == TASK_TEMPERATURE == 1.0
+    pinned = cli.build_parser().parse_args(["auto", "--temperature", "0.0", "t"])
+    assert pinned.temperature == 0.0  # a measurement can still ask for greedy
 
 
 class MainClient(Scripted):

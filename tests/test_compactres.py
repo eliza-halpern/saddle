@@ -122,7 +122,7 @@ def test_f0_auto_run_keeps_every_request_under_the_compaction_limit(repo: Path) 
     (repo / "big.py").write_text(BIG)
     git(repo, "add", "big.py")
     git(repo, "commit", "-q", "-m", "big")
-    reads = [[call("read_file", f"r{i}", path="big.py")] for i in range(8)]
+    reads = [[call("read_file", f"r{i}", path="big.py", limit=600)] for i in range(8)]
     client = Scripted([*reads, finish()])
     options = AutoOptions(
         task=TASK, repo=repo, run_id="f0", arm="E", context_tokens=40_000, token_budget=10**7
@@ -169,7 +169,7 @@ def test_d3_edited_files_survive_compaction(repo: Path) -> None:  # noqa: F811
     git(repo, "add", "big.py")
     git(repo, "commit", "-q", "-m", "big")
     edit = [call("write_file", "w0", path="src/util_math.py", content="X = 1\n")]
-    reads = [[call("read_file", f"r{i}", path="big.py")] for i in range(8)]
+    reads = [[call("read_file", f"r{i}", path="big.py", limit=600)] for i in range(8)]
     client = Scripted([edit, *reads, finish()])
     options = AutoOptions(task=TASK, repo=repo, run_id="d3", arm="E", context_tokens=40_000)
     run_auto(options, cast(VllmClient, client))
@@ -188,7 +188,7 @@ def test_d3_latest_audit_finding_survives_compaction(repo: Path) -> None:  # noq
     git(repo, "add", "big.py")
     git(repo, "commit", "-q", "-m", "big")
     edit = [call("edit_file", "e0", path="calc.py", old="def add", new="# adds\ndef add")]
-    reads = [[call("read_file", f"r{i}", path="big.py")] for i in range(8)]
+    reads = [[call("read_file", f"r{i}", path="big.py", limit=600)] for i in range(8)]
     client = Scripted([edit, [call("finish", "f0", summary="x")], *reads], tail=finish("y", "f9"))
     options = AutoOptions(
         task=TASK,

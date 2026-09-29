@@ -61,7 +61,15 @@ def preview_for(name: str, arguments: str, workdir: Path) -> str | None:
     return str(target.relative_to(workdir)) if target.is_file() else None
 
 
-MAX_READ: Final = 200_000
+READ_LINES: Final = 400
+READ_TOKENS: Final = 12_000
+"""At most this many tokens (the model's own count) in one `read_file`
+window; a window over it is cut to fewer lines, and one line over it alone
+is refused with where to look instead."""
+"""How many lines one `read_file` returns unless asked for a window. A whole
+module in one read (a dogfood run read a 2,600-line file at once, about 30k
+tokens) filled half the context by minute five and forced compaction, and
+the model re-read what compaction had shortened."""
 MAX_MATCHES: Final = 60
 MAX_DIFF: Final = 20_000
 
@@ -92,8 +100,15 @@ def _tool(
 TOOLS: Final[list[dict[str, Any]]] = [
     _tool(
         "read_file",
-        "Read a UTF-8 text file under the working directory.",
-        {"path": {"type": "string"}},
+        "Read a UTF-8 text file under the working directory. A file longer than "
+        f"{READ_LINES} lines comes back {READ_LINES} lines at a time, headed by "
+        "which lines they are; pass offset (the first line, from 1) and limit (how "
+        "many lines) to read another part.",
+        {
+            "path": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 1},
+            "limit": {"type": "integer", "minimum": 1},
+        },
         ["path"],
     ),
     _tool(
@@ -149,6 +164,14 @@ TOOLS: Final[list[dict[str, Any]]] = [
         ["id"],
     ),
 ]
+
+_ARGUMENTS: Final[dict[str, frozenset[str]]] = {
+    tool["function"]["name"]: frozenset(tool["function"]["parameters"]["properties"])
+    for tool in TOOLS
+}
+"""Each tool's declared arguments. Anything else is refused by name, not
+dropped: `read_file` once ignored an `offset` and `limit` its schema did not
+declare, and returned whole files to a model that had asked for 120 lines."""
 
 READ_ONLY_TOOLS: Final = ("read_file", "list_dir", "search")
 """What the Ask lane may call: nothing that writes a file or runs a command.
@@ -293,6 +316,10 @@ class ToolContext:
             self.undo.before_write(path)
 
     call_id: str | None = None
+    count_tokens: Callable[[str], int | None] | None = None
+    """The model's own tokenizer, asked through the server, for a tool that
+    must keep its result inside the context (`read_file`). None where no
+    server is at hand: the tool then limits by lines alone."""
     """Which tool call is running, so a kept version can be found again from
     a stored transcript."""
 
@@ -362,15 +389,62 @@ def _text(args: Mapping[str, Any], key: str, tool: str) -> str:
     return value
 
 
+def _line_number(args: Mapping[str, Any], key: str) -> int | None:
+    """An optional whole-number argument of at least 1; a numeric string counts
+    (models send "280" as often as 280)."""
+    value = args.get(key)
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        msg = f"read_file {key} must be a whole number of at least 1"
+        raise _BadArgumentError(msg)
+    return value
+
+
 def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    """The file, or a window of it by lines. A file of at most `READ_LINES`
+    lines and `READ_TOKENS` tokens read without `offset`/`limit` comes back
+    whole and unchanged; any other read is headed by the lines it holds and
+    how to read on."""
     name = _text(args, "path", "read_file")
+    offset = _line_number(args, "offset")
+    limit = _line_number(args, "limit")
     path = resolve_within(ctx.workdir, name)
     if not path.is_file():
         return f"error: cannot read {name!r}"
     data = path.read_text(encoding="utf-8", errors="replace")
-    if len(data) > MAX_READ:
-        return data[:MAX_READ] + f"\n[... truncated at {MAX_READ} characters ...]"
-    return data
+    lines = data.splitlines(keepends=True)
+    total = len(lines)
+    if offset is None and limit is None and total <= READ_LINES:
+        whole = ctx.count_tokens(data) if ctx.count_tokens is not None else None
+        if whole is None or whole <= READ_TOKENS:
+            return data
+    start = offset or 1
+    if start > max(total, 1):
+        return f"error: offset {start} is past the end of {name} ({total} lines)"
+    end = min(start - 1 + (limit or READ_LINES), total)
+    body = "".join(lines[start - 1 : end])
+    for _ in range(4):
+        tokens = ctx.count_tokens(body) if ctx.count_tokens is not None else None
+        if tokens is None or tokens <= READ_TOKENS:
+            break
+        if end == start:
+            return (
+                f"error: line {start} of {name} alone is {tokens} tokens, over the "
+                f"{READ_TOKENS}-token limit for one read; look into it with search "
+                "or run_command instead"
+            )
+        end = start - 1 + max(1, (end - start + 1) * READ_TOKENS // tokens)
+        body = "".join(lines[start - 1 : end])
+    head = f"[{name}: lines {start}-{end} of {total}]\n"
+    more = (
+        f"\n[{total - end} more lines: read_file with offset={end + 1} to read on]"
+        if end < total
+        else ""
+    )
+    return head + body + more
 
 
 def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -597,6 +671,13 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
             return "error: arguments must be a JSON object"
     except ValueError as exc:
         return f"error: arguments are not valid JSON: {exc}"
+    allowed = _ARGUMENTS.get(call.name)
+    extra = sorted(set(args) - allowed) if allowed is not None else []
+    if extra:
+        return (
+            f"error: {call.name} does not take {', '.join(extra)}; "
+            f"its arguments are {', '.join(sorted(allowed or ()))}"
+        )
     ctx.call_id = call.id
     try:
         return handler(ctx, args)
