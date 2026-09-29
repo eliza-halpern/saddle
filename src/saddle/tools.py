@@ -426,17 +426,28 @@ def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return f"error: offset {start} is past the end of {name} ({total} lines)"
     end = min(start - 1 + (limit or READ_LINES), total)
     body = "".join(lines[start - 1 : end])
-    for _ in range(4):
-        tokens = ctx.count_tokens(body) if ctx.count_tokens is not None else None
-        if tokens is None or tokens <= READ_TOKENS:
-            break
-        if end == start:
+    count = ctx.count_tokens
+    tokens = count(body) if count is not None else None
+    if count is not None and tokens is not None and tokens > READ_TOKENS:
+        first = count(lines[start - 1])
+        if first is not None and first > READ_TOKENS:
             return (
-                f"error: line {start} of {name} alone is {tokens} tokens, over the "
+                f"error: line {start} of {name} alone is {first} tokens, over the "
                 f"{READ_TOKENS}-token limit for one read; look into it with search "
                 "or run_command instead"
             )
-        end = start - 1 + max(1, (end - start + 1) * READ_TOKENS // tokens)
+        # The largest window from `start` that fits, by halving: a few counts,
+        # and never a window over the limit (a proportional cut undershoots
+        # when every count carries a fixed overhead).
+        fits, over = start, end
+        while over - fits > 1:
+            mid = (fits + over) // 2
+            size = count("".join(lines[start - 1 : mid]))
+            if size is None or size <= READ_TOKENS:
+                fits = mid
+            else:
+                over = mid
+        end = fits
         body = "".join(lines[start - 1 : end])
     head = f"[{name}: lines {start}-{end} of {total}]\n"
     more = (

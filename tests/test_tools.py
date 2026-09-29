@@ -386,3 +386,25 @@ def test_waiting_on_a_command_that_is_still_running_reports_it_rather_than_lying
     out = call("wait_for_terminal", id=terminal_id, timeout=1)
     assert "still running" in out
     context.box().kill(terminal_id)
+
+
+def test_a_window_is_the_largest_that_fits_even_with_a_fixed_overhead(tmp_path: Path) -> None:
+    """Red before: with a per-call overhead (as a chat template adds) a
+    proportional cut undershoots every time, and the old loop gave up after
+    four cuts and returned a window still over the limit."""
+    from saddle.tools import READ_TOKENS
+
+    def overhead(text: str) -> int:
+        return (READ_TOKENS - 10) + text.count("\n")  # 10 lines fit, 11 do not
+
+    calls: list[int] = []
+
+    def counted(text: str) -> int:
+        calls.append(1)
+        return overhead(text)
+
+    (tmp_path / "o.txt").write_text("x\n" * 300)
+    out = read(tmp_path, counter=counted, path="o.txt")
+    assert out.splitlines()[0] == "[o.txt: lines 1-10 of 300]"
+    assert len(calls) <= 12  # a halving search, not one count per shrink
+    assert out.endswith("[290 more lines: read_file with offset=11 to read on]")
