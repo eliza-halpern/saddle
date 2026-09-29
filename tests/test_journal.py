@@ -38,6 +38,7 @@ from saddle.journal import (
     read_records,
     read_spans,
     rebuild_proven,
+    redact_secrets,
     scrub_thinking,
     started_before,
     tool_spans_by_node,
@@ -88,6 +89,62 @@ def test_scrub_thinking_redacts_secrets() -> None:
     aws = "AKIA" + "H" * 16
     text = f"key {key} and {bearer}, password=hunter2, {aws}"
     assert scrub_thinking(text) == ("key *** and Bearer ***, password=***, ***")
+
+
+# The key-shaped values below are built from fragments so the leak guard
+# can scan this file: none of them appears whole in the source.
+_KEY = "s" + "k-" + "Abc123_def-456"
+
+
+def test_words_that_contain_sk_dash_survive_redaction() -> None:
+    """Known-good: a hyphenated word whose letters run into `sk-` is not a
+    key. `task-requirements` was sealed into span details as `ta***`."""
+    words = [
+        "task-requirements",
+        "--task-requirements",
+        "desk-reference",
+        "risk-assessment",
+        "disk-partition-table",
+        "the task-requirements file, then risk-assessment",
+    ]
+    for word in words:
+        assert redact_secrets(word) == word
+        assert scrub_thinking(word) == word
+
+
+def test_a_span_detail_naming_task_requirements_is_sealed_whole() -> None:
+    detail = "not proven: task-requirements (question)"
+    span = build_span(node_id="n1", argv=[], duration_ms=0, exit_code=1, detail=detail)
+    assert span.detail == detail
+
+
+def test_a_key_is_still_redacted_wherever_a_separator_precedes_it() -> None:
+    """Known-bad: the boundary admits a key at the start, after whitespace,
+    after `=`, `:` or a quote, after `Bearer `, inside JSON, after a newline."""
+    cases = {
+        _KEY: "***",
+        f"{_KEY} trailing": "*** trailing",
+        f"use {_KEY} now": "use *** now",
+        f"key={_KEY}": "key=***",
+        f"key:{_KEY}": "key:***",
+        f'"{_KEY}"': '"***"',
+        f"Bearer {_KEY}": "Bearer ***",
+        f'{{"k": "{_KEY}", "n": 1}}': '{"k": "***", "n": 1}',
+        f"line one\n{_KEY}\nline three": "line one\n***\nline three",
+        f"\t{_KEY}": "\t***",
+        f"({_KEY})": "(***)",
+        f"x-{_KEY}": "x-***",
+    }
+    for text, expected in cases.items():
+        assert redact_secrets(text) == expected, text
+
+
+def test_the_loosening_admits_a_key_glued_to_a_letter_digit_or_underscore() -> None:
+    """The cost of the boundary, on the record: a key whose `sk` runs on from
+    a letter, digit or underscore is no longer redacted. A key the model
+    wrote that way is indistinguishable from `task-requirements` by shape."""
+    for glued in ("x" + _KEY, "9" + _KEY, "_" + _KEY):
+        assert redact_secrets(glued) == glued
 
 
 def test_scrub_thinking_caps_length() -> None:

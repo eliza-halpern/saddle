@@ -147,7 +147,10 @@ class JournalIssue:
 
 MAX_THINKING_CHARS: Final = 4000
 STAR: Final = "***"
-_KEY_PATTERN: Final = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
+_KEY_PATTERN: Final = re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{8,}")
+"""An `sk-` key, but not the `sk-` inside a word such as `task-requirements`:
+the `sk` may not run on from a letter, digit or underscore. A key glued to one
+(`xsk-...`) is therefore not redacted; by shape it cannot be told from a word."""
 _AWS_PATTERN: Final = re.compile(r"AKIA[0-9A-Z]{16}")
 _NAMED_PATTERN: Final = re.compile(r"(?i)(api[_-]?key|password|secret|token)\s*[:=]\s*([^\s,;]+)")
 
