@@ -1881,6 +1881,7 @@ def _mutmut_scratch_config(
     also_copy: Sequence[str] = (),
     *,
     only_covered: bool = False,
+    selection: Collection[str] = (),
 ) -> str:
     """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
 
@@ -1891,6 +1892,12 @@ def _mutmut_scratch_config(
     A sequence keeps its order (a declared scope's `-k expr` must stay a
     pair); an unordered collection is sorted for a stable file.
     `only_covered` has mutmut mutate only the lines `run_tests` execute.
+
+    `selection` (test node ids) is what mutmut's stats, clean and coverage
+    runs collect (`pytest_add_cli_args_test_selection`), never what a mutant
+    runs: each mutant runs only the tests mutmut saw run its function.
+    `run_tests` would be added to every mutant's run, which then ran all of
+    them. With `selection`, `only_covered` mutates the lines they execute.
     """
     quoted = ", ".join(json.dumps(source) for source in sources)
     ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
@@ -1902,9 +1909,16 @@ def _mutmut_scratch_config(
         else ""
     )
     covered = "mutate_only_covered_lines = true\n" if only_covered else ""
+    chosen = (
+        "pytest_add_cli_args_test_selection = ["
+        + ", ".join(json.dumps(test) for test in sorted(selection))
+        + "]\n"
+        if selection
+        else ""
+    )
     return (
         f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
-        f"{copied}{covered}"
+        f"{copied}{covered}{chosen}"
     )
 
 
@@ -2107,6 +2121,7 @@ def mutation_sample(
     timeout_s: int = _MUTATION_TIMEOUT_S,
     recorder: SpanRecorder | None = None,
     only_covered: bool = False,
+    select_tests: Collection[str] = (),
 ) -> MutationOutcome:
     """Kill-rate over every decided mutant on a changed line.
 
@@ -2125,6 +2140,9 @@ def mutation_sample(
     `run_tests` restricts which tests pytest collects against each mutant
     and leaves the scope alone -- the two are different sets (a
     session read the first as the second and built a vacuous oracle).
+    `select_tests` (the covering tests' node ids) decides what mutmut's
+    stats run collects instead, and each mutant then runs only the tests
+    that ran its function (`_mutmut_scratch_config`'s `selection`).
     Text-only mutants are excluded only when they did NOT kill (widened
     from "survived" alone to every not-killed status).
     Timeouts count as killed (behavior changed), and missing mutmut
@@ -2171,6 +2189,7 @@ def mutation_sample(
                 run_tests,
                 _copyable(production, untouched),
                 only_covered=only_covered,
+                selection=select_tests,
             )
         )
         # Only the mutants of the functions a changed line lies in run: every

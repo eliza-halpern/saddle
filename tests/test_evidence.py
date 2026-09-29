@@ -3041,3 +3041,44 @@ def test_changed_function_globs_ask_for_no_filter_when_they_cannot_tell(
     else:
         target.write_text(source)
     assert _changed_function_globs(tmp_path, {rel: {1, 2}}) == ()
+
+
+# --- each mutant runs only the tests that ran its function ---------------------
+#
+# Contract: the covering tests `mutation_sample` is handed as `select_tests`
+# decide what mutmut's stats and clean runs collect
+# (`pytest_add_cli_args_test_selection`), never what each mutant runs: every
+# mutant runs only the tests mutmut saw run its function. In
+# `pytest_add_cli_args` they were added to every mutant's run, so each mutant
+# ran every covering test.
+
+
+def test_real_mutmut_runs_each_mutant_against_only_the_tests_that_ran_its_function(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before: `test_g` never calls `f` but ran under each of `f`'s
+    mutants, and here it fails there, so a test that cannot see `f` killed
+    `f`'s mutants. Each mutant now runs only its own function's tests: `f`'s
+    survive (its test asserts nothing) and `g`'s are killed by `test_g`."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f(x):\n    return x + 1\n\n\ndef g(x):\n    return x * 2\n")
+    (workdir / "test_f.py").write_text("from n import f\n\n\ndef test_f_weak():\n    f(1)\n")
+    (workdir / "test_g.py").write_text(
+        "import os\n\nfrom n import g\n\n\ndef test_g():\n"
+        '    assert "x_f" not in os.environ.get("MUTANT_UNDER_TEST", "")\n'
+        "    assert g(2) == 4\n"
+    )
+    for argv in (["init", "-q"], ["add", "-A"]):
+        assert run_argv(["git", *argv], workdir) == 0
+    outcome = mutation_sample(
+        workdir,
+        {(str(workdir / "n.py"), 2), (str(workdir / "n.py"), 6)},
+        10,
+        test_files={"test_f.py", "test_g.py"},
+        select_tests=("test_f.py::test_f_weak", "test_g.py::test_g"),
+    )
+    statuses = {name: status for name, status, _show in outcome.mutant_detail}
+    assert {s for n, s in statuses.items() if ".x_f__" in n} == {"survived"}, outcome
+    assert {s for n, s in statuses.items() if ".x_g__" in n} == {"killed"}, outcome

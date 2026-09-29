@@ -403,7 +403,11 @@ def run_node_gate(
             changed,
             sample.max_mutants,
             test_files=test_sources,
-            run_tests=covering or pytest_scope(gate.test_command),
+            # The covering tests decide what mutmut's stats run collects; each
+            # mutant then runs only the ones that ran its function. As
+            # arguments to every run, each mutant ran all of them.
+            run_tests=() if covering else pytest_scope(gate.test_command),
+            select_tests=covering,
             suite_passed=current_exit == 0,
             recorder=recorder,
             # Only the lines those tests run are mutated: a changed line none
