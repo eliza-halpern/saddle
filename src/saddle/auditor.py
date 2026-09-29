@@ -25,8 +25,9 @@ over the worktree with untracked files staged) plus the resolved baseline,
 the test command, the node and `audit.gate_surface()`, so an identical tree
 is never gated twice at the same tier. Tier 0 is keyed by the file's path
 and bytes instead, since it sees one file and no tree. Every run of the
-tests takes the project's time limit (`evidence.suite_limit`), read at the
-resolved baseline: the key names it, and the tree audited cannot move it.
+tests takes the project's time limit (`evidence.suite_limit`) and worker
+count (`evidence.suite_workers`), read at the resolved baseline: the key
+names them, and the tree audited cannot move them.
 
 Without a plan node the four plan-relative checks are `not-applicable`
 (`audit.NOT_APPLICABLE`); with one (`AuditorConfig.node`), they run.
@@ -79,6 +80,7 @@ from saddle.evidence import (
     ruff_findings,
     run_capture,
     suite_limit,
+    suite_workers,
     tree_memory_limit,
 )
 from saddle.gates import (
@@ -925,8 +927,10 @@ class Auditor:
                 return hit
             try:
                 # Read at the resolved baseline, which `key` already names: the
-                # limit is a function of that commit, not of the tree audited.
+                # limit and the worker count are functions of that commit, not
+                # of the tree audited.
                 limit = suite_limit(copy, resolved).seconds
+                workers = suite_workers(copy, resolved).count
             except SuiteLimitError as exc:
                 raise AuditError(str(exc)) from exc
             if tier == 2:
@@ -958,7 +962,12 @@ class Auditor:
                 )
             try:
                 gated = runner.run_node_gate(
-                    self.node, copy, baseline=resolved, tier2=tier == 2, test_timeout=limit
+                    self.node,
+                    copy,
+                    baseline=resolved,
+                    tier2=tier == 2,
+                    test_timeout=limit,
+                    test_workers=workers,
                 )
             finally:
                 if pool is not None:

@@ -77,6 +77,20 @@ verdict, and far past this the wait itself fails: `Popen.communicate`
 raises `OverflowError` for a timeout of 2.2e6 s (about 25 days), which
 would read as a crashed audit instead of a hang."""
 
+SUITE_WORKERS_KEY: Final = "test-workers"
+"""How many pytest-xdist workers the audit runs the project's suite on:
+`test-workers` in the `[tool.saddle]` table of its `pyproject.toml`
+(`suite_workers`). Absent or 1, the suite runs serially, as before."""
+
+SUITE_WORKERS_MAX: Final = 64
+"""The most workers a project may ask for. Every worker is a Python process
+under the run's one memory cap, so a typo such as 800 must be refused by
+name rather than start 800 interpreters."""
+
+SADDLE_KEYS: Final = (SUITE_LIMIT_KEY, SUITE_WORKERS_KEY)
+"""Every key saddle reads in `[tool.saddle]`. Any other key there is refused
+(`_committed_saddle_table`): a typo must not read as "not set"."""
+
 TEST_MEMORY_LIMIT_BYTES: Final = memcap.DEFAULT_MEMORY_MAX
 """Default memory cap for every subprocess that executes the audited tree's
 code: the declared test command and `mutmut run` (`SADDLE_MEMORY_MAX`
@@ -421,23 +435,25 @@ def run_shell_capture(
     *,
     recorder: SpanRecorder | None = None,
     timeout: float | None = DEFAULT_TEST_TIMEOUT_S,
+    extra_env: Mapping[str, str] | None = None,
 ) -> CapturedRun:
     """Run a `test_command` string via shlex splitting, capturing output, under
     the memory cap (`tree_memory_limit`): it executes the tree's code, and
     imports the tree's own package (`src_layout_env`). The default `timeout`
-    is the built-in one; a gate passes the project's `suite_limit` instead."""
+    is the built-in one; a gate passes the project's `suite_limit` instead.
+    `extra_env` is laid over that environment (a parallel suite's data file)."""
     return run_capture(
         shlex.split(command),
         cwd,
         recorder=recorder,
         timeout=timeout,
         memory_limit=tree_memory_limit(),
-        extra_env=src_layout_env(cwd),
+        extra_env={**src_layout_env(cwd), **(extra_env or {})},
     )
 
 
 class SuiteLimitError(ValueError):
-    """The project sets a test time limit saddle cannot use."""
+    """The project sets a test time limit or worker count saddle cannot use."""
 
 
 @dataclass(frozen=True)
@@ -446,6 +462,49 @@ class SuiteLimit:
 
     seconds: float
     source: str
+
+
+def _committed_saddle_table(tree: Path, rev: str, what: str) -> tuple[dict[str, Any] | None, str]:
+    """`[tool.saddle]` of the `pyproject.toml` committed at `rev`, and where it was read.
+
+    The file is the one in `tree`'s own directory, read from the commit,
+    never from the working tree or the index. The table is None when that
+    commit has no such file, and empty when the file has no table. A file
+    that cannot be read, a table that is not one, or a key outside
+    `SADDLE_KEYS` raises `SuiteLimitError`, its message starting "cannot
+    read `what`" and naming the commit.
+    """
+    found = run_capture(["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], tree)
+    sha = found.stdout.strip()
+    if found.exit_code != 0 or not sha:
+        msg = f"cannot read {what}: {rev!r} is not a commit in {tree}"
+        raise SuiteLimitError(msg)
+    where = f"{SUITE_LIMIT_FILE} at {sha[:12]}"
+    blob = f"{sha}:./{SUITE_LIMIT_FILE}"
+    if run_capture(["git", "cat-file", "-e", blob], tree).exit_code != 0:
+        return None, where
+    shown = run_capture(["git", "cat-file", "blob", blob], tree)
+    if shown.exit_code != 0:
+        msg = f"cannot read {what}: {where} is not a file: {shown.stderr.strip()}"
+        raise SuiteLimitError(msg)
+    try:
+        data = tomllib.loads(shown.stdout)
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"cannot read {what}: {where} is not TOML ({exc})"
+        raise SuiteLimitError(msg) from exc
+    tool = data.get("tool")
+    table = tool.get("saddle", {}) if isinstance(tool, dict) else {}
+    if not isinstance(table, dict):
+        msg = f"cannot read {what}: {where}: [tool.saddle] is not a table"
+        raise SuiteLimitError(msg)
+    unknown = sorted(set(table) - set(SADDLE_KEYS))
+    if unknown:
+        msg = (
+            f"cannot read {what}: {where}: [tool.saddle] holds {', '.join(unknown)}; "
+            f"the keys saddle reads there are {' and '.join(SADDLE_KEYS)}"
+        )
+        raise SuiteLimitError(msg)
+    return table, where
 
 
 def suite_limit(tree: Path, rev: str) -> SuiteLimit:
@@ -467,37 +526,10 @@ def suite_limit(tree: Path, rev: str) -> SuiteLimit:
     value: a typo must not read as "no limit set" and leave the default in
     force unannounced.
     """
-    found = run_capture(["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], tree)
-    sha = found.stdout.strip()
-    if found.exit_code != 0 or not sha:
-        msg = f"cannot read the test time limit: {rev!r} is not a commit in {tree}"
-        raise SuiteLimitError(msg)
-    where = f"{SUITE_LIMIT_FILE} at {sha[:12]}"
+    table, where = _committed_saddle_table(tree, rev, "the test time limit")
     default = f"built-in default {DEFAULT_TEST_TIMEOUT_S:g} s"
-    blob = f"{sha}:./{SUITE_LIMIT_FILE}"
-    if run_capture(["git", "cat-file", "-e", blob], tree).exit_code != 0:
+    if table is None:
         return SuiteLimit(DEFAULT_TEST_TIMEOUT_S, f"{default} (no {where})")
-    shown = run_capture(["git", "cat-file", "blob", blob], tree)
-    if shown.exit_code != 0:
-        msg = f"cannot read the test time limit: {where} is not a file: {shown.stderr.strip()}"
-        raise SuiteLimitError(msg)
-    try:
-        data = tomllib.loads(shown.stdout)
-    except tomllib.TOMLDecodeError as exc:
-        msg = f"cannot read the test time limit: {where} is not TOML ({exc})"
-        raise SuiteLimitError(msg) from exc
-    tool = data.get("tool")
-    table = tool.get("saddle", {}) if isinstance(tool, dict) else {}
-    if not isinstance(table, dict):
-        msg = f"cannot read the test time limit: {where}: [tool.saddle] is not a table"
-        raise SuiteLimitError(msg)
-    unknown = sorted(set(table) - {SUITE_LIMIT_KEY})
-    if unknown:
-        msg = (
-            f"cannot read the test time limit: {where}: [tool.saddle] holds "
-            f"{', '.join(unknown)}; the only key saddle reads there is {SUITE_LIMIT_KEY}"
-        )
-        raise SuiteLimitError(msg)
     if SUITE_LIMIT_KEY not in table:
         return SuiteLimit(DEFAULT_TEST_TIMEOUT_S, f"{default} (no {SUITE_LIMIT_KEY} in {where})")
     value = table[SUITE_LIMIT_KEY]
@@ -515,6 +547,232 @@ def suite_limit(tree: Path, rev: str) -> SuiteLimit:
         )
         raise SuiteLimitError(msg)
     return SuiteLimit(float(value), f"[tool.saddle] {SUITE_LIMIT_KEY} in {where}")
+
+
+@dataclass(frozen=True)
+class SuiteWorkers:
+    """How many workers the audit runs a project's suite on, and where that came from."""
+
+    count: int
+    source: str
+
+
+def suite_workers(tree: Path, rev: str) -> SuiteWorkers:
+    """The project's test worker count as committed at `rev`, never as `tree` has it now.
+
+    `test-workers = <N>` in the `[tool.saddle]` table of the
+    `pyproject.toml` in `tree`'s own directory sets it; with no file, no
+    table or no key it is 1, a serial run. Read exactly where and how
+    `suite_limit` reads `test-timeout`, so the tree under audit cannot
+    choose how its own suite is run. A value that is not a whole number
+    from 1 to `SUITE_WORKERS_MAX` (a bool, a float, a string such as
+    "auto") raises `SuiteLimitError` naming the commit and the value.
+    Whether N workers are then used is `suite_run`'s question.
+    """
+    table, where = _committed_saddle_table(tree, rev, "the test worker count")
+    if table is None:
+        return SuiteWorkers(1, f"serial (no {where})")
+    if SUITE_WORKERS_KEY not in table:
+        return SuiteWorkers(1, f"serial (no {SUITE_WORKERS_KEY} in {where})")
+    value = table[SUITE_WORKERS_KEY]
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= SUITE_WORKERS_MAX:
+        msg = (
+            f"cannot read the test worker count: {where}: {SUITE_WORKERS_KEY} = {value!r} "
+            f"is not a whole number of workers from 1 to {SUITE_WORKERS_MAX}"
+        )
+        raise SuiteLimitError(msg)
+    return SuiteWorkers(value, f"[tool.saddle] {SUITE_WORKERS_KEY} in {where}")
+
+
+RAN_SERIALLY: Final = "ran serially"
+"""How a note about a serial run ends (`SuiteRun.note`)."""
+
+WORKERS_BASIS: Final = "test-workers="
+"""The `basis` field of a `tests` check whose suite ran on that many
+pytest-xdist workers (`runner.run_node_gate`)."""
+
+WORKERS_PROBE_MODULE: Final = "saddle_workers_probe"
+_WORKERS_PROBE_MARK: Final = "saddle-workers-probe "
+_WORKERS_PROBE_SOURCE: Final = f'''"""saddle's test-workers probe.
+
+Which of the plugins a parallel audit needs pytest loads under the
+project's own configuration. It prints one line and ends the run before
+anything is collected."""
+
+import json
+
+import pytest
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config):
+    plugins = config.pluginmanager
+    report = {{
+        "xdist": plugins.hasplugin("xdist"),
+        "xdist_blocked": plugins.is_blocked("xdist"),
+        "cov": plugins.hasplugin("pytest_cov"),
+        "cov_blocked": plugins.is_blocked("pytest_cov"),
+        "no_cov": bool(getattr(config.option, "no_cov", False)),
+        "cov_source": bool(getattr(config.option, "cov_source", None)),
+    }}
+    print({_WORKERS_PROBE_MARK!r} + json.dumps(report), flush=True)
+    return 0
+'''
+"""A pytest plugin, loaded with `-p` from a scratch directory, that answers
+`suite_run`'s questions with pytest's own view: its plugin manager after
+the project's `addopts` and the test command's own options are applied.
+Asking pytest, not the filesystem: an installed pytest-xdist that the
+project disables with `-p no:xdist` would make `-n` a usage error, and
+`pytest -VV` still lists xdist's looponfail plugin in that case."""
+
+WORKERS_PROBE_TIMEOUT_S: Final = 120.0
+"""How long the probe may take. It starts pytest and imports the project's
+initial conftests, and collects nothing."""
+
+
+@dataclass(frozen=True)
+class SuiteRun:
+    """How a gate runs a project's suite (`suite_run` decides).
+
+    `workers` below 2 is the serial run exactly as it always was: the test
+    command under `coverage run` (`under_coverage`). From 2 up it is the
+    test command with `-n workers` (pytest-xdist), recorded by pytest-cov
+    into the gate's data file (`COVERAGE_FILE`), which pytest-cov combines
+    from the controller and every worker. `project_cov` says the project's
+    own options already start pytest-cov: its sources, report and
+    fail-under then stand, as they did inside the serial run. Otherwise
+    `--cov` with no source measures what `coverage run` measures (the
+    coverage config's `source`, else everything) and `--cov-fail-under=0`
+    enforces no total, as `coverage run` enforces none.
+
+    `note` says why a project that set `test-workers` got a serial run; it
+    is appended to the `tests` finding, never dropped.
+    """
+
+    workers: int = 1
+    project_cov: bool = False
+    note: str = ""
+
+    @property
+    def parallel(self) -> bool:
+        return self.workers >= 2
+
+    def covered(self, test_command: str, data_file: str) -> tuple[str, dict[str, str]]:
+        """The command that runs the suite recording into `data_file`, and its extra env."""
+        if not self.parallel:
+            return under_coverage(test_command, data_file), {}
+        extra = ["-n", str(self.workers)]
+        if not self.project_cov:
+            extra += ["--cov", "--cov-report=", "--cov-fail-under=0"]
+        command = shlex.join([*shlex.split(test_command), *extra])
+        return command, {"COVERAGE_FILE": os.path.abspath(data_file)}
+
+    def plain(self, test_command: str) -> str:
+        """The command that runs the suite with no coverage asked for (dead-code reruns)."""
+        if not self.parallel:
+            return test_command
+        return shlex.join([*shlex.split(test_command), "-n", str(self.workers)])
+
+
+def _starts_pytest(argv: Sequence[str]) -> bool:
+    """`pytest ...` or `<python> -m pytest ...`: a command options can be appended to."""
+    program = PurePath(next(iter(argv), "")).name
+    if program in ("pytest", "py.test"):
+        return True
+    return re.fullmatch(r"python[\d.]*", program) is not None and list(argv[1:3]) == [
+        "-m",
+        "pytest",
+    ]
+
+
+def suite_run(
+    tree: Path,
+    test_command: str,
+    workers: int,
+    *,
+    recorder: SpanRecorder | None = None,
+) -> SuiteRun:
+    """How to run `test_command`'s suite in `tree` when the project asks for `workers`.
+
+    Parallel only when the test command starts pytest and pytest, started
+    exactly as the command starts it in the gate's sandbox and environment,
+    loads pytest-xdist and pytest-cov with neither disabled by the project's
+    options (`_WORKERS_PROBE_SOURCE`). Every other case is the serial run,
+    and when `workers` asked for more than one, `SuiteRun.note` says why:
+    a missing plugin must never be silent. A probe that does not answer
+    is such a case too, reported with its exit code.
+    """
+    if workers < 2:
+        return SuiteRun()
+    head = f"{SUITE_WORKERS_KEY} = {workers} set but"
+    argv = shlex.split(test_command)
+    if not _starts_pytest(argv):
+        return SuiteRun(note=f"{head} the test command does not start pytest: {RAN_SERIALLY}")
+    with tempfile.TemporaryDirectory(prefix="saddle-workers-probe-") as scratch:
+        (Path(scratch) / f"{WORKERS_PROBE_MODULE}.py").write_text(_WORKERS_PROBE_SOURCE)
+        inherited = src_layout_env(tree).get("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
+        probe = run_capture(
+            [*argv, "-p", WORKERS_PROBE_MODULE, "-p", "no:cacheprovider"],
+            tree,
+            recorder=recorder,
+            timeout=WORKERS_PROBE_TIMEOUT_S,
+            memory_limit=tree_memory_limit(),
+            writable=(Path(scratch),),
+            extra_env={"PYTHONPATH": os.pathsep.join(filter(None, [scratch, inherited]))},
+        )
+    said = [
+        line.removeprefix(_WORKERS_PROBE_MARK)
+        for line in probe.stdout.splitlines()
+        if line.startswith(_WORKERS_PROBE_MARK)
+    ]
+    try:
+        report = json.loads(said[-1]) if said and probe.exit_code == 0 else None
+    except ValueError:
+        report = None
+    if not isinstance(report, dict):
+        why = "timed out" if probe.timed_out else f"exit {probe.exit_code}"
+        return SuiteRun(
+            note=f"{head} pytest did not say which plugins it loads ({why}): {RAN_SERIALLY}"
+        )
+    missing = []
+    for plugin, name in (("xdist", "pytest-xdist"), ("cov", "pytest-cov")):
+        if not report.get(plugin):
+            blocked = report.get(f"{plugin}_blocked")
+            missing.append(
+                f"the project's pytest options disable {name}"
+                if blocked
+                else f"{name} is not installed"
+            )
+    if report.get("cov") and report.get("no_cov"):
+        missing.append("the project's pytest options disable pytest-cov (--no-cov)")
+    if missing:
+        return SuiteRun(note=f"{head} {' and '.join(missing)}: {RAN_SERIALLY}")
+    return SuiteRun(workers=workers, project_cov=bool(report.get("cov_source")))
+
+
+def run_suite_capture(
+    run: SuiteRun,
+    test_command: str,
+    cwd: Path,
+    data_file: str,
+    *,
+    recorder: SpanRecorder | None = None,
+    timeout: float | None,
+) -> CapturedRun:
+    """Run the suite as `run` says, recording coverage into `data_file`.
+
+    A parallel run first removes `data_file` and any `data_file.*` left in
+    `cwd`: pytest-cov combines every file of that name, and one it did not
+    write (a copy of the tree carries whatever the tree holds) must not add
+    lines no test ran. The serial run is `run_shell_capture` of
+    `under_coverage`, unchanged."""
+    command, env = run.covered(test_command, data_file)
+    if run.parallel:
+        target = Path(data_file)
+        for stale in list(target.parent.iterdir()):
+            if stale.name == target.name or stale.name.startswith(f"{target.name}."):
+                stale.unlink()
+    return run_shell_capture(command, cwd, recorder=recorder, timeout=timeout, extra_env=env)
 
 
 def src_layout_env(tree: Path) -> dict[str, str]:

@@ -189,7 +189,8 @@ def test_a_value_that_is_not_a_limit_is_refused_by_name(tmp_path: Path, written:
 def test_a_key_saddle_does_not_read_is_refused_not_ignored(tmp_path: Path, table: str) -> None:
     """A typo must not read as "no setting" and quietly keep 300 s."""
     _commit(tmp_path, {"pyproject.toml": f"[tool.saddle]\n{table}"})
-    with pytest.raises(SuiteLimitError, match="the only key saddle reads there is test-timeout"):
+    reads = "the keys saddle reads there are test-timeout and test-workers"
+    with pytest.raises(SuiteLimitError, match=reads):
         suite_limit(tmp_path, "HEAD")
 
 

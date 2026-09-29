@@ -13,13 +13,16 @@ import ast
 import shutil
 import tempfile
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path, PurePath
 
 from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
+    WORKERS_BASIS,
     CapturedRun,
     MutationOutcome,
+    SuiteRun,
     changed_statements,
     covered_lines,
     drop_test_caches,
@@ -34,11 +37,13 @@ from saddle.evidence import (
     ruff_findings,
     run_capture,
     run_shell_capture,
+    run_suite_capture,
     scoped_targets,
-    under_coverage,
+    suite_run,
 )
 from saddle.gates import (
     RED_PHASE_SAMPLES,
+    GateCheck,
     Tier1Inputs,
     Tier1Result,
     introduced_findings,
@@ -112,6 +117,21 @@ def _test_signatures(sources: dict[str, str]) -> dict[str, str]:
     return signatures
 
 
+def _with_suite_run(check: GateCheck, run: SuiteRun) -> GateCheck:
+    """The `tests` check, saying how its suite ran when the project asked for workers.
+
+    A parallel run adds `test-workers=N` to `basis`; a serial run the
+    project asked to parallelize appends `run.note` to `detail`, so the
+    reason is in the finding. A project that set nothing gets the check
+    unchanged, byte for byte."""
+    if run.parallel:
+        basis = f"{WORKERS_BASIS}{run.workers}"
+        return replace(check, basis=f"{check.basis} {basis}" if check.basis else basis)
+    if run.note:
+        return replace(check, detail=f"{check.detail}; {run.note}")
+    return check
+
+
 def run_node_gate(
     node: Node,
     workdir: Path,
@@ -123,6 +143,7 @@ def run_node_gate(
     owed_tests: tuple[str, ...] = (),
     tier2: bool = True,
     test_timeout: float = DEFAULT_TEST_TIMEOUT_S,
+    test_workers: int = 1,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -154,8 +175,21 @@ def run_node_gate(
     project's `evidence.suite_limit`, read where the task started -- never
     at `baseline`, which in `slice` is a per-node snapshot that holds the
     edits of the nodes before it.
+
+    `test_workers` is the project's `evidence.suite_workers`, read where
+    the task started (the audit passes it; `slice` does not). From 2 up,
+    and when `evidence.suite_run` finds pytest-xdist and pytest-cov in the
+    tree's test environment, those same runs are `pytest -n test_workers`:
+    the suite under pytest-cov, recorded into the one data file both the
+    tests and the coverage checks read, and so is each red-phase sample
+    (asked again of the baseline copy, whose pytest options are the
+    baseline's). The `tests` check's `basis` then says `test-workers=N`.
+    Otherwise every run is serial, as before, and the `tests` check's
+    detail ends with why. A `test` node always runs serially: its verdict
+    is read off the run's output.
     """
     gate = node.deterministic_gate
+    workers = 1 if node.kind == "test" else test_workers
     sources = read_sources(workdir, "*.py")
     changed = changed_statements(workdir, git_diff(workdir, baseline, recorder=recorder))
     changed_files = sorted({path for path, _ in changed})
@@ -166,9 +200,12 @@ def run_node_gate(
     touched = sorted(git_changed_files(workdir, baseline, recorder=recorder))
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
-    suite = run_shell_capture(
-        under_coverage(gate.test_command, data_file),
+    mode = suite_run(workdir, gate.test_command, workers, recorder=recorder)
+    suite = run_suite_capture(
+        mode,
+        gate.test_command,
         workdir,
+        data_file,
         recorder=recorder,
         timeout=test_timeout,
     )
@@ -236,11 +273,18 @@ def run_node_gate(
         )
         baseline_exits: list[int] = []
         baseline_output = ""
+        baseline_mode = (
+            suite_run(dest, gate.test_command, workers, recorder=recorder)
+            if samples
+            else SuiteRun()
+        )
         for sample_index in range(samples):
             drop_test_caches(dest)
-            baseline_run = run_shell_capture(
-                under_coverage(gate.test_command, str(dest / ".coverage.red")),
+            baseline_run = run_suite_capture(
+                baseline_mode,
+                gate.test_command,
                 dest,
+                str(dest / ".coverage.red"),
                 recorder=recorder,
                 timeout=test_timeout,
             )
@@ -329,7 +373,7 @@ def run_node_gate(
             for rel, text in edited.items():
                 (sandbox / rel).write_text(text)
             return run_shell_capture(
-                gate.test_command, sandbox, recorder=recorder, timeout=test_timeout
+                mode.plain(gate.test_command), sandbox, recorder=recorder, timeout=test_timeout
             ).exit_code
 
     inputs = Tier1Inputs(
@@ -363,4 +407,8 @@ def run_node_gate(
         property_targets=property_targets,
         property_out_of_scope=property_out_of_scope,
     )
-    return run_tier1(node, inputs)
+    result = run_tier1(node, inputs)
+    checks = tuple(
+        _with_suite_run(check, mode) if check.name == "tests" else check for check in result.checks
+    )
+    return replace(result, checks=checks)

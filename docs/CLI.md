@@ -52,8 +52,8 @@ test-timeout = 3600   # seconds
   the commit `saddle auto` makes its worktree from, `saddle audit`'s `--baseline`, and
   `saddle run`'s `HEAD`. A run that edits `pyproject.toml` does not change the limit it
   is judged under. An edit of yours takes effect once it is committed.
-- The value is a number of seconds above 0 and at most 86400 (a day). `test-timeout`
-  is the only key saddle reads in `[tool.saddle]`.
+- The value is a number of seconds above 0 and at most 86400 (a day). The keys saddle
+  reads in `[tool.saddle]` are `test-timeout` and `test-workers` (below).
 - A value that is not usable stops the audit instead of falling back to 300 s. This
   covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
   table (such as the typo `test_timeout`), or a `pyproject.toml` that is not TOML. The
@@ -68,6 +68,45 @@ Saddle's own repository sets 3600 s. `check.sh` runs its suite in about 20 to 23
 minutes (1209 to 1378 s in recorded serial runs), and the gate's own run of it, sandboxed
 and under `coverage run`, took about 38 minutes (about 2300 s) in a 2-core slot. The
 built-in 300 s reported it as a hang.
+
+## Running the tests on workers
+
+A project whose suite is slow can ask the auditor to run it on pytest-xdist workers, in
+the same table:
+
+```toml
+[tool.saddle]
+test-workers = 8
+```
+
+- The auditor then runs the suite once as `pytest -n 8` under pytest-cov, and the
+  `tests` and `coverage` findings both read that one run. Each red-phase sample and each
+  dead-code rerun uses the same workers. This holds for the checkpoints and the finish
+  audit of `saddle auto` and the chat's Task runs, and for `saddle audit`; `saddle run`
+  runs its node gates serially.
+- It is read like `test-timeout`: from the commit the work starts from, never from the
+  tree being judged. The value is a whole number from 1 to 64, and 1 or no key is a
+  serial run. A value that is not usable, such as `"8"`, `true`, `8.0` or `"auto"`,
+  stops the audit (`error: cannot read the test worker count: pyproject.toml at
+  <commit>: …`), and so does a key saddle does not read, such as the typo `test-worker`.
+- The environment the tests run in (the project's virtualenv, or the `python` on your
+  PATH) needs pytest-xdist and pytest-cov. Saddle asks pytest itself, in the audit's
+  sandbox, which plugins it loads under your project's own options. When one is missing,
+  or your options disable it (`-p no:xdist`, `-p no:cov`, `--no-cov`), the suite runs
+  serially, as it does without the setting, and the `tests` finding says why:
+  `'python -m pytest -q' exited 0; test-workers = 8 set but pytest-xdist is not
+  installed: ran serially`. A test command that does not start pytest directly (`make
+  test`, `tox`) runs serially with the same kind of note. A parallel run is recorded in
+  the finding's basis as `test-workers=8`.
+- The verdicts are the serial run's: the same tests pass or fail, and the same changed
+  lines count as run, because pytest-cov combines what the controller and every worker
+  ran. When your own pytest options start pytest-cov (`--cov=...` in `addopts`), its
+  source, report and `--cov-fail-under` stand as you set them. Otherwise saddle adds
+  `--cov` with no source, which measures what `coverage run` measures (your coverage
+  config's `source`, else everything), and `--cov-fail-under=0`, since the serial run
+  enforces no total either.
+- A suite whose tests share a file, a port or other global state can fail on workers
+  where it passes serially. Leave the setting out for such a suite.
 
 ## saddle auto TASK
 

@@ -54,6 +54,16 @@ finding reads `'python -m pytest -q' hangs: no verdict within the time limit`. T
 limit is read at the baseline, never from the tree audited, so a change cannot raise
 the limit it is judged under.
 
+The same committed table can set `test-workers = N` (a whole number, 2 or more). Those
+runs then use N pytest-xdist workers: the suite runs once as `pytest -n N` under
+pytest-cov, and the `tests` and `coverage` findings both read that run, with
+`test-workers=N` in the `tests` basis ([CLI.md](CLI.md#running-the-tests-on-workers)).
+The verdicts are the serial run's. When pytest-xdist or pytest-cov is missing from the
+test environment, or the project's pytest options disable one, the runs are serial and
+the `tests` finding ends with the reason, for example `test-workers = 8 set but
+pytest-xdist is not installed: ran serially`. Like the limit, the setting is read at the
+baseline, never from the tree audited.
+
 ## Tier 2: before "done"
 
 | Gate | Reason | Proves |
