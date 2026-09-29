@@ -780,8 +780,15 @@ def test_every_suite_run_of_the_gate_uses_the_workers(tmp_path: Path) -> None:
     suites = [argv for argv in runs if argv not in probes]
     assert len(probes) == 2
     covered = [*COMMAND.split(), "-n", "2", "--cov-report=", "--cov=.", "--cov-fail-under=0"]
-    # the suite, the red-phase samples, the dead-code rerun without `_spare`
-    samples = [covered] * RED_PHASE_SAMPLES
+    # the suite, the red-phase samples, the dead-code rerun without `_spare`;
+    # a sample runs only the changed test file, every other one ignored
+    ignored = sorted(
+        f"--ignore={path.relative_to(root).as_posix()}"
+        for path in (root / "tests").glob("test_*.py")
+        if path.name != "test_new.py"
+    )
+    red = [*COMMAND.split(), *ignored, *covered[len(COMMAND.split()) :]]
+    samples = [red] * RED_PHASE_SAMPLES
     assert suites == [covered, *samples, [*COMMAND.split(), "-n", "2"]]
 
 

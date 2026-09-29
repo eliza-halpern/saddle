@@ -2732,9 +2732,40 @@ def test_mutation_sample_mutates_only_the_files_with_changed_lines(
     mutation_sample(workdir, changed, 10, test_files={"tests/test_a.py"})
     table = tomllib.loads(written[-1])["tool"]["mutmut"]
     assert table["source_paths"] == ["a.py"]
-    assert table["also_copy"] == ["b.py", "src/deep/nested/deep.py"]
+    # a directory with no mutated file goes whole: mutmut would not create it
+    assert table["also_copy"] == ["b.py", "src"]
     both = {(str(workdir / "a.py"), 1), (str(workdir / "src" / "deep" / "nested" / "deep.py"), 1)}
     mutation_sample(workdir, both, 10, test_files={"tests/test_a.py"})
     table = tomllib.loads(written[-1])["tool"]["mutmut"]
     assert table["source_paths"] == ["a.py", "src/deep/nested/deep.py"]
     assert table["also_copy"] == ["b.py"]
+
+
+def test_real_mutmut_decides_mutants_when_an_unchanged_file_sits_where_no_changed_one_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before, against the enforcing engine: each unchanged file was a
+    separate `also_copy` entry, and mutmut copies a file entry without
+    creating its directory. On saddle's own tree every mutation run stopped
+    at once ("No such file or directory: 'mutants/benchmark/stall_check.py'")
+    and no mutant was ever decided. The stub-based test above pinned the
+    entries' text and could not see it."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    (workdir / "tools" / "deep").mkdir(parents=True)
+    (workdir / "tests").mkdir()
+    (workdir / "tools" / "__init__.py").write_text("")
+    (workdir / "tools" / "deep" / "__init__.py").write_text("")
+    (workdir / "tools" / "deep" / "helper.py").write_text("def one():\n    return 1\n")
+    (workdir / "calc.py").write_text(
+        "from tools.deep.helper import one\n\n\ndef add(a, b):\n    return a + b * one()\n"
+    )
+    (workdir / "tests" / "test_calc.py").write_text(
+        "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+    )
+    outcome = mutation_sample(
+        workdir, {(str(workdir / "calc.py"), 5)}, 10, test_files={"tests/test_calc.py"}
+    )
+    assert not [s for s in outcome.survivors if s.startswith("mutmut run exited")], outcome
+    assert outcome.total > 0, outcome
+    assert outcome.killed > 0, outcome

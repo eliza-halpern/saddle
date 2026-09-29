@@ -26,7 +26,7 @@ import tomllib
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from io import BytesIO
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PurePosixPath
 from time import perf_counter
 from typing import Any, Final
 
@@ -1793,6 +1793,28 @@ def _mutmut_scratch_config(
     return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n{copied}"
 
 
+def _copyable(mutated: Collection[str], untouched: Collection[str]) -> list[str]:
+    """`untouched` as entries mutmut's `also_copy` can copy.
+
+    mutmut copies a file entry into `mutants/` without creating its
+    directory, which exists only when a mutated file sits at or below it
+    (the sources are copied first). Any other file is covered by its
+    highest ancestor directory that holds no mutated file, copied whole:
+    on saddle's own tree `benchmark/stall_check.py` stopped every mutation
+    run with FileNotFoundError before a mutant was made.
+    """
+    present = {PurePosixPath(".")} | {
+        parent for path in mutated for parent in PurePosixPath(path).parents
+    }
+    entries: set[str] = set()
+    for rel in untouched:
+        top = PurePosixPath(rel)
+        while top.parent not in present:
+            top = top.parent
+        entries.add(top.as_posix())
+    return sorted(entries)
+
+
 class MutantLookupError(RuntimeError):
     """The batched mutant-lookup subprocess failed or gave unparseable output.
 
@@ -1942,7 +1964,7 @@ def mutation_sample(
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
         (scratch / "pyproject.toml").write_text(
-            _mutmut_scratch_config(production, run_tests, untouched)
+            _mutmut_scratch_config(production, run_tests, _copyable(production, untouched))
         )
         ran = run_capture(
             ["timeout", str(timeout_s), "mutmut", "run"],
