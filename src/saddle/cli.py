@@ -90,7 +90,7 @@ from saddle.slice import (
     TestDrawer,
     run_slice,
 )
-from saddle.task_passes import baseline_sources
+from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
 from saddle.task_requirements import ProbeTree, RequirementsError
 from saddle.task_requirements import load as requirements_load
@@ -1520,11 +1520,12 @@ def run_requirements(
     out = Path(args.out)
     out.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     listed = tuple((p["sha256"], p["source"]) for p in record["probes"])
+    said = cut_calls(record)
     stdout.write(
         f"sealed {out} ({record['file_sha256'][:12]}): {len(record['examples'])} example(s) "
         f"over {len(record['units'])} unit(s); {len(record['not_executable'])} not "
         f"executable, {len(record['unanswered'])} unanswered, {len(record['cut'])} cut, "
-        f"{_probe_count(listed)}\n"
+        f"{_probe_count(listed)}" + (f"; {said}" if said else "") + "\n"
     )
     return 0
 

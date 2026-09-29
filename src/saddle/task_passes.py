@@ -68,6 +68,7 @@ from saddle.task_examples import (
 from saddle.task_prompts import ALTERNATIVES, PREDICT, PROPOSE, SNIPPET_RULES
 from saddle.task_requirements import ProbeTree, Runner, probe_listing, run_probes, seal
 from saddle.task_units import Units, task_units
+from saddle.vllm import VllmResponseError
 
 PROPOSE_TEMPERATURE: Final = 0.6
 PREDICT_TEMPERATURE: Final = 0.8
@@ -218,6 +219,10 @@ class Call:
     temperature: float
     raw: str
     error: str = ""
+    cut_at: int | None = None
+    """The token cap the reply was cut at (`finish_reason=length`): the
+    `max_tokens` the call was sent. None when it ended by itself, or failed
+    some other way."""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -227,6 +232,7 @@ class Call:
             "raw_sha256": hashlib.sha256(self.raw.encode()).hexdigest(),
             "raw": self.raw,
             **({"error": self.error} if self.error else {}),
+            **({"cut_at": self.cut_at} if self.cut_at is not None else {}),
         }
 
 
@@ -240,8 +246,23 @@ def _call(client: Completer, name: str, prompt: str, seed: int, temperature: flo
             seed=seed,
         )
     except Exception as exc:  # a failed call decides nothing; it is sealed as such
-        return Call(name, seed, temperature, "", f"{type(exc).__name__}: {exc}")
+        cut = isinstance(exc, VllmResponseError) and exc.finish_reason == "length"
+        error = f"{type(exc).__name__}: {exc}"
+        return Call(name, seed, temperature, "", error, PASS_MAX_TOKENS if cut else None)
     return Call(name, seed, temperature, raw)
+
+
+def cut_calls(record: Mapping[str, Any]) -> str:
+    """The sealed record's calls cut at their token cap, named, for a summary
+    line; "" when none was. A cut reply is never a quiet absence."""
+    calls = [c for c in record.get("calls", []) if isinstance(c, dict)]
+    cut = [c for c in calls if c.get("cut_at") is not None]
+    if not cut:
+        return ""
+    named = ", ".join(f"{c.get('pass')} seed {c.get('seed')}" for c in cut)
+    caps = sorted({int(c["cut_at"]) for c in cut})
+    cap = "/".join(str(n) for n in caps)
+    return f"{len(cut)} of {len(calls)} model call(s) cut at the {cap}-token cap ({named})"
 
 
 # -- P-a ------------------------------------------------------------------------
@@ -502,6 +523,23 @@ class Predictor:
     references: dict[str, str]
 
 
+def _missing(p: Predictor, listed: bool) -> str:
+    """Why predictor `p` gave no outcome for one input: what happened, in
+    words a question can quote (`task_examples.Prediction.missing`)."""
+    call = p.call
+    if call.cut_at is not None:
+        return f"a prediction reply was cut at the {call.cut_at}-token cap"
+    if call.error:
+        return f"a prediction call failed ({call.error.split(':', 1)[0]})"
+    if not call.raw.strip():
+        return "a prediction call returned nothing"
+    if reply_json(call.raw) is None:
+        return "a prediction reply did not parse"
+    if not listed:
+        return "a prediction reply gave no outcome for this input"
+    return "a prediction reply's outcome for this input did not parse"
+
+
 def predictor(call: Call) -> Predictor:
     reply = reply_json(call.raw) or {}
     predictions = {
@@ -574,12 +612,14 @@ def extract(
         for p in predictors:
             got = p.predictions.get(inp["id"], {})
             outcome = _outcome(got.get("outcome"))
+            missing = "" if outcome is not None else _missing(p, inp["id"] in p.predictions)
             preds.append(
                 {
                     "outcome": outcome.to_dict() if outcome is not None else None,
                     "decides": str(got.get("decides", "")),
                     "derivation": str(got.get("derivation", "")),
                     "raw_sha256": hashlib.sha256(p.call.raw.encode()).hexdigest(),
+                    **({"missing": missing} if missing else {}),
                 }
             )
         examples.append({**inp, "predictions": preds, "references": [], "alternatives": []})

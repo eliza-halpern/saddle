@@ -12,6 +12,7 @@ import pytest
 from saddle.dag import dag_json_schema
 from saddle.edits import EDIT_GRAMMAR
 from saddle.vllm import (
+    DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIMEOUT,
@@ -416,7 +417,14 @@ def test_complete_blank_content_and_truncation_raise() -> None:
     cut, _ = _json_client(_ok_body(content="half", finish_reason="length"))
     with pytest.raises(VllmResponseError, match="truncated") as cut_info:
         cut.complete("Do x.")
-    assert str(cut_info.value) == "completion truncated (finish_reason=length)"
+    # flip: the message names the cap the call was sent (the default here).
+    assert str(cut_info.value) == (
+        f"completion truncated at {DEFAULT_MAX_TOKENS} output tokens (finish_reason=length)"
+    )
+    assert (cut_info.value.max_tokens, cut_info.value.finish_reason) == (
+        DEFAULT_MAX_TOKENS,
+        "length",
+    )
 
 
 def test_list_models_returns_served_ids() -> None:

@@ -522,9 +522,10 @@ def _parse_response(data: object) -> DagEmission:
     return DagEmission(dag=dag, reasoning=reasoning, raw_content=content)
 
 
-def _parse_text_response(data: object) -> str:
-    """Free-text content from a chat envelope; prose needs no JSON parse."""
-    content, _ = _parse_message(data)
+def _parse_text_response(data: object, *, max_tokens: int | None = None) -> str:
+    """Free-text content from a chat envelope; prose needs no JSON parse. A
+    truncation names `max_tokens`, the cap the call was sent."""
+    content, _ = _parse_message(data, max_tokens=max_tokens)
     return content
 
 
@@ -768,7 +769,7 @@ class VllmClient:
             reasoning_effort=reasoning_effort,
             seed=seed,
         )
-        return _parse_text_response(self._post(payload))
+        return _parse_text_response(self._post(payload), max_tokens=max_tokens)
 
     def stream_chat(
         self,
