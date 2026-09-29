@@ -52,6 +52,8 @@ from saddle.journal import (
     build_record,
     build_span,
     run_audit_hashes,
+    started_before,
+    utc_now,
     write_attempt_sidecar,
 )
 from saddle.labels import label_for
@@ -1428,14 +1430,19 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
     if auto.reason == AUDIT_UNRESOLVED:
         named = ", ".join(f"{f['gate']} ({f['reason']})" for f in auto.unresolved)
         detail += f"; unresolved findings: {named}"
+    took = int(auto.budget.elapsed() * 1000)
+    # The run's span of wall time: it began `took` before now and ends as it is
+    # sealed, so a reader has when the run finished (`transcript`).
+    began = started_before(took, utc_now())
     span = build_span(
         node_id=node_id,
         argv=[f"auto:{auto.outcome}"],
-        duration_ms=int(auto.budget.elapsed() * 1000),
+        duration_ms=took,
         exit_code=0 if auto.outcome == "finished" else 3,
         detail=detail,
         kind="agent",
         parent_id=auto.run_span,
+        started_at=began,
     )
     evidence = {
         "outcome": auto.outcome,
@@ -1492,6 +1499,7 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         parent_id=auto.run_span,
         span_id=span.span_id,
         attempt_hash=digest,
+        started_at=began,
     )
     append_span(journal, span)
 

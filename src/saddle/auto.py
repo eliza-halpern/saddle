@@ -514,6 +514,7 @@ def run_auto(
             else ""
         ),
         kind="agent",
+        started_at=utc_now().isoformat(),
     )
     append_span(journal, start)
     p1, extraction = _requirements(options, client, worktree, base, journal, start.span_id)

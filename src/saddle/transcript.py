@@ -11,6 +11,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Final
 
 from saddle.gates import GateCheck
@@ -41,6 +42,8 @@ QUESTION_RUN_DETAIL: Final = " halted on a question"
 # prefixed "deadline: "), mirrored for the same reason.
 DEADLINE_RUN_EXIT: Final = 3
 DEADLINE_RUN_DETAIL: Final = "deadline: "
+UNKNOWN: Final = "(unknown)"
+"""What a transcript says for run metadata the journal never sealed."""
 
 
 @dataclass(frozen=True)
@@ -181,9 +184,13 @@ def render_journal_transcript(
 ) -> str:
     """Re-render a transcript from sealed records alone (the audit view).
 
-    Run metadata the journal never stores (task, timestamps) renders as
-    "(unknown)"; the verdict is PASS only when every sealed gate output
-    passed, so an auditor recomputes it instead of trusting it. A run span
+    Start and finish come from the run's own sealed spans: a slice run's
+    `run` span, an autonomous run's `auto:start` and outcome spans (their
+    `started_at`, and for the finish the duration after it); what a journal
+    never sealed (a task outside an autonomous run, a time in an older
+    ledger) renders as "(unknown)". The verdict is PASS only when every
+    sealed gate output passed, so an auditor recomputes it instead of
+    trusting it. A run span
     sealed as a rule D question halt (exit 4, "halted on a question") with
     no sealed gate failure renders QUESTION; a deadline stop (exit 3,
     "deadline: ...") renders FAIL naming the deadline; anything else not
@@ -240,18 +247,42 @@ def render_journal_transcript(
     else:
         verdict = "FAIL"
     task = "(unknown)"
+    started, finished = UNKNOWN, UNKNOWN
+    if runs:
+        started, finished = runs[-1].started_at or UNKNOWN, _ended(runs[-1])
     starts = [s for s in spans if s.kind == "agent" and s.name == AUTO_START]
     if starts:
         task, verdict = _auto_verdict(starts[-1], spans)
+        outcome = _auto_outcome(starts[-1], spans)
+        started = starts[-1].started_at or UNKNOWN
+        finished = _ended(outcome) if outcome is not None else "(no outcome yet)"
     return render_transcript(
         RunTranscript(
             task=task,
-            started="(unknown)",
-            finished="(unknown)",
+            started=started,
+            finished=finished,
             verdict=verdict,
             nodes=nodes,
             journal_path=journal_path,
         )
+    )
+
+
+def _ended(span: SpanRecord) -> str:
+    """When a span ended: its sealed `started_at` plus its duration, as UTC
+    ISO-8601; "(unknown)" for a span that sealed no start."""
+    try:
+        began = datetime.fromisoformat(span.started_at)
+    except ValueError:
+        return UNKNOWN
+    return (began + timedelta(milliseconds=span.duration_ms)).isoformat()
+
+
+def _auto_outcome(start: SpanRecord, spans: Sequence[SpanRecord]) -> SpanRecord | None:
+    """The autonomous run's outcome span under `start`, or None while it runs."""
+    return next(
+        (s for s in reversed(spans) if s.parent_id == start.span_id and s.name in AUTO_OUTCOMES),
+        None,
     )
 
 
@@ -267,10 +298,7 @@ def _auto_verdict(start: SpanRecord, spans: Sequence[SpanRecord]) -> tuple[str, 
     the user, and the verdict says so rather than only "no outcome".
     """
     task = start.argv[1] if len(start.argv) > 1 else "(unknown)"
-    outcome = next(
-        (s for s in reversed(spans) if s.parent_id == start.span_id and s.name in AUTO_OUTCOMES),
-        None,
-    )
+    outcome = _auto_outcome(start, spans)
     if outcome is None:
         answered = {s.parent_id for s in spans if s.name == "answer"}
         waiting = [
