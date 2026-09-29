@@ -6,4 +6,8 @@ cd "$(dirname "$0")"
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
-uv run pytest
+# The suite runs on as many pytest-xdist workers as the audit uses on this repo
+# (`[tool.saddle] test-workers` in pyproject.toml); pytest-cov combines every
+# worker's lines for the 100% line and branch gate in `addopts`.
+workers=$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["saddle"]["test-workers"])')
+uv run pytest -n "$workers"

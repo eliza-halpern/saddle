@@ -294,10 +294,12 @@ PATH="$PWD/.venv/bin:$PATH" ./check.sh
 ```
 
 `check.sh` runs `ruff check`, `ruff format --check`, `mypy` in strict mode
-over `src` and `tests`, and `pytest` at 100% line and branch coverage. A
-change is green only when all four pass; `pytest` alone once hid over a
-hundred type errors. For a quicker loop while you work, run one test file
-with `--no-cov`, then the whole gate before you commit.
+over `src` and `tests`, and `pytest` at 100% line and branch coverage, on
+as many pytest-xdist workers as `[tool.saddle] test-workers` says (the
+count saddle's own audits use). A change is green only when all four pass;
+`pytest` alone once hid over a hundred type errors. For a quicker loop while
+you work, run one test file with `--no-cov`, then the whole gate before you
+commit.
 
 ## Layering
 
