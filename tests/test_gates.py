@@ -3080,3 +3080,27 @@ def test_coverage_exemption_admits_untested_logic_in_the_root_setup_py() -> None
     assert before.detail == "no test runs setup.py:3, setup.py:4, setup.py:5"
     assert after.passed
     assert after.detail == "every changed line runs; 3 packaging lines not judged (root setup.py)"
+
+
+def test_a_failed_suite_names_its_failing_tests() -> None:
+    """Red before: the finding said only "exited 1", and a watched run guessed
+    at the cause. Instances from pytest's own short summary: failures and
+    errors named once each, sorted, the rest counted; a run with no
+    summary keeps the plain detail."""
+    from saddle.gates import FAILING_NAMED, check_test_command
+
+    summary = (
+        "..F.E\n=========================== short test summary info ============================\n"
+        "FAILED tests/test_a.py::test_one - AssertionError: assert 3 == 6\n"
+        "ERROR tests/test_b.py - ImportError: cannot import name 'x'\n"
+        "FAILED tests/test_a.py::test_one - AssertionError: again\n"
+        "1 failed, 1 error in 0.1s\n"
+    )
+    named = check_test_command("pytest -q", lambda _c: 1, output=summary)
+    assert named.detail == (
+        "'pytest -q' exited 1: 2 failing: tests/test_a.py::test_one, tests/test_b.py"
+    )
+    many = "".join(f"FAILED tests/t.py::test_{i}\n" for i in range(FAILING_NAMED + 2))
+    capped = check_test_command("pytest -q", lambda _c: 1, output=many).detail
+    assert capped.endswith(f"test_{FAILING_NAMED - 1} and 2 more")
+    assert check_test_command("pytest -q", lambda _c: 1, output="").detail == "'pytest -q' exited 1"

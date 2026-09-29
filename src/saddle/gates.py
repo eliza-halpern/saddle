@@ -316,12 +316,32 @@ def check_test_command(
     if kind == "test":
         return _red_specification(test_command, exit_code, output, workdir_modules)
     if exit_code != 0:
+        failing = failing_tests(output)
+        named = ", ".join(failing[:FAILING_NAMED])
+        if len(failing) > FAILING_NAMED:
+            named += f" and {len(failing) - FAILING_NAMED} more"
         return GateCheck(
             name="tests",
             passed=False,
-            detail=f"{test_command!r} exited {exit_code}",
+            detail=f"{test_command!r} exited {exit_code}"
+            + (f": {len(failing)} failing: {named}" if failing else ""),
         )
     return GateCheck(name="tests", passed=True, detail=f"{test_command!r} exited 0")
+
+
+_FAILING_LINE: Final = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
+FAILING_NAMED: Final = 5
+"""How many failing tests a failed `tests` check names before counting the rest."""
+
+
+def failing_tests(output: str) -> list[str]:
+    """The tests pytest's short summary names as failed or errored, once each,
+    sorted: the same finding whether the suite ran serially or on workers.
+
+    A failed suite's finding named only the exit code, so a watched run
+    guessed at the cause ("might be the coverage gate") and weighed running
+    the whole suite to find what the audit had already seen."""
+    return sorted({match.group(1) for match in _FAILING_LINE.finditer(output)})
 
 
 def _definition_lines(source: str, wanted: Collection[str]) -> dict[str, tuple[set[int], set[int]]]:

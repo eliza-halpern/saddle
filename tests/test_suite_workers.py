@@ -722,8 +722,10 @@ def test_a_failing_test_fails_the_tests_check_on_workers(tmp_path: Path) -> None
     root = _project(tmp_path / "p", _pyproject())
     (root / "src/pkg/calc.py").write_text(CALC.replace("return a - b", "return b - a"))
     serial, parallel = _gate_both_ways(root)
-    assert serial["tests"] == (False, f"{COMMAND!r} exited 1", None)
-    assert parallel["tests"] == (False, f"{COMMAND!r} exited 1", "test-workers=2")
+    named = ", ".join(f"tests/test_part{i}.py::test_sub_{i}" for i in (2, 3, 4))
+    detail = f"{COMMAND!r} exited 1: 3 failing: {named}"
+    assert serial["tests"] == (False, detail, None)
+    assert parallel["tests"] == (False, detail, "test-workers=2")
 
 
 def test_dead_code_is_rerun_on_workers(tmp_path: Path) -> None:
