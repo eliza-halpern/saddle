@@ -53,6 +53,7 @@ from saddle.journal import (
     SpanRecord,
     attempt_sidecar_path,
     read_entries,
+    redact_secrets,
     verify_journal,
 )
 from saddle.transcript import FEED_SPANS, start_field, tier_finding
@@ -296,7 +297,16 @@ def _coverage_summary(
             return None
     sources = _sealed_sources(sealed["sources"])
     changed = [(str(f), int(n)) for f, n in sealed["changed"]]
-    return coverage_text.describe_coverage(finding, sources, changed, mutation, lines=lines)
+    summary = coverage_text.describe_coverage(finding, sources, changed, mutation, lines=lines)
+    # The sources are sealed verbatim, so that they parse; the lines a person
+    # reads are redacted, as every other sealed string is.
+    return dataclasses.replace(
+        summary,
+        gaps=tuple(
+            dataclasses.replace(g, text=tuple((n, redact_secrets(t)) for n, t in g.text))
+            for g in summary.gaps
+        ),
+    )
 
 
 def _sealed_sources(raw: Any) -> dict[str, str]:
