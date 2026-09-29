@@ -158,3 +158,16 @@ def test_the_prompt_names_the_worktree_and_not_the_checkout_it_hides(tmp_path: P
     assert Path(worktree).is_absolute()
     assert str((repo / ".venv").resolve()) not in system
     assert "not visible" in system
+
+
+def test_the_prompt_explains_audit_notes_only_when_the_run_delivers_them(
+    tmp_path: Path,
+) -> None:
+    """Red before: arm E+A+F appends audit results to tool results and the
+    model was never told; a watched run guessed they came from the repo."""
+    said: dict[str, bool] = {}
+    for arm in ("E+A+F", "E+A", "E"):
+        client = Scripted([finish()])
+        auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
+        said[arm] = "audit checkpoint N on tree <id>, then PASS or FAIL" in _system(client)
+    assert said == {"E+A+F": True, "E+A": False, "E": False}

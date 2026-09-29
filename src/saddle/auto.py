@@ -95,8 +95,21 @@ ENVIRONMENT_PROMPT: Final = (
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
     "first. This run has {minutes} and {tokens} generated tokens; it stops at "
-    "either limit, so leave room to call finish.{coverage}"
+    "either limit, so leave room to call finish.{coverage}{feed}"
 )
+
+FEED_PROMPT: Final = (
+    " While you work, saddle audits snapshots of this worktree in the "
+    "background and appends each result to your next tool result: a line in "
+    "square brackets reading audit checkpoint N on tree <id>, then PASS or FAIL, "
+    "with any failing checks after it. It describes the tree at that snapshot, "
+    "not the command it "
+    "follows. Every file left in the worktree is audited, so remove scratch "
+    "files before you call finish, which runs the same audit on the final tree."
+)
+"""Said only when the run delivers audits to the model (arm E+A+F). A watched
+dogfood run met its first checkpoint note inside its own script's output and
+spent a paragraph guessing where it came from ("the repo's conftest??")."""
 """What the run's commands actually see, from facts saddle already holds
 (`environment_prompt`). A dogfood run on saddle's own repo spent seven rounds
 finding a Python that could import the project, because none of this was said."""
@@ -108,6 +121,7 @@ def environment_prompt(
     env: dict[str, str],
     time_budget_s: float,
     token_budget: int,
+    feed: bool = False,
 ) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
@@ -150,6 +164,7 @@ def environment_prompt(
         minutes=f"{minutes} minute{'s' if minutes != 1 else ''}",
         tokens=f"{token_budget:,}",
         coverage=coverage,
+        feed=FEED_PROMPT if feed else "",
     )
 
 
@@ -706,7 +721,12 @@ def run_auto(
         reasoning_effort=options.reasoning_effort,
         system_prompt=SYSTEM_PROMPT.format(tests=tests)
         + environment_prompt(
-            worktree, project, run_env, options.time_budget_s, options.token_budget
+            worktree,
+            project,
+            run_env,
+            options.time_budget_s,
+            options.token_budget,
+            feed=options.arm == "E+A+F",
         )
         + (CHECK_PROMPT if options.check_tool else ""),
         context_tokens=options.context_tokens,
