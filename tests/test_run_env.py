@@ -279,8 +279,12 @@ def test_a_resumed_run_continues_the_recorded_conversation_in_its_own_worktree(
         "diff --git a/n.py b/n.py\n--- a/n.py\n+++ b/n.py\n@@ -1,2 +1,2 @@\n"
         " def f():\n-    return 2\n+    return 3\n"
     )
-    client = Scripted([[call("run_command", "r1", command="cat n.py")], finish()])
-    result = auto(repo, client, resume_messages=recorded, resume_patch=patch)
+    kept = tmp_path / "kept_tmp"
+    kept.mkdir()
+    (kept / "note.txt").write_text("from before\n")
+    (kept / "pytest-current").symlink_to(tmp_path / "gone")  # dangling, as pytest leaves it
+    client = Scripted([[call("run_command", "r1", command="cat n.py /tmp/note.txt")], finish()])
+    result = auto(repo, client, resume_messages=recorded, resume_patch=patch, resume_tmp=kept)
     sent = client.asked[0]["messages"]
     system = str(sent[0]["content"])
     assert system.startswith("You are working alone")
@@ -289,3 +293,4 @@ def test_a_resumed_run_continues_the_recorded_conversation_in_its_own_worktree(
     assert old not in json.dumps(sent)
     assert f"cd {worktree} && cat n.py" in sent[2]["tool_calls"][0]["function"]["arguments"]
     assert "return 3" in _command_details(result)[0]
+    assert "from before" in _command_details(result)[0]

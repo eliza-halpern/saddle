@@ -796,7 +796,8 @@ def run_auto(
     run_tmp = journal.parent / "tmp"
     run_tmp.mkdir(parents=True, exist_ok=True)
     if options.resume_tmp is not None:
-        shutil.copytree(options.resume_tmp, run_tmp, dirs_exist_ok=True)
+        # symlinks kept as links: pytest leaves dangling `pytest-current` ones
+        shutil.copytree(options.resume_tmp, run_tmp, dirs_exist_ok=True, symlinks=True)
     context = ToolContext(
         workdir=worktree,
         sandbox=Sandbox.for_workdir(
