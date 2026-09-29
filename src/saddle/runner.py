@@ -10,9 +10,10 @@ baseline diff sees them.
 from __future__ import annotations
 
 import ast
+import shlex
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import replace
 from pathlib import Path, PurePath
 
@@ -54,6 +55,22 @@ from saddle.journal import SpanRecorder
 # The placeholder survivor a `tier2=False` gate run carries in place of a
 # mutation sample: never a verdict, only a marker that nothing was measured.
 NOT_MEASURED_AT_TIER1 = "not measured: tier-1 checkpoint"
+
+
+def red_phase_command(test_command: str, ignored: Collection[str]) -> str:
+    """`test_command` with every file in `ignored` passed to pytest as `--ignore`.
+
+    Red-phase asks whether the node's own new or changed tests fail
+    pre-change, so its baseline leg ignores each test file the node left
+    as it was (or deleted), and pytest collects the rest by the suite's own
+    rules (`testpaths`, `norecursedirs`). A command that is not a plain
+    pytest invocation, or nothing to ignore, comes back unchanged: the
+    whole suite, as before.
+    """
+    argv = shlex.split(test_command)
+    if not ignored or "pytest" not in argv or any(c in test_command for c in ";&|"):
+        return test_command
+    return shlex.join([*argv, *(f"--ignore={rel}" for rel in sorted(ignored))])
 
 
 def read_sources(root: Path, pattern: str) -> dict[str, str]:
@@ -279,11 +296,29 @@ def run_node_gate(
             if samples
             else SuiteRun()
         )
+        # Only the node's own new or changed test files run pre-change: each
+        # sample used to be the whole suite, most of a finish audit's wall on
+        # a large project, and an unchanged test failing on the original code
+        # stood in for a new test that proves nothing. With no test changed,
+        # the one sample stays the whole suite (an impl node's tests are its
+        # baseline's).
+        red_command = (
+            red_phase_command(
+                gate.test_command,
+                [
+                    rel
+                    for rel, text in baseline_tests.items()
+                    if test_sources.get(rel) in (text, None)
+                ],
+            )
+            if tests_changed
+            else gate.test_command
+        )
         for sample_index in range(samples):
             drop_test_caches(dest)
             baseline_run = run_suite_capture(
                 baseline_mode,
-                gate.test_command,
+                red_command,
                 dest,
                 str(dest / ".coverage.red"),
                 recorder=recorder,

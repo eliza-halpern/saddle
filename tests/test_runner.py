@@ -14,7 +14,7 @@ from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
 from saddle.gates import RED_PHASE_SAMPLES, GateCheck
 from saddle.journal import SpanRecorder, read_spans
-from saddle.runner import _stub_module, read_sources, run_node_gate
+from saddle.runner import _stub_module, read_sources, red_phase_command, run_node_gate
 
 # Every tool name the global allowlist carries. A node listing all
 # four behaves exactly as it did before each name was bound to a harness
@@ -842,6 +842,65 @@ def test_run_node_gate_flaky_baseline_is_caught_end_to_end(tmp_path: Path) -> No
     red = next(check for check in result.checks if check.name == "red-phase")
     assert red.passed is False
     assert "nondeterministic" in red.detail
+
+
+# Each pytest run reports the test files it collected on stderr, which the
+# run's span keeps, once pytest has let go of the output (at exit).
+_REPORTS_COLLECTION: Final = (
+    "import atexit\nimport os\n\n_seen: list[str] = []\n\n\n"
+    "def pytest_collection_finish(session):\n"
+    "    _seen.extend(sorted({item.path.name for item in session.items}))\n\n\n"
+    "atexit.register(lambda: os.write(2, ('COLLECTED ' + ' '.join(_seen) + '\\n').encode()))\n"
+)
+
+
+def test_run_node_gate_red_phase_runs_only_the_tests_the_node_changed(tmp_path: Path) -> None:
+    """Red before: every red-phase sample ran the whole suite on the original
+    code. An unchanged test that fails there (it wants the fix) stood in for
+    the node's own new test, which passes pre-change and proves nothing, and
+    on a large project the samples were most of a finish audit's wall. Now
+    the unchanged file runs once, in the current tree's suite."""
+    setup = (
+        ["git", "init"],
+        ["git", "config", "user.email", "test@example.com"],
+        ["git", "config", "user.name", "test"],
+    )
+    for argv in setup:
+        assert run_argv(argv, tmp_path) == 0
+    (tmp_path / "n.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "conftest.py").write_text(_REPORTS_COLLECTION)
+    wants_fix = "from n import f\n\n\ndef test_wants_fix():\n    assert f() == 2\n"
+    (tmp_path / "test_wants_fix.py").write_text(wants_fix)
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    assert run_argv(["git", "commit", "-m", "baseline"], tmp_path) == 0
+    (tmp_path / "n.py").write_text("def f():\n    return 2\n")
+    tautology = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() in (1, 2)\n"
+    (tmp_path / "test_n.py").write_text(tautology)
+    assert run_argv(["git", "add", "-A"], tmp_path) == 0
+    journal = tmp_path / "proofs.jsonl"
+    recorder = SpanRecorder(path=journal, node_id="n1")
+    result = run_node_gate(_node("pytest", kind="refactor"), tmp_path, recorder=recorder)
+    red = next(check for check in result.checks if check.name == "red-phase")
+    assert red.detail == "tests pass pre-change; prove nothing"
+    collected = [
+        line
+        for span in read_spans(journal)
+        for line in span.detail.splitlines()
+        if line.startswith("COLLECTED")
+    ]
+    assert collected.count("COLLECTED test_n.py test_wants_fix.py") == 1, collected
+    assert collected.count("COLLECTED test_n.py") == RED_PHASE_SAMPLES, collected
+
+
+def test_red_phase_command_leaves_a_command_it_cannot_extend_whole() -> None:
+    """Known-good half: the whole suite, as before, whenever the command is
+    not a plain pytest run or nothing is to be ignored."""
+    assert red_phase_command("python -m pytest -q", ["tests/test_a.py"]) == (
+        "python -m pytest -q --ignore=tests/test_a.py"
+    )
+    for command in ("make test", "cd sub && pytest -q", "pytest -q; echo done"):
+        assert red_phase_command(command, ["tests/test_a.py"]) == command
+    assert red_phase_command("pytest -q", []) == "pytest -q"
 
 
 def test_stub_module_keeps_the_api_and_empties_the_bodies() -> None:
