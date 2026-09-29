@@ -367,6 +367,10 @@ def run_node_gate(
             run_tests=covering or pytest_scope(gate.test_command),
             suite_passed=current_exit == 0,
             recorder=recorder,
+            # Only the lines those tests run are mutated: a changed line none
+            # runs is the coverage check's refusal, and mutmut generating a
+            # large module's every mutant alone could spend the budget.
+            only_covered=bool(covering),
         )
     )
     # The property oracle, `impl` nodes only: the property-bearing

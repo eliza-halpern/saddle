@@ -1776,7 +1776,11 @@ def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
 
 
 def _mutmut_scratch_config(
-    sources: list[str], run_tests: Collection[str] = (), also_copy: Sequence[str] = ()
+    sources: list[str],
+    run_tests: Collection[str] = (),
+    also_copy: Sequence[str] = (),
+    *,
+    only_covered: bool = False,
 ) -> str:
     """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
 
@@ -1786,6 +1790,7 @@ def _mutmut_scratch_config(
     belongs to that set, which the unrestricted run cannot say.
     A sequence keeps its order (a declared scope's `-k expr` must stay a
     pair); an unordered collection is sorted for a stable file.
+    `only_covered` has mutmut mutate only the lines `run_tests` execute.
     """
     quoted = ", ".join(json.dumps(source) for source in sources)
     ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
@@ -1796,7 +1801,11 @@ def _mutmut_scratch_config(
         if also_copy
         else ""
     )
-    return f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n{copied}"
+    covered = "mutate_only_covered_lines = true\n" if only_covered else ""
+    return (
+        f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
+        f"{copied}{covered}"
+    )
 
 
 def _copyable(mutated: Collection[str], untouched: Collection[str]) -> list[str]:
@@ -1909,6 +1918,7 @@ def mutation_sample(
     suite_passed: bool = True,
     timeout_s: int = _MUTATION_TIMEOUT_S,
     recorder: SpanRecorder | None = None,
+    only_covered: bool = False,
 ) -> MutationOutcome:
     """Kill-rate over every decided mutant on a changed line.
 
@@ -1970,7 +1980,12 @@ def mutation_sample(
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
         (scratch / "pyproject.toml").write_text(
-            _mutmut_scratch_config(production, run_tests, _copyable(production, untouched))
+            _mutmut_scratch_config(
+                production,
+                run_tests,
+                _copyable(production, untouched),
+                only_covered=only_covered,
+            )
         )
         ran = run_capture(
             ["timeout", str(timeout_s), "mutmut", "run"],

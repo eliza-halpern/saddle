@@ -984,7 +984,7 @@ def test_the_gates_mutation_run_is_handed_the_tests_that_ran_a_changed_line(
     real = evidence.mutation_sample
 
     def spy(*args: Any, **kwargs: Any) -> evidence.MutationOutcome:
-        handed.append(kwargs.get("run_tests"))
+        handed.append((kwargs.get("run_tests"), kwargs.get("only_covered")))
         return real(*args, **kwargs)
 
     monkeypatch.setattr(runner_module, "mutation_sample", spy)
@@ -992,4 +992,5 @@ def test_the_gates_mutation_run_is_handed_the_tests_that_ran_a_changed_line(
         run_node_gate(audit_node(), copy, baseline=resolved, test_workers=2)
     # and test_lazy: it imports lazy.py inside its body, which runs the added
     # `def unreached` line; the sub tests ran no changed line
-    assert handed[0] == tuple(sorted([*ADD_TESTS, "tests/test_lazy.py::test_lazy"]))
+    # and only the lines they run are mutated
+    assert handed[0] == (tuple(sorted([*ADD_TESTS, "tests/test_lazy.py::test_lazy"])), True)

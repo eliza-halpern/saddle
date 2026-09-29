@@ -2769,3 +2769,34 @@ def test_real_mutmut_decides_mutants_when_an_unchanged_file_sits_where_no_change
     assert not [s for s in outcome.survivors if s.startswith("mutmut run exited")], outcome
     assert outcome.total > 0, outcome
     assert outcome.killed > 0, outcome
+
+
+def test_real_mutmut_mutates_only_the_lines_the_handed_tests_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scope narrowed, shown on the enforcing engine: with `only_covered` a
+    changed line no handed test runs yields no mutant, where before its
+    mutants were "no tests" survivors (the coverage check is what refuses
+    that line). The covered line's mutants are decided either way. Without
+    it mutmut generated every mutant of the module first, which for one of
+    saddle's larger modules spent minutes of a ten-minute budget."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    (workdir / "tests").mkdir(parents=True)
+    (workdir / "calc.py").write_text(
+        "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+    )
+    (workdir / "tests" / "test_calc.py").write_text(
+        "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+    )
+    changed = {(str(workdir / "calc.py"), 2), (str(workdir / "calc.py"), 6)}
+    tests = {"tests/test_calc.py"}
+    handed = ("tests/test_calc.py::test_add",)
+    every = mutation_sample(workdir, changed, 10, test_files=tests, run_tests=handed)
+    covered = mutation_sample(
+        workdir, changed, 10, test_files=tests, run_tests=handed, only_covered=True
+    )
+    assert every.untested > 0, every
+    assert covered.untested == 0, covered
+    assert 0 < covered.total < every.total, (covered, every)
+    assert covered.killed > 0, covered
