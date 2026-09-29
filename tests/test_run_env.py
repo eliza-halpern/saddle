@@ -112,3 +112,33 @@ def test_a_budget_under_a_minute_still_reads_as_one_minute(tmp_path: Path) -> No
     client = Scripted([finish()])
     auto(repo, client, time_budget_s=20.0)
     assert "This run has 1 minute and " in _system(client)
+
+
+def test_the_prompt_warns_about_coverage_in_addopts_only_when_it_is_there(
+    tmp_path: Path,
+) -> None:
+    """Red before: a one-file test run on a repo whose addopts carry --cov
+    failed on package coverage, and nothing said why. Instances: pyproject
+    addopts (string and list), pytest.ini addopts, and a repo without."""
+    cases = {
+        "toml": ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = "--cov=pkg"\n'),
+        "list": ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = ["-q", "--cov=pkg"]\n'),
+        "ini": ("pytest.ini", "[pytest]\naddopts = --cov=pkg\n"),
+        "none": ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = "-q"\n'),
+        "broken": ("pyproject.toml", "[tool.pytest.ini_options\naddopts = --cov\n"),
+    }
+    said: dict[str, bool] = {}
+    for name, (config, text) in cases.items():
+        root = tmp_path / name
+        root.mkdir()
+        (root / config).write_text(text)
+        (root / "tests").mkdir()
+        (root / "n.py").write_text(FLAT)
+        (root / "tests" / "test_x.py").write_text("def test_x():\n    assert True\n")
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "init")
+        client = Scripted([finish()])
+        auto(root, client)
+        said[name] = "--no-cov" in _system(client)
+    assert said == {"toml": True, "list": True, "ini": True, "none": False, "broken": False}

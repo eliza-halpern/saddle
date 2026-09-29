@@ -23,6 +23,7 @@ turns on the tier-0 guards and a budget, and hands one turn to the same engine t
 
 from __future__ import annotations
 
+import configparser
 import json
 import math
 import shutil
@@ -92,7 +93,7 @@ ENVIRONMENT_PROMPT: Final = (
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
     "first. This run has {minutes} and {tokens} generated tokens; it stops at "
-    "either limit, so leave room to call finish."
+    "either limit, so leave room to call finish.{coverage}"
 )
 """What the run's commands actually see, from facts saddle already holds
 (`environment_prompt`). A dogfood run on saddle's own repo spent seven rounds
@@ -131,6 +132,13 @@ def environment_prompt(
         if "PYTHONPATH" in src_layout_env(worktree)
         else ""
     )
+    coverage = (
+        " This project's pytest options add coverage, so a run of a few test files "
+        "reports a coverage failure that says nothing about your change: pass "
+        "`--no-cov` for those quick runs."
+        if "--cov" in pytest_addopts(worktree)
+        else ""
+    )
     minutes = max(1, math.ceil(time_budget_s / 60))
     return ENVIRONMENT_PROMPT.format(
         python=python,
@@ -138,7 +146,30 @@ def environment_prompt(
         test_command=AUDIT_TEST_COMMAND,
         minutes=f"{minutes} minute{'s' if minutes != 1 else ''}",
         tokens=f"{token_budget:,}",
+        coverage=coverage,
     )
+
+
+def pytest_addopts(worktree: Path) -> str:
+    """The `addopts` a pytest run in `worktree` picks up from `pyproject.toml`
+    (`[tool.pytest.ini_options]`) or `pytest.ini` (`[pytest]`), joined; ""
+    when neither sets any or a file does not parse. A dogfood run on saddle's
+    own repo ran one test file and got the repo's `--cov-fail-under=100`
+    failure for the whole package."""
+    found: list[str] = []
+    try:
+        table = tomllib.loads((worktree / "pyproject.toml").read_text(encoding="utf-8"))
+        opts = table.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("addopts", "")
+        found.append(" ".join(opts) if isinstance(opts, list) else str(opts))
+    except (OSError, tomllib.TOMLDecodeError):
+        pass
+    ini = configparser.ConfigParser()
+    try:
+        ini.read_string((worktree / "pytest.ini").read_text(encoding="utf-8"))
+        found.append(ini.get("pytest", "addopts", fallback=""))
+    except (OSError, configparser.Error):
+        pass
+    return " ".join(part for part in found if part)
 
 
 CHECK_PROMPT: Final = (
