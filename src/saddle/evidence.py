@@ -639,16 +639,22 @@ class SuiteRun:
     project's own pytest options start pytest-cov. Inside `coverage run`
     that pytest-cov takes the tracer over and `coverage run` records
     nothing, so such a suite is recorded by the project's pytest-cov itself:
-    the test command as written, with `COVERAGE_FILE` naming the gate's data
-    file; its sources, report and fail-under stand, as they did before.
+    the test command with `COVERAGE_FILE` naming the gate's data file; its
+    sources and report stand.
 
     From 2 `workers` up it is the test command with `-n workers`
     (pytest-xdist), also recorded by pytest-cov into the gate's data file,
     which pytest-cov combines from the controller and every worker. When
     the project's options do not start pytest-cov, `--cov` with no source
     measures what `coverage run` measures (the coverage config's `source`,
-    else everything) and `--cov-fail-under=0` enforces no total, as
-    `coverage run` enforces none.
+    else everything).
+
+    Whenever pytest-cov runs, the gate adds `--cov-fail-under=0`: no
+    coverage total decides the tests, red-phase or dead-code checks, as
+    none does under `coverage run`. Coverage is the coverage check's, over
+    the changed lines. A project's own total cannot be met in the gate's
+    sandbox whenever its suite skips tests there (saddle's own skips the
+    ones that need a user systemd manager), and it failed every run.
 
     `note` says why a project that set `test-workers` got a serial run; it
     is appended to the `tests` finding, never dropped.
@@ -673,15 +679,23 @@ class SuiteRun:
             return under_coverage(test_command, data_file), {}
         extra = ["-n", str(self.workers)] if self.parallel else []
         if not self.project_cov:
-            extra += ["--cov", "--cov-report=", "--cov-fail-under=0"]
+            extra += ["--cov", "--cov-report="]
+        extra += ["--cov-fail-under=0"]
         command = shlex.join([*shlex.split(test_command), *extra])
         return command, {"COVERAGE_FILE": os.path.abspath(data_file)}
 
     def plain(self, test_command: str) -> str:
-        """The command that runs the suite with no coverage asked for (dead-code reruns)."""
-        if not self.parallel:
+        """The command that runs the suite with no coverage asked for (dead-code reruns).
+
+        The project's own pytest-cov still runs if its options start it, and
+        its total must not decide this run either: a rerun failed on the total
+        reads as "the suite fails without them" and passes dead code."""
+        extra = ["-n", str(self.workers)] if self.parallel else []
+        if self.project_cov:
+            extra += ["--cov-fail-under=0"]
+        if not extra:
             return test_command
-        return shlex.join([*shlex.split(test_command), "-n", str(self.workers)])
+        return shlex.join([*shlex.split(test_command), *extra])
 
 
 PYTEST_CONFIG_FILES: Final = ("pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")

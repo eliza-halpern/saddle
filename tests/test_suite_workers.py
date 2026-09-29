@@ -564,6 +564,70 @@ def test_a_project_whose_options_start_pytest_cov_is_measured_serially_and_on_wo
     assert serial["tests"] == (True, f"{COMMAND!r} exited 0", None)
 
 
+TOTAL: Final = "--cov=pkg --cov-report=term-missing --cov-fail-under=100"
+"""A project's own options that start pytest-cov and enforce a total this
+fixture's suite does not reach (`early_unused` and the `nonpos` branch never
+run), as saddle's own enforce one its suite cannot reach in the sandbox."""
+
+
+def test_a_projects_coverage_total_never_decides_the_tests_check(tmp_path: Path) -> None:
+    """Known-good: a passing suite below its project's own total passes the
+    tests check, serially and on workers; the coverage check still names the
+    changed line no test runs, and only that one."""
+    serial, parallel = _gate_both_ways(_project(tmp_path / "p", _pyproject(addopts=TOTAL)))
+    assert serial["tests"] == (True, f"{COMMAND!r} exited 0", None)
+    assert parallel["tests"] == (True, f"{COMMAND!r} exited 0", "test-workers=2")
+    assert serial["coverage"] == parallel["coverage"]
+    assert serial["coverage"][1].endswith("/src/pkg/lazy.py:14")
+
+
+def test_dead_code_is_found_in_a_project_that_enforces_a_total(tmp_path: Path) -> None:
+    """Known-bad for the rerun: its run failing on the total read as "the
+    suite fails without them", which passed the dead helper."""
+    root = _project(tmp_path / "p", _pyproject(addopts=TOTAL))
+    (root / "src/pkg/calc.py").write_text(CALC_CHANGED + "\n\ndef _spare():\n    return 3\n")
+    serial, parallel = _gate_both_ways(root)
+    assert serial["dead-code"] == parallel["dead-code"]
+    assert not serial["dead-code"][0]
+    assert "_spare" in serial["dead-code"][1]
+
+
+API: Final = "def api(x):\n    return helper(x)\n\n\ndef helper(x):\n    return x + 1\n"
+API_TEST: Final = "from api import api\n\n\ndef test_api():\n    assert api(1) == 2\n"
+
+
+def test_what_the_gate_admits_a_total_that_falls_on_unchanged_lines(tmp_path: Path) -> None:
+    """The cost, exhibited: `api` stops calling `helper`. The changed line
+    runs and nothing was added or deleted, so the audit accepts; only the
+    project's own 100% total fell (`helper` is unchanged and no longer runs),
+    which the gate no longer reads. The project's own check still does."""
+    root = tmp_path / "p"
+    _commit(
+        root,
+        {
+            "pyproject.toml": _pyproject(addopts="--cov=api --cov-fail-under=100"),
+            "api.py": API,
+            "tests/test_api.py": API_TEST,
+        },
+    )
+    (root / "api.py").write_text(API.replace("return helper(x)", "return x + 1"))
+    serial, parallel = _gate_both_ways(root)
+    for checks in (serial, parallel):
+        assert checks["tests"][:2] == (True, f"{COMMAND!r} exited 0")
+        assert checks["coverage"][:2] == (True, "every changed line runs")
+        assert checks["dead-code"][0]
+        assert checks["public-deletions"][0]
+    own = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert own.returncode == 1
+    assert "FAIL Required test coverage of 100% not reached" in own.stdout
+
+
 def test_a_failing_test_fails_the_tests_check_on_workers(tmp_path: Path) -> None:
     root = _project(tmp_path / "p", _pyproject())
     (root / "src/pkg/calc.py").write_text(CALC.replace("return a - b", "return b - a"))
