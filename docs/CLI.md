@@ -79,7 +79,7 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--repo REPO` | `.` | git repository to work on |
 | `--time-budget S` | `1800` | wall-clock seconds before an honest stop |
 | `--token-budget N` | `100000` | generated tokens before an honest stop (the prompt is not counted) |
-| `--allow-test-edits` | off (tests read-only) | let the run edit test files |
+| `--allow-test-edits` | off (tests read-only) | let the run edit test files. The normal flag for a task that needs a new or changed test: a terminal run cannot answer the "allow test edits?" question (USING-SADDLE.md §5, item 6), so without the flag its tests stay read-only |
 | `--no-feedback` | | arm E+A: audit and journal, but deliver nothing and never refuse finish |
 | `--no-audit` | | arm E: no auditor at all (mutually exclusive with `--no-feedback`) |
 | `--sanctioned-test-rewrite NAME` | none | repeatable; see AUDIT-TIERS.md |

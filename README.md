@@ -133,6 +133,13 @@ no network, so nothing is downloaded and no package's build code runs. A package
 no wheel in the folder is refused as missing, and a run with installs allowed does not
 start without a project venv or with a missing or empty wheel folder.
 
+`saddle auto` keeps the project's tests read-only unless you pass `--allow-test-edits`:
+a write to a test file is refused at the tool. When the audit wants a test the run may
+not write, the run asks whether to allow test edits, but a run in a terminal cannot
+answer, so the default (keep them read-only) is sealed and the run cannot write the
+test. For a task that asks for a new or changed test, `--allow-test-edits` is the
+normal flag. The chat's Task lane ticks **Allow test edits** by default.
+
 To have every Task run from the chat also check the task text's own examples (P1),
 start the chat with `saddle web --extract-requirements`, or put
 `SADDLE_EXTRACT_REQUIREMENTS=1` in the env file once. The examples are extracted

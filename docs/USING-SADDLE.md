@@ -202,8 +202,10 @@ closes the strip.
   *generated* tokens; the prompt is not counted). The run stops when either one runs
   out.
 - **Allow test edits.** Ticked by default in the chat (`web.tasks.SMALL_LANE_TEST_EDITS`).
-  `saddle auto` defaults the other way: tests are read-only. When it is unticked, any
-  write to a test path is refused at the tool. Test paths are the repo's pytest
+  `saddle auto` defaults the other way: tests are read-only. A terminal run cannot answer
+  the test-edits question (section 5, item 6), so for a task that needs a new or changed
+  test, pass `--allow-test-edits`: it is the normal flag for such tasks. When the box is
+  unticked, any write to a test path is refused at the tool. Test paths are the repo's pytest
   `testpaths` (or `tests/`), `test_*.py` and `conftest.py`. When it is ticked, the model
   can add tests, but the **assertion-preservation** gate still fails a change that
   removes or weakens an assertion in a test that existed before the run. A failing gate
@@ -248,7 +250,9 @@ closes the strip.
      rest of this run?" [Allow, Keep read-only]. Allow lifts the test-path guard for the
      rest of the run, seals `test_edits_granted: true` in the outcome sidecar, and reopens
      the run if this refusal hit the cap. In the chat this only arises when you untick
-     **Allow test edits**, since the box is ticked by default.
+     **Allow test edits**, since the box is ticked by default. A terminal `saddle auto`
+     has no one to ask: it seals the default, Keep read-only, and the run goes on without
+     the test. Start such a run with `--allow-test-edits` instead.
    - **Budget.** When generated tokens or wall time first reach 80% of the budget
      (`engine.BUDGET_ASK_AT`) without finishing, the run asks whether to extend that
      budget by the same amount again or stop at the limit [Extend, Stop at limit].
