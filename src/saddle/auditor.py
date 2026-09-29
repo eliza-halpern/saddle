@@ -89,6 +89,7 @@ from saddle.gates import (
     GateCheck,
     RuffFinding,
     TaskRequirementsCheck,
+    Tier1Result,
     check_mutation_shortlist,
     check_ruff,
     check_syntax,
@@ -423,6 +424,16 @@ rewritten tests are red on the baseline (they assert new behaviour) and no one
 sanctioned them at the start, so a person decides rather than the run refusing
 work the task may require. A watched run had to rewrite two tests that pinned
 the very masking its task removed, and could not finish any other way."""
+
+
+def _blocked_tier2(key: str, first: Findings) -> Findings:
+    """Tier 2's one finding when tier 1 on the same tree failed: blocked, naming
+    what failed (a sanctioned finding did not fail, so it is not named)."""
+    failed = ", ".join(
+        f.gate for f in first.findings if f.verdict == "fail" and f.reason != "sanctioned"
+    )
+    blocked = _finding("mutation", 2, "blocked", f"tier 1 failed ({failed}); tier 2 not run", None)
+    return Findings(tier=2, key=key, findings=(blocked,))
 
 
 def rewritten(detail: str) -> set[str]:
@@ -945,23 +956,17 @@ class Auditor:
                 workers = suite_workers(copy, resolved).count
             except SuiteLimitError as exc:
                 raise AuditError(str(exc)) from exc
-            if tier == 2:
-                first = self.tier1(copy)
-                if not first.passed:
-                    # The cause is what failed tier 1: a sanctioned finding did not
-                    # (`Findings.passed`), so it is not named.
-                    failed = ", ".join(
-                        f.gate
-                        for f in first.findings
-                        if f.verdict == "fail" and f.reason != "sanctioned"
-                    )
-                    blocked = _finding(
-                        "mutation", 2, "blocked", f"tier 1 failed ({failed}); tier 2 not run", None
-                    )
-                    return self._store(Findings(tier=2, key=key, findings=(blocked,)))
+            # One run of the battery serves both tiers: at tier 2 the tier-1
+            # findings come from the same suite run, and are cached under
+            # tier 1's key, unless that tree's tier 1 is already known. The
+            # finish audit used to run the whole suite once per tier on one tree.
+            key1 = self._key(1, staged, resolved)
+            first = self._cached(key1) if tier == 2 else None
+            if first is not None and not first.passed:
+                return self._store(_blocked_tier2(key, first))
             p1: Future[TaskRequirementsCheck] | None = None
             pool: ThreadPoolExecutor | None = None
-            if tier == 1 and self.config.task_requirements is not None:
+            if first is None and self.config.task_requirements is not None:
                 # Beside the tests, not after them: it adds to the wall only if
                 # it outlasts them. The context carries the project environment.
                 pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-p1")
@@ -984,100 +989,117 @@ class Auditor:
             finally:
                 if pool is not None:
                     pool.shutdown(wait=True)
-            # Every entry becomes a Finding verdict (`_finding` below), and the
-            # shortlist paths write not-proven, so the table holds Verdicts.
-            statuses: dict[str, tuple[Verdict, str, str | None]]
-            if self.config.node is None:
-                checks, _ = audit_checks(gated.checks, gated.mutation, copy)
-                statuses = {c.name: (c.status, c.detail, c.basis) for c in checks}
-            else:
-                statuses = {
-                    c.name: ("pass" if c.passed else "fail", c.detail, c.basis)
-                    for c in gated.checks
-                }
-            if self.config.tier2 == "shortlist" and statuses.get("coverage", ("",))[0] == "fail":
-                # Under the shortlist, coverage is a locator. An uncovered changed line is
-                # "not proven", never a refusal; the detail keeps its lines.
-                statuses["coverage"] = ("not-proven", *statuses["coverage"][1:])
-            survivors: tuple[Survivor, ...] = ()
-            scored = gated.mutation.mutant_detail if gated.mutation is not None else ()
-            cites: dict[str, str] = {}
-            shortlist = self.config.tier2 == "shortlist"
-            if shortlist and tier == 2 and gated.mutation is not None:
-                outcome = _rooted(gated.mutation, copy)
-                sources = _sources(copy, outcome)
-                shortlisted = check_mutation_shortlist(
-                    outcome,
-                    self.node.deterministic_gate.mutation_sample.kill_threshold,
-                    shortlist=self.config.mutant_shortlist,
-                    sources=sources,
+            if tier == 2:
+                if first is None:
+                    first = self._tiered(1, key1, gated, copy, resolved, limit, p1)
+                if not first.passed:
+                    return self._store(_blocked_tier2(key, first))
+                return self._tiered(2, key, gated, copy, resolved, limit, None)
+            return self._tiered(1, key, gated, copy, resolved, limit, p1)
+
+    def _tiered(
+        self,
+        tier: int,
+        key: str,
+        gated: Tier1Result,
+        copy: Path,
+        resolved: str,
+        limit: float,
+        p1: Future[TaskRequirementsCheck] | None,
+    ) -> Findings:
+        """`tier`'s findings from one run of the battery (`_gate`), stored under `key`."""
+        # Every entry becomes a Finding verdict (`_finding` below), and the
+        # shortlist paths write not-proven, so the table holds Verdicts.
+        statuses: dict[str, tuple[Verdict, str, str | None]]
+        if self.config.node is None:
+            checks, _ = audit_checks(gated.checks, gated.mutation, copy)
+            statuses = {c.name: (c.status, c.detail, c.basis) for c in checks}
+        else:
+            statuses = {
+                c.name: ("pass" if c.passed else "fail", c.detail, c.basis) for c in gated.checks
+            }
+        if self.config.tier2 == "shortlist" and statuses.get("coverage", ("",))[0] == "fail":
+            # Under the shortlist, coverage is a locator. An uncovered changed line is
+            # "not proven", never a refusal; the detail keeps its lines.
+            statuses["coverage"] = ("not-proven", *statuses["coverage"][1:])
+        survivors: tuple[Survivor, ...] = ()
+        scored = gated.mutation.mutant_detail if gated.mutation is not None else ()
+        cites: dict[str, str] = {}
+        shortlist = self.config.tier2 == "shortlist"
+        if shortlist and tier == 2 and gated.mutation is not None:
+            outcome = _rooted(gated.mutation, copy)
+            sources = _sources(copy, outcome)
+            shortlisted = check_mutation_shortlist(
+                outcome,
+                self.node.deterministic_gate.mutation_sample.kill_threshold,
+                shortlist=self.config.mutant_shortlist,
+                sources=sources,
+            )
+            statuses["mutation"] = (
+                "pass" if shortlisted.passed else "not-proven",
+                shortlisted.detail,
+                shortlisted.basis,
+            )
+            cites["mutation"] = "saddle.gates.check_mutation_shortlist"
+            if not shortlisted.passed:
+                survivors = _survivors(outcome, sources)
+        sidecars: dict[str, Mapping[str, Any]] = {}
+        if gated.mutation is not None:
+            # The shortlist records `mutant_detail` as (name, status, show)
+            # tuples; the sidecar seals the record shape Findings.to_dict
+            # and feed.AuditResult.to_dict already use, which is what
+            # mutant_text.describe_mutation reads.
+            sidecars["mutation"] = {
+                **dataclasses.asdict(gated.mutation),
+                "mutant_detail": [
+                    {"name": n, "status": s, "show": t} for n, s, t in gated.mutation.mutant_detail
+                ],
+            }
+        rewrote = statuses.get("assertion-preservation")
+        sanctioned = set(self.config.sanctioned_test_rewrites)
+        if (
+            tier == 1
+            and rewrote is not None
+            and rewrote[0] == "fail"
+            and (named := rewritten(rewrote[1]))
+        ):
+            # A rewrite that is sanctioned, or put to a person, must be red
+            # on the baseline: one that passes there asserts nothing new.
+            green = green_on_baseline(
+                copy, resolved, sorted(named), self.config.test_command, timeout=limit
+            )
+            if green:
+                statuses["assertion-preservation"] = (
+                    "fail",
+                    f"{rewrote[1]}{GREEN_ON_BASELINE}{', '.join(green)}",
+                    rewrote[2],
                 )
-                statuses["mutation"] = (
-                    "pass" if shortlisted.passed else "not-proven",
-                    shortlisted.detail,
-                    shortlisted.basis,
+            elif not named <= sanctioned:
+                statuses["assertion-preservation"] = (
+                    "question",
+                    f"{rewrote[1]}{REWRITE_QUESTION}",
+                    rewrote[2],
                 )
-                cites["mutation"] = "saddle.gates.check_mutation_shortlist"
-                if not shortlisted.passed:
-                    survivors = _survivors(outcome, sources)
-            sidecars: dict[str, Mapping[str, Any]] = {}
-            if gated.mutation is not None:
-                # The shortlist records `mutant_detail` as (name, status, show)
-                # tuples; the sidecar seals the record shape Findings.to_dict
-                # and feed.AuditResult.to_dict already use, which is what
-                # mutant_text.describe_mutation reads.
-                sidecars["mutation"] = {
-                    **dataclasses.asdict(gated.mutation),
-                    "mutant_detail": [
-                        {"name": n, "status": s, "show": t}
-                        for n, s, t in gated.mutation.mutant_detail
-                    ],
-                }
-            rewrote = statuses.get("assertion-preservation")
-            sanctioned = set(self.config.sanctioned_test_rewrites)
-            if (
-                tier == 1
-                and rewrote is not None
-                and rewrote[0] == "fail"
-                and (named := rewritten(rewrote[1]))
-            ):
-                # A rewrite that is sanctioned, or put to a person, must be red
-                # on the baseline: one that passes there asserts nothing new.
-                green = green_on_baseline(
-                    copy, resolved, sorted(named), self.config.test_command, timeout=limit
-                )
-                if green:
-                    statuses["assertion-preservation"] = (
-                        "fail",
-                        f"{rewrote[1]}{GREEN_ON_BASELINE}{', '.join(green)}",
-                        rewrote[2],
-                    )
-                elif not named <= sanctioned:
-                    statuses["assertion-preservation"] = (
-                        "question",
-                        f"{rewrote[1]}{REWRITE_QUESTION}",
-                        rewrote[2],
-                    )
-            if tier == 1:
-                status, detail, basis = statuses["coverage"]
-                # A not-proven coverage finding names the same lines;
-                # its sidecar is what `coverage_text` renders.
-                sealed = (
-                    coverage_evidence(copy, resolved, detail, basis or "")
-                    if status in ("fail", "not-proven")
-                    else None
-                )
-                # The baseline definitions coverage did not judge,
-                # sealed whatever the verdict (a pass is where they hide).
-                spared = spared_definitions(basis or "")
-                if spared:
-                    sealed = {**(sealed or {}), "spared": spared}
-                if sealed is not None:
-                    sidecars["coverage"] = sealed
-            if p1 is not None:
-                check = p1.result()
-                statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
-                sidecars[TASK_REQUIREMENTS] = p1_tally(check)
+        if tier == 1:
+            status, detail, basis = statuses["coverage"]
+            # A not-proven coverage finding names the same lines;
+            # its sidecar is what `coverage_text` renders.
+            sealed = (
+                coverage_evidence(copy, resolved, detail, basis or "")
+                if status in ("fail", "not-proven")
+                else None
+            )
+            # The baseline definitions coverage did not judge,
+            # sealed whatever the verdict (a pass is where they hide).
+            spared = spared_definitions(basis or "")
+            if spared:
+                sealed = {**(sealed or {}), "spared": spared}
+            if sealed is not None:
+                sidecars["coverage"] = sealed
+        if p1 is not None:
+            check = p1.result()
+            statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
+            sidecars[TASK_REQUIREMENTS] = p1_tally(check)
         wanted = TIER1 if tier == 1 else TIER2
         if TASK_REQUIREMENTS in statuses:
             wanted = (*wanted, TASK_REQUIREMENTS)
@@ -1099,6 +1121,14 @@ class Auditor:
             sidecars,
         )
 
+    def prime(self, tree: Path | None = None) -> None:
+        """Run tiers 1 and 2 on `tree` as one run of the battery and cache both.
+
+        `_gate` at tier 2 derives tier 1 from the same suite run, so a caller
+        about to ask for both (the finish audit) asks for tier 2 first and
+        reads tier 1 cached: one run of the tests, where it was two."""
+        self.tier2(tree)
+
     def tier1(self, tree: Path | None = None) -> Findings:
         """The checkpoint tier over `tree` (default: the repo's working tree)."""
         return self._gate(1, tree)
@@ -1116,4 +1146,6 @@ class Auditor:
             ).stdout.split()
             texts = {n: (copy / n).read_text() for n in names if n.endswith(".py")}
         zero = [self.tier0(n, t) for n, t in sorted(texts.items())]
-        return (*zero, self.tier1(root), self.tier2(root))
+        # Tier 2 first: its one run of the battery also yields tier 1 (`_gate`).
+        two = self.tier2(root)
+        return (*zero, self.tier1(root), two)

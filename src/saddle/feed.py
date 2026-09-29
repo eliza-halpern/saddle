@@ -448,6 +448,11 @@ class AuditFeed:
             pending = self._p1_state(final=point == "finish") if 1 in tiers else None
             found: list[Finding] = []
             detail: tuple[tuple[str, str, str], ...] = ()
+            prime = getattr(self.auditor, "prime", None)
+            if 1 in tiers and 2 in tiers and prime is not None:
+                # One run of the battery for both tiers (`Auditor.prime`): the
+                # loop below then reads tiers 1 and 2 from the cache.
+                prime(scratch / "tree")
             for tier in tiers:
                 got = self._tier(tier, scratch / "tree")
                 found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)

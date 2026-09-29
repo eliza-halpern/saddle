@@ -141,20 +141,21 @@ def test_correct_change_passes_every_tier_then_hits_the_cache(
     assert [r.tier for r in results] == [0, 0, 1, 2]
     for result in results:
         assert result.passed, result.findings
-        assert not result.cached
+    # one run of the battery: tier 2 ran it, tier 1 was read from its cache
+    assert [r.cached for r in results] == [False, False, True, False]
     assert [f.gate for f in results[2].findings] == list(TIER1)
     assert [f.gate for f in results[3].findings] == list(TIER2)
     assert _verdicts(results[2])["node-scope"] == "not-applicable"
     mutation = next(f for f in results[3].findings if f.gate == "mutation")
     assert mutation.verdict == "pass"
     assert mutation.cites == ("saddle.gates.check_mutation", "sampled n=5")
-    # tier 1 once, tier 2 once (its tier-1 prerequisite is a cache hit).
-    assert gate_spy.calls == 2
+    # one run of the battery for both tiers (it used to be one per tier)
+    assert gate_spy.calls == 1
     syntax_spy = _Spy(gates.check_syntax)  # the object auditor_mod.check_syntax names
     monkeypatch.setattr(auditor_mod, "check_syntax", syntax_spy)
     again = auditor.audit()
     assert all(r.cached for r in again)
-    assert gate_spy.calls == 2
+    assert gate_spy.calls == 1
     assert syntax_spy.calls == 0
     assert [r.findings for r in again] == [r.findings for r in results]
 
@@ -222,10 +223,18 @@ def test_uncovered_changed_line_fails_tier1_and_blocks_tier2(
     assert gate_spy.calls == 1
 
 
-def test_tier2_alone_runs_tier1_first(uncovered_tree: Path, mutation_spy: _Spy) -> None:
-    result = Auditor(uncovered_tree).tier2()
+def test_tier2_alone_derives_tier1_from_its_own_run_and_is_blocked_when_it_fails(
+    uncovered_tree: Path, gate_spy: _Spy
+) -> None:
+    """One run of the battery: tier 2 derives tier 1 from it and caches it;
+    a failing tier 1 still blocks tier 2 (its mutation result is discarded)."""
+    auditor = Auditor(uncovered_tree)
+    result = auditor.tier2()
     assert result.findings[0].verdict == "blocked"
-    assert mutation_spy.calls == 0
+    first = auditor.tier1()
+    assert first.cached
+    assert _verdicts(first)["coverage"] == "fail"
+    assert gate_spy.calls == 1
 
 
 def _untested_mutmut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
