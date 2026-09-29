@@ -46,6 +46,11 @@ def make_repo(root: Path) -> Path:
     )
     (root / "README").write_text("calc\n")
     git(root, "init", "-q", "-b", "main")
+    # The checkout's own identity: saddle's cherry-pick commits as the user, and
+    # a run with no global git config (the audit's sandbox has an empty HOME)
+    # has no other.
+    git(root, "config", "user.name", "t")
+    git(root, "config", "user.email", "t@t")
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "init")
     return root

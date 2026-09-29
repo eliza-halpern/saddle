@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from test_auto import Scripted, auto, call, finish, git
 from test_project_env import make_venv
 
@@ -59,13 +60,18 @@ def test_the_models_commands_import_the_src_layout_package_from_the_worktree(
     assert "/src/pkg/__init__.py" in detail, detail
 
 
-def test_a_flat_project_gets_no_src_entry_on_its_import_path(tmp_path: Path) -> None:
-    """Known-good half: without `src/` nothing is added."""
+def test_a_flat_project_gets_no_src_entry_on_its_import_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-good half: without `src/` nothing is added. Nothing is
+    inherited either: this suite may itself run with a `src` entry on its
+    path (the audit runs saddle's own tests that way)."""
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     repo = _repo(tmp_path / "repo", src=False)
     result = auto(repo, Scripted([[call("run_command", "r1", command=PYPATH)], finish()]))
     detail = _command_details(result)[0]
     assert "exit 0" in detail, detail
-    assert "/src" not in detail.split("PP=", 1)[1], detail
+    assert detail.split("PP=", 1)[1].strip() == "", detail
 
 
 def test_the_prompt_states_the_worktree_the_python_and_the_audits_test_command(
