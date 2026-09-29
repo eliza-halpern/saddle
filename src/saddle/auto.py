@@ -112,7 +112,10 @@ FEED_PROMPT: Final = (
     "files from it before you call finish, which runs the same audit on the "
     "final tree. That final audit also runs your new and changed tests against "
     "the original code, where they must fail, so you do not need to undo your "
-    "change to show that."
+    "change to show that. If your change must rewrite an assertion in an existing "
+    "test because that test pins the behaviour you were asked to change, keep the "
+    "rewrite: the audit asks a person to approve it when the run ends, so name each "
+    "such test and why in your finish summary."
 )
 """Said only when the run delivers audits to the model (arm E+A+F). A watched
 dogfood run met its first checkpoint note inside its own script's output and

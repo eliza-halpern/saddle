@@ -746,24 +746,28 @@ def _rewrite_repo(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("sanctioned", "passes"), [(("test_f",), True), (("test_other",), False), ((), False)]
+    ("sanctioned", "verdict"),
+    [(("test_f",), "fail"), (("test_other",), "question"), ((), "question")],
 )
-def test_the_real_auditor_honours_a_sanctioned_rewrite_and_only_that(
-    tmp_path: Path, sanctioned: tuple[str, ...], passes: bool
+def test_the_real_auditor_honours_a_sanctioned_rewrite_and_asks_about_the_rest(
+    tmp_path: Path, sanctioned: tuple[str, ...], verdict: str
 ) -> None:
+    """A sanctioned rewrite passes as before. One nobody sanctioned, red on
+    the baseline (`f() == 2` fails where f returns 1), is a question for a
+    person: it refuses nothing, blocks nothing, and the run needs you."""
     from saddle.auditor import Auditor
 
     tree = _rewrite_repo(tmp_path)
     auditor = Auditor(tree, "HEAD", AuditorConfig(sanctioned_test_rewrites=sanctioned))
     first = auditor.tier1(tree)
     kept = next(f for f in first.findings if f.gate == "assertion-preservation")
-    assert kept.verdict == "fail"
+    assert kept.verdict == verdict
     assert kept.detail.startswith("refactor node rewrote assertions in: test_f")
-    assert first.passed is passes
-    assert (kept.reason == "sanctioned") is passes
+    assert first.passed
+    assert (kept.reason == "sanctioned") is (verdict == "fail")
+    assert first.needs_you is (verdict == "question")
     second = auditor.tier2(tree)
-    blocked = [f for f in second.findings if f.verdict == "blocked"]
-    assert (blocked == []) is passes
+    assert [f for f in second.findings if f.verdict == "blocked"] == []
 
 
 class RewritesTests(FakeAuditor):
@@ -1111,18 +1115,25 @@ def test_the_cli_passes_the_finish_refusal_cap(repo: Path, monkeypatch: pytest.M
     assert got == [5, 3]
 
 
-@pytest.mark.parametrize(("sanctioned", "listed"), [(("test_f",), False), ((), True)])
+@pytest.mark.parametrize(
+    ("sanctioned", "assertion", "listed"),
+    [(("test_f",), "== 2", False), ((), "== 2", False), ((), "in (1, 2)", True)],
+)
 def test_a_blocked_tier_2_names_only_the_unsanctioned_tier_1_failures(
-    tmp_path: Path, sanctioned: tuple[str, ...], listed: bool
+    tmp_path: Path, sanctioned: tuple[str, ...], assertion: str, listed: bool
 ) -> None:
     """The blocked detail listed a
     sanctioned assertion-preservation finding as a cause. An uncovered new
-    function keeps tier 1 failing either way; the sanctioned rewrite is
-    named only when it is not sanctioned."""
+    function keeps tier 1 failing either way; the rewrite is named only when
+    it fails: not sanctioned and green on the baseline (`in (1, 2)` passes
+    where f returns 1). One red there and not sanctioned is a question."""
     from saddle.auditor import Auditor
 
     tree = _rewrite_repo(tmp_path)
     (tree / "n.py").write_text("def f():\n    return 2\n\n\ndef g():\n    return 3\n")
+    (tree / "test_n.py").write_text(
+        f"from n import f\n\n\ndef test_f():\n    assert f() {assertion}\n"
+    )
     auditor = Auditor(tree, "HEAD", AuditorConfig(sanctioned_test_rewrites=sanctioned))
     first = auditor.tier1(tree)
     assert not first.passed

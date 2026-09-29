@@ -413,6 +413,16 @@ finding carrying it, so the feed cannot re-sanction what the auditor refused."""
 SANCTIONED_SUFFIX: Final = " (all sanctioned by the task)"
 """What `sanction` appends to a finding it reclasses."""
 
+REWRITE_QUESTION: Final = (
+    "; each fails on the original code, so it may pin behaviour the task "
+    "changes: a person approves or rejects the rewrite when the run ends"
+)
+"""Appended to an assertion-preservation finding turned into a question: the
+rewritten tests are red on the baseline (they assert new behaviour) and no one
+sanctioned them at the start, so a person decides rather than the run refusing
+work the task may require. A watched run had to rewrite two tests that pinned
+the very masking its task removed, and could not finish any other way."""
+
 
 def rewritten(detail: str) -> set[str]:
     """The test names an assertion-preservation detail says were rewritten,
@@ -1028,9 +1038,9 @@ class Auditor:
                 and rewrote is not None
                 and rewrote[0] == "fail"
                 and (named := rewritten(rewrote[1]))
-                and named <= sanctioned
             ):
-                # A sanctioned rewrite must be red on the baseline.
+                # A rewrite that is sanctioned, or put to a person, must be red
+                # on the baseline: one that passes there asserts nothing new.
                 green = green_on_baseline(
                     copy, resolved, sorted(named), self.config.test_command, timeout=limit
                 )
@@ -1038,6 +1048,12 @@ class Auditor:
                     statuses["assertion-preservation"] = (
                         "fail",
                         f"{rewrote[1]}{GREEN_ON_BASELINE}{', '.join(green)}",
+                        rewrote[2],
+                    )
+                elif not named <= sanctioned:
+                    statuses["assertion-preservation"] = (
+                        "question",
+                        f"{rewrote[1]}{REWRITE_QUESTION}",
                         rewrote[2],
                     )
             if tier == 1:

@@ -222,3 +222,15 @@ def test_the_prompt_says_the_finish_audit_runs_new_tests_on_the_old_code(tmp_pat
         auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
         said[arm] = "against the original code, where they must fail" in _system(client)
     assert said == {"E+A+F": True, "E": False}
+
+
+def test_the_prompt_says_a_pinned_test_rewrite_is_put_to_a_person(tmp_path: Path) -> None:
+    """Red before: a watched run had to rewrite two tests that pinned the
+    masking its task removed, found the rewrite refused, and went looking
+    through the harness for a way to finish. Said where audits reach the model."""
+    said: dict[str, bool] = {}
+    for arm in ("E+A+F", "E"):
+        client = Scripted([finish()])
+        auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
+        said[arm] = "asks a person to approve it when the run ends" in _system(client)
+    assert said == {"E+A+F": True, "E": False}

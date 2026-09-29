@@ -17,7 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from saddle.auditor import GREEN_ON_BASELINE, Auditor, AuditorConfig, Finding, sanction
+from saddle.auditor import (
+    GREEN_ON_BASELINE,
+    REWRITE_QUESTION,
+    Auditor,
+    AuditorConfig,
+    Finding,
+    sanction,
+)
 from saddle.evidence import run_argv
 
 BASE = "def fee(x):\n    return x - 1\n"
@@ -103,3 +110,31 @@ def test_the_test_side_is_kept_and_everything_else_goes_back(path: str) -> None:
 
     assert _test_side(path)
     assert not _test_side("src/pkg/fees.py")
+
+
+def _asked(root: Path) -> Finding:
+    """The assertion-preservation finding when no rewrite was sanctioned."""
+    found = Auditor(root, config=AuditorConfig()).tier1()
+    return next(f for f in found.findings if f.gate == "assertion-preservation")
+
+
+def test_an_unapproved_rewrite_that_asserts_the_new_behaviour_is_put_to_a_person(
+    tmp_path: Path,
+) -> None:
+    """Loosened, fail to question (the maintainer's call): with nothing
+    sanctioned at the start, a rewrite red on the baseline is asked about,
+    so the run ends needing a person instead of refusing work the task may
+    require. Red before: it failed, and the model could not comply."""
+    tests = OLD_TESTS.replace("== 9", "== 8").replace("== 19", "== 18")
+    finding = _asked(_tree(tmp_path, tests))
+    assert finding.verdict == "question", finding.detail
+    assert finding.detail.endswith(REWRITE_QUESTION)
+
+
+def test_an_unapproved_vacuous_rewrite_is_still_refused(tmp_path: Path) -> None:
+    """Known-bad, unchanged: a rewrite that passes on the original code
+    asserts nothing new, so it is refused, never asked about."""
+    tests = OLD_TESTS.replace("assert fee(10) == 9", "assert True").replace("== 19", "== 18")
+    finding = _asked(_tree(tmp_path, tests))
+    assert finding.verdict == "fail"
+    assert finding.detail.endswith(f"{GREEN_ON_BASELINE}test_fee_basic")
