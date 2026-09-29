@@ -33,6 +33,42 @@ OK: http://127.0.0.1:18020/v1 serves my-model (models: my-model)
 The source is one of `from flag --base-url`, `from environment SADDLE_BASE_URL`,
 `from file <path>` or `built-in default` (and the same for `--model`).
 
+## The test time limit
+
+Every time the auditor runs the project's tests, the run gets a time limit: in
+`saddle auto` and the chat's Task runs (checkpoints and the finish audit), in
+`saddle audit`, and in `saddle run` (each node's gate, its sampled candidates and the
+merge-time suite). A suite still running at the limit is killed, and the `tests`
+finding reads `'python -m pytest -q' hangs: no verdict within the time limit`.
+
+The limit is 300 s unless the project sets its own in its `pyproject.toml`:
+
+```toml
+[tool.saddle]
+test-timeout = 3600   # seconds
+```
+
+- It is read from the commit the work starts from, never from the tree being judged:
+  the commit `saddle auto` makes its worktree from, `saddle audit`'s `--baseline`, and
+  `saddle run`'s `HEAD`. A run that edits `pyproject.toml` does not change the limit it
+  is judged under. An edit of yours takes effect once it is committed.
+- The value is a number of seconds above 0 and at most 86400 (a day). `test-timeout`
+  is the only key saddle reads in `[tool.saddle]`.
+- A value that is not usable stops the audit instead of falling back to 300 s. This
+  covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
+  table (such as the typo `test_timeout`), or a `pyproject.toml` that is not TOML. The
+  error names the commit and the value: `error: cannot read the test time limit:
+  pyproject.toml at <commit>: …`. `saddle audit` then exits 2, and in a Task run each
+  audit is `blocked` with that reason. `saddle run` prints the error and exits 1
+  before any node runs.
+- The `pyproject.toml` read is the one at the root of the audited tree, where the tests
+  run.
+
+Saddle's own repository sets 3600 s. `check.sh` runs its suite in about 20 to 23
+minutes (1209 to 1378 s in recorded serial runs), and the gate's own run of it, sandboxed
+and under `coverage run`, took about 38 minutes (about 2300 s) in a 2-core slot. The
+built-in 300 s reported it as a hang.
+
 ## saddle auto TASK
 
 This command runs one task autonomously in a new worktree. The result is a branch.
@@ -43,7 +79,7 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--repo REPO` | `.` | git repository to work on |
 | `--time-budget S` | `1800` | wall-clock seconds before an honest stop |
 | `--token-budget N` | `100000` | generated tokens before an honest stop (the prompt is not counted) |
-| `--allow-test-edits` | off (tests read-only) | let the run edit test files |
+| `--allow-test-edits` | off (tests read-only) | let the run edit test files. The normal flag for a task that needs a new or changed test: a terminal run cannot answer the "allow test edits?" question (USING-SADDLE.md §5, item 6), so without the flag its tests stay read-only |
 | `--no-feedback` | | arm E+A: audit and journal, but deliver nothing and never refuse finish |
 | `--no-audit` | | arm E: no auditor at all (mutually exclusive with `--no-feedback`) |
 | `--sanctioned-test-rewrite NAME` | none | repeatable; see AUDIT-TIERS.md |

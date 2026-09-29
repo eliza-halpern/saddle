@@ -133,12 +133,26 @@ no network, so nothing is downloaded and no package's build code runs. A package
 no wheel in the folder is refused as missing, and a run with installs allowed does not
 start without a project venv or with a missing or empty wheel folder.
 
+`saddle auto` keeps the project's tests read-only unless you pass `--allow-test-edits`:
+a write to a test file is refused at the tool. When the audit wants a test the run may
+not write, the run asks whether to allow test edits, but a run in a terminal cannot
+answer, so the default (keep them read-only) is sealed and the run cannot write the
+test. For a task that asks for a new or changed test, `--allow-test-edits` is the
+normal flag. The chat's Task lane ticks **Allow test edits** by default.
+
 To have every Task run from the chat also check the task text's own examples (P1),
 start the chat with `saddle web --extract-requirements`, or put
 `SADDLE_EXTRACT_REQUIREMENTS=1` in the env file once. The examples are extracted
 beside the worker (extra model calls); their findings only ask, never refuse, and a run
 whose finish audit asks ends "needs you" with the question on the task card. The card's
 Task text row says how long the extraction took and how many units it judged.
+
+The auditor gives each run of the project's tests 300 s and reports a suite that takes
+longer as a hang. A project whose suite needs longer sets its own limit in its
+`pyproject.toml`, as `test-timeout = <seconds>` under `[tool.saddle]` (saddle's own is
+3600). The limit is read from the commit the work starts from, so commit the setting
+first; nothing a run changes in its own tree can raise the limit it is judged under
+([docs/CLI.md](docs/CLI.md#the-test-time-limit)).
 
 [docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
 evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle
