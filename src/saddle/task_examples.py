@@ -601,6 +601,8 @@ class Example:
     references: tuple[Reference, ...] = ()
     alternatives: tuple[Alternative, ...] = ()
     probes: tuple[Probe, ...] = ()
+    args: tuple[str, ...] = ()
+    """The input values, as literals, a mini-reference `ref(*args)` takes."""
 
     @staticmethod
     def from_dict(data: Mapping[str, Any]) -> Example:
@@ -613,6 +615,7 @@ class Example:
             references=tuple(Reference.from_dict(r) for r in data.get("references", ())),
             alternatives=tuple(Alternative.from_dict(a) for a in data.get("alternatives", ())),
             probes=tuple(Probe.from_dict(p) for p in data.get("probes", ())),
+            args=tuple(str(a) for a in data.get("args", ())),
         )
 
 
