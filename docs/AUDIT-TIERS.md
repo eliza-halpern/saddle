@@ -65,6 +65,12 @@ the `tests` finding ends with the reason, for example `test-workers = 8 set but
 pytest-xdist is not installed: ran serially`. Like the limit, the setting is read at the
 baseline, never from the tree audited.
 
+When the project's own pytest options start pytest-cov (`--cov` in its `addopts`), the
+suite is recorded by that pytest-cov, serially too: under `coverage run` it would take
+the tracer over and leave the gate's data empty. Either way no coverage total decides a
+run (the gate adds `--cov-fail-under=0`); the `coverage` finding judges the changed
+lines.
+
 ## Tier 2: before "done"
 
 | Gate | Reason | Proves |

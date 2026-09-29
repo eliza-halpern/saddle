@@ -101,10 +101,14 @@ test-workers = 8
 - The verdicts are the serial run's: the same tests pass or fail, and the same changed
   lines count as run, because pytest-cov combines what the controller and every worker
   ran. When your own pytest options start pytest-cov (`--cov=...` in `addopts`), its
-  source, report and `--cov-fail-under` stand as you set them. Otherwise saddle adds
-  `--cov` with no source, which measures what `coverage run` measures (your coverage
-  config's `source`, else everything), and `--cov-fail-under=0`, since the serial run
-  enforces no total either.
+  source and report stand. Otherwise saddle adds `--cov` with no source, which
+  measures what `coverage run` measures (your coverage config's `source`, else
+  everything).
+- No coverage total decides an audit's run of your suite, on workers or not: whenever
+  pytest-cov runs, saddle adds `--cov-fail-under=0`. The `coverage` finding judges the
+  changed lines instead. A total your suite reaches in your own checks can be out of
+  reach in the audit's sandbox, where tests that need what the sandbox withholds skip.
+  Keep enforcing your total in your own check (saddle's `check.sh` does).
 - A suite whose tests share a file, a port or other global state can fail on workers
   where it passes serially. Leave the setting out for such a suite.
 
