@@ -18,6 +18,7 @@ import mimetypes
 import queue
 import re
 import threading
+import uuid
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field, replace
@@ -47,10 +48,12 @@ from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_HASHES,
     COMPACTION_SPAN,
+    MAX_THINKING_CHARS,
     append_record,
     append_span,
     build_record,
     build_span,
+    redact_secrets,
     run_audit_hashes,
     started_before,
     utc_now,
@@ -1327,6 +1330,13 @@ def _charge(
         **({"max_tokens": cap} if cap is not None else {}),
         **({"cut": cut} if cut else {}),
     }
+    span_id = uuid.uuid4().hex
+    # A cut reply's text is sealed beside its spend: the round's reasoning is
+    # otherwise kept only inside the turn's capped proof record, so a
+    # runaway reply cut at a limit could not be read back.
+    digest = (
+        write_attempt_sidecar(journal, span_id, partial_reply(reply, reasoning, cut)) if cut else ""
+    )
     append_span(
         journal,
         build_span(
@@ -1340,9 +1350,38 @@ def _charge(
             kind="agent",
             name="auto:spend",
             parent_id=auto.run_span,
+            span_id=span_id,
+            attempt_hash=digest,
         ),
     )
     return cut
+
+
+PARTIAL_ENDS: Final = MAX_THINKING_CHARS
+"""How many characters of each end of a cut reply's reasoning, and of its
+content, its spend sidecar keeps: the start shows what the reply set out to
+do, the end what it was doing when it was cut."""
+
+
+def partial_reply(reply: str, reasoning: str, cut: str) -> dict[str, Any]:
+    """What a cut reply streamed before its cut, bounded and labelled partial.
+
+    For its reasoning and its content: the length that streamed, and the
+    first and the last `PARTIAL_ENDS` characters (the whole text when it is
+    no longer than both together, with nothing repeated). Redacted before it
+    is cut into ends, so no secret escapes split across the two; the
+    sidecar writer redacts and caps again (`journal.write_attempt_sidecar`).
+    It is kept as every attempt's reasoning is: beside the ledger, redacted,
+    never in a ledger line (`journal._RETAINED_WHOLE`). `saddle explain
+    --attempt <span id>` prints it.
+    """
+
+    def ends(text: str) -> dict[str, Any]:
+        shown = redact_secrets(text)
+        head = shown[:PARTIAL_ENDS]
+        return {"chars": len(text), "head": head, "tail": shown[len(head) :][-PARTIAL_ENDS:]}
+
+    return {"partial": True, "cut": cut, "reasoning": ends(reasoning), "content": ends(reply)}
 
 
 def _hold_guarded(auto: AutoRun) -> None:
