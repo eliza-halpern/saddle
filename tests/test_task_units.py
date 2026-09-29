@@ -65,7 +65,7 @@ def test_blocks_list_items_fences_and_headings() -> None:
         "- ABC-12: labelled item\n"
         "\n"
         "### Deeper\n"
-        "REQ-1 must hold.\n"
+        "XYZ-1 must hold.\n"
     )
     units = task_units(text)
     assert [u.text for u in units.units] == [
@@ -76,17 +76,17 @@ def test_blocks_list_items_fences_and_headings() -> None:
         "1. ordered item",
         "2) other item",
         "ABC-12: labelled item",
-        "REQ-1 must hold.",
+        "XYZ-1 must hold.",
     ]
     by = {u.text: u for u in units.units}
     assert by["Intro sentence."].heading == ("Title",)
     assert by["second item"].heading == ("Title", "Spec")
-    assert by["REQ-1 must hold."].heading == ("Title", "Spec", "Deeper")
-    assert [u.label for u in units.units] == [None, None, None, None, "1.", "2)", "ABC-12", "REQ-1"]
+    assert by["XYZ-1 must hold."].heading == ("Title", "Spec", "Deeper")
+    assert [u.label for u in units.units] == [None, None, None, None, "1.", "2)", "ABC-12", "XYZ-1"]
     assert [u.kind for u in units.units][:3] == ["sentence", "sentence", "list-item"]
     assert by["`f(x)` returns x. It is wrapped onto a second line."].line == 7
     assert [u.id for u in units.units][:2] == ["S-001", "S-002"]
-    assert units.by_id("S-008") is by["REQ-1 must hold."]
+    assert units.by_id("S-008") is by["XYZ-1 must hold."]
     assert units.by_id("S-999") is None
     # the census holds every unit: its denominator equals the hand count, 8
     census = units.census()

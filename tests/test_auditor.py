@@ -22,6 +22,7 @@ from saddle.audit import AuditError, audit_node
 from saddle.auditor import (
     REASONS,
     REUSES,
+    TASK_REQUIREMENTS,
     TIER0,
     TIER1,
     TIER2,
@@ -122,7 +123,10 @@ def test_tiers_partition_the_thirteen_gates() -> None:
     gates = set(TIER0) - {"imports"} | set(TIER1) | set(TIER2) - {"full-suite"}
     assert gates == THIRTEEN
     assert len(TIER0) + len(TIER1) + len(TIER2) == 15
-    assert set(REUSES) == set(REASONS) == set(TIER0) | set(TIER1) | set(TIER2)
+    # P1's gate is the one tier-1 finding emitted only with a requirements
+    # file (`AuditorConfig.task_requirements`); it is not one of the thirteen.
+    assert TASK_REQUIREMENTS not in THIRTEEN | set(TIER1)
+    assert set(REUSES) == set(REASONS) == set(TIER0) | set(TIER1) | set(TIER2) | {TASK_REQUIREMENTS}
     assert set(REASONS.values()) <= {"code-wrong", "evidence-thin", "scope", "unknown"}
 
 
