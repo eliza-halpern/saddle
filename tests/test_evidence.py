@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import tomllib
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, Final
 
 import conftest
 import pytest
@@ -27,6 +29,7 @@ from saddle.evidence import (
     CapturedRun,
     MutantLookupError,
     MutationOutcome,
+    _changed_function_globs,
     _mutant_lines,
     _mutmut_scratch_config,
     _parse_mutant_verdicts,
@@ -2834,3 +2837,207 @@ def test_real_mutmut_decides_mutants_when_the_tests_read_files_beside_the_code(
     assert not [s for s in outcome.survivors if s.startswith("mutmut run exited")], outcome
     assert outcome.total > 0, outcome
     assert outcome.killed > 0, outcome
+
+
+# --- only the mutants of a changed function run ------------------------------
+#
+# Contract: mutmut is asked to run only the mutants of the functions a changed
+# line lies in (`_changed_function_globs`); every other mutant stays `not
+# checked`, and the verdict is the one the whole run gave, since only those
+# functions' mutants can land on a changed line.
+
+
+def _engine_listings(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
+    """Every `mutmut results --all True` listing `mutation_sample` reads, as
+    mutmut printed it (name to status), in call order."""
+    listings: list[dict[str, str]] = []
+    real = evidence_module.run_capture
+
+    def spy(argv: Sequence[str], cwd: Path, **kwargs: Any) -> CapturedRun:
+        done = real(argv, cwd, **kwargs)
+        if list(argv[:2]) == ["mutmut", "results"]:
+            listings.append(_parse_mutant_verdicts(done.stdout))
+        return done
+
+    monkeypatch.setattr(evidence_module, "run_capture", spy)
+    return listings
+
+
+@pytest.mark.parametrize(
+    ("line", "own"), [(2, "a.x_f__mutmut_"), (11, "a.xǁKǁm__mutmut_")], ids=["function", "method"]
+)
+def test_real_mutmut_runs_only_the_mutants_of_the_function_a_changed_line_lies_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line: int, own: str
+) -> None:
+    """Known-good, on the enforcing engine: the changed function's mutants
+    are decided and scored exactly as the whole run scored them (every one
+    killed). Known-bad: the mutants of `g`, `K.m`/`f` and `total`, whose
+    lines did not change, never run; a whole-module run decides them all
+    (`g`'s survive) only to leave them out of the verdict."""
+    _without_stubbed_mutmut(monkeypatch)
+    listings = _engine_listings(monkeypatch)
+    workdir = _locator_workdir(tmp_path)
+    changed = {(str(workdir / "a.py"), line)}
+    outcome = mutation_sample(workdir, changed, 100, test_files={"tests/test_a.py"})
+    (listing,) = listings
+    mine = {name: status for name, status in listing.items() if name.startswith(own)}
+    others = {name: status for name, status in listing.items() if not name.startswith(own)}
+    assert mine
+    assert set(mine.values()) == {"killed"}
+    assert len({name.split("__mutmut_")[0] for name in others}) == 3
+    assert set(others.values()) == {"not checked"}
+    assert outcome == MutationOutcome(
+        killed=len(mine),
+        total=len(mine),
+        generated=len(mine),
+        survivors=(),
+        statuses=(("killed", len(mine)),),
+    )
+
+
+def test_real_mutmut_a_changed_function_without_a_mutant_reads_as_no_mutant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad: `h`'s body is `pass`, so mutmut makes no mutant of it and
+    `mutmut run` given only `h`'s names exits 1 ("Filtered for specific
+    mutants, but nothing matches"). That is no mutant on a changed line, as
+    the whole run found, never a tool failure. Known-good: the same run with
+    `f` changed too decides `f`'s mutants."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f():\n    return 2\n\n\ndef h():\n    pass\n")
+    (workdir / "test_n.py").write_text(
+        "from n import f, h\n\n\ndef test_f():\n    assert f() == 2\n    h()\n"
+    )
+    h_line = (str(workdir / "n.py"), 6)
+    none = mutation_sample(workdir, {h_line}, 10, test_files={"test_n.py"})
+    assert none == MutationOutcome(killed=0, total=0, generated=0, survivors=())
+    both = mutation_sample(
+        workdir, {h_line, (str(workdir / "n.py"), 2)}, 10, test_files={"test_n.py"}
+    )
+    assert (both.killed, both.total) == (1, 1)
+
+
+def test_a_not_checked_mutant_is_undecided_only_if_mutmut_was_asked_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The budget binds before either mutant is decided. `f`'s line changed,
+    so mutmut was asked for `f`'s mutant and it counts as undecided; `g`'s
+    was never asked for and does not (the whole run counted both)."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / "n.py").write_text("def f():\n    return 2\n\n\ndef g():\n    return 3\n")
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    listing = "  n.x_f__mutmut_1: not checked\n  n.x_g__mutmut_1: not checked\n"
+    _stub_mutmut(stub_dir, listing, {}, run_body="sleep 5")
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    changed = {(str(workdir / "n.py"), 2)}
+    outcome = mutation_sample(workdir, changed, 10, test_files=set(), timeout_s=1)
+    assert outcome == MutationOutcome(killed=0, total=0, generated=1, survivors=())
+
+
+GLOBBED: Final = (
+    "import os\n"  # 1
+    "LIMIT = 3\n"  # 2: module level, no mutant
+    "\n"
+    "\n"
+    "def f(x):\n"  # 5
+    "    def inner(y):\n"  # 6: a nested function's mutants are f's
+    "        return y + 1\n"  # 7
+    "    return inner(x)\n"  # 8
+    "\n"
+    "\n"
+    "async def g(x):\n"  # 11
+    "    return x * 2\n"  # 12
+    "\n"
+    "\n"
+    "class K:\n"  # 15
+    "    size = 4\n"  # 16: class level, no mutant
+    "\n"
+    "    def m(self):\n"  # 18
+    "        return self.size - 1\n"  # 19
+    "\n"
+    "    @staticmethod\n"  # 21
+    "    def s(a):\n"  # 22
+    "        return a % 5\n"  # 23
+    "\n"
+    "    class Inner:\n"  # 25: a nested class is not mutated
+    "        def n(self):\n"  # 26
+    "            return 6\n"  # 27
+    "\n"
+    "\n"
+    "if os.name:\n"  # 30
+    "\n"
+    "    def h():\n"  # 32: a def under an `if` is not mutated
+    "        return 7\n"  # 33
+)
+
+
+def _real_name(rel: str, name: str, cls: str | None = None) -> str:
+    """The name mutmut gives mutant 1 of `name` in `rel`, built by mutmut itself."""
+    from mutmut.mutation.trampoline_templates import mangle_function_name
+    from mutmut.utils.format_utils import get_mutant_name
+
+    return get_mutant_name(
+        Path(rel), mangle_function_name(name=name, class_name=cls) + "__mutmut_1"
+    )
+
+
+@pytest.mark.parametrize(
+    ("lines", "names"),
+    [
+        ({7}, [("f", None)]),
+        ({12}, [("g", None)]),
+        ({19}, [("m", "K")]),
+        ({21}, [("s", "K")]),
+        ({15}, [("s", "K")]),
+        ({2, 7, 16, 27, 33}, [("f", None)]),
+        ({7, 12, 19, 23}, [("f", None), ("g", None), ("m", "K"), ("s", "K")]),
+    ],
+    ids=["nested", "async", "method", "decorator", "class-line", "off-function", "all"],
+)
+def test_changed_function_globs_match_the_names_mutmut_gives_those_functions_only(
+    tmp_path: Path, lines: set[int], names: list[tuple[str, str | None]]
+) -> None:
+    """Instances, with mutmut's own name builder as the oracle and `fnmatch`
+    as mutmut matches: each glob matches the mutants of a function a changed
+    line lies in, in any module, and no other function's. A decorated
+    method's decorator lines are its own, and its class line locates its
+    mutants too (`_mutant_lines`). A changed line at module or class level,
+    in a nested class or under an `if` adds no glob: mutmut mutates none."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "n.py").write_text(GLOBBED)
+    globs = _changed_function_globs(tmp_path, {"pkg/n.py": lines})
+    everything = [("f", None), ("g", None), ("m", "K"), ("s", "K"), ("n", "Inner"), ("h", None)]
+    for name, cls in everything:
+        for rel in ("pkg/n.py", "src/other/mod.py"):
+            real = _real_name(rel, name, cls)
+            asked = any(fnmatch.fnmatch(real, glob) for glob in globs)
+            assert asked == ((name, cls) in names), (real, globs)
+
+
+@pytest.mark.parametrize(
+    ("rel", "source"),
+    [
+        ("my-pkg/n.py", "def f():\n    return 1\n"),
+        ("n.py", "def f(:\n    return 1\n"),
+        ("n.py", b"\xff\xfe def f():\n"),
+        ("n.py", "LIMIT = 3\n\n\ndef f():\n    return 1\n"),
+    ],
+    ids=["no-dotted-module", "syntax-error", "not-utf8", "no-function-changed"],
+)
+def test_changed_function_globs_ask_for_no_filter_when_they_cannot_tell(
+    tmp_path: Path, rel: str, source: str | bytes
+) -> None:
+    """No glob, so every mutant runs as before: a path that is no dotted
+    module (`_mutant_lines` then matches a mutant's text in any function), a
+    file that does not parse or decode, and a change to no function."""
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(source, bytes):
+        target.write_bytes(source)
+    else:
+        target.write_text(source)
+    assert _changed_function_globs(tmp_path, {rel: {1, 2}}) == ()

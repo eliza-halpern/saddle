@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import fnmatch
 import hashlib
 import io
 import json
@@ -1937,6 +1938,65 @@ def _copyable(mutated: Collection[str], untouched: Collection[str]) -> list[str]
     return sorted(entries)
 
 
+def _holds_a_line(node: ast.FunctionDef | ast.AsyncFunctionDef, lines: Collection[int]) -> bool:
+    """Whether one of `lines` lies in `node`, from its first decorator to its last line."""
+    start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+    return any(start <= line <= (node.end_lineno or node.lineno) for line in lines)
+
+
+def _changed_function_globs(
+    scratch: Path, lines_by_file: Mapping[str, Collection[int]]
+) -> tuple[str, ...]:
+    """`mutmut run` name globs for every function a changed line lies in.
+
+    mutmut 3.8 mutates only the bodies of top-level functions and of the
+    methods directly in a top-level class: `combine_mutations_to_source`
+    gives every other statement back unmutated, so a changed line anywhere
+    else carries no mutant. A mutant `_mutant_lines` locates to a changed
+    line is one of the function (first decorator to last line) holding that
+    line, or of a decorated method whose class line changed (a decorator
+    line locates to its class's line). Its name is
+    `<module>.x_<name>__mutmut_<n>` or `<module>.xǁ<Class>ǁ<name>__mutmut_<n>`
+    (`_MUTANT_NAME`), and mutmut matches the globs with `fnmatch`; a glob
+    leaves the module out, so a function of the same name in another changed
+    file runs too, never the reverse.
+
+    Empty, which asks for no filter (every mutant runs, as before), when no
+    function holds a changed line, when a file does not parse, and when a
+    file's path gives mutant names `_MUTANT_NAME` does not parse (a
+    directory such as `my-pkg`): `_mutant_lines` matches such a mutant's
+    text anywhere in the file, in any function.
+    """
+    globs: set[str] = set()
+    for rel, lines in lines_by_file.items():
+        module = PurePosixPath(rel).with_suffix("").as_posix().replace("/", ".")
+        if _MUTANT_NAME.match(f"{module}.x_f__mutmut_1") is None:
+            return ()
+        try:
+            tree = ast.parse((scratch / rel).read_text())
+        except (SyntaxError, ValueError):
+            return ()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _holds_a_line(node, lines):
+                    globs.add(f"*.x_{node.name}__mutmut_*")
+            elif isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                        _holds_a_line(item, lines) or (item.decorator_list and node.lineno in lines)
+                    ):
+                        globs.add(f"*.xǁ{node.name}ǁ{item.name}__mutmut_*")
+    return tuple(sorted(globs))
+
+
+_MUTMUT_NOTHING_MATCHES: Final = "Filtered for specific mutants, but nothing matches"
+"""What mutmut 3.8's `collect_source_file_mutation_data` asserts, failing
+`mutmut run` with exit 1, when no mutant it made matches the names it was
+given: no function a changed line lies in has a mutant (a `pass` body, a
+decorator mutmut does not mutate under, no line the handed tests run under
+`mutate_only_covered_lines`), so no mutant is on a changed line."""
+
+
 class MutantLookupError(RuntimeError):
     """The batched mutant-lookup subprocess failed or gave unparseable output.
 
@@ -2032,7 +2092,10 @@ def mutation_sample(
     Runs in a scratch copy (mutmut writes mutants/ into cwd) under a time
     budget; the verdict covers every changed-line mutant mutmut decided
     and degrades to decided mutants when the budget binds first (a real
-    timeout, not a truncation: see `max_mutants` below). `max_mutants` is
+    timeout, not a truncation: see `max_mutants` below). mutmut runs only
+    the mutants of the functions a changed line lies in
+    (`_changed_function_globs`), which hold every changed-line mutant; the
+    others are neither decided nor counted as undecided. `max_mutants` is
     kept as a parameter only because the plan schema and its callers
     still pass it; it no longer samples or truncates the population
     (every scoped mutant is scored), so no verdict depends on which mutants sort first by
@@ -2089,8 +2152,13 @@ def mutation_sample(
                 only_covered=only_covered,
             )
         )
+        # Only the mutants of the functions a changed line lies in run: every
+        # other one is off the changed lines and never counts, and running
+        # them was most of the wall on a large module. They stay `not checked`.
+        lines_by_file = {Path(key).as_posix(): lines for key, lines in by_line.items()}
+        globs = _changed_function_globs(scratch, {rel: lines_by_file[rel] for rel in production})
         ran = run_capture(
-            ["timeout", str(timeout_s), "mutmut", "run"],
+            ["timeout", str(timeout_s), "mutmut", "run", *globs],
             scratch,
             recorder=recorder,
             memory_limit=tree_memory_limit(),
@@ -2101,6 +2169,8 @@ def mutation_sample(
         # gate read "no mutants decided" -- the absence of a verdict, not
         # the tool. SHELL_TIMEOUT is the budget binding and keeps its path.
         if ran.exit_code not in (0, SHELL_TIMEOUT):
+            if globs and _MUTMUT_NOTHING_MATCHES in ran.stderr:
+                return MutationOutcome(killed=0, total=0, generated=0, survivors=())
             output = (ran.stderr.strip() or ran.stdout.strip()).splitlines()
             last = output[-1].strip() if output else "no output"
             # The same exit covers two causes and only the caller can tell
@@ -2133,7 +2203,10 @@ def mutation_sample(
         for name in sorted(verdicts):
             verdict = verdicts[name]
             if verdict == "not checked":
-                undecided += 1
+                # Undecided only if mutmut was asked to decide it: one outside
+                # every glob never ran, and it is off the changed lines.
+                if not globs or any(fnmatch.fnmatch(name, glob) for glob in globs):
+                    undecided += 1
                 continue
             shown_stdout = shows.get(name, "")
             rel = _mutant_path(shown_stdout)
