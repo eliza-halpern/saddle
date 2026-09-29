@@ -14,6 +14,7 @@ import httpx
 import pytest
 from rich.console import Console
 
+from saddle import cli
 from saddle.chat import ChatOptions, _run_turn, _seal_turn, _stream_response, run_chat
 from saddle.journal import read_records, read_spans, verify_journal
 from saddle.timeline import Timeline
@@ -392,7 +393,11 @@ def test_run_turn_tool_results_carry_exit_colors(tmp_path: Path) -> None:
     )
     final_body = _chunk({"content": "Done."}) + "data: [DONE]\n\n"
     out = io.StringIO()
-    console = Console(file=out, width=80, force_terminal=True, color_system="truecolor")
+    # Colour on, set here: rich would read `NO_COLOR` from the environment,
+    # and saddle's own command environment sets it.
+    console = Console(
+        file=out, width=80, force_terminal=True, color_system="truecolor", no_color=False
+    )
     display = Timeline(console)
     journal = tmp_path / "chat.jsonl"
 
@@ -412,6 +417,33 @@ def test_run_turn_tool_results_carry_exit_colors(tmp_path: Path) -> None:
     assert "\x1b[31merror: cannot read 'x'\x1b[0m" in captured
     assert "\x1b[35m$ read_file" in captured
     assert new_parent == read_records(journal)[0].record_hash
+
+
+class _Terminal(io.StringIO):
+    """Output a console takes for a terminal, as `saddle up`'s stdout is."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize(("no_color", "coloured"), [(None, True), ("", True), ("1", False)])
+def test_saddle_up_colours_its_display_unless_no_color_is_set(
+    monkeypatch: pytest.MonkeyPatch, no_color: str | None, coloured: bool
+) -> None:
+    """The product honours `NO_COLOR` (a set, non-empty value): the console
+    `saddle up` builds (`cli.chat_console`) on a colour terminal, the
+    environment set here."""
+    for name in ("NO_COLOR", "FORCE_COLOR", "TTY_COMPATIBLE", "TTY_INTERACTIVE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setenv("COLUMNS", "80")
+    if no_color is not None:
+        monkeypatch.setenv("NO_COLOR", no_color)
+    out = _Terminal()
+    Timeline(cli.chat_console(out)).show_error("boom")
+    assert "error: boom" in out.getvalue()
+    assert ("\x1b[31m" in out.getvalue()) is coloured
 
 
 def test_run_turn_gives_up_after_ten_tool_rounds(tmp_path: Path) -> None:

@@ -102,13 +102,14 @@ def test_w3_a_long_question_is_sealed_as_json_that_still_parses() -> None:
     assert fits["cites"] == ["saddle.gates.check_task_requirements"]
 
 
-def test_w3_a_short_finding_and_a_long_non_question_are_sealed_as_before() -> None:
+def test_w3_a_short_finding_is_sealed_as_before_and_a_long_one_of_any_verdict_is_fitted() -> None:
     short = Finding(TASK_REQUIREMENTS, 1, "question", "code-wrong", "S-001: got []", ("g", "b"))
     assert json.loads(sealed_finding(short))["cites"] == list(short.cites)
-    # Scope: only a question is fitted; a long fail keeps its full JSON (its
-    # exit code already says fail), cut by the ledger line as before.
+    # flip: a long fail was left whole and cut by the ledger line, unparseable;
+    # every verdict is now fitted (tests/test_sealed_findings.py).
     fail = Finding("coverage", 1, "fail", "evidence-thin", "x" * 900, ("c",))
-    assert len(sealed_finding(fail)) > MAX_SPAN_DETAIL_CHARS
+    assert len(sealed_finding(fail)) <= MAX_SPAN_DETAIL_CHARS
+    assert json.loads(sealed_finding(fail))["verdict"] == "fail"
 
 
 def test_w3_a_question_without_the_refusal_mark_gets_none() -> None:

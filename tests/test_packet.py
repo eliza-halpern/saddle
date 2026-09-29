@@ -33,6 +33,7 @@ from saddle.journal import (
     attempt_sidecar_path,
     build_span,
     read_entries,
+    scrub_thinking,
     write_attempt_sidecar,
 )
 from saddle.packet import (
@@ -911,14 +912,18 @@ def test_a_ledger_with_no_coverage_finding_has_no_audit_summary(tmp_path: Path) 
 
 
 def test_a_source_sealed_as_one_string_over_the_sidecar_cap_is_not_placed(tmp_path: Path) -> None:
-    """Known-bad for the cap: `write_attempt_sidecar` cuts a string at 4000
+    """Known-bad for the cap: `write_attempt_sidecar` cut a string at 4000
     characters. money.py sealed whole no longer parses; its lines are named
     and "not placed", store.py (sealed as lines) is still placed, and the
-    packet does not crash."""
+    packet does not crash.
+
+    The writer now keeps `sources` verbatim (the lines placed whole:
+    test_coverage_placement.py), so the source is cut here the way an older
+    writer cut it (`scrub_thinking`): what such a ledger holds."""
     journal = tmp_path / "proofs.jsonl"
     sealed = coverage_evidence(tmp_path)
     assert len(coverage_sources()["money.py"]) > 4000
-    sealed["sources"]["money.py"] = coverage_sources()["money.py"]
+    sealed["sources"]["money.py"] = scrub_thinking(coverage_sources()["money.py"])
     coverage_span(journal, coverage_finding(), sealed)
     audit = next(r for r in compile_packet(journal).rows if r.key == "audit")
     assert (

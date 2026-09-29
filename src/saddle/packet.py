@@ -47,13 +47,13 @@ from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_PREFIXES,
     AUTO_OUTCOMES,
-    JOURNAL_QUESTION_EXIT,
     P1_EXTRACT_SPAN,
     SEALED_CUT,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
     read_entries,
+    redact_secrets,
     verify_journal,
 )
 from saddle.transcript import FEED_SPANS, start_field, tier_finding
@@ -275,20 +275,38 @@ def _mutation_summary(journal: Path, span: SpanRecord | None) -> mutant_text.Mut
 def _coverage_summary(
     journal: Path, span: SpanRecord | None, mutation: mutant_text.MutationSummary | None
 ) -> coverage_text.CoverageSummary | None:
-    """A failing coverage finding's summary, from the sources and
-    changed set sealed in its span; None when nothing is sealed there."""
+    """A failing coverage finding's summary, from the sources and changed
+    set sealed in its span, and the lines it names: whole from the same
+    sidecar (`auditor.coverage_evidence`), which the span's own line, fitted
+    to the ledger, may hold only part of; from the line itself in a ledger
+    sealed before that. None when nothing is sealed there."""
     sealed = _sealed(journal, span, "sources", "changed")
     if sealed is None or span is None:
         return None
-    try:
-        finding = json.loads(span.detail)
-    except ValueError:
-        return None
-    if not isinstance(finding, dict):
-        return None
+    named = sealed.get("uncovered")
+    lines: list[tuple[str, int]] | None = None
+    if isinstance(named, list):
+        finding: Any = {"cites": [str(sealed.get("basis", ""))]}
+        lines = [(str(f), int(n)) for f, n in named]
+    else:
+        try:
+            finding = json.loads(span.detail)
+        except ValueError:
+            return None
+        if not isinstance(finding, dict):
+            return None
     sources = _sealed_sources(sealed["sources"])
     changed = [(str(f), int(n)) for f, n in sealed["changed"]]
-    return coverage_text.describe_coverage(finding, sources, changed, mutation)
+    summary = coverage_text.describe_coverage(finding, sources, changed, mutation, lines=lines)
+    # The sources are sealed verbatim, so that they parse; the lines a person
+    # reads are redacted, as every other sealed string is.
+    return dataclasses.replace(
+        summary,
+        gaps=tuple(
+            dataclasses.replace(g, text=tuple((n, redact_secrets(t)) for n, t in g.text))
+            for g in summary.gaps
+        ),
+    )
 
 
 def _sealed_sources(raw: Any) -> dict[str, str]:
@@ -412,14 +430,11 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
     seam: list[tuple[int, _Audit]] = []
     latest: dict[str, tuple[int, _Audit]] = {}
     for order, span in enumerate(spans):
-        finding = tier_finding(span.name, span.detail)
+        # A line that does not parse reads its verdict from its exit code.
+        finding = tier_finding(span.name, span.detail, span.exit_code)
         if finding is not None:
             if (finding.tier == 0) != edit_checks:
                 continue
-            if finding.verdict == "unreadable" and span.exit_code == JOURNAL_QUESTION_EXIT:
-                # A question sealed before its JSON was fitted to the line
-                # (`auditor.sealed_finding`): its exit code still says question.
-                finding = dataclasses.replace(finding, verdict="question")
             latest[finding.gate] = (
                 order,
                 _Audit(

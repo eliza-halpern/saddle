@@ -33,11 +33,14 @@ from saddle.vllm import ToolCall
 
 
 def _console(out: io.StringIO, *, ansi: bool = False) -> Console:
+    """A console whose colour is set here, never read from the environment:
+    saddle's own command environment sets `NO_COLOR=1`, and rich reads it."""
     return Console(
         file=out,
         width=80,
         force_terminal=ansi,
         color_system="truecolor" if ansi else None,
+        no_color=not ansi,
     )
 
 

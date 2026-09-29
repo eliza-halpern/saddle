@@ -337,8 +337,14 @@ def write_attempt_sidecar(journal_path: Path, span_id: str, evidence: Mapping[st
 # run whose every gate had passed. A diff is source code, and it
 # is already in the worktree and in git by the time the sidecar is
 # authored, so scrubbing this copy protects nothing the tree does not
-# already expose.
-_RETAINED_VERBATIM: Final = frozenset({"diff"})
+# already expose. `sources` are the audited tree's own files, sealed beside
+# a coverage finding (`auditor.coverage_evidence`) so the packet can place
+# each uncovered line in its function: redaction rewrote their code
+# (`CHARS_PER_TOKEN: Final = 4` became `CHARS_PER_TOKEN=*** = 4`), the file no
+# longer parsed, and the packet said it was "not in the tree read". They are
+# in the worktree as the diff is; the lines the packet shows are redacted
+# there (`packet._coverage_summary`).
+_RETAINED_VERBATIM: Final = frozenset({"diff", "sources"})
 
 # Sidecar text that is retained whole but still redacted: a prompt is what
 # a replay needs verbatim and can carry an injected key, and `thinking` is
@@ -351,7 +357,8 @@ _RETAINED_WHOLE: Final = frozenset({"prompt", "thinking"})
 
 
 def _scrub_evidence(key: str, value: Any) -> Any:
-    """Redact every string in `value`, at any depth; cap all but the retained keys.
+    """Redact every string in `value`, at any depth; cap all but the retained
+    keys; keep a `_RETAINED_VERBATIM` key's value, whatever its shape, as is.
 
     Round 3e: the scrub was one level deep and capped every
     string, so a 4001+ character `diff` no longer hashed to its
@@ -368,9 +375,9 @@ def _scrub_evidence(key: str, value: Any) -> Any:
     retained whole here for that reason; the cap still applies to every
     other string, at every depth.
     """
+    if key in _RETAINED_VERBATIM:
+        return value
     if isinstance(value, str):
-        if key in _RETAINED_VERBATIM:
-            return value
         return redact_secrets(value) if key in _RETAINED_WHOLE else scrub_thinking(value)
     if isinstance(value, Mapping):
         return {str(k): _scrub_evidence(str(k), v) for k, v in value.items()}

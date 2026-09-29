@@ -44,7 +44,7 @@ from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
 from saddle.journal import P1_EXTRACT_SPAN, append_span, build_span, started_before, utc_now
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
-from saddle.task_passes import baseline_sources
+from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
 from saddle.task_requirements import ProbeTree
 from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, INSTALL_SCHEMA, TOOLS, ToolContext
@@ -344,10 +344,11 @@ def extraction_counts(record: dict[str, object]) -> str:
         value = record.get(key)
         return len(value) if isinstance(value, list) else 0
 
+    said = cut_calls(record)
     return (
         f"{n('units')} candidate unit(s), {n('examples')} example(s), "
         f"{n('not_executable')} not executable, {n('cut')} cut, "
-        f"{n('unanswered')} unanswered, {n('probes')} probe(s)"
+        f"{n('unanswered')} unanswered, {n('probes')} probe(s)" + (f", {said}" if said else "")
     )
 
 
@@ -396,6 +397,8 @@ def _requirements(
                 options.task,
                 client,
                 sources=baseline_sources(worktree, base),
+                # The name the passes' requests carry, sealed with their replies.
+                model=client.model,
                 probes=[ProbeTree(r.resolve(), "user") for r in options.references],
             )
             target.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
@@ -511,6 +514,7 @@ def run_auto(
             else ""
         ),
         kind="agent",
+        started_at=utc_now().isoformat(),
     )
     append_span(journal, start)
     p1, extraction = _requirements(options, client, worktree, base, journal, start.span_id)

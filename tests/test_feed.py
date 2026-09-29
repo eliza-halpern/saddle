@@ -118,6 +118,9 @@ class Reactive:
     sees the finding unless the engine puts it in a message it is sent.
     """
 
+    model = "reactive-stand-in"
+    """What a record of its calls names, as `VllmClient.model` is for a real client."""
+
     def __init__(self, script: list[list[Any]], tail: list[Any] | None = None) -> None:
         self.script = list(script)
         self.tail = tail if tail is not None else [FINISH]
