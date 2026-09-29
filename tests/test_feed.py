@@ -31,6 +31,7 @@ import pytest
 from test_audit import VENV_TEST, _files_outside_git
 
 from saddle import cli, engine, feed
+from saddle.audit import AuditError
 from saddle.auditor import AuditorConfig, Finding, Findings, sanction
 from saddle.auto import AutoError, AutoOptions, AutoResult, run_auto
 from saddle.engine import FINISH_REFUSED
@@ -674,6 +675,38 @@ def test_no_audited_tree_holds_a_path_git_ignores_and_each_holds_every_untracked
     f.close()
     expected = {".gitignore", "calc.py", "new.py", "tests/test_calc.py"}
     assert seen.trees == [expected, expected]
+
+
+def test_a_checkpoint_whose_copy_fails_reports_it_and_the_tool_call_goes_ahead(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkpoint that cannot take its frozen copy (git cannot say what it
+    ignores) is a blocked checkpoint naming why, never an exception out of
+    the tool hook: that would end the run over an advisory audit."""
+    worktree = tmp_path / "worktree"
+    git(repo, "worktree", "add", "-q", "-b", "run", str(worktree), "HEAD")
+
+    def fails(_root: Path) -> frozenset[str]:
+        msg = "git ls-files failed: broken"
+        raise AuditError(msg)
+
+    monkeypatch.setattr(feed, "git_ignored", fails)
+    seen = SeesFiles()
+    f = AuditFeed(
+        worktree=worktree,
+        baseline=git(worktree, "rev-parse", "HEAD"),
+        journal=tmp_path / "j.jsonl",
+        run_span="s",
+        auditor=seen,
+    )
+    f.after_tool("edit_file", ok=True)
+    f.before_tool("run_command")
+    f.close()
+    assert seen.trees == []
+    (result,) = f.results
+    (finding,) = result.findings
+    assert finding.verdict == "blocked"
+    assert "git ls-files failed: broken" in finding.detail
 
 
 @pytest.fixture

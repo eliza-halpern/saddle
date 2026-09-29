@@ -539,7 +539,17 @@ class AuditFeed:
         scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))
         # The copy is taken now, before the tool runs: it is this burst's tree,
         # whatever the model does while the audit is in flight.
-        _copy_files(self.worktree, scratch / "frozen")
+        try:
+            _copy_files(self.worktree, scratch / "frozen")
+        except (AuditError, OSError) as exc:
+            # A blocked checkpoint that says why; the tool call it rides on
+            # goes ahead, and the next burst of edits tries again.
+            shutil.rmtree(scratch, ignore_errors=True)
+            failed = AuditResult(point, "", (_blocked(f"checkpoint copy failed: {exc}"),))
+            with self._lock:
+                self._ready.append(failed)
+                self.results.append(failed)
+            return
         if self._pool is None:
             self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-audit")
         self._pending = self._pool.submit(self._checkpoint, point, scratch)
