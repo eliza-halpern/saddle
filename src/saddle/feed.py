@@ -91,6 +91,7 @@ from saddle.auditor import (
     sanction,
 )
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
+from saddle.impact import ImpactMemo
 from saddle.journal import FEED_QUESTION_LINE, append_span, build_span, write_attempt_sidecar
 from saddle.tools import CHECK_TOOL, FINISH_TOOL
 
@@ -387,6 +388,9 @@ class AuditFeed:
             sanctioned_test_rewrites=self.sanctioned_test_rewrites,
             tier2=self.tier2,
             mutant_shortlist=self.mutant_shortlist,
+            # One map for the run: the first audit runs the whole suite and
+            # draws it; later ones run the test files the change can reach.
+            impact=ImpactMemo(),
         )
         if self.auditor is None:
             self.auditor = self.factory(self.worktree, self.baseline, self._config)

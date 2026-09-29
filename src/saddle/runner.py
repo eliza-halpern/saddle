@@ -13,9 +13,10 @@ import ast
 import shlex
 import shutil
 import tempfile
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import replace
 from pathlib import Path, PurePath
+from typing import Final
 
 from saddle.dag import Node
 from saddle.evidence import (
@@ -57,6 +58,13 @@ from saddle.journal import SpanRecorder
 # The placeholder survivor a `tier2=False` gate run carries in place of a
 # mutation sample: never a verdict, only a marker that nothing was measured.
 NOT_MEASURED_AT_TIER1 = "not measured: tier-1 checkpoint"
+
+
+IMPACT_RAN: Final = (
+    "impact: {ran} of {of} test files ran, the ones this change can reach "
+    "(the whole suite ran at the first audit of this run)"
+)
+"""Appended to the `tests` check when `run_node_gate` ran a selection."""
 
 
 def red_phase_command(test_command: str, ignored: Collection[str]) -> str:
@@ -163,6 +171,8 @@ def run_node_gate(
     tier2: bool = True,
     test_timeout: float = DEFAULT_TEST_TIMEOUT_S,
     test_workers: int = 1,
+    test_selection: Collection[str] | None = None,
+    on_suite: Callable[[str, CapturedRun], None] | None = None,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -205,6 +215,15 @@ def run_node_gate(
     Otherwise every run is serial, as before, and the `tests` check's
     detail ends with why. A `test` node always runs serially: its verdict
     is read off the run's output.
+
+    `test_selection` (`saddle.impact.select`) is the test files the change
+    can reach: the suite run and every dead-code rerun then pass every other
+    test file to pytest as `--ignore`, keeping the command's own scope and
+    options, and the `tests` check's detail says how many ran. None, or a
+    command that is not a plain pytest invocation, runs the whole suite.
+    `on_suite` is called with the data file and the suite's run while the
+    tree is still there; the suite then records per-test contexts, which
+    `saddle.impact.build` reads.
     """
     gate = node.deterministic_gate
     workers = 1 if node.kind == "test" else test_workers
@@ -218,24 +237,30 @@ def run_node_gate(
     touched = sorted(git_changed_files(workdir, baseline, recorder=recorder))
     data_file = str(workdir / ".coverage.tier1")
     drop_test_caches(workdir)
+    test_sources = read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")
+    # Only the test files the change can reach, when the caller knows them:
+    # every other one is ignored, so the command's own scope still decides.
+    skipped = sorted(set(test_sources) - set(test_selection)) if test_selection is not None else []
+    command = red_phase_command(gate.test_command, skipped)
     mode = suite_run(workdir, gate.test_command, workers, recorder=recorder)
     suite = run_suite_capture(
         mode,
-        gate.test_command,
+        command,
         workdir,
         data_file,
         recorder=recorder,
         timeout=test_timeout,
-        contexts=tier2,
+        contexts=tier2 or on_suite is not None,
     )
     if capture is not None:
         capture.append(suite)
+    if on_suite is not None:
+        on_suite(data_file, suite)
     current_exit = suite.exit_code
     covered = covered_lines(data_file, changed_files)
     # The tests that ran a changed line are all a changed-line mutant can
     # meet, so mutmut runs those, not the whole scope (tier 2 only).
     covering = covering_tests(data_file, changed) if tier2 else ()
-    test_sources = read_sources(workdir, "test_*.py") | read_sources(workdir, "*_test.py")
     ruff_files = [
         Path(path).relative_to(workdir).as_posix() for path in changed_files if path.endswith(".py")
     ]
@@ -421,7 +446,7 @@ def run_node_gate(
             for rel, text in edited.items():
                 (sandbox / rel).write_text(text)
             return run_shell_capture(
-                mode.plain(gate.test_command), sandbox, recorder=recorder, timeout=test_timeout
+                mode.plain(command), sandbox, recorder=recorder, timeout=test_timeout
             ).exit_code
 
     inputs = Tier1Inputs(
@@ -456,7 +481,16 @@ def run_node_gate(
         property_out_of_scope=property_out_of_scope,
     )
     result = run_tier1(node, inputs)
+    ran = IMPACT_RAN.format(ran=len(test_sources) - len(skipped), of=len(test_sources))
     checks = tuple(
-        _with_suite_run(check, mode) if check.name == "tests" else check for check in result.checks
+        _with_suite_run(
+            replace(check, detail=f"{check.detail}; {ran}")
+            if command != gate.test_command
+            else check,
+            mode,
+        )
+        if check.name == "tests"
+        else check
+        for check in result.checks
     )
     return replace(result, checks=checks)

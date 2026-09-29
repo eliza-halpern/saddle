@@ -41,6 +41,7 @@ from __future__ import annotations
 import ast
 import contextvars
 import dataclasses
+import functools
 import hashlib
 import importlib.util
 import json
@@ -59,7 +60,7 @@ from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal
 
-from saddle import coverage_text, runner, sandbox
+from saddle import coverage_text, impact, runner, sandbox
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     AuditError,
@@ -72,6 +73,7 @@ from saddle.audit import (
 from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
+    CapturedRun,
     MutationOutcome,
     SuiteLimitError,
     changed_statements,
@@ -98,6 +100,7 @@ from saddle.gates import (
     shortlist_order,
     spared_definitions,
 )
+from saddle.impact import ImpactMemo
 from saddle.journal import (
     JOURNAL_QUESTION_EXIT,
     MAX_SPAN_DETAIL_CHARS,
@@ -393,6 +396,12 @@ class AuditorConfig:
     """`--task-requirements`: a sealed P1 file. Tier 1 then runs the
     `task-requirements` gate beside the tests, and the file's bytes join the
     cache key, so a changed file never reuses a verdict."""
+    impact: ImpactMemo | None = None
+    """The test-impact map one run's audits share (`saddle.impact`). None runs
+    the whole suite at every audit, as before. With a memo the first audit
+    runs it with per-test contexts and records the map, and every later one
+    runs only the test files the change can reach; the whole suite again
+    whenever `impact.select` cannot say."""
 
 
 def _file_sha(path: Path) -> str:
@@ -424,6 +433,26 @@ rewritten tests are red on the baseline (they assert new behaviour) and no one
 sanctioned them at the start, so a person decides rather than the run refusing
 work the task may require. A watched run had to rewrite two tests that pinned
 the very masking its task removed, and could not finish any other way."""
+
+
+def _selection(memo: ImpactMemo | None, tree: Path, baseline: str) -> tuple[str, ...] | None:
+    """The test files `tree`'s change can reach, or None for the whole suite:
+    no memo, no map yet, or a selection that failed (never read as "none")."""
+    if memo is None or memo.tests is None:
+        return None
+    try:
+        return impact.select(tree, baseline, memo.tests)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _record_impact(memo: ImpactMemo, tree: Path, data_file: str, suite: CapturedRun) -> None:
+    """Draw the map from a whole-suite run whose tests ran to the end (exit 0
+    or 1): one cut short records only the tests it reached."""
+    if suite.exit_code in (0, 1) and not suite.timed_out:
+        drawn = impact.build(data_file, tree)
+        if drawn is not None:
+            memo.tests = drawn
 
 
 def _blocked_tier2(key: str, first: Findings) -> Findings:
@@ -837,6 +866,7 @@ class Auditor:
                     if self.config.task_requirements is not None
                     else []
                 ),
+                *(["impact"] if self.config.impact is not None else []),
             ]
         )
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -977,6 +1007,8 @@ class Auditor:
                     resolved,
                     self.config.task_requirements,
                 )
+            memo = self.config.impact
+            selection = _selection(memo, copy, resolved)
             try:
                 gated = runner.run_node_gate(
                     self.node,
@@ -985,6 +1017,13 @@ class Auditor:
                     tier2=tier == 2,
                     test_timeout=limit,
                     test_workers=workers,
+                    test_selection=selection,
+                    # A whole-suite run under a memo (re)draws the map.
+                    on_suite=(
+                        functools.partial(_record_impact, memo, copy)
+                        if memo is not None and selection is None
+                        else None
+                    ),
                 )
             finally:
                 if pool is not None:
