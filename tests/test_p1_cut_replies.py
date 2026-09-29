@@ -10,6 +10,7 @@ prediction replies stop at the cap, as the served model's did.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -18,11 +19,15 @@ from typing import Any
 import httpx
 import pytest
 from test_p1_audit import good
-from test_task_passes import PROPOSAL, TASK, Scripted
+from test_task_examples import val
+from test_task_passes import PROPOSAL, TASK, Scripted, predict_reply
 
 from saddle import cli
 from saddle.auto import extraction_counts
+from saddle.gates import check_task_requirements
+from saddle.task_examples import EMPTY_SHA256, SPLIT_NOTE, Prediction, undecided
 from saddle.task_passes import PASS_MAX_TOKENS, PREDICT_SEEDS, cut_calls, extract
+from saddle.task_requirements import load
 from saddle.vllm import VllmClient, VllmResponseError
 
 __all__ = ["good"]
@@ -146,4 +151,73 @@ def test_the_extract_command_names_the_cut_calls(
             f"; 3 of 4 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
             "(P-b seed 11, P-b seed 23, P-b seed 37)"
         )
+    )
+
+
+# -- the question a missing prediction asks says what happened -----------------------
+
+
+def questions(record: dict[str, Any], tmp_path: Path) -> list[str]:
+    """What the gate says of each example the predictions did not decide, over
+    the sealed record loaded as an audit loads it, on a tree that returns
+    [1, 1, 2, 2], at full strength: each is a question, never a refusal and
+    never a pass."""
+    path = tmp_path / "task-requirements.json"
+    path.write_text(json.dumps(record))
+    req = load(path, TASK)
+    results = {e.id: val([1, 1, 2, 2]) for e in req.examples}
+    check = check_task_requirements(results, req.units, req.examples, licensed=True)
+    undecided_rows = [r for r in check.rows if r.klass.route == "split"]
+    assert undecided_rows
+    assert {r.status for r in undecided_rows} == {"question"}
+    return [r.why for r in undecided_rows]
+
+
+def test_every_reply_cut_asks_why_not_a_disagreement(tmp_path: Path) -> None:
+    server = CapServer(Scripted(PROPOSAL), cut=PREDICT_SEEDS)
+    asked = questions(extract(TASK, server.client()), tmp_path)
+    assert asked == [
+        f"3 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
+        "cap)"
+    ] * len(asked)
+    assert asked
+
+
+def test_one_reply_cut_asks_with_the_two_readings_that_came(tmp_path: Path) -> None:
+    server = CapServer(Scripted(PROPOSAL), cut=(PREDICT_SEEDS[2],))
+    asked = questions(extract(TASK, server.client()), tmp_path)
+    assert asked[0] == (
+        f"1 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
+        "cap): [1, 1, 2, 2]"
+    )
+    assert not any(SPLIT_NOTE in a for a in asked)
+
+
+def test_a_cut_reply_and_two_that_differ_say_both(tmp_path: Path) -> None:
+    def differing(seed: int) -> str:
+        reply = json.loads(predict_reply(seed))
+        if seed == PREDICT_SEEDS[1]:
+            reply["predictions"][0]["outcome"]["text"] = "[1, 2, 1, 2]"
+        return json.dumps(reply)
+
+    server = CapServer(Scripted(PROPOSAL, predict=differing), cut=(PREDICT_SEEDS[2],))
+    asked = questions(extract(TASK, server.client()), tmp_path)
+    assert asked[0] == (
+        f"1 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
+        f"cap); {SPLIT_NOTE}: [1, 1, 2, 2] / [1, 2, 1, 2]"
+    )
+
+
+def test_a_prediction_sealed_without_a_reason_says_what_its_record_shows() -> None:
+    """A file sealed before predictions carried `missing`: an empty reply's hash
+    says the call returned nothing; any other says only that no outcome came."""
+    empty = Prediction(None, "", EMPTY_SHA256)
+    other = Prediction(None, "", "0" * 64)
+    assert EMPTY_SHA256 == hashlib.sha256(b"").hexdigest()
+    assert undecided((empty, empty, empty)) == (
+        "3 of 3 predictions missing (a prediction call returned nothing)"
+    )
+    assert undecided((other, empty)) == (
+        "2 of 2 predictions missing (a predictor gave no outcome for this input; a prediction "
+        "call returned nothing); 2 predictions recorded where 3 are needed"
     )

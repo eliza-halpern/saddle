@@ -529,6 +529,10 @@ class Prediction:
     decides: str
     raw_sha256: str
     """The predictor's whole raw output, hashed: byte-identical outputs are one sample."""
+    missing: str = ""
+    """Why it gave no outcome, as the extraction sealed it (`task_passes._missing`):
+    its reply cut at the token cap, its call failed or returned nothing, and so
+    on. "" when it gave one, and in a file sealed before the reason was."""
 
     @staticmethod
     def from_dict(data: Mapping[str, Any]) -> Prediction:
@@ -537,7 +541,12 @@ class Prediction:
             outcome = Outcome.from_dict(raw) if isinstance(raw, Mapping) else None
         except (ValueError, KeyError):
             outcome = None
-        return Prediction(outcome, str(data.get("decides", "")), str(data["raw_sha256"]))
+        return Prediction(
+            outcome,
+            str(data.get("decides", "")),
+            str(data["raw_sha256"]),
+            str(data.get("missing", "")),
+        )
 
 
 @dataclass(frozen=True)
@@ -777,13 +786,7 @@ def classify(example: Example, units: Units) -> Class:
             disagree_with_text=not (decided and written[0].same(expected)),
         )
     elif not decided:
-        return Class(
-            "split",
-            None,
-            tuple(readings),
-            "the predictors read the cited words differently",
-            effective_k=k,
-        )
+        return Class("split", None, tuple(readings), undecided(example.predictions), effective_k=k)
     else:
         expected = written[0]
         agree = len(example.references) == K_PREDICTORS and all(
@@ -814,6 +817,34 @@ def classify(example: Example, units: Units) -> Class:
     if base.route == "decided-unverified":
         return base
     return _probed(base, expected, example.probes)
+
+
+SPLIT_NOTE: Final = "the predictors read the cited words differently"
+NO_OUTCOME: Final = "a predictor gave no outcome for this input"
+NOTHING_RETURNED: Final = "a prediction call returned nothing"
+EMPTY_SHA256: Final = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+"""The sha256 of no text: the `raw_sha256` of a prediction whose call returned nothing."""
+
+
+def undecided(predictions: Sequence[Prediction]) -> str:
+    """Why `predictions` do not decide their input, in words a question can
+    quote: what happened. Predictions that are missing say why
+    (`Prediction.missing`); a disagreement is named only where written
+    outcomes differ, never for a prediction that never came."""
+    written = [p.outcome for p in predictions if p.outcome is not None]
+    missing = [p for p in predictions if p.outcome is None]
+    said = []
+    if missing:
+        whys = dict.fromkeys(
+            p.missing or (NOTHING_RETURNED if p.raw_sha256 == EMPTY_SHA256 else NO_OUTCOME)
+            for p in missing
+        )
+        said.append(f"{len(missing)} of {len(predictions)} predictions missing ({'; '.join(whys)})")
+    if len(predictions) != K_PREDICTORS:
+        said.append(f"{len(predictions)} predictions recorded where {K_PREDICTORS} are needed")
+    if any(not o.same(written[0]) for o in written[1:]):
+        said.append(SPLIT_NOTE)
+    return "; ".join(said)
 
 
 LITERAL_DISAGREES: Final = "literal (the predictors disagree with the text; the text wins)"
@@ -944,7 +975,8 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
             return Row(example, "not-proven", f"the tree's value is undecodable ({exc})", klass)
     if klass.expected is None:
         # A split input: the readings are recorded, and a person decides.
-        return Row(example, "question", f"{klass.note}: {_readings(klass.readings)}", klass, shown)
+        why = f"{klass.note}: {_readings(klass.readings)}" if klass.readings else klass.note
+        return Row(example, "question", why, klass, shown)
     closeness = got.matches(klass.expected, klass.abs_tol)
     if closeness == "equal":
         return Row(example, "pass", "matches", klass, shown)
