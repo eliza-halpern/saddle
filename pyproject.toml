@@ -85,6 +85,10 @@ branch = true
 # gate's own sandboxed coverage run of it took about 2300 s in a 2-core slot.
 # Read from the commit a run or audit starts from, never from the tree it judges.
 test-timeout = 3600
+# How many pytest-xdist workers the audit runs this suite on (docs/CLI.md, "Running
+# the tests on workers"), and `check.sh` too: 376 s on 8 workers with coverage,
+# against 1209-1378 s serially. Read like test-timeout, from the starting commit.
+test-workers = 8
 
 [tool.mutmut]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.

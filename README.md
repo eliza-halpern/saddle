@@ -153,8 +153,8 @@ longer as a hang. A project whose suite needs longer sets its own limit in its
 3600). The limit is read from the commit the work starts from, so commit the setting
 first; nothing a run changes in its own tree can raise the limit it is judged under
 ([docs/CLI.md](docs/CLI.md#the-test-time-limit)). A slow suite can also be run on
-pytest-xdist workers, with `test-workers = <N>` in the same table
-([docs/CLI.md](docs/CLI.md#running-the-tests-on-workers)).
+pytest-xdist workers, with `test-workers = <N>` in the same table (saddle's own is 8;
+[docs/CLI.md](docs/CLI.md#running-the-tests-on-workers)).
 
 [docs/USING-SADDLE.md](docs/USING-SADDLE.md) walks through the chat, the lanes and the
 evidence packet. Every command and flag is in [docs/CLI.md](docs/CLI.md): `saddle

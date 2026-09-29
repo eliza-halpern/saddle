@@ -67,7 +67,7 @@ test-timeout = 3600   # seconds
 Saddle's own repository sets 3600 s. `check.sh` runs its suite in about 20 to 23
 minutes (1209 to 1378 s in recorded serial runs), and the gate's own run of it, sandboxed
 and under `coverage run`, took about 38 minutes (about 2300 s) in a 2-core slot. The
-built-in 300 s reported it as a hang.
+built-in 300 s reported it as a hang. It also sets `test-workers = 8` (below).
 
 ## Running the tests on workers
 
@@ -107,6 +107,10 @@ test-workers = 8
   enforces no total either.
 - A suite whose tests share a file, a port or other global state can fail on workers
   where it passes serially. Leave the setting out for such a suite.
+
+Saddle's own repository sets `test-workers = 8`: its suite, with coverage, took 376 s
+on 8 workers against 1209 to 1378 s serially, with the same tests passing and 100% line
+and branch coverage. Its own `check.sh` runs the suite on the same number of workers.
 
 ## saddle auto TASK
 
