@@ -113,12 +113,20 @@ GUARDED_MODULES: Final = (
     "engine",
     "memcap",
     "sandbox",
+    "task_units",
+    "task_examples",
+    "task_requirements",
+    "task_passes",
+    "task_prompts",
     "auto",
 )
 """The modules a run on saddle's own source may not finish on: the judges
 (`gates`, `evidence`, `auditor`, `audit`), what decides whether a finish is
 accepted (`feed`, `engine`), what confines and caps the auditor's runs
-(`sandbox`, `memcap`), and `auto` itself, which holds these lists: a run that
+(`sandbox`, `memcap`), the task-requirements check (`task_units`,
+`task_examples` and `task_requirements`, which the gates and the auditor
+call, and `task_passes` with its `task_prompts`, which write the
+requirements file a run is judged against), and `auto` itself, which holds these lists: a run that
 could shorten them must not finish either. The one module list the self-guard
 reads."""
 
@@ -134,6 +142,10 @@ GUARDED_TESTS: Final = (
     "tests/test_chat_engine.py",
     "tests/test_memcap.py",
     "tests/test_sandbox_reach.py",
+    "tests/test_task_units.py",
+    "tests/test_task_examples.py",
+    "tests/test_task_requirements.py",
+    "tests/test_task_passes.py",
     "tests/test_auto.py",
     "tests/test_self_guard.py",
     "tests/conftest.py",

@@ -4,7 +4,8 @@ When saddle works on its own repository, a run could change the code that
 judges runs. A run whose tree changes a guarded path (`auto.GUARDED_PATHS`: the gates,
 evidence, auditor and audit modules; the feed and the turn engine, which
 decide whether a finish is accepted; the sandbox and the memory cap, which
-confine the auditor's runs; their tests, and the suite's conftest) ends
+confine the auditor's runs; the task-requirements check and the passes that
+extract its file; their tests, and the suite's conftest) ends
 `stopped`, reason "needs you: ...", naming the paths, never `finished`. Each
 half both ways: a guarded edit stops, an unrelated module or a near-miss of a
 guarded name finishes; the guard is armed only on saddle's own source, so
@@ -50,6 +51,22 @@ FINISH_PATH_JUDGES = [
 and what confines and caps the auditor's runs (sandbox, memory cap), with the
 test files that pin each."""
 
+TASK_REQUIREMENT_JUDGES = [
+    "src/saddle/task_units.py",
+    "src/saddle/task_examples.py",
+    "src/saddle/task_requirements.py",
+    "src/saddle/task_passes.py",
+    "src/saddle/task_prompts.py",
+    "tests/test_task_units.py",
+    "tests/test_task_examples.py",
+    "tests/test_task_requirements.py",
+    "tests/test_task_passes.py",
+]
+"""The task-requirements check: the parser, the example judge and the
+predicate the gates and the auditor call, and the extraction passes (with
+their prompts) that write the requirements file a run is judged against,
+with the test files that pin each."""
+
 GUARD_ITSELF = [
     "src/saddle/auto.py",
     "tests/test_auto.py",
@@ -65,6 +82,8 @@ NEAR_MISSES = [
     "src/saddle/autos.py",
     "tests/test_feed_extra.py",
     "tests/test_engine.py",
+    "src/saddle/task_units_extra.py",
+    "tests/test_task_prompts_extra.py",
 ]
 """Named files, never a pattern: paths that share a guarded module's stem but
 are not it, and must still finish."""
@@ -101,7 +120,10 @@ def saddle_repo(tmp_path: Path) -> Path:
             "src/saddle/mutant_text.py": "WIDTH = 1\n",
             "tests/test_gates.py": "def test_limit():\n    assert 1\n",
             "tests/conftest.py": "",
-            **dict.fromkeys(FINISH_PATH_JUDGES + GUARD_ITSELF + NEAR_MISSES, "LIMIT = 1\n"),
+            **dict.fromkeys(
+                FINISH_PATH_JUDGES + TASK_REQUIREMENT_JUDGES + GUARD_ITSELF + NEAR_MISSES,
+                "LIMIT = 1\n",
+            ),
         },
     )
 
@@ -141,6 +163,11 @@ def test_the_guarded_list_is_the_judges_the_finish_path_the_confinement_and_thei
         "engine",
         "memcap",
         "sandbox",
+        "task_units",
+        "task_examples",
+        "task_requirements",
+        "task_passes",
+        "task_prompts",
         "auto",
     )
     assert {
@@ -154,6 +181,7 @@ def test_the_guarded_list_is_the_judges_the_finish_path_the_confinement_and_thei
         "tests/test_audit.py",
         "tests/conftest.py",
         *FINISH_PATH_JUDGES,
+        *TASK_REQUIREMENT_JUDGES,
         *GUARD_ITSELF,
     } == GUARDED_PATHS
 
@@ -255,6 +283,16 @@ def test_an_audited_accept_on_a_guarded_path_is_held(saddle_repo: Path) -> None:
 
 @pytest.mark.parametrize("path", FINISH_PATH_JUDGES)
 def test_a_run_that_edits_the_finish_path_or_the_confinement_stops_needing_you(
+    saddle_repo: Path, path: str
+) -> None:
+    result = _run(saddle_repo, Scripted([_edit(path), finish()]), allow_test_edits=True)
+    assert result.outcome == "stopped"
+    assert result.reason == GUARDED_STOP.format(paths=path)
+    assert sidecar(result)["guarded_paths"] == [path]
+
+
+@pytest.mark.parametrize("path", TASK_REQUIREMENT_JUDGES)
+def test_a_run_that_edits_the_task_requirements_check_stops_needing_you(
     saddle_repo: Path, path: str
 ) -> None:
     result = _run(saddle_repo, Scripted([_edit(path), finish()]), allow_test_edits=True)
