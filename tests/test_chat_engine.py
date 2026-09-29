@@ -717,3 +717,47 @@ def test_a_client_with_no_counter_still_runs(options: TurnOptions) -> None:
     # FakeClient has no count_tokens, which is the older-server case.
     events = run(FakeClient([[content("ok")]]), options)
     assert events[-1].kind == "turn.end"
+
+
+class _RealCounts(FakeClient):
+    """A server whose tokenizer says each message costs `per` real tokens."""
+
+    def __init__(self, per: int) -> None:
+        super().__init__([[content("ok")]])
+        self.per = per
+
+    def count_tokens(self, messages: Any, *, tools: Any = None) -> int:
+        notes = sum(str(m.get("content", "")).startswith("[Earlier conversation") for m in messages)
+        return self.per * (len(messages) - notes) + NOTE_TOKENS * notes
+
+
+NOTE_TOKENS = 300
+"""What the stand-in charges compaction's own note: a few hundred tokens,
+not a full message's worth."""
+
+
+def test_compaction_waits_for_the_real_token_count_not_the_estimate(
+    options: TurnOptions,
+) -> None:
+    """Red before: a conversation the chars-based estimate put over its limit
+    (20 messages of 20,000 characters, 100,000 estimated) was compacted at
+    60,000 real tokens of a 175,000 window. A dogfood run compacted at
+    85,550 real tokens this way and then re-read what it had lost."""
+    options.context_tokens = 175_000
+    messages = [{"role": "user", "content": "x" * 20_000} for _ in range(20)]
+    events = run(_RealCounts(3_000), options, messages=messages)
+    assert not those(events, Compaction)
+    assert len(messages) >= 21
+
+
+def test_over_the_real_limit_compaction_brings_the_real_count_under_it(
+    options: TurnOptions,
+) -> None:
+    options.context_tokens = 175_000
+    messages = [{"role": "user", "content": "x" * 20_000} for _ in range(20)]
+    events = run(_RealCounts(8_000), options, messages=messages)
+    compaction = those(events, Compaction)[0]
+    assert compaction.dropped_messages > 0
+    real = (compaction.kept_messages - 1) * 8_000 + NOTE_TOKENS  # one of them is the note
+    assert real <= options.compaction_limit_exact()
+    assert options.compaction_limit_exact() == 175_000 - 32_768 - 2048
