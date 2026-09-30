@@ -587,7 +587,7 @@ main { position: relative; }
 .task-card[data-state="asked"]     { --tone: var(--ask); --wash: var(--wash-ask); }
 .task-card[data-state="finished"]  { --tone: var(--done); --wash: var(--wash-done); }
 .task-card[data-state="stopped"],
-.task-card[data-state="unchanged"],
+.task-card[data-state="unchanged"] { --tone: var(--ask); --wash: var(--wash-ask); }
 .task-card[data-state="failed"]    { --tone: var(--halt); --wash: var(--wash-halt); }
 .task-card[data-state="loading"]   { --tone: var(--line); }
 
@@ -780,10 +780,7 @@ main { position: relative; }
   line-height: 1.6; color: var(--ink-dim); font-style: italic; }
 .narrative-text::before { content: "“"; color: var(--lilac); font-size: 22px; line-height: 0;
   vertical-align: -6px; margin-right: 2px; }
-.struck s { text-decoration-color: var(--halt); text-decoration-thickness: 1.5px; color: var(--ink-faint); }
-.struck-why { font: 600 10.5px var(--sans); font-style: normal; letter-spacing: .04em;
-  color: var(--halt); border: 1px solid var(--halt); border-radius: 999px; padding: 0 7px;
-  margin-left: 5px; white-space: nowrap; vertical-align: 1px; }
+.flagged-why { font: italic 11.5px var(--serif); color: var(--ink-faint); }
 
 .status.needs { color: var(--bg); border-color: transparent; background: var(--ask); }
 .status.needs::before { content: "? "; }
@@ -861,7 +858,8 @@ main { position: relative; }
 .run-dot.rs-running   { color: var(--sky); }
 .run-dot.rs-needs_you, .run-dot.rs-asked { color: var(--peach); background: #ffc49b1f; font-weight: 600; }
 .run-dot.rs-finished  { color: var(--mint); }
-.run-dot.rs-stopped, .run-dot.rs-failed { color: var(--bad); }
+.run-dot.rs-failed { color: var(--bad); }
+.run-dot.rs-stopped, .run-dot.rs-unchanged { color: var(--ask); }
 .notify-toggle { margin: 4px 14px 8px; padding: 6px 10px; border-radius: 10px; font: inherit; font-size: 12.5px;
                  border: 1px dashed var(--line); background: none; color: var(--ink-dim); cursor: pointer; text-align: left; }
 .notify-toggle:hover:not(:disabled) { border-color: var(--rose); color: var(--ink); }

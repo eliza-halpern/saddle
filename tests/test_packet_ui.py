@@ -121,6 +121,7 @@ def test_an_honest_stop_is_amber_lists_its_findings_and_cannot_merge(tmp_path: P
     assert not_proven["glyph"] == "!"
     assert "Unresolved at finish: coverage (evidence-thin)." in not_proven["items"]
     assert r["merge"]["disabled"] is True
+    assert "unproven" not in r["merge"]["text"]  # a disabled Merge drops the suffix
     assert r["why"].startswith("Merge is off: The run is stopped, not finished")
     assert r["discard"]["disabled"] is False
     assert r["audit"]["summary"] == "Audit0 of 1 passed"

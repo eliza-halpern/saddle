@@ -470,9 +470,11 @@ function narrativeBlock(packet) {
   if (!packet.narrative.length) return document.createDocumentFragment();
   for (const sentence of packet.narrative) {
     if (sentence.flagged) {
-      const span = el("span", "struck");
-      span.appendChild(el("s", null, sentence.text));
-      span.appendChild(el("em", "struck-why", "asserts a check result — not evidence"));
+      // Normal ink with a quiet note, not struck through in red: the model's
+      // claim is not evidence, but crossing it out shouts louder than it should.
+      const span = el("span", "flagged");
+      span.appendChild(el("span", null, sentence.text));
+      span.appendChild(el("em", "flagged-why", " (asserts a check result — not evidence)"));
       quote.appendChild(span);
     } else {
       quote.appendChild(el("span", null, sentence.text));
@@ -794,12 +796,15 @@ function actionRow(card, packet) {
     // Mutation row may merge, and the button says what it is merging without.
     const mutation = packet.rows.find((r) => r.key === "mutation");
     const unproven = !mutation || mutation.status !== "proven";
+    // The "(mutation unproven)" suffix explains why an ENABLED merge lands
+    // without a mutation proof; on a disabled button it only adds noise, so drop it.
     merge.textContent = (got.target ? `Merge into ${got.target}` : "Merge")
-      + (unproven ? " (mutation unproven)" : "");
+      + (unproven && !merge.disabled ? " (mutation unproven)" : "");
     merge.classList.toggle("unproven", unproven);
     push.hidden = !got.upstream;
     push.disabled = merge.disabled || !!got.push_refusal;
-    push.textContent = `Merge and push to ${got.upstream}` + (unproven ? " (mutation unproven)" : "");
+    push.textContent = `Merge and push to ${got.upstream}`
+      + (unproven && !push.disabled ? " (mutation unproven)" : "");
     push.classList.toggle("unproven", unproven);
     // A run the self-guard held changed saddle's judges: its finish audit
     // passed, but only a person may land it. Merge becomes Approve and merge.
