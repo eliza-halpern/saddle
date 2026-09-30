@@ -7,10 +7,14 @@ disposable directory keeps those side effects out of the checkout.
 
 from __future__ import annotations
 
+import ctypes
+import functools
 import os
 import re
+import signal
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -26,6 +30,70 @@ _PRODUCTION_SHOW_ALL = evidence.show_all_mutants
 `test_evidence._without_stubbed_mutmut` restores this so tests that run the
 real mutmut engine exercise the real lookup, not the PATH-stub replay below.
 """
+
+
+PR_SET_CHILD_SUBREAPER = 36
+
+
+@functools.cache
+def _subreaper() -> bool:
+    """Make this test process adopt its orphaned descendants (Linux prctl).
+
+    A browser test runs a `node` driver that starts Chrome. When the test
+    times out, `subprocess` kills the driver and Chrome survives, reparented
+    to init: the full gate leaked a Chrome per timeout, which slowed the next
+    run into more timeouts (267 were found alive at once). As a subreaper this
+    worker keeps them, so `_reap_browsers` can find and kill them, and only
+    its own: a parallel worker's browsers are never its descendants."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return bool(libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0)
+    except (OSError, AttributeError):
+        return False
+
+
+def descendants(pid: int) -> list[int]:
+    """Every live process whose parent chain reaches `pid`, from /proc."""
+    parent: dict[int, int] = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+        except OSError:
+            continue
+        # comm may hold spaces or parentheses: the ppid is after the last ")".
+        parent[int(entry.name)] = int(stat.rsplit(")", 1)[1].split()[1])
+    found: list[int] = []
+    for child, up in parent.items():
+        seen = {child}
+        while up not in (0, 1, pid) and up in parent and up not in seen:
+            seen.add(up)
+            up = parent[up]
+        if up == pid:
+            found.append(child)
+    return found
+
+
+@functools.cache
+def _drives_a_browser(path: str) -> bool:
+    """A test module that runs a Chrome through a `tests/fixtures/*_cdp.mjs` driver."""
+    return "_cdp.mjs" in Path(path).read_text(encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _reap_browsers(request: pytest.FixtureRequest) -> Iterator[None]:
+    """After a browser test, kill any process it left behind, by PID."""
+    module = getattr(request.module, "__file__", None)
+    if module is None or not _drives_a_browser(module) or not _subreaper():
+        yield
+        return
+    yield
+    for pid in descendants(os.getpid()):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 @pytest.fixture(autouse=True)
