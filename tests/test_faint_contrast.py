@@ -21,8 +21,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 # Every test runs from a disposable cwd (conftest), so anchor to the test
 # file rather than to wherever pytest was started.
 _ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +32,9 @@ _SURFACES = ("--bg", "--bg-sunk", "--bg-raise", "--card")
 # WCAG 2.x AA minimum for small (normal-weight) text.
 _AA = 4.5
 
-_LIGHT_MEDIA = "@media (prefers-color-scheme: light)"
+_DARK_ROOT = re.compile(r":root\s*{([^{}]*)}")
+_LIGHT_ROOT = re.compile(r':root\[data-theme="light"]\s*{([^{}]*)}')
+_TOKEN = re.compile(r"([a-z-]+-(?:faint|dim)|--[a-z-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;")
 
 
 def _stylesheet() -> str:
@@ -42,43 +42,20 @@ def _stylesheet() -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
 
 
-def _media_body(css: str, query: str) -> str:
-    """The body of the `@media` block for `query`, braces balanced."""
-    start = css.index(query)
-    open_brace = css.index("{", start)
-    depth = 0
-    for pos in range(open_brace, len(css)):
-        if css[pos] == "{":
-            depth += 1
-        elif css[pos] == "}":
-            depth -= 1
-            if depth == 0:
-                return css[open_brace + 1 : pos]
-    msg = f"unbalanced braces in {query}"
-    raise AssertionError(msg)
-
-
 def _root_tokens(css: str, *, light: bool) -> dict[str, str]:
-    """Hex-colour custom properties declared by the theme's `:root` block(s).
+    """Hex-colour custom properties the theme resolves to.
 
-    The dark theme splits its tokens across two `:root` blocks (the
-    second carries `--card` and the state colours), so they are merged.
-    The light theme keeps them in one, inside the media query.
+    Dark is the base: its tokens split across the plain `:root { }` blocks (the
+    second carries `--card` and the state colours), merged here. Light is that
+    base overlaid by the explicit `:root[data-theme="light"] { }` block, which
+    the page applies when the reader's chosen or system theme is light.
     """
-    if light:
-        body = _media_body(css, _LIGHT_MEDIA)
-    else:
-        body = css.replace(_media_body(css, _LIGHT_MEDIA), "")
     tokens: dict[str, str] = {}
-    for match in re.finditer(r":root\s*{([^{}]*)}", body):
-        tokens.update(
-            dict(
-                re.findall(
-                    r"([a-z-]+-(?:faint|dim)|--[a-z-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;",
-                    match.group(1),
-                )
-            )
-        )
+    for match in _DARK_ROOT.finditer(css):
+        tokens.update(dict(_TOKEN.findall(match.group(1))))
+    if light:
+        for match in _LIGHT_ROOT.finditer(css):
+            tokens.update(dict(_TOKEN.findall(match.group(1))))
     return tokens
 
 
@@ -102,12 +79,6 @@ def _relative_luminance(rgb: tuple[int, int, int]) -> float:
 def _contrast(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float:
     light, dark = sorted((_relative_luminance(c) for c in (fg, bg)), reverse=True)
     return (light + 0.05) / (dark + 0.05)
-
-
-def test_media_body_reports_when_the_braces_do_not_balance() -> None:
-    """The guard fires only for a malformed stylesheet; prove it does not hang."""
-    with pytest.raises(AssertionError, match="unbalanced"):
-        _media_body("@media (x) { :root { color: #111; }", "@media (x)")
 
 
 def test_ink_faint_reaches_aa_on_every_surface_it_is_drawn_on() -> None:

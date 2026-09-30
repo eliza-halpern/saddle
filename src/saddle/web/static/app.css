@@ -100,9 +100,10 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   background: linear-gradient(94deg, var(--peach), var(--rose)); }
 .status.working::before { content: "₍ ᐢ..ᐢ ₎ "; }
 .status.error { color: var(--bad); border-color: var(--bad); }
-/* A task session's chrome is the run card, not the chat: the context meter and
-   the topbar status pill are chat-only, so drop both in task mode (#85). */
-body[data-mode="task"] #meter, body[data-mode="task"] #status { display: none; }
+/* A task session's status is the run card, not the chat context meter: drop the
+   meter in task mode (#85). The topbar status pill stays -- on a phone, with the
+   card scrolled off, it is the only "needs you" indicator. */
+body[data-mode="task"] #meter { display: none; }
 /* A Task run uses a fixed temperature, so the Temperature control does not apply
    to it: dim it in task mode (persona and thinking still apply, so keep them). */
 body[data-mode="task"] .side-foot label:has(#temp) { opacity: .45; }
