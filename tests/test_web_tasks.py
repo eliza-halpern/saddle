@@ -212,6 +212,37 @@ def test_a_session_line_cite_opens_its_sealed_record(store: SessionStore, repo: 
         assert client.get(f"/api/sessions/{sid}/tasks/nope/record/{cite}").status_code == 404
 
 
+def test_the_task_lane_toggles_reach_the_runs_options(
+    store: SessionStore, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # premise_check and stall_check from the confirm box thread through to the
+    # run's AutoOptions; default off when the body omits them.
+    seen: list[Any] = []
+    real = saddle.auto.run_auto
+
+    def spy(options: Any, *a: Any, **k: Any) -> Any:
+        seen.append(options)
+        return real(options, *a, **k)
+
+    monkeypatch.setattr(tasks, "run_auto", spy)
+    with app_for(store, repo, FIX) as (client, server):
+        sid = client.post("/api/sessions").json()["id"]
+        client.post(
+            f"/api/sessions/{sid}/task",
+            json={"text": "make add add", "premise_check": True, "stall_check": True},
+        )
+        wait_for(lambda: idle(server, sid))
+    assert (seen[0].premise_check, seen[0].stall_check) == (True, True)
+
+
+def test_a_non_boolean_task_toggle_is_refused(store: SessionStore, repo: Path) -> None:
+    with app_for(store, repo, []) as (client, _server):
+        sid = client.post("/api/sessions").json()["id"]
+        resp = client.post(f"/api/sessions/{sid}/task", json={"text": "t", "premise_check": "yes"})
+        assert resp.status_code == 400
+        assert "boolean" in resp.json()["error"]
+
+
 def test_a_question_round_trips_and_the_answer_is_sealed(store: SessionStore, repo: Path) -> None:
     with app_for(store, repo, FIX, auditor=asking) as (client, server):
         sid = client.post("/api/sessions").json()["id"]

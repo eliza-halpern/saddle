@@ -1173,10 +1173,12 @@ async function startTask() {
   input.style.height = "auto";
   // No time or token limit (engine.NO_LIMIT): a run stops at finish, an
   // error, the stall check or your Stop button, never at a clock.
-  await launchTask(text, 0, 0, $("#tc-test-edits").checked);
+  await launchTask(text, 0, 0, $("#tc-test-edits").checked,
+                   $("#tc-premise").checked, $("#tc-stall").checked);
 }
 
-async function launchTask(text, timeBudget, tokenBudget, allowTestEdits) {
+async function launchTask(text, timeBudget, tokenBudget, allowTestEdits,
+                          premiseCheck = false, stallCheck = false) {
   if (state.busy) return;
   state.pendingTaskTurn = taskTurn(text);
   followBottom();
@@ -1187,7 +1189,7 @@ async function launchTask(text, timeBudget, tokenBudget, allowTestEdits) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         text, time_budget_s: timeBudget || 0, token_budget: tokenBudget || 0,
-        allow_test_edits: allowTestEdits,
+        allow_test_edits: allowTestEdits, premise_check: premiseCheck, stall_check: stallCheck,
       }),
     });
   } catch (error) {

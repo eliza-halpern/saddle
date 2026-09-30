@@ -67,6 +67,10 @@
         <p class="tc-p1" id="tc-p1" hidden>The task-text check (P1) is on: it also extracts the task's own examples and runs them. Its findings ask you, never refuse.</p>
         <label class="tc-toggle"><input type="checkbox" id="tc-test-edits" checked> Allow test edits
           <span class="tc-toggle-note">so it can write the test the auditor asks for. Finish is still refused if it weakens an assertion that was already there.</span></label>
+        <label class="tc-toggle"><input type="checkbox" id="tc-premise"> Make it prove the bug first
+          <span class="tc-toggle-note">before its first edit it must show the problem on the current code; edits are refused until it does. Stops it "fixing" a bug that is not there.</span></label>
+        <label class="tc-toggle"><input type="checkbox" id="tc-stall"> Return it to me if it stalls
+          <span class="tc-toggle-note">after ~10 minutes with no edit, no proof and no dispute, and still hedging, it stops and comes back as "needs you" instead of spinning to the end.</span></label>
         <div class="tc-row">
           <span class="tc-spacer"></span>
           <button type="button" id="tc-cancel">Cancel</button>

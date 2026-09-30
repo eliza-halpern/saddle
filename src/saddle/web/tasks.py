@@ -134,6 +134,12 @@ class TaskRun:
     time_budget_s: float
     token_budget: int
     allow_test_edits: bool = SMALL_LANE_TEST_EDITS
+    premise_check: bool = False
+    """`--premise-check`: the run must show the problem with premise_check before
+    its first edit, so it cannot "fix" a bug that is not there."""
+    stall_check: bool = False
+    """`--stall-check`: a run that never edited, premise_checked or disputed and
+    is still hedging is returned to you rather than spinning to no end."""
     state: str = "running"
     journal: Path | None = None
     question: Question | None = None
@@ -450,6 +456,8 @@ def execute(
         arm=arm,
         auditor_factory=feed_auditor,
         allow_test_edits=allow_test_edits,
+        premise_check=run.premise_check,
+        stall_check=run.stall_check,
         keep_reasoning=keep_reasoning,
         wheels=wheels,
         extract_requirements=extract_requirements,

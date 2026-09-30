@@ -874,8 +874,13 @@ def build_app(
         time_s = max(0.0, time_s)
         token_budget = max(0, token_budget)
         allow_test_edits = body.get("allow_test_edits", server.allow_test_edits)
-        if not isinstance(allow_test_edits, bool):
-            return JSONResponse({"error": "allow_test_edits must be a boolean"}, status_code=400)
+        premise_check = body.get("premise_check", False)
+        stall_check = body.get("stall_check", False)
+        if not all(isinstance(b, bool) for b in (allow_test_edits, premise_check, stall_check)):
+            return JSONResponse(
+                {"error": "allow_test_edits, premise_check and stall_check must be booleans"},
+                status_code=400,
+            )
         session = store.get(sid)
         # A Task run works in a git worktree, so it cannot start where there is
         # no repository. Refuse up front with a clear message rather than start
@@ -904,6 +909,8 @@ def build_app(
             time_budget_s=time_s,
             token_budget=token_budget,
             allow_test_edits=allow_test_edits,
+            premise_check=premise_check,
+            stall_check=stall_check,
         )
         server.tasks[run.run_id] = run
         server._note_run(run)
