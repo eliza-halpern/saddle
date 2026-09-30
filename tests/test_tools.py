@@ -328,6 +328,56 @@ def test_editing_a_file_that_is_not_there_is_an_error(tmp_path: Path) -> None:
     )
 
 
+def test_a_near_miss_edit_names_the_line_that_diverged_and_the_files_nearest(
+    tmp_path: Path,
+) -> None:
+    """Known-good: the refusal says which line of the snippet the file lacks and
+    which line it holds instead, each in its own role, and changes nothing."""
+    source = "def add(a, b):\n    return a - b\n"
+    (tmp_path / "calc.py").write_text(source)
+    out = run(
+        "edit_file",
+        tmp_path,
+        path="calc.py",
+        old="def add(a, b):\n    return a - c\n",
+        new="def add(a, b):\n    return a + b\n",
+    )
+    assert out.startswith("error: that snippet does not appear in 'calc.py'.")
+    assert "Its line 2 reads '    return a - c'" in out  # the snippet's role
+    assert "the file's closest line is '    return a - b'" in out  # the file's role
+    assert (tmp_path / "calc.py").read_text() == source
+
+
+def test_a_snippet_with_nothing_close_says_so_and_names_no_nearest_line(tmp_path: Path) -> None:
+    """Known-bad guard: with no line within reach, no 'closest line' is offered,
+    which would point the caller at code that is not what they meant."""
+    source = "def add(a, b):\n    return a - b\n"
+    (tmp_path / "calc.py").write_text(source)
+    out = run(
+        "edit_file", tmp_path, path="calc.py", old="zzqq_unrelated_words_here\n", new="x = 1\n"
+    )
+    assert "Its line 1 reads 'zzqq_unrelated_words_here'" in out
+    assert "no line of the file is close to it" in out
+    assert "closest line" not in out
+    assert (tmp_path / "calc.py").read_text() == source
+
+
+def test_the_edit_is_still_applied_or_refused_on_exactly_the_same_inputs(tmp_path: Path) -> None:
+    """The divergence text only explains a refusal; it never turns one into an edit
+    or an edit into a refusal. An exact snippet applies, a snippet that differs only
+    by a dropped blank line still applies, and one that matches twice is refused."""
+    (tmp_path / "a.py").write_text("x = 1\n\ny = 2\n")
+    assert "error" not in run("edit_file", tmp_path, path="a.py", old="x = 1\n", new="x = 9\n")
+    # blank line dropped between the two significant lines: matched loosely, applied
+    out = run("edit_file", tmp_path, path="a.py", old="x = 9\ny = 2\n", new="x = 9\ny = 3\n")
+    assert not out.startswith("error")
+    assert (tmp_path / "a.py").read_text() == "x = 9\ny = 3\n"
+    (tmp_path / "b.py").write_text("v = 1\nv = 1\n")
+    twice = run("edit_file", tmp_path, path="b.py", old="v = 1\n", new="v = 2\n")
+    assert twice.startswith("error: that snippet appears 2 times")
+    assert (tmp_path / "b.py").read_text() == "v = 1\nv = 1\n"
+
+
 def test_edit_file_rejects_non_string_snippets(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x = 1\n")
     assert run("edit_file", tmp_path, path="a.py", old=1, new="b").startswith("error: ")

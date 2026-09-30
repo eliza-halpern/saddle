@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from saddle.edits import loose_spans
+from saddle.edits import first_divergence, loose_spans
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
     OutsideRootError,
@@ -587,7 +587,11 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
                 "lines are ignored; include more surrounding context"
             )
         if not spans:
-            return f"error: that snippet does not appear in {name!r}"
+            # Say which line of the snippet the file lacks (`edits.first_divergence`,
+            # the same words the worker's refusal uses): "does not appear" alone
+            # gives a person or model nothing to fix on a long block.
+            where = first_divergence(before, old_text)
+            return f"error: that snippet does not appear in {name!r}.{where}"
         start, end = spans[0]
         lines = before.split("\n")
         after = "\n".join(lines[:start] + new_text.splitlines() + lines[end:])

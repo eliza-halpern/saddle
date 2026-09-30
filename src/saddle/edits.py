@@ -186,7 +186,7 @@ def loose_spans(source: str, search: str) -> list[tuple[int, int]]:
     return hits
 
 
-def _first_divergence(source: str, search: str) -> str:
+def first_divergence(source: str, search: str) -> str:
     """Name the first search line the file does not hold, and its nearest.
 
     A refusal that says only "does not appear" is unactionable on a long
@@ -264,7 +264,7 @@ def _replace_once(source: str, search: str, replace: str, path: str) -> str:
             raise EditError(msg)
         msg = (
             f"{path}: the search block does not appear in the file."
-            f"{_first_divergence(source, search)}"
+            f"{first_divergence(source, search)}"
         )
         raise EditError(msg)
     if len(hits) > 1:
