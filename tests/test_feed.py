@@ -709,6 +709,44 @@ def test_a_checkpoint_whose_copy_fails_reports_it_and_the_tool_call_goes_ahead(
     assert "git ls-files failed: broken" in finding.detail
 
 
+class RuffFails(FakeAuditor):
+    """Tier 0 fails (a formatting finding); records every tier asked for."""
+
+    def tier0(self, path: str, new_text: str) -> Findings:
+        self.calls.append((0, path))
+        found = Finding("ruff", 0, "fail", "code-wrong", "ruff format --check exited 1", ("fake",))
+        return Findings(tier=0, key="k0", findings=(found,))
+
+
+@pytest.mark.parametrize(("auditor", "later_tiers_run"), [(RuffFails, False), (FakeAuditor, True)])
+def test_the_finish_audit_refuses_on_a_failing_edit_check_before_running_the_suite(
+    repo: Path, tmp_path: Path, auditor: type[FakeAuditor], later_tiers_run: bool
+) -> None:
+    """Red before: the finish ran tiers 1 and 2 (the suite, mutation: ten
+    minutes on saddle) and only then reported a ruff finding that tier 0
+    knows in seconds. A failing edit check now refuses at once and says the
+    other tiers were not run; passing edit checks change nothing."""
+    worktree = tmp_path / "worktree"
+    git(repo, "worktree", "add", "-q", "-b", "run", str(worktree), "HEAD")
+    (worktree / "calc.py").write_text(BUGGY.replace("a - b", "a + b"))
+    fake = auditor()
+    f = AuditFeed(
+        worktree=worktree,
+        baseline=git(worktree, "rev-parse", "HEAD"),
+        journal=tmp_path / "j.jsonl",
+        run_span="s",
+        auditor=fake,
+    )
+    accepted, text = f.final()
+    f.close()
+    tiers = {tier for tier, _ in fake.calls}
+    assert (1 in tiers and 2 in tiers) is later_tiers_run
+    if not later_tiers_run:
+        assert not accepted
+        assert "ruff format --check exited 1" in text
+        assert "tiers 1 and 2 were not run" in text
+
+
 class MapsAuditor(FakeAuditor):
     """Records each `draw_map` call's tree, and answers with `said` (or raises it)."""
 
@@ -1174,7 +1212,8 @@ def test_a_tier0_only_refusal_counts_toward_the_cap(repo: Path) -> None:
     refusals = [t for t in client.seen if t.startswith(FINISH_REFUSED)]
     assert len(refusals) == 2
     assert "- ruff (tier 0): fail, code-wrong: calc.py: ruff format --check exited 1" in refusals[0]
-    assert "(2 other check(s) passed or not applicable)" in refusals[0]
+    # tiers 1 and 2 are not run while an edit check fails, and the refusal says so
+    assert "tiers 1 and 2 were not run" in refusals[0]
 
 
 def test_the_cap_is_configurable_and_one_stops_on_the_first_refusal(repo: Path) -> None:

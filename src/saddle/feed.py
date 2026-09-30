@@ -118,6 +118,12 @@ CHECK_UNCHANGED: Final = "error: check refused: the tree is unchanged since chec
 not counted among the run's guard refusals, and not a finish refusal."""
 
 NOTHING_TO_AUDIT: Final = "nothing to audit"
+
+EDIT_CHECKS_FIRST: Final = (
+    "tiers 1 and 2 were not run: an edit check below failed. Fix it (seconds) and "
+    "the tests, coverage and mutation run on the next audit."
+)
+"""An audit's note when tier 0 failed and the later tiers were skipped (`_audit_on`)."""
 """How `Auditor` begins the error for a tree equal to its baseline."""
 
 DETAIL_CHARS: Final = 1200
@@ -482,12 +488,19 @@ class AuditFeed:
             pending = self._p1_state(final=point == "finish") if 1 in tiers else None
             found: list[Finding] = []
             detail: tuple[tuple[str, str, str], ...] = ()
+            if 0 in tiers:
+                # Tier 0 first: its checks take seconds, and a failing one is
+                # refused before the suite and mutation spend minutes on a tree
+                # that must change anyway.
+                found.extend(self._tier(0, scratch / "tree").findings)
+                if len(tiers) > 1 and any(failing(f) for f in found):
+                    return AuditResult(point, tree, tuple(found), note=EDIT_CHECKS_FIRST)
             prime = getattr(self.auditor, "prime", None)
             if 1 in tiers and 2 in tiers and prime is not None:
                 # One run of the battery for both tiers (`Auditor.prime`): the
                 # loop below then reads tiers 1 and 2 from the cache.
                 prime(scratch / "tree")
-            for tier in tiers:
+            for tier in (t for t in tiers if t != 0):
                 got = self._tier(tier, scratch / "tree")
                 found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
                 detail = detail or got.mutant_detail

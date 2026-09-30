@@ -48,6 +48,7 @@ def test_a_checkpoint_names_the_uncovered_function_and_what_it_is_for(tmp_path: 
     root = _repo(tmp_path)
     (root / "u.py").write_text(UNCOVERED)
     feed = _feed(root, tmp_path)
+    feed._await()  # the run-start map job holds the one audit slot until it is done
     feed.after_tool("write_file", ok=True)
     feed.before_tool("run_command")
     assert feed._pending is not None
