@@ -662,9 +662,12 @@ def test_the_command_reports_setup_failure(tmp_path: Path) -> None:
     assert out.getvalue().startswith("error: git rev-parse")
 
 
-def test_parser_defaults_come_from_the_documented_budgets() -> None:
+def test_the_parser_defaults_to_no_time_or_token_limit() -> None:
+    # 0 == engine.NO_LIMIT: a run is not stopped for spending by default. The
+    # old caps (1800s / 100k) killed good runs at the finish line; only the
+    # loop guards and the opt-in stall check break a spin now.
     args = cli.build_parser().parse_args(["auto", "t"])
-    assert (args.time_budget, args.token_budget, args.allow_test_edits) == (1800, 100_000, False)
+    assert (args.time_budget, args.token_budget, args.allow_test_edits) == (0, 0, False)
     assert args.temperature == TASK_TEMPERATURE == 1.0
     pinned = cli.build_parser().parse_args(["auto", "--temperature", "0.0", "t"])
     assert pinned.temperature == 0.0  # a measurement can still ask for greedy

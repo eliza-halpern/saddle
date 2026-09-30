@@ -270,7 +270,11 @@ def test_a_restarted_server_serves_the_packet_from_the_chat_journal_only(
     [
         ({"text": ""}, 400),
         ({"text": "t", "time_budget_s": "soon"}, 400),
-        ({"text": "t", "token_budget": -1}, 400),
+        # A non-numeric budget is still refused; a non-positive one is not --
+        # 0 or less means "no limit" now (engine.NO_LIMIT), the default. That
+        # acceptance is exercised by every task-launch test in this file, which
+        # now start with the unlimited default and run to completion.
+        ({"text": "t", "token_budget": "lots"}, 400),
     ],
 )
 def test_a_bad_task_request_is_refused(

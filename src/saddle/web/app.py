@@ -868,8 +868,10 @@ def build_app(
             token_budget = int(body.get("token_budget") or DEFAULT_TOKEN_BUDGET)
         except (TypeError, ValueError):
             return JSONResponse({"error": "budgets must be numbers"}, status_code=400)
-        if time_s <= 0 or token_budget <= 0:
-            return JSONResponse({"error": "budgets must be positive"}, status_code=400)
+        # 0 or less is "no limit" (engine.NO_LIMIT), the default; clamp so the
+        # sealed record and the meters read a clean 0, never a negative.
+        time_s = max(0.0, time_s)
+        token_budget = max(0, token_budget)
         allow_test_edits = body.get("allow_test_edits", server.allow_test_edits)
         if not isinstance(allow_test_edits, bool):
             return JSONResponse({"error": "allow_test_edits must be a boolean"}, status_code=400)

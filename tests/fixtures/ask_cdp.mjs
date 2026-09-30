@@ -87,8 +87,10 @@ try {
   await js(`document.querySelector("#input").focus()`);
   await send("Input.insertText", { text: "f(None) should be 0" });
   await key("Enter");
-  await js(`(() => { const box = document.querySelector("#tc-test-edits"); if (box.checked) box.click();
-    document.querySelector("#tc-tokens").value = ${JSON.stringify(tokensK)}; })()`);
+  // Budgets are gone from the UI (a run has no time or token limit by
+  // default); tokensK is kept in the signature for callers but no longer set.
+  void tokensK;
+  await js(`(() => { const box = document.querySelector("#tc-test-edits"); if (box.checked) box.click(); })()`);
   await key("Enter");
   await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "the question");
   const out = {};

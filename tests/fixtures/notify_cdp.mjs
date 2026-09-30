@@ -162,8 +162,7 @@ try {
     // Keyboard focus on each control the review found with outline: none.
     out.rings = {};
     await send("Emulation.setFocusEmulationEnabled", { enabled: true });
-    await js(`document.querySelector("#task-confirm").hidden = false`);
-    for (const sel of ["#title", "#input", "#temp", "#tc-time", "#notify-toggle"]) {
+    for (const sel of ["#title", "#input", "#temp", "#notify-toggle"]) {
       out.rings[sel] = await js(`(() => { const n = document.querySelector(${JSON.stringify(sel)}); if (!n) return null;
         n.focus({ focusVisible: true }); const c = getComputedStyle(n);
         return { style: c.outlineStyle, width: parseFloat(c.outlineWidth) }; })()`);

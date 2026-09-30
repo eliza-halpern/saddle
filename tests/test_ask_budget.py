@@ -24,8 +24,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from test_ask_web import BROWSER, CDP, app_for, start
-from test_ui3_mode import serving
+from test_ask_web import app_for, start
 from test_web_tasks import git, idle, wait_for
 
 from saddle import cli
@@ -43,7 +42,6 @@ from saddle.journal import attempt_sidecar_path, read_spans
 from saddle.memory import CHARS_PER_TOKEN
 from saddle.sessions import SessionStore
 from saddle.vllm import StreamToken, ToolCall, VllmClient
-from saddle.web.app import build_app
 
 ROUND = 100
 """Estimated tokens per scripted round (reasoning only, no usage)."""
@@ -257,30 +255,3 @@ def test_extend_is_answered_through_the_web_api(tmp_path: Path, repo: Path) -> N
     end = next(s for s in reversed(all_spans) if s.name == "auto:finished")
     sealed = json.loads(attempt_sidecar_path(run.journal, end.span_id).read_text())
     assert sealed["budget_extended"] == {"budget": "token", "by": 1000}
-
-
-@pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
-def test_the_card_answers_the_budget_question(tmp_path: Path, repo: Path) -> None:
-    import os
-    import subprocess
-
-    store = SessionStore(tmp_path / "s")
-    app = build_app(store, lambda: Reader(13), default_workdir=repo, arm="E")
-    with serving(app) as base:
-        sid = store.create(title="t", workdir=str(repo)).id
-        store.update(sid, mode="task")
-        out = subprocess.run(
-            ["node", str(CDP), base, sid, "Extend", "1", os.environ.get("ASK_SHOTS", ""), "budget"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-        )
-    assert out.returncode == 0, out.stderr
-    got = json.loads(out.stdout.strip().splitlines()[-1])
-    assert got["question"].startswith("This run has used 80% of its token budget")
-    assert got["options"] == ["Extend", "Stop at limit"]
-    assert got["verdict"] == "v-finished"
-    # The card's meter ends on the extended budget, as sealed.
-    assert got["meter"].endswith("of 2.0k"), got["meter"]
-    assert got["contract"]["items"] == [f"You were asked: {got['question']} → you answered: Extend"]

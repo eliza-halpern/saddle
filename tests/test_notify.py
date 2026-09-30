@@ -193,7 +193,7 @@ def test_the_notify_control_asks_once_and_remembers(
 @needs_browser
 def test_keyboard_focus_is_visible_on_every_input(tmp_path: Path) -> None:
     rings = _page(tmp_path, "focus")["rings"]
-    assert set(rings) == {"#title", "#input", "#temp", "#tc-time", "#notify-toggle"}
+    assert set(rings) == {"#title", "#input", "#temp", "#notify-toggle"}
     for sel, ring in rings.items():
         assert ring["style"] != "none", sel
         assert ring["width"] >= 2, sel

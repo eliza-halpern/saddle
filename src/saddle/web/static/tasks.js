@@ -176,7 +176,8 @@ function tick(card) {
   setMeter(card.time, elapsed, budget,
            budget ? `${fmtDuration(elapsed)} of ${fmtDuration(budget)}` : fmtDuration(elapsed));
   setMeter(card.tokens, card.spent, card.tokenBudget,
-           card.tokenBudget ? `~${fmtTokens(card.spent)} of ${fmtTokens(card.tokenBudget)}` : "—");
+           card.tokenBudget ? `~${fmtTokens(card.spent)} of ${fmtTokens(card.tokenBudget)}`
+                            : `~${fmtTokens(card.spent)} tokens`);
 }
 
 function addLine(card, line) {
@@ -1109,15 +1110,14 @@ async function startTask() {
   const input = $("#input");
   const text = input.value.trim();
   // Nothing runs unless the strip is on screen: it is the one place the
-  // folder, lane, budgets and test policy are shown before a run.
+  // folder, lane and test policy are shown before a run.
   if (!text || state.busy || $("#task-confirm").hidden) return;
-  const minutes = Number($("#tc-time").value) || 30;
-  const thousands = Number($("#tc-tokens").value) || 100;
   closeRunConfirm();
   input.value = "";
   input.style.height = "auto";
-  await launchTask(text, Math.round(minutes * 60), Math.round(thousands * 1000),
-                   $("#tc-test-edits").checked);
+  // No time or token limit (engine.NO_LIMIT): a run stops at finish, an
+  // error, the stall check or your Stop button, never at a clock.
+  await launchTask(text, 0, 0, $("#tc-test-edits").checked);
 }
 
 async function launchTask(text, timeBudget, tokenBudget, allowTestEdits) {
@@ -1130,7 +1130,7 @@ async function launchTask(text, timeBudget, tokenBudget, allowTestEdits) {
     await api(`/api/sessions/${state.sessionId}/task`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text, time_budget_s: timeBudget || 1800, token_budget: tokenBudget || 100000,
+        text, time_budget_s: timeBudget || 0, token_budget: tokenBudget || 0,
         allow_test_edits: allowTestEdits,
       }),
     });

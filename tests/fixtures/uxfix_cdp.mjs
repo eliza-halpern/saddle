@@ -94,11 +94,10 @@ try {
   if (step === "switch") {
     await js(`select(${JSON.stringify(sid)})`);
     await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`, "session A");
-    await js(`document.querySelector("#input").focus()`);
-    await send("Input.insertText", { text: "f(None) should be 0" });
-    await key("Enter");
-    await js(`document.querySelector("#tc-tokens").value = "1"`);
-    await key("Enter");
+    // Budgets left the UI; start with an explicit token budget through the
+    // page's own launcher so the 80%-budget question still fires as the vehicle
+    // this test needs (a run with a pending question).
+    await js(`launchTask("f(None) should be 0", 0, 1000, false)`);
     await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "the question");
     out.onA = await header();
     await js(`select(${JSON.stringify(other)})`);
@@ -120,11 +119,10 @@ try {
     await width(400);
     await js(`select(${JSON.stringify(sid)})`);
     await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`, "session A");
-    await js(`document.querySelector("#input").focus()`);
-    await send("Input.insertText", { text: "f(None) should be 0" });
-    await key("Enter");
-    await js(`document.querySelector("#tc-tokens").value = "1"`);
-    await key("Enter");
+    // Budgets left the UI; start with an explicit token budget through the
+    // page's own launcher so the 80%-budget question still fires as the vehicle
+    // this test needs (a run with a pending question).
+    await js(`launchTask("f(None) should be 0", 0, 1000, false)`);
     await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "the question");
     const pill = () => js(`(() => { const n = document.querySelector("#status"); const r = n.getBoundingClientRect();
       return { text: n.textContent, display: getComputedStyle(n).display, width: r.width,

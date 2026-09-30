@@ -180,6 +180,18 @@ stall check for the rest of the run. An attempt counts (the run engaged), so a
 refused edit or a premise_check that failed to reproduce still exempts."""
 
 
+NO_LIMIT: Final = 0
+"""A time or token budget of 0 (or less) means no limit: the run is never
+stopped for spending, only by `finish`, an error, a cancel or the stall
+check. The default for every run; a positive value opts back into a cap."""
+_UNBOUNDED_TOKENS: Final = 1 << 62
+"""What `remaining_tokens` reports with no token budget: large enough that
+only the context window ever caps a reply, small enough to stay a plain int."""
+_UNBOUNDED_S: Final = 365 * 24 * 3600.0
+"""What `time_left` reports with no time budget: a year, so `int()` of it is
+safe and no run reaches it, without the edge cases of `inf`."""
+
+
 @dataclass
 class RunBudget:
     """Wall time and generated tokens an autonomous run may spend.
@@ -222,26 +234,40 @@ class RunBudget:
         return used[0] if len(used) == 1 else ("mixed" if used else "none")
 
     def remaining_tokens(self) -> int:
+        if self.tokens <= NO_LIMIT:  # no token budget: only the context window caps a reply
+            return _UNBOUNDED_TOKENS
         return max(self.tokens - self.spent_tokens, 0)
 
+    def time_left(self) -> float:
+        """Seconds until the time budget runs out; a year when there is none
+        (kept finite so a caller can `int()` it)."""
+        if self.time_s <= NO_LIMIT:
+            return _UNBOUNDED_S
+        return self.time_s - self.elapsed()
+
     def near(self, fraction: float) -> str | None:
-        """ "token" or "time" once that budget is `fraction` spent but not gone."""
-        if self.tokens * fraction <= self.spent_tokens < self.tokens:
+        """ "token" or "time" once that budget is `fraction` spent but not gone.
+
+        A budget of 0 or less is no limit, so it is never "near": the extend
+        question is never put and the run is never stopped for spending."""
+        if self.tokens > NO_LIMIT and self.tokens * fraction <= self.spent_tokens < self.tokens:
             return "token"
-        if self.time_s * fraction <= self.elapsed() < self.time_s:
+        if self.time_s > NO_LIMIT and self.time_s * fraction <= self.elapsed() < self.time_s:
             return "time"
         return None
 
     def exhausted(self) -> str | None:
-        """Which budget has run out, in words, or None if neither has."""
-        if self.spent_tokens >= self.tokens:
+        """Which budget has run out, in words, or None (a budget of 0 or less
+        is no limit and never runs out)."""
+        if self.tokens > NO_LIMIT and self.spent_tokens >= self.tokens:
             return (
                 f"token budget exhausted: ~{self.spent_tokens} of {self.tokens} "
                 "generated tokens spent"
             )
-        elapsed = self.elapsed()
-        if elapsed >= self.time_s:
-            return f"time budget exhausted: {elapsed:.0f}s of {self.time_s:.0f}s spent"
+        if self.time_s > NO_LIMIT:
+            elapsed = self.elapsed()
+            if elapsed >= self.time_s:
+                return f"time budget exhausted: {elapsed:.0f}s of {self.time_s:.0f}s spent"
         return None
 
 
@@ -892,7 +918,7 @@ def run_turn(
                             break
                         if auto is None:
                             continue
-                        if auto.budget.elapsed() >= auto.budget.time_s:
+                        if auto.budget.time_left() <= 0:
                             timed_out = True
                             break
                         # The time question, asked while the reply streams on.

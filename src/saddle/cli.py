@@ -2003,13 +2003,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--time-budget",
         type=float,
         default=DEFAULT_TIME_BUDGET_S,
-        help=f"Wall-clock seconds before an honest stop (default: {DEFAULT_TIME_BUDGET_S}).",
+        help="Wall-clock seconds before an honest stop; 0 (the default) is no time limit.",
     )
     auto.add_argument(
         "--token-budget",
         type=int,
         default=DEFAULT_TOKEN_BUDGET,
-        help=f"Generated tokens before an honest stop (default: {DEFAULT_TOKEN_BUDGET}).",
+        help="Generated tokens before an honest stop; 0 (the default) is no "
+        "token limit (each reply is still bounded by the context window).",
     )
     auto.add_argument(
         "--allow-test-edits",

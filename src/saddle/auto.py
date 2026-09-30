@@ -70,14 +70,16 @@ from saddle.tools import (
 )
 from saddle.vllm import VllmClient
 
-DEFAULT_TIME_BUDGET_S: Final = 1800
-"""30 minutes: 3x the untouched arm's ~10 min on a T5-class task (the
-Daily Driver page's timing chart). Saddle's own loop has never been timed
-autonomously, so the headroom is wide on purpose; arm E measures it."""
+DEFAULT_TIME_BUDGET_S: Final = 0
+"""No time limit (engine.NO_LIMIT). The wall-clock cap existed to break the
+endless loops early runs fell into; the loop guards (MAX_TOOL_ROUNDS, the
+empty-round cap, the optional stall check) stop those now, and a hard clock
+only ever killed good runs at the finish line. A positive value opts back in."""
 
-DEFAULT_TOKEN_BUDGET: Final = 100_000
-"""~2x the untouched arm's median 47k generated tokens on T5 (the page's
-"The money" table). Generated tokens only; the prompt is not charged."""
+DEFAULT_TOKEN_BUDGET: Final = 0
+"""No token limit (engine.NO_LIMIT). Each reply is still bounded by the
+model's context window; only the per-run cap is gone. A positive value opts
+back in."""
 
 DEFAULT_TEST_ROOTS: Final = ("tests",)
 
@@ -787,7 +789,7 @@ def run_auto(
             tier2=options.tier2,
             mutant_shortlist=options.mutant_shortlist,
             p1=p1,
-            p1_wait=lambda: auto.budget.time_s - auto.budget.elapsed(),
+            p1_wait=lambda: auto.budget.time_left(),
             impact_cache=root / ".saddle" / "impact",
         )
     )
@@ -906,7 +908,7 @@ def run_auto(
         ),
         protected_tests=roots,
         syntax_guard=True,
-        time_left=lambda: auto.budget.time_s - auto.budget.elapsed(),
+        time_left=lambda: auto.budget.time_left(),
     )
     if options.wheels is not None:
         assert project is not None  # checked before the run started
