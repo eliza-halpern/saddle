@@ -875,7 +875,22 @@ def build_app(
         allow_test_edits = body.get("allow_test_edits", server.allow_test_edits)
         if not isinstance(allow_test_edits, bool):
             return JSONResponse({"error": "allow_test_edits must be a boolean"}, status_code=400)
-        store.get(sid)
+        session = store.get(sid)
+        # A Task run works in a git worktree, so it cannot start where there is
+        # no repository. Refuse up front with a clear message rather than start
+        # a run that dies in setup and leaves a failed card.
+        try:
+            repo_root(Path(session.workdir))
+        except AutoError:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"{session.workdir} is not a git repository, so a Task run "
+                        "cannot start here. Pick a repo folder, or run `git init` in it."
+                    )
+                },
+                status_code=400,
+            )
         live = server._live(sid)
         with live.lock:
             if live.busy:

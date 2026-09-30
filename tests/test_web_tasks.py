@@ -285,6 +285,20 @@ def test_a_bad_task_request_is_refused(
         assert client.post(f"/api/sessions/{sid}/task", json=body).status_code == status
 
 
+def test_a_task_in_a_non_git_folder_is_refused(store: SessionStore, tmp_path: Path) -> None:
+    # A Task run needs a git worktree, so a folder that is not a repository is
+    # refused up front (400) -- not started and left to fail in setup. The
+    # known-good case (a git repo starts and returns a run id) is every other
+    # task-launch test in this file, which run in the git `repo` fixture.
+    bare = tmp_path / "not-a-repo"
+    bare.mkdir()
+    with app_for(store, bare, []) as (client, _server):
+        sid = client.post("/api/sessions").json()["id"]
+        resp = client.post(f"/api/sessions/{sid}/task", json={"text": "t"})
+        assert resp.status_code == 400
+        assert "not a git repository" in resp.json()["error"]
+
+
 def test_unknown_tasks_are_404(store: SessionStore, repo: Path) -> None:
     with app_for(store, repo, []) as (client, _server):
         assert client.post("/api/tasks/nope/answer", json={"text": "x"}).status_code == 404
@@ -292,21 +306,6 @@ def test_unknown_tasks_are_404(store: SessionStore, repo: Path) -> None:
 
 
 # -- failure paths: never a finished card without a finish record ---------------
-
-
-def test_a_folder_that_is_not_a_repo_fails_the_task(store: SessionStore, tmp_path: Path) -> None:
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    with app_for(store, plain, FIX) as (client, server):
-        sid = client.post("/api/sessions").json()["id"]
-        rid = client.post(f"/api/sessions/{sid}/task", json={"text": "t"}).json()["run_id"]
-        wait_for(lambda: idle(server, sid))
-    assert server.tasks[rid].state == "failed"
-    assert (
-        not any(s.name == RUN_REF for s in read_spans(store.journal_path(sid)))
-        if (store.journal_path(sid).is_file())
-        else True
-    )
 
 
 def test_an_auto_error_fails_the_task(
