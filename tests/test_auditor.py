@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from saddle import auditor as auditor_mod
-from saddle import evidence, gates, runner
+from saddle import evidence, gates, impact, runner
 from saddle.audit import AuditError, audit_node
 from saddle.auditor import (
     REASONS,
@@ -824,3 +824,73 @@ def test_every_tier_0_finding_names_the_file_it_checked(clean_tree: Path) -> Non
     assert ruff.verdict == "fail"
     text = render(AuditResult("finish", "t" * 12, found))
     assert "- ruff (tier 0): fail, code-wrong: n.py: " in text
+
+
+# -- helpers the audit leans on: impact selection, syntax key, reuse, the map ----
+
+
+def test_a_selection_that_fails_runs_the_whole_suite_never_none_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from saddle.impact import FileImpact, ImpactMemo
+
+    known = {"n.py": FileImpact(frozenset({"test_n.py"}), {}, frozenset())}
+    monkeypatch.setattr(impact, "select", lambda *_a: ("test_n.py",))
+    assert auditor_mod._selection(ImpactMemo(tests=known), tmp_path, "HEAD") == ("test_n.py",)
+    assert auditor_mod._selection(ImpactMemo(), tmp_path, "HEAD") is None
+    assert auditor_mod._selection(None, tmp_path, "HEAD") is None
+    for error in (OSError, RuntimeError, ValueError):
+
+        def fails(*_a: object, error: type[Exception] = error) -> None:
+            message = "select broke"
+            raise error(message)
+
+        monkeypatch.setattr(impact, "select", fails)
+        assert auditor_mod._selection(ImpactMemo(tests=known), tmp_path, "HEAD") is None
+
+
+def test_the_syntax_key_ignores_layout_but_not_the_bytes_of_code_that_does_not_parse(
+    tmp_path: Path,
+) -> None:
+    def key(name: str, files: dict[str, str], drop: str = "") -> str:
+        root = tmp_path / name
+        _init(root, files)
+        if drop:
+            (root / drop).unlink()  # still listed by git, gone from disk
+        return auditor_mod.syntax_key(root)
+
+    assert key("a", {"m.py": "x=1\n"}) == key("b", {"m.py": "x = 1  # one\n"})
+    assert key("c", {"m.py": "def f(:\n"}) != key("d", {"m.py": "def f( :\n"})
+    # A listed file that cannot be read is left out, as if it were not listed.
+    assert key("e", {"m.py": "x = 1\n", "gone.txt": "g\n"}, drop="gone.txt") == key(
+        "f", {"m.py": "x = 1\n"}
+    )
+    assert key("g", {"m.py": "x = 1\n", "kept.txt": "g\n"}) != key("h", {"m.py": "x = 1\n"})
+
+
+def test_findings_are_reused_across_a_format_only_edit_only_when_nothing_names_lines() -> None:
+    def found(*findings: auditor_mod.Finding) -> Findings:
+        return Findings(tier=1, key="k", findings=findings)
+
+    unmeasured = auditor_mod.MUTATION_UNMEASURED.format(generated=3)
+    passed = auditor_mod.Finding("tests", 1, "pass", "unknown", "ok", ())
+    budget = auditor_mod.Finding("mutation", 2, "not-proven", "evidence-thin", unmeasured, ())
+    lines = auditor_mod.Finding("coverage", 1, "not-proven", "evidence-thin", "n.py:3", ())
+    assert auditor_mod._reusable(found(passed, budget))
+    assert not auditor_mod._reusable(found(passed, lines))
+
+
+def test_draw_map_draws_once_and_refuses_a_project_limit_it_cannot_use(tmp_path: Path) -> None:
+    from saddle.impact import FileImpact, ImpactMemo
+
+    tree = tmp_path / "tree"
+    _init(tree, {"n.py": BASE_CODE})
+    drawn = ImpactMemo(tests={"n.py": FileImpact(frozenset(), {}, frozenset())})
+    assert Auditor(tree, "HEAD", AuditorConfig(impact=drawn)).draw_map() == "map already drawn"
+    assert Auditor(tree, "HEAD", AuditorConfig()).draw_map() == "no map wanted"
+    bad = tmp_path / "bad"
+    _init(bad, {"n.py": BASE_CODE, "pyproject.toml": "[tool.saddle]\nno-such-key = 1\n"})
+    memo = ImpactMemo()
+    with pytest.raises(AuditError, match="no-such-key"):
+        Auditor(bad, "HEAD", AuditorConfig(impact=memo)).draw_map()
+    assert memo.tests is None

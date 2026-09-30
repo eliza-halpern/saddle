@@ -848,3 +848,162 @@ def test_premise_check_lets_a_probe_be_written_outside_the_worktree(repo: Path) 
     told = [m["content"] for m in client.asked[2]["messages"] if m.get("role") == "tool"]
     assert not told[0].startswith("error: refused: edits wait for premise_check")
     assert told[1].startswith("error: refused: edits wait for premise_check")
+
+
+# -- dispute, premise_check and the edit gate, argument by argument ----------------
+
+
+def _run() -> AutoRun:
+    return AutoRun(budget=RunBudget(time_s=60, tokens=1000), run_span="s")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ("not json", "error: premise_check needs a JSON object"),
+        ('["a list"]', "error: premise_check needs a JSON object"),
+        ("", "error: premise_check refused: name the claim"),
+        (json.dumps({"claim": "  ", "commands": ["echo x"]}), "error: premise_check refused: name"),
+        (json.dumps({"claim": "c", "commands": []}), "error: premise_check refused: give one to 5"),
+        (json.dumps({"claim": "c", "commands": "echo x"}), "error: premise_check refused: give"),
+        (json.dumps({"claim": "c", "commands": ["echo x"] * 6}), "error: premise_check refused"),
+        (json.dumps({"claim": "c", "commands": [" "]}), "error: premise_check refused: give"),
+    ],
+    ids=["not-json", "not-object", "empty", "blank-claim", "none", "a-string", "six", "blank"],
+)
+def test_a_premise_check_without_a_claim_and_commands_is_refused_and_seals_nothing(
+    tmp_path: Path, arguments: str, refusal: str
+) -> None:
+    from saddle.engine import _premise
+
+    run = _run()
+    told = _premise(run, arguments, tmp_path, ToolContext(workdir=tmp_path))
+    assert told.startswith(refusal), told
+    assert run.premise is None
+    # Known-good control: the same run takes a well-formed check and seals it.
+    good = json.dumps({"claim": "c", "commands": ["echo shown"] * 5})
+    assert "shown" in _premise(run, good, tmp_path, ToolContext(workdir=tmp_path))
+    assert run.premise is not None
+    assert len(run.premise["evidence"]) == 5
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ("{", "error: dispute needs a JSON object"),
+        ("7", "error: dispute needs a JSON object"),
+        (json.dumps({"claim": "c", "finding": " ", "evidence": ["echo x"]}), "say what you found"),
+        (json.dumps({"claim": "c", "evidence": ["echo x"]}), "say what you found"),
+    ],
+    ids=["not-json", "not-object", "blank-finding", "no-finding"],
+)
+def test_a_dispute_that_is_not_an_object_or_names_no_finding_is_refused(
+    tmp_path: Path, arguments: str, refusal: str
+) -> None:
+    from saddle.engine import _dispute
+
+    run = _run()
+    told = _dispute(run, arguments, tmp_path, ToolContext(workdir=tmp_path))
+    assert refusal in told
+    assert told.startswith("error: dispute")
+    assert (run.dispute, run.outcome) == (None, "")
+    good = json.dumps({"claim": "c", "finding": "f", "evidence": ["echo x"]})
+    _dispute(run, good, tmp_path, ToolContext(workdir=tmp_path))
+    assert run.dispute is not None
+    assert run.reason.startswith("needs you")
+
+
+@pytest.mark.parametrize("tool", ["premise_check", "dispute"])
+def test_evidence_that_does_not_run_refuses_the_call_and_seals_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """A command the tool layer cannot run (an "error: " result) is not evidence:
+    the call is refused naming which command, and nothing is sealed or stopped."""
+    from saddle import engine
+
+    ran: list[str] = []
+
+    def execute(call: ToolCall, **_kw: Any) -> str:
+        command = json.loads(call.arguments)["command"]
+        ran.append(command)
+        return "error: no sandbox" if command == "bad" else "exit 0\nok"
+
+    monkeypatch.setattr(engine, "execute_tool", execute)
+    run = _run()
+    ctx = ToolContext(workdir=tmp_path)
+    if tool == "premise_check":
+        told = engine._premise(
+            run, json.dumps({"claim": "c", "commands": ["ok", "bad"]}), tmp_path, ctx
+        )
+        assert told.startswith("error: premise_check refused: command 2 did not run (no sandbox)")
+        assert run.premise is None
+    else:
+        args = {"claim": "c", "finding": "f", "evidence": ["ok", "bad"]}
+        told = engine._dispute(run, json.dumps(args), tmp_path, ctx)
+        assert told.startswith(
+            "error: dispute refused: evidence command 2 did not run (no sandbox)"
+        )
+        assert (run.dispute, run.outcome) == (None, "")
+    assert ran == ["ok", "bad"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "held"),
+    [
+        ("not json", True),
+        ('["path"]', True),
+        (json.dumps({"path": ""}), True),
+        (json.dumps({"path": 3}), True),
+        (json.dumps({"path": "calc.py"}), True),
+        (json.dumps({"path": "."}), True),
+        (json.dumps({"path": "/tmp/probe.py"}), False),
+        (json.dumps({"path": "../elsewhere.py"}), False),
+    ],
+    ids=["not-json", "not-object", "empty", "not-a-string", "inside", "root", "tmp", "parent"],
+)
+def test_an_edit_is_held_unless_its_path_is_plainly_outside_the_worktree(
+    tmp_path: Path, arguments: str, held: bool
+) -> None:
+    """What cannot be read as a path is held: the gate fails closed."""
+    from saddle.engine import _in_worktree
+
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    assert _in_worktree(arguments, worktree) is held
+
+
+# -- resume and format-at-finish, directly -------------------------------------------
+
+
+@pytest.mark.parametrize("system", [None, "Old prompt with no directory named."])
+def test_a_recording_without_a_named_worktree_is_resumed_verbatim_behind_the_new_prompt(
+    tmp_path: Path, system: str | None
+) -> None:
+    from saddle.auto import resumed
+
+    kept = [{"role": "user", "content": "cd /old/wt && fix it"}]
+    head = [{"role": "system", "content": system}] if system else []
+    recorded = tmp_path / "request.json"
+    recorded.write_text(json.dumps({"messages": head + kept}))
+    assert resumed(recorded, tmp_path / "new", "NEW") == [
+        {"role": "system", "content": "NEW"},
+        *kept,
+    ]
+    # Known-good contrast: a named worktree is rewritten to this run's.
+    named = [{"role": "system", "content": "Your working directory is /old/wt, go"}]
+    recorded.write_text(json.dumps({"messages": named + kept}))
+    assert resumed(recorded, tmp_path / "new", "NEW")[1]["content"] == (
+        f"cd {tmp_path / 'new'} && fix it"
+    )
+
+
+def test_format_changed_touches_nothing_when_no_python_file_changed(repo: Path) -> None:
+    from saddle.auto import format_changed
+
+    (repo / "calc.py").write_text("def add(a,b):\n    return a+b\n")
+    (repo / "calc.py").rename(repo / "calc.txt")
+    assert format_changed(repo, "HEAD") == ""
+    assert (repo / "calc.txt").read_text() == "def add(a,b):\n    return a+b\n"
+    (repo / "calc.txt").rename(repo / "calc.py")
+    assert format_changed(repo, "HEAD").startswith("saddle formatted calc.py")
+    assert (repo / "calc.py").read_text() == FIXED

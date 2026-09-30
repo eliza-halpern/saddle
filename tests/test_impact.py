@@ -112,17 +112,21 @@ def _git(root: Path, *argv: str) -> None:
     assert evidence.run_argv(["git", *argv], root) == 0
 
 
+def _make_tree(root: Path, overrides: dict[str, str] | None = None) -> Path:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "test")
+    for name, text in {**FILES, **(overrides or {})}.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
-    _git(tmp_path, "init", "-q")
-    _git(tmp_path, "config", "user.email", "test@example.com")
-    _git(tmp_path, "config", "user.name", "test")
-    for name, text in FILES.items():
-        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / name).write_text(text)
-    _git(tmp_path, "add", "-A")
-    _git(tmp_path, "commit", "-q", "-m", "baseline")
-    return tmp_path
+    return _make_tree(tmp_path)
 
 
 def _edit(tree: Path, name: str, old: str, new: str) -> None:
@@ -228,6 +232,148 @@ def test_a_function_that_also_ran_outside_every_test_takes_the_whole_suite(tree:
     assert select(tree, "HEAD", ran_at_import) is None
 
 
+USE_VARIANTS: Final = {
+    # Each use.py reaches calc.py's LIMIT or Box by one way of naming it; only
+    # double_limit is in the map, so test_use is selected only if it is followed.
+    "relative-from": ("from .calc import LIMIT\n\n\ndef double_limit():\n    return LIMIT * 2\n"),
+    "relative-module": ("from . import calc\n\n\ndef double_limit():\n    return calc.LIMIT * 2\n"),
+    "import-as": ("import pkg.calc as c\n\n\ndef double_limit():\n    return c.LIMIT * 2\n"),
+    "star": "from pkg.calc import *\n\n\ndef double_limit():\n    return LIMIT * 2\n",
+    "async": ("from pkg.calc import LIMIT\n\n\nasync def double_limit():\n    return LIMIT * 2\n"),
+    "class-in-function": (
+        "from pkg.calc import LIMIT\n\n\ndef double_limit():\n"
+        "    class Local:\n        n = LIMIT\n\n    return Local.n * 2\n"
+    ),
+    "def-in-try": (
+        "from pkg.calc import LIMIT\n\ntry:\n    import json\nexcept ImportError:\n"
+        "    json = None\nelse:\n\n    def double_limit():\n        return LIMIT * 2\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("variant", sorted(USE_VARIANTS))
+def test_a_changed_constant_is_followed_through_every_way_of_naming_it(
+    tmp_path: Path, variant: str
+) -> None:
+    root = _make_tree(tmp_path, {"src/pkg/use.py": USE_VARIANTS[variant]})
+    _edit(root, "src/pkg/calc.py", "LIMIT = 10", "LIMIT = 11")
+    assert select(root, "HEAD", KNOWN) == ("tests/test_capped.py", "tests/test_use.py")
+
+
+def test_a_module_that_does_not_name_the_constant_is_not_selected(tmp_path: Path) -> None:
+    # Known-bad control for the variants above: a relative import past the top
+    # of the tree resolves to nothing, and nothing else names LIMIT.
+    use = "from .... import far\n\n\ndef double_limit():\n    return far * 2\n"
+    root = _make_tree(tmp_path, {"src/pkg/use.py": use})
+    _edit(root, "src/pkg/calc.py", "LIMIT = 10", "LIMIT = 11")
+    assert select(root, "HEAD", KNOWN) == ("tests/test_capped.py",)
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        "import pkg.calc\n\n\ndef double_limit() -> pkg.calc.Box:\n    return 20\n",
+        (
+            "import pkg.calc\n\n\nclass Doubler(pkg.calc.Box):\n    pass\n\n\n"
+            "def double_limit():\n    return Doubler().area() * 2\n"
+        ),
+    ],
+    ids=["return-annotation", "base-class"],
+)
+def test_a_changed_class_reaches_what_names_it_in_a_signature_or_a_base(
+    tmp_path: Path, use: str
+) -> None:
+    root = _make_tree(tmp_path, {"src/pkg/use.py": use})
+    _edit(root, "src/pkg/calc.py", "size = 3", "size = 4")
+    assert select(root, "HEAD", KNOWN) == ("tests/test_box.py", "tests/test_use.py")
+
+
+def test_a_narrow_fixture_keeps_the_selection(tmp_path: Path) -> None:
+    fixtures = (
+        "import pytest\n\n\n@pytest.fixture(autouse=True)\ndef a():\n    return 1\n\n\n"
+        '@pytest.fixture(scope="module")\ndef b():\n    return 2\n\n\n'
+    )
+    root = _make_tree(tmp_path, {"tests/test_add.py": fixtures + ADD_TEST})
+    _edit(root, "src/pkg/calc.py", "return a + b", "return b + a")
+    assert select(root, "HEAD", KNOWN) == ("tests/test_add.py",)
+
+
+def test_a_conftest_that_names_a_changed_binding_takes_the_whole_suite(tmp_path: Path) -> None:
+    root = _make_tree(tmp_path, {"tests/conftest.py": "from pkg.calc import LIMIT\n"})
+    _edit(root, "src/pkg/calc.py", "return a + b", "return b + a")
+    assert select(root, "HEAD", KNOWN) == ("tests/test_add.py",)
+    _edit(root, "src/pkg/calc.py", "LIMIT = 10", "LIMIT = 11")
+    assert select(root, "HEAD", KNOWN) is None
+
+
+def test_a_baseline_that_does_not_parse_takes_the_whole_suite(tmp_path: Path) -> None:
+    broken = CALC.replace("return a + b", "return a +")
+    root = _make_tree(tmp_path, {"src/pkg/calc.py": broken})
+    (root / "src/pkg/calc.py").write_text(CALC)
+    _git(root, "add", "-A")
+    assert select(root, "HEAD", KNOWN) is None
+
+
+def test_a_new_method_runs_every_test_of_its_file(tree: Path) -> None:
+    # It may override a method unchanged code calls: unlike a new function
+    # (test_a_new_function_reaches_the_tests_of_its_changed_callers).
+    _edit(
+        tree,
+        "src/pkg/calc.py",
+        "    def area(self):",
+        "    def side(self):\n        return self.size\n\n    def area(self):",
+    )
+    assert select(tree, "HEAD", KNOWN) == (
+        "tests/test_add.py",
+        "tests/test_box.py",
+        "tests/test_capped.py",
+    )
+
+
+def test_a_module_statement_that_binds_nothing_runs_every_test_of_its_file(
+    tree: Path,
+) -> None:
+    _edit(tree, "src/pkg/calc.py", "LIMIT = 10\n", "LIMIT = 10\nprint(LIMIT)\n")
+    assert select(tree, "HEAD", KNOWN) == (
+        "tests/test_add.py",
+        "tests/test_box.py",
+        "tests/test_capped.py",
+    )
+
+
+def test_an_unnamed_data_file_takes_the_whole_suite_and_an_unnamed_doc_does_not(
+    tmp_path: Path,
+) -> None:
+    root = _make_tree(tmp_path, {"data.csv": "a,b\n"})
+    _edit(root, "src/pkg/calc.py", "return a + b", "return b + a")
+    _edit(root, "docs/OTHER.md", "# Other", "# Nothing names this")
+    assert select(root, "HEAD", KNOWN) == ("tests/test_add.py",)
+    _edit(root, "data.csv", "a,b", "a,c")
+    assert select(root, "HEAD", KNOWN) is None
+
+
+def test_a_file_the_map_does_not_hold_contributes_no_tests(tree: Path) -> None:
+    # The cost, on the record: use.py is not in this map, so its tests are
+    # not selected for a function or a file of it that the change reaches.
+    partial = {rel: impact for rel, impact in KNOWN.items() if rel != "src/pkg/use.py"}
+    _edit(tree, "src/pkg/calc.py", "LIMIT = 10", "LIMIT = 11")
+    assert select(tree, "HEAD", KNOWN) == ("tests/test_capped.py", "tests/test_use.py")
+    assert select(tree, "HEAD", partial) == ("tests/test_capped.py",)
+    _git(tree, "reset", "-q", "--hard")
+    _edit(tree, "src/pkg/calc.py", "return a + b", "return b + a")
+    _edit(tree, "src/pkg/use.py", "return LIMIT * 2", "return LIMIT * 2  # doubled")
+    assert select(tree, "HEAD", KNOWN) == ("tests/test_add.py", "tests/test_use.py")
+    assert select(tree, "HEAD", partial) == ("tests/test_add.py",)
+
+
+def test_a_changed_class_of_a_file_the_map_does_not_hold_reaches_its_users(
+    tree: Path,
+) -> None:
+    partial = {rel: impact for rel, impact in KNOWN.items() if rel != "src/pkg/calc.py"}
+    _edit(tree, "src/pkg/calc.py", "size = 3", "size = 4")
+    assert select(tree, "HEAD", partial) == ("tests/test_box.py",)
+
+
 # -- build ----------------------------------------------------------------------
 
 
@@ -265,6 +411,34 @@ def test_a_run_with_no_test_context_draws_no_map(tmp_path: Path) -> None:
     source.write_text("def f():\n    return 1\n")
     assert build(_data(tmp_path, {"": {str(source): [1, 2]}}), tmp_path) is None
     assert build(str(tmp_path / "missing"), tmp_path) is None
+
+
+def test_build_skips_files_outside_the_tree_and_keeps_tests_of_unreadable_ones(
+    tmp_path: Path,
+) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    broken = tree / "broken.py"
+    broken.write_text("def f(:\n")
+    gone = tree / "gone.py"
+    outside = tmp_path / "outside.py"
+    outside.write_text("def f():\n    return 1\n")
+    data_file = _data(
+        tmp_path,
+        {"tests/test_m.py::test_f|run": {str(broken): [2], str(gone): [2], str(outside): [2]}},
+    )
+    drawn = build(data_file, tree)
+    assert drawn is not None
+    assert set(drawn) == {"broken.py", "gone.py"}
+    # No owner can be read: the tests that ran the file are kept, no function.
+    assert drawn["broken.py"] == FileImpact(frozenset({"tests/test_m.py"}), {}, frozenset())
+    assert drawn["gone.py"] == FileImpact(frozenset({"tests/test_m.py"}), {}, frozenset())
+
+
+def test_a_data_file_coverage_cannot_read_draws_no_map(tmp_path: Path) -> None:
+    corrupt = tmp_path / ".coverage.ctx"
+    corrupt.write_text("not a coverage database\n" * 10)
+    assert build(str(corrupt), tmp_path) is None
 
 
 # -- the audit: the first run draws the map, later ones run what the change reaches ----

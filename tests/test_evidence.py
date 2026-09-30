@@ -39,6 +39,7 @@ from saddle.evidence import (
     changed_statements,
     covered_lines,
     drop_test_caches,
+    format_overrides,
     git_added_files,
     git_changed_files,
     git_diff,
@@ -3087,3 +3088,54 @@ def test_real_mutmut_runs_each_mutant_against_only_the_tests_that_ran_its_functi
     statuses = {name: status for name, status, _show in outcome.mutant_detail}
     assert {s for n, s in statuses.items() if ".x_f__" in n} == {"survived"}, outcome
     assert {s for n, s in statuses.items() if ".x_g__" in n} == {"killed"}, outcome
+
+
+def _commit_ruff_config(root: Path, name: str, text: str) -> None:
+    _git_repo(root)
+    (root / name).write_text(text)
+    assert run_argv(["git", "add", name], root) == 0
+    assert run_argv(["git", "commit", "-q", "-m", "ruff config"], root) == 0
+
+
+def test_format_overrides_carry_the_committed_format_table_and_ruff_applies_them(
+    tmp_path: Path,
+) -> None:
+    """Every setting a `--config` override can carry (string, bool, int,
+    list) goes to ruff as TOML ruff itself accepts; one it cannot (a list
+    holding a table) is dropped rather than sent malformed."""
+    _commit_ruff_config(
+        tmp_path,
+        "ruff.toml",
+        "line-length = 100\n\n[format]\n"
+        'quote-style = "single"\n'
+        "skip-magic-trailing-comma = true\n"
+        "docstring-code-format = false\n"
+        'exclude = ["gen/*.py"]\n'
+        "odd = [1, {a = 1}]\n",
+    )
+    overrides = format_overrides(tmp_path, "HEAD")
+    assert overrides == (
+        "--config",
+        "line-length = 100",
+        "--config",
+        'format.quote-style = "single"',
+        "--config",
+        "format.skip-magic-trailing-comma = true",
+        "--config",
+        "format.docstring-code-format = false",
+        "--config",
+        'format.exclude = ["gen/*.py"]',
+    )
+    # The enforcing engine, not our reading of it: ruff formats by them.
+    (tmp_path / "m.py").write_text('x = "a"\n')
+    ran = run_capture(ruff_argv("format", *overrides, "m.py"), tmp_path)
+    assert ran.exit_code == 0, ran.stdout
+    assert (tmp_path / "m.py").read_text() == "x = 'a'\n"
+
+
+def test_format_overrides_of_a_config_that_does_not_parse_are_none(tmp_path: Path) -> None:
+    _commit_ruff_config(tmp_path, ".ruff.toml", "line-length = [\n")
+    assert format_overrides(tmp_path, "HEAD") == ()
+    (tmp_path / ".ruff.toml").write_text("line-length = 90\n")
+    assert run_argv(["git", "commit", "-q", "-am", "fixed"], tmp_path) == 0
+    assert format_overrides(tmp_path, "HEAD") == ("--config", "line-length = 90")
