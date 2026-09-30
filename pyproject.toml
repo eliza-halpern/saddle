@@ -89,6 +89,9 @@ test-timeout = 3600
 # the tests on workers"), and `check.sh` too: 376 s on 8 workers with coverage,
 # against 1209-1378 s serially. Read like test-timeout, from the starting commit.
 test-workers = 8
+# The finish audit runs this beside the suite and refuses on a failure: the
+# same strict mypy check.sh runs, so a run's new test file is type-checked too.
+static-check = ["mypy", "src", "tests"]
 
 [tool.mutmut]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.

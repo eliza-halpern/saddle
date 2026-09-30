@@ -83,7 +83,9 @@ from saddle.evidence import (
     ruff_argv,
     ruff_findings,
     run_capture,
+    run_static_check,
     run_suite_capture,
+    static_check,
     suite_limit,
     suite_run,
     suite_workers,
@@ -97,6 +99,7 @@ from saddle.gates import (
     Tier1Result,
     check_mutation_shortlist,
     check_ruff,
+    check_static,
     check_syntax,
     introduced_findings,
     set_aside_kind,
@@ -129,6 +132,11 @@ tests the task itself declared rewritable (`AuditorConfig.sanctioned_test_rewrit
 The verdict stays `fail` -- the gate did see rewritten assertions -- but the
 finding does not count against `Findings.passed`, so it neither blocks tier 2
 nor refuses an autonomous run's `finish`."""
+
+STATIC_CHECK: Final = "static-check"
+"""The project's own static check (`evidence.static_check`, a type checker for
+saddle itself): a tier-1 gate emitted after `TIER1`, and only when the
+project's committed `[tool.saddle]` names one; without it, no finding."""
 
 TASK_REQUIREMENTS: Final = "task-requirements"
 """P1's tier-1 gate (`task_requirements.check_tree`): emitted after `TIER1`,
@@ -173,6 +181,7 @@ REUSES: Final[dict[str, str]] = {
     "requirement-binding": "saddle.gates.check_requirement_binding",
     "full-suite": "saddle.gates.check_test_command",
     TASK_REQUIREMENTS: "saddle.gates.check_task_requirements",
+    STATIC_CHECK: "saddle.gates.check_static",
 }
 
 # The calibration hook: what a failure of each gate claims about the change.
@@ -193,6 +202,7 @@ REASONS: Final[dict[str, Reason]] = {
     "red-phase": "evidence-thin",
     "requirement-binding": "evidence-thin",
     TASK_REQUIREMENTS: "code-wrong",
+    STATIC_CHECK: "code-wrong",
     "node-scope": "scope",
     "target-scope": "scope",
 }
@@ -527,6 +537,11 @@ def _reusable(found: Findings) -> bool:
         if f.verdict == "not-proven" and not f.detail.startswith(MUTATION_UNMEASURED[:12]):
             return False
     return True
+
+
+def _run_static(argv: tuple[str, ...], copy: Path, limit: float) -> GateCheck:
+    """Run the project's static check on the audited copy and judge it."""
+    return check_static(argv, run_static_check(argv, copy, timeout=limit))
 
 
 def _blocked_tier2(key: str, first: Findings) -> Findings:
@@ -1075,6 +1090,7 @@ class Auditor:
                 # of the tree audited.
                 limit = suite_limit(copy, resolved).seconds
                 workers = suite_workers(copy, resolved).count
+                statics = static_check(copy, resolved)
             except SuiteLimitError as exc:
                 raise AuditError(str(exc)) from exc
             # One run of the battery serves both tiers: at tier 2 the tier-1
@@ -1087,10 +1103,17 @@ class Auditor:
                 return self._store(_blocked_tier2(key, first))
             p1: Future[TaskRequirementsCheck] | None = None
             pool: ThreadPoolExecutor | None = None
+            static: Future[GateCheck] | None = None
+            if first is None and statics:
+                # Beside the tests too: a type check takes seconds, the suite minutes.
+                pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
+                static = pool.submit(
+                    contextvars.copy_context().run, _run_static, statics, copy, limit
+                )
             if first is None and self.config.task_requirements is not None:
                 # Beside the tests, not after them: it adds to the wall only if
                 # it outlasts them. The context carries the project environment.
-                pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-p1")
+                pool = pool or ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
                 p1 = pool.submit(
                     contextvars.copy_context().run,
                     check_tree,
@@ -1121,14 +1144,14 @@ class Auditor:
                     pool.shutdown(wait=True)
             if tier == 2:
                 if first is None:
-                    first = self._tiered(1, key1, gated, copy, resolved, limit, p1)
+                    first = self._tiered(1, key1, gated, copy, resolved, limit, p1, static)
                 self._by_syntax[same1] = first.key
                 if not first.passed:
                     return self._store(_blocked_tier2(key, first))
                 second = self._tiered(2, key, gated, copy, resolved, limit, None)
                 self._by_syntax[same] = second.key
                 return second
-            done = self._tiered(1, key, gated, copy, resolved, limit, p1)
+            done = self._tiered(1, key, gated, copy, resolved, limit, p1, static)
             self._by_syntax[same] = done.key
             return done
 
@@ -1149,6 +1172,7 @@ class Auditor:
         resolved: str,
         limit: float,
         p1: Future[TaskRequirementsCheck] | None,
+        static: Future[GateCheck] | None = None,
     ) -> Findings:
         """`tier`'s findings from one run of the battery (`_gate`), stored under `key`."""
         # Every entry becomes a Finding verdict (`_finding` below), and the
@@ -1254,7 +1278,12 @@ class Auditor:
             check = p1.result()
             statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
             sidecars[TASK_REQUIREMENTS] = p1_tally(check)
+        if static is not None:
+            ran = static.result()
+            statuses[STATIC_CHECK] = ("pass" if ran.passed else "fail", ran.detail, None)
         wanted = TIER1 if tier == 1 else TIER2
+        if STATIC_CHECK in statuses:
+            wanted = (*wanted, STATIC_CHECK)
         if TASK_REQUIREMENTS in statuses:
             wanted = (*wanted, TASK_REQUIREMENTS)
         findings = []

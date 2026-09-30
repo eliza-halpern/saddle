@@ -88,7 +88,12 @@ SUITE_WORKERS_MAX: Final = 64
 under the run's one memory cap, so a typo such as 800 must be refused by
 name rather than start 800 interpreters."""
 
-SADDLE_KEYS: Final = (SUITE_LIMIT_KEY, SUITE_WORKERS_KEY)
+STATIC_CHECK_KEY: Final = "static-check"
+"""The project's own static check, as an argv: `static-check = ["mypy", "src",
+"tests"]` in the `[tool.saddle]` table of its `pyproject.toml` (`static_check`).
+Absent, no static check runs and the audit emits no finding for it."""
+
+SADDLE_KEYS: Final = (SUITE_LIMIT_KEY, SUITE_WORKERS_KEY, STATIC_CHECK_KEY)
 """Every key saddle reads in `[tool.saddle]`. Any other key there is refused
 (`_committed_saddle_table`): a typo must not read as "not set"."""
 
@@ -610,6 +615,43 @@ class SuiteWorkers:
 
     count: int
     source: str
+
+
+def static_check(tree: Path, rev: str) -> tuple[str, ...]:
+    """The project's static-check argv as committed at `rev`; () when it sets none.
+
+    Read exactly where and how `suite_limit` reads `test-timeout`, so the tree
+    under audit cannot drop or weaken its own check. A value that is not a
+    non-empty list of non-empty strings raises `SuiteLimitError` naming the
+    commit and the value."""
+    table, where = _committed_saddle_table(tree, rev, "the static check")
+    if table is None or STATIC_CHECK_KEY not in table:
+        return ()
+    value = table[STATIC_CHECK_KEY]
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(part, str) and part.strip() for part in value)
+    ):
+        msg = (
+            f"cannot read the static check: {where}: {STATIC_CHECK_KEY} = {value!r} "
+            "is not a non-empty list of command words"
+        )
+        raise SuiteLimitError(msg)
+    return tuple(value)
+
+
+def run_static_check(argv: Sequence[str], cwd: Path, *, timeout: float) -> CapturedRun:
+    """Run the project's static check in `cwd` under the memory cap, with the
+    tree's own package importable (`src_layout_env`): it executes the
+    project's tooling (a type checker's plugins are code) the way its tests do."""
+    return run_capture(
+        list(argv),
+        cwd,
+        timeout=timeout,
+        memory_limit=tree_memory_limit(),
+        extra_env=src_layout_env(cwd),
+    )
 
 
 def suite_workers(tree: Path, rev: str) -> SuiteWorkers:

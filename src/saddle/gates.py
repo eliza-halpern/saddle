@@ -25,7 +25,7 @@ from saddle.task_examples import classify as classify_example
 from saddle.task_units import Units
 
 if TYPE_CHECKING:
-    from saddle.evidence import MutationOutcome, SurvivorDetail
+    from saddle.evidence import CapturedRun, MutationOutcome, SurvivorDetail
 
 # pytest exit codes that carry red-phase evidence (see `check_red_phase`).
 PYTEST_TESTS_FAILED: Final = 1
@@ -153,6 +153,39 @@ def introduced_findings(
         else:
             introduced.append(finding)
     return introduced, inherited
+
+
+STATIC_NAMED_LINES: Final = 12
+"""How many output lines of a failing static check its finding quotes."""
+
+
+def check_static(argv: Sequence[str], run: CapturedRun) -> GateCheck:
+    """The project's own static check: pass iff it exited 0.
+
+    A tool that could not be launched, or that ran out of time, fails by
+    name rather than reading as a clean tree; a failure quotes the first
+    `STATIC_NAMED_LINES` lines of its output (the checker's own errors), so
+    the model is told which file and line, not only that it failed."""
+    shown = " ".join(argv)
+    if run.exit_code == TOOL_UNAVAILABLE:
+        return GateCheck(
+            name="static-check",
+            passed=False,
+            detail=f"{shown}: the tool could not be launched",
+        )
+    if run.timed_out:
+        return GateCheck(name="static-check", passed=False, detail=f"{shown}: timed out")
+    if run.exit_code == 0:
+        return GateCheck(name="static-check", passed=True, detail=f"{shown}: clean")
+    lines = [line for line in (run.stdout + run.stderr).splitlines() if line.strip()]
+    quoted = "\n".join(lines[:STATIC_NAMED_LINES])
+    more = len(lines) - STATIC_NAMED_LINES
+    suffix = f"\n(+{more} more lines)" if more > 0 else ""
+    return GateCheck(
+        name="static-check",
+        passed=False,
+        detail=f"{shown} exited {run.exit_code}:\n{quoted}{suffix}",
+    )
 
 
 def check_ruff(
