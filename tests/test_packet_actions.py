@@ -569,3 +569,111 @@ def test_a_held_runs_packet_reads_needs_you_and_names_the_guarded_files(
     assert packet.guarded_paths == GUARDED_SEEDED
     assert packet.verdict_text.startswith("Needs you: this run changed code that judges runs (")
     assert packet.payload()["guarded_paths"] == list(GUARDED_SEEDED)
+
+
+# -- push branch: the checkout's work branch goes up for a pull request --------
+
+# Built from fragments so the leak guard can scan this file itself.
+FAKE_KEY = "AKIA" + "Q7ZX" + "4M2P" + "9R1T" + "6W3K"
+
+
+def on_work_branch(repo: Path, tmp_path: Path) -> Path:
+    remote = with_remote(repo, tmp_path)
+    git(repo, "checkout", "-q", "-b", "work")
+    (repo / "README").write_text("calc, on a work branch\n")
+    git(repo, "commit", "-q", "-am", "work: readme")
+    return remote
+
+
+def guard_hook(repo: Path, marker: Path) -> None:
+    """saddle's leak-guard hook, plus a line that would leave `marker` if run."""
+    hooks = repo / "githooks"
+    hooks.mkdir()
+    (hooks / "pre-push").write_text(
+        f'#!/bin/sh\necho ran > {marker}\nexec python -m saddle.leakguard pre-push "$@"\n'
+    )
+    (hooks / "pre-push").chmod(0o755)
+    git(repo, "config", "core.hooksPath", "githooks")
+    (repo / ".git" / "info" / "exclude").write_text("githooks/\n")
+
+
+def test_push_branch_puts_the_work_branch_up_and_sets_its_upstream(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    sid, rid, _branch = seed(store, repo, "audited")
+    remote = on_work_branch(repo, tmp_path)
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        done = client.post(url(sid, rid, "push-branch"), json={"confirm": "work"})
+    assert info["push_branch"] == {
+        "branch": "work",
+        "remote": "origin",
+        "refusal": "",
+        "on_main": False,
+    }
+    assert done.status_code == 200, done.text
+    assert done.json()["output"].startswith("Pushed work to origin.")
+    assert git(remote, "rev-parse", "work").strip() == head(repo)
+    assert git(repo, "rev-parse", "--abbrev-ref", "work@{upstream}").strip() == "origin/work"
+
+
+def test_push_branch_is_refused_on_main_and_without_naming_the_branch(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    sid, rid, _branch = seed(store, repo, "audited")
+    remote = with_remote(repo, tmp_path)
+    before = git(remote, "rev-parse", "main").strip()
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        on_main = client.post(url(sid, rid, "push-branch"), json={"confirm": "main"})
+    assert info["push_branch"]["on_main"] is True
+    assert on_main.status_code == 409
+    assert "is the main branch" in on_main.json()["error"]
+    git(repo, "checkout", "-q", "-b", "work")
+    with client_for(store, repo) as client:
+        unnamed = client.post(url(sid, rid, "push-branch"), json={"confirm": "main"})
+    assert unnamed.status_code == 400
+    assert git(remote, "rev-parse", "main").strip() == before
+    listed = git(remote, "branch", "--list", "work").strip()
+    assert listed == ""
+
+
+def test_the_leak_guard_runs_in_process_and_the_hook_file_never_runs(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    """Known-good: a clean branch under saddle's leak-guard hook is pushed, the
+    guard having run from saddle's own copy -- the hook file itself never ran.
+    Known-bad: a commit carrying a secret shape is refused by name, nothing pushed."""
+    sid, rid, _branch = seed(store, repo, "audited")
+    remote = on_work_branch(repo, tmp_path)
+    marker = tmp_path / "hook-ran"
+    guard_hook(repo, marker)
+    with client_for(store, repo) as client:
+        clean = client.post(url(sid, rid, "push-branch"), json={"confirm": "work"})
+    assert clean.status_code == 200, clean.text
+    assert "(leak guard: clean)" in clean.json()["output"]
+    assert not marker.exists()
+    (repo / "README").write_text(f"key = {FAKE_KEY}\n")
+    git(repo, "commit", "-q", "-am", "work: leak a key")
+    pushed_before = git(remote, "rev-parse", "work").strip()
+    with client_for(store, repo) as client:
+        leaky = client.post(url(sid, rid, "push-branch"), json={"confirm": "work"})
+    assert leaky.status_code == 409
+    assert leaky.json()["error"].startswith("The leak guard refused the push:")
+    assert git(remote, "rev-parse", "work").strip() == pushed_before
+    assert not marker.exists()
+
+
+def test_another_pre_push_hook_still_means_push_from_a_terminal(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    sid, rid, _branch = seed(store, repo, "audited")
+    remote = on_work_branch(repo, tmp_path)
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o755)
+    with client_for(store, repo) as client:
+        done = client.post(url(sid, rid, "push-branch"), json={"confirm": "work"})
+    assert done.status_code == 409
+    assert "not saddle's leak guard" in done.json()["error"]
+    assert git(remote, "branch", "--list", "work").strip() == ""

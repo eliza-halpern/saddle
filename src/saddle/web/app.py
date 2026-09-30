@@ -1004,6 +1004,12 @@ def build_app(
                 "push_refusal": branch_actions.push_refusal(root),
                 "guarded_paths": list(packet.guarded_paths),
                 "approve_refusal": branch_actions.approve_refusal(packet),
+                "push_branch": {
+                    "branch": branch_actions.current_branch(root),
+                    "remote": branch_actions.branch_remote(root),
+                    "refusal": branch_actions.push_branch_refusal(root),
+                    "on_main": branch_actions.on_main_branch(root),
+                },
                 "recap": render_packet_text(packet),
                 "report": str(report),
                 "sealed": False,
@@ -1036,6 +1042,8 @@ def build_app(
             elif action == "approve":
                 paths = str(body.get("paths") or "")
                 said = branch_actions.approve_merge(root, packet, branch, confirm, paths)
+            elif action == "push-branch":
+                said = branch_actions.push_branch(root, confirm)
             elif action == "merge-push":
                 said = branch_actions.merge_and_push(root, packet, branch, confirm)
             else:
@@ -1051,6 +1059,9 @@ def build_app(
 
     async def task_approve(request: Request) -> JSONResponse:
         return _act(request, "approve", await request.json())
+
+    async def task_push_branch(request: Request) -> JSONResponse:
+        return _act(request, "push-branch", await request.json())
 
     async def task_merge_push(request: Request) -> JSONResponse:
         return _act(request, "merge-push", await request.json())
@@ -1244,6 +1255,9 @@ def build_app(
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/approve", task_approve, methods=["POST"]),
+            Route(
+                "/api/sessions/{sid}/tasks/{rid}/push-branch", task_push_branch, methods=["POST"]
+            ),
             Route("/api/sessions/{sid}/tasks/{rid}/merge-push", task_merge_push, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/discard", task_discard, methods=["POST"]),
             Route("/api/tasks/{rid}/answer", answer_task, methods=["POST"]),

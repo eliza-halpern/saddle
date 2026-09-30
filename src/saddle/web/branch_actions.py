@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from saddle import leakguard
 from saddle.packet import Packet
 from saddle.sandbox import HOST_GIT_GUARD
 
@@ -269,6 +270,95 @@ def merge_and_push(root: Path, packet: Packet, branch: str, confirm: str) -> str
         msg = f"{merged}\n\n{failed}\n{said}"
         raise ActionRefusedError(msg, 502)
     return f"{merged}\nPushed to {name}.\n{said}".rstrip()
+
+
+LEAKGUARD_HOOK: Final = "-m saddle.leakguard pre-push"
+"""What saddle's own pre-push hook runs (`tools/githooks/pre-push`): a repo whose
+hook is this one gets the same guard run in-process by `push_branch`."""
+
+DEFAULT_BRANCHES: Final = frozenset({"main", "master"})
+
+
+def branch_remote(root: Path) -> str:
+    """The remote the current branch pushes to: its configured one, else origin."""
+    target = current_branch(root)
+    configured = git(root, "config", "--get", f"branch.{target}.remote").stdout.strip()
+    return configured or "origin"
+
+
+def default_branch(root: Path, remote: str) -> str:
+    """The remote's default branch as the checkout knows it, or "" if unknown."""
+    ref = git(root, "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD")
+    return ref.stdout.strip().removeprefix(f"{remote}/") if ref.returncode == 0 else ""
+
+
+def on_main_branch(root: Path) -> bool:
+    """Whether the checkout's current branch is main, master or the remote's default."""
+    target = current_branch(root)
+    return target in DEFAULT_BRANCHES or target == default_branch(root, branch_remote(root))
+
+
+def push_branch_refusal(root: Path) -> str:
+    """Why the current branch may not be pushed from the page, or "" if it may."""
+    target = current_branch(root)
+    if not target:
+        return "The checkout is on a detached HEAD; there is no branch to push."
+    remote = branch_remote(root)
+    if git(root, "remote", "get-url", remote).returncode != 0:
+        return f"There is no remote {remote!r} to push to."
+    if on_main_branch(root):
+        return f"{target} is the main branch; land it through a pull request or your terminal."
+    hook = pre_push_hook(root)
+    if hook and LEAKGUARD_HOOK not in Path(hook).read_text(encoding="utf-8", errors="replace"):
+        return (
+            f"This repo has a pre-push hook ({hook}) that is not saddle's leak guard. "
+            "saddle runs no repo hook, so push from a terminal, where it runs."
+        )
+    return ""
+
+
+def push_branch(root: Path, confirm: str) -> str:
+    """Push the current branch to its remote under the same name, setting its
+    upstream; git's output, which on a new branch includes the host's
+    pull-request link.
+
+    A repo whose pre-push hook is saddle's leak guard gets that guard here,
+    run from saddle's own installed copy over exactly the commits the remote
+    lacks -- never by executing the repo's hook file, which a run could have
+    planted. Any finding refuses the push and names it."""
+    why = push_branch_refusal(root)
+    if why:
+        raise ActionRefusedError(why)
+    target = current_branch(root)
+    if confirm != target:
+        msg = "Not confirmed: the confirm step must name the branch being pushed."
+        raise ActionRefusedError(msg, 400)
+    remote = branch_remote(root)
+    hook = pre_push_hook(root)
+    if hook:
+        try:
+            rules = (
+                *leakguard.BUILTIN_RULES,
+                *leakguard.load_private_rules(leakguard.patterns_path()),
+            )
+        except leakguard.GuardConfigError as exc:
+            msg = f"The leak guard cannot start: {exc}"
+            raise ActionRefusedError(msg) from exc
+        head = _out(root, "rev-parse", "HEAD")
+        there = git(root, "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{target}")
+        old = there.stdout.strip() if there.returncode == 0 else leakguard.ZERO_SHA
+        update = f"refs/heads/{target} {head} refs/heads/{target} {old}"
+        hits = leakguard.scan_push(root, remote, [update], rules)
+        if hits:
+            named = "\n".join(hit.render() for hit in hits[:10])
+            msg = f"The leak guard refused the push:\n{named}"
+            raise ActionRefusedError(msg)
+    pushed = git(root, "push", "--set-upstream", remote, f"HEAD:refs/heads/{target}")
+    said = (pushed.stderr + pushed.stdout).strip()
+    if pushed.returncode != 0:
+        raise ActionRefusedError(said or "git push failed", 502)
+    guarded = " (leak guard: clean)" if hook else ""
+    return f"Pushed {target} to {remote}{guarded}.\n{said}"
 
 
 def _worktree_of(root: Path, branch: str) -> str:

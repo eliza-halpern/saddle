@@ -734,12 +734,15 @@ function actionRow(card, packet) {
   // Offered only when the current branch has an upstream to push to.
   const push = actionButton("Merge and push", "act-push");
   push.hidden = true;
+  // Push the checkout's current (work) branch to its remote: offered off the main branch.
+  const pushBranch = actionButton("Push branch", "act-pushbranch");
+  pushBranch.hidden = true;
   const discard = actionButton("Discard branch", "act-discard");
   const chat = actionButton("Ask about this run", "act-chat");
   const download = actionButton("Download full report", "act-download");
   for (const b of [view, merge, push, discard]) b.disabled = true;
   const why = el("p", "act-why");
-  row.append(view, merge, push, discard, chat, download);
+  row.append(view, merge, push, pushBranch, discard, chat, download);
   wrap.append(row, why, panel);
 
   let info = null;
@@ -768,6 +771,13 @@ function actionRow(card, packet) {
       merge.textContent = got.target ? `Approve and merge into ${got.target}` : "Approve and merge";
       merge.classList.remove("unproven");
       push.hidden = true;
+    }
+    const pb = got.push_branch;
+    pushBranch.hidden = !pb || !pb.branch || pb.on_main;
+    if (pb && !pushBranch.hidden) {
+      pushBranch.textContent = `Push ${pb.branch} to ${pb.remote}`;
+      pushBranch.disabled = !!pb.refusal;
+      pushBranch.title = pb.refusal || "";
     }
     if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
     else if (guarded && got.approve_refusal) why.textContent = `Approve is off: ${got.approve_refusal}`;
@@ -840,6 +850,24 @@ function actionRow(card, packet) {
           // The merge landed even though the push failed: it cannot merge twice.
           if (text.includes("Merged locally")) merge.disabled = push.disabled = true;
           actionResult(panel, false, text, false);
+        }
+      });
+  };
+  pushBranch.onclick = () => {
+    if (!info) return;
+    const pb = info.push_branch;
+    confirmStrip(panel,
+      `Push ${pb.branch} to ${pb.remote}? It goes up as a branch of the same name for a pull request; main is not touched. The leak guard runs first when the repo uses it.`,
+      `Push ${pb.branch}`,
+      async () => {
+        try {
+          const got = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/push-branch`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: pb.branch }),
+          });
+          actionResult(panel, true, got.output, got.sealed);
+        } catch (error) {
+          actionResult(panel, false, String(error.message || error), false);
         }
       });
   };
