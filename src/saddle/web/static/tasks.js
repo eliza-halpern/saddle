@@ -731,12 +731,15 @@ function actionRow(card, packet) {
   const panel = el("div", "act-panel");
   const view = actionButton("View diff", "act-diff");
   const merge = actionButton("Merge", "act-merge");
+  // Offered only when the current branch has an upstream to push to.
+  const push = actionButton("Merge and push", "act-push");
+  push.hidden = true;
   const discard = actionButton("Discard branch", "act-discard");
   const chat = actionButton("Ask about this run", "act-chat");
   const download = actionButton("Download full report", "act-download");
-  for (const b of [view, merge, discard]) b.disabled = true;
+  for (const b of [view, merge, push, discard]) b.disabled = true;
   const why = el("p", "act-why");
-  row.append(view, merge, discard, chat, download);
+  row.append(view, merge, push, discard, chat, download);
   wrap.append(row, why, panel);
 
   let info = null;
@@ -752,8 +755,13 @@ function actionRow(card, packet) {
     merge.textContent = (got.target ? `Merge into ${got.target}` : "Merge")
       + (unproven ? " (mutation unproven)" : "");
     merge.classList.toggle("unproven", unproven);
+    push.hidden = !got.upstream;
+    push.disabled = merge.disabled || !!got.push_refusal;
+    push.textContent = `Merge and push to ${got.upstream}` + (unproven ? " (mutation unproven)" : "");
+    push.classList.toggle("unproven", unproven);
     if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
     else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
+    else if (got.upstream && got.push_refusal) why.textContent = `Push is off: ${got.push_refusal}`;
   }).catch((error) => {
     why.textContent = `No branch actions: ${error.message || error}`;
   });
@@ -782,8 +790,28 @@ function actionRow(card, packet) {
           const got = await postAction(card, "merge", info.branch);
           actionResult(panel, true, got.output, got.sealed);
           merge.disabled = true;
+          push.disabled = true;
         } catch (error) {
           actionResult(panel, false, String(error.message || error), false);
+        }
+      });
+  };
+  push.onclick = () => {
+    if (!info) return;
+    confirmStrip(panel,
+      `Merge ${info.branch} into ${info.target}, then push ${info.target} to ${info.upstream}? The push is public to anyone who can read ${info.upstream}.`,
+      `Merge and push to ${info.upstream}`,
+      async () => {
+        try {
+          const got = await postAction(card, "merge-push", info.branch);
+          actionResult(panel, true, got.output, got.sealed);
+          merge.disabled = true;
+          push.disabled = true;
+        } catch (error) {
+          const text = String(error.message || error);
+          // The merge landed even though the push failed: it cannot merge twice.
+          if (text.includes("Merged locally")) merge.disabled = push.disabled = true;
+          actionResult(panel, false, text, false);
         }
       });
   };
@@ -796,7 +824,7 @@ function actionRow(card, packet) {
         try {
           const got = await postAction(card, "discard", info.branch);
           actionResult(panel, true, got.output, got.sealed);
-          for (const b of [view, merge, discard]) b.disabled = true;
+          for (const b of [view, merge, push, discard]) b.disabled = true;
         } catch (error) {
           actionResult(panel, false, String(error.message || error), false);
         }

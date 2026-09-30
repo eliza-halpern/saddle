@@ -355,3 +355,124 @@ def test_discard_works_when_the_run_worktree_is_already_gone(
         done = client.post(url(sid, rid, "discard"), json={"confirm": branch})
     assert done.status_code == 200, done.text
     assert not branch_actions.branch_exists(repo, branch)
+
+
+# -- merge and push -----------------------------------------------------------
+
+
+def with_remote(repo: Path, tmp_path: Path) -> Path:
+    """A bare `origin` holding main, set as main's upstream."""
+    remote = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(remote))
+    git(repo, "remote", "add", "origin", str(remote))
+    git(repo, "push", "-q", "-u", "origin", "main")
+    return remote
+
+
+def test_merge_and_push_lands_the_run_on_the_upstream(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    remote = with_remote(repo, tmp_path)
+    sid, rid, branch = seed(store, repo, "audited")
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        done = client.post(url(sid, rid, "merge-push"), json={"confirm": branch})
+    assert info["upstream"] == "origin/main"
+    assert info["push_refusal"] == ""
+    assert done.status_code == 200, done.text
+    out = done.json()["output"]
+    assert out.startswith(f"Fast-forwarded main to {branch}")
+    assert "Pushed to origin/main." in out
+    tip = git(repo, "rev-parse", branch).strip()
+    assert git(remote, "rev-parse", "main").strip() == tip
+    log = (store.journal_path(sid).parent / "actions.log").read_text()
+    assert f"\t{rid}\tmerge-push\tFast-forwarded main" in log
+
+
+def test_merge_and_push_without_an_upstream_changes_nothing(
+    store: SessionStore, repo: Path
+) -> None:
+    sid, rid, branch = seed(store, repo, "audited")
+    before = head(repo)
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        done = client.post(url(sid, rid, "merge-push"), json={"confirm": branch})
+    assert info["upstream"] == ""
+    assert done.status_code == 409
+    assert done.json()["error"] == "The current branch has no upstream to push to."
+    assert head(repo) == before  # refused before the merge, not after
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_a_pre_push_hook_turns_push_off_and_nothing_merges(
+    store: SessionStore, repo: Path, tmp_path: Path, configured: bool
+) -> None:
+    """saddle runs no repo hook, so a push from the page would skip the
+    user's pre-push guard: the page sends them to a terminal instead. Both
+    places git looks count: `.git/hooks` and a configured `core.hooksPath`."""
+    remote = with_remote(repo, tmp_path)
+    sid, rid, branch = seed(store, repo, "audited")
+    hooks = repo / ("githooks" if configured else ".git/hooks")
+    hooks.mkdir(exist_ok=True)
+    if configured:
+        git(repo, "config", "core.hooksPath", "githooks")
+    (hooks / "pre-push").write_text("#!/bin/sh\nexit 0\n")
+    (hooks / "pre-push").chmod(0o755)
+    (repo / ".git" / "info" / "exclude").write_text("githooks/\n")
+    before, remote_before = head(repo), git(remote, "rev-parse", "main").strip()
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        done = client.post(url(sid, rid, "merge-push"), json={"confirm": branch})
+    assert info["push_refusal"].startswith("This repo has a pre-push hook")
+    assert done.status_code == 409
+    assert "push from a terminal" in done.json()["error"]
+    assert head(repo) == before
+    assert git(remote, "rev-parse", "main").strip() == remote_before
+
+
+def test_a_hook_that_is_not_executable_does_not_count(repo: Path, tmp_path: Path) -> None:
+    with_remote(repo, tmp_path)
+    (repo / ".git" / "hooks" / "pre-push").write_text("#!/bin/sh\nexit 1\n")
+    assert branch_actions.push_refusal(repo) == ""
+
+
+def test_a_rejected_push_says_the_merge_landed_locally(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    remote = with_remote(repo, tmp_path)
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", str(remote), str(other))
+    (other / "README").write_text("moved on upstream\n")
+    git(other, "commit", "-q", "-am", "upstream moved")
+    git(other, "push", "-q", "origin", "main")
+    moved = git(remote, "rev-parse", "main").strip()
+    sid, rid, branch = seed(store, repo, "audited")
+    with client_for(store, repo) as client:
+        done = client.post(url(sid, rid, "merge-push"), json={"confirm": branch})
+    assert done.status_code == 502
+    error = done.json()["error"]
+    assert error.startswith(f"Fast-forwarded main to {branch}")
+    assert "Merged locally, but the push to origin/main failed; nothing was pushed." in error
+    assert "rejected" in error  # git's own words
+    assert head(repo) == git(repo, "rev-parse", branch).strip()
+    assert git(remote, "rev-parse", "main").strip() == moved
+
+
+def test_merge_and_push_needs_the_confirm_and_a_mergeable_run(
+    store: SessionStore, repo: Path, tmp_path: Path
+) -> None:
+    remote = with_remote(repo, tmp_path)
+    sid, rid, branch = seed(store, repo, "stopped")
+    before = git(remote, "rev-parse", "main").strip()
+    with client_for(store, repo) as client:
+        unconfirmed = client.post(url(sid, rid, "merge-push"), json={"confirm": "main"})
+        stopped = client.post(url(sid, rid, "merge-push"), json={"confirm": branch})
+    assert unconfirmed.status_code == 400
+    assert stopped.status_code == 409
+    assert stopped.json()["error"].startswith("The run is")
+    assert git(remote, "rev-parse", "main").strip() == before
+
+
+def test_a_detached_head_has_no_upstream(repo: Path) -> None:
+    git(repo, "checkout", "-q", "--detach")
+    assert branch_actions.upstream(repo) == ("", "")

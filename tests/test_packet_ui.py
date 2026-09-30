@@ -42,8 +42,13 @@ def page(
     dirty: bool = False,
     width: int = 1200,
     mode: str | None = None,
+    remote: bool = False,
 ) -> tuple[dict[str, Any], Path, str]:
     repo = make_repo(tmp_path / "repo")
+    if remote:  # a bare origin holding main, set as main's upstream
+        git(tmp_path, "init", "-q", "--bare", "-b", "main", str(tmp_path / "origin.git"))
+        git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
+        git(repo, "push", "-q", "-u", "origin", "main")
     store = SessionStore(tmp_path / "s")
     _sid, _rid, branch = seed(store, repo, kind)  # type: ignore[arg-type]
     if mode is not None:
@@ -273,3 +278,31 @@ def test_not_proven_draws_each_packet_md_item_once_and_no_bullet_is_empty(
     assert got["notProven"]["empty"] == 0
     if kind == "budget":
         assert got["notProven"]["cites"] == 1  # the fold still opens to its cite
+
+
+def test_push_is_offered_only_with_an_upstream(tmp_path: Path) -> None:
+    got, _repo, _branch = page(tmp_path, "audited", "read")
+    assert got["read"]["push"]["hidden"] is True
+
+
+def test_merge_and_push_confirms_in_the_page_then_lands_upstream(tmp_path: Path) -> None:
+    got, repo, branch = page(tmp_path, "audited", "push", remote=True)
+    assert got["read"]["push"] == {
+        "text": "Merge and push to origin/main (mutation unproven)",
+        "disabled": False,
+        "hidden": False,
+    }
+    asked = f"Merge {branch} into main, then push main to origin/main?"
+    assert got["confirm"]["text"].startswith(asked)
+    assert got["confirm"]["yes"] == "Merge and push to origin/main"
+    assert got["confirm"]["focus"] == "Cancel"
+    assert got["result"]["ok"] is True
+    assert "Pushed to origin/main." in got["result"]["output"]
+    origin = tmp_path / "origin.git"
+    assert git(origin, "rev-parse", "main").strip() == git(repo, "rev-parse", branch).strip()
+
+
+def test_a_stopped_run_cannot_push_either(tmp_path: Path) -> None:
+    got, _repo, _branch = page(tmp_path, "stopped", "read", remote=True)
+    assert got["read"]["push"]["hidden"] is False
+    assert got["read"]["push"]["disabled"] is True

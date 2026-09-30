@@ -1000,6 +1000,8 @@ def build_app(
                 "exists": branch_actions.branch_exists(root, branch),
                 "target": branch_actions.current_branch(root),
                 "merge_refusal": branch_actions.merge_refusal(packet),
+                "upstream": branch_actions.upstream_name(root),
+                "push_refusal": branch_actions.push_refusal(root),
                 "recap": render_packet_text(packet),
                 "report": str(report),
                 "sealed": False,
@@ -1029,6 +1031,8 @@ def build_app(
         try:
             if action == "merge":
                 said = branch_actions.merge(root, packet, branch, confirm)
+            elif action == "merge-push":
+                said = branch_actions.merge_and_push(root, packet, branch, confirm)
             else:
                 said = branch_actions.discard(root, branch, confirm)
         except branch_actions.ActionRefusedError as exc:
@@ -1039,6 +1043,9 @@ def build_app(
 
     async def task_merge(request: Request) -> JSONResponse:
         return _act(request, "merge", await request.json())
+
+    async def task_merge_push(request: Request) -> JSONResponse:
+        return _act(request, "merge-push", await request.json())
 
     async def task_discard(request: Request) -> JSONResponse:
         return _act(request, "discard", await request.json())
@@ -1228,6 +1235,7 @@ def build_app(
             Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),
+            Route("/api/sessions/{sid}/tasks/{rid}/merge-push", task_merge_push, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/discard", task_discard, methods=["POST"]),
             Route("/api/tasks/{rid}/answer", answer_task, methods=["POST"]),
             Route("/api/tasks/{rid}/stop", stop_task, methods=["POST"]),

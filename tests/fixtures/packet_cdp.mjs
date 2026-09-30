@@ -3,7 +3,7 @@
 // Merge, Discard, Ask about this run). Used by tests/test_packet_ui.py; node
 // >= 22 and Chrome only. No model: the run is seeded by the test.
 //
-// usage: node packet_cdp.mjs <base> <sid> <read|diff|merge|merge-cancel|discard|chat> [shot-dir] [shot-prefix] [width]
+// usage: node packet_cdp.mjs <base> <sid> <read|diff|merge|merge-cancel|push|discard|chat> [shot-dir] [shot-prefix] [width]
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,6 +99,7 @@ try {
       bandRows: [...band.querySelectorAll(":scope > .band-line > .prow")].map((n) => [...n.classList].find((c) => c.startsWith("k-")).slice(2)),
       view: btn(".act-diff"), merge: btn(".act-merge"), discard: btn(".act-discard"), chat: btn(".act-chat"), download: btn(".act-download"),
       why: p.querySelector(".act-why").textContent,
+      push: { ...btn(".act-push"), hidden: p.querySelector(".act-push").hidden },
       mergeClass: p.querySelector(".act-merge").classList.contains("unproven") ? "unproven" : "",
       panel: p.querySelector(".act-panel").textContent,
     };
@@ -145,8 +146,8 @@ try {
     await shot("diff-open.png");
     await click(".act-diff");
     out.closed = await js(`document.querySelector(".act-panel").textContent`);
-  } else if (step === "merge" || step === "merge-cancel") {
-    await click(".act-merge");
+  } else if (step === "merge" || step === "merge-cancel" || step === "push") {
+    await click(step === "push" ? ".act-push" : ".act-merge");
     out.confirm = await js(`(() => { const c = document.querySelector(".act-confirm"); return c ? { text: c.querySelector(".act-confirm-text").textContent, yes: c.querySelector(".act-yes").textContent, focus: document.activeElement.textContent } : null; })()`);
     await toPacket(".actions");
     await shot("merge-confirm.png");
