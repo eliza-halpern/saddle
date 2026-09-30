@@ -73,6 +73,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -382,6 +383,9 @@ class AuditFeed:
     "needs you", never finished on a check that did not run."""
     p1_wait: Callable[[], float] = field(default=lambda: 0.0)
     """Seconds `final` may wait for a pending extraction: the run's remaining time."""
+    impact_cache: Path | None = None
+    """Where drawn test-impact maps are kept across runs (`Auditor.draw_map`);
+    `auto` passes the repository's `.saddle/impact`."""
     auditor: AuditorLike | None = None
     results: list[AuditResult] = field(default_factory=list)
     """Every completed audit, in completion order; the last is the verdict."""
@@ -394,7 +398,7 @@ class AuditFeed:
     delivered (`final`); None until one is."""
     _checked_tree: str | None = None
     _dirty: bool = False
-    _pending: Future[AuditResult] | None = None
+    _pending: Future[AuditResult | None] | None = None
     _ready: list[AuditResult] = field(default_factory=list)
     _pool: ThreadPoolExecutor | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -407,12 +411,19 @@ class AuditFeed:
             sanctioned_test_rewrites=self.sanctioned_test_rewrites,
             tier2=self.tier2,
             mutant_shortlist=self.mutant_shortlist,
-            # One map for the run: the first audit runs the whole suite and
-            # draws it; later ones run the test files the change can reach.
-            impact=ImpactMemo(),
+            # One map for the run, drawn at its start (below) or by its first
+            # audit; every other audit runs the test files a change can reach.
+            impact=ImpactMemo(cache=self.impact_cache),
         )
         if self.auditor is None:
             self.auditor = self.factory(self.worktree, self.baseline, self._config)
+        draw = getattr(self.auditor, "draw_map", None)
+        if draw is not None:
+            # Beside the model's first reading, in the one audit slot: a
+            # checkpoint that comes due meanwhile waits its turn as it would
+            # for another checkpoint, and `check` and `final` wait for it.
+            self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-audit")
+            self._pending = self._pool.submit(self._draw_map, draw)
 
     def _p1_state(self, *, final: bool) -> Finding | None:
         """None once the P1 file is in the auditor's hands (or there is no P1);
@@ -558,6 +569,33 @@ class AuditFeed:
         """Mark the tree dirty after a successful edit."""
         if name in EDIT_TOOLS and ok:
             self._dirty = True
+
+    def _draw_map(self, draw: Callable[[Path], str]) -> None:
+        """Draw the run's test-impact map over the worktree as it is at the
+        start, and journal how (`Auditor.draw_map`). A map that cannot be
+        drawn leaves every audit on the whole suite, and says why."""
+        scratch = Path(tempfile.mkdtemp(prefix="saddle-map-"))
+        started = time.monotonic()
+        try:
+            with sandbox.using_project_env(self.project_env):
+                snapshot(self.worktree, self.worktree, scratch / "tree")
+                said = draw(scratch / "tree")
+        except Exception as exc:  # the audits then run the whole suite
+            said = f"no map: {type(exc).__name__}: {exc}"
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        append_span(
+            self.journal,
+            build_span(
+                node_id="chat#1",
+                argv=["audit", "impact-map"],
+                duration_ms=int((time.monotonic() - started) * 1000),
+                exit_code=0 if said.startswith("map ") else 1,
+                detail=said,
+                name="audit:impact-map",
+                parent_id=self.run_span,
+            ),
+        )
 
     def _take(self) -> list[AuditResult]:
         with self._lock:

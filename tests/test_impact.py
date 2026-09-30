@@ -27,6 +27,7 @@ from typing import Final
 import coverage
 import pytest
 
+from saddle import auditor as auditor_module
 from saddle import evidence
 from saddle.auditor import Auditor, AuditorConfig, Finding, Findings
 from saddle.impact import FileImpact, ImpactMap, ImpactMemo, build, select
@@ -307,3 +308,67 @@ def test_the_second_audit_runs_only_what_the_change_reaches(tmp_path: Path) -> N
     second = _tests(auditor.tier1())
     assert second.verdict == "fail"
     assert "impact: 1 of 2 test files ran" in second.detail
+
+
+def _project(root: Path) -> Path:
+    root.mkdir(parents=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "test")
+    for name, text in PROJECT.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "baseline")
+    return root
+
+
+def _auditor(root: Path, memo: ImpactMemo) -> Auditor:
+    return Auditor(root, "HEAD", AuditorConfig(test_command="python -m pytest -q", impact=memo))
+
+
+def test_a_map_drawn_at_the_start_makes_the_first_audit_selective(tmp_path: Path) -> None:
+    """Red before: the first audit of a run drew the map, running the whole
+    suite itself; a watched run's finish audit paid seven minutes for it."""
+    root = _project(tmp_path / "p")
+    memo = ImpactMemo()
+    auditor = _auditor(root, memo)
+    assert auditor.draw_map() == "map drawn over 4 files"
+    calc = root / "src/pkg/calc.py"
+    calc.write_text(calc.read_text().replace("return a + b", "return b + a"))
+    first = _tests(auditor.tier1())
+    assert first.verdict == "pass", first.detail
+    assert "impact: 1 of 2 test files ran" in first.detail
+
+
+def test_a_drawn_map_is_read_back_from_the_cache_for_the_same_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _project(tmp_path / "p")
+    cache = tmp_path / "cache"
+    drawn = ImpactMemo(cache=cache)
+    assert _auditor(root, drawn).draw_map().startswith("map drawn")
+    (entry,) = cache.iterdir()
+
+    def no_suite(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a cached map ran the suite")
+
+    monkeypatch.setattr(auditor_module, "run_suite_capture", no_suite)
+    again = ImpactMemo(cache=cache)
+    assert _auditor(root, again).draw_map() == f"map read from {entry.name}"
+    assert again.tests == drawn.tests
+
+
+@pytest.mark.parametrize("change", ["tree", "corrupt"])
+def test_a_cached_map_of_another_tree_or_unreadable_is_drawn_again(
+    tmp_path: Path, change: str
+) -> None:
+    root = _project(tmp_path / "p")
+    cache = tmp_path / "cache"
+    assert _auditor(root, ImpactMemo(cache=cache)).draw_map().startswith("map drawn")
+    (entry,) = cache.iterdir()
+    if change == "tree":
+        (root / "tests/test_neg.py").write_text(PROJECT["tests/test_neg.py"] + "\n# edited\n")
+    else:
+        entry.write_text("{not json")
+    assert _auditor(root, ImpactMemo(cache=cache)).draw_map().startswith("map drawn")

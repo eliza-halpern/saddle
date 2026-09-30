@@ -709,6 +709,52 @@ def test_a_checkpoint_whose_copy_fails_reports_it_and_the_tool_call_goes_ahead(
     assert "git ls-files failed: broken" in finding.detail
 
 
+class MapsAuditor(FakeAuditor):
+    """Records each `draw_map` call's tree, and answers with `said` (or raises it)."""
+
+    def __init__(self, said: str | Exception) -> None:
+        super().__init__()
+        self.said = said
+        self.drawn: list[set[str]] = []
+
+    def draw_map(self, tree: Path | None = None) -> str:
+        assert tree is not None
+        self.drawn.append(_files_outside_git(tree))
+        if isinstance(self.said, Exception):
+            raise self.said
+        return self.said
+
+
+@pytest.mark.parametrize(
+    ("said", "detail", "exit_code"),
+    [
+        ("map drawn over 2 files", "map drawn over 2 files", 0),
+        (OSError("disk full"), "no map: OSError: disk full", 1),
+    ],
+    ids=["drawn", "failed"],
+)
+def test_the_feed_draws_the_map_at_the_start_and_journals_how(
+    repo: Path, tmp_path: Path, said: str | Exception, detail: str, exit_code: int
+) -> None:
+    """The run's test-impact map is drawn over the worktree as it is when the
+    feed starts, before any edit, so no audit pays a whole-suite run for it;
+    a map that cannot be drawn is journaled as such and ends nothing."""
+    worktree = tmp_path / "worktree"
+    git(repo, "worktree", "add", "-q", "-b", "run", str(worktree), "HEAD")
+    maps = MapsAuditor(said)
+    f = AuditFeed(
+        worktree=worktree,
+        baseline=git(worktree, "rev-parse", "HEAD"),
+        journal=tmp_path / "j.jsonl",
+        run_span="s",
+        auditor=maps,
+    )
+    f.close()
+    assert maps.drawn == [{"calc.py", "tests/test_calc.py"}]
+    (span,) = [s for s in read_spans(tmp_path / "j.jsonl") if s.name == "audit:impact-map"]
+    assert (span.detail, span.exit_code) == (detail, exit_code)
+
+
 @pytest.fixture
 def landed(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
     """Set once a checkpoint audit's result is ready for `collect`."""

@@ -38,6 +38,7 @@ is the net for those.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import subprocess
 from collections import Counter
@@ -67,6 +68,10 @@ WHOLE_SUITE: Final = (
 )
 """Basenames whose change can reach every test: pytest's own configuration,
 the environment the suite runs in, or a conftest."""
+
+MAP_VERSION: Final = 1
+"""Part of a cached map's key: bumped whenever `build` changes what a map
+holds, so a map drawn by other code is never read back."""
 
 TEST_FILES: Final = ("test_*.py", "*_test.py")
 """pytest's default test modules, the files the gate's suite run can skip."""
@@ -100,6 +105,40 @@ class ImpactMemo:
     whole-suite run recorded with per-test contexts has been read."""
 
     tests: ImpactMap | None = None
+    cache: Path | None = None
+    """Where drawn maps are kept (`Auditor.draw_map`), one file per tree,
+    test command, worker count and environment; None keeps none."""
+
+
+def dumps(known: ImpactMap) -> str:
+    """`known` as JSON, sorted, for the cache."""
+    return json.dumps(
+        {
+            rel: {
+                "tests": sorted(impact.tests),
+                "functions": {name: sorted(files) for name, files in impact.functions.items()},
+                "outside": sorted(impact.outside),
+            }
+            for rel, impact in known.items()
+        },
+        sort_keys=True,
+    )
+
+
+def loads(text: str) -> ImpactMap | None:
+    """A map `dumps` wrote; None for anything else, never a partial map."""
+    try:
+        raw = json.loads(text)
+        return {
+            rel: FileImpact(
+                frozenset(entry["tests"]),
+                {name: frozenset(files) for name, files in entry["functions"].items()},
+                frozenset(entry["outside"]),
+            )
+            for rel, entry in raw.items()
+        }
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def is_test_file(rel: str) -> bool:

@@ -77,12 +77,15 @@ from saddle.evidence import (
     MutationOutcome,
     SuiteLimitError,
     changed_statements,
+    drop_test_caches,
     format_overrides,
     git_diff,
     ruff_argv,
     ruff_findings,
     run_capture,
+    run_suite_capture,
     suite_limit,
+    suite_run,
     suite_workers,
     tree_memory_limit,
 )
@@ -1159,6 +1162,48 @@ class Auditor:
             ),
             sidecars,
         )
+
+    def draw_map(self, tree: Path | None = None) -> str:
+        """Draw the run's test-impact map now (`AuditorConfig.impact`), before
+        any audit needs it, and say how: read from the memo's cache when this
+        tree, test command, worker count and environment were mapped before,
+        else from one whole-suite run over `tree` with per-test contexts,
+        which is then cached. Nothing without a memo, or once it holds a map.
+
+        `saddle auto` calls it at run start, beside the model's first reading,
+        so no audit of the run pays a whole-suite run to learn which tests a
+        change reaches; a watched run's finish audit paid seven minutes."""
+        memo = self.config.impact
+        if memo is None or memo.tests is not None:
+            return "no map wanted" if memo is None else "map already drawn"
+        with staged_copy(tree or self.repo, self.baseline_rev) as (copy, staged, resolved):
+            try:
+                limit = suite_limit(copy, resolved).seconds
+                workers = suite_workers(copy, resolved).count
+            except SuiteLimitError as exc:
+                raise AuditError(str(exc)) from exc
+            command = self.node.deterministic_gate.test_command
+            payload = [impact.MAP_VERSION, staged, command, workers, sandbox.environment_key()]
+            key = hashlib.sha256(json.dumps(payload).encode()).hexdigest()
+            cached = memo.cache / f"{key}.json" if memo.cache is not None else None
+            if cached is not None and cached.is_file():
+                memo.tests = impact.loads(cached.read_text())
+                if memo.tests is not None:
+                    return f"map read from {cached.name}"
+            data_file = str(copy / ".coverage.map")
+            drop_test_caches(copy)
+            mode = suite_run(copy, command, workers)
+            ran = run_suite_capture(mode, command, copy, data_file, timeout=limit, contexts=True)
+            _record_impact(memo, copy, data_file, ran)
+            if memo.tests is None:
+                why = "timed out" if ran.timed_out else f"exit {ran.exit_code}"
+                return f"no map: the suite recorded no test context ({why})"
+            if cached is not None:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                partial = cached.with_suffix(".partial")
+                partial.write_text(impact.dumps(memo.tests))
+                os.replace(partial, cached)
+            return f"map drawn over {len(memo.tests)} files"
 
     def prime(self, tree: Path | None = None) -> None:
         """Run tiers 1 and 2 on `tree` as one run of the battery and cache both.

@@ -713,6 +713,7 @@ def run_auto(
             mutant_shortlist=options.mutant_shortlist,
             p1=p1,
             p1_wait=lambda: auto.budget.time_s - auto.budget.elapsed(),
+            impact_cache=root / ".saddle" / "impact",
         )
     )
     guard = self_guard(worktree)
