@@ -338,7 +338,13 @@ def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> N
     assert "1 passed" in captured[0].stdout
 
 
-def test_run_node_gate_ignores_stale_bytecode(tmp_path: Path) -> None:
+def test_run_node_gate_ignores_stale_bytecode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stale-bytecode hazard needs bytecode to exist: a saddle Task run sets
+    # PYTHONDONTWRITEBYTECODE for every command (auto.COMMAND_ENV), so without
+    # this the suite run inside one mints no caches and the setup assert fails.
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
     # This test edits test_n.py mid-test to force a stale-bytecode mtime
     # collision, which an honest `impl` node's own diff never does (it may
     # not touch tests at all); kept a `refactor` node so that deliberate
