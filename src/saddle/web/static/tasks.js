@@ -200,7 +200,6 @@ function addLine(card, line) {
    it is sealed; it is folded by default and says so on its face. */
 const ACTIVITY_OPEN = "saddle.activityOpen";
 const STREAM_WINDOW = 40000;  // chars of the current reply's stream kept for the scrollable monitor
-const CHARS_PER_TOKEN = 4;  // engine.CHARS_PER_TOKEN: how an unmetered round is estimated
 
 function activityWanted() {
   try { return localStorage.getItem(ACTIVITY_OPEN) === "1"; } catch { return false; }
@@ -240,6 +239,7 @@ function activityStrip() {
   return {
     box, glance, doing, streamed, tool, tailLabel, tail,
     mode: "waiting", chars: 0, text: "", stream: "", lastTool: null, fresh: true, queued: false,
+    spentAtStart: 0,  // the run's measured tokens when this reply began; the reply's exact count is the rise from here
     // A card rebuilt after a reload joins a reply part-way: its counts are
     // "since this page opened" until the next tool call starts a new reply.
     joined: true,
@@ -263,7 +263,7 @@ function noteActivity(card, inner) {
     case "reasoning.delta":
     case "content.delta": {
       const stream = inner.kind === "reasoning.delta" ? "reasoning" : "reply";
-      if (a.fresh) { a.chars = 0; a.text = ""; a.fresh = false; }
+      if (a.fresh) { a.chars = 0; a.text = ""; a.fresh = false; a.spentAtStart = card.spent || 0; }
       if (a.stream !== stream) a.text = "";
       a.stream = stream;
       a.mode = stream === "reasoning" ? "thinking" : "writing";
@@ -307,13 +307,18 @@ function paintActivity(card) {
   const a = card.activity;
   const mode = card.state === "needs_you" ? "asking" : a.mode;
   const words = ACT_WORDS[mode] || mode;
-  const tokens = a.chars ? `~${fmtTokens(Math.ceil(a.chars / CHARS_PER_TOKEN))} tokens` : "";
+  // Exact only: a reply's tokens are the server's measured count, known once
+  // its round reports usage (the rise in the run's measured total since the
+  // reply began). Until then there is no honest token number, so none is shown.
+  const replyTokens = Math.max(0, (card.spent || 0) - (a.spentAtStart || 0));
+  const tokens = replyTokens ? `${fmtTokens(replyTokens)} tokens` : "";
   a.box.dataset.mode = mode;
   a.glance.textContent = tokens && (mode === "thinking" || mode === "writing") ? `${words} · ${tokens}` : words;
   a.doing.textContent = words;
   const since = a.joined ? " since this page opened" : "";
-  a.streamed.textContent = a.chars
-    ? `${tokens} streamed${since} (estimated from ${a.chars.toLocaleString()} characters)`
+  a.streamed.textContent = replyTokens
+    ? `${tokens}${since} (measured)`
+    : a.chars ? `streaming${since}; tokens are counted when the reply ends`
     : `nothing streamed${since || " yet"}`;
   a.tool.textContent = a.lastTool
     ? `${a.lastTool.text}${a.lastTool.ok === null ? " …" : a.lastTool.ok ? "" : " (failed)"}`
@@ -1042,6 +1047,7 @@ function handleTask(event) {
         if (inner.time_budget_s) card.timeBudget = inner.time_budget_s;
         if (inner.token_budget) card.tokenBudget = inner.token_budget;
         tick(card);
+        scheduleActivity(card);  // a new measured total means the reply's exact tokens can show
       } else {
         noteActivity(card, inner);
       }
