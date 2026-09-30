@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 
 from saddle.journal import append_span, build_span
-from saddle.packet import Row, compile_packet
+from saddle.packet import Packet, Row, compile_packet
 
 SANCTIONED_DETAIL = (
     "refactor node rewrote assertions in: test_fee_basic (all sanctioned by the task)"
@@ -74,8 +74,9 @@ def finished(journal: Path) -> None:
     )
 
 
-def audit_row(packet) -> Row:
-    return next(r for r in packet.rows if r.key == "audit")
+def audit_row(packet: Packet) -> Row:
+    row: Row = next(r for r in packet.rows if r.key == "audit")
+    return row
 
 
 def test_a_sanctioned_rewrite_is_rendered_sanctioned_not_failed(tmp_path: Path) -> None:
