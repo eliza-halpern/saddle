@@ -937,6 +937,15 @@ function testEditOffer(card, packet) {
 }
 
 async function loadPacket(card) {
+  // A run that failed before it produced a packet -- e.g. its folder was not a
+  // git repository -- has no ledger to compile. Show why it failed, not a raw
+  // "no such task" from trying to load a packet that never existed.
+  if (card.state === "failed" && card.detail) {
+    card.packet.hidden = false;
+    card.packet.textContent = "";
+    card.packet.appendChild(el("p", "notice", `This run did not start: ${card.detail}`));
+    return;
+  }
   try {
     const packet = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/packet`);
     renderPacket(card, packet);
@@ -945,7 +954,12 @@ async function loadPacket(card) {
   } catch (error) {
     card.packet.hidden = false;
     card.packet.textContent = "";
-    card.packet.appendChild(el("p", "notice error", `could not load the packet: ${error.message || error}`));
+    const msg = card.detail
+      ? `This run did not start: ${card.detail}`
+      : card.state === "failed"
+        ? "This run failed before it produced a packet (for example, its folder was not a git repository)."
+        : `could not load the packet: ${error.message || error}`;
+    card.packet.appendChild(el("p", card.detail || card.state === "failed" ? "notice" : "notice error", msg));
   }
 }
 
@@ -993,7 +1007,10 @@ function handleTask(event) {
         setStatus("working", "task running");
       }
       if (ENDED.has(event.state)) {
-        if (event.detail && event.state === "failed") card.now.textContent = event.detail;
+        if (event.detail && event.state === "failed") {
+          card.detail = event.detail;  // why it failed, for loadPacket when there is no packet
+          card.now.textContent = event.detail;
+        }
         loadPacket(card);
       }
       return true;
