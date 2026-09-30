@@ -632,6 +632,10 @@ AUDIT_QUESTION_STOP: Final = "needs you: the audit asks "
 PREMISE_DISPUTED_STOP: Final = "needs you: the task's premise is disputed: "
 """The stop reason when the model calls `dispute` (`engine._dispute`): the run
 ends needing a person, who reads the claim and the rerun evidence."""
+STALL_STOP: Final = "needs you: stalled"
+"""The stop-reason prefix when `--stall-check` ejects a stalled run
+(`engine.STALLED`): the run made no progress and ends needing a person to read
+its reasoning and decide. A needs-you verdict, not a fault or budget stop."""
 """How the stop reason of a run whose finish audit asked a question opens
 (`engine.needs_you_reason`): the run ends needing you, not stopped on a fault."""
 SEALED_CUT: Final = " [cut to fit the ledger line; the audit sidecar holds it whole]"

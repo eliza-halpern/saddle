@@ -50,6 +50,7 @@ from saddle.journal import (
     COMPACTION_SPAN,
     MAX_THINKING_CHARS,
     PREMISE_DISPUTED_STOP,
+    STALL_STOP,
     append_record,
     append_span,
     build_record,
@@ -164,12 +165,13 @@ def hedge_density(text: str) -> float:
 
 
 STALLED: Final = (
-    "needs you: stalled -- {mins:.0f} min with no edit, premise_check or dispute "
+    STALL_STOP + " -- {mins:.0f} min with no edit, premise_check or dispute "
     "and still turning the task over (hedging {density:.1f} of {threshold:.1f} per "
     "1k words). Read the reasoning and decide."
 )
-"""The sealed stop reason when `--stall-check` ejects a never-acted run. Reads
-as a needs-you so the packet's verdict keeps the whole reason (no semicolon)."""
+"""The sealed stop reason when `--stall-check` ejects a never-acted run. Built on
+`STALL_STOP`, which the packet matches to render a needs-you verdict; no
+semicolon, so the verdict line keeps the whole reason."""
 
 STALL_TOOLS: Final = frozenset({"write_file", "edit_file", "premise_check", "dispute", "finish"})
 """A call to any of these is a progress-action: it exempts the run from the

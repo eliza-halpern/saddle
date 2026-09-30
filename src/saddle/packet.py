@@ -53,6 +53,7 @@ from saddle.journal import (
     P1_EXTRACT_SPAN,
     PREMISE_DISPUTED_STOP,
     SEALED_CUT,
+    STALL_STOP,
     ProofRecord,
     SpanRecord,
     attempt_sidecar_path,
@@ -917,6 +918,16 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             f"Needs you: the model disputes the task's premise ({claim}). It made no "
             "claim of done: read its finding and the evidence saddle reran, then agree "
             "(close the task) or disagree (run it again with a note)."
+        )
+    elif outcome.name == "auto:stopped" and outcome.detail.startswith(f"stopped: {STALL_STOP}"):
+        # --stall-check ejected the run: it made no progress and stayed in its
+        # reasoning past the warmup. A person reads the reasoning and decides;
+        # not a fault or a budget stop, and nothing says it is done.
+        verdict = "needs_you"
+        detail = outcome.detail.split(";")[0].removeprefix(f"stopped: {STALL_STOP} -- ")
+        verdict_text = (
+            f"Needs you: the run stalled -- {detail} It made no edit and no dispute, so "
+            "there is nothing to audit; read its reasoning, then answer it or run it again."
         )
     elif outcome.name == "auto:unchanged":
         verdict = "unchanged"

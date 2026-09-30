@@ -443,6 +443,12 @@ def test_stall_check_ejects_a_never_acted_still_hedging_run(repo: Path) -> None:
     assert "no edit, premise_check or dispute" in result.reason
     assert "auto:finished" not in [s.name for s in read_spans(result.journal)]
     assert verify_journal(result.journal) == []
+    # The packet reads a stall as a needs-you verdict, not a bare "stopped".
+    from saddle.packet import compile_packet
+
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "needs_you"
+    assert packet.verdict_text.startswith("Needs you: the run stalled")
 
 
 def test_stall_check_spares_a_run_that_acted_even_if_it_then_hedges(repo: Path) -> None:
