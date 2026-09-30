@@ -669,10 +669,10 @@ function actionButton(label, cls) {
   return button;
 }
 
-async function postAction(card, action, branch) {
+async function postAction(card, action, branch, extra = {}) {
   return api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/${action}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ confirm: branch }),
+    body: JSON.stringify({ confirm: branch, ...extra }),
   });
 }
 
@@ -759,7 +759,19 @@ function actionRow(card, packet) {
     push.disabled = merge.disabled || !!got.push_refusal;
     push.textContent = `Merge and push to ${got.upstream}` + (unproven ? " (mutation unproven)" : "");
     push.classList.toggle("unproven", unproven);
+    // A run the self-guard held changed saddle's judges: its finish audit
+    // passed, but only a person may land it. Merge becomes Approve and merge.
+    const guarded = got.guarded_paths && got.guarded_paths.length > 0;
+    merge.dataset.guarded = guarded ? "1" : "";
+    if (guarded) {
+      merge.disabled = !got.exists || !!got.approve_refusal;
+      merge.textContent = got.target ? `Approve and merge into ${got.target}` : "Approve and merge";
+      merge.classList.remove("unproven");
+      push.hidden = true;
+    }
     if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
+    else if (guarded && got.approve_refusal) why.textContent = `Approve is off: ${got.approve_refusal}`;
+    else if (guarded) why.textContent = `Changes saddle's judges: ${got.guarded_paths.join(", ")}. Only you can approve it.`;
     else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
     else if (got.upstream && got.push_refusal) why.textContent = `Push is off: ${got.push_refusal}`;
   }).catch((error) => {
@@ -782,6 +794,22 @@ function actionRow(card, packet) {
   };
   merge.onclick = () => {
     if (!info) return;
+    if (merge.dataset.guarded) {
+      const files = info.guarded_paths.join(", ");
+      confirmStrip(panel,
+        `Approve and merge ${info.branch} into ${info.target}? This run changed code that judges runs: ${files}. Its finish audit passed; you are approving these changes to saddle's judges as a person, and the approval is logged with your git identity.`,
+        `Approve and merge into ${info.target}`,
+        async () => {
+          try {
+            const got = await postAction(card, "approve", info.branch, { paths: files });
+            actionResult(panel, true, got.output, got.sealed);
+            merge.disabled = true;
+          } catch (error) {
+            actionResult(panel, false, String(error.message || error), false);
+          }
+        });
+      return;
+    }
     confirmStrip(panel,
       `Merge ${info.branch} into ${info.target}? Fast-forward if possible, else cherry-pick its commits.`,
       `Merge into ${info.target}`,

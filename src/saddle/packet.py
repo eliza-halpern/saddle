@@ -50,6 +50,7 @@ from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_PREFIXES,
     AUTO_OUTCOMES,
+    GUARDED_STOP_PREFIX,
     P1_EXTRACT_SPAN,
     PREMISE_DISPUTED_STOP,
     SEALED_CUT,
@@ -155,6 +156,11 @@ class Packet:
     """A run that ended needing you (verdict `needs_you`): each question its
     finish audit asked, whole (`_asked`). Empty, and absent from the payload,
     otherwise."""
+    guarded_paths: tuple[str, ...] = ()
+    """A run the self-guard held (its finish audit accepted the tree, but it
+    changed saddle's judges): the guarded paths it changed, from the sealed
+    outcome. Only a person may land such a run (`branch_actions.approve_merge`).
+    Empty, and absent from the payload, otherwise."""
     spend: dict[str, float] | None = None
     """The sealed outcome's own numbers -- `elapsed_s`, `time_budget_s`,
     `tokens`, `token_budget` -- for the card's meters; None without an
@@ -186,6 +192,7 @@ class Packet:
             "offer_test_edits": self.offer_test_edits,
             "spend": self.spend,
             **({"questions": list(self.questions)} if self.questions else {}),
+            **({"guarded_paths": list(self.guarded_paths)} if self.guarded_paths else {}),
         }
 
 
@@ -852,6 +859,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     answers = {s.parent_id: s for s in spans if s.name == "answer"}
     evidence = _sidecar(journal, outcome) if outcome is not None else None
     audits = _whole(audits, evidence)
+    guarded: tuple[str, ...] = ()
     # The list is the last refusal's; only the capped stop makes it the verdict.
     capped = outcome is not None and outcome.detail.startswith(f"stopped: {AUDIT_UNRESOLVED}")
     unresolved = _unresolved(evidence) if capped and evidence is not None else []
@@ -918,6 +926,20 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             f"Needs you: the model disputes the task's premise ({claim}). It made no "
             "claim of done: read its finding and the evidence saddle reran, then agree "
             "(close the task) or disagree (run it again with a note)."
+        )
+    elif outcome.name == "auto:stopped" and outcome.detail.startswith(
+        f"stopped: {GUARDED_STOP_PREFIX}"
+    ):
+        # The self-guard held a run whose finish audit accepted the tree: it
+        # changed one of saddle's judges, so a person decides, not the run.
+        verdict = "needs_you"
+        held = evidence.get("guarded_paths") if evidence is not None else None
+        guarded = tuple(str(p) for p in held) if isinstance(held, list) else ()
+        which = ", ".join(guarded) if guarded else "saddle's judges"
+        verdict_text = (
+            f"Needs you: this run changed code that judges runs ({which}). Its finish "
+            "audit accepted the tree, but the model may not approve changes to its own "
+            "judges: review the diff, then approve and merge it, or discard it."
         )
     elif outcome.name == "auto:stopped" and outcome.detail.startswith(f"stopped: {STALL_STOP}"):
         # --stall-check ejected the run: it made no progress and stayed in its
@@ -1417,6 +1439,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         test_edits=test_edits,
         offer_test_edits=offer_test_edits,
         questions=_asked(audits, evidence) if verdict == "needs_you" and outcome else (),
+        guarded_paths=guarded,
         spend=_meters(evidence) if evidence is not None else None,
         records={
             h: _display(e)

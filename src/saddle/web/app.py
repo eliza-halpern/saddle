@@ -1002,6 +1002,8 @@ def build_app(
                 "merge_refusal": branch_actions.merge_refusal(packet),
                 "upstream": branch_actions.upstream_name(root),
                 "push_refusal": branch_actions.push_refusal(root),
+                "guarded_paths": list(packet.guarded_paths),
+                "approve_refusal": branch_actions.approve_refusal(packet),
                 "recap": render_packet_text(packet),
                 "report": str(report),
                 "sealed": False,
@@ -1031,6 +1033,9 @@ def build_app(
         try:
             if action == "merge":
                 said = branch_actions.merge(root, packet, branch, confirm)
+            elif action == "approve":
+                paths = str(body.get("paths") or "")
+                said = branch_actions.approve_merge(root, packet, branch, confirm, paths)
             elif action == "merge-push":
                 said = branch_actions.merge_and_push(root, packet, branch, confirm)
             else:
@@ -1043,6 +1048,9 @@ def build_app(
 
     async def task_merge(request: Request) -> JSONResponse:
         return _act(request, "merge", await request.json())
+
+    async def task_approve(request: Request) -> JSONResponse:
+        return _act(request, "approve", await request.json())
 
     async def task_merge_push(request: Request) -> JSONResponse:
         return _act(request, "merge-push", await request.json())
@@ -1235,6 +1243,7 @@ def build_app(
             Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),
+            Route("/api/sessions/{sid}/tasks/{rid}/approve", task_approve, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/merge-push", task_merge_push, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/discard", task_discard, methods=["POST"]),
             Route("/api/tasks/{rid}/answer", answer_task, methods=["POST"]),

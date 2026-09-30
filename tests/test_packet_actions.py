@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from packet_seed import git, make_repo, seed
+from packet_seed import GUARDED_SEEDED, git, make_repo, seed
 from starlette.testclient import TestClient
 from test_sandbox_reach import plant_host_hooks
 from test_ui3_mode import NoModel
@@ -476,3 +476,96 @@ def test_merge_and_push_needs_the_confirm_and_a_mergeable_run(
 def test_a_detached_head_has_no_upstream(repo: Path) -> None:
     git(repo, "checkout", "-q", "--detach")
     assert branch_actions.upstream(repo) == ("", "")
+
+
+# -- approve and merge: a run the self-guard held ------------------------------
+
+
+def test_a_guarded_run_cannot_merge_but_a_person_can_approve_it(
+    store: SessionStore, repo: Path
+) -> None:
+    """Known-good: a run held for changing saddle's judges, with every check
+    passed, is refused by Merge and landed by Approve when the confirm names
+    the branch and the guarded files; the log says who approved."""
+    git(repo, "config", "user.name", "Pat Reviewer")
+    git(repo, "config", "user.email", "pat@example.test")
+    sid, rid, branch = seed(store, repo, "guarded")
+    files = ", ".join(GUARDED_SEEDED)
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        merged = client.post(url(sid, rid, "merge"), json={"confirm": branch})
+        done = client.post(url(sid, rid, "approve"), json={"confirm": branch, "paths": files})
+    assert info["guarded_paths"] == list(GUARDED_SEEDED)
+    assert info["approve_refusal"] == ""
+    assert info["merge_refusal"].startswith("The run is needing you, not finished")
+    assert merged.status_code == 409
+    assert done.status_code == 200, done.text
+    out = done.json()["output"]
+    assert out.startswith(f"Approved by Pat Reviewer <pat@example.test>: changes to {files}.")
+    assert f"Fast-forwarded main to {branch}" in out
+    assert head(repo) == git(repo, "rev-parse", branch).strip()
+    log = (store.journal_path(sid).parent / "actions.log").read_text()
+    assert f"\t{rid}\tapprove\tApproved by Pat Reviewer" in log
+
+
+def test_approve_merges_nothing_without_naming_the_branch_and_the_guarded_files(
+    store: SessionStore, repo: Path
+) -> None:
+    sid, rid, branch = seed(store, repo, "guarded")
+    before = head(repo)
+    with client_for(store, repo) as client:
+        no_branch = client.post(url(sid, rid, "approve"), json={"confirm": "main", "paths": ""})
+        wrong_files = client.post(
+            url(sid, rid, "approve"), json={"confirm": branch, "paths": "src/saddle/audit.py"}
+        )
+    assert no_branch.status_code == 400
+    assert wrong_files.status_code == 400
+    assert "must name the guarded files" in wrong_files.json()["error"]
+    assert head(repo) == before
+
+
+@pytest.mark.parametrize("kind", ["audited", "stopped", "budget"])
+def test_approve_is_only_for_runs_the_self_guard_held(
+    store: SessionStore, repo: Path, kind: str
+) -> None:
+    """Known-bad: a finished run (which uses Merge) and ordinary stops (which
+    no one may land) are refused by Approve, whatever the confirm says."""
+    sid, rid, branch = seed(store, repo, kind)  # type: ignore[arg-type]
+    before = head(repo)
+    with client_for(store, repo) as client:
+        info = client.get(url(sid, rid, "branch")).json()
+        done = client.post(url(sid, rid, "approve"), json={"confirm": branch, "paths": ""})
+    assert info["approve_refusal"].startswith("Only a run held for changing saddle's judges")
+    assert done.status_code == 409
+    assert head(repo) == before
+
+
+def test_approve_refusal_reads_rows_not_words() -> None:
+    """A held run with a failed check, or with no auditor verdict, cannot be
+    approved: the same bar as Merge, minus the verdict the guard withholds."""
+    proven = [Row("tests", "Tests", "proven", "2 passed")]
+    failed = [*proven, Row("audit", "Audit", "failed", "1 of 2 failed")]
+    observed = [Row("tests", "Tests", "observed", "ran")]
+
+    def held(rows: list[Row]) -> Packet:
+        return Packet("r", "t", "needs_you", "Needs you", (), tuple(rows), guarded_paths=("a",))
+
+    assert branch_actions.approve_refusal(held(proven)) == ""
+    assert branch_actions.approve_refusal(held(failed)) == "Failed on the record: Audit."
+    assert branch_actions.approve_refusal(held(observed)).startswith("No auditor verdict")
+    unheld = Packet("r", "t", "needs_you", "Needs you", (), tuple(proven))
+    assert branch_actions.approve_refusal(unheld).startswith("Only a run held")
+
+
+def test_a_held_runs_packet_reads_needs_you_and_names_the_guarded_files(
+    store: SessionStore, repo: Path
+) -> None:
+    from saddle.auto import ledger_path
+    from saddle.packet import compile_packet
+
+    _sid, rid, _branch = seed(store, repo, "guarded")
+    packet = compile_packet(ledger_path(repo, rid), run_id=rid)
+    assert packet.verdict == "needs_you"
+    assert packet.guarded_paths == GUARDED_SEEDED
+    assert packet.verdict_text.startswith("Needs you: this run changed code that judges runs (")
+    assert packet.payload()["guarded_paths"] == list(GUARDED_SEEDED)

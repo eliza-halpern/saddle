@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from packet_seed import git, make_repo, seed
+from packet_seed import GUARDED_SEEDED, git, make_repo, seed
 from test_ui3_mode import NoModel, serving
 
 from saddle.packet import compile_packet, render_packet_text
@@ -306,3 +306,22 @@ def test_a_stopped_run_cannot_push_either(tmp_path: Path) -> None:
     got, _repo, _branch = page(tmp_path, "stopped", "read", remote=True)
     assert got["read"]["push"]["hidden"] is False
     assert got["read"]["push"]["disabled"] is True
+
+
+def test_a_held_run_offers_approve_and_merge_and_the_confirm_names_the_files(
+    tmp_path: Path,
+) -> None:
+    """Known-good: a run the self-guard held reads Needs you, its Merge button is
+    Approve and merge, the confirm names the guarded files, and approving lands it."""
+    got, repo, branch = page(tmp_path, "guarded", "merge")
+    assert got["read"]["verdict"] == "Needs you"
+    assert got["read"]["merge"] == {"text": "Approve and merge into main", "disabled": False}
+    assert got["read"]["push"]["hidden"] is True
+    assert "Only you can approve it" in got["read"]["why"]
+    for path in GUARDED_SEEDED:
+        assert path in got["confirm"]["text"]
+    assert got["confirm"]["yes"] == "Approve and merge into main"
+    assert got["confirm"]["focus"] == "Cancel"
+    assert got["result"]["ok"] is True
+    assert got["result"]["output"].startswith("Approved by ")
+    assert git(repo, "rev-parse", "main").strip() == git(repo, "rev-parse", branch).strip()

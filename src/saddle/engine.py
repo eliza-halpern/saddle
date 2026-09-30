@@ -48,6 +48,7 @@ from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_HASHES,
     COMPACTION_SPAN,
+    GUARDED_STOP_PREFIX,
     MAX_THINKING_CHARS,
     PREMISE_DISPUTED_STOP,
     STALL_STOP,
@@ -321,8 +322,7 @@ AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The sealed stop reason when the finish refusal cap is reached."""
 
 GUARDED_STOP: Final = (
-    "needs you: this run changed code that judges runs ({paths}), "
-    "so a person must review it before it counts as finished"
+    GUARDED_STOP_PREFIX + " ({paths}), so a person must review it before it counts as finished"
 )
 """The stop reason when a finished run on saddle's own source changed a
 guarded path (`auto.GUARDED_PATHS`). Rule D's stop form ("needs you: ..."):

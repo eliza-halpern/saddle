@@ -16,6 +16,7 @@ from typing import Literal
 
 from saddle.auditor import Auditor, AuditorConfig
 from saddle.auto import create_worktree, ledger_path
+from saddle.engine import GUARDED_STOP
 from saddle.journal import append_span, build_span, write_attempt_sidecar
 from saddle.packet import compile_packet, render_packet_text
 from saddle.sessions import SessionStore
@@ -23,9 +24,12 @@ from saddle.web.tasks import RUN_REF, TaskRun, recap_message
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+GUARDED_SEEDED = ("src/saddle/audit.py", "tests/test_audit.py")
+"""The guarded paths a `guarded` seed says its run changed."""
+
 Kind = Literal[
     "audited", "mutated", "summarised", "unaudited", "stopped", "failed", "edit-checked",
-    "budget",
+    "budget", "guarded",
 ]  # fmt: skip
 
 
@@ -86,6 +90,7 @@ def seed(
     append_span(journal, start)
     audits = {
         "audited": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
+        "guarded": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
         "edit-checked": [("audit:tests", 0, "2 passed"), ("audit:coverage", 0, "covered")],
         "mutated": [
             ("audit:tests", 0, "2 passed"),
@@ -144,10 +149,12 @@ def seed(
         # The real auditor's tier-0 records (syntax, ruff, imports) on the edit.
         config = AuditorConfig(journal=journal)
         Auditor(worktree, config=config).tier0("calc.py", (worktree / "calc.py").read_text())
-    outcome = "stopped" if kind in ("stopped", "budget") else "finished"
+    outcome = "stopped" if kind in ("stopped", "budget", "guarded") else "finished"
     reason = {
         "stopped": "audit unresolved",
         "budget": "token budget exhausted: ~100000 of 100000 generated tokens spent",
+        # the self-guard's hold, as engine._hold_guarded seals it
+        "guarded": GUARDED_STOP.format(paths=", ".join(GUARDED_SEEDED)),
     }.get(kind, "finish called")
     evidence = {
         "outcome": outcome,
@@ -164,6 +171,7 @@ def seed(
         "unresolved_findings": (
             [{"gate": "coverage", "reason": "evidence-thin"}] if kind == "stopped" else []
         ),
+        **({"guarded_paths": list(GUARDED_SEEDED)} if kind == "guarded" else {}),
     }
     span_id = uuid.uuid4().hex
     digest = write_attempt_sidecar(journal, span_id, evidence)

@@ -629,6 +629,8 @@ JOURNAL_QUESTION_EXIT: Final = 4
 pass), 1 (a fail) or 2 (blocked). Readers that cannot parse a finding's
 detail still read this code as a question, never as a failure."""
 AUDIT_QUESTION_STOP: Final = "needs you: the audit asks "
+"""How the stop reason of a run whose finish audit asked a question opens
+(`engine.needs_you_reason`): the run ends needing you, not stopped on a fault."""
 PREMISE_DISPUTED_STOP: Final = "needs you: the task's premise is disputed: "
 """The stop reason when the model calls `dispute` (`engine._dispute`): the run
 ends needing a person, who reads the claim and the rerun evidence."""
@@ -636,8 +638,10 @@ STALL_STOP: Final = "needs you: stalled"
 """The stop-reason prefix when `--stall-check` ejects a stalled run
 (`engine.STALLED`): the run made no progress and ends needing a person to read
 its reasoning and decide. A needs-you verdict, not a fault or budget stop."""
-"""How the stop reason of a run whose finish audit asked a question opens
-(`engine.needs_you_reason`): the run ends needing you, not stopped on a fault."""
+GUARDED_STOP_PREFIX: Final = "needs you: this run changed code that judges runs"
+"""How the stop reason of a run held by the self-guard opens (`engine.GUARDED_STOP`):
+its finish audit accepted the tree, but it changed one of saddle's judges, so
+only a person may land it (`web.branch_actions.approve_merge`)."""
 SEALED_CUT: Final = " [cut to fit the ledger line; the audit sidecar holds it whole]"
 """What a `question` finding's sealed detail ends with when it was cut to fit
 (`auditor.sealed_finding`)."""

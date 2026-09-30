@@ -16,6 +16,9 @@ with it, as plain git in the checkout the session points at:
   pre-push hook: saddle runs no repo hook (a run could have planted one), so
   pushing here would skip a guard the user set up; they push from a terminal.
   A push that fails after the merge says the merge landed locally.
+- `approve_merge`: land a run the self-guard held (its finish audit passed but
+  it changed saddle's judges). Only a person may: the confirm names the branch
+  and the guarded files, and the log records who approved.
 - `discard`: delete the branch (and the run's worktree that holds it).
   Refused when the branch is the checkout's current branch.
 
@@ -131,6 +134,12 @@ def merge(root: Path, packet: Packet, branch: str, confirm: str) -> str:
     why = merge_refusal(packet)
     if why:
         raise ActionRefusedError(why)
+    return _land(root, branch)
+
+
+def _land(root: Path, branch: str) -> str:
+    """Fast-forward the current branch to `branch`, or cherry-pick its commits;
+    refused on a detached HEAD or a dirty checkout, and a failed pick is aborted."""
     target = current_branch(root)
     if not target:
         msg = "The checkout is on a detached HEAD; there is no branch to merge into."
@@ -148,6 +157,52 @@ def merge(root: Path, packet: Packet, branch: str, confirm: str) -> str:
         return f"Cherry-picked {base[:10]}..{branch} onto {target}.\n{picked.stdout.strip()}"
     git(root, "cherry-pick", "--abort")
     raise ActionRefusedError((picked.stderr + picked.stdout).strip())
+
+
+def approve_refusal(packet: Packet) -> str:
+    """Why this packet may not be approved and merged, or "" if it may.
+
+    Only a run the self-guard held is approved this way: its finish audit
+    accepted the tree, but it changed one of saddle's judges, which the model
+    may never approve for itself. A person may, when the record shows no failed
+    check and an auditor verdict covers the change -- the same bar as Merge,
+    without the "finished" verdict the guard withholds."""
+    if packet.verdict != "needs_you" or not packet.guarded_paths:
+        return "Only a run held for changing saddle's judges is approved here; use Merge."
+    failed = [r.title for r in packet.rows if r.status == "failed"]
+    if failed:
+        return f"Failed on the record: {', '.join(failed)}."
+    if not any(r.key in MERGE_KEYS and r.status == "proven" for r in packet.rows):
+        return "No auditor verdict covers the change; it cannot be approved."
+    return ""
+
+
+def approver(root: Path) -> str:
+    """The person approving, as the checkout's git identity names them."""
+    name = git(root, "config", "--get", "user.name").stdout.strip()
+    email = git(root, "config", "--get", "user.email").stdout.strip()
+    who = f"{name} <{email}>" if name and email else name or email
+    return who or "(no git identity configured)"
+
+
+def approve_merge(root: Path, packet: Packet, branch: str, confirm: str, paths: str) -> str:
+    """A person lands a run the self-guard held; the git output and who approved.
+
+    `confirm` must name the branch, as for Merge, and `paths` must name the
+    guarded files the run changed, exactly as the card lists them: the person
+    says what they are approving, and a request without it merges nothing."""
+    if confirm != branch:
+        msg = "Not confirmed: the confirm step must name the branch."
+        raise ActionRefusedError(msg, 400)
+    why = approve_refusal(packet)
+    if why:
+        raise ActionRefusedError(why)
+    held = ", ".join(packet.guarded_paths)
+    if paths != held:
+        msg = f"Not confirmed: the approval must name the guarded files ({held})."
+        raise ActionRefusedError(msg, 400)
+    landed = _land(root, branch)
+    return f"Approved by {approver(root)}: changes to {held}.\n{landed}"
 
 
 def upstream(root: Path) -> tuple[str, str]:
