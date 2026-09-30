@@ -38,7 +38,7 @@ from time import monotonic
 from typing import Any, Final
 
 from saddle import prompt_constants, sandbox
-from saddle.anchor import anchor_trailers, outcome_hash
+from saddle.anchor import COAUTHOR_TRAILER, anchor_trailers, outcome_hash
 from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
@@ -318,6 +318,9 @@ class AutoOptions:
     time_budget_s: float = DEFAULT_TIME_BUDGET_S
     token_budget: int = DEFAULT_TOKEN_BUDGET
     allow_test_edits: bool = False
+    coauthor: bool = True
+    """End the run's commit with `anchor.COAUTHOR_TRAILER`: Saddle wrote the
+    change. On unless the user asks for it off (`--no-coauthor`)."""
     temperature: float = TASK_TEMPERATURE
     """`TASK_TEMPERATURE`: the model's own recommended sampling. A measurement
     that wants greedy decoding pins `--temperature 0.0` explicitly."""
@@ -873,6 +876,8 @@ def run_auto(
     # The anchor: the outcome span's hash, outside the ledger, as the last paragraph.
     ledger = journal.relative_to(root).as_posix()
     message += f"\n\n{anchor_trailers(outcome_hash(journal, start.span_id), ledger)}"
+    if options.coauthor:
+        message += f"\n{COAUTHOR_TRAILER}"
     _git(worktree, "commit", "-q", "--allow-empty", "--no-verify", "-m", message)
     commit = _git(worktree, "rev-parse", "HEAD").strip()
     return AutoResult(

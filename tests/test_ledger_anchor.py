@@ -146,6 +146,7 @@ def test_the_final_commit_ends_with_the_outcome_spans_record_hash(
     last = message.strip().split("\n\n")[-1]
     assert last == (
         f"Saddle-Outcome: {outcome['record_hash']}\nSaddle-Ledger: .saddle/runs/r1/proofs.jsonl"
+        "\nCo-Authored-By: Saddle"
     )
     # the span's own hash, not its sidecar's (attempt_hash)
     assert outcome["attempt_hash"] not in message

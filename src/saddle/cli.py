@@ -2014,6 +2014,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Let the run edit test files (refused by default).",
     )
+    auto.add_argument(
+        "--no-coauthor",
+        action="store_true",
+        help="Leave the 'Co-Authored-By: Saddle' trailer off the run's commit (on by default).",
+    )
     arms = auto.add_mutually_exclusive_group()
     arms.add_argument(
         "--no-feedback",
@@ -2109,6 +2114,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         time_budget_s=args.time_budget,
         token_budget=args.token_budget,
         allow_test_edits=args.allow_test_edits,
+        coauthor=not args.no_coauthor,
         temperature=args.temperature,
         reasoning_effort=args.reasoning_effort,
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",

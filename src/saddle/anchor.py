@@ -26,6 +26,9 @@ from saddle.transcript import start_field
 
 OUTCOME_TRAILER: Final = "Saddle-Outcome"
 LEDGER_TRAILER: Final = "Saddle-Ledger"
+COAUTHOR_TRAILER: Final = "Co-Authored-By: Saddle"
+"""Credits the run's commit to Saddle, which wrote the change; `saddle auto
+--no-coauthor` leaves it off. No address: none is Saddle's."""
 
 
 def anchor_trailers(outcome_hash: str, ledger: str) -> str:

@@ -22,6 +22,7 @@ from typing import Any, ClassVar, cast
 import pytest
 
 from saddle import cli
+from saddle.anchor import parse_trailers
 from saddle.auto import (
     DEFAULT_TEST_ROOTS,
     TASK_TEMPERATURE,
@@ -676,3 +677,18 @@ def test_bytecode_is_neither_listed_nor_committed_without_a_gitignore(repo: Path
     assert changed_files(wt) == []  # committed; bytecode and .saddle/ still unlisted
     assert sidecar(result)["files_changed"] == ["calc.py"]
     assert git(repo, "show", f"{result.branch}:calc.py") == FIXED
+
+
+@pytest.mark.parametrize(("coauthor", "credited"), [(True, True), (False, False)])
+def test_the_run_commit_credits_saddle_unless_asked_not_to(
+    repo: Path, coauthor: bool, credited: bool
+) -> None:
+    """Saddle wrote the change, so its commit says so by default: the trailer
+    sits in the anchor's trailer block, which still parses. `--no-coauthor`
+    (coauthor=False) leaves it off."""
+    client = Scripted([[call("edit_file", path="calc.py", old="a - b", new="a + b")], finish()])
+    result = auto(repo, client, coauthor=coauthor)
+    message = git(repo, "log", "-1", "--format=%B", result.branch)
+    last = message.strip().split("\n\n")[-1].splitlines()
+    assert ("Co-Authored-By: Saddle" in last) is credited
+    assert set(parse_trailers(message)) == {"Saddle-Outcome", "Saddle-Ledger"}
