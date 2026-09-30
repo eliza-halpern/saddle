@@ -3,6 +3,7 @@
    reading code. Contrast stays high on text; the sweetness is in the radii,
    the pastel accents and the way things arrive. */
 :root {
+  color-scheme: dark;
   --bg: #211d22;
   --bg-sunk: #1a171b;
   --bg-raise: #2b262d;
@@ -811,34 +812,43 @@ main { position: relative; }
    rather than kept pastel: a pastel on white carries no contrast, and the
    state colours above are how a card is read at a glance.
    ===================================================================== */
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #fbf8f9; --bg-sunk: #f2ecef; --bg-raise: #ffffff; --line: #e3d9df;
-    --ink: #221b22; --ink-dim: #4f4550; --ink-faint: #665c65;
-    --rose: #b83a6c; --peach: #a95512; --mint: #1f7a45; --sky: #245f9a; --lilac: #6a45b8;
-    --bad: #b8323f; --card: #ffffff;
-    --wash-run: #245f9a12; --wash-ask: #a9551216; --wash-done: #1f7a4512; --wash-halt: #b8323f10;
-  }
-  body { background:
-      radial-gradient(1100px 620px at 12% -8%, #f6e9ef 0%, transparent 62%),
-      radial-gradient(900px 520px at 105% 108%, #efe9f6 0%, transparent 58%),
-      var(--bg); }
-  .user { background: linear-gradient(98deg, #f6e8ee, var(--bg-raise)); }
-  .session.active { background: linear-gradient(96deg, #f4e4ec, var(--bg-raise)); }
-  .assistant code { background: #f3e7ec; color: var(--peach); }
-  .status.working { color: #fff; }
-  .tool-detail.terminal { color: #1d5a33; }
-  .tool-detail .d-add { color: #116329; background: #dafbe1; box-shadow: inset 2px 0 0 #1a7f37; }
-  .tool-detail .d-del { color: #82071e; background: #ffebe9; box-shadow: inset 2px 0 0 #cf222e; }
-  #rewind-warning { background: #fff1f1; }
-  #persona-pick, #settings-dialog select { color-scheme: light; }
-  dialog button.primary, #settings-dialog button.primary, #rewind-dialog button.primary { color: #fff; }
-  .assistant pre code .c-comment { color: #8b7f8e; }
-  .task-card { box-shadow: 0 1px 2px #22112208, 0 6px 22px #2211220d; }
-  .k-narrative { background: linear-gradient(90deg, #6a45b80a, transparent 60%); }
-  .act-tail { background: linear-gradient(90deg, #6a45b80d, transparent 70%); }
-  .task-pill b, .tc-row button.primary, .ask-send.primary, .ask-option.picked, .status.needs { color: #fff; }
+/* JS sets data-theme on <html> from the reader's stored choice, or -- with none
+   -- their system setting, following system changes until they choose (app.js
+   applyTheme). The base :root above is dark; these rules are the light palette,
+   applied only when the effective theme is light. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fbf8f9; --bg-sunk: #f2ecef; --bg-raise: #ffffff; --line: #e3d9df;
+  --ink: #221b22; --ink-dim: #4f4550; --ink-faint: #665c65;
+  --rose: #b83a6c; --peach: #a95512; --mint: #1f7a45; --sky: #245f9a; --lilac: #6a45b8;
+  --bad: #b8323f; --card: #ffffff;
+  --wash-run: #245f9a12; --wash-ask: #a9551216; --wash-done: #1f7a4512; --wash-halt: #b8323f10;
 }
+:root[data-theme="light"] body { background:
+    radial-gradient(1100px 620px at 12% -8%, #f6e9ef 0%, transparent 62%),
+    radial-gradient(900px 520px at 105% 108%, #efe9f6 0%, transparent 58%),
+    var(--bg); }
+:root[data-theme="light"] .user { background: linear-gradient(98deg, #f6e8ee, var(--bg-raise)); }
+:root[data-theme="light"] .session.active { background: linear-gradient(96deg, #f4e4ec, var(--bg-raise)); }
+:root[data-theme="light"] .assistant code { background: #f3e7ec; color: var(--peach); }
+:root[data-theme="light"] .status.working { color: #fff; }
+:root[data-theme="light"] .tool-detail.terminal { color: #1d5a33; }
+:root[data-theme="light"] .tool-detail .d-add { color: #116329; background: #dafbe1; box-shadow: inset 2px 0 0 #1a7f37; }
+:root[data-theme="light"] .tool-detail .d-del { color: #82071e; background: #ffebe9; box-shadow: inset 2px 0 0 #cf222e; }
+:root[data-theme="light"] #rewind-warning { background: #fff1f1; }
+:root[data-theme="light"] #persona-pick, :root[data-theme="light"] #settings-dialog select { color-scheme: light; }
+:root[data-theme="light"] dialog button.primary,
+:root[data-theme="light"] #settings-dialog button.primary,
+:root[data-theme="light"] #rewind-dialog button.primary { color: #fff; }
+:root[data-theme="light"] .assistant pre code .c-comment { color: #8b7f8e; }
+:root[data-theme="light"] .task-card { box-shadow: 0 1px 2px #22112208, 0 6px 22px #2211220d; }
+:root[data-theme="light"] .k-narrative { background: linear-gradient(90deg, #6a45b80a, transparent 60%); }
+:root[data-theme="light"] .act-tail { background: linear-gradient(90deg, #6a45b80d, transparent 70%); }
+:root[data-theme="light"] .task-pill b,
+:root[data-theme="light"] .tc-row button.primary,
+:root[data-theme="light"] .ask-send.primary,
+:root[data-theme="light"] .ask-option.picked,
+:root[data-theme="light"] .status.needs { color: #fff; }
 
 /* ---- UI2: test-edit policy on the strip, the card, and the offer ---- */
 .tc-toggle { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; margin: -4px 0 10px;

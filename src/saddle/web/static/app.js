@@ -1065,4 +1065,31 @@ $("#folder-use").onclick = async (event) => {
   $("#folder-dialog").close();
 };
 
+/* Theme: an explicit choice wins and persists; with none, follow the system
+   setting (and its live changes). The CSS reads data-theme on <html>. */
+function storedTheme() {
+  try { return localStorage.getItem("saddle.theme"); } catch { return null; }
+}
+function systemTheme() {
+  try { return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
+  catch { return "dark"; }
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
+}
+function initTheme() {
+  applyTheme(storedTheme() || systemTheme());
+  try {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (event) => {
+      if (!storedTheme()) applyTheme(event.matches ? "dark" : "light");  // only while unset
+    });
+  } catch { /* older browsers: no live follow, the initial read still holds */ }
+}
+$("#theme-toggle").onclick = () => {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  try { localStorage.setItem("saddle.theme", next); } catch { /* per-browser nicety only */ }
+  applyTheme(next);
+};
+initTheme();
+
 boot();
