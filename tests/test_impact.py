@@ -351,7 +351,8 @@ def test_a_drawn_map_is_read_back_from_the_cache_for_the_same_tree(
     (entry,) = cache.iterdir()
 
     def no_suite(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("a cached map ran the suite")
+        msg = "a cached map ran the suite"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(auditor_module, "run_suite_capture", no_suite)
     again = ImpactMemo(cache=cache)
