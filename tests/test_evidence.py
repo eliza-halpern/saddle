@@ -1289,7 +1289,10 @@ def test_mutation_sample_timeout_yields_undecided(
     outcome = mutation_sample(
         workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set(), timeout_s=1
     )
-    assert outcome == MutationOutcome(killed=0, total=0, generated=1, survivors=())
+    # the budget bound before anything was decided, and the outcome says so
+    assert outcome == MutationOutcome(
+        killed=0, total=0, generated=1, survivors=(), budget_spent=True
+    )
 
 
 def test_mutation_sample_vacuous_without_changes(tmp_path: Path) -> None:
@@ -2935,7 +2938,9 @@ def test_a_not_checked_mutant_is_undecided_only_if_mutmut_was_asked_for_it(
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
     changed = {(str(workdir / "n.py"), 2)}
     outcome = mutation_sample(workdir, changed, 10, test_files=set(), timeout_s=1)
-    assert outcome == MutationOutcome(killed=0, total=0, generated=1, survivors=())
+    assert outcome == MutationOutcome(
+        killed=0, total=0, generated=1, survivors=(), budget_spent=True
+    )
 
 
 GLOBBED: Final = (

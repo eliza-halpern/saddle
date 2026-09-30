@@ -458,6 +458,19 @@ def _record_impact(memo: ImpactMemo, tree: Path, data_file: str, suite: Captured
             memo.tests = drawn
 
 
+MUTATION_UNMEASURED: Final = (
+    "not measured: the mutation run's time budget ran out before mutmut decided a "
+    "mutant ({generated} generated; mutmut first runs every test that covers a changed "
+    "line, one at a time). This is no finding against the change and no edit can clear "
+    "it: call finish again to end the run, and a person decides whether to measure it "
+    "on its own."
+)
+"""The mutation finding when `MutationOutcome.budget_spent` and nothing was
+decided: not proven, never a refusal. A watched run's correct tree was sent
+back with "no mutants decided" because mutmut spent the whole budget running
+the 408 tests that covered its changed lines before its first mutant."""
+
+
 def _blocked_tier2(key: str, first: Findings) -> Findings:
     """Tier 2's one finding when tier 1 on the same tree failed: blocked, naming
     what failed (a sanctioned finding did not fail, so it is not named)."""
@@ -1085,6 +1098,17 @@ class Auditor:
             cites["mutation"] = "saddle.gates.check_mutation_shortlist"
             if not shortlisted.passed:
                 survivors = _survivors(outcome, sources)
+        spent = gated.mutation
+        if (
+            tier == 2
+            and spent is not None
+            and spent.budget_spent
+            and spent.total == 0
+            and statuses.get("mutation", ("",))[0] == "fail"
+        ):
+            # No evidence either way, and nothing the change could do about it.
+            detail = MUTATION_UNMEASURED.format(generated=spent.generated)
+            statuses["mutation"] = ("not-proven", detail, statuses["mutation"][2])
         sidecars: dict[str, Mapping[str, Any]] = {}
         if gated.mutation is not None:
             # The shortlist records `mutant_detail` as (name, status, show)

@@ -1408,6 +1408,10 @@ class MutationOutcome:
     """(name, status, mutmut show text) for EVERY scored mutant, killed ones
     included, in name order; a mutant mutmut never scored (`not checked`) or
     that is not in `total` has none. Recording only: no verdict reads it."""
+    budget_spent: bool = False
+    """The run hit `mutation_sample`'s time budget, so `total` counts only the
+    mutants decided before it; with `total == 0` nothing was decided at all
+    (the auditor then reports the mutation check not proven)."""
 
 
 def mutation_text(show_output: str) -> str:
@@ -2320,6 +2324,7 @@ def mutation_sample(
         statuses=tuple(sorted(status_tally.items())),
         survivor_details=details,
         mutant_detail=tuple((name, verdict, shown[name]) for name, verdict, _, _ in sample),
+        budget_spent=ran.exit_code == SHELL_TIMEOUT,
     )
 
 

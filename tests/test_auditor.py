@@ -33,7 +33,7 @@ from saddle.auditor import (
     gate_interpreter_finds,
 )
 from saddle.cli import main
-from saddle.evidence import run_argv
+from saddle.evidence import MutationOutcome, run_argv
 from saddle.journal import read_spans, verify_journal
 
 BASE_CODE = "def f():\n    return 1\n"
@@ -741,3 +741,28 @@ def test_tier0_formats_by_the_projects_own_ruff_settings(tmp_path: Path) -> None
     # read from the commit: the tree loosening its own config changes nothing
     (tree / "pyproject.toml").write_text("[tool.ruff]\nline-length = 200\n")
     assert _verdicts(Auditor(tree).tier0("n.py", too_wide))["ruff"] == "fail"
+
+
+@pytest.mark.parametrize(
+    ("budget_spent", "verdict"), [(True, "not-proven"), (False, "fail")], ids=["spent", "ran"]
+)
+def test_a_mutation_run_whose_budget_ran_out_before_any_mutant_is_not_proven(
+    clean_tree: Path, monkeypatch: pytest.MonkeyPatch, budget_spent: bool, verdict: str
+) -> None:
+    """Red before: a mutation run whose time budget ran out before mutmut
+    decided a single mutant refused the finish ("no mutants decided"), and
+    the model could do nothing about it. It is no evidence either way, so it
+    is not proven and says so; a run that decided nothing within its budget
+    still fails."""
+
+    def undecided(*_args: object, **_kwargs: object) -> MutationOutcome:
+        return MutationOutcome(
+            killed=0, total=0, generated=12, survivors=(), budget_spent=budget_spent
+        )
+
+    monkeypatch.setattr(runner, "mutation_sample", undecided)
+    found = next(f for f in Auditor(clean_tree).tier2().findings if f.gate == "mutation")
+    assert found.verdict == verdict, found.detail
+    if budget_spent:
+        assert found.detail.startswith("not measured: the mutation run's time budget ran out")
+        assert "12 generated" in found.detail
