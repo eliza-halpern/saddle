@@ -756,3 +756,19 @@ def test_a_dispute_without_evidence_is_refused_and_the_run_goes_on(
     assert "dispute" not in sidecar(result)
     told = [m for m in client.asked[1]["messages"] if m.get("role") == "tool"]
     assert told[-1]["content"].startswith("error: dispute refused")
+
+
+@pytest.mark.parametrize("formats", [True, False], ids=["format-at-finish", "default"])
+def test_format_at_finish_formats_the_changed_files_and_says_so_only_when_asked(
+    repo: Path, formats: bool
+) -> None:
+    """`--format-at-finish`: the run's changed Python files are ruff-formatted
+    before the finish audit, and the model is told which. Off by default: the
+    model owns its changes, and nothing is touched."""
+    client = Scripted([[call("edit_file", path="calc.py", old="a - b", new="a+b")], finish()])
+    result = auto(repo, client, format_at_finish=formats)
+    committed = git(repo, "show", f"{result.branch}:calc.py")
+    assert ("a + b" in committed) is formats
+    assert ("a+b" in committed) is not formats
+    (told,) = [s.detail for s in read_spans(result.journal) if s.argv[:1] == ["finish"]]
+    assert ("saddle formatted calc.py before the audit" in told) is formats

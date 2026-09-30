@@ -375,6 +375,10 @@ class AutoRun:
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
     on that same tree ends finished with it."""
+    before_finish: Callable[[], str] | None = None
+    """Run before each `finish` audit (`saddle auto --format-at-finish`):
+    formats the run's changed Python files and says what it did, which the
+    model is told. None does nothing."""
     guard: Callable[[], list[str]] | None = None
     """The self-guard (`auto.self_guard`): set only when the run is on saddle's
     own source, it names the guarded paths the run changed. A run that would
@@ -1474,6 +1478,8 @@ def _finish(auto: AutoRun, arguments: str) -> str:
     summary = args.get("summary") if isinstance(args, dict) else None
     if not isinstance(summary, str):
         return "error: finish needs a string summary argument"
+    said = auto.before_finish() if auto.before_finish is not None else ""
+    note = f"{said}\n\n" if said else ""
     if auto.feed is not None:
         accepted, findings = auto.feed.final()
         if auto.feed.unchanged():
@@ -1488,26 +1494,26 @@ def _finish(auto: AutoRun, arguments: str) -> str:
             auto.unresolved = unresolved
             if auto.unchanged_refusals >= auto.finish_refusal_cap:
                 auto.stop(AUDIT_UNRESOLVED)
-                return (
+                return note + (
                     f"{FINISH_REFUSED}The same findings refused finish "
                     f"{auto.unchanged_refusals} times in a row; the run stops "
                     f"({AUDIT_UNRESOLVED}).\n\n{findings}"
                 )
-            return f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
+            return note + f"{FINISH_REFUSED}Fix what it names and call finish again.\n\n{findings}"
         auto.waivers = auto.feed.waivers()
         asked = auto.feed.questions()
         if asked:
             # Accepted (a question refuses nothing), but a person must decide
             # it: the run ends "needs you", never finished on it silently.
             auto.stop(needs_you_reason(asked))
-            return f"{FINISH_QUESTION}{chr(10).join(asked)}"
+            return note + f"{FINISH_QUESTION}{chr(10).join(asked)}"
         if findings:
             # Accepted, with not-proven findings the model has not read: it
             # reads them in its next round; a later finish ends the run.
             auto.surfaced = summary
-            return f"{FINISH_SURFACED}{findings}"
+            return note + f"{FINISH_SURFACED}{findings}"
     auto.finish(summary)
-    return "finished. Your summary is recorded as narrative, not as evidence."
+    return note + "finished. Your summary is recorded as narrative, not as evidence."
 
 
 DISPUTE_MAX_COMMANDS: Final = 5

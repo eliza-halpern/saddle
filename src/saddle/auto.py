@@ -43,7 +43,14 @@ from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Event, Question
-from saddle.evidence import SuiteLimitError, src_layout_env, suite_workers
+from saddle.evidence import (
+    SuiteLimitError,
+    format_overrides,
+    ruff_argv,
+    run_capture,
+    src_layout_env,
+    suite_workers,
+)
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
@@ -330,6 +337,10 @@ class AutoOptions:
     token_budget: int = DEFAULT_TOKEN_BUDGET
     allow_test_edits: bool = False
     coauthor: bool = True
+    format_at_finish: bool = False
+    """`--format-at-finish`: before each finish audit, `ruff format` the run's
+    changed Python files with the project's committed formatter settings. Off
+    by default: the model owns its changes."""
     """End the run's commit with `anchor.COAUTHOR_TRAILER`: Saddle wrote the
     change. On unless the user asks for it off (`--no-coauthor`)."""
     temperature: float = TASK_TEMPERATURE
@@ -510,6 +521,23 @@ def changed_files(worktree: Path) -> list[str]:
     """Paths the run changed, added or deleted, relative to the worktree."""
     out = _git(worktree, "status", "--porcelain", "--untracked-files=all", "-z", "--", *UNSTAGED)
     return sorted({entry[3:] for entry in out.split("\0") if len(entry) > 3})
+
+
+FORMATTED_AT_FINISH: Final = "saddle formatted {files} before the audit (--format-at-finish): "
+"""How the finish result begins when `format_changed` changed a file."""
+
+
+def format_changed(worktree: Path, base: str) -> str:
+    """`ruff format` the run's changed Python files, with the formatter
+    settings committed at `base`; what it changed, for the model, or "" when
+    nothing needed it. The audit then judges the formatted tree."""
+    files = [f for f in changed_files(worktree) if f.endswith(".py") and (worktree / f).is_file()]
+    if not files:
+        return ""
+    before = {f: (worktree / f).read_bytes() for f in files}
+    run_capture(ruff_argv("format", *format_overrides(worktree, base), *files), worktree)
+    moved = [f for f in files if (worktree / f).read_bytes() != before[f]]
+    return FORMATTED_AT_FINISH.format(files=", ".join(moved)) + "check the diff" if moved else ""
 
 
 def self_guard(worktree: Path) -> Callable[[], list[str]] | None:
@@ -749,6 +777,9 @@ def run_auto(
         ),
         feed=feed,
         guard=guard,
+        before_finish=(
+            (lambda: format_changed(worktree, base)) if options.format_at_finish else None
+        ),
         finish_refusal_cap=options.finish_refusal_cap,
         arm=options.arm,
         sealed={

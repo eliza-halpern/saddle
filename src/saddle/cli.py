@@ -2015,6 +2015,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Let the run edit test files (refused by default).",
     )
     auto.add_argument(
+        "--format-at-finish",
+        action="store_true",
+        help="Run ruff format on the run's changed Python files before each finish audit.",
+    )
+    auto.add_argument(
         "--no-coauthor",
         action="store_true",
         help="Leave the 'Co-Authored-By: Saddle' trailer off the run's commit (on by default).",
@@ -2115,6 +2120,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         token_budget=args.token_budget,
         allow_test_edits=args.allow_test_edits,
         coauthor=not args.no_coauthor,
+        format_at_finish=args.format_at_finish,
         temperature=args.temperature,
         reasoning_effort=args.reasoning_effort,
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
