@@ -533,10 +533,8 @@ def data_only_change(copy: Path, baseline: str) -> list[str]:
         if not is_test_file(rel):
             by_file.setdefault(rel, set()).add(line)
     for rel, lines in by_file.items():
-        try:
-            module = ast.parse((copy / rel).read_text())
-        except (OSError, SyntaxError, ValueError):
-            return []
+        # `changed_statements` lists only files that exist and parse.
+        module = ast.parse((copy / rel).read_text())
         literal: set[int] = set()
         for node in module.body:
             if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:

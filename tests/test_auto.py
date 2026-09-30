@@ -1109,3 +1109,8 @@ def test_format_changed_touches_nothing_when_no_python_file_changed(repo: Path) 
     (repo / "calc.txt").rename(repo / "calc.py")
     assert format_changed(repo, "HEAD").startswith("saddle formatted calc.py")
     assert (repo / "calc.py").read_text() == FIXED
+
+
+def test_stall_density_of_a_run_with_no_reasoning_yet_is_zero() -> None:
+    run = AutoRun(budget=RunBudget(time_s=60, tokens=1000), run_span="s")
+    assert run.stall_density() == 0.0

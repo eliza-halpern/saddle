@@ -677,3 +677,38 @@ def test_another_pre_push_hook_still_means_push_from_a_terminal(
     assert done.status_code == 409
     assert "not saddle's leak guard" in done.json()["error"]
     assert git(remote, "branch", "--list", "work").strip() == ""
+
+
+def test_push_branch_refusals_name_why_nothing_went_up(
+    store: SessionStore, repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detached HEAD, a private leak-pattern file the guard cannot use, and a
+    push the remote rejects each refuse by name."""
+    sid, rid, _branch = seed(store, repo, "audited")
+    remote = on_work_branch(repo, tmp_path)
+    git(repo, "checkout", "-q", "--detach")
+    assert branch_actions.push_branch_refusal(repo).startswith("The checkout is on a detached HEAD")
+    git(repo, "checkout", "-q", "work")
+    guard_hook(repo, tmp_path / "hook-ran")
+    bad = tmp_path / "patterns.txt"
+    bad.write_text("([unclosed\n")
+    monkeypatch.setenv("SADDLE_LEAK_PATTERNS", str(bad))
+    with client_for(store, repo) as client:
+        broken = client.post(url(sid, rid, "push-branch"), json={"confirm": "work"})
+    assert broken.status_code == 409
+    assert broken.json()["error"].startswith("The leak guard cannot start:")
+    monkeypatch.delenv("SADDLE_LEAK_PATTERNS")
+    git(repo, "config", "--unset", "core.hooksPath")
+    # The remote's work branch moves on elsewhere: this push is not a fast-forward.
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", "-b", "main", str(remote), str(other))
+    git(other, "checkout", "-q", "-b", "work")
+    (other / "README").write_text("someone else's work\n")
+    git(other, "commit", "-q", "-am", "theirs")
+    git(other, "push", "-q", "origin", "work")
+    theirs = git(remote, "rev-parse", "work").strip()
+    with client_for(store, repo) as client:
+        rejected = client.post(url(sid, rid, "push-branch"), json={"confirm": "work"})
+    assert rejected.status_code == 502
+    assert "rejected" in rejected.json()["error"]
+    assert git(remote, "rev-parse", "work").strip() == theirs

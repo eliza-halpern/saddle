@@ -446,3 +446,15 @@ def test_compact_on_a_passing_finding_is_empty() -> None:
     s = describe_coverage({"detail": "every changed line is run", "cites": []}, {"t.py": TOY})
     assert render_coverage(s, compact=True) == ""
     assert render_coverage(s) == ""
+
+
+def test_a_summary_line_with_no_period_is_quoted_up_to_its_blank_line() -> None:
+    src = 'def f():\n    """Load the box\n\n    Details follow."""\n    return 1\n'
+    (g,) = describe_coverage({"detail": "no test runs a.py:5"}, {"a.py": src}).gaps
+    assert g.doc == "Load the box"
+
+
+def test_a_one_line_docstring_with_no_period_is_quoted_whole() -> None:
+    src = 'def f():\n    """Load the box"""\n    return 1\n'
+    (g,) = describe_coverage({"detail": "no test runs a.py:3"}, {"a.py": src}).gaps
+    assert g.doc == "Load the box"
