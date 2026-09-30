@@ -184,7 +184,7 @@ function addLine(card, line) {
   const item = el("li", `tl tone-${line.tone || "info"}`);
   item.appendChild(el("span", "tl-mark", line.mark));
   item.appendChild(el("span", "tl-text", line.text));
-  item.appendChild(el("span", "tl-cite", line.cite.slice(0, 8)));
+  item.appendChild(sessionCite(card, line.cite));  // click to open the sealed record, again to close
   item.title = `ledger record ${line.cite}`;
   card.lines.appendChild(item);
   card.count += 1;
@@ -411,6 +411,17 @@ const STATUS_WORD = {
   narrative: "narrative, not evidence", cost: "sealed",
 };
 
+function recordPanel(hash, record) {
+  const box = el("dl", "record");
+  box.dataset.hash = hash;
+  for (const [key, value] of Object.entries(record || { hash, note: "not in this packet" })) {
+    if (value === "" || value === null || value === undefined) continue;
+    box.appendChild(el("dt", null, key));
+    box.appendChild(el("dd", null, String(value)));
+  }
+  return box;
+}
+
 function citeButton(hash, record, host) {
   const button = el("button", "cite", hash.slice(0, 8));
   button.type = "button";
@@ -422,14 +433,34 @@ function citeButton(hash, record, host) {
     for (const other of host.querySelectorAll(".cite.open")) other.classList.remove("open");
     if (open) return;
     button.classList.add("open");
-    const box = el("dl", "record");
-    box.dataset.hash = hash;
-    for (const [key, value] of Object.entries(record || { hash, note: "not in this packet" })) {
-      if (value === "" || value === null || value === undefined) continue;
-      box.appendChild(el("dt", null, key));
-      box.appendChild(el("dd", null, String(value)));
+    host.appendChild(recordPanel(hash, record));
+  };
+  return button;
+}
+
+/* A session-log line's cite: unlike a packet cite it carries only the hash, so
+   it fetches the sealed record from the run's ledger on demand, opens it under
+   the line, and closes it on a second click. */
+function sessionCite(card, hash) {
+  const button = el("button", "cite tl-cite", hash.slice(0, 8));
+  button.type = "button";
+  button.title = "Open this sealed ledger record";
+  button.onclick = async (event) => {
+    event.preventDefault();
+    const host = card.lines;
+    const open = host.querySelector(`.record[data-hash="${hash}"]`);
+    for (const other of host.querySelectorAll(".record")) other.remove();
+    for (const other of host.querySelectorAll(".cite.open")) other.classList.remove("open");
+    if (open) return;  // it was open: the removal above collapsed it
+    button.classList.add("open");
+    let record;
+    try {
+      record = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/record/${hash}`);
+    } catch (error) {
+      record = { hash, note: `could not load this record: ${error.message || error}` };
     }
-    host.appendChild(box);
+    if (!button.classList.contains("open")) return;  // a later click closed it while we fetched
+    button.closest("li").after(recordPanel(hash, record));
   };
   return button;
 }

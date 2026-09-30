@@ -193,6 +193,25 @@ def test_a_task_runs_to_finished_on_the_clis_own_path(
     assert "add adds now" not in messages[-1]["content"]  # the recap, not the narrative
 
 
+def test_a_session_line_cite_opens_its_sealed_record(store: SessionStore, repo: Path) -> None:
+    # A session-log line cites a record by hash; the endpoint returns that
+    # record from the run's own ledger. Known-good: a hash the ledger holds
+    # returns its record. Known-bad: a hash it does not hold, and an unknown
+    # task, are each a 404 -- a miss is a failure, never an empty record.
+    with app_for(store, repo, FIX) as (client, server):
+        sid = client.post("/api/sessions").json()["id"]
+        rid = client.post(f"/api/sessions/{sid}/task", json={"text": "make add add"}).json()[
+            "run_id"
+        ]
+        wait_for(lambda: idle(server, sid))
+        cite = server.tasks[rid].lines[0].cite
+        good = client.get(f"/api/sessions/{sid}/tasks/{rid}/record/{cite}")
+        assert good.status_code == 200
+        assert good.json()["hash"] == cite
+        assert client.get(f"/api/sessions/{sid}/tasks/{rid}/record/{'0' * 64}").status_code == 404
+        assert client.get(f"/api/sessions/{sid}/tasks/nope/record/{cite}").status_code == 404
+
+
 def test_a_question_round_trips_and_the_answer_is_sealed(store: SessionStore, repo: Path) -> None:
     with app_for(store, repo, FIX, auditor=asking) as (client, server):
         sid = client.post("/api/sessions").json()["id"]

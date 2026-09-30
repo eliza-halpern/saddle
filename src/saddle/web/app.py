@@ -58,9 +58,10 @@ from saddle.events import (
 from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.installs import WheelFolder
+from saddle.journal import ProofRecord, SpanRecord, read_entries
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
-from saddle.packet import Packet, compile_packet, render_packet_text
+from saddle.packet import Packet, compile_packet, display_record, render_packet_text
 from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import BUILTIN_PERSONAS, DEFAULT_TITLE, SESSION_MODES, SessionStore
 from saddle.titles import title_for, words_title
@@ -985,6 +986,21 @@ def build_app(
             headers={"Content-Disposition": f'attachment; filename="saddle-packet-{rid[:8]}.md"'},
         )
 
+    async def task_record(request: Request) -> JSONResponse:
+        """One sealed ledger record of a run, by its hash, so a session line can
+        open the evidence it cites. Reads only a run this session recorded, and
+        only a hash that run's own journal holds; a miss is a failure, never an
+        empty record."""
+        sid, rid = request.path_params["sid"], request.path_params["rid"]
+        rhash = request.path_params["hash"]
+        journal = _journal(sid, rid)
+        if journal is None:
+            return JSONResponse({"error": "no such task in this session"}, status_code=404)
+        for entry in read_entries(journal):
+            if entry.record_hash == rhash and isinstance(entry, ProofRecord | SpanRecord):
+                return JSONResponse(display_record(entry))
+        return JSONResponse({"error": "no such record in this run"}, status_code=404)
+
     def _branch_context(request: Request) -> tuple[str, Path, Packet, str]:
         """The run id, checkout root, packet and run branch an action works on."""
         sid, rid = request.path_params["sid"], request.path_params["rid"]
@@ -1268,6 +1284,7 @@ def build_app(
             Route("/api/sessions/{sid}/task", post_task, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/packet", task_packet),
             Route("/api/sessions/{sid}/tasks/{rid}/packet.md", task_report),
+            Route("/api/sessions/{sid}/tasks/{rid}/record/{hash}", task_record),
             Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),

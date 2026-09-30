@@ -351,7 +351,7 @@ def _sealed_sources(raw: Any) -> dict[str, str]:
     return sources
 
 
-def _display(entry: ProofRecord | SpanRecord) -> dict[str, Any]:
+def display_record(entry: ProofRecord | SpanRecord) -> dict[str, Any]:
     """A record as the fields a person reads, not the JSON line."""
     if isinstance(entry, ProofRecord):
         return {
@@ -1442,7 +1442,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         guarded_paths=guarded,
         spend=_meters(evidence) if evidence is not None else None,
         records={
-            h: _display(e)
+            h: display_record(e)
             for h in cited
             if isinstance(e := by_hash.get(h), ProofRecord | SpanRecord)
         },
