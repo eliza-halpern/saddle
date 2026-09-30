@@ -396,6 +396,36 @@ def layers_on(venv: Path) -> Path | None:
     return None
 
 
+EXPOSE_ENV: Final = "SADDLE_SANDBOX_EXPOSE"
+"""Comma-separated command names a sandboxed command may also run, beyond the
+gate tools: each is found on saddle's own PATH, and its install directory is
+shown read-only (`exposed_commands`). Unset or empty, nothing more is shown.
+For a project whose tests need a tool installed under HOME -- `node` and a
+browser for web tests, say -- which the sandbox otherwise hides."""
+
+
+def exposed_commands(path: str, names: str) -> dict[Path, Path]:
+    """Read-only `{destination: source}` binds for each command in `names`.
+
+    The command's resolved file is shown at the spelling found on `path` (so a
+    link in a hidden `~/.local/bin` still runs), and the directory it is
+    installed in is shown whole -- the parent of its `bin/` when it sits in one,
+    else its own directory -- because a runtime needs its libraries beside it.
+    A name not found is skipped: the command then fails inside the sandbox as
+    it would have, rather than saddle refusing to start."""
+    binds: dict[Path, Path] = {}
+    for name in (n.strip() for n in names.split(",")):
+        found = shutil.which(name, path=path) if name else None
+        if found is None:
+            continue
+        spelled, landed = Path(found).absolute(), Path(found).resolve()
+        home = landed.parent.parent if landed.parent.name == "bin" else landed.parent
+        binds[home] = home
+        if spelled != landed:
+            binds[spelled] = landed
+    return binds
+
+
 def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
     """Read-only `(source, destination)` binds for the gate tools `env` finds.
 
@@ -429,6 +459,7 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
             site = user_site(landed)
             if site is not None:
                 binds[site] = site
+    binds.update(exposed_commands(env.get("PATH", ""), os.environ.get(EXPOSE_ENV, "")))
     for venv in venvs:
         if not (venv / "pyvenv.cfg").is_file():
             continue
