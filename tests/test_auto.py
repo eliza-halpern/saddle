@@ -449,6 +449,11 @@ def test_stall_check_ejects_a_never_acted_still_hedging_run(repo: Path) -> None:
     packet = compile_packet(result.journal)
     assert packet.verdict == "needs_you"
     assert packet.verdict_text.startswith("Needs you: the run stalled")
+    # Not proven quotes the reason once, ending in one period, not "decide..".
+    unproven = next(r for r in packet.rows if r.key == "not-proven").items
+    ended = next(i for i in unproven if i.startswith("The run ended needing you"))
+    assert ended.endswith("and decide.")
+    assert not ended.endswith("..")
 
 
 def test_stall_check_spares_a_run_that_acted_even_if_it_then_hedges(repo: Path) -> None:

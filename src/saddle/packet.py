@@ -1244,13 +1244,15 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         # not then read "Nothing is left unproven" beside it.
         gaps.append("Changed lines were not mutation-tested: no mutation record.")
     if outcome is not None and outcome.name == "auto:stopped":
+        stop_reason = outcome.detail.split(";")[0].removeprefix("stopped: ")
         gaps.append(
             (
                 "The run ended needing you before finishing: "
                 if verdict == "needs_you"
                 else "The run stopped before finishing: "
             )
-            + f"{outcome.detail.split(';')[0].removeprefix('stopped: ')}."
+            # A reason that already ends a sentence (the stall's) gets no second period.
+            + (stop_reason if stop_reason.endswith(".") else f"{stop_reason}.")
         )
         gap_cites.append(outcome.record_hash)
     if outcome is not None and outcome.name == "auto:unchanged":
