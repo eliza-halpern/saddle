@@ -106,7 +106,7 @@ from saddle.gates import (
     shortlist_order,
     spared_definitions,
 )
-from saddle.impact import ImpactMemo
+from saddle.impact import ImpactMemo, is_test_file
 from saddle.journal import (
     JOURNAL_QUESTION_EXIT,
     MAX_SPAN_DETAIL_CHARS,
@@ -505,6 +505,49 @@ MUTATION_UNMEASURED: Final = (
 decided: not proven, never a refusal. A watched run's correct tree was sent
 back with "no mutants decided" because mutmut spent the whole budget running
 the 408 tests that covered its changed lines before its first mutant."""
+
+
+MUTATION_DATA_ONLY: Final = (
+    "not proven: the source this change touches is module-level constants only ({files}); "
+    "mutation mutates code, not data, so it has nothing here to test. This is no finding "
+    "against the change and no edit can clear it: a person reviews the data."
+)
+"""The mutation finding when mutmut generated nothing and every changed source
+line is a module-level literal constant (`data_only_change`): not proven, never
+a refusal. A correct change that added one entry to a tuple of module names was
+refused "no mutants on changed lines", and the model rewrote it into a function
+body to give the gate something to mutate. Module-level code that is not a
+literal (a call, a loop, a comprehension) still fails: that is where the fail
+exists for, a module mutmut cannot reach passing an infinite loop."""
+
+
+def data_only_change(copy: Path, baseline: str) -> list[str]:
+    """The changed source files, when every changed line in them sits in a
+    module-level assignment of a literal value; else []. Test files are not
+    source. No changed source line at all is [] too: there is no data to name."""
+    changed = changed_statements(copy, git_diff(copy, baseline))
+    by_file: dict[str, set[int]] = {}
+    root = f"{copy}{os.sep}"
+    for spelled, line in changed:
+        rel = spelled.removeprefix(root)
+        if not is_test_file(rel):
+            by_file.setdefault(rel, set()).add(line)
+    for rel, lines in by_file.items():
+        try:
+            module = ast.parse((copy / rel).read_text())
+        except (OSError, SyntaxError, ValueError):
+            return []
+        literal: set[int] = set()
+        for node in module.body:
+            if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+                try:
+                    ast.literal_eval(node.value)
+                except ValueError:
+                    continue
+                literal.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        if not lines <= literal:
+            return []
+    return sorted(by_file)
 
 
 def syntax_key(copy: Path) -> str:
@@ -1220,6 +1263,17 @@ class Auditor:
         ):
             # No evidence either way, and nothing the change could do about it.
             detail = MUTATION_UNMEASURED.format(generated=spent.generated)
+            statuses["mutation"] = ("not-proven", detail, statuses["mutation"][2])
+        elif (
+            tier == 2
+            and spent is not None
+            and spent.generated == 0
+            and spent.total == 0
+            and not spent.survivors  # an engine that failed still fails
+            and statuses.get("mutation", ("",))[0] == "fail"
+            and (data := data_only_change(copy, resolved))
+        ):
+            detail = MUTATION_DATA_ONLY.format(files=", ".join(data))
             statuses["mutation"] = ("not-proven", detail, statuses["mutation"][2])
         sidecars: dict[str, Mapping[str, Any]] = {}
         if gated.mutation is not None:
