@@ -57,6 +57,36 @@ class _Scope:
     body: int
 
 
+SUMMARY_LINES = 5
+"""Most lines of one wrapped docstring sentence that are quoted. The feed caps
+the whole worded text at `DETAIL_CHARS`; this keeps a sentence that never ends
+from spending that budget before any row is named."""
+
+
+def docstring_summary(doc: str | None) -> str | None:
+    """The docstring's opening sentence as one line, or None when it has none.
+
+    A sentence wrapped over several lines is quoted whole (its lines joined by
+    single spaces); before this, only its first line was, so the quote stopped
+    mid-sentence. The sentence ends at a line ending in `.`, `!` or `?`, at a
+    blank line, or after `SUMMARY_LINES` lines. A docstring whose first line
+    already ends its sentence reads exactly as it did: detail lines that follow
+    it are not pulled in. An abbreviation ending a wrapped line ("e.g.") ends
+    the quote there, a known limit of stopping on punctuation.
+    """
+    if not doc or not doc.strip():
+        return None
+    parts: list[str] = []
+    for line in doc.strip().splitlines():
+        text = line.strip()
+        if not text:
+            break
+        parts.append(text)
+        if text.endswith((".", "!", "?")) or len(parts) == SUMMARY_LINES:
+            break
+    return " ".join(parts)
+
+
 def _scopes(source: str) -> list[_Scope]:
     out: list[_Scope] = []
 
@@ -66,8 +96,7 @@ def _scopes(source: str) -> list[_Scope]:
                 name = f"{prefix}{child.name}"
                 if not isinstance(child, ast.ClassDef):
                     first = min([child.lineno] + [d.lineno for d in child.decorator_list])
-                    doc = ast.get_docstring(child)
-                    head = doc.strip().splitlines()[0].strip() if doc and doc.strip() else None
+                    head = docstring_summary(ast.get_docstring(child))
                     out.append(
                         _Scope(
                             name,

@@ -98,7 +98,8 @@ def test_t5_renders_convert_and_version_1_loader(t5_changed: Changed) -> None:
     ) in text
     assert (
         "  - store.py _from_record_v1: 1 of 2 changed lines never run -- nothing exercises "
-        '_from_record_v1 ("Rebuild one account from an old version-1 storage record,") '
+        '_from_record_v1 ("Rebuild one account from an old version-1 storage record, '
+        'mapping its single balance number to USD.") '
         "[lines 43]"
     ) in text
 
@@ -293,6 +294,48 @@ def test_a_function_with_no_body_statement_is_not_said_to_be_unexercised() -> No
     (g,) = describe_coverage({"detail": "no test runs a.py:1"}, {"a.py": src}).gaps
     assert not g.never_ran
     assert "no test reaches these lines of f" in gap_sentence(g)
+
+
+def test_a_wrapped_docstring_sentence_is_quoted_whole() -> None:
+    """Known-good: the sentence wrapped over two lines is quoted in full, its
+    lines joined by one space, and the paragraph after the blank line is not."""
+    src = (
+        "def f():\n"
+        '    """Compute the fee for an amount in\n'
+        "    the given currency, rounding half up.\n"
+        "\n"
+        '    Longer detail that is not the summary."""\n'
+        "    return 1\n"
+    )
+    (g,) = describe_coverage({"detail": "no test runs a.py:6"}, {"a.py": src}).gaps
+    assert g.doc == "Compute the fee for an amount in the given currency, rounding half up."
+
+
+def test_a_one_line_docstring_is_quoted_exactly_as_before() -> None:
+    src = 'def f():\n    """Load a version-1 box."""\n    return 1\n'
+    (g,) = describe_coverage({"detail": "no test runs a.py:3"}, {"a.py": src}).gaps
+    assert g.doc == "Load a version-1 box."
+
+
+def test_detail_lines_after_a_finished_first_sentence_are_not_pulled_in() -> None:
+    """Known-bad guard: a first line that already ends its sentence stays alone,
+    even with no blank line before the lines that follow it."""
+    src = (
+        "def f():\n"
+        '    """Return the fee.\n'
+        '    Raises ValueError for negative amounts."""\n'
+        "    return 1\n"
+    )
+    (g,) = describe_coverage({"detail": "no test runs a.py:4"}, {"a.py": src}).gaps
+    assert g.doc == "Return the fee."
+
+
+def test_a_sentence_that_never_ends_is_bounded_by_the_line_cap() -> None:
+    lines = "".join(f"    word{i} word{i}\n" for i in range(10))
+    src = f'def f():\n    """Start\n{lines}    end"""\n    return 1\n'
+    (g,) = describe_coverage({"detail": "no test runs a.py:13"}, {"a.py": src}).gaps
+    assert g.doc is not None
+    assert len(g.doc.split(" ")) == 1 + 4 * 2  # "Start" plus the next four two-word lines
 
 
 def test_blank_docstring_is_no_docstring() -> None:
