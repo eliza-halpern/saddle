@@ -606,6 +606,7 @@ function showMode(mode) {
   $("#mode-desc").textContent = lane.desc;
   $("#mode-chip").textContent = lane.id;
   $("#mode-chip").dataset.mode = lane.id;
+  document.body.dataset.mode = lane.id;  // page-level hook: task mode quiets the chat-only chrome
   $("#input").placeholder = lane.placeholder;
   $("#mode-note").hidden = true;
   if (lane.id !== "task") closeRunConfirm();
