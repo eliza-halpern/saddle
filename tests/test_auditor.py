@@ -766,3 +766,47 @@ def test_a_mutation_run_whose_budget_ran_out_before_any_mutant_is_not_proven(
     if budget_spent:
         assert found.detail.startswith("not measured: the mutation run's time budget ran out")
         assert "12 generated" in found.detail
+
+
+# -- a format-only edit reuses the tiers it cannot change -------------------------
+
+
+@pytest.mark.parametrize(
+    ("edit", "reruns"),
+    [
+        ("def f():\n\n    return  2  # the fix\n", False),
+        ("def f():\n    return 3\n", True),
+    ],
+    ids=["format-only", "behaviour"],
+)
+def test_a_format_only_edit_reuses_tier_1_and_2_and_a_real_edit_runs_them(
+    clean_tree: Path, gate_spy: _Spy, edit: str, reruns: bool
+) -> None:
+    """Red before: reformatting after a passing audit re-ran the suite and
+    mutation (ten minutes on saddle), though nothing the interpreter sees had
+    changed. A tree whose every Python file has the same syntax tree reuses
+    the passing tiers 1 and 2; any change the interpreter sees runs them."""
+    auditor = Auditor(clean_tree)
+    first = auditor.tier2()
+    assert first.passed, first
+    ran = gate_spy.calls
+    (clean_tree / "n.py").write_text(edit)
+    (clean_tree / "test_n.py").write_text(TEST_BODY.format(value=3 if reruns else 2))
+    again = auditor.tier2()
+    assert (gate_spy.calls > ran) is reruns
+    if not reruns:
+        assert _verdicts(again) == _verdicts(first)
+
+
+def test_a_failing_audit_is_never_reused_across_a_format_only_edit(
+    uncovered_tree: Path, gate_spy: _Spy
+) -> None:
+    """Known-bad: findings with a failure name lines a reformat may move, and
+    a failure must be re-proved on the tree it is shown for."""
+    auditor = Auditor(uncovered_tree)
+    first = auditor.tier1()
+    assert not first.passed
+    ran = gate_spy.calls
+    (uncovered_tree / "m.py").write_text("def g():\n\n    return  7\n")
+    auditor.tier1()
+    assert gate_spy.calls > ran

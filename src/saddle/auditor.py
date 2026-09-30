@@ -471,6 +471,38 @@ back with "no mutants decided" because mutmut spent the whole budget running
 the 408 tests that covered its changed lines before its first mutant."""
 
 
+def syntax_key(copy: Path) -> str:
+    """The staged tree as the interpreter sees it: each `.py` file by its
+    syntax tree (formatting and comments dropped, docstrings kept), every other
+    file by its bytes. Two trees with the same key run the same code."""
+    listed = run_capture(["git", "ls-files", "-z"], copy).stdout.split("\0")
+    digest = hashlib.sha256()
+    for name in sorted(n for n in listed if n):
+        try:
+            data = (copy / name).read_bytes()
+        except OSError:
+            continue
+        if name.endswith(".py"):
+            try:
+                data = ast.dump(ast.parse(data)).encode()
+            except (SyntaxError, ValueError):
+                pass
+        digest.update(name.encode() + b"\0" + hashlib.sha256(data).digest())
+    return digest.hexdigest()
+
+
+def _reusable(found: Findings) -> bool:
+    """Findings a format-only edit cannot change or make stale: nothing failed
+    or was blocked (a failure is re-proved on the tree it is shown for), and
+    nothing not proven names lines, except the budget-bound mutation note."""
+    for f in found.findings:
+        if f.verdict in ("fail", "blocked") and f.reason != "sanctioned":
+            return False
+        if f.verdict == "not-proven" and not f.detail.startswith(MUTATION_UNMEASURED[:12]):
+            return False
+    return True
+
+
 def _blocked_tier2(key: str, first: Findings) -> Findings:
     """Tier 2's one finding when tier 1 on the same tree failed: blocked, naming
     what failed (a sanctioned finding did not fail, so it is not named)."""
@@ -855,6 +887,9 @@ class Auditor:
         self.config = config or AuditorConfig()
         self.node = self.config.node or audit_node(self.config.test_command)
         self._memory: dict[str, Findings] = {}
+        self._by_syntax: dict[str, str] = {}
+        """`_key(tier, "syntax", syntax_key, baseline)` to the verdict key it was
+        decided under: a format-only edit reuses it (`_reuse`)."""
 
     # -- cache ---------------------------------------------------------------
 
@@ -994,6 +1029,14 @@ class Auditor:
             hit = self._cached(key)
             if hit is not None:
                 return hit
+            # A format-only edit of an audited tree: the interpreter runs the
+            # same code, so the suite and mutation are not asked again.
+            shape = syntax_key(copy)
+            same1 = self._key(1, "syntax", shape, resolved)
+            same = self._key(tier, "syntax", shape, resolved)
+            reused = self._reuse(same, key)
+            if reused is not None:
+                return reused
             try:
                 # Read at the resolved baseline, which `key` already names: the
                 # limit and the worker count are functions of that commit, not
@@ -1007,7 +1050,7 @@ class Auditor:
             # tier 1's key, unless that tree's tier 1 is already known. The
             # finish audit used to run the whole suite once per tier on one tree.
             key1 = self._key(1, staged, resolved)
-            first = self._cached(key1) if tier == 2 else None
+            first = (self._cached(key1) or self._reuse(same1, key1)) if tier == 2 else None
             if first is not None and not first.passed:
                 return self._store(_blocked_tier2(key, first))
             p1: Future[TaskRequirementsCheck] | None = None
@@ -1047,10 +1090,23 @@ class Auditor:
             if tier == 2:
                 if first is None:
                     first = self._tiered(1, key1, gated, copy, resolved, limit, p1)
+                self._by_syntax[same1] = first.key
                 if not first.passed:
                     return self._store(_blocked_tier2(key, first))
-                return self._tiered(2, key, gated, copy, resolved, limit, None)
-            return self._tiered(1, key, gated, copy, resolved, limit, p1)
+                second = self._tiered(2, key, gated, copy, resolved, limit, None)
+                self._by_syntax[same] = second.key
+                return second
+            done = self._tiered(1, key, gated, copy, resolved, limit, p1)
+            self._by_syntax[same] = done.key
+            return done
+
+    def _reuse(self, same: str, key: str) -> Findings | None:
+        """The findings decided for a tree with the same syntax key, stored and
+        returned under `key`, when `_reusable`; else None."""
+        earlier = self._memory.get(self._by_syntax.get(same, ""))
+        if earlier is None or not _reusable(earlier):
+            return None
+        return dataclasses.replace(self._store(dataclasses.replace(earlier, key=key)), cached=True)
 
     def _tiered(
         self,
