@@ -49,6 +49,7 @@ from saddle.journal import (
     AUDIT_SPAN_HASHES,
     COMPACTION_SPAN,
     MAX_THINKING_CHARS,
+    PREMISE_DISPUTED_STOP,
     append_record,
     append_span,
     build_record,
@@ -71,6 +72,7 @@ from saddle.memory import (
 )
 from saddle.tools import (
     CHECK_TOOL,
+    DISPUTE_TOOL,
     FINISH_TOOL,
     INSTALL_TOOL,
     REFUSED,
@@ -366,6 +368,9 @@ class AutoRun:
     `installs.plan`, put to the user as a question every time, and carried
     out only on Install (`_install`). None: the tool is not offered, and a
     call to it is an unknown tool."""
+    dispute: dict[str, Any] | None = None
+    """The model's `dispute` (`_dispute`): its claim, finding and each evidence
+    command with saddle's own rerun output; sealed in the outcome. None unless called."""
     surfaced: str | None = None
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
@@ -911,6 +916,8 @@ def run_turn(
                     and call.name == CHECK_TOOL
                 ):
                     result = auto.feed.check()
+                elif auto is not None and call.name == DISPUTE_TOOL:
+                    result = _dispute(auto, call.arguments, options.workdir, ctx)
                 elif auto is not None and auto.installs is not None and call.name == INSTALL_TOOL:
                     result = yield from _install(auto, options.journal, node_id, call.arguments)
                 else:
@@ -1503,6 +1510,56 @@ def _finish(auto: AutoRun, arguments: str) -> str:
     return "finished. Your summary is recorded as narrative, not as evidence."
 
 
+DISPUTE_MAX_COMMANDS: Final = 5
+
+
+def _dispute(auto: AutoRun, arguments: str, workdir: Path, ctx: ToolContext) -> str:
+    """The model's ripcord: the task's premise is false. Each evidence command
+    is rerun by saddle, as the model's own `run_command` runs it, and its output
+    sealed; the run then ends "needs you" (`PREMISE_DISPUTED_STOP`). A dispute
+    with no claim, no finding, no command, too many, or a command that cannot
+    run is refused, and the run goes on: the ripcord is never a cheap way out."""
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        args = None
+    if not isinstance(args, dict):
+        return "error: dispute needs a JSON object with claim, finding and evidence"
+    claim, finding, evidence = args.get("claim"), args.get("finding"), args.get("evidence")
+    if not isinstance(claim, str) or not claim.strip():
+        return "error: dispute refused: name the claim the task makes"
+    if not isinstance(finding, str) or not finding.strip():
+        return "error: dispute refused: say what you found"
+    if (
+        not isinstance(evidence, list)
+        or not evidence
+        or not all(isinstance(c, str) and c.strip() for c in evidence)
+    ):
+        return "error: dispute refused: give one or more shell commands whose output shows it"
+    if len(evidence) > DISPUTE_MAX_COMMANDS:
+        return f"error: dispute refused: at most {DISPUTE_MAX_COMMANDS} evidence commands"
+    ran = []
+    for index, command in enumerate(evidence):
+        call = ToolCall(
+            id=f"dispute-{index}",
+            name="run_command",
+            arguments=json.dumps({"command": command}),
+        )
+        output = execute_tool(call, workdir=workdir, context=ctx)
+        if output.startswith("error: "):
+            return (
+                f"error: dispute refused: evidence command {index + 1} did not run "
+                f"({output.removeprefix('error: ')}); give commands that run"
+            )
+        ran.append({"command": command, "output": output})
+    auto.dispute = {"claim": claim, "finding": finding, "evidence": ran}
+    auto.stop(f"{PREMISE_DISPUTED_STOP}{claim.strip().splitlines()[0]}")
+    return (
+        "dispute recorded: the run ends here, needing a person, who reads your claim, "
+        "your finding and saddle's rerun of each evidence command. It is not a pass."
+    )
+
+
 NARRATIVE_LABEL: Final = "narrative, not evidence"
 
 
@@ -1567,6 +1624,7 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "finish_refusal_cap": auto.finish_refusal_cap,
         "unchanged_refusals": auto.unchanged_refusals,
         "unresolved_findings": auto.unresolved,
+        **({"dispute": auto.dispute} if auto.dispute is not None else {}),
         # The last completed audit (the finish audit if finish was called):
         # its tree id, findings and verdict. None for arm E, or when nothing
         # was audited before the run ended.

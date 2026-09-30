@@ -52,7 +52,14 @@ from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
 from saddle.task_requirements import ProbeTree
-from saddle.tools import CHECK_SCHEMA, FINISH_SCHEMA, INSTALL_SCHEMA, TOOLS, ToolContext
+from saddle.tools import (
+    CHECK_SCHEMA,
+    DISPUTE_SCHEMA,
+    FINISH_SCHEMA,
+    INSTALL_SCHEMA,
+    TOOLS,
+    ToolContext,
+)
 from saddle.vllm import VllmClient
 
 DEFAULT_TIME_BUDGET_S: Final = 1800
@@ -83,7 +90,11 @@ SYSTEM_PROMPT: Final = (
     "{tests} "
     "When the task is done, call finish once with a short account of what you "
     "changed and why. If it cannot be done honestly, call finish and say so. "
-    "Your account is recorded as narrative; it does not count as proof."
+    "Your account is recorded as narrative; it does not count as proof. "
+    "If you find the task's premise false (the bug it describes cannot happen, "
+    "or is already fixed), do not force a change: call dispute with the claim, "
+    "what you found and the commands whose output shows it. A person reviews it; "
+    "it is not a pass."
 )
 
 ENVIRONMENT_PROMPT: Final = (
@@ -801,6 +812,7 @@ def run_auto(
         tools=[
             *TOOLS,
             FINISH_SCHEMA,
+            DISPUTE_SCHEMA,
             *([CHECK_SCHEMA] if options.check_tool else []),
             *([INSTALL_SCHEMA] if options.wheels is not None else []),
         ],

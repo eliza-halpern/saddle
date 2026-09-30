@@ -629,6 +629,9 @@ JOURNAL_QUESTION_EXIT: Final = 4
 pass), 1 (a fail) or 2 (blocked). Readers that cannot parse a finding's
 detail still read this code as a question, never as a failure."""
 AUDIT_QUESTION_STOP: Final = "needs you: the audit asks "
+PREMISE_DISPUTED_STOP: Final = "needs you: the task's premise is disputed: "
+"""The stop reason when the model calls `dispute` (`engine._dispute`): the run
+ends needing a person, who reads the claim and the rerun evidence."""
 """How the stop reason of a run whose finish audit asked a question opens
 (`engine.needs_you_reason`): the run ends needing you, not stopped on a fault."""
 SEALED_CUT: Final = " [cut to fit the ledger line; the audit sidecar holds it whole]"

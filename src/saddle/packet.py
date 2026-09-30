@@ -48,6 +48,7 @@ from saddle.journal import (
     AUDIT_SPAN_PREFIXES,
     AUTO_OUTCOMES,
     P1_EXTRACT_SPAN,
+    PREMISE_DISPUTED_STOP,
     SEALED_CUT,
     ProofRecord,
     SpanRecord,
@@ -831,6 +832,18 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         verdict_text = (
             f"Needs you: {asked_text.split(':')[0]}. The run did not finish: a question is "
             "neither a pass nor a refusal, and only you can decide it."
+        )
+    elif outcome.name == "auto:stopped" and outcome.detail.startswith(
+        f"stopped: {PREMISE_DISPUTED_STOP}"
+    ):
+        # The model pulled the ripcord (`engine._dispute`): the task's premise
+        # is false, with rerun evidence sealed in the outcome. A person decides.
+        verdict = "needs_you"
+        claim = outcome.detail.split(";")[0].removeprefix(f"stopped: {PREMISE_DISPUTED_STOP}")
+        verdict_text = (
+            f"Needs you: the model disputes the task's premise ({claim}). It made no "
+            "claim of done: read its finding and the evidence saddle reran, then agree "
+            "(close the task) or disagree (run it again with a note)."
         )
     elif outcome.name == "auto:unchanged":
         verdict = "unchanged"

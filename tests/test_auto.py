@@ -692,3 +692,67 @@ def test_the_run_commit_credits_saddle_unless_asked_not_to(
     last = message.strip().split("\n\n")[-1].splitlines()
     assert ("Co-Authored-By: Saddle" in last) is credited
     assert set(parse_trailers(message)) == {"Saddle-Outcome", "Saddle-Ledger"}
+
+
+# -- dispute: the ripcord for a false premise ------------------------------------
+
+
+def test_a_dispute_with_rerun_evidence_ends_the_run_needing_you(repo: Path) -> None:
+    """The model finds the task's premise false and says so with evidence:
+    saddle reruns the command itself, seals its output, and the run ends
+    needing a person. It is offered and stated up front, and never a finish."""
+    client = Scripted(
+        [
+            [
+                call(
+                    "dispute",
+                    claim="add subtracts",
+                    finding="add already adds",
+                    evidence=["echo premise-probe-output"],
+                )
+            ]
+        ]
+    )
+    result = auto(repo, client)
+    assert result.outcome == "stopped"
+    assert result.reason == "needs you: the task's premise is disputed: add subtracts"
+    sealed = sidecar(result)["dispute"]
+    assert sealed["finding"] == "add already adds"
+    assert sealed["evidence"][0]["command"] == "echo premise-probe-output"
+    assert "premise-probe-output" in sealed["evidence"][0]["output"]
+    asked = client.asked[0]
+    assert "dispute" in [t["function"]["name"] for t in asked["tools"]]
+    assert "call dispute" in asked["messages"][0]["content"]
+    from saddle.packet import compile_packet
+
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "needs_you"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"claim": "add subtracts", "finding": "it adds", "evidence": []},
+        {"claim": "add subtracts", "finding": "it adds", "evidence": ["  "]},
+        {"claim": "", "finding": "it adds", "evidence": ["echo x"]},
+        {"claim": "add subtracts", "finding": "it adds", "evidence": ["echo x"] * 6},
+    ],
+    ids=["no-command", "blank-command", "no-claim", "too-many"],
+)
+def test_a_dispute_without_evidence_is_refused_and_the_run_goes_on(
+    repo: Path, arguments: dict[str, Any]
+) -> None:
+    """The ripcord is not a cheap way out: without a claim and runnable
+    evidence it is refused, the model is told why, and the run continues."""
+    client = Scripted(
+        [
+            [call("dispute", **arguments)],
+            [call("edit_file", path="calc.py", old="a - b", new="a + b")],
+            finish(),
+        ]
+    )
+    result = auto(repo, client)
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+    assert "dispute" not in sidecar(result)
+    told = [m for m in client.asked[1]["messages"] if m.get("role") == "tool"]
+    assert told[-1]["content"].startswith("error: dispute refused")

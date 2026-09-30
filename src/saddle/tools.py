@@ -240,6 +240,29 @@ CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
     [],
 )
 
+DISPUTE_TOOL: Final = "dispute"
+"""The model's ripcord (`engine._dispute`): the task's premise is false.
+
+Like `finish`, the engine handles it, and it is offered only when a run is
+autonomous. It never passes anything: the run ends "needs you" with the
+claim, the finding and the evidence commands' output, rerun by saddle."""
+
+DISPUTE_SCHEMA: Final[dict[str, Any]] = _tool(
+    DISPUTE_TOOL,
+    "End the run because the task's premise is false: the bug it describes cannot "
+    "happen, or is already fixed. Give the claim the task makes, what you found, and "
+    "one to five shell commands whose output shows it (a script you wrote in /tmp is "
+    "fine). Saddle reruns each command and seals its output; a person reviews it. "
+    "This is not a pass and not a finish. A dispute with no command, or with a command "
+    "that cannot run, is refused.",
+    {
+        "claim": {"type": "string"},
+        "finding": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+    },
+    ["claim", "finding", "evidence"],
+)
+
 INSTALL_TOOL: Final = "install"
 """The model's request for a package (`saddle auto --allow-installs`, `installs`).
 
