@@ -1928,6 +1928,7 @@ def _mutmut_scratch_config(
     *,
     only_covered: bool = False,
     selection: Collection[str] = (),
+    unmutated: str = "",
 ) -> str:
     """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
 
@@ -1944,6 +1945,9 @@ def _mutmut_scratch_config(
     runs: each mutant runs only the tests mutmut saw run its function.
     `run_tests` would be added to every mutant's run, which then ran all of
     them. With `selection`, `only_covered` mutates the lines they execute.
+
+    `unmutated` is a regex (`_mutate_only`): mutmut's `do_not_mutate_patterns`,
+    so it skips the expressions that start on a line it matches.
     """
     quoted = ", ".join(json.dumps(source) for source in sources)
     ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
@@ -1962,9 +1966,14 @@ def _mutmut_scratch_config(
         if selection
         else ""
     )
+    quiet = (
+        f"do_not_mutate_patterns = [{json.dumps(unmutated, ensure_ascii=False)}]\n"
+        if unmutated
+        else ""
+    )
     return (
         f"[tool.mutmut]\nsource_paths = [{quoted}]\npytest_add_cli_args = [{joined}]\n"
-        f"{copied}{covered}{chosen}"
+        f"{copied}{covered}{chosen}{quiet}"
     )
 
 
@@ -2070,6 +2079,187 @@ def _changed_function_globs(
     return tuple(sorted(globs))
 
 
+_NO_MUTATE: Final = "# pragma: no mutate"
+_NO_MUTATE_BLOCK: Final = "# pragma: no mutate block"
+
+
+def _logical_lines(source: str) -> list[tuple[int, int]]:
+    """Each logical line of `source` as (first row, row of its NEWLINE token),
+    in order; `tokenize.TokenError` when the tokenizer cannot read the text.
+
+    A logical line is what mutmut's pragma reads: the trailing comment of the
+    line holding a statement's last token (or a compound statement's colon)."""
+    found: list[tuple[int, int]] = []
+    first = 0  # the row the open logical line began on; rows count from 1
+    skipped = (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER)
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type in skipped:
+            continue
+        if tok.type == tokenize.NEWLINE:
+            found.append((first, tok.start[0]))
+            first = 0
+        elif not first:
+            first = tok.start[0]
+    return found
+
+
+def _mutmut_mutates(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether mutmut 3.8 makes mutants of `node`'s body: a decorated function
+    is left alone unless its one decorator is `staticmethod` or `classmethod`."""
+    if not node.decorator_list:
+        return True
+    only = node.decorator_list[0]
+    return (
+        len(node.decorator_list) == 1
+        and isinstance(only, ast.Name)
+        and only.id in ("staticmethod", "classmethod")
+    )
+
+
+def _scope_functions(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Top-level functions and the methods directly in top-level classes: the
+    only bodies mutmut 3.8 mutates (`_changed_function_globs`)."""
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(node)
+        elif isinstance(node, ast.ClassDef):
+            found.extend(
+                item
+                for item in node.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+    return [fn for fn in found if _mutmut_mutates(fn)]
+
+
+@dataclass(frozen=True)
+class _Narrowed:
+    """The scratch tree told to mutate only some statements (`_narrow`)."""
+
+    sources: Mapping[str, str]
+    """The edited text of each production file that still has a statement to mutate."""
+    keep: Mapping[str, frozenset[int]]
+    """Those files' statements, by first line."""
+    pattern: str
+    """`do_not_mutate_patterns` for every row the edit leaves quiet, or ""."""
+
+
+def _mutate_only(
+    source: str, keep: Collection[int]
+) -> tuple[str, frozenset[str], frozenset[str]] | None:
+    """`source` with mutmut told to mutate only the statements whose first line
+    is in `keep`, the text of the continuation rows it must also leave alone,
+    and the text of the rows it keeps; None when that cannot be done without
+    risk.
+
+    mutmut 3.8 reads `# pragma: no mutate` as a trailing comment on a logical
+    line (skip the nodes that start on its first row; on a `def`, `block`
+    skips the whole function) and `do_not_mutate_patterns` as a regex over a
+    line's text (skip the expressions that start on a matching row, which is
+    what a statement's continuation rows need: one giant multi-line literal
+    in a function left 900 mutants nobody asked for). So inside every
+    function mutmut mutates, each logical line that holds none of `keep` gets
+    the pragma and each of its continuation rows is to be matched, and a
+    function holding none of `keep` gets `block`. The edit only appends
+    comments: the syntax tree must come out the same, else None.
+    """
+    try:
+        tree = ast.parse(source)
+        logical = _logical_lines(source)
+    except (SyntaxError, ValueError, tokenize.TokenError):
+        return None
+    lines = io.StringIO(source, newline="").readlines()
+    add: dict[int, str] = {}
+    kept_rows: set[int] = set()
+    quiet_rows: set[int] = set()
+    for fn in _scope_functions(tree):
+        last = fn.end_lineno or fn.lineno
+        inside = [(a, b) for a, b in logical if fn.lineno <= a <= last]
+        if not any(fn.lineno <= line <= last for line in keep):
+            add[inside[0][1]] = _NO_MUTATE_BLOCK
+            continue
+        for first, end in inside:
+            if any(first <= line <= end for line in keep):
+                kept_rows.update(range(first, end + 1))
+            else:
+                add[end] = _NO_MUTATE
+                quiet_rows.update(range(first + 1, end + 1))
+    edited = []
+    for number, text in enumerate(lines, start=1):
+        if number in add:
+            body = text.rstrip("\r\n")
+            text = f"{body}  {add[number]}{text[len(body) :]}"
+        edited.append(text)
+    pruned = "".join(edited)
+    if ast.dump(ast.parse(pruned)) != ast.dump(tree):
+        return None
+    quiet = frozenset(edited[row - 1].rstrip("\r\n") for row in quiet_rows - kept_rows)
+    kept = frozenset(edited[row - 1].rstrip("\r\n") for row in kept_rows)
+    return pruned, quiet, kept
+
+
+def _narrow(texts: Mapping[str, str], wanted: Mapping[str, Collection[int]]) -> _Narrowed | None:
+    """`_mutate_only` over every production file in `texts`, for the statements
+    `wanted` names in each (by first line); None when a file cannot be edited
+    safely or no file has a statement left, so the caller keeps mutmut's own
+    way. A file with none of its own is left out of `sources`: it is copied
+    unmutated.
+
+    The regex is one for the whole run, so a row's text is quiet only when no
+    kept row of any file has the same text."""
+    sources: dict[str, str] = {}
+    keep: dict[str, frozenset[int]] = {}
+    quiet: set[str] = set()
+    kept: set[str] = set()
+    for rel, text in texts.items():
+        lines = frozenset(wanted.get(rel, ()))
+        if not lines:
+            continue
+        edited = _mutate_only(text, lines)
+        if edited is None:
+            return None
+        sources[rel], more_quiet, more_kept = edited
+        keep[rel] = lines
+        quiet |= more_quiet
+        kept |= more_kept
+    if not sources:
+        return None
+    left = sorted(text for text in quiet - kept if text.strip())
+    pattern = "^(?:" + "|".join(re.escape(text) for text in left) + ")$" if left else ""
+    return _Narrowed(sources, keep, pattern)
+
+
+COVERAGE_CONFIG_FILES: Final = (".coveragerc", "setup.cfg", "tox.ini")
+"""The files besides `pyproject.toml` (which the scratch config replaces) that
+coverage.py reads its `exclude_lines` from."""
+
+
+def _excluded_rows(tree: Path, source: str, rel: str) -> frozenset[int] | None:
+    """The rows mutmut's own covered-lines pass would leave unmutated in `rel`:
+    every statement coverage.py excludes (a `no cover` pragma) over its whole
+    span, which mutmut treats like a `no mutate block` pragma. None when
+    the answer would depend on a coverage config saddle does not read, or the
+    file does not analyse."""
+    try:
+        for name in COVERAGE_CONFIG_FILES:
+            config = tree / name
+            if config.is_file() and (
+                name == ".coveragerc" or "coverage" in config.read_text(errors="replace")
+            ):
+                return None
+        excluded = set(
+            coverage.Coverage(data_file=None, config_file=False).analysis2(str(tree / rel))[2]
+        )
+        parsed = ast.parse(source)
+    except (coverage.CoverageException, OSError, SyntaxError, ValueError):
+        return None
+    rows = set(excluded)
+    for node in ast.walk(parsed):
+        if isinstance(node, ast.stmt) and node.lineno in excluded:
+            rows.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return frozenset(rows)
+
+
 _MUTMUT_NOTHING_MATCHES: Final = "Filtered for specific mutants, but nothing matches"
 """What mutmut 3.8's `collect_source_file_mutation_data` asserts, failing
 `mutmut run` with exit 1, when no mutant it made matches the names it was
@@ -2156,6 +2346,27 @@ def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> 
     return mapping
 
 
+def _narrowed_scratch(
+    scratch: Path,
+    production: Sequence[str],
+    changed: Mapping[str, Collection[int]],
+    executed: Mapping[str, Collection[int]],
+) -> _Narrowed | None:
+    """`_narrow` over the scratch copy's `production` files for what mutmut's
+    covered-lines pass would have left to mutate there: the changed statements
+    whose first line a test ran, minus what coverage.py excludes; None when
+    any of that cannot be said (`_excluded_rows`, `_narrow`)."""
+    texts: dict[str, str] = {}
+    wanted: dict[str, frozenset[int]] = {}
+    for rel in production:
+        texts[rel] = (scratch / rel).read_text()
+        dropped = _excluded_rows(scratch, texts[rel], rel)
+        if dropped is None:
+            return None
+        wanted[rel] = (frozenset(changed[rel]) & frozenset(executed.get(rel, ()))) - dropped
+    return _narrow(texts, wanted)
+
+
 def mutation_sample(
     workdir: Path,
     changed: Collection[tuple[str, int]],
@@ -2168,6 +2379,7 @@ def mutation_sample(
     recorder: SpanRecorder | None = None,
     only_covered: bool = False,
     select_tests: Collection[str] = (),
+    covered: Collection[tuple[str, int]] = (),
 ) -> MutationOutcome:
     """Kill-rate over every decided mutant on a changed line.
 
@@ -2189,6 +2401,13 @@ def mutation_sample(
     `select_tests` (the covering tests' node ids) decides what mutmut's
     stats run collects instead, and each mutant then runs only the tests
     that ran its function (`_mutmut_scratch_config`'s `selection`).
+    `only_covered` with `select_tests` and `covered` (the lines some test ran,
+    spelled like `changed`) does not have mutmut run its own serial pass to
+    find the covered lines -- on a large test selection that pass alone
+    outlasted the budget: the scratch copy is edited so mutmut mutates only
+    the changed statements whose first line a test ran (`_narrow`), and when
+    that cannot be done, or mutmut fails on the edited copy, mutmut's own
+    way runs as before.
     Text-only mutants are excluded only when they did NOT kill (widened
     from "survived" alone to every not-killed status).
     Timeouts count as killed (behavior changed), and missing mutmut
@@ -2210,6 +2429,10 @@ def mutation_sample(
         by_line.setdefault(key, set()).add(line)
         spelled.setdefault(key, path)
     tests = set(test_files)
+    executed: dict[str, set[int]] = {}
+    for path, line in covered:
+        name = Path(os.path.relpath(os.path.realpath(path), root)).as_posix()
+        executed.setdefault(name, set()).add(line)
     with tempfile.TemporaryDirectory(prefix="saddle-mutation-") as tmp:
         scratch = Path(tmp)
         copied = _tree_files(workdir)
@@ -2226,29 +2449,58 @@ def mutation_sample(
         touched = {Path(key).as_posix() for key in by_line}
         every = [name for name in copied if name not in tests]
         production = [path for path in every if path in touched]
-        untouched = [path for path in every if path not in touched]
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
-        (scratch / "pyproject.toml").write_text(
-            _mutmut_scratch_config(
-                production,
-                run_tests,
-                _copyable(production, untouched),
-                only_covered=only_covered,
-                selection=select_tests,
-            )
-        )
-        # Only the mutants of the functions a changed line lies in run: every
-        # other one is off the changed lines and never counts, and running
-        # them was most of the wall on a large module. They stay `not checked`.
         lines_by_file = {Path(key).as_posix(): lines for key, lines in by_line.items()}
-        globs = _changed_function_globs(scratch, {rel: lines_by_file[rel] for rel in production})
-        ran = run_capture(
-            ["timeout", str(timeout_s), "mutmut", "run", *globs],
-            scratch,
-            recorder=recorder,
-            memory_limit=tree_memory_limit(),
+        narrowed = (
+            _narrowed_scratch(scratch, production, lines_by_file, executed)
+            if only_covered and select_tests and executed
+            else None
         )
+        started = perf_counter()
+        attempts: list[_Narrowed | None] = [narrowed, None] if narrowed is not None else [None]
+        while True:
+            scope = attempts.pop(0)
+            if scope is None and narrowed is not None:
+                # The edited copy failed: mutmut's own way, on the tree as it was.
+                shutil.rmtree(scratch / "mutants", ignore_errors=True)
+                for edited in narrowed.sources:
+                    shutil.copy2(workdir / edited, scratch / edited)
+            mutable = [path for path in production if scope is None or path in scope.keep]
+            if scope is not None:
+                for edited, text in scope.sources.items():
+                    (scratch / edited).write_text(text)
+            (scratch / "pyproject.toml").write_text(
+                _mutmut_scratch_config(
+                    mutable,
+                    run_tests,
+                    _copyable(mutable, [name for name in every if name not in mutable]),
+                    only_covered=only_covered and scope is None,
+                    selection=select_tests,
+                    unmutated="" if scope is None else scope.pattern,
+                ),
+                encoding="utf-8",
+            )
+            # Only the mutants of the functions a changed line lies in run: every
+            # other one is off the changed lines and never counts, and running
+            # them was most of the wall on a large module. They stay `not checked`.
+            wanted = lines_by_file if scope is None else scope.keep
+            globs = _changed_function_globs(scratch, {rel: wanted[rel] for rel in mutable})
+            ran = run_capture(
+                [
+                    "timeout",
+                    str(max(1, timeout_s - int(perf_counter() - started))),
+                    "mutmut",
+                    "run",
+                    *globs,
+                ],
+                scratch,
+                recorder=recorder,
+                memory_limit=tree_memory_limit(),
+            )
+            nothing = bool(globs) and _MUTMUT_NOTHING_MATCHES in ran.stderr
+            if not attempts or ran.exit_code in (0, SHELL_TIMEOUT) or nothing:
+                break
         # `mutmut run` exits 0 even when mutants survive, so any other exit
         # is the tool failing, not a verdict: the smoke run's mutmut
         # 3.8 refused a package named `src` and exited 1 in 658 ms, and the

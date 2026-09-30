@@ -414,6 +414,7 @@ def run_node_gate(
             # runs is the coverage check's refusal, and mutmut generating a
             # large module's every mutant alone could spend the budget.
             only_covered=bool(covering),
+            covered=covered,
         )
     )
     # The property oracle, `impl` nodes only: the property-bearing

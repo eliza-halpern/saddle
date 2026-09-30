@@ -1154,6 +1154,30 @@ def test_the_gates_mutation_run_is_handed_the_tests_that_ran_a_changed_line(
     assert handed[0] == (covering, (), True)
 
 
+def test_the_gates_mutation_run_is_handed_the_lines_a_test_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before: mutmut found the lines to mutate by running every covering
+    test again under coverage, serially, which on saddle's own repository
+    outlasted the mutation budget. The suite run's own data already says them."""
+    root = _project(tmp_path / "p", _pyproject())
+    handed: list[object] = []
+    real = evidence.mutation_sample
+
+    def spy(*args: Any, **kwargs: Any) -> evidence.MutationOutcome:
+        handed.append(kwargs.get("covered"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "mutation_sample", spy)
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        run_node_gate(audit_node(), copy, baseline=resolved, test_workers=2)
+        calc, lazy = str(copy / "src/pkg/calc.py"), str(copy / "src/pkg/lazy.py")
+        (ran,) = handed
+        assert isinstance(ran, set)
+        assert {(calc, 2), (calc, 3), (calc, 4)} <= ran
+        assert not [line for path, line in ran if path == lazy and line == 14]
+
+
 def test_an_unreadable_data_file_names_no_covering_test(tmp_path: Path) -> None:
     """A data file coverage cannot read hands mutmut nothing narrower: the
     gate then keeps its whole scope, the run as it was before contexts."""
