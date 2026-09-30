@@ -906,6 +906,7 @@ def run_auto(
         ),
         protected_tests=roots,
         syntax_guard=True,
+        time_left=lambda: auto.budget.time_s - auto.budget.elapsed(),
     )
     if options.wheels is not None:
         assert project is not None  # checked before the run started

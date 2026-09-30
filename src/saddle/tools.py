@@ -360,6 +360,11 @@ class ToolContext:
             self.undo.before_write(path)
 
     call_id: str | None = None
+    time_left: Callable[[], float] | None = None
+    """Seconds left in an autonomous run's time budget; None in chat. A
+    command's timeout and a wait are capped at it (`_bounded`): the budget is
+    checked between model rounds, so one long command could otherwise run far
+    past it (a `timeout 3500` suite started near the end of a 60-min run did)."""
     count_tokens: Callable[[str], int | None] | None = None
     """The model's own tokenizer, asked through the server, for a tool that
     must keep its result inside the context (`read_file`). None where no
@@ -654,6 +659,16 @@ def _search(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     return "\n".join(hits) + more
 
 
+def _bounded(ctx: ToolContext, asked: int) -> tuple[int, str]:
+    """`asked` seconds, capped at the run's time left, and a note when capped."""
+    if ctx.time_left is None:
+        return asked, ""
+    left = max(1, int(ctx.time_left()))
+    if left >= asked:
+        return asked, ""
+    return left, f" (capped at the {left}s left in this run's time budget)"
+
+
 def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     command = _text(args, "command", "run_command")
     box = ctx.box()
@@ -663,11 +678,11 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             f"started terminal {terminal.id} (isolation: {box.isolation}). "
             "Use read_terminal or wait_for_terminal."
         )
-    timeout = int(args.get("timeout") or DEFAULT_TIMEOUT)
+    timeout, capped = _bounded(ctx, int(args.get("timeout") or DEFAULT_TIMEOUT))
     terminal = box.run(command, timeout=timeout)
     if terminal.running:
         return (
-            f"still running after {timeout}s as terminal {terminal.id}; "
+            f"still running after {timeout}s{capped} as terminal {terminal.id}; "
             f"output so far:\n{terminal.output()}"
         )
     return f"exit {terminal.exit_code}\n{terminal.output()}"
@@ -685,11 +700,11 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     box = ctx.box()
     if str(args["id"]) not in box.terminals:
         return f"error: no terminal {args['id']!r}"
-    timeout = int(args.get("timeout") or 60)
+    timeout, capped = _bounded(ctx, int(args.get("timeout") or 60))
     terminal = box.wait(str(args["id"]), timeout=timeout)
     if terminal.running:
         return (
-            f"terminal {terminal.id} still running after {timeout}s "
+            f"terminal {terminal.id} still running after {timeout}s{capped} "
             f"(not killed; wait again if you want)\n{terminal.output()}"
         )
     return f"exit {terminal.exit_code}\n{terminal.output()}"
