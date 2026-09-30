@@ -250,7 +250,10 @@ claim, the finding and the evidence commands' output, rerun by saddle."""
 DISPUTE_SCHEMA: Final[dict[str, Any]] = _tool(
     DISPUTE_TOOL,
     "End the run because the task's premise is false: the bug it describes cannot "
-    "happen, or is already fixed. Give the claim the task makes, what you found, and "
+    "happen, or is already fixed. Use it as soon as your probe or your reading shows "
+    "the task's claim cannot hold on the current code, even if you could build "
+    "something that satisfies the task's wording. Give the claim the task makes, what "
+    "you found, and "
     "one to five shell commands whose output shows it (a script you wrote in /tmp is "
     "fine). Saddle reruns each command and seals its output; a person reviews it. "
     "This is not a pass and not a finish. A dispute with no command, or with a command "
@@ -261,6 +264,24 @@ DISPUTE_SCHEMA: Final[dict[str, Any]] = _tool(
         "evidence": {"type": "array", "items": {"type": "string"}},
     },
     ["claim", "finding", "evidence"],
+)
+
+PREMISE_TOOL: Final = "premise_check"
+"""`saddle auto --premise-check`: before its first edit the model shows the
+problem the task describes (`engine._premise`). Saddle reruns the commands and
+hands their output back with one question: does this show the problem?"""
+
+PREMISE_SCHEMA: Final[dict[str, Any]] = _tool(
+    PREMISE_TOOL,
+    "Before your first edit: show that the problem the task describes exists on the "
+    "current code. Give the claim you are checking and one to five shell commands "
+    "(a failing test, or a script you wrote in /tmp) whose output shows it. Saddle "
+    "reruns them and shows you their output. Edits are refused until you call this.",
+    {
+        "claim": {"type": "string"},
+        "commands": {"type": "array", "items": {"type": "string"}},
+    },
+    ["claim", "commands"],
 )
 
 INSTALL_TOOL: Final = "install"

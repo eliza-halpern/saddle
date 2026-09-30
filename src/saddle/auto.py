@@ -64,6 +64,7 @@ from saddle.tools import (
     DISPUTE_SCHEMA,
     FINISH_SCHEMA,
     INSTALL_SCHEMA,
+    PREMISE_SCHEMA,
     TOOLS,
     ToolContext,
 )
@@ -92,17 +93,31 @@ greedy runs diverge). A measurement that wants greedy pins 0.0 itself."""
 
 SYSTEM_PROMPT: Final = (
     "You are working alone on one task in a git worktree of a repository. "
-    "Nobody will answer questions. Read the code, make the change with the "
-    "file tools, and run the tests with run_command to check it. "
+    "First, check that the problem the task describes exists on the current code: "
+    "reproduce it with a failing test or a short script. A task is written by a "
+    "person and can be wrong, often because the code changed since. If your probe "
+    "or your reading of the code shows the task's claim cannot hold, or the problem "
+    "is already fixed, call dispute with the claim, what you found and the commands "
+    "that show it. That is a correct outcome, as good as a fix; a person reviews "
+    "it. Do not look for another reading of the task that would make it true, and "
+    "do not reconstruct how older code behaved to make its claim true: if you catch "
+    "yourself doing either, call dispute instead. "
+    "Otherwise, read the code, make the change with the file tools, and run the "
+    "tests with run_command to check it. "
     "{tests} "
     "When the task is done, call finish once with a short account of what you "
-    "changed and why. If it cannot be done honestly, call finish and say so. "
-    "Your account is recorded as narrative; it does not count as proof. "
-    "If you find the task's premise false (the bug it describes cannot happen, "
-    "or is already fixed), do not force a change: call dispute with the claim, "
-    "what you found and the commands whose output shows it. A person reviews it; "
-    "it is not a pass."
+    "changed and why. If the problem is real but cannot be done honestly, call "
+    "finish and say so. Your account is recorded as narrative; it does not count "
+    "as proof."
 )
+
+
+PREMISE_PROMPT: Final = (
+    " Before your first edit, call premise_check with the command(s) that show the "
+    "problem on the current code; edits are refused until you do. It shows you "
+    "their output: if that output does not show the problem, call dispute."
+)
+"""Appended to the system prompt with `--premise-check`."""
 
 ENVIRONMENT_PROMPT: Final = (
     " Your working directory is {worktree}, a fresh git worktree of the "
@@ -338,6 +353,9 @@ class AutoOptions:
     allow_test_edits: bool = False
     coauthor: bool = True
     format_at_finish: bool = False
+    premise_check: bool = False
+    """`--premise-check`: edits are refused until the model has shown the problem
+    with `premise_check` (engine), which puts the real output in front of it."""
     """`--format-at-finish`: before each finish audit, `ruff format` the run's
     changed Python files with the project's committed formatter settings. Off
     by default: the model owns its changes."""
@@ -776,6 +794,7 @@ def run_auto(
             else None
         ),
         feed=feed,
+        require_premise=options.premise_check,
         guard=guard,
         before_finish=(
             (lambda: format_changed(worktree, base)) if options.format_at_finish else None
@@ -838,12 +857,14 @@ def run_auto(
             options.token_budget,
             feed=options.arm == "E+A+F",
         )
-        + (CHECK_PROMPT if options.check_tool else ""),
+        + (CHECK_PROMPT if options.check_tool else "")
+        + (PREMISE_PROMPT if options.premise_check else ""),
         context_tokens=options.context_tokens,
         tools=[
             *TOOLS,
             FINISH_SCHEMA,
             DISPUTE_SCHEMA,
+            *([PREMISE_SCHEMA] if options.premise_check else []),
             *([CHECK_SCHEMA] if options.check_tool else []),
             *([INSTALL_SCHEMA] if options.wheels is not None else []),
         ],

@@ -75,6 +75,7 @@ from saddle.tools import (
     DISPUTE_TOOL,
     FINISH_TOOL,
     INSTALL_TOOL,
+    PREMISE_TOOL,
     REFUSED,
     TOOLS,
     ToolContext,
@@ -368,6 +369,11 @@ class AutoRun:
     `installs.plan`, put to the user as a question every time, and carried
     out only on Install (`_install`). None: the tool is not offered, and a
     call to it is an unknown tool."""
+    require_premise: bool = False
+    """`--premise-check`: edits are refused until `premise_check` ran (`_premise`)."""
+    premise: dict[str, Any] | None = None
+    """The model's `premise_check`: its claim and each command with saddle's rerun
+    output; sealed in the outcome. None until called."""
     dispute: dict[str, Any] | None = None
     """The model's `dispute` (`_dispute`): its claim, finding and each evidence
     command with saddle's own rerun output; sealed in the outcome. None unless called."""
@@ -922,6 +928,16 @@ def run_turn(
                     result = auto.feed.check()
                 elif auto is not None and call.name == DISPUTE_TOOL:
                     result = _dispute(auto, call.arguments, options.workdir, ctx)
+                elif auto is not None and call.name == PREMISE_TOOL:
+                    result = _premise(auto, call.arguments, options.workdir, ctx)
+                elif (
+                    auto is not None
+                    and auto.require_premise
+                    and auto.premise is None
+                    and call.name in PREMISE_GATED
+                    and _in_worktree(call.arguments, options.workdir)
+                ):
+                    result = PREMISE_FIRST
                 elif auto is not None and auto.installs is not None and call.name == INSTALL_TOOL:
                     result = yield from _install(auto, options.journal, node_id, call.arguments)
                 else:
@@ -1518,6 +1534,87 @@ def _finish(auto: AutoRun, arguments: str) -> str:
 
 DISPUTE_MAX_COMMANDS: Final = 5
 
+PREMISE_GATED: Final = frozenset({"write_file", "edit_file"})
+
+
+def _in_worktree(arguments: str, workdir: Path) -> bool:
+    """Whether an edit tool's `path` lands in the run's worktree: a probe written
+    to /tmp is not an edit of the code, and `--premise-check` asks for probes."""
+    try:
+        path = json.loads(arguments).get("path", "")
+    except (ValueError, AttributeError):
+        return True
+    if not isinstance(path, str) or not path:
+        return True
+    target = (workdir / path).resolve()
+    return target == workdir.resolve() or workdir.resolve() in target.parents
+
+
+PYTHON_CRASH: Final = "Traceback (most recent call last):"
+"""How a crashed Python probe announces itself; a pytest run's failures are results."""
+"""The tools `--premise-check` holds back until `premise_check` ran."""
+
+PREMISE_FIRST: Final = (
+    "error: refused: edits wait for premise_check. Call it first with the claim "
+    "you are checking and the command(s) whose output shows the problem the task "
+    "describes on the current code."
+)
+
+PREMISE_QUESTION: Final = (
+    "Read this output. Does it show the problem the task describes, on the current "
+    "code? If it does, go on and fix it. If it does not, and the code explains why "
+    "the problem cannot happen or is already fixed, call dispute now with these "
+    "commands as evidence; do not look for another reading of the task."
+)
+
+
+def _premise(auto: AutoRun, arguments: str, workdir: Path, ctx: ToolContext) -> str:
+    """The model shows the problem before its first edit (`--premise-check`):
+    saddle reruns each command, seals claim and output, unlocks the edit tools,
+    and returns the output with `PREMISE_QUESTION`. Refused like `dispute` when
+    the claim or the commands are missing or cannot run."""
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        args = None
+    if not isinstance(args, dict):
+        return "error: premise_check needs a JSON object with claim and commands"
+    claim, commands = args.get("claim"), args.get("commands")
+    if not isinstance(claim, str) or not claim.strip():
+        return "error: premise_check refused: name the claim you are checking"
+    if (
+        not isinstance(commands, list)
+        or not commands
+        or len(commands) > DISPUTE_MAX_COMMANDS
+        or not all(isinstance(c, str) and c.strip() for c in commands)
+    ):
+        return (
+            f"error: premise_check refused: give one to {DISPUTE_MAX_COMMANDS} "
+            "shell commands whose output shows the problem"
+        )
+    ran = []
+    for index, command in enumerate(commands):
+        call = ToolCall(
+            id=f"premise-{index}", name="run_command", arguments=json.dumps({"command": command})
+        )
+        output = execute_tool(call, workdir=workdir, context=ctx)
+        if output.startswith("error: "):
+            return (
+                f"error: premise_check refused: command {index + 1} did not run "
+                f"({output.removeprefix('error: ')}); give commands that run"
+            )
+        if PYTHON_CRASH in output and "pytest" not in command:
+            # A probe that crashed shows nothing either way; edits stay held.
+            return (
+                f"error: premise_check refused: command {index + 1} crashed (a Python "
+                f"traceback, not a result). Fix it and call premise_check again.\n\n"
+                f"{output[-2000:]}"
+            )
+        ran.append({"command": command, "output": output})
+    auto.premise = {"claim": claim, "evidence": ran}
+    shown = "\n\n".join(f"$ {r['command']}\n{r['output']}" for r in ran)
+    return f"{shown}\n\n{PREMISE_QUESTION}"
+
 
 def _dispute(auto: AutoRun, arguments: str, workdir: Path, ctx: ToolContext) -> str:
     """The model's ripcord: the task's premise is false. Each evidence command
@@ -1631,6 +1728,7 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "unchanged_refusals": auto.unchanged_refusals,
         "unresolved_findings": auto.unresolved,
         **({"dispute": auto.dispute} if auto.dispute is not None else {}),
+        **({"premise": auto.premise} if auto.premise is not None else {}),
         # The last completed audit (the finish audit if finish was called):
         # its tree id, findings and verdict. None for arm E, or when nothing
         # was audited before the run ended.

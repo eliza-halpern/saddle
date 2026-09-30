@@ -772,3 +772,79 @@ def test_format_at_finish_formats_the_changed_files_and_says_so_only_when_asked(
     assert ("a+b" in committed) is not formats
     (told,) = [s.detail for s in read_spans(result.journal) if s.argv[:1] == ["finish"]]
     assert ("saddle formatted calc.py before the audit" in told) is formats
+
+
+def test_premise_check_refuses_edits_until_the_problem_is_shown_then_asks_the_question(
+    repo: Path,
+) -> None:
+    """`--premise-check`: an edit before `premise_check` is refused and says why;
+    `premise_check` reruns the commands, seals them, returns their output with
+    the question (does it show the problem? if not, dispute), and unlocks edits."""
+    client = Scripted(
+        [
+            [call("edit_file", path="calc.py", old="a - b", new="a + b")],
+            [call("premise_check", claim="add subtracts", commands=["echo shown-output"])],
+            [call("edit_file", path="calc.py", old="a - b", new="a + b")],
+            finish(),
+        ]
+    )
+    result = auto(repo, client, premise_check=True)
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+    told = [m["content"] for m in client.asked[3]["messages"] if m.get("role") == "tool"]
+    assert told[0].startswith("error: refused: edits wait for premise_check")
+    assert "shown-output" in told[1]
+    assert "call dispute now" in told[1]
+    assert not told[2].startswith("error")
+    sealed = sidecar(result)["premise"]
+    assert sealed["claim"] == "add subtracts"
+    assert "shown-output" in sealed["evidence"][0]["output"]
+    asked = client.asked[0]
+    assert "premise_check" in [t["function"]["name"] for t in asked["tools"]]
+    assert "call premise_check" in asked["messages"][0]["content"]
+
+
+def test_without_premise_check_edits_are_not_held_and_the_tool_is_not_offered(
+    repo: Path,
+) -> None:
+    client = Scripted([[call("edit_file", path="calc.py", old="a - b", new="a + b")], finish()])
+    result = auto(repo, client)
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+    assert "premise" not in sidecar(result)
+    assert "premise_check" not in [t["function"]["name"] for t in client.asked[0]["tools"]]
+
+
+def test_a_premise_check_whose_probe_crashes_keeps_edits_held(repo: Path) -> None:
+    """A probe that dies with a traceback shows nothing either way: the check is
+    refused, says so, and edits stay held until a probe that runs."""
+    crash = (
+        "python -c 'import sys; sys.stderr.write(\"Traceback (most recent call last):\\n\"); 1/0'"
+    )
+    client = Scripted(
+        [
+            [call("premise_check", claim="add subtracts", commands=[crash])],
+            [call("edit_file", path="calc.py", old="a - b", new="a + b")],
+            [call("premise_check", claim="add subtracts", commands=["echo ran"])],
+            finish(),
+        ]
+    )
+    result = auto(repo, client, premise_check=True)
+    told = [m["content"] for m in client.asked[3]["messages"] if m.get("role") == "tool"]
+    assert told[0].startswith("error: premise_check refused: command 1 crashed")
+    assert told[1].startswith("error: refused: edits wait for premise_check")
+    assert "ran" in sidecar(result)["premise"]["evidence"][0]["output"]
+
+
+def test_premise_check_lets_a_probe_be_written_outside_the_worktree(repo: Path) -> None:
+    """The gate holds edits of the code, not the probe it asks for: a file
+    written outside the worktree (the run's /tmp) is not held before the check."""
+    client = Scripted(
+        [
+            [call("write_file", path="/tmp/probe.py", content="print('probe')\n")],
+            [call("write_file", path="calc.py", content="x = 1\n")],
+            finish(),
+        ]
+    )
+    auto(repo, client, premise_check=True)
+    told = [m["content"] for m in client.asked[2]["messages"] if m.get("role") == "tool"]
+    assert not told[0].startswith("error: refused: edits wait for premise_check")
+    assert told[1].startswith("error: refused: edits wait for premise_check")
