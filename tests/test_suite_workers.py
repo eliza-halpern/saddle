@@ -1178,6 +1178,32 @@ def test_the_gates_mutation_run_is_handed_the_lines_a_test_ran(
         assert not [line for path, line in ran if path == lazy and line == 14]
 
 
+@pytest.mark.parametrize("asked", [1, 2])
+def test_the_gates_mutation_run_is_handed_the_workers_and_test_cost_the_suite_ran_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asked: int
+) -> None:
+    """Red before: mutmut's stats pass ran every covering test one after another
+    however many workers the project's suite ran on. A suite that ran serially
+    hands it one, and either hands it what a test cost, which keeps quick
+    suites off the workers."""
+    root = _project(tmp_path / "p", _pyproject(_workers(asked) if asked > 1 else ""))
+    handed: list[tuple[object, object]] = []
+    real = evidence.mutation_sample
+
+    def spy(*args: Any, **kwargs: Any) -> evidence.MutationOutcome:
+        handed.append((kwargs.get("workers"), kwargs.get("test_seconds")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "mutation_sample", spy)
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        run_node_gate(audit_node(), copy, baseline=resolved, test_workers=asked)
+    ((workers, seconds),) = handed
+    assert workers == asked
+    # what one test cost on one core, read from the suite run's own summary line
+    assert isinstance(seconds, float)
+    assert 0 < seconds < 60
+
+
 def test_an_unreadable_data_file_names_no_covering_test(tmp_path: Path) -> None:
     """A data file coverage cannot read hands mutmut nothing narrower: the
     gate then keeps its whole scope, the run as it was before contexts."""

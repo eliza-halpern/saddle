@@ -44,6 +44,7 @@ from saddle.evidence import (
     run_suite_capture,
     scoped_targets,
     suite_run,
+    suite_test_seconds,
 )
 from saddle.gates import (
     RED_PHASE_SAMPLES,
@@ -415,6 +416,9 @@ def run_node_gate(
             # large module's every mutant alone could spend the budget.
             only_covered=bool(covering),
             covered=covered,
+            # The workers the suite ran on, which mutmut's stats pass may use.
+            workers=mode.workers if mode.parallel else 1,
+            test_seconds=suite_test_seconds(suite.stdout, mode.workers if mode.parallel else 1),
         )
     )
     # The property oracle, `impl` nodes only: the property-bearing

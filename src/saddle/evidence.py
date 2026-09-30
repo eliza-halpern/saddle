@@ -1921,6 +1921,90 @@ def _mutant_lines(show_output: str, source: str, mutant_name: str) -> set[int]:
     return {(_statement_start(tree, lineno) or node.lineno) for lineno in matched}
 
 
+PARALLEL_TESTS_PER_WORKER: Final = 4
+"""Fewest selected tests per worker for which mutmut's stats pass is run on the
+project's workers (`mutation_sample`'s `workers`): below it, starting the
+workers costs what the serial pass would."""
+
+PARALLEL_MIN_SERIAL_S: Final = 20.0
+"""Least estimated cost, in seconds, of mutmut's serial stats pass for which it
+is run on workers: starting them costs a few seconds, so a suite of quick tests
+loses by it (`mutation_sample`'s `test_seconds`)."""
+
+PARALLEL_PHASES: Final = ("stats",)
+"""The `MUTANT_UNDER_TEST` values mutmut 3.8 sets for the runs that go to the
+workers: `stats` is its pass that records which tests reach which function."""
+
+_PARALLEL_MODULE: Final = "_saddle_mutmut_parallel"
+_PARALLEL_SOURCE: Final = '''"""Run mutmut's stats pass on pytest-xdist workers (saddle).
+
+mutmut 3.8 records which tests reach which function, and how long each takes,
+by running every selected test in its own process one after another. Here the
+same tests run on workers: each worker puts the trampoline hits of a test
+(mutmut's own `state()._stats`) on the test's report, and this plugin, in
+mutmut's process, adds them and the durations to mutmut's own tables, so what
+mutmut goes on to do is what it does after its own serial pass. A run of
+any other phase is left exactly as it was."""
+
+import os
+
+import pytest
+
+WORKERS = __WORKERS__
+PHASES = __PHASES__
+
+
+def _phase():
+    return os.environ.get("MUTANT_UNDER_TEST", "")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config, parser, args):
+    if "PYTEST_XDIST_WORKER" not in os.environ and _phase() in PHASES:
+        args.extend(["-n", str(WORKERS)])
+
+
+def pytest_configure(config):
+    # mutmut reads its config from `pyproject.toml` in the working directory the
+    # first time a trampoline is hit, which a test that has changed directory
+    # would send elsewhere; its own serial pass had read it before any test ran.
+    if _phase() == "stats" and "PYTEST_XDIST_WORKER" in os.environ:
+        from mutmut.configuration import config as mutmut_config
+
+        mutmut_config()
+
+
+def pytest_runtest_teardown(item, nextitem):
+    if _phase() != "stats" or not hasattr(item.config, "workerinput"):
+        return
+    from mutmut.state import state
+
+    hits = sorted(state()._stats)
+    state()._stats.clear()
+    item.user_properties.append(("saddle_mutmut_hits", hits))
+
+
+def pytest_runtest_logreport(report):
+    if _phase() != "stats" or "PYTEST_XDIST_WORKER" in os.environ:
+        return
+    from mutmut.state import state
+
+    if report.when == "call":
+        state().duration_by_test[report.nodeid] += report.duration
+    for name, hits in report.user_properties:
+        if name == "saddle_mutmut_hits":
+            for function in hits:
+                state().tests_by_mangled_function_name[function].add(report.nodeid)
+'''
+
+
+def _parallel_plugin(workers: int) -> str:
+    """The text of the plugin that runs `PARALLEL_PHASES` on `workers` workers."""
+    return _PARALLEL_SOURCE.replace("__WORKERS__", str(workers)).replace(
+        "__PHASES__", repr(PARALLEL_PHASES)
+    )
+
+
 def _mutmut_scratch_config(
     sources: list[str],
     run_tests: Collection[str] = (),
@@ -1929,6 +2013,7 @@ def _mutmut_scratch_config(
     only_covered: bool = False,
     selection: Collection[str] = (),
     unmutated: str = "",
+    plugins: Sequence[str] = (),
 ) -> str:
     """Minimal mutmut config: per-file sources (a `.` root nests mutants/).
 
@@ -1948,10 +2033,13 @@ def _mutmut_scratch_config(
 
     `unmutated` is a regex (`_mutate_only`): mutmut's `do_not_mutate_patterns`,
     so it skips the expressions that start on a line it matches.
+
+    `plugins` are pytest plugin modules loaded in every run mutmut makes.
     """
     quoted = ", ".join(json.dumps(source) for source in sources)
     ordered = list(run_tests) if isinstance(run_tests, Sequence) else sorted(run_tests)
-    args = ["-q", "-x", "-p", "no:cacheprovider", *ordered]
+    loaded = [arg for plugin in plugins for arg in ("-p", plugin)]
+    args = ["-q", "-x", "-p", "no:cacheprovider", *loaded, *ordered]
     joined = ", ".join(json.dumps(arg) for arg in args)
     copied = (
         "also_copy = [" + ", ".join(json.dumps(path) for path in also_copy) + "]\n"
@@ -2346,6 +2434,19 @@ def show_all_mutants(scratch: Path, *, recorder: SpanRecorder | None = None) -> 
     return mapping
 
 
+_PYTEST_SUMMARY: Final = re.compile(r"(\d+) passed\b[^\n]*? in (\d+(?:\.\d+)?)s")
+
+
+def suite_test_seconds(output: str, workers: int) -> float | None:
+    """What one test costs on one core, read off the `N passed in X s` line a
+    pytest run ends with: `X` seconds on `workers` workers is `X * workers`
+    core-seconds for `N` tests. None when the output has no such line."""
+    found = _PYTEST_SUMMARY.findall(output)
+    if not found or not int(found[-1][0]):
+        return None
+    return float(found[-1][1]) * max(workers, 1) / int(found[-1][0])
+
+
 def _narrowed_scratch(
     scratch: Path,
     production: Sequence[str],
@@ -2380,6 +2481,8 @@ def mutation_sample(
     only_covered: bool = False,
     select_tests: Collection[str] = (),
     covered: Collection[tuple[str, int]] = (),
+    workers: int = 1,
+    test_seconds: float | None = None,
 ) -> MutationOutcome:
     """Kill-rate over every decided mutant on a changed line.
 
@@ -2408,6 +2511,13 @@ def mutation_sample(
     the changed statements whose first line a test ran (`_narrow`), and when
     that cannot be done, or mutmut fails on the edited copy, mutmut's own
     way runs as before.
+    `workers` (the project's pytest-xdist workers, 2 or more) with a green
+    suite, at least `PARALLEL_TESTS_PER_WORKER` selected tests per worker and
+    a serial pass estimated at `PARALLEL_MIN_SERIAL_S` seconds or more
+    (`test_seconds` a test, from the suite run: `suite_test_seconds`) runs
+    mutmut's stats pass on them (`_PARALLEL_SOURCE`): mutmut's own pass runs
+    one test after another, and took 738 s for 408 tests, more than the whole
+    600 s budget. If mutmut fails with that, it is run again without.
     Text-only mutants are excluded only when they did NOT kill (widened
     from "survived" alone to every not-killed status).
     Timeouts count as killed (behavior changed), and missing mutmut
@@ -2457,27 +2567,45 @@ def mutation_sample(
             if only_covered and select_tests and executed
             else None
         )
+        parallel = (
+            workers
+            if workers >= 2
+            and suite_passed
+            and len(select_tests) >= workers * PARALLEL_TESTS_PER_WORKER
+            and test_seconds is not None
+            and len(select_tests) * test_seconds >= PARALLEL_MIN_SERIAL_S
+            else 0
+        )
         started = perf_counter()
-        attempts: list[_Narrowed | None] = [narrowed, None] if narrowed is not None else [None]
+        faster = narrowed is not None or parallel > 0
+        attempts: list[tuple[_Narrowed | None, int]] = [(narrowed, parallel), (None, 0)]
+        if not faster:
+            attempts = attempts[1:]
         while True:
-            scope = attempts.pop(0)
-            if scope is None and narrowed is not None:
-                # The edited copy failed: mutmut's own way, on the tree as it was.
+            scope, pool = attempts.pop(0)
+            if not attempts and faster:
+                # The faster way failed: mutmut's own, on the tree as it was.
                 shutil.rmtree(scratch / "mutants", ignore_errors=True)
-                for edited in narrowed.sources:
+                (scratch / f"{_PARALLEL_MODULE}.py").unlink(missing_ok=True)
+                for edited in narrowed.sources if narrowed is not None else ():
                     shutil.copy2(workdir / edited, scratch / edited)
             mutable = [path for path in production if scope is None or path in scope.keep]
             if scope is not None:
                 for edited, text in scope.sources.items():
                     (scratch / edited).write_text(text)
+            also = _copyable(mutable, [name for name in every if name not in mutable])
+            if pool:
+                (scratch / f"{_PARALLEL_MODULE}.py").write_text(_parallel_plugin(pool))
+                also.append(f"{_PARALLEL_MODULE}.py")
             (scratch / "pyproject.toml").write_text(
                 _mutmut_scratch_config(
                     mutable,
                     run_tests,
-                    _copyable(mutable, [name for name in every if name not in mutable]),
+                    also,
                     only_covered=only_covered and scope is None,
                     selection=select_tests,
                     unmutated="" if scope is None else scope.pattern,
+                    plugins=(_PARALLEL_MODULE,) if pool else (),
                 ),
                 encoding="utf-8",
             )
