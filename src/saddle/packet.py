@@ -24,9 +24,12 @@ What the packet can and cannot say for an executor-only run (arm E):
   `audit:delivered`/`audit:withheld` records are deliveries, not verdicts.
   With none, "finished" here never reads as "done".
 - A tier-0 finding (`audit-tier0:<gate>`: syntax, ruff, imports on one
-  edited file) is an edit check, not an audit verdict. It is counted on its
-  own "Edit checks" row, never in the Audit row or the verdict line
-  (a run with 9 verdicts and 3 edit checks once read "12 of 12").
+  edited file; its record names the file under `path`) is an edit check,
+  not an audit verdict. It is counted on its own "Edit checks" row,
+  per gate per file, never in the Audit row or the verdict line (a run
+  with 9 verdicts and 3 edit checks once read "12 of 12"). With more than
+  one file, the row names each, so a failure on one cannot read under a
+  pass on another.
 """
 
 from __future__ import annotations
@@ -414,6 +417,10 @@ class _Audit:
     """An auditor finding's own detail, without the tier prefix."""
     tier: int = -1
     """An auditor finding's tier; -1 for a seam span."""
+    path: str = ""
+    """The file a tier-0 finding checked, from the `path` its record sealed
+    (`auditor.finding_body`); "" for a seam span, for tiers 1 and 2, and for
+    a ledger sealed before the field."""
 
 
 def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_Audit]:
@@ -425,18 +432,24 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
     gate of its tier on a newer tree, so an earlier checkpoint's failure
     that a later audit cleared is history, not a verdict on the change.
 
-    Tier 0 checks one edited file at the edit and is not a verdict on the
+    Tier 0 checks one edited file at the check and is not a verdict on the
     change: it is left out, and `edit_checks=True` returns only it instead.
+
+    The latest kept is per gate and file, not per gate alone: tier 0 runs on
+    every edited file, so a later file's pass on a gate must not mask an
+    earlier file's failure. A tier-0 record names its file (`Finding.path`);
+    tiers 1 and 2, and a ledger sealed before the field, name none, and for
+    those the key is the gate, as before.
     """
     seam: list[tuple[int, _Audit]] = []
-    latest: dict[str, tuple[int, _Audit]] = {}
+    latest: dict[tuple[str, str], tuple[int, _Audit]] = {}
     for order, span in enumerate(spans):
         # A line that does not parse reads its verdict from its exit code.
         finding = tier_finding(span.name, span.detail, span.exit_code)
         if finding is not None:
             if (finding.tier == 0) != edit_checks:
                 continue
-            latest[finding.gate] = (
+            latest[(finding.gate, finding.path)] = (
                 order,
                 _Audit(
                     f"audit:{finding.gate}",
@@ -446,6 +459,7 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
                     finding.verdict,
                     finding.detail,
                     finding.tier,
+                    finding.path,
                 ),
             )
         elif not edit_checks and span.name.startswith("audit:") and span.name not in FEED_SPANS:
@@ -1076,9 +1090,15 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     if p1_row is not None:
         rows.append(p1_row)
 
-    # -- edit checks (tier 0: one edited file, at the edit; not a verdict) -------------
+    # -- edit checks (tier 0: every edited file; not a verdict) -------------------------
     if edit_checks:
         passed = sum(a.exit_code == 0 for a in edit_checks)
+        files = sorted({a.path for a in edit_checks if a.path})
+        named = len(files) > 1
+        # More than one file: name each in the text and in its item, or a
+        # failure on one file reads under the other's pass. One file (or a
+        # ledger sealed before the records learned the file) renders exactly
+        # as before, byte for byte.
         rows.append(
             Row(
                 "edit-checks",
@@ -1086,13 +1106,26 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 # Never "proven": an edit check is not an audit verdict. A
                 # failing one is still a failed record (and refuses a merge).
                 "observed" if passed == len(edit_checks) else "failed",
-                f"{passed} of {_n(len(edit_checks), 'edit check')} passed. Tier 0 checks "
-                "one edited file (syntax, ruff, imports) when it is written; it is not "
-                "an audit verdict and is not counted in Audit.",
+                (
+                    f"{passed} of {_n(len(edit_checks), 'edit check')} passed. Tier 0 checks "
+                    + (
+                        f"each edited file (syntax, ruff, imports) when it is written: "
+                        f"{', '.join(files)}; it is not an audit verdict and is not counted "
+                        "in Audit."
+                        if named
+                        else "one edited file (syntax, ruff, imports) when it is written; "
+                        "it is not an audit verdict and is not counted in Audit."
+                    )
+                ),
                 tuple(a.record_hash for a in edit_checks),
                 tuple(
-                    f"{'✓' if a.exit_code == 0 else '✗'} "
-                    f"{a.name.removeprefix('audit:')}: {a.detail}"
+                    (
+                        f"{'✓' if a.exit_code == 0 else '✗'} "
+                        f"{a.name.removeprefix('audit:')} ({a.path}): {a.detail}"
+                        if named and a.path
+                        else f"{'✓' if a.exit_code == 0 else '✗'} "
+                        f"{a.name.removeprefix('audit:')}: {a.detail}"
+                    )
                     for a in edit_checks
                 ),
             )

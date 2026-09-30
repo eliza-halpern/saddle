@@ -274,9 +274,9 @@ planted-bug trees, 49 of 65 for the right reason (measured on `48eb6d6`). The op
    boundary (`sandbox.confine`, no network).
 2. **Auditor** — `auditor.Auditor`: the gates of §3 Phase 3 (`gates`, pure predicates;
    `evidence`, the runners) applied to a tree the executor produced, split into tiers and
-   cached by tree hash. Tier 0 checks one edited file at the edit (syntax, ruff, imports);
-   tier 1 runs at checkpoints on a copy of the tree in a background thread; tiers 1 and 2
-   run at `finish`. Findings reach the model as tool results (`feed.AuditFeed`, arm
+   cached by tree hash. Tier 0 checks one edited file at a time, each finding
+   naming the file it checked (syntax, ruff, imports); tier 1 runs at checkpoints
+   on a copy of the tree in a background thread; tiers 0, 1 and 2 run at `finish`. Findings reach the model as tool results (`feed.AuditFeed`, arm
    E+A+F); `finish` is refused while a finding is `fail` or `blocked` and not
    `sanctioned`, up to `--finish-refusal-cap` consecutive refusals on an unchanged set
    (then `stopped: audit unresolved`). Arms: E (no auditor), E+A (audit and journal,

@@ -351,6 +351,10 @@ class TierFinding:
     tier: int
     verdict: str
     detail: str
+    path: str = ""
+    """The file a tier-0 finding checked, from the `path` its record sealed
+    (`auditor.finding_body`); "" for tiers 1 and 2 and for a ledger sealed
+    before the field."""
 
 
 EXIT_VERDICT: Final[Mapping[int, str]] = {
@@ -404,7 +408,8 @@ def _cut_detail(line: str) -> str:
 def tier_finding(name: str, detail: str, exit_code: int | None = None) -> TierFinding | None:
     """The finding an auditor span seals, or None if `name` is not one.
 
-    The span's detail is the `auditor.Finding` as JSON. A detail that does
+    The span's detail is the `auditor.Finding` as JSON, which a tier-0
+    finding seals with the file it checked under `path`. A detail that does
     not parse, or names no verdict, still names its gate and tier; its
     verdict is then the one its `exit_code` seals (`EXIT_VERDICT`), never
     "unreadable" when the code is given, and its detail whatever the line
@@ -421,7 +426,13 @@ def tier_finding(name: str, detail: str, exit_code: int | None = None) -> TierFi
     sealed = "unreadable" if exit_code is None else EXIT_VERDICT.get(exit_code, "unreadable")
     if not isinstance(body, dict):
         return TierFinding(gate, tier, sealed, _cut_detail(detail) or detail)
-    return TierFinding(gate, tier, str(body.get("verdict", sealed)), str(body.get("detail", "")))
+    return TierFinding(
+        gate,
+        tier,
+        str(body.get("verdict", sealed)),
+        str(body.get("detail", "")),
+        str(body.get("path", "")),
+    )
 
 
 def start_field(detail: str, key: str) -> str:

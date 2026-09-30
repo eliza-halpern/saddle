@@ -19,6 +19,7 @@ is the only writer of `audit-tier<N>:<gate>` spans), wrapped in the
 
 from __future__ import annotations
 
+import json
 import subprocess
 import uuid
 from collections.abc import Callable
@@ -50,10 +51,11 @@ def git(root: Path, *argv: str) -> None:
 def audited_run(
     tmp_path: Path,
     test: str = TEST,
+    n: str = FIXED,
     audit: Callable[[Auditor, Path], object] = lambda auditor, _repo: auditor.audit(),
 ) -> Path:
     """A finished run's ledger holding the real auditor's records: by default
-    one `Auditor.audit()` (tiers 0, 1, 2)."""
+    one `Auditor.audit()` (tiers 0, 1, 2) over `n.py` and `test_n.py`."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "n.py").write_text(BASE)
@@ -61,7 +63,7 @@ def audited_run(
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "baseline")
-    (repo / "n.py").write_text(FIXED)
+    (repo / "n.py").write_text(n)
     (repo / "test_n.py").write_text(test)
     journal = repo / ".saddle" / "runs" / "r1" / "proofs.jsonl"
     start = build_span(
@@ -110,11 +112,12 @@ def gates_by_tier(journal: Path) -> dict[int, set[str]]:
 
 
 def test_tier_0_edit_checks_are_not_counted_as_audit_verdicts(tmp_path: Path) -> None:
-    """Known-good: 9 verdicts and 3 edit checks read "9 of 9" plus an edit-check line.
+    """Known-good: 9 verdicts and 6 edit checks (3 per file on the two changed
+    files) read "9 of 9" plus an edit-check line naming each file.
     Known-bad: the old "12 of 12" reading."""
     journal = audited_run(tmp_path)
     gates = gates_by_tier(journal)
-    assert gates[0] == set(TIER0)  # syntax, ruff, imports: 3 edit checks
+    assert gates[0] == set(TIER0)  # syntax, ruff, imports: 3 edit checks per file
     # tests/full-suite fill the Tests row and mutation the Mutation row.
     verdicts = (gates[1] | gates[2]) - {"tests", "full-suite", "mutation"}
     assert len(verdicts) == 9
@@ -126,14 +129,23 @@ def test_tier_0_edit_checks_are_not_counted_as_audit_verdicts(tmp_path: Path) ->
     assert not any("tier 0" in item for item in rows["audit"].items)
     edit = rows["edit-checks"]
     assert edit.title == "Edit checks"
-    assert edit.status == "observed"  # an at-edit check is never an audit verdict
-    assert edit.text.startswith("3 of 3 edit checks passed. ")
-    assert [i.split(":")[0] for i in edit.items] == ["✓ syntax", "✓ ruff", "✓ imports"]
-    assert len(edit.cites) == 3
+    assert edit.status == "observed"  # an at-check check is never an audit verdict
+    assert edit.text.startswith("6 of 6 edit checks passed. ")
+    # More than one file: the row names each, in the text and in every item.
+    assert "n.py, test_n.py" in edit.text
+    assert [i.split(":")[0] for i in edit.items] == [
+        "✓ syntax (n.py)",
+        "✓ ruff (n.py)",
+        "✓ imports (n.py)",
+        "✓ syntax (test_n.py)",
+        "✓ ruff (test_n.py)",
+        "✓ imports (test_n.py)",
+    ]
+    assert len(edit.cites) == 6
     text = render_packet_text(packet)
     assert "12 of 12" not in text
     assert "Audit [proven]: 9 of 9 findings passed." in text
-    assert "Edit checks [observed]: 3 of 3 edit checks passed." in text
+    assert "Edit checks [observed]: 6 of 6 edit checks passed." in text
     assert packet.verdict_text.endswith("every audit finding recorded passed.")
 
 
@@ -143,20 +155,127 @@ def test_a_failing_edit_check_is_its_own_failed_line_and_still_refuses_merge(
     """Moving tier 0 out of the Audit row must not let a failing edit check merge.
 
     The unused import is in the file tier 0 checks last (`Auditor.audit`
-    sorts by path): the row keeps the latest finding per gate, so an earlier
-    file's failure is masked by a later file's pass (open: the
-    ledger does not record which file a tier-0 span checked).
+    sorts by path): the row keeps the latest finding per gate per file, the
+    failure stands, and the row names the file its record sealed.
     """
     journal = audited_run(tmp_path, test="import os\n" + TEST)
     packet = compile_packet(journal)
     rows = {row.key: row for row in packet.rows}
     edit = rows["edit-checks"]
     assert edit.status == "failed"
-    assert edit.text.startswith("2 of 3 edit checks passed. ")
-    assert any(i.startswith("✗ ruff: tier 0, fail: ") for i in edit.items)
+    assert edit.text.startswith("5 of 6 edit checks passed. ")
+    assert "n.py, test_n.py" in edit.text
+    assert any(i.startswith("✗ ruff (test_n.py): tier 0, fail: ") for i in edit.items)
     assert not any("tier 0" in item for item in rows["audit"].items)
     assert rows["audit"].text.endswith(" of 9 findings passed.")
     assert "Edit checks" in merge_refusal(packet)
+
+
+def test_an_earlier_files_failed_edit_check_is_not_masked_by_a_later_file(
+    tmp_path: Path,
+) -> None:
+    """Known-bad: the row once kept the latest finding per gate alone, so a
+    failure on the file checked first read under the pass of the file
+    checked last: n.py failed ruff, test_n.py passed it, and the row said
+    "3 of 3 passed" with an empty merge refusal -- the failure was not on
+    the record at all (the ledger did not name the file either).
+
+    The tier-0 record now seals the file it checked under `path`, the row
+    keeps the latest finding per gate per file, and with more than one
+    file it names each: the failure stands, and the refusal names it.
+    """
+    journal = audited_run(tmp_path, n="import os\n\n\ndef f():\n    return 2\n")
+    packet = compile_packet(journal)
+    rows = {row.key: row for row in packet.rows}
+    edit = rows["edit-checks"]
+    assert edit.status == "failed"
+    assert edit.text.startswith("5 of 6 edit checks passed. ")
+    assert "n.py, test_n.py" in edit.text
+    assert any(i.startswith("✗ ruff (n.py): tier 0, fail: ") for i in edit.items)
+    assert any(i.startswith("✓ ruff (test_n.py): ") for i in edit.items)
+    assert len(edit.cites) == 6
+    # The failure is on the record, so the merge refusal names it.
+    assert "Edit checks" in merge_refusal(packet)
+    findings = [
+        finding
+        for finding in (
+            tier_finding(span.name, span.detail, span.exit_code) for span in read_spans(journal)
+        )
+        if finding is not None
+    ]
+    # The ledger names the file in every tier-0 record, and in nothing else.
+    assert sorted(f.path for f in findings if f.tier == 0) == [
+        "n.py",
+        "n.py",
+        "n.py",
+        "test_n.py",
+        "test_n.py",
+        "test_n.py",
+    ]
+    assert all(not f.path for f in findings if f.tier != 0)
+
+
+def test_a_single_files_edit_checks_render_byte_identically_to_the_old_ledger(
+    tmp_path: Path,
+) -> None:
+    """Done-when: a single-file ledger gives a packet byte-identical to
+    before the records learned the file. The ledger the old auditor sealed
+    for one file (no `path` key in the record's JSON) and the one the new
+    auditor seals for the same file (the record names it) compile to
+    byte-identical packets: the row's count, text and items read exactly
+    as they did before the change.
+    """
+    old = tmp_path / "a" / ".saddle" / "runs" / "r1" / "proofs.jsonl"
+    for gate, detail in (
+        ("syntax", "1 file(s) parsed"),
+        ("ruff", "1 file(s) clean"),
+        ("imports", "0 name(s) resolved"),
+    ):
+        body = {
+            "gate": gate,
+            "tier": 0,
+            "verdict": "pass",
+            "reason": "code-wrong",
+            "detail": detail,
+            "cites": [],
+        }  # fmt: skip
+        append_span(
+            old,
+            build_span(
+                node_id="n",
+                argv=["saddle-audit", "tier0", gate, "k"],
+                duration_ms=0,
+                exit_code=0,
+                detail=json.dumps(body, sort_keys=True),
+                name=f"audit-tier0:{gate}",
+            ),
+        )
+    for span in read_spans(old):
+        assert "path" not in json.loads(span.detail)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "n.py").write_text(FIXED)
+    (repo / ".gitignore").write_text("__pycache__/\n.saddle/\n")
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "baseline")
+    new = tmp_path / "b" / ".saddle" / "runs" / "r1" / "proofs.jsonl"
+    Auditor(repo, config=AuditorConfig(journal=new)).tier0("n.py", FIXED)
+    for span in read_spans(new):
+        assert json.loads(span.detail)["path"] == "n.py"
+    # Same run id on purpose: the packets must be byte-identical, not merely
+    # differ by the ledger's location in the file system.
+    assert render_packet_text(compile_packet(old)) == render_packet_text(compile_packet(new))
+    row = next(r for r in compile_packet(new).rows if r.key == "edit-checks")
+    assert row.text == (
+        "3 of 3 edit checks passed. Tier 0 checks one edited file (syntax, ruff, imports) "
+        "when it is written; it is not an audit verdict and is not counted in Audit."
+    )
+    assert row.items == (
+        "✓ syntax: tier 0, pass: 1 file(s) parsed",
+        "✓ ruff: tier 0, pass: 1 file(s) clean",
+        "✓ imports: tier 0, pass: 0 name(s) resolved",
+    )
 
 
 def test_a_ledger_with_only_edit_checks_has_no_audit_verdict(tmp_path: Path) -> None:

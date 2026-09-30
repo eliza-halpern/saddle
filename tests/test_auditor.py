@@ -815,9 +815,12 @@ def test_a_failing_audit_is_never_reused_across_a_format_only_edit(
 def test_every_tier_0_finding_names_the_file_it_checked(clean_tree: Path) -> None:
     """Red before: a failing format check read "ruff format --check exited 1",
     and a watched run formatted the wrong files twice before finding the one
-    it meant. Each tier-0 finding now starts with its file."""
+    it meant. Each tier-0 finding carries its file, and the model's text names it."""
+    from saddle.feed import AuditResult, render
+
     found = Auditor(clean_tree).tier0("n.py", "def f():\n    return  2\n").findings
-    assert all(f.detail.startswith("n.py: ") or "n.py" in f.detail for f in found), found
+    assert {f.path for f in found} == {"n.py"}
     ruff = next(f for f in found if f.gate == "ruff")
     assert ruff.verdict == "fail"
-    assert ruff.detail.startswith("n.py: ")
+    text = render(AuditResult("finish", "t" * 12, found))
+    assert "- ruff (tier 0): fail, code-wrong: n.py: " in text

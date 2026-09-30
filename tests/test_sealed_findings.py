@@ -81,8 +81,11 @@ UNCOVERED = Finding(
 
 def old_line(finding: Finding) -> str:
     """A finding as the auditor sealed it before it fitted findings to the
-    line: its whole JSON, which `build_span` then cuts at the cap."""
-    return json.dumps(dataclasses.asdict(finding), sort_keys=True)
+    line: its whole JSON, which `build_span` then cuts at the cap. That
+    writer knew no `path` field, so the key is absent here too."""
+    body = dataclasses.asdict(finding)
+    body.pop("path", None)
+    return json.dumps(body, sort_keys=True)
 
 
 def seal(journal: Path, name: str, detail: str, exit_code: int) -> None:

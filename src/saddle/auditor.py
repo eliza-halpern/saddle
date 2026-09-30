@@ -216,6 +216,19 @@ def _reads_back(text: str, finding: Finding) -> bool:
     )
 
 
+def finding_body(finding: Finding) -> dict[str, object]:
+    """The finding's fields as the dict its records carry.
+
+    `path` is absent when it holds none: tiers 1 and 2 judge the tree, not
+    a file, so their records read exactly as a ledger sealed before the
+    field; a record that lacks the key reads back with it empty
+    (`Findings.from_dict`)."""
+    body = dataclasses.asdict(finding)
+    if not body["path"]:
+        body.pop("path")
+    return body
+
+
 def sealed_finding(finding: Finding) -> str:
     """The finding as the JSON its `audit-tier<N>:<gate>` span seals: one that
     parses on the ledger line, whatever the verdict, with its gate, tier,
@@ -232,11 +245,16 @@ def sealed_finding(finding: Finding) -> str:
     the line holds is sealed as before, byte for byte. The whole finding is
     in the audit's own sidecar (`feed.AuditResult`), and a coverage
     finding's lines and basis in its span's sidecar (`coverage_evidence`).
+
+    A tier-0 finding seals the file it checked under `path`, so a reader can
+    tell which file a per-file check checked; a finding that checked no
+    file seals no key.
     """
-    text = json.dumps(dataclasses.asdict(finding), sort_keys=True)
+    body = finding_body(finding)
+    text = json.dumps(body, sort_keys=True)
     if _reads_back(text, finding):
         return text
-    body = {**dataclasses.asdict(finding), "cites": list(finding.cites[:1])}
+    body = {**body, "cites": list(finding.cites[:1])}
     text = json.dumps(body, sort_keys=True)
     if _reads_back(text, finding):
         return text  # the gate's basis was what did not fit; the detail is whole
@@ -300,11 +318,19 @@ class Finding:
     reason: Reason
     detail: str
     cites: tuple[str, ...]
+    path: str = ""
+    """The file this finding checked, relative to the audited tree's root:
+    tier 0 checks one file's bytes, so its records name the file, and a
+    failure on one file cannot read under a pass on another (the packet's
+    Edit checks row keeps the latest finding per gate per file). Tiers 1
+    and 2 judge the tree, so their findings leave it empty, as does a
+    record sealed before the field."""
 
 
 @dataclass(frozen=True)
 class Findings:
-    """A tier's findings over one tree (or, at tier 0, one file's bytes)."""
+    """A tier's findings over one tree (or, at tier 0, one file's bytes,
+    named in each finding's `path`)."""
 
     tier: int
     key: str
@@ -341,7 +367,7 @@ class Findings:
             "passed": self.passed,
             **({"needs_you": True} if self.needs_you else {}),
             "cached": self.cached,
-            "findings": [dataclasses.asdict(f) for f in self.findings],
+            "findings": [finding_body(f) for f in self.findings],
             **(
                 {"survivors": [dataclasses.asdict(v) for v in self.survivors]}
                 if self.survivors
@@ -1015,11 +1041,12 @@ class Auditor:
         ]
         build = setup_py_build_requirements(self.repo) if rel == "setup.py" else set()
         imports = check_imports(rel, new_text, roots, gate_interpreter_finds, build)
-        # Each finding names its file: tier 0 checks one file at a time, and a
-        # bare "ruff format --check exited 1" left the model to guess which.
+        # Each finding names the file it checked, so the ledger's records
+        # tell the files apart and the packet's Edit checks row keeps a
+        # failure on one from reading under a pass on another; the feed
+        # renders it for the model (`feed.render`).
         findings = tuple(
-            dataclasses.replace(f, detail=f.detail if rel in f.detail else f"{rel}: {f.detail}")
-            for f in (_from_check(c, 0) for c in (syntax, ruff, imports))
+            dataclasses.replace(_from_check(c, 0), path=rel) for c in (syntax, ruff, imports)
         )
         return self._store(Findings(tier=0, key=key, findings=findings))
 

@@ -91,6 +91,7 @@ from saddle.auditor import (
     Findings,
     Tier2Mode,
     coverage_evidence,
+    finding_body,
     rewritten,
     sanction,
 )
@@ -178,7 +179,7 @@ class AuditResult:
             "passed": self.passed,
             **({"needs_you": True} if self.needs_you else {}),
             "note": self.note,
-            "findings": [dataclasses.asdict(f) for f in self.findings],
+            "findings": [finding_body(f) for f in self.findings],
             **(
                 {
                     "mutant_detail": [
@@ -278,7 +279,9 @@ def render(result: AuditResult) -> str:
     said: dict[str, int] = {}
     for f in bad:
         detail = _worded(result, f)
-        text = f"- {f.gate} (tier {f.tier}): {f.verdict}, {f.reason}: {detail}"
+        # A tier-0 finding names its file (`Finding.path`) when its detail does not.
+        where = f"{f.path}: " if f.path and f.path not in detail else ""
+        text = f"- {f.gate} (tier {f.tier}): {f.verdict}, {f.reason}: {where}{detail}"
         said[text] = said.get(text, 0) + 1
     lines.extend(text if n == 1 else f"{text} ({n} findings)" for text, n in said.items())
     allowed = [f for f in result.findings if f.reason == "sanctioned" and f.verdict in FAILING]

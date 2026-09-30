@@ -3,7 +3,10 @@
 The auditor (`src/saddle/auditor.py`, class `Auditor`) runs saddle's 13 gates plus one
 extra check, `check_imports`. The checks are split into three tiers by when they run.
 Each finding carries a gate, a tier, a verdict (`pass`, `fail`, `not-applicable` or
-`blocked`), a reason class, a detail, and `cites` (the function that decided it).
+`blocked`), a reason class, a detail, and `cites` (the function that decided it); a
+tier-0 finding also names the file it checked under `path` (`auditor.finding_body`
+seals it, tiers 1 and 2 seal no key, and a record sealed before the field reads back
+with it empty), so the packet's Edit checks row can tell the files apart.
 
 ## Reason classes
 
