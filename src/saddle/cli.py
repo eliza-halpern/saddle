@@ -1603,8 +1603,10 @@ def _add_tier2(sub: argparse.ArgumentParser) -> None:
         choices=list(TIER2_MODES),
         default="score",
         help="Tier-2 mutation verdict: 'score' (default) is the 85%% kill-rate bar, "
-        "unchanged; 'shortlist' refuses on any surviving changed-line mutant without "
-        "a checked reason and names them, with coverage as a locator only.",
+        "unchanged; 'shortlist' does not refuse on survivors: a surviving changed-line "
+        "mutant without a checked reason is reported as not proven and named, and an "
+        "uncovered changed line is reported as not proven too (coverage is a locator "
+        "only). A failure in any other check still refuses.",
     )
 
 

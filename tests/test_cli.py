@@ -290,6 +290,22 @@ def test_version_flag_prints_and_exits(capsys: pytest.CaptureFixture[str]) -> No
     assert out.startswith("saddle 0.1.1")
 
 
+def test_tier2_help_says_shortlist_reports_not_proven_and_does_not_refuse_on_survivors(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Known-good: both commands that take --tier2 describe the shortlist as
+    reporting survivors and uncovered lines as not proven, with other failures
+    still refusing. Known-bad: the old wording, which said it refuses on any
+    surviving mutant (a behaviour it lost when survivors became not-proven)."""
+    for command in ("audit", "auto"):
+        with pytest.raises(SystemExit, match=r"^0$"):
+            main([command, "--help"])
+        out = " ".join(capsys.readouterr().out.split())
+        assert "reported as not proven and named" in out
+        assert "A failure in any other check still refuses" in out
+        assert "refuses on any surviving" not in out
+
+
 def test_help_flag_shows_exact_description(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit, match=r"^0$"):
         main(["--help"])
