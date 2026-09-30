@@ -404,6 +404,97 @@ def test_a_model_error_is_a_stop(repo: Path) -> None:
     assert result.reason == "model error: boom"
 
 
+# -- stall check (--stall-check): eject a never-acted, still-hedging run -------
+
+# A round of high-hedge reasoning (>=50 words, dense markers) with a non-progress
+# read. Its density is well above STALL_HEDGE_PER_K.
+HEDGY = (
+    "hmm wait what is the task even saying here maybe i should re-read the task "
+    "i think perhaps the real bug must be somewhere else not sure this seems "
+    "unclear why is it like this or is it actually fine it doesnt make sense to me "
+    "apparently the count must mean something else presumably i guess i am confused "
+    "hold on wait what does the record actually hold here re-read again not clear"
+) * 2
+# The same length of plain, productive reasoning: no hedging markers.
+PLAIN = (
+    "open the coverage module and locate describe coverage it computes the per "
+    "function count from the changed set and the span map add a parameter and "
+    "adjust the caller in packet and feed then run the covering tests to confirm "
+    "the new behavior lands correctly and the row shows the gate own count now "
+    "read the sidecar writer and seal the compelled lines as a relative path list"
+) * 2
+
+
+def hedgy_tail() -> list[Any]:
+    return [StreamToken(stream="reasoning", text=HEDGY), call("read_file", "rd", path="calc.py")]
+
+
+def test_stall_check_ejects_a_never_acted_still_hedging_run(repo: Path) -> None:
+    # Past the warmup, only reading and hedging, never an edit/premise/dispute.
+    result = auto(
+        repo,
+        Scripted([], tail=hedgy_tail()),
+        stall_check=True,
+        time_budget_s=100000,
+        clock=Clock(80),
+    )
+    assert result.outcome == "stopped"
+    assert result.reason.startswith("needs you: stalled")
+    assert "no edit, premise_check or dispute" in result.reason
+    assert "auto:finished" not in [s.name for s in read_spans(result.journal)]
+    assert verify_journal(result.journal) == []
+
+
+def test_stall_check_spares_a_run_that_acted_even_if_it_then_hedges(repo: Path) -> None:
+    # One premise_check up front exempts the run for the rest of it: it then
+    # hedges past the warmup but is never ejected for the stall (times out).
+    edit = call("edit_file", path="calc.py", old="a - b", new="a + b")
+    result = auto(
+        repo,
+        Scripted([[edit]], tail=hedgy_tail()),
+        stall_check=True,
+        time_budget_s=1200,
+        clock=Clock(80),
+    )
+    assert result.outcome == "stopped"
+    assert not result.reason.startswith("needs you: stalled")
+    assert result.reason.startswith("time budget exhausted")
+
+
+def test_stall_check_spares_a_never_acted_run_below_the_hedge_threshold(repo: Path) -> None:
+    # Deep exploration with no hedging: never acts, past the warmup, but plain
+    # reasoning stays below the threshold, so no eject (times out instead).
+    plain_tail = [
+        StreamToken(stream="reasoning", text=PLAIN),
+        call("read_file", "rd", path="calc.py"),
+    ]
+    result = auto(
+        repo, Scripted([], tail=plain_tail), stall_check=True, time_budget_s=1200, clock=Clock(80)
+    )
+    assert result.outcome == "stopped"
+    assert not result.reason.startswith("needs you: stalled")
+    assert result.reason.startswith("time budget exhausted")
+
+
+def test_stall_check_off_never_ejects_even_a_hedging_idle_run(repo: Path) -> None:
+    # Default (flag off): the hedge is scored for nothing; the run times out.
+    result = auto(repo, Scripted([], tail=hedgy_tail()), time_budget_s=1200, clock=Clock(80))
+    assert result.outcome == "stopped"
+    assert not result.reason.startswith("needs you: stalled")
+    assert result.reason.startswith("time budget exhausted")
+
+
+def test_stall_check_does_not_eject_before_the_warmup(repo: Path) -> None:
+    # Hedging and never acting, but the clock is slow (2s/tick), so the whole
+    # run stays under the 600s warmup and reaches its finish: the warmup must
+    # hold the eject off. (A mutant that armed before the warmup would stop it
+    # as stalled on the first hedgy round instead.)
+    hedgy = [StreamToken(stream="reasoning", text=HEDGY), call("read_file", "rd", path="calc.py")]
+    client = Scripted([hedgy, hedgy, finish()])
+    result = auto(repo, client, stall_check=True, time_budget_s=1200, clock=Clock(2))
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+
+
 def budget_options(tmp_path: Path, **budget: Any) -> tuple[TurnOptions, AutoRun]:
     run = AutoRun(budget=RunBudget(**{"time_s": 60, "tokens": 1000, **budget}), run_span="s")
     options = TurnOptions(workdir=tmp_path, journal=tmp_path / "j.jsonl", auto=run)

@@ -118,6 +118,64 @@ is bounded; the tree is never marked finished by it."""
 EMPTY_ROUNDS: Final = "no tool call in {n} consecutive rounds"
 """The sealed stop reason when `EMPTY_ROUND_CAP` is reached."""
 
+STALL_WARMUP_S: Final = 600.0
+"""`--stall-check`: the rolling stall window is not armed until this many
+seconds have elapsed. A run that has only been exploring is indistinguishable
+from a stuck one before this: on the recorded runs the productive ones made
+their first edit as late as ~19 min (`run3`), so an earlier arm ejects real
+work. Ten minutes clears every productive first-edit in the sample."""
+
+STALL_WINDOW_S: Final = 300.0
+"""The trailing span of reasoning the stall check scores (five minutes)."""
+
+STALL_HEDGE_PER_K: Final = 5.0
+"""Hedge-marker matches per 1,000 reasoning words, over the window, at or above
+which a run that has never acted is ejected. Tuned, NOT yet held-out: on the 30
+recorded WATCH runs, at the moment a run is ejectable (past the warmup, not yet
+acted), the stuck ones scored 5.3-7.1 and the productive ones 1.4-4.4 under this
+lexicon; 5.0 caught 4 of 5 stalls with no false positives, but the margin is
+thin (4.4 vs 5.3) and the threshold is fitted on that sample. Re-tune on
+outcome-labelled held-out runs before trusting it off this branch."""
+
+_HEDGE = re.compile(
+    r"\bmaybe\b|\bperhaps\b|\bnot sure\b|\bunclear\b|\bunsure\b|\bconfus|\bi think\b"
+    r"|\bi guess\b|\bseems?\b|\bapparently\b|\bpresumably\b|\bsomehow\b"
+    r"|\bhold on\b|\bwhat (is|does|if|the)\b|\?\?|\bor is it\b"
+    r"|\bmust (be|have|mean)\b|\bi'?m (confused|lost|missing)\b|\bdoesn'?t make sense\b"
+    r"|\bwhy (is|does|would)\b|\bre-?read\b|\bcan'?t tell\b|\bnot clear\b",
+    re.IGNORECASE,
+)
+"""Epistemic-hedging / confusion markers. The stuck-run signal is uncertainty,
+not negative polarity (a productive debugging run is just as negative), so this
+scores hedging, not sentiment. `hmm`, `wait` and `actually` are deliberately
+excluded: on the recorded runs they were pure discourse noise, used as often by
+productive deep-dives as by stuck ones (run9/10/11, same task, same
+productivity, diverged only on those three words), so counting them measured
+writing style, not confusion, and false-ejected 4/15 productive runs."""
+
+
+def hedge_density(text: str) -> float:
+    """Hedge-marker matches per 1,000 words of `text`; 0.0 for <50 words (too
+    little to score). Deterministic and lexical, so it can vary and be tested."""
+    words = len(text.split())
+    if words < 50:
+        return 0.0
+    return len(_HEDGE.findall(text)) / words * 1000
+
+
+STALLED: Final = (
+    "needs you: stalled -- {mins:.0f} min with no edit, premise_check or dispute "
+    "and still turning the task over (hedging {density:.1f} of {threshold:.1f} per "
+    "1k words). Read the reasoning and decide."
+)
+"""The sealed stop reason when `--stall-check` ejects a never-acted run. Reads
+as a needs-you so the packet's verdict keeps the whole reason (no semicolon)."""
+
+STALL_TOOLS: Final = frozenset({"write_file", "edit_file", "premise_check", "dispute", "finish"})
+"""A call to any of these is a progress-action: it exempts the run from the
+stall check for the rest of the run. An attempt counts (the run engaged), so a
+refused edit or a premise_check that failed to reproduce still exempts."""
+
 
 @dataclass
 class RunBudget:
@@ -407,6 +465,25 @@ class AutoRun:
     compactions: int = 0
     empty_rounds: int = 0
     """Length of the current run of rounds with no tool call."""
+    stall_check: bool = False
+    """`--stall-check`: after `STALL_WARMUP_S`, a run that has never called an
+    edit, premise_check or dispute and whose trailing reasoning stays at or
+    above `STALL_HEDGE_PER_K` hedging is stopped and returned to the user
+    (`STALLED`). Off: nothing is scored and the run is never ejected for it."""
+    ever_acted: bool = False
+    """Set once the run calls any `STALL_TOOLS` tool. A run that has acted is
+    exempt from the stall check for the rest of the run."""
+    reasoning_log: list[tuple[float, str]] = field(default_factory=list)
+    """(elapsed_seconds, round reasoning) per round, for the trailing-window
+    hedge score. Only appended when `stall_check` is on."""
+
+    def stall_density(self, window_s: float = STALL_WINDOW_S) -> float:
+        """Hedge density over the reasoning of the last `window_s` seconds."""
+        if not self.reasoning_log:
+            return 0.0
+        now = self.reasoning_log[-1][0]
+        window = " ".join(t for (s, t) in self.reasoning_log if s >= now - window_s)
+        return hedge_density(window)
 
     def stop(self, reason: str) -> None:
         if not self.outcome:
@@ -856,6 +933,24 @@ def run_turn(
                     )
                     yield ErrorEvent(message=f"stopped: {auto.reason}")
                     break
+                if auto.stall_check:
+                    if any(c.name in STALL_TOOLS for c in calls):
+                        auto.ever_acted = True
+                    auto.reasoning_log.append((auto.budget.elapsed(), reasoning))
+                    elapsed = auto.budget.elapsed()
+                    density = auto.stall_density()
+                    if (
+                        not auto.ever_acted
+                        and elapsed >= STALL_WARMUP_S
+                        and density >= STALL_HEDGE_PER_K
+                    ):
+                        auto.stop(
+                            STALLED.format(
+                                mins=elapsed / 60, density=density, threshold=STALL_HEDGE_PER_K
+                            )
+                        )
+                        yield ErrorEvent(message=f"stopped: {auto.reason}")
+                        break
 
             keep = options.keep_reasoning and auto is not None and bool(reasoning)
             if not calls:

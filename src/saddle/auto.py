@@ -120,6 +120,16 @@ PREMISE_PROMPT: Final = (
 )
 """Appended to the system prompt with `--premise-check`."""
 
+STALL_PROMPT: Final = (
+    " You have about ten minutes to make your first real move -- an edit, a "
+    "premise_check or a dispute. If ten minutes pass with none of those and you "
+    "are still turning the task over, the run returns to the person with your "
+    "reasoning, unfinished. So do not read and re-read without acting: once you "
+    "have shown the task's claim cannot hold, call dispute."
+)
+"""Appended to the system prompt with `--stall-check`, so the eject is a stated
+rule the model can satisfy (act, or dispute), not a silent trap."""
+
 ENVIRONMENT_PROMPT: Final = (
     " Your working directory is {worktree}, a fresh git worktree of the "
     "repository; your commands run in it inside a sandbox with no network. The "
@@ -357,6 +367,10 @@ class AutoOptions:
     premise_check: bool = False
     """`--premise-check`: edits are refused until the model has shown the problem
     with `premise_check` (engine), which puts the real output in front of it."""
+    stall_check: bool = False
+    """`--stall-check`: after ~10 min, a run that has never edited, run
+    premise_check or disputed and is still hedging is returned to the user
+    (engine `STALLED`). Off: nothing is scored."""
     """`--format-at-finish`: before each finish audit, `ruff format` the run's
     changed Python files with the project's committed formatter settings. Off
     by default: the model owns its changes."""
@@ -796,6 +810,7 @@ def run_auto(
         ),
         feed=feed,
         require_premise=options.premise_check,
+        stall_check=options.stall_check,
         guard=guard,
         before_finish=(
             (lambda: format_changed(worktree, base)) if options.format_at_finish else None
@@ -859,7 +874,8 @@ def run_auto(
             feed=options.arm == "E+A+F",
         )
         + (CHECK_PROMPT if options.check_tool else "")
-        + (PREMISE_PROMPT if options.premise_check else ""),
+        + (PREMISE_PROMPT if options.premise_check else "")
+        + (STALL_PROMPT if options.stall_check else ""),
         context_tokens=options.context_tokens,
         tools=[
             *TOOLS,
