@@ -872,9 +872,13 @@ $("#new-session").onclick = async (event) => {
   if (button.disabled) return;
   button.disabled = true;
   try {
+    // A new chat starts in the server's default folder (~/saddle-ranch), not
+    // whatever the current session happens to be in; sending no workdir lets
+    // the server fill its default. `saddle-dev work` still overrides it by
+    // PATCHing the session's workdir after it creates the session.
     const session = await api("/api/sessions", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workdir: state.folder || "." }),
+      body: JSON.stringify({}),
     });
     select(session.id);
   } finally {
