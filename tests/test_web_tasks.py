@@ -382,6 +382,27 @@ def test_an_auto_error_fails_the_task(
     assert "worktree exists" in published[-1].detail
 
 
+def test_execute_fails_cleanly_when_the_workdir_is_not_a_repo(tmp_path: Path) -> None:
+    # execute() still guards repo_root, even though the endpoint refuses a
+    # non-repo folder up front: a direct call (or a folder that stopped being a
+    # repo) fails with the reason and writes no packet, rather than crashing.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    published: list[Any] = []
+    run = TaskRun(run_id="r", session_id="s", task="t", time_budget_s=0, token_budget=0)
+    verdict, recap = execute(
+        run,
+        workdir=plain,
+        client=None,
+        publish=published.append,
+        chat_journal=tmp_path / "chat.jsonl",
+        reasoning_effort="low",
+        audit=None,
+    )
+    assert (verdict, recap, run.state) == ("failed", None, "failed")
+    assert "not a git repository" in published[-1].detail
+
+
 def test_a_run_that_leaves_no_outcome_record_is_failed_not_finished(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
