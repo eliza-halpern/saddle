@@ -42,6 +42,29 @@ R1 = "first-round reasoning about calc.py"
 R2 = "second-round reasoning after the nudge"
 
 
+@pytest.fixture(autouse=True)
+def _git_workdir(tmp_path: Path) -> None:
+    """A Task run needs a git worktree, so the endpoint refuses a non-repo
+    folder; these UI tests launch runs in tmp_path, so make it a repository."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "init",
+        ],
+        check=True,
+    )
+
+
 def _read_call() -> dict[str, Any]:
     call = {"index": 0, "id": "r1", "type": "function"}
     call["function"] = {"name": "read_file", "arguments": json.dumps({"path": "calc.py"})}

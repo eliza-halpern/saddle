@@ -32,6 +32,29 @@ HERE = Path(__file__).parent
 CDP = HERE / "fixtures" / "ui3_mode_cdp.mjs"
 
 
+@pytest.fixture(autouse=True)
+def _git_workdir(tmp_path: Path) -> None:
+    """A Task run needs a git worktree, so the endpoint refuses a non-repo
+    folder; these UI tests launch runs in tmp_path, so make it a repository."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "init",
+        ],
+        check=True,
+    )
+
+
 class NoModel:
     def __enter__(self) -> NoModel:
         return self
