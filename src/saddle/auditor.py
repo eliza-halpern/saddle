@@ -1015,7 +1015,12 @@ class Auditor:
         ]
         build = setup_py_build_requirements(self.repo) if rel == "setup.py" else set()
         imports = check_imports(rel, new_text, roots, gate_interpreter_finds, build)
-        findings = tuple(_from_check(c, 0) for c in (syntax, ruff, imports))
+        # Each finding names its file: tier 0 checks one file at a time, and a
+        # bare "ruff format --check exited 1" left the model to guess which.
+        findings = tuple(
+            dataclasses.replace(f, detail=f.detail if rel in f.detail else f"{rel}: {f.detail}")
+            for f in (_from_check(c, 0) for c in (syntax, ruff, imports))
+        )
         return self._store(Findings(tier=0, key=key, findings=findings))
 
     # -- tiers 1 and 2 -------------------------------------------------------

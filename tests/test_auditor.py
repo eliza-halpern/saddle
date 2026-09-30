@@ -810,3 +810,14 @@ def test_a_failing_audit_is_never_reused_across_a_format_only_edit(
     (uncovered_tree / "m.py").write_text("def g():\n\n    return  7\n")
     auditor.tier1()
     assert gate_spy.calls > ran
+
+
+def test_every_tier_0_finding_names_the_file_it_checked(clean_tree: Path) -> None:
+    """Red before: a failing format check read "ruff format --check exited 1",
+    and a watched run formatted the wrong files twice before finding the one
+    it meant. Each tier-0 finding now starts with its file."""
+    found = Auditor(clean_tree).tier0("n.py", "def f():\n    return  2\n").findings
+    assert all(f.detail.startswith("n.py: ") or "n.py" in f.detail for f in found), found
+    ruff = next(f for f in found if f.gate == "ruff")
+    assert ruff.verdict == "fail"
+    assert ruff.detail.startswith("n.py: ")
