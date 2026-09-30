@@ -199,7 +199,7 @@ function addLine(card, line) {
    reply, the last tool call, and a short tail of the latest stream. None of
    it is sealed; it is folded by default and says so on its face. */
 const ACTIVITY_OPEN = "saddle.activityOpen";
-const TAIL_CHARS = 280;
+const STREAM_WINDOW = 40000;  // chars of the current reply's stream kept for the scrollable monitor
 const CHARS_PER_TOKEN = 4;  // engine.CHARS_PER_TOKEN: how an unmetered round is estimated
 
 function activityWanted() {
@@ -268,7 +268,7 @@ function noteActivity(card, inner) {
       a.stream = stream;
       a.mode = stream === "reasoning" ? "thinking" : "writing";
       a.chars += (inner.text || "").length;
-      a.text = (a.text + (inner.text || "")).slice(-TAIL_CHARS * 2);
+      a.text = (a.text + (inner.text || "")).slice(-STREAM_WINDOW);
       break;
     }
     case "tool.start":
@@ -320,14 +320,16 @@ function paintActivity(card) {
     : `none${since || " yet"}`;
   a.tailLabel.textContent = a.stream === "reasoning" ? "latest reasoning, not evidence"
     : a.stream === "reply" ? "latest reply text, not evidence" : "";
-  // The newest words are the point: cut the window at a word and keep the
-  // box scrolled to its end, so a narrow screen clips the oldest words.
-  const cut = a.text.slice(-TAIL_CHARS);
-  const shown = a.text.length > TAIL_CHARS ? `…${cut.slice(cut.indexOf(" ") + 1)}` : a.text;
+  // Show the whole current reply's stream in a scrollable box, so the reasoning
+  // can be read back rather than only its last few tokens. Trim a partial first
+  // word once the window fills. Follow the live end only when the reader is
+  // already there, so scrolling up to read earlier thinking is never yanked.
+  const shown = a.text.length >= STREAM_WINDOW ? `…${a.text.slice(a.text.indexOf(" ") + 1)}` : a.text;
+  const atEnd = a.tail.scrollHeight - a.tail.scrollTop - a.tail.clientHeight < 40;
   a.tail.textContent = shown;
   a.tail.hidden = !shown;
   a.tailLabel.hidden = !shown;
-  a.tail.scrollTop = a.tail.scrollHeight;
+  if (atEnd) a.tail.scrollTop = a.tail.scrollHeight;
 }
 
 /* ---------- needs you ---------- */

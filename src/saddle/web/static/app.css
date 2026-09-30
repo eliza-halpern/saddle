@@ -676,7 +676,8 @@ main { position: relative; }
 .act-tail { margin: 0; padding: 6px 10px; border-left: 2px solid var(--lilac); border-radius: 3px;
   background: linear-gradient(90deg, #cbb2f212, transparent 70%); font-family: var(--serif);
   font-style: italic; font-size: 13.5px; line-height: 1.5; color: var(--ink-dim);
-  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow-y: auto; }
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22em; overflow-y: auto;
+  resize: vertical; }
 .act-note { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-faint); }
 
 /* ---- needs you ---- */
