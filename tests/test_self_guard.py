@@ -31,6 +31,7 @@ from saddle.engine import GUARDED_STOP
 from saddle.journal import read_spans, verify_journal
 from saddle.packet import compile_packet
 from saddle.vllm import VllmClient
+from saddle.web import branch_actions
 
 BUGGY = "def add(a, b):\n    return a - b\n"
 
@@ -212,9 +213,16 @@ def test_a_run_that_edits_gates_py_stops_needing_you(saddle_repo: Path) -> None:
     assert span.exit_code == 3
     assert verify_journal(result.journal) == []
     packet = compile_packet(result.journal, run_id="g1")
-    assert packet.verdict == "stopped"
+    # A held run reads "needs you" (a person decides), never "finished", and
+    # Merge still refuses it: only Approve and merge, by a person, lands it.
+    assert packet.verdict == "needs_you"
+    assert packet.guarded_paths == ("src/saddle/gates.py",)
     assert "src/saddle/gates.py" in packet.verdict_text
-    assert "a person must review it" in packet.verdict_text
+    assert "the model may not approve changes to its own judges" in packet.verdict_text
+    assert branch_actions.merge_refusal(packet).startswith("The run is needing you, not finished")
+    # This run had no auditor (arm E), so even a person may not approve it: the
+    # approval needs an audit verdict to stand on.
+    assert branch_actions.approve_refusal(packet).startswith("No auditor verdict")
     assert f"stopped ({result.reason})" in git(
         saddle_repo, "log", "-1", "--format=%B", result.branch
     )
