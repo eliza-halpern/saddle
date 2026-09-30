@@ -399,8 +399,8 @@ async function stopTask(runId) {
 
 const STATUS_WORD = {
   proven: "proven", failed: "failed", observed: "recorded", absent: "no record",
-  "not-proven": "not proven", question: "needs you", narrative: "narrative, not evidence",
-  cost: "sealed",
+  "not-proven": "not proven", question: "needs you", sanctioned: "sanctioned",
+  narrative: "narrative, not evidence", cost: "sealed",
 };
 
 function citeButton(hash, record, host) {
@@ -570,7 +570,9 @@ const GLYPH = {
    when it lists nothing. */
 function lineTone(row) {
   if (row.key === "not-proven") return row.items.length ? "warn" : "ok";
-  return { proven: "ok", failed: "bad", observed: "info", absent: "none" }[row.status] || "none";
+  return { proven: "ok", failed: "bad", observed: "info", absent: "none", sanctioned: "info" }[
+    row.status
+  ] || "none";
 }
 
 function firstSentence(text) {

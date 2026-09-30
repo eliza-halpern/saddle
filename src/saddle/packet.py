@@ -67,7 +67,15 @@ CHECK_SPAN: Final = "audit:check"
 stays a reader of the ledger."""
 
 Status = Literal[
-    "proven", "failed", "observed", "absent", "not-proven", "question", "narrative", "cost"
+    "proven",
+    "failed",
+    "observed",
+    "absent",
+    "not-proven",
+    "question",
+    "sanctioned",
+    "narrative",
+    "cost",
 ]
 
 CLAIMS: Final = frozenset({"proven", "failed", "observed", "question", "cost"})
@@ -421,6 +429,9 @@ class _Audit:
     """The file a tier-0 finding checked, from the `path` its record sealed
     (`auditor.finding_body`); "" for a seam span, for tiers 1 and 2, and for
     a ledger sealed before the field."""
+    reason: str = ""
+    """An auditor finding's own reason; `sanctioned` is the task's waiver of
+    a failing finding (`auditor.sanction`). "" when it does not parse."""
 
 
 def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_Audit]:
@@ -460,6 +471,7 @@ def _audits(spans: Iterable[SpanRecord], *, edit_checks: bool = False) -> list[_
                     finding.detail,
                     finding.tier,
                     finding.path,
+                    finding.reason,
                 ),
             )
         elif not edit_checks and span.name.startswith("audit:") and span.name not in FEED_SPANS:
@@ -591,11 +603,15 @@ def _asked(audits: list[_Audit], evidence: dict[str, Any] | None) -> tuple[str, 
 def _status(audit: _Audit) -> Status:
     """A finding's row status. Its verdict first: `not-proven` journals exit
     0 like `pass` (`auditor._JOURNAL_EXIT`), so the exit code alone would
-    call an open shortlist survivor proven."""
+    call an open shortlist survivor proven. A `fail` the task sanctioned
+    (`auditor.sanction`) is not a failure of the run: it is `sanctioned`,
+    reported but not held against it."""
     if audit.verdict == "not-proven":
         return "not-proven"
     if audit.verdict == "question":
         return "question"  # exit 4: neither proven nor failed; a person decides
+    if audit.reason == "sanctioned":
+        return "sanctioned"  # exit 1, but the task waived it: reported, not held
     return "proven" if audit.exit_code == 0 else "failed"
 
 
@@ -608,7 +624,57 @@ def _finished_but(failed: list[_Audit], blocked: list[_Audit]) -> str:
     return f"Finished, but {', and '.join(said)}."
 
 
-_MARK: Final[dict[str, str]] = {"proven": "✓", "failed": "✗", "not-proven": "?", "question": "?"}
+def _finished_verdict(
+    audits: list[_Audit],
+    blocked: list[_Audit],
+    failed: list[_Audit],
+    sanctioned: list[_Audit],
+    asked: int,
+) -> str:
+    """A finished run's verdict line. A failure or a block is the refusal
+    (`_finished_but`). With neither, a finding the task sanctioned
+    (`auditor.sanction`: a test rewrite it ordered) is named as reported, not
+    held against the run -- it never reads as the failure the plain gate
+    verdict is. Then an open not-proven, then a clean pass."""
+    if failed or blocked:
+        return _finished_but(failed, blocked)
+    if not audits:
+        return (
+            "The executor called finish. No auditor verdict covers the change, "
+            "so this is finished, not proven done."
+        )
+    unproven = [a for a in audits if a.verdict == "not-proven"]
+    if unproven:
+        said = (
+            "The executor called finish. No audit finding failed; "
+            f"{_n(len(unproven), 'finding')} could not be proven (they do not "
+            "refuse finish)."
+        )
+    elif sanctioned:
+        said = (
+            f"The executor called finish. No audit finding refused it; "
+            f"{_n(len(sanctioned), 'finding')} was sanctioned (a test rewrite the "
+            "task ordered), reported, not held against the run."
+        )
+    else:
+        said = "The executor called finish, and every audit finding recorded passed."
+    if sanctioned and unproven:
+        said += (
+            f" {_n(len(sanctioned), 'finding')} was also sanctioned (a test "
+            "rewrite the task ordered); it is reported, not held against the run."
+        )
+    if asked:
+        said += f" {_n(asked, 'audit finding')} asked a question only you can answer."
+    return said
+
+
+_MARK: Final[dict[str, str]] = {
+    "proven": "✓",
+    "failed": "✗",
+    "not-proven": "?",
+    "question": "?",
+    "sanctioned": "↪",
+}
 
 AUDIT_UNRESOLVED: Final = "audit unresolved"
 """The finish-refusal cap's stop reason (`engine.AUDIT_UNRESOLVED`): finish refused on an
@@ -813,27 +879,20 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     elif outcome.name == "auto:finished":
         # A blocked finding never ran (tier 2 after a tier-1 failure on that
         # tree): it is reported as blocked, and only gates that ran and
-        # failed count as failed.
+        # failed count as failed. A sanctioned finding (a fail the task
+        # waived) is neither: it is never the refusal the verdict line names.
         blocked = [a for a in audits if a.verdict == "blocked"]
         failed_audits = [
-            a for a in audits if a.exit_code != 0 and a.verdict not in ("blocked", "question")
+            a
+            for a in audits
+            if a.exit_code != 0
+            and a.verdict not in ("blocked", "question")
+            and a.reason != "sanctioned"
         ]
+        sanctioned = [a for a in audits if a.reason == "sanctioned"]
         asked = sum(a.verdict == "question" for a in audits)
         verdict = "finished"
-        verdict_text = (
-            _finished_but(failed_audits, blocked)
-            if failed_audits or blocked
-            else "The executor called finish. No auditor verdict covers the change, "
-            "so this is finished, not proven done."
-            if not audits
-            else "The executor called finish. No audit finding failed; "
-            f"{_n(sum(a.verdict == 'not-proven' for a in audits), 'finding')} "
-            "could not be proven (they do not refuse finish)."
-            if any(a.verdict == "not-proven" for a in audits)
-            else "The executor called finish, and every audit finding recorded passed."
-        )
-        if asked and not failed_audits and not blocked:
-            verdict_text += f" {_n(asked, 'audit finding')} asked a question only you can answer."
+        verdict_text = _finished_verdict(audits, blocked, failed_audits, sanctioned, asked)
     elif outcome.name == "auto:stopped" and outcome.detail.startswith(
         f"stopped: {AUDIT_QUESTION_STOP}"
     ):
@@ -1054,6 +1113,10 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             statuses = [_status(a) for a in other]
             unproven = statuses.count("not-proven")
             asked = statuses.count("question")
+            # A sanctioned finding is a fail the task waived: neither a
+            # failure that holds the row against the run nor a pass. It is
+            # its own status, below a not-proven one and above a plain pass.
+            waived = statuses.count("sanctioned")
             rows.append(
                 Row(
                     "audit",
@@ -1064,10 +1127,13 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                     if asked
                     else "not-proven"
                     if unproven
+                    else "sanctioned"
+                    if waived
                     else "proven",
                     f"{statuses.count('proven')} of {_n(len(other), 'finding')} passed"
                     + (f", {unproven} not proven" if unproven else "")
                     + (f", {asked} need you" if asked else "")
+                    + (f", {waived} sanctioned" if waived else "")
                     + ".",
                     tuple(a.record_hash for a in other),
                     tuple(

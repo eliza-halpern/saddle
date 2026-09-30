@@ -355,6 +355,10 @@ class TierFinding:
     """The file a tier-0 finding checked, from the `path` its record sealed
     (`auditor.finding_body`); "" for tiers 1 and 2 and for a ledger sealed
     before the field."""
+    reason: str = ""
+    """The finding's own `reason`, read from the sealed detail's JSON:
+    `""` when the line does not parse or names none. A `sanctioned`
+    reason is the task's waiver of a failing finding (`auditor.sanction`)."""
 
 
 EXIT_VERDICT: Final[Mapping[int, str]] = {
@@ -432,6 +436,7 @@ def tier_finding(name: str, detail: str, exit_code: int | None = None) -> TierFi
         str(body.get("verdict", sealed)),
         str(body.get("detail", "")),
         str(body.get("path", "")),
+        str(body.get("reason", "")),
     )
 
 

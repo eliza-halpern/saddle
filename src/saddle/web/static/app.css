@@ -721,6 +721,7 @@ main { position: relative; }
 .s-proven { --s: var(--done); }
 .s-observed, .s-cost { --s: var(--run); }
 .s-not-proven, .s-question { --s: var(--ask); }
+.s-sanctioned { --s: var(--ask); }
 .task-asked { margin: 0 0 14px; padding: 11px 13px; border-radius: 11px;
   border: 1px solid var(--ask); background: var(--wash-ask); }
 .task-asked .ask-text { overflow-wrap: anywhere; }
@@ -916,6 +917,7 @@ main { position: relative; }
 .audit-fold { border-bottom: 1px solid var(--line); --s: var(--ink-faint); }
 .audit-fold.s-proven { --s: var(--done); }
 .audit-fold.s-failed { --s: var(--halt); }
+.audit-fold.s-sanctioned { --s: var(--ask); }
 .audit-summary { list-style: none; cursor: pointer; display: flex; gap: 10px; align-items: baseline;
   padding: 10px 2px 10px 10px; border-left: 2px solid var(--s); margin: 6px 0; }
 .audit-summary::-webkit-details-marker { display: none; }
