@@ -235,9 +235,13 @@ def test_a_check_returns_the_findings_as_a_finish_refusal_renders_them(repo: Pat
     refused = results(result, "finish")[0]
     assert refused.startswith(FINISH_REFUSED)
     line = "- tests (tier 1): fail, code-wrong: calc.py:2: a - b"
+    ruff = "- ruff (tier 0): fail, code-wrong: calc.py:2: a - b"
     assert line in checked.splitlines()
-    assert line in refused.splitlines()
-    assert "- ruff (tier 0): fail, code-wrong: calc.py:2: a - b" in checked.splitlines()
+    assert ruff in checked.splitlines()
+    # The finish refuses on the failing edit check before the suite runs (the
+    # check, which runs no mutation, still shows the tests): same line format.
+    assert ruff in refused.splitlines()
+    assert "tiers 1 and 2 were not run" in refused
     assert checked.startswith("[audit check 1 on tree ")
     assert not checked.startswith("error: ")
 

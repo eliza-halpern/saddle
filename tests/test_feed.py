@@ -786,6 +786,7 @@ def test_the_feed_draws_the_map_at_the_start_and_journals_how(
         journal=tmp_path / "j.jsonl",
         run_span="s",
         auditor=maps,
+        impact_cache=tmp_path / "impact",
     )
     f.close()
     assert maps.drawn == [{"calc.py", "tests/test_calc.py"}]

@@ -337,7 +337,9 @@ class SessionLine:
 AUDIT_TIER: Final = re.compile(r"audit-tier(\d+):(.+)")
 """The real auditor's per-finding span name (`auditor.Auditor._journal`)."""
 
-FEED_SPANS: Final = frozenset({"audit:delivered", "audit:withheld", "audit:check"})
+FEED_SPANS: Final = frozenset(
+    {"audit:delivered", "audit:withheld", "audit:check", "audit:impact-map"}
+)
 """The audit feed's delivery records (`feed.AuditFeed._journal`): one per
 completed audit, not a gate's verdict; `audit:check` is a `check` call's
 (`feed.CHECK_SPAN`), delivered as that call's result."""
@@ -527,6 +529,9 @@ def session_line(entry: JournalEntry) -> SessionLine | None:
             "audit" if ok else "fail",
             cite,
         )
+    if name == "audit:impact-map":
+        # Bookkeeping, not a verdict: how the run's test-impact map was drawn.
+        return SessionLine("·", f"test-impact map · {_first_line(entry.detail)}", "info", cite)
     if name in FEED_SPANS:
         ok = entry.exit_code == 0
         point = entry.argv[1] if len(entry.argv) > 1 else "audit"

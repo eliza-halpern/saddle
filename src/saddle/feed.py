@@ -408,6 +408,8 @@ class AuditFeed:
     _checked_tree: str | None = None
     _dirty: bool = False
     _pending: Future[AuditResult | None] | None = None
+    _map_job: Future[AuditResult | None] | None = None
+    """The run-start map job (`_draw_map`); a checkpoint may queue behind it."""
     _ready: list[AuditResult] = field(default_factory=list)
     _pool: ThreadPoolExecutor | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -427,12 +429,13 @@ class AuditFeed:
         if self.auditor is None:
             self.auditor = self.factory(self.worktree, self.baseline, self._config)
         draw = getattr(self.auditor, "draw_map", None)
-        if draw is not None:
+        if draw is not None and self.impact_cache is not None:
             # Beside the model's first reading, in the one audit slot: a
             # checkpoint that comes due meanwhile waits its turn as it would
             # for another checkpoint, and `check` and `final` wait for it.
             self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="saddle-audit")
             self._pending = self._pool.submit(self._draw_map, draw)
+            self._map_job = self._pending
 
     def _p1_state(self, *, final: bool) -> Finding | None:
         """None once the P1 file is in the auditor's hands (or there is no P1);
@@ -496,7 +499,7 @@ class AuditFeed:
                 # refused before the suite and mutation spend minutes on a tree
                 # that must change anyway.
                 found.extend(self._tier(0, scratch / "tree").findings)
-                if len(tiers) > 1 and any(failing(f) for f in found):
+                if 2 in tiers and any(failing(f) for f in found):
                     return AuditResult(point, tree, tuple(found), note=EDIT_CHECKS_FIRST)
             prime = getattr(self.auditor, "prime", None)
             if 1 in tiers and 2 in tiers and prime is not None:
@@ -557,10 +560,14 @@ class AuditFeed:
             return
         if name in (FINISH_TOOL, CHECK_TOOL):
             return  # `final` / `check` audit this tree themselves; no checkpoint too
-        if self._pending is not None and not self._pending.done():
+        busy = self._pending is not None and not self._pending.done()
+        if busy and self._pending is not self._map_job:
             return  # one checkpoint in flight at a time; the auditor is not shared
+        # Behind the run-start map job, a checkpoint queues: the one audit slot
+        # runs it once the map is drawn, on the tree frozen now.
         self._dirty = False
-        self._await()  # already done: collects the finished checkpoint's future
+        if self._pending is not None and self._pending.done():
+            self._await()  # collects the finished job's future; never waits
         self.checkpoints += 1
         point = f"checkpoint {self.checkpoints}"
         scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))

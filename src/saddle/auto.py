@@ -93,6 +93,7 @@ greedy runs diverge). A measurement that wants greedy pins 0.0 itself."""
 
 SYSTEM_PROMPT: Final = (
     "You are working alone on one task in a git worktree of a repository. "
+    "Nobody will answer questions. "
     "First, check that the problem the task describes exists on the current code: "
     "reproduce it with a failing test or a short script. A task is written by a "
     "person and can be wrong, often because the code changed since. If your probe "

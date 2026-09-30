@@ -200,7 +200,8 @@ def test_the_installed_wheel_refuses_a_wrong_change(
     # Refused because the test ran and failed, not because a tool was missing.
     tests = [line for line in done.stdout.splitlines() if line.split()[:2] == ["fail", "tests"]]
     assert tests, done.stdout
-    assert all(line.endswith("'python -m pytest -q' exited 1") for line in tests), tests
+    # The line may go on to name the failing tests (e786922).
+    assert all("'python -m pytest -q' exited 1" in line for line in tests), tests
 
 
 def test_the_projects_own_environment_on_path_runs_its_tests(
