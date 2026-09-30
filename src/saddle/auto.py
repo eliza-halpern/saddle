@@ -67,6 +67,8 @@ from saddle.tools import (
     PREMISE_SCHEMA,
     TOOLS,
     ToolContext,
+    provider_prompt,
+    provider_schemas,
 )
 from saddle.vllm import VllmClient
 
@@ -877,7 +879,8 @@ def run_auto(
         )
         + (CHECK_PROMPT if options.check_tool else "")
         + (PREMISE_PROMPT if options.premise_check else "")
-        + (STALL_PROMPT if options.stall_check else ""),
+        + (STALL_PROMPT if options.stall_check else "")
+        + provider_prompt(),
         context_tokens=options.context_tokens,
         tools=[
             *TOOLS,
@@ -886,6 +889,7 @@ def run_auto(
             *([PREMISE_SCHEMA] if options.premise_check else []),
             *([CHECK_SCHEMA] if options.check_tool else []),
             *([INSTALL_SCHEMA] if options.wheels is not None else []),
+            *provider_schemas(),
         ],
         auto=auto,
         keep_reasoning=options.keep_reasoning,

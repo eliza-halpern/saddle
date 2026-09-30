@@ -19,6 +19,8 @@ rather than the turn dying.
 from __future__ import annotations
 
 import difflib
+import functools
+import importlib.metadata
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -729,7 +731,8 @@ _HANDLERS: Final[dict[str, _Handler]] = {
 def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None = None) -> str:
     """Run one tool call; every failure becomes an "error: ..." string."""
     ctx = context or ToolContext(workdir=workdir)
-    handler = _HANDLERS.get(call.name)
+    provider = _provider_by_name(call.name)
+    handler = _HANDLERS.get(call.name) or (provider.handler if provider is not None else None)
     if handler is not None and ctx.allowed is not None and call.name not in ctx.allowed:
         return (
             f"{REFUSED}{call.name!r} is not available in the Ask lane, which is "
@@ -746,6 +749,8 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
     except ValueError as exc:
         return f"error: arguments are not valid JSON: {exc}"
     allowed = _ARGUMENTS.get(call.name)
+    if allowed is None and provider is not None:
+        allowed = frozenset(provider.schema["function"]["parameters"]["properties"])
     extra = sorted(set(args) - allowed) if allowed is not None else []
     if extra:
         return (
@@ -761,3 +766,51 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
         return f"error: missing argument {exc}"
     except (OSError, ValueError) as exc:
         return f"error: {type(exc).__name__}: {exc}"
+
+
+# --- tool providers: extra tools a package adds to a run --------------------
+#
+# A package installed in the harness's own environment can add tools to a run by
+# registering a ToolProvider under the "saddle.tools" entry-point group. They are
+# discovered from installed distributions, never from a run's worktree, so a run
+# cannot grant itself a tool. Each call runs through execute_tool and is sealed
+# in the ledger like any built-in. With none installed, the tool list, the
+# prompt and the records are exactly as before.
+
+
+@dataclass(frozen=True)
+class ToolProvider:
+    """One extra tool: the schema the model sees, the handler execute_tool runs,
+    and one line for the system prompt so the model knows the tool exists."""
+
+    name: str
+    schema: dict[str, Any]
+    handler: _Handler
+    prompt_line: str
+
+
+@functools.cache
+def tool_providers() -> tuple[ToolProvider, ...]:
+    """The installed providers, or () when none are. A provider whose name would
+    shadow a built-in tool is ignored, so a package can never replace one. Cached;
+    a test clears it (tool_providers.cache_clear()) after injecting one."""
+    found: list[ToolProvider] = []
+    for entry in importlib.metadata.entry_points(group="saddle.tools"):
+        provider = entry.load()
+        if isinstance(provider, ToolProvider) and provider.name not in _HANDLERS:
+            found.append(provider)
+    return tuple(found)
+
+
+def _provider_by_name(name: str) -> ToolProvider | None:
+    return next((p for p in tool_providers() if p.name == name), None)
+
+
+def provider_schemas() -> list[dict[str, Any]]:
+    """The installed providers' tool schemas, to add to a run's tool list."""
+    return [provider.schema for provider in tool_providers()]
+
+
+def provider_prompt() -> str:
+    """The providers' prompt lines, or "" when none are installed."""
+    return "".join(f"\n{provider.prompt_line}" for provider in tool_providers())
