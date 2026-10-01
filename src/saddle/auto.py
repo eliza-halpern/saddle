@@ -817,6 +817,7 @@ def run_auto(
             else None
         ),
         feed=feed,
+        tell_summary=feed.tell_summary if feed is not None else None,
         require_premise=options.premise_check,
         stall_check=options.stall_check,
         guard=guard,

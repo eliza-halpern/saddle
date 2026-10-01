@@ -92,6 +92,7 @@ from saddle.auditor import (
     Tier2Mode,
     coverage_evidence,
     finding_body,
+    flip_finding,
     rewritten,
     sanction,
 )
@@ -125,6 +126,13 @@ EDIT_CHECKS_FIRST: Final = (
     "the tests, coverage and mutation run on the next audit."
 )
 """An audit's note when tier 0 failed and the later tiers were skipped (`_audit_on`)."""
+
+FLIPS_FIRST: Final = (
+    "tiers 1 and 2 were not run: a pre-existing test changed and the finish summary has no "
+    "usable `flip:` line for it. Write the line (or restore the test) and the tests, coverage "
+    "and mutation run on the next audit."
+)
+"""An audit's note when the `test-changes` finding refused finish before the suite ran."""
 """How `Auditor` begins the error for a tree equal to its baseline."""
 
 DETAIL_CHARS: Final = 1200
@@ -395,6 +403,9 @@ class AuditFeed:
     "needs you", never finished on a check that did not run."""
     p1_wait: Callable[[], float] = field(default=lambda: 0.0)
     """Seconds `final` may wait for a pending extraction: the run's remaining time."""
+    summary: str = ""
+    """The finish summary the model has written so far (`tell_summary`): the text
+    a `flip:` line is read from. Empty until `finish` is called."""
     impact_cache: Path | None = None
     """Where drawn test-impact maps are kept across runs (`Auditor.draw_map`);
     `auto` passes the repository's `.saddle/impact`."""
@@ -504,6 +515,13 @@ class AuditFeed:
                 found.extend(self._tier(0, scratch / "tree").findings)
                 if 2 in tiers and any(failing(f) for f in found):
                     return AuditResult(point, tree, tuple(found), note=EDIT_CHECKS_FIRST)
+            flips = (
+                flip_finding(scratch / "tree", self.baseline, self.summary) if 1 in tiers else None
+            )
+            if flips is not None and failing(flips) and 2 in tiers and self.feedback:
+                # Cheap, and the same on a retry of this tree: refused before
+                # the suite runs, as an edit check is.
+                return AuditResult(point, tree, (*found, flips), note=FLIPS_FIRST)
             prime = getattr(self.auditor, "prime", None)
             if 1 in tiers and 2 in tiers and prime is not None:
                 # One run of the battery for both tiers (`Auditor.prime`): the
@@ -513,6 +531,8 @@ class AuditFeed:
                 got = self._tier(tier, scratch / "tree")
                 found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
                 detail = detail or got.mutant_detail
+                if tier == 1 and flips is not None:
+                    found.append(flips)
                 if tier == 1 and pending is not None:
                     found.append(pending)
             words = _coverage_words(scratch / "tree", self.baseline, found)
@@ -678,6 +698,11 @@ class AuditFeed:
             ),
         )
         return text
+
+    def tell_summary(self, summary: str) -> None:
+        """Record the summary `finish` was called with, before it is audited: a changed
+        pre-existing test is allowed only with a `flip:` line in it (`flip_finding`)."""
+        self.summary = summary
 
     def final(self) -> tuple[bool, str]:
         """Tiers 0, 1 and 2 on the tree `finish` is called on.

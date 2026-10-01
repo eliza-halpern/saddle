@@ -25,8 +25,17 @@ from rich.console import Console
 from saddle import __version__, audit
 from saddle.anchor import anchor_issues, default_anchor_repo
 from saddle.answer_book import AnswersError
-from saddle.audit import AuditError, AuditResult, audit_tree
-from saddle.auditor import TIER2_MODES, Auditor, AuditorConfig, Findings, Tier2Mode
+from saddle.audit import AuditCheck, AuditError, AuditResult, audit_tree
+from saddle.auditor import (
+    TEST_CHANGES,
+    TIER2_MODES,
+    Auditor,
+    AuditorConfig,
+    Findings,
+    Tier2Mode,
+    commit_messages,
+    flip_finding,
+)
 from saddle.auto import (
     DEFAULT_TIME_BUDGET_S,
     DEFAULT_TOKEN_BUDGET,
@@ -1397,6 +1406,33 @@ def _render_audit(result: AuditResult, stdout: IO[str]) -> None:
     stdout.write(f"verdict: {result.verdict.replace('-', ' ')}\n")
 
 
+def _with_test_changes(
+    result: AuditResult | tuple[Findings, ...], root: Path, baseline: str
+) -> AuditResult | tuple[Findings, ...]:
+    """`result` with the `test-changes` finding added when a pre-existing test changed.
+
+    The `flip:` line is read from the commits after `baseline` in `root`; an
+    uncommitted tree has none, so its changed tests fail with the instruction.
+    A plain audit has no `not-proven` status, so an accepted flip is a passing
+    check whose detail says it is not proven.
+    """
+    if isinstance(result, AuditResult) and result.verdict == "nothing-to-audit":
+        return result
+    found = flip_finding(root, baseline, commit_messages(root, baseline))
+    if found is None:
+        return result
+    if isinstance(result, tuple):
+        return (*result, Findings(tier=1, key=TEST_CHANGES, findings=(found,)))
+    failed = found.verdict == "fail"
+    detail = found.detail if failed else f"not proven: {found.detail}"
+    check = AuditCheck(TEST_CHANGES, "fail" if failed else "pass", detail, None)
+    return dataclasses.replace(
+        result,
+        verdict="refuse" if failed else result.verdict,
+        checks=(*result.checks, check),
+    )
+
+
 def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> int:
     """Gate a diff with no plan and exit with the verdict.
 
@@ -1429,6 +1465,7 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
                 test_command=args.test_command,
                 cache=cache,
             )
+            result = _with_test_changes(result, Path(args.repo), args.baseline or "HEAD")
         else:
             with tempfile.TemporaryDirectory() as scratch:
                 clone = Path(scratch) / "tree"
@@ -1455,6 +1492,7 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
                     test_command=args.test_command,
                     cache=cache,
                 )
+                result = _with_test_changes(result, clone, args.baseline or f"{rev}^")
     except AuditError as exc:
         print(f"error: {exc}", file=stderr)
         return AUDIT_COULD_NOT_AUDIT

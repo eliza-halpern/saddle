@@ -49,6 +49,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -60,7 +61,7 @@ from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal
 
-from saddle import coverage_text, impact, runner, sandbox
+from saddle import coverage_text, impact, runner, sandbox, test_changes
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     AuditError,
@@ -698,6 +699,96 @@ def green_on_baseline(
         for name in wanted
         if (mine := [n for n in nodes if n.rsplit("::", 1)[1].split("[")[0] == name])
         and all(n in passed for n in mine)
+    )
+
+
+TEST_CHANGES: Final = "test-changes"
+"""The finding for pre-existing tests the tree changed, in every language
+(`test_changes`). Emitted only when something changed or could not be read,
+and not one of `TIER1`: it is judged against the finish summary, which changes
+between finish calls on one tree, so it is never cached with the battery."""
+
+
+def _git_out(root: Path, *argv: str) -> bytes:
+    """Stdout of `git <argv>` in `root`; an `AuditError` when it exits nonzero, so a
+    lookup that failed never reads as "no test changed"."""
+    run = subprocess.run(["git", *argv], cwd=root, capture_output=True, check=False)
+    if run.returncode != 0:
+        said = run.stderr.decode(errors="replace").strip()
+        msg = f"git {' '.join(argv)} failed: {said}"
+        raise AuditError(msg)
+    return run.stdout
+
+
+def changed_tests(root: Path, baseline: str) -> list[test_changes.ChangedTest]:
+    """The pre-existing tests `root`'s tree changed against `baseline`, read-only.
+
+    Every test file git says differs from the baseline, as the baseline had it
+    and as the tree has it, plus every test file the tree added (a test that
+    moved is found there). A file that is not UTF-8 is reported as unreadable.
+    """
+    resolved = _git_out(root, "rev-parse", "--verify", f"{baseline}^{{commit}}").decode().strip()
+    listing = _git_out(root, "diff", "--name-status", "--no-renames", "-z", resolved)
+    fields = listing.decode().split("\0")
+    status = {path: kind for kind, path in zip(fields[0::2], fields[1::2], strict=False)}
+    untracked = _git_out(root, "ls-files", "-z", "--others", "--exclude-standard").decode()
+    base: dict[str, str] = {}
+    head: dict[str, str] = {}
+    unreadable: list[test_changes.ChangedTest] = []
+
+    def put(into: dict[str, str], path: str, data: bytes, where: str) -> None:
+        try:
+            into[path] = data.decode()
+        except UnicodeDecodeError:
+            unreadable.append(
+                test_changes.ChangedTest(path, path, test_changes.UNREADABLE, f"{where}: not UTF-8")
+            )
+
+    for path, kind in status.items():
+        if test_changes.language(path) is None:
+            continue
+        if kind != "A":
+            put(base, path, _git_out(root, "show", f"{resolved}:{path}"), "baseline")
+        if kind != "D":
+            put(head, path, (root / path).read_bytes(), "tree")
+    for path in (p for p in untracked.split("\0") if p):
+        if test_changes.language(path) is not None:
+            put(head, path, (root / path).read_bytes(), "tree")
+    # An unreadable file is reported once, not also as a file whose tests all vanished.
+    for bad in {c.path for c in unreadable}:
+        base.pop(bad, None)
+        head.pop(bad, None)
+    return sorted(
+        [*test_changes.detect(base, head), *unreadable], key=lambda c: (c.path, c.name, c.kind)
+    )
+
+
+def commit_messages(root: Path, baseline: str) -> str:
+    """The messages of the commits after `baseline` in `root`, newest first; "" for none.
+
+    What `saddle audit` reads a `flip:` line from when the change is committed.
+    """
+    resolved = _git_out(root, "rev-parse", "--verify", f"{baseline}^{{commit}}").decode().strip()
+    return _git_out(root, "log", "--format=%B", f"{resolved}..HEAD").decode()
+
+
+def flip_finding(root: Path, baseline: str, message: str) -> Finding | None:
+    """The `test-changes` finding for `root`'s tree, or None when no pre-existing test changed.
+
+    `fail` until every changed test has its `flip:` line in `message` with evidence
+    `test_changes.circular_evidence` does not refuse; then `not-proven`, never
+    `pass`: the label buys a person's review, not a verdict.
+    """
+    judged = test_changes.judge(changed_tests(root, baseline), message)
+    if judged is None:
+        return None
+    return Finding(
+        gate=TEST_CHANGES,
+        tier=1,
+        verdict=judged.verdict,
+        reason="evidence-thin",
+        detail=judged.detail,
+        cites=("saddle.test_changes.judge",),
     )
 
 

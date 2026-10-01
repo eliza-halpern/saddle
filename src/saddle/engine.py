@@ -481,6 +481,9 @@ class AutoRun:
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
     on that same tree ends finished with it."""
+    tell_summary: Callable[[str], None] | None = None
+    """Hands `finish`'s summary to the auditor before the finish audit
+    (`feed.AuditFeed.tell_summary`): a `flip:` line is read from it. None does nothing."""
     before_finish: Callable[[], str] | None = None
     """Run before each `finish` audit (`saddle auto --format-at-finish`):
     formats the run's changed Python files and says what it did, which the
@@ -1635,6 +1638,8 @@ def _finish(auto: AutoRun, arguments: str) -> str:
     summary = args.get("summary") if isinstance(args, dict) else None
     if not isinstance(summary, str):
         return "error: finish needs a string summary argument"
+    if auto.tell_summary is not None:
+        auto.tell_summary(summary)
     said = auto.before_finish() if auto.before_finish is not None else ""
     note = f"{said}\n\n" if said else ""
     if auto.feed is not None:
