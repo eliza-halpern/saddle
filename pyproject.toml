@@ -29,12 +29,15 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "actionlint-py>=1.7.12.25",
     "hypothesis>=6.130",
     "jinja2>=3.1.6",
     "jsonschema>=4.26.0",
     "mypy>=1.14",
     "pytest-cov>=6.0",
     "pytest-xdist>=3.8",
+    "shellcheck-py>=0.11.0.1",
+    "taplo>=0.9.3",
 ]
 
 [project.scripts]

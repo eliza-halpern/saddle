@@ -23,3 +23,5 @@ dist/
 !tests/fixtures/**/*.jsonl
 # Local, per-contributor agent notes
 CLAUDE.local.md
+# Node tooling for the browser files, docs and styles (package-lock.json)
+node_modules/

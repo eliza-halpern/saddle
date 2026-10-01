@@ -3,6 +3,12 @@
 # CI runs exactly this script (plus the time-boxed mutation job).
 set -euo pipefail
 cd "$(dirname "$0")"
+# The JavaScript, HTML, CSS and Markdown checkers are development-only npm
+# packages pinned by package-lock.json. Install them when they are missing or
+# older than the lockfile; --ignore-scripts so no package runs code on install.
+if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+    npm ci --ignore-scripts --no-audit --no-fund
+fi
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
