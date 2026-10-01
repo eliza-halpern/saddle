@@ -76,8 +76,8 @@ export default [
     languageOptions: { sourceType: "commonjs", globals: { ...globals.node } },
   },
   {
-    // The node test installs its own fake `document` on the global object.
-    files: ["tests/markdown.test.js"],
+    // The node test and the shared DOM shim install their own fake `document` on the global object.
+    files: ["tests/markdown.test.js", "tests/fixtures/dom_shim.js"],
     languageOptions: { globals: { document: "writable" } },
   },
   {
