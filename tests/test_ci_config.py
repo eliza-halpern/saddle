@@ -204,13 +204,17 @@ def read_yaml(text: str) -> Any:
 ALLOWED_ACTIONS = {"actions/checkout", "astral-sh/setup-uv", "actions/setup-node"}
 # job -> (job keys allowed, regexes the `run` steps must fullmatch, in order)
 JOB_POLICY: dict[str, tuple[set[str], list[str]]] = {
-    "check": ({"runs-on", "steps"}, [r"\./check\.sh"]),
+    "check": ({"runs-on", "env", "steps"}, [r"\./check\.sh"]),
     "mutation": (
         {"if", "runs-on", "timeout-minutes", "steps"},
         [r"uv sync --frozen", r'\./ci-mutate\.sh "\$\{\{ [^{}"]+ \}\}"'],
     ),
 }
 MUTATION_JOB_CONDITION = "github.event_name == 'workflow_dispatch'"
+# The browser tests skip when node or Chrome is missing (tests/browser_guard.py).
+# In CI that must be an error, or a runner image without Chrome passes the gate
+# with every browser test unrun. Nothing else may be set in the job's environment.
+CHECK_JOB_ENV = {"SADDLE_REQUIRE_BROWSER": "1"}
 
 
 def _find_key(node: Any, key: str) -> bool:
@@ -243,6 +247,8 @@ def ci_violations(workflow: Any, root: Path) -> list[str]:
             continue
         if set(job) - allowed_keys:
             found.append(f"job {name} has unexpected keys {sorted(set(job) - allowed_keys)}")
+        if name == "check" and job.get("env") != CHECK_JOB_ENV:
+            found.append(f"job check must set env to exactly {CHECK_JOB_ENV}")
         if name == "mutation" and job.get("if") != MUTATION_JOB_CONDITION:
             found.append("job mutation is not limited to workflow_dispatch")
         steps = job.get("steps")
@@ -443,6 +449,21 @@ def test_ci_runs_exactly_the_local_gate() -> None:
         (
             _replace("  check:\n    runs-on", "  check:\n    if: false\n    runs-on"),
             "job check has unexpected keys",
+        ),
+        (
+            _replace('      SADDLE_REQUIRE_BROWSER: "1"\n', '      SADDLE_REQUIRE_BROWSER: "0"\n'),
+            "job check must set env",
+        ),
+        (
+            _replace('    env:\n      SADDLE_REQUIRE_BROWSER: "1"\n', ""),
+            "job check must set env",
+        ),
+        (
+            _replace(
+                '      SADDLE_REQUIRE_BROWSER: "1"\n',
+                '      SADDLE_REQUIRE_BROWSER: "1"\n      PYTEST_ADDOPTS: "-k nothing"\n',
+            ),
+            "job check must set env",
         ),
         (
             _replace(

@@ -12,6 +12,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A missing node or Chrome is an error here, never a skip: the browser
+    # tests are part of the gate (tests/browser_guard.py).
+    env:
+      SADDLE_REQUIRE_BROWSER: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
