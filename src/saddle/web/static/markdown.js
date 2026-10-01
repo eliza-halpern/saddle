@@ -83,10 +83,14 @@ function renderMarkdown(target, text) {
       index += 1;
       while (index < lines.length && !/^\s*```/.test(lines[index])) body.push(lines[index++]);
       index += 1;
+      const codeText = body.join("\n");
       const pre = el("pre");
       const code = el("code", fence[1] ? `lang-${fence[1]}` : null);
-      highlight(code, body.join("\n"), fence[1]);
+      highlight(code, codeText, fence[1]);
       pre.appendChild(code);
+      // The corner button copies the code as the model wrote it: the fence
+      // lines and the language tag are rendering, not content.
+      pre.appendChild(copyButton(codeText, fence[1] ? `code (${fence[1]})` : "code"));
       target.appendChild(pre);
       continue;
     }
@@ -368,18 +372,97 @@ function renderCreated(target, match) {
 
 /* One filling for a tool row's body, used by the live stream and by a
    reloaded transcript alike. They had separate code and disagreed: the
-   live one coloured a diff, the stored one printed it flat. */
+   live one coloured a diff, the stored one printed it flat. The row's
+   copy button copies the text the tool actually returned, not the DOM:
+   a diff's blank lines are padded to spaces for equal row heights, and
+   a created file's header line is not part of the file. */
 function fillToolDetail(row, detail, text) {
   const created = typeof text === "string" ? text.match(CREATED) : null;
   if (isDiff(text)) {
     renderDiff(detail, text);
     row.classList.add("has-diff");
+    attachCopy(detail, text, "diff");
   } else if (created) {
     renderCreated(detail, created);
     row.classList.add("has-diff");
+    attachCopy(detail, created[3], "file");
+  } else if (text) {
+    detail.textContent = text;
+    attachCopy(detail, text, "output");
   } else {
-    detail.textContent = text || "(no output)";
+    // Nothing was said; there is nothing to copy, so no button either.
+    detail.textContent = "(no output)";
   }
+}
+
+/* ---------- copy ----------
+
+   Every block of code on screen carries one standard corner button. A
+   copy is the browser and the operating system acting together, so the
+   paths are layered rather than assumed: the async clipboard API first
+   -- it exists only in a secure context, and a plain-http chat page
+   (opened on a phone, or bound to an address the browser will not call
+   local) is not one -- then the select-a-field-and-execCommand path,
+   which the click itself authorises. Both can be refused by the system
+   (a background tab, a locked clipboard); then the button says Failed,
+   because a button that pretends it copied lies about what the
+   clipboard holds. The layering is what makes the button work on a
+   plain Linux box with nothing in front of it. */
+
+async function copyText(text) {
+  const nav = typeof navigator === "undefined" ? null : navigator;
+  if (nav && nav.clipboard && typeof nav.clipboard.writeText === "function") {
+    try {
+      await nav.clipboard.writeText(text);
+      return true;
+    } catch {
+      // A secure context can still refuse the write; fall through.
+    }
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");  // a copy does not open a keyboard
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return !!ok;
+  } catch {
+    return false;
+  }
+}
+
+/* The label change is the whole feedback: Copy becomes Copied, or
+   Failed, and settles back, so the result is visible at the block
+   without a toast stealing the reader's place. */
+const COPY_FEEDBACK_MS = 1600;
+
+function copyButton(payload, what) {
+  const button = el("button", "code-copy", "Copy");
+  button.type = "button";
+  button.title = `Copy ${what}`;
+  button.setAttribute("aria-label", `Copy ${what}`);
+  button.onclick = async () => {
+    const text = typeof payload === "function" ? payload() : payload;
+    const ok = await copyText(text);
+    button.textContent = ok ? "Copied" : "Failed";
+    setTimeout(() => { button.textContent = "Copy"; }, COPY_FEEDBACK_MS);
+    return ok;
+  };
+  return button;
+}
+
+/* The block a button belongs to. A row's fill can run twice (a re-run
+   of the same tool, a reload overlapping a live fill), so a host that
+   already carries its button keeps exactly one. */
+function attachCopy(host, payload, what) {
+  for (const child of host.children) {
+    if (child.classList.contains("code-copy")) return child;
+  }
+  return host.appendChild(copyButton(payload, what));
 }
 
 /* Following the bottom is an intent, not a measurement.
@@ -496,5 +579,6 @@ if (typeof module !== "undefined" && module.exports) {
     el, inlineInto, renderMarkdown, splitStable, paintStream,
     isDiff, renderDiff, fillToolDetail, highlight, grammarFor,
     languageForPath, CREATED,
+    copyText, copyButton, attachCopy,
   };
 }

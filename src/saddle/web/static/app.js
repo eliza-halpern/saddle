@@ -219,9 +219,17 @@ function handle(event) {
     case "password.done":
       if (state.passwordId === event.id) closePassword();
       break;
-    case "terminal.output":
-      terminalBlock(event.id).textContent += event.chunk;
+    case "terminal.output": {
+      // Append, do not replace: the block's copy button sits inside it and
+      // a textContent rewrite would delete it on the next chunk. The raw
+      // text rides along so the button copies what the command said, not
+      // whatever the DOM happens to hold.
+      const body = terminalBlock(event.id);
+      if (!body.output) attachCopy(body, () => body.output || "", "terminal output");
+      body.output = (body.output || "") + event.chunk;
+      body.appendChild(document.createTextNode(event.chunk));
       break;
+    }
     case "context": {
       const pct = Math.min(100, Math.round((event.used / event.limit) * 100));
       const meter = $("#meter");

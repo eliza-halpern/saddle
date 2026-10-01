@@ -33,6 +33,7 @@ class Element {
     this.dataset = {};
     this.parent = null;
     this._cls = "";
+    this.style = {};
   }
   get children() { return this.childNodes.filter((n) => n instanceof Element); }
   get firstChild() { return this.childNodes[0] || null; }
@@ -47,6 +48,17 @@ class Element {
       add: (c) => { if (!self.classList.contains(c)) self._cls = (self._cls + " " + c).trim(); },
       remove: (c) => { self._cls = self._cls.split(/\s+/).filter((x) => x !== c).join(" "); },
     };
+  }
+  setAttribute(name, value) { (this.attrs ||= {})[name] = value; }
+  // The legacy copy path hands a selected field to execCommand("copy");
+  // the shim remembers the last selection the way the selection range does.
+  select() { global.document.__lastSelected = this; }
+  remove() {
+    if (this.parent) {
+      const kids = this.parent.childNodes;
+      kids.splice(kids.indexOf(this), 1);
+      this.parent = null;
+    }
   }
   appendChild(node) {
     // Real appendChild *moves* a node. The incremental painter relies on it:
@@ -74,10 +86,53 @@ class Element {
   }
 }
 
+/* What a copy reached: every successful write, whichever path made it, and
+   how many went through the select-and-execute path. The default
+   execCommand models the browser's contract: "copy" copies the value of
+   the last field that was selected. */
+const clipboard = { writes: [], viaExecCommand: 0 };
+
 global.document = {
   createElement: (tag) => new Element(tag),
   createTextNode: (text) => new TextNode(text),
+  body: new Element("body"),
+  __lastSelected: null,
+  execCommand: (command) => {
+    if (command !== "copy") return false;
+    const sel = document.__lastSelected;
+    if (!sel || typeof sel.value !== "string") return false;
+    clipboard.writes.push(sel.value);
+    clipboard.viaExecCommand += 1;
+    return true;
+  },
 };
+
+/* The page's origin decides which clipboard API exists: a secure-context
+   page has navigator.clipboard, a plain-http page (the phone path) has
+   none. The test stands in for that by swapping the navigator before a
+   click, because the renderer reads it at click time, not load time. */
+function setNavigator(value) {
+  Object.defineProperty(globalThis, "navigator", {
+    value, configurable: true, writable: true,
+  });
+}
+
+function workingNavigator() {
+  return {
+    clipboard: {
+      writeText: (text) => { clipboard.writes.push(text); return Promise.resolve(); },
+    },
+  };
+}
+
+setNavigator(workingNavigator());
+
+function resetClipboard() {
+  clipboard.writes.length = 0;
+  clipboard.viaExecCommand = 0;
+  document.__lastSelected = null;
+  setNavigator(workingNavigator());
+}
 
 const md = require(path.join(__dirname, "..", "src", "saddle", "web", "static", "markdown.js"));
 const { el, renderMarkdown, splitStable, paintStream } = md;
@@ -254,11 +309,20 @@ test("the live row and a reloaded row fill identically", () => {
   assert.strictEqual(pastDetail.children.filter((c) => c.className === "d-del").length, 1);
 });
 
-test("output that is not a diff is left alone", () => {
+test("output that is not a diff keeps its text and gains a copy button", async () => {
+  // The old pin held the detail to its text alone; the button is a
+  // positioned overlay, so it adds only its label, after the output. The
+  // text the button copies is the output verbatim, label excluded.
+  resetClipboard();
   const row = el("div"), detail = el("div");
   fillToolDetail(row, detail, "created 'frog.svg' (1692 bytes)");
-  assert.strictEqual(detail.textContent, "created 'frog.svg' (1692 bytes)");
   assert.ok(!row.classList.contains("has-diff"));
+  assert.strictEqual(detail.textContent, "created 'frog.svg' (1692 bytes)Copy");
+  const button = detail.children[detail.children.length - 1];
+  assert.strictEqual(button.className, "code-copy");
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.writes[0], "created 'frog.svg' (1692 bytes)");
 });
 
 test("an empty result says so rather than showing nothing", () => {
@@ -532,4 +596,187 @@ test("a created file and a reloaded one render identically", () => {
   fillToolDetail(live.row, live.detail, text);
   fillToolDetail(past.row, past.detail, text);
   assert.strictEqual(past.detail.html, live.detail.html);
+});
+
+/* ---------- the code block's copy button ---------- */
+
+const { copyButton } = md;
+
+const findPre = (root) => {
+  for (const child of root.children) {
+    if (child.tagName === "PRE") return child;
+    const deep = findPre(child);
+    if (deep) return deep;
+  }
+  return null;
+};
+
+test("a fenced code block carries a corner button that names its language", () => {
+  const node = el("div");
+  renderMarkdown(node, "Here you go.\n\n```python\ndef f():\n    return 1\n```\n\nDone.");
+  const pre = node.children.find((c) => c.tagName === "PRE");
+  assert.ok(pre, "no code block");
+  const button = pre.children.find((c) => c.className === "code-copy");
+  assert.ok(button, "the block has no copy button");
+  assert.strictEqual(button.textContent, "Copy");
+  assert.strictEqual(button.title, "Copy code (python)");
+});
+
+test("clicking the button copies the code, not the fences or the language", async () => {
+  resetClipboard();
+  const node = el("div");
+  renderMarkdown(node, "```\nline one\nline two\n```");
+  const button = node.children[0].children.find((c) => c.className === "code-copy");
+  assert.ok(button);
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.deepStrictEqual(clipboard.writes, ["line one\nline two"]);
+  assert.strictEqual(button.textContent, "Copied");
+});
+
+test("a diff row's button copies the diff verbatim, blank line intact", async () => {
+  // The renderer pads a blank line to a space for equal row heights; the
+  // copy must carry the tool's text, not the renderer's padding.
+  resetClipboard();
+  const row = el("div"), detail = el("div");
+  const diff = "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n\n+added";
+  fillToolDetail(row, detail, diff);
+  const button = detail.children[detail.children.length - 1];
+  assert.strictEqual(button.className, "code-copy");
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.writes[0], diff);
+});
+
+test("a created file's button copies the file, not its header", async () => {
+  resetClipboard();
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail, "created 'a.py' (12 bytes)\nx = 1\ny = 2");
+  const button = detail.children[detail.children.length - 1];
+  assert.strictEqual(button.className, "code-copy");
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.writes[0], "x = 1\ny = 2");
+});
+
+test("a tool row keeps exactly one button across re-fills", async () => {
+  // A re-run of the same tool, or a reload overlapping a live fill, must
+  // not leave a second button behind; a result with no content has nothing
+  // to copy, so no button at all.
+  resetClipboard();
+  const row = el("div"), detail = el("div");
+  fillToolDetail(row, detail, "def f():\n    return 1");
+  fillToolDetail(row, detail, "def f():\n    return 1");
+  assert.strictEqual(detail.children.filter((c) => c.className === "code-copy").length, 1);
+  const ok = await detail.children[detail.children.length - 1].onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.writes[0], "def f():\n    return 1");
+  const emptyRow = el("div"), emptyDetail = el("div");
+  fillToolDetail(emptyRow, emptyDetail, "");
+  assert.strictEqual(emptyDetail.children.length, 0);
+});
+
+test("the async clipboard is used when it is there", async () => {
+  resetClipboard();
+  const button = copyButton("some code", "code");
+  await button.onclick();
+  assert.strictEqual(clipboard.writes.length, 1);
+  assert.strictEqual(clipboard.viaExecCommand, 0);
+  assert.strictEqual(button.textContent, "Copied");
+});
+
+test("without the async clipboard, the select-and-execute path copies", async () => {
+  // A page the browser will not call local has no clipboard API: the
+  // legacy path is the copy, and the click is the authorisation it needs.
+  resetClipboard();
+  setNavigator({});
+  const button = copyButton("legacy copy", "code");
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.viaExecCommand, 1);
+  assert.deepStrictEqual(clipboard.writes, ["legacy copy"]);
+  assert.strictEqual(button.textContent, "Copied");
+});
+
+test("a refused async clipboard falls back to the select-and-execute path", async () => {
+  resetClipboard();
+  setNavigator({ clipboard: { writeText: () => Promise.reject(new Error("denied")) } });
+  const button = copyButton("after the refusal", "code");
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.viaExecCommand, 1);
+  assert.strictEqual(clipboard.writes[0], "after the refusal");
+});
+
+test("when the system clipboard takes nothing, the button says Failed", async () => {
+  resetClipboard();
+  setNavigator({ clipboard: { writeText: () => Promise.reject(new Error("denied")) } });
+  const realExec = document.execCommand;
+  document.execCommand = () => false;
+  try {
+    const button = copyButton("nowhere to go", "code");
+    const ok = await button.onclick();
+    assert.strictEqual(ok, false);
+    assert.strictEqual(button.textContent, "Failed");
+  } finally {
+    document.execCommand = realExec;
+  }
+});
+
+test("the button settles back to Copy after the feedback window", async () => {
+  resetClipboard();
+  const realSetTimeout = globalThis.setTimeout;
+  const timers = [];
+  globalThis.setTimeout = (callback, delay) => { timers.push({ callback, delay }); return 0; };
+  try {
+    const button = copyButton("transient", "code");
+    await button.onclick();
+    assert.strictEqual(button.textContent, "Copied");
+    assert.strictEqual(timers.length, 1);
+    assert.ok(timers[0].delay > 0);
+    timers[0].callback();
+    assert.strictEqual(button.textContent, "Copy");
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});
+
+test("a streamed fence settles with its button intact", () => {
+  // The button rides inside the pre, so the settled-node rule applies to
+  // it: once the fence is settled the block -- button and all -- is the
+  // same object forever, or the reader's hover target would move under
+  // the cursor.
+  const raw = "Prose.\n\n```js\nlet a = 1;\nlet b = 2;\n```\n\nTail.";
+  const node = el("div");
+  node.dataset.raw = "";
+  let settledPre = null;
+  for (const bit of raw.match(/.{1,5}/gs)) {
+    node.dataset.raw += bit;
+    paintStream(node);
+    const pre = node.firstElementChild ? findPre(node.firstElementChild) : null;
+    if (pre && !settledPre) settledPre = pre;
+    if (pre && settledPre) assert.strictEqual(pre, settledPre, "the settled code block was rebuilt");
+  }
+  assert.ok(settledPre, "the fence never settled");
+  assert.strictEqual(settledPre.children[0].tagName, "CODE");
+  const button = settledPre.children.find((c) => c.className === "code-copy");
+  assert.ok(button, "the settled block has no button");
+});
+
+test("a click on a block that is still streaming copies what has arrived", async () => {
+  resetClipboard();
+  const raw = "```python\ndef f():\n    return 4";
+  const node = el("div");
+  node.dataset.raw = "";
+  for (const bit of raw.match(/.{1,5}/gs)) {
+    node.dataset.raw += bit;
+    paintStream(node);
+  }
+  const pre = findPre(node.lastElementChild);
+  assert.ok(pre);
+  const button = pre.children.find((c) => c.className === "code-copy");
+  assert.ok(button);
+  const ok = await button.onclick();
+  assert.strictEqual(ok, true);
+  assert.strictEqual(clipboard.writes[0], "def f():\n    return 4");
 });

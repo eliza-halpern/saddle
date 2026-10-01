@@ -85,6 +85,39 @@ MAX_RUN_ROWS = 20
 
 STATIC = Path(__file__).resolve().parent / "static"
 
+# The code block's copy button lives in the static files -- the click
+# happens in a browser, so that is the only place it can exist -- and its
+# behaviour (what a click copies, how a refused copy reads) is pinned by
+# tests/markdown.test.js, which test_copy_button runs under node. The pin
+# the server can own is the wiring itself: the markers each served file
+# must carry, so a change that strips the button reads as a failure
+# instead of a pass.
+COPY_BUTTON_ASSETS: dict[str, tuple[str, ...]] = {
+    "app.css": (".code-copy",),
+    "markdown.js": ("function copyText", "function copyButton", "function attachCopy"),
+    "app.js": ("attachCopy(", "body.output"),
+    "tasks.js": ("attachCopy(",),
+}
+
+
+def copy_button_wiring(static_dir: Path) -> dict[str, list[str]]:
+    """The copy button's wiring, file by file: what each is missing.
+
+    A file that keeps part of the wiring and loses the rest is named for
+    exactly what it lost; a missing file lost all of its markers, as a
+    file that lost them does. An empty dict is the button, intact."""
+    missing: dict[str, list[str]] = {}
+    for name, markers in COPY_BUTTON_ASSETS.items():
+        try:
+            text = (static_dir / name).read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        absent = [marker for marker in markers if marker not in text]
+        if absent:
+            missing[name] = absent
+    return missing
+
+
 TOKEN_FILE = "~/.config/saddle/chat-token"
 """Where a generated chat token is cached across restarts, when the caller
 gives none and SADDLE_CHAT_TOKEN is not set. Distinct from `cli.KEY_FILE`,

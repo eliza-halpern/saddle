@@ -170,6 +170,28 @@ details.tool[open] > summary::after { transform: rotate(90deg); }
   max-height: 420px; overflow: auto; color: var(--ink-dim); }
 .tool-detail.terminal { color: #cfe9d6; }
 
+/* ---- the code block's corner button ----
+
+   Every code block on screen carries one: the reply's fenced blocks, a
+   tool's output, the live terminal, and the packet's diff and action
+   blocks. It is positioned, so appearing never moves the code; it stays
+   faint until its block is hovered or the button is keyboard-focused
+   (opacity, not display, so it stays in the tab order), and a device
+   without hover sees it always. The label says what happened -- a copy
+   that the system refused reads Failed, never a silent no-op. */
+.assistant pre, .tool-detail, .act-result, details.diff-file { position: relative; }
+.code-copy { position: absolute; top: 7px; right: 9px; z-index: 1;
+  background: var(--bg-raise); border: 1px solid var(--line); color: var(--ink-dim);
+  border-radius: 7px; padding: 1px 8px 2px; font: 11.5px/1.5 var(--mono);
+  cursor: pointer; opacity: 0; transition: opacity .12s ease, color .12s ease,
+  border-color .12s ease; }
+.assistant pre:hover .code-copy, .assistant pre .code-copy:focus-visible,
+.tool-detail:hover .code-copy, .tool-detail .code-copy:focus-visible,
+.act-result:hover .code-copy, .act-result .code-copy:focus-visible,
+details.diff-file:hover .code-copy, details.diff-file .code-copy:focus-visible { opacity: 1; }
+.code-copy:hover { color: var(--ink); border-color: var(--ink-faint); }
+@media (hover: none) { .code-copy { opacity: 1; } }
+
 .notice { color: var(--ink-faint); font-size: 12.5px; border-left: 2px solid var(--line);
           padding-left: 11px; margin: 0 0 12px; }
 .notice::before { content: "⋯ "; }

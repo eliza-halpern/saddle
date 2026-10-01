@@ -731,6 +731,9 @@ function showDiff(panel, files) {
     const body = el("div", "tool-detail diff-body");
     renderDiff(body, file.patch);
     one.appendChild(body);
+    // The run's own diff is code on screen like any other: it gets the
+    // standard corner button, copying the patch as git wrote it.
+    attachCopy(one, file.patch, file.path);
     panel.appendChild(one);
   }
 }
@@ -759,6 +762,9 @@ function actionResult(panel, ok, text, sealed) {
   panel.dataset.showing = "result";
   const box = el("div", `act-result ${ok ? "ok" : "error"}`);
   box.appendChild(el("pre", "act-output", text));
+  // The button sits in the box, not in the pre: the pre's text is quoted
+  // verbatim by the card's readers, and a button label would sit inside it.
+  attachCopy(box, text, "output");
   if (sealed === false) {
     box.appendChild(el("p", "act-note",
       "Not sealed in the ledger: there is no ledger record for user actions. Logged to this session's actions.log."));
