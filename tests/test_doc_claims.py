@@ -499,10 +499,12 @@ def test_the_symbol_check_reports_a_stale_name_and_honours_the_exceptions(tmp_pa
 
 def test_check_node_scope_forbids_an_implementation_node_from_editing_tests() -> None:
     # CONTRIBUTING.md: "`check_node_scope` forbids an implementation node from
-    # editing tests". Python test files only: the claim for other languages is
-    # a separate contract and is not asserted here.
-    refused = gates.check_node_scope("impl", ["tests/test_x.py"], may_create=True)
-    assert refused.passed is False
+    # editing tests", in any language (`gates.is_test_code`): a run once rewrote
+    # a JavaScript test because only pytest modules counted as tests.
+    for test_file in ("tests/test_x.py", "tests/markdown.test.js", "tests/fixtures/x_cdp.mjs"):
+        refused = gates.check_node_scope("impl", [test_file], may_create=True)
+        assert refused.passed is False, test_file
+        assert test_file in refused.detail
     allowed = gates.check_node_scope("impl", ["src/saddle/gates.py"], may_create=True)
     assert allowed.passed is True
     # The split is by kind: the node that is meant to write tests may.

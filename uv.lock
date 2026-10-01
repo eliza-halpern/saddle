@@ -1186,6 +1186,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "pyyaml" },
     { name = "shellcheck-py" },
     { name = "taplo" },
 ]
@@ -1213,6 +1214,7 @@ dev = [
     { name = "mypy", specifier = ">=1.14" },
     { name = "pytest-cov", specifier = ">=6.0" },
     { name = "pytest-xdist", specifier = ">=3.8" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "shellcheck-py", specifier = ">=0.11.0.1" },
     { name = "taplo", specifier = ">=0.9.3" },
 ]
