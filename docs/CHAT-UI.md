@@ -25,7 +25,7 @@ disagree about what happened.
 
 ## The shape
 
-```
+```text
 engine.run_turn()  ──yields──>  events.Event  ──┬──>  Timeline   (saddle up)
                                                 └──>  SSE → app.js (saddle chat)
 ```
@@ -55,7 +55,9 @@ A tool row carries one label that changes with its state, and the label
 comes from the **server** so the terminal and the browser say the same
 words:
 
-    Running pytest -q   ->   Ran pytest -q   |   Failed to run pytest -q
+```text
+Running pytest -q   ->   Ran pytest -q   |   Failed to run pytest -q
+```
 
 An unlabelled tool degrades to `Calling <name> <object>` rather than to a
 raw JSON blob, and malformed arguments still produce a label instead of
@@ -111,7 +113,7 @@ fsmonitor in the repo's config is not run on its behalf.
 A build takes minutes; blocking the conversation on it is what makes an
 agent feel dead.
 
-```
+```text
 run_command(command, background=true)  ->  terminal id, immediately
 read_terminal(id)                      ->  output so far
 wait_for_terminal(id, timeout)         ->  waits, bounded

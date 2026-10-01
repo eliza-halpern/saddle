@@ -1,0 +1,57 @@
+// Markdown lint for every `*.md` in the tree, run as the plain command
+// `npx --no-install markdownlint-cli2` from check.sh. The globs reach every
+// Markdown file, tracked or not, so a new one is linted without editing this
+// file (an untracked scratch note is linted too: ignore it in .gitignore or
+// keep it outside the tree). Each disabled rule below carries the reason it is
+// off; the files left out are listed under "ignores" with theirs.
+{
+  "config": {
+    "default": true,
+    // MD013 line length: prose is wrapped by hand at differing widths and
+    // tables, URLs and quoted prompts cannot wrap; 880 findings were all of
+    // that kind, none a defect.
+    "MD013": false,
+    // MD060 table pipe alignment: padding every cell to the column width
+    // rewrites a whole table whenever one cell grows; it is not a defect.
+    "MD060": false,
+    // MD036 bold line used as a heading: docs/benchmark-archive.md labels
+    // each archived comment with a bold line; turning them into headings
+    // would add 48 entries to the document outline and change its anchors.
+    "MD036": false,
+    // MD025 one H1: docs/benchmark-archive.md and docs/SLICE_TRANSCRIPT.md
+    // quote whole prompts and transcripts that carry their own `# ` title.
+    "MD025": false,
+    // MD024 duplicate headings: the archive repeats `### Body` under each
+    // issue; only siblings with the same title are a real clash.
+    "MD024": { "siblings_only": true },
+    // MD033 inline HTML: the README logo is an <img> (the only way to set
+    // its width), and the docs name model tags such as <think> in prose.
+    "MD033": { "allowed_elements": ["img", "think"] },
+    // MD041 first line: the README opens with the logo <img>, then the title.
+    "MD041": { "allow_preamble": true },
+    // MD026 trailing punctuation: the DESIGN-NOTES priority headings are
+    // whole sentences ending in a period; stripping it would change their
+    // anchors. Colons, commas, semicolons and bangs stay banned.
+    "MD026": { "punctuation": ",;:!" },
+    // Unordered lists use a dash.
+    "MD004": { "style": "dash" }
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    // Task fixtures: benchmark/tasks holds the specs handed to the models
+    // under test, byte for byte (ruff excludes the same directory).
+    // Reformatting them would change what the benchmark measures.
+    "benchmark/tasks/**",
+    // One line: the `@CONTRIBUTING.md` import that pulls the contributor
+    // rules in for coding agents; it is not a document to lint (the file's
+    // links are still checked by tests/test_doc_links.py).
+    "CLAUDE.md",
+    // Not part of the repository: installed packages, local environments and
+    // mutmut's generated work copies.
+    "node_modules/**",
+    ".venv/**",
+    "venv/**",
+    "mutants/**"
+  ],
+  "gitignore": true
+}

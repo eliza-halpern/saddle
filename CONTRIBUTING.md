@@ -154,7 +154,7 @@ every working diff impossible to emit. JSON Schema defines `pattern` as an
 unanchored partial match, but the constrained decoder compiled it as a
 *full* match, and the grammar it produced accepted one 11-character string:
 
-```
+```text
 root_prop_0 ::= (("\"" "d" "i" "f" "f" " " "-" "-" "g" "i" "t" " " "\""))
 ```
 

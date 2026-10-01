@@ -417,7 +417,7 @@ ledger. Each row has a status:
 |---|---|
 | Contract | Always `absent` in the Small lane, which seals no contract. If questions were answered, lists them. |
 | Tests | The auditor's latest `tests`/`full-suite` finding (`proven`/`failed`). If there is none, the model's own last pytest run (`observed`, "not an auditor verdict"). |
-| Mutation | The latest tier-2 `mutation` finding, e.g. "killed 1 of 1 changed-line mutants". `blocked` (tier 1 failed on that tree, so tier 2 did not run) is `not-proven`, shown as "blocked: <cause>": there is no mutation result to call failed. When the auditor sealed the mutation outcome beside the finding, the row also carries the mutation record in English (below). |
+| Mutation | The latest tier-2 `mutation` finding, e.g. "killed 1 of 1 changed-line mutants". `blocked` (tier 1 failed on that tree, so tier 2 did not run) is `not-proven`, shown as "blocked: \<cause\>": there is no mutation result to call failed. When the auditor sealed the mutation outcome beside the finding, the row also carries the mutation record in English (below). |
 | Scope | The files changed on the branch, every edit refused by the tier-0 guard, and whether tests were editable. |
 | Audit | Every tier-1 and tier-2 gate's latest finding, ✓ or ✗. Only the latest finding per gate counts, so a failure that a later audit cleared is history. Tier-0 findings are not in this row and not in its "N of M" count (`packet._audits`). A failing coverage finding carries its uncovered lines in English (below). |
 | Edit checks | The tier-0 checks (syntax, ruff, imports on each edited file, at the check and at finish): "N of M edit checks passed", one check per gate per file, `observed` when all passed, `failed` otherwise, never `proven`, because an edit check is not a verdict on the change. The records name the file each checked (`Finding.path`), so with more than one file the row names each, and a failure on one file never reads under a pass on another. A failing edit check still refuses a merge. The row appears only when tier-0 findings exist; in a run they come from the `check` tool (`--check-tool`, `feed.AuditFeed.check` runs tiers 0 and 1) and the finish audit (section 5). |
@@ -478,7 +478,7 @@ The chat card does not show the rows above in table order (`static/tasks.js`,
 
 1. **Verdict**: Finished, Stopped or No outcome, the task, one sentence, and chips for
    the branch, files changed, test policy and ledger size.
-2. **Action row**: **View diff**, **Merge into <branch>**, **Discard branch**,
+2. **Action row**: **View diff**, **Merge into \<branch\>**, **Discard branch**,
    **Ask about this run**, **Download full report**.
    - View diff shows the run's changes per file (merge base to the run branch).
    - Merge is enabled only for a finished run with no failed row and at least one
@@ -574,7 +574,7 @@ The ledger alone can be resealed: delete a span, drop it from the outcome's list
 recompute the hashes, and plain `verify` still passes. So every run's final commit on
 `saddle/auto/<run-id>` ends with a trailer paragraph:
 
-```
+```text
 Saddle-Outcome: <outcome span record_hash>
 Saddle-Ledger: .saddle/runs/<run-id>/proofs.jsonl
 ```

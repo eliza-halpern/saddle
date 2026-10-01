@@ -118,7 +118,7 @@ One T5 seed against the node-size pre-flight and truncation ladder
 public) before the run. Full record in the same notes. **TIMEOUT at
 1800 s, 0 sealed proofs**, worktree clean at exit.
 
-```
+```text
 attempt 1/3: 3 gate(s) failed: syntax, tests, red-phase
 Attempt 2 of 3: completion truncated at 32624 output tokens
 Attempt 3 of 3: completion truncated at 32768 output tokens

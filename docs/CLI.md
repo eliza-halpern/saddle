@@ -14,7 +14,7 @@ wins:
 1. the flag (`--base-url URL`, `--model ID`), even when it names the default;
 2. the environment variable (`SADDLE_BASE_URL`, `SADDLE_MODEL`); an empty one counts as unset;
 3. a line in `~/.config/saddle/env`, parsed like the key's (`NAME=value`, optional
-   `export ` and quotes);
+   `export` and quotes);
 4. the built-in default: `http://127.0.0.1:18020/v1` and `qwen3.8-27b`.
 
 Only `SADDLE_VLLM_API_KEY`, `VLLM_API_KEY`, `SADDLE_BASE_URL` and `SADDLE_MODEL` are
@@ -24,7 +24,7 @@ too.
 
 `saddle doctor` prints where each value came from before its verdict, and never the key:
 
-```
+```text
 base URL: http://127.0.0.1:18020/v1 (built-in default)
 model: my-model (from environment SADDLE_MODEL)
 OK: http://127.0.0.1:18020/v1 serves my-model (models: my-model)
@@ -151,7 +151,7 @@ to the model, and a failing finish audit refuses `finish`.
 
 While it runs, the command prints one line per tool call. At the end it prints:
 
-```
+```text
 finished: finish called (arm E+A+F)
 branch saddle/auto/<id> at <commit> (worktree <repo>/.saddle/worktrees/<id>)
 ledger <repo>/.saddle/runs/<id>/proofs.jsonl
@@ -235,4 +235,4 @@ The terminal chat. Same lanes and tool lists as the web chat's Ask and Edit
 | `--max-tokens N` | `8192` | reply max tokens |
 | `--temperature T` | `0.0` | sampling temperature |
 | `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
-| `--base-url`, `--model` | as for `auto` |
+| `--base-url`, `--model` | as for `auto` | |

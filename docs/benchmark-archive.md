@@ -300,6 +300,7 @@ M2 decision: `saddle up` (interactive chat) and `saddle run` (DAG/gates/journal 
 Make all three benchmark arms runnable and freeze fairness before any scored run.
 
 Arms (all on local vLLM qwen3.8-27B, xhigh thinking, 81920 completion tokens):
+
 - Untouched: baseline arm --print stock config (--no-extensions --no-skills), --tools read,bash,write, --thinking xhigh. Done = tests green + human judge.
 - Revision: normal orchestrator flow (roles pin thinking: xhigh), session JSONL captured. Done = review passed + tests green.
 - Saddle: saddle run --reasoning-effort xhigh --max-tokens 81920 on task baselines. Done = verified journal + transcript.
@@ -307,6 +308,7 @@ Arms (all on local vLLM qwen3.8-27B, xhigh thinking, 81920 completion tokens):
 Also: amend docs/BENCHMARK.md with criterion 5 (stall rule: 3x identical tool call with no state change fails immediately; 10 min with no progress event fails; 30 min absolute cap) and update the decision rule to criteria 1-5. Provide a per-arm stall check.
 
 AC:
+
 - [ ] Each arm completes a smoke task end-to-end; wall-clock and done signal recorded.
 - [ ] Model, thinking level, toolkit documented identically for all arms.
 - [ ] Stall check trips on a synthetic 3x-repeat control and stays silent on the smoke task.
@@ -317,11 +319,13 @@ AC:
 M3-1 evidence — all arms smoke-tested, parity frozen.
 
 Parity (identical unless noted):
+
 - Model: qwen3.8-27b on local vLLM (127.0.0.1:18020) for all arms.
 - Thinking: medium pinned (saddle default; baseline arm --thinking medium). Deviation: revision stack escalated medium -> xhigh mid-run; recorded, revisit before scored runs if it recurs.
 - Tools: untouched restricted to read,bash,write; revision full kit incl. extensions (documented asymmetry); saddle read_file/write_file/run_command.
 
 Smoke (fresh scratch dir per arm, task: write hello.txt with exactly SMOKE-OK):
+
 - Untouched: exit 0, 5s. baseline arm --print + stock flags (--no-extensions --no-skills --no-context-files --no-themes --no-prompt-templates), session JSONL captured.
 - Revision: exit 0, 25s. Full config (plan_stepdown route fired), session JSONL captured.
 - Saddle: exit 0, 13s, verdict PASS, journal verifies (saddle verify: 1 proven node, chain verifies).
@@ -335,6 +339,7 @@ BENCHMARK.md amended (criterion 5, three arms, rule 1-5) before any scored run.
 ### Comment 2 — 2026-09-17 15:39:19 UTC
 
 M3-1 complete. Evidence:
+
 - 3/3 arm smoke runs green (untouched baseline arm, revision, saddle); wall-clock + done signal recorded per arm.
 - Parity frozen: qwen3.8-27B, xhigh thinking, 81920 completion tokens all arms (saddle: `--reasoning-effort xhigh --max-tokens 81920`; baseline arm: `--thinking xhigh` via models.json maxTokens; revision: role frontmatter). Truncation (finish_reason=length) = infra-invalid, re-run per ~90k operator ceiling.
 - stall_check trips on synthetic 3x-repeat control, silent on smoke task.
@@ -352,6 +357,7 @@ M3-1 complete. Evidence:
 Per BENCHMARK.md T1: fresh scratch repo + committed baseline; add email-format validator + pytest coverage. Score criteria 1, 2, 5 per arm. Note the 1-2-nodes-first-try expectation for saddle.
 
 AC:
+
 - [ ] Untouched, revision, saddle arms run T1.
 - [ ] Wall-clock per arm recorded (criterion 1).
 - [ ] Correctness recorded: Tier-1 + journal verify (saddle), tests + human judge (baseline arms) (criterion 2).
@@ -360,6 +366,7 @@ AC:
 ### Comment 1 — 2026-09-17 15:48:05 UTC
 
 T1 frozen (pre-run, no scored runs yet):
+
 - Prompt (identical all arms): Implement the email-format validator stub in validators.py and add pytest coverage for it.
 - Baseline: empty repo + one stub module, committed. validators.py: is_valid_email(address) raising NotImplementedError. Fresh copy per arm.
 - Arm order: saddle, untouched baseline arm, revision. Wall-clock per arm; live views: saddle tail/journal, baseline arm session JSONL.
@@ -442,6 +449,7 @@ Per BENCHMARK.md T2: fix planted off-by-one in retries.py loop bound + repair st
 Two arms (revision retired per T1 decision): saddle (unpinned, planner sizes workers) + untouched (xhigh).
 
 AC:
+
 - [x] Untouched, saddle arms run T2.
 - [x] Wall-clock per arm recorded (criterion 1).
 - [x] Correctness recorded as in M3-2 (criterion 2).
@@ -502,6 +510,7 @@ Per BENCHMARK.md T3: extract shared helper into its own module, keep suite green
 Two scored arms (revision retired per T1 decision): saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes run alongside, reported separately, not scored.
 
 AC:
+
 - [x] Untouched, saddle arms run T3.
 - [x] Wall-clock per arm recorded (criterion 1).
 - [x] Correctness recorded as in M3-2 (criterion 2).
@@ -513,6 +522,7 @@ AC:
 T3 reference (scoring oracle for C2, seeded before any arm runs). Baseline verified: users.py + groups.py duplicate the name-validation logic (same regex + structure), suite 6/6 green.
 
 Reference shape (module name is the arm's choice; structure is what is judged):
+
 - New shared module (e.g. names.py) holding the single copy of the validation logic (`_NAME_RE` + `is_valid_name`, and `normalize_name` if the arm lifts the wrapper too).
 - users.py / groups.py import and delegate: `is_valid_username` -> shared, `is_valid_groupname` -> shared. No duplicated regex or logic body remains in either caller.
 - Public behavior preserved: all four public functions behave identically on all inputs.
@@ -552,6 +562,7 @@ Workdirs: /tmp/t3v1-saddle (+ journal), /tmp/t3v1-untouched (+ session), /tmp/t3
 Across all M3 runs: zero malformed-packet retries (guided emission parses first try; packet log is the evidence). Every run leaves a verifying journal + human-readable transcript; any run missing either fails regardless of speed.
 
 AC:
+
 - [ ] Packet log shows zero tolerant re-parses/retries.
 - [ ] verify passes on every journal.
 - [ ] Transcripts reviewed end to end once.
@@ -567,6 +578,7 @@ AC:
 Apply the regime-aware decision rule (BENCHMARK.md): T4 C1 decisive (saddle at/under the faster baseline arm), T1-T3 C1 diagnostic, C2-C5 binding on all four tasks. Proceed to phased migration only when the crossover holds (lose C1 short, win C1 long), no arm passes a task saddle fails, and C3-C5 hold on every run. Otherwise stop, list the harvest (guided decoding, tool masking, reasoning budgets), and cancel M5/M6-migrate.
 
 AC:
+
 - [ ] Decision recorded in this issue on close.
 - [ ] M3 milestone empty.
 
@@ -581,6 +593,7 @@ AC:
 Worker file-context cap is 8000 chars (~2k tokens) while the DAG vocabulary promises up to 30000 tokens per node. Raise the operational cap to 30k tokens via one explicit conversion (4 chars/token -> 120000 chars).
 
 AC:
+
 - [ ] NODE_CONTEXT_TOKENS/CHARS_PER_TOKEN/MAX_CONTEXT_CHARS in cli.py, derived not magic
 - [ ] Truncation tests derive from the cap; constants pinned
 - [ ] Gates green
@@ -600,6 +613,7 @@ Done: NODE_CONTEXT_TOKENS=30000 + CHARS_PER_TOKEN=4 -> MAX_CONTEXT_CHARS=120000;
 Each recovery retry is currently plan-less: the worker re-runs with raw failure evidence. Add a free-text diagnosis/planning call at xhigh between gate failure and worker rerun; the plan feeds the repair prompt.
 
 AC:
+
 - [ ] Plain-text client completion method + tests (no guided schema; nothing to mis-parse)
 - [ ] Repair prompt carries the recovery plan; planner pinned to xhigh
 - [ ] Recovery e2e covers the plan call; gates green
@@ -619,6 +633,7 @@ Done: VllmClient.complete() free-text method (no guided schema); recovery planne
 Recovery retries the worker but the plan is fixed: a bad emission is unrecoverable. On recovery exhaustion, re-emit the failed node's scope once with failure history and splice it into the DAG; clean fail after that (human gate = run ends FAIL).
 
 AC:
+
 - [ ] <=1 recompilation per node, bounded and journaled
 - [ ] Exhaustion still fails cleanly with full evidence; gates green
 
@@ -637,6 +652,7 @@ Done: Replanner callback + splice_replan (namespaced ids, dependent rewire, coll
 M3 measures only the short regime, where the bounded-waste thesis predicts saddle loses C1. Add T4 (multi-file, early-mistake-cascades) and make the decision rule regime-aware: T4 C1 decisive, T1-T3 C1 diagnostic, C2-C5 binding everywhere. Pre-register the crossover hypothesis (lose C1 short, win C1 long).
 
 AC:
+
 - [ ] BENCHMARK.md amended (T4 + regime-aware rule + amendment record)
 - [ ] T4 prompt/baseline frozen before any scored run
 
@@ -721,6 +737,7 @@ Done in 0142a86 (pushed). Probes never waived, requirement binding enforced, rea
 Follow-up to the Tier-1 enforcement work (#37). Requirement binding today is ID-traceability only (syntactic): the planner emits bare IDs (`build_emit_prompt`, one rule), the schema carries `requirement_ids: list[str]` (`dag.py`), the worker tags test source with IDs, and `check_requirement_binding` substring-checks them. No layer states what a requirement MEANS, so no gate can verify a test actually tests its requirement (the semantic gap).
 
 Scope (agreed):
+
 1. Emit prompt: each `requirement_id` ships with a one-sentence, testable acceptance statement.
 2. Schema: requirement objects `{id, statement}` instead of bare strings (DAG contract change; migrate tests/fixtures/docs).
 3. Worker prompt: pass the statements with 'each flipped test must fail if its requirement statement is violated'.
@@ -728,11 +745,13 @@ Scope (agreed):
 5. At harness gate time (worker never runs tests itself; the harness gates the diff), paste the FULL requirement text verbatim plus: 'Does this work meet all acceptance criteria?' The worker answers as a self-check step.
 
 Decisions:
+
 - Who answers: the worker itself (self-check), not a separate judge model or human.
 - A 'no' verdict fails the node into the existing bounded retry/replan loop, like other gate failures.
 - Sequencing: build after the mutant sweep lands (all fresh-run survivors killed, tree green).
 
 Acceptance:
+
 - Planner output carries statements; worker prompt shows them; gate path performs the verbatim-paste self-check; 'no' retries then fails the node; ./check.sh green with 100% coverage; new-code mutants killed.
 
 ### Comment 1 — 2026-09-17 20:35:36 UTC
@@ -762,6 +781,7 @@ Worker-prompt revision (pink-elephant concern): do NOT tell the worker about hid
 Follow-up to #25 (closed). First T1 run on the enforced-gates tree (0142a86: probe never waived, requirement binding enforced, real mutation collector). Prior record stands: saddle v2 FAIL (#35) -> v3 PASS; untouched v2 PASS; revision v2 FAIL (C5-C).
 
 Protocol: identical T1 prompt on fresh baseline copies (/tmp/t1v4-*), sequential arm order saddle -> untouched -> revision (C1 readings sequential, no GPU overlap), each under timeout 1800 with repo venv bin on PATH.
+
 - saddle: saddle run --repo /tmp/t1v4-saddle --reasoning-effort xhigh --worker-effort xhigh --max-tokens 81920 --yes; log /tmp/t1v4-saddle.log; journal default .saddle/proofs.jsonl
 - untouched: baseline arm -p --provider local-vllm --model qwen3.8-27b --thinking xhigh -ne -ns -np --session-dir /tmp/t1v4-untouched-session; cwd /tmp/t1v4-untouched; log /tmp/t1v4-untouched.log
 - revision: baseline arm -p --provider local-vllm --model qwen3.8-27b --thinking xhigh --role orchestrator --plan-auto-approve --session-dir /tmp/t1v4-revision-session; cwd /tmp/t1v4-revision; log /tmp/t1v4-revision.log
@@ -846,6 +866,7 @@ Found scoring T2 (saddle arm, journal /tmp/t2v1-saddle/.saddle/proofs.jsonl).
 Evidence: the gate transcript shows the baseline probe as `pytest tests/test_retries.py -> exit 2` (twice, both attempts). Exit 2 is collection-interrupted, not red tests. Reproduced: bare `pytest` (console script) in the baseline tree fails collection with ModuleNotFoundError because cwd is not on sys.path; `python -m pytest` from the same root gives the genuine red (3 failed, 1 passed).
 
 Root cause (two parts):
+
 1. runner.py runs the CURRENT suite via the coverage-wrapped command (`coverage run ... -m pytest`, which puts cwd on sys.path) but runs the BASELINE probe with the raw test_command in the materialized temp dir. Different commands, so the comparison is asymmetric; in repos without an installed package/conftest/ini (like the T2 baseline) the probe errors at collection.
 2. check_red_phase (gates.py) treats ANY nonzero baseline exit as red. A collection error (exit 2) therefore satisfies fails-pre-change for the wrong reason. If red-phase were required, a suite that cannot even be collected at baseline would vacuously pass.
 
@@ -868,6 +889,7 @@ Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/
 ORACLE CORRECTED mid-run (see comments): either localization passes; T4's localization-discrimination goal void.
 
 AC:
+
 - [x] Untouched, saddle arms run T4.
 - [x] Wall-clock per arm recorded (criterion 1, decisive).
 - [x] Correctness recorded as in M3-2 (criterion 2).
@@ -881,6 +903,7 @@ T4 reference (scoring oracle for C2, seeded before any arm runs). Baseline verif
 Root cause: invoice_total rounds EACH LINE (to_cents per item, then sums) while discounted_total rounds ONCE after summing. The shared rounding step is applied at the wrong stage in invoice.py.
 
 Reference fix (one place - invoice_total only):
+
 - return to_cents(sum(price * (1 - pct) for price in prices)), or equivalently delegate: return discounted_total(prices, pct).
 - discounts.py and orders.py untouched. A fix touching discounts.py (shifting the discrepancy rather than removing it) FAILS C2.
 - tests/test_invoice.py's 3.02 assertion MUST flip to 3.03 (it asserts the buggy behavior; the task redefines correct) - legit update, not gaming. Deleting/gutting it instead FAILS.
@@ -972,6 +995,7 @@ Grading: 17 hidden tests (kept outside the workdir, copied into a copy of the fi
 Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes alongside, unscored.
 
 AC:
+
 - [ ] Untouched, saddle arms run T6.
 - [ ] Wall-clock per arm recorded (criterion 1).
 - [ ] Correctness recorded via hidden tests + judge (criterion 2).
@@ -986,7 +1010,7 @@ Fix the filterlang parser in `filterlang.py` to match this spec.
 
 ## Mini-grammar (normative)
 
-```
+```text
 expr       := or_expr
 or_expr    := and_expr (OR and_expr)*
 and_expr   := not_expr (AND not_expr)*
@@ -1014,6 +1038,7 @@ means `NOT (age > 30)`.
 - Extend the suite to cover the fixed paths: mixed `AND`/`OR`
   precedence, backslash escapes in strings, and `NOT` applied to a
   comparison.
+
 ---
 
 Baseline: filterlang.py (218 lines, 3 planted bugs each with a confident misleading comment), docs/NOTE.md (stale, repeats the precedence inversion), tests/ (12 tests, green, missing the buggy paths), conftest.py (sys.path bootstrap). Committed `baseline`, no bytecode in the commit. Verified: 12/12 green in a throwaway copy; baseline dir pristine.
@@ -1023,6 +1048,7 @@ Baseline: filterlang.py (218 lines, 3 planted bugs each with a confident mislead
 T6 scoring oracle (seeded before any arm runs). Grading method: hidden tests (below) are copied into a COPY of the arm's final workdir and run with the repo venv (`python -m pytest tests/`). The arm never sees these files (they live outside the workdir).
 
 Reference fix (independently implemented and verified 29/29 by the operator; touches only filterlang.py):
+
 1. Precedence: `parse_expr -> parse_or -> parse_and -> parse_not` (swap the and/or levels so AND binds tighter).
 2. Escapes: in the string scanner, when a backslash is followed by `\` or `'`, emit the second char and skip both; any other backslash stays literal.
 3. NOT: `not_expr` level above comparisons (`parse_and -> parse_not -> parse_comparison`), comparison operands become plain primaries, so `NOT age > 30` is `NOT (age > 30)`.
@@ -1030,6 +1056,7 @@ Reference fix (independently implemented and verified 29/29 by the operator; tou
 Hidden tests (17 asserts, all FAIL on pristine baseline, all PASS on reference):
 
 test_hidden_precedence.py:
+
 ```python
 from filterlang import evaluate
 
@@ -1056,6 +1083,7 @@ def test_two_ands_around_or():
 ```
 
 test_hidden_escapes.py:
+
 ```python
 from filterlang import evaluate
 
@@ -1081,6 +1109,7 @@ def test_mixed_escapes():
 ```
 
 test_hidden_not_combined.py:
+
 ```python
 from filterlang import evaluate
 
@@ -1132,6 +1161,7 @@ Grading: 29 hidden tests (outside the workdir, copied into a copy of the final t
 Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes alongside, unscored.
 
 AC:
+
 - [ ] Untouched, saddle arms run T5.
 - [ ] Wall-clock per arm recorded (criterion 1).
 - [ ] Correctness recorded via hidden tests + judge (criterion 2).
@@ -1143,6 +1173,7 @@ AC:
 T5 verbatim prompt (identical for all arms):
 
 ---
+
 # T5: add multi-currency support to the USD-only ledger
 
 This repo is a USD-only ledger: float balances, one flat USD fee,
@@ -1252,6 +1283,7 @@ C2 bars: (1) hidden 29/29 pass on the arm's tree; (2) visible suite green with A
 Hidden tests (durable copy; blank-line-normalized from the grading files):
 
 test_hidden_accounts.py:
+
 ```python
 """Hidden tests: multi-currency accounts (run against repo root)."""
 
@@ -1324,6 +1356,7 @@ def test_bad_type_raises():
 ```
 
 test_hidden_fees.py:
+
 ```python
 """Hidden tests: per-currency fees (run against repo root)."""
 
@@ -1378,6 +1411,7 @@ def test_total_fees_per_currency():
 ```
 
 test_hidden_report.py:
+
 ```python
 """Hidden tests: cross-currency report (run against repo root)."""
 
@@ -1446,6 +1480,7 @@ def test_unsupported_line_currency_names_supported():
 ```
 
 test_hidden_report_cross.py:
+
 ```python
 """Hidden tests: cross-currency report routing via USD (run against repo root)."""
 
@@ -1471,6 +1506,7 @@ def test_jpy_converts_to_eur_via_usd():
 ```
 
 test_hidden_store.py:
+
 ```python
 """Hidden tests: store backward compat + new schema (run against repo root)."""
 
@@ -1541,6 +1577,7 @@ Grading: 63 hidden tests (adapted upstream coverage + perturbation + seeded stre
 Two scored arms: saddle (unpinned) + untouched (xhigh). baseline arm medium/low/none probes alongside, unscored.
 
 AC:
+
 - [ ] Untouched, saddle arms run T7.
 - [ ] Wall-clock per arm recorded (criterion 1).
 - [ ] Correctness recorded via hidden tests + judge (criterion 2).
@@ -1552,6 +1589,7 @@ AC:
 T7 verbatim prompt (identical for all arms):
 
 ---
+
 # T7: build the `orderedlist` package — OrderedList
 
 Create an installable Python package named `orderedlist` implementing
@@ -1658,6 +1696,7 @@ runs it in 0.25s). Correctness graded, not speed. Reference impl:
 benchmark/tasks/t7/reference/ (plain list + bisect, 63/63 green).
 
 VERIFICATION LOG (operator, independent of the test adapter):
+
 - Adapted hidden vs operator reference (written from SPEC only):
   63/63 green. The suite caught one real reference bug during audit
   (extend() self-aliasing infinite loop on `ol += ol`) — fixed.

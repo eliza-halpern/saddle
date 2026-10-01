@@ -24,6 +24,9 @@ npx --no-install tsc -p tsconfig.json
 # The page's HTML and CSS: the repo configs, pinned by package-lock.json.
 npx --no-install html-validate src/saddle/web/static/index.html
 npx --no-install stylelint src/saddle/web/static/app.css
+# Markdown lint over every Markdown file (rules and the reasoned exclusions are
+# in .markdownlint-cli2.jsonc).
+npx --no-install markdownlint-cli2
 # The suite runs on as many pytest-xdist workers as the audit uses on this repo
 # (`[tool.saddle] test-workers` in pyproject.toml); pytest-cov combines every
 # worker's lines for the 100% line and branch gate in `addopts`. `worksteal`
