@@ -61,7 +61,7 @@ from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal
 
-from saddle import coverage_text, impact, runner, sandbox, test_changes
+from saddle import coverage_text, flips, impact, runner, sandbox
 from saddle.audit import (
     AUDIT_TEST_COMMAND,
     AuditError,
@@ -704,7 +704,7 @@ def green_on_baseline(
 
 TEST_CHANGES: Final = "test-changes"
 """The finding for pre-existing tests the tree changed, in every language
-(`test_changes`). Emitted only when something changed or could not be read,
+(`flips`). Emitted only when something changed or could not be read,
 and not one of `TIER1`: it is judged against the finish summary, which changes
 between finish calls on one tree, so it is never cached with the battery."""
 
@@ -720,7 +720,7 @@ def _git_out(root: Path, *argv: str) -> bytes:
     return run.stdout
 
 
-def changed_tests(root: Path, baseline: str) -> list[test_changes.ChangedTest]:
+def changed_tests(root: Path, baseline: str) -> list[flips.ChangedTest]:
     """The pre-existing tests `root`'s tree changed against `baseline`, read-only.
 
     Every test file git says differs from the baseline, as the baseline had it
@@ -734,33 +734,31 @@ def changed_tests(root: Path, baseline: str) -> list[test_changes.ChangedTest]:
     untracked = _git_out(root, "ls-files", "-z", "--others", "--exclude-standard").decode()
     base: dict[str, str] = {}
     head: dict[str, str] = {}
-    unreadable: list[test_changes.ChangedTest] = []
+    unreadable: list[flips.ChangedTest] = []
 
     def put(into: dict[str, str], path: str, data: bytes, where: str) -> None:
         try:
             into[path] = data.decode()
         except UnicodeDecodeError:
             unreadable.append(
-                test_changes.ChangedTest(path, path, test_changes.UNREADABLE, f"{where}: not UTF-8")
+                flips.ChangedTest(path, path, flips.UNREADABLE, f"{where}: not UTF-8")
             )
 
     for path, kind in status.items():
-        if test_changes.language(path) is None:
+        if flips.language(path) is None:
             continue
         if kind != "A":
             put(base, path, _git_out(root, "show", f"{resolved}:{path}"), "baseline")
         if kind != "D":
             put(head, path, (root / path).read_bytes(), "tree")
     for path in (p for p in untracked.split("\0") if p):
-        if test_changes.language(path) is not None:
+        if flips.language(path) is not None:
             put(head, path, (root / path).read_bytes(), "tree")
     # An unreadable file is reported once, not also as a file whose tests all vanished.
     for bad in {c.path for c in unreadable}:
         base.pop(bad, None)
         head.pop(bad, None)
-    return sorted(
-        [*test_changes.detect(base, head), *unreadable], key=lambda c: (c.path, c.name, c.kind)
-    )
+    return sorted([*flips.detect(base, head), *unreadable], key=lambda c: (c.path, c.name, c.kind))
 
 
 def commit_messages(root: Path, baseline: str) -> str:
@@ -781,11 +779,11 @@ def flip_finding(
     needs no label: `sanction` and the red-on-baseline check already judge it.
 
     `fail` until every changed test has its `flip:` line in `message` with evidence
-    `test_changes.circular_evidence` does not refuse; then `not-proven`, never
+    `flips.circular_evidence` does not refuse; then `not-proven`, never
     `pass`: the label buys a person's review, not a verdict.
     """
     changes = [c for c in changed_tests(root, baseline) if c.name not in sanctioned]
-    judged = test_changes.judge(changes, message)
+    judged = flips.judge(changes, message)
     if judged is None:
         return None
     return Finding(
@@ -794,7 +792,7 @@ def flip_finding(
         verdict=judged.verdict,
         reason="evidence-thin",
         detail=judged.detail,
-        cites=("saddle.test_changes.judge",),
+        cites=("saddle.flips.judge",),
     )
 
 

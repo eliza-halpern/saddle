@@ -1,4 +1,4 @@
-"""`saddle.test_changes`: pre-existing tests the tree changed, and the `flip:` rule.
+"""`saddle.flips`: pre-existing tests the tree changed, and the `flip:` rule.
 
 Each detection case is a pair: the tree that changed a test is reported, and
 the tree that did not (or only added) is silent. A constraint is checked by
@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from saddle import test_changes as tc
-from saddle.test_changes import ChangedTest, detect, judge, language
+from saddle import flips as tc
+from saddle.flips import ChangedTest, detect, judge, language
 
 FIXTURES = Path(__file__).parent / "fixtures"
 JS = "tests/markdown.test.js"

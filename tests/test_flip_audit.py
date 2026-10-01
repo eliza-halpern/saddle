@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from test_feed import EDIT_COMMENT, FakeAuditor, Reactive, call, run
 
-from saddle import test_changes as tc
+from saddle import flips as tc
 from saddle.audit import AuditCheck, AuditError, AuditResult
 from saddle.auditor import (
     TEST_CHANGES,
