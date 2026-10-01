@@ -732,8 +732,9 @@ function showDiff(panel, files) {
     renderDiff(body, file.patch);
     one.appendChild(body);
     // The run's own diff is code on screen like any other: it gets the
-    // standard corner button, copying the patch as git wrote it.
-    attachCopy(one, file.patch, file.path);
+    // standard button, in the file's header, copying the patch as git
+    // wrote it.
+    attachCopy(one.firstElementChild, file.patch, file.path);
     panel.appendChild(one);
   }
 }

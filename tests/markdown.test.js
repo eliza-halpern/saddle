@@ -309,20 +309,11 @@ test("the live row and a reloaded row fill identically", () => {
   assert.strictEqual(pastDetail.children.filter((c) => c.className === "d-del").length, 1);
 });
 
-test("output that is not a diff keeps its text and gains a copy button", async () => {
-  // The old pin held the detail to its text alone; the button is a
-  // positioned overlay, so it adds only its label, after the output. The
-  // text the button copies is the output verbatim, label excluded.
-  resetClipboard();
+test("output that is not a diff is left alone", () => {
   const row = el("div"), detail = el("div");
   fillToolDetail(row, detail, "created 'frog.svg' (1692 bytes)");
+  assert.strictEqual(detail.textContent, "created 'frog.svg' (1692 bytes)");
   assert.ok(!row.classList.contains("has-diff"));
-  assert.strictEqual(detail.textContent, "created 'frog.svg' (1692 bytes)Copy");
-  const button = detail.children[detail.children.length - 1];
-  assert.strictEqual(button.className, "code-copy");
-  const ok = await button.onclick();
-  assert.strictEqual(ok, true);
-  assert.strictEqual(clipboard.writes[0], "created 'frog.svg' (1692 bytes)");
 });
 
 test("an empty result says so rather than showing nothing", () => {
@@ -641,7 +632,7 @@ test("a diff row's button copies the diff verbatim, blank line intact", async ()
   const row = el("div"), detail = el("div");
   const diff = "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n\n+added";
   fillToolDetail(row, detail, diff);
-  const button = detail.children[detail.children.length - 1];
+  const button = row.children[row.children.length - 1];
   assert.strictEqual(button.className, "code-copy");
   const ok = await button.onclick();
   assert.strictEqual(ok, true);
@@ -652,28 +643,82 @@ test("a created file's button copies the file, not its header", async () => {
   resetClipboard();
   const row = el("div"), detail = el("div");
   fillToolDetail(row, detail, "created 'a.py' (12 bytes)\nx = 1\ny = 2");
-  const button = detail.children[detail.children.length - 1];
+  const button = row.children[row.children.length - 1];
   assert.strictEqual(button.className, "code-copy");
   const ok = await button.onclick();
   assert.strictEqual(ok, true);
   assert.strictEqual(clipboard.writes[0], "x = 1\ny = 2");
 });
 
-test("a tool row keeps exactly one button across re-fills", async () => {
+test("a tool row keeps exactly one button across re-fills, copying the latest", async () => {
   // A re-run of the same tool, or a reload overlapping a live fill, must
-  // not leave a second button behind; a result with no content has nothing
-  // to copy, so no button at all.
+  // not leave a second button behind, and the one left copies the latest
+  // fill; a re-fill with no content has nothing to copy, so it drops it.
   resetClipboard();
   const row = el("div"), detail = el("div");
-  fillToolDetail(row, detail, "def f():\n    return 1");
-  fillToolDetail(row, detail, "def f():\n    return 1");
-  assert.strictEqual(detail.children.filter((c) => c.className === "code-copy").length, 1);
-  const ok = await detail.children[detail.children.length - 1].onclick();
-  assert.strictEqual(ok, true);
-  assert.strictEqual(clipboard.writes[0], "def f():\n    return 1");
-  const emptyRow = el("div"), emptyDetail = el("div");
-  fillToolDetail(emptyRow, emptyDetail, "");
-  assert.strictEqual(emptyDetail.children.length, 0);
+  fillToolDetail(row, detail, "first");
+  fillToolDetail(row, detail, "second");
+  const buttons = row.children.filter((c) => c.className === "code-copy");
+  assert.strictEqual(buttons.length, 1);
+  assert.strictEqual(await buttons[0].onclick(), true);
+  assert.strictEqual(clipboard.writes[0], "second");
+  fillToolDetail(row, detail, "");
+  assert.strictEqual(row.children.filter((c) => c.className === "code-copy").length, 0);
+});
+
+test("the button goes in a row's summary and leaves the detail as output only", () => {
+  const row = el("details"), summary = el("summary"), detail = el("div");
+  row.appendChild(summary);
+  row.appendChild(detail);
+  fillToolDetail(row, detail, "some output");
+  assert.strictEqual(detail.textContent, "some output");
+  assert.strictEqual(summary.children.filter((c) => c.className === "code-copy").length, 1);
+});
+
+test("a second click restarts the feedback window", async () => {
+  resetClipboard();
+  const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const live = new Set();
+  let next = 1;
+  globalThis.setTimeout = (callback) => { const id = next++; live.add(id); return id; };
+  globalThis.clearTimeout = (id) => { live.delete(id); };
+  try {
+    const button = copyButton("twice", "code");
+    await button.onclick();
+    await button.onclick();
+    assert.strictEqual(live.size, 1);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+test("a click inside a summary does not toggle the row", async () => {
+  resetClipboard();
+  let prevented = 0, stopped = 0;
+  const button = copyButton("x", "code");
+  await button.onclick({ preventDefault: () => prevented++, stopPropagation: () => stopped++ });
+  assert.strictEqual(prevented, 1);
+  assert.strictEqual(stopped, 1);
+});
+
+test("the fallback copy cleans up its field even when selecting throws", async () => {
+  resetClipboard();
+  setNavigator({});
+  const kids = document.body.childNodes.length;
+  const realCreate = document.createElement;
+  document.createElement = (tag) => {
+    const node = realCreate(tag);
+    if (tag === "textarea") node.select = () => { throw new Error("no selection"); };
+    return node;
+  };
+  try {
+    const ok = await copyButton("x", "code").onclick();
+    assert.strictEqual(ok, false);
+    assert.strictEqual(document.body.childNodes.length, kids);
+  } finally {
+    document.createElement = realCreate;
+  }
 });
 
 test("the async clipboard is used when it is there", async () => {

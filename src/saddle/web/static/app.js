@@ -220,12 +220,13 @@ function handle(event) {
       if (state.passwordId === event.id) closePassword();
       break;
     case "terminal.output": {
-      // Append, do not replace: the block's copy button sits inside it and
-      // a textContent rewrite would delete it on the next chunk. The raw
-      // text rides along so the button copies what the command said, not
-      // whatever the DOM happens to hold.
+      // Append text nodes; the raw text rides along so the button in the
+      // row's header copies what the command said, not what the DOM holds.
       const body = terminalBlock(event.id);
-      if (!body.output) attachCopy(body, () => body.output || "", "terminal output");
+      if (!body.output) {
+        attachCopy(body.parentNode.querySelector("summary"),
+          () => body.output || "", "terminal output");
+      }
       body.output = (body.output || "") + event.chunk;
       body.appendChild(document.createTextNode(event.chunk));
       break;

@@ -375,29 +375,41 @@ function renderCreated(target, match) {
    live one coloured a diff, the stored one printed it flat. The row's
    copy button copies the text the tool actually returned, not the DOM:
    a diff's blank lines are padded to spaces for equal row heights, and
-   a created file's header line is not part of the file. */
+   a created file's header line is not part of the file. The button sits
+   in the row's header, not in the detail, so the detail holds the
+   output and nothing else. */
 function fillToolDetail(row, detail, text) {
   const created = typeof text === "string" ? text.match(CREATED) : null;
+  const host = copyHostOf(row);
   if (isDiff(text)) {
     renderDiff(detail, text);
     row.classList.add("has-diff");
-    attachCopy(detail, text, "diff");
+    attachCopy(host, text, "diff");
   } else if (created) {
     renderCreated(detail, created);
     row.classList.add("has-diff");
-    attachCopy(detail, created[3], "file");
+    attachCopy(host, created[3], "file");
   } else if (text) {
     detail.textContent = text;
-    attachCopy(detail, text, "output");
+    attachCopy(host, text, "output");
   } else {
-    // Nothing was said; there is nothing to copy, so no button either.
+    // Nothing was said; there is nothing to copy, so no button either --
+    // and a re-fill that now says nothing drops the one it had.
     detail.textContent = "(no output)";
+    const stale = copyButtonIn(host);
+    if (stale) stale.remove();
   }
+}
+
+/* A collapsible row carries its button in its summary, beside the label;
+   anything else carries it directly. */
+function copyHostOf(row) {
+  return row.children.find((c) => c.tagName === "SUMMARY") || row;
 }
 
 /* ---------- copy ----------
 
-   Every block of code on screen carries one standard corner button. A
+   Every block of code on screen carries one standard copy button. A
    copy is the browser and the operating system acting together, so the
    paths are layered rather than assumed: the async clipboard API first
    -- it exists only in a secure context, and a plain-http chat page
@@ -419,48 +431,71 @@ async function copyText(text) {
       // A secure context can still refuse the write; fall through.
     }
   }
+  // Selecting the field takes focus from the button; it goes back after,
+  // so a keyboard reader is not left on a node that no longer exists.
+  const before = document.activeElement;
+  const area = document.createElement("textarea");
   try {
-    const area = document.createElement("textarea");
     area.value = text;
     area.setAttribute("readonly", "");  // a copy does not open a keyboard
     area.style.position = "fixed";
     area.style.left = "-9999px";
     document.body.appendChild(area);
     area.select();
-    const ok = document.execCommand("copy");
-    area.remove();
-    return !!ok;
+    return !!document.execCommand("copy");
   } catch {
     return false;
+  } finally {
+    area.remove();
+    if (before && typeof before.focus === "function") before.focus();
   }
 }
 
 /* The label change is the whole feedback: Copy becomes Copied, or
    Failed, and settles back, so the result is visible at the block
-   without a toast stealing the reader's place. */
+   without a toast stealing the reader's place. A second click restarts
+   the window rather than letting the first click's timer cut it short. */
 const COPY_FEEDBACK_MS = 1600;
 
 function copyButton(payload, what) {
   const button = el("button", "code-copy", "Copy");
   button.type = "button";
-  button.title = `Copy ${what}`;
-  button.setAttribute("aria-label", `Copy ${what}`);
-  button.onclick = async () => {
-    const text = typeof payload === "function" ? payload() : payload;
+  button.payload = payload;
+  setCopyLabel(button, what);
+  let settle = null;
+  button.onclick = async (event) => {
+    // Inside a summary, a click would also open or close the row.
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    const current = button.payload;
+    const text = typeof current === "function" ? current() : current;
     const ok = await copyText(text);
     button.textContent = ok ? "Copied" : "Failed";
-    setTimeout(() => { button.textContent = "Copy"; }, COPY_FEEDBACK_MS);
+    clearTimeout(settle);
+    settle = setTimeout(() => { button.textContent = "Copy"; }, COPY_FEEDBACK_MS);
     return ok;
   };
   return button;
 }
 
+function setCopyLabel(button, what) {
+  button.title = `Copy ${what}`;
+  button.setAttribute("aria-label", `Copy ${what}`);
+}
+
+function copyButtonIn(host) {
+  return host.children.find((c) => c.classList.contains("code-copy")) || null;
+}
+
 /* The block a button belongs to. A row's fill can run twice (a re-run
    of the same tool, a reload overlapping a live fill), so a host that
-   already carries its button keeps exactly one. */
+   already carries its button keeps exactly one -- copying the latest
+   fill, not the first. */
 function attachCopy(host, payload, what) {
-  for (const child of host.children) {
-    if (child.classList.contains("code-copy")) return child;
+  const existing = copyButtonIn(host);
+  if (existing) {
+    existing.payload = payload;
+    setCopyLabel(existing, what);
+    return existing;
   }
   return host.appendChild(copyButton(payload, what));
 }

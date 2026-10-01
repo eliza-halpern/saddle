@@ -170,25 +170,29 @@ details.tool[open] > summary::after { transform: rotate(90deg); }
   max-height: 420px; overflow: auto; color: var(--ink-dim); }
 .tool-detail.terminal { color: #cfe9d6; }
 
-/* ---- the code block's corner button ----
+/* ---- the code block's copy button ----
 
    Every code block on screen carries one: the reply's fenced blocks, a
    tool's output, the live terminal, and the packet's diff and action
-   blocks. It is positioned, so appearing never moves the code; it stays
-   faint until its block is hovered or the button is keyboard-focused
-   (opacity, not display, so it stays in the tab order), and a device
-   without hover sees it always. The label says what happened -- a copy
-   that the system refused reads Failed, never a silent no-op. */
-.assistant pre, .tool-detail, .act-result, details.diff-file { position: relative; }
+   blocks. In a fenced block or an action result it sits in the corner,
+   positioned, so appearing never moves the code; on a collapsible row it
+   sits in the row's header beside the label, so the output below holds
+   the output alone. It stays faint until its block is hovered or the
+   button is keyboard-focused (opacity, not display, so it stays in the
+   tab order), and a device without hover sees it always. It is never
+   part of a selection: dragging across a block copies the code, not the
+   word Copy. The label says what happened -- a copy that the system
+   refused reads Failed, never a silent no-op. */
+.assistant pre, .act-result { position: relative; }
 .code-copy { position: absolute; top: 7px; right: 9px; z-index: 1;
   background: var(--bg-raise); border: 1px solid var(--line); color: var(--ink-dim);
   border-radius: 7px; padding: 1px 8px 2px; font: 11.5px/1.5 var(--mono);
-  cursor: pointer; opacity: 0; transition: opacity .12s ease, color .12s ease,
-  border-color .12s ease; }
-.assistant pre:hover .code-copy, .assistant pre .code-copy:focus-visible,
-.tool-detail:hover .code-copy, .tool-detail .code-copy:focus-visible,
-.act-result:hover .code-copy, .act-result .code-copy:focus-visible,
-details.diff-file:hover .code-copy, details.diff-file .code-copy:focus-visible { opacity: 1; }
+  cursor: pointer; opacity: 0; user-select: none; -webkit-user-select: none;
+  transition: opacity .12s ease, color .12s ease, border-color .12s ease; }
+summary > .code-copy { position: static; float: right; margin-left: auto; }
+.assistant pre:hover .code-copy, .act-result:hover .code-copy,
+details.tool:hover > summary > .code-copy, details.diff-file:hover > summary > .code-copy,
+.code-copy:focus-visible { opacity: 1; }
 .code-copy:hover { color: var(--ink); border-color: var(--ink-faint); }
 @media (hover: none) { .code-copy { opacity: 1; } }
 
