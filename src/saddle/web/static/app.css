@@ -30,8 +30,8 @@
 html, body { height: 100%; margin: 0; }
 /* The panes scroll, the page does not: without this the whole document can
    be dragged up on a phone, taking the composer off-screen again. */
-body { overflow: hidden; overscroll-behavior: none; }
 body {
+  overflow: hidden; overscroll-behavior: none;
   background:
     radial-gradient(1100px 620px at 12% -8%, #2e2533 0%, transparent 62%),
     radial-gradient(900px 520px at 105% 108%, #2a2430 0%, transparent 58%),
@@ -237,7 +237,7 @@ dialog h3::before { content: "🗂 "; }
   padding: 7px 10px; border-radius: 10px; cursor: pointer; font: inherit; font-size: 13.5px; }
 #folder-entries button::before { content: "📁 "; font-size: 11px; }
 #folder-entries button:hover { background: var(--bg-sunk); color: var(--ink); }
-dialog menu { display: flex; justify-content: flex-end; gap: 9px; padding: 0; margin: 0; }
+dialog .folder-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 0; margin: 0; }
 dialog button { background: var(--bg-sunk); color: var(--ink-dim); border: 1px solid var(--line);
   border-radius: 11px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; }
 dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--rose));
@@ -272,9 +272,9 @@ dialog button.primary { background: linear-gradient(95deg, var(--peach), var(--r
    theme, which cost the one thing a diff is for: telling the two sides
    apart at a glance. The accent bar carries the meaning even when the
    colours themselves are hard to separate. */
-.tool-detail .d-add { color: #7ee787; background: rgba(63, 185, 80, .16);
+.tool-detail .d-add { color: #7ee787; background: rgb(63 185 80 / 16%);
                       box-shadow: inset 2px 0 0 #3fb950; }
-.tool-detail .d-del { color: #ff9c92; background: rgba(248, 81, 73, .16);
+.tool-detail .d-del { color: #ff9c92; background: rgb(248 81 73 / 16%);
                       box-shadow: inset 2px 0 0 #f85149; }
 .tool-detail .d-hunk { color: var(--lilac); }
 .tool-detail .d-file { color: var(--ink-faint); }
@@ -380,6 +380,7 @@ figure.preview figcaption { margin-top: 8px; font: 12px var(--mono); color: var(
    them had been given a second, worse definition. Only the glyph size
    differs, because a cog reads smaller than a plus at the same size. */
 #settings { font-size: 13px; }
+/* stylelint-disable-next-line no-duplicate-selectors -- a second rule for this selector sits beside the feature that needs it; merging would move a declaration across other rules */
 .side-head { gap: 8px; }
 
 /* ---- temperature knob ---- */
@@ -399,6 +400,7 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
   background: var(--line); }
 
 /* ---- retry and edit ---- */
+/* stylelint-disable-next-line no-duplicate-selectors -- a second rule for this selector sits beside the feature that needs it; merging would move a declaration across other rules */
 .turn { position: relative; }
 .turn-tools { position: absolute; top: -6px; right: 0; display: flex; gap: 4px;
   opacity: 0; transition: opacity .14s; }
@@ -505,6 +507,7 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
 /* Shown only once you have scrolled away, so there is a way back. */
 /* Inside the composer, above its top edge: the composer's height varies
    (the Run strip, a two-line lane note on a phone), a fixed offset did not. */
+/* stylelint-disable-next-line no-duplicate-selectors -- a second rule for this selector sits beside the feature that needs it; merging would move a declaration across other rules */
 #composer { position: relative; }
 #jump { position: absolute; left: 50%; transform: translateX(-50%);
   bottom: calc(100% + 10px); z-index: 5; background: var(--bg-raise); color: var(--ink-dim);
@@ -512,6 +515,7 @@ input[type="range"]::-moz-range-track { height: 4px; border-radius: 99px;
   font: inherit; font-size: 12.5px; cursor: pointer;
   box-shadow: 0 6px 20px #0008; animation: rise .2s cubic-bezier(.34,1.3,.64,1); }
 #jump:hover { color: var(--rose); border-color: var(--rose); }
+/* stylelint-disable-next-line no-duplicate-selectors -- a second rule for this selector sits beside the feature that needs it; merging would move a declaration across other rules */
 main { position: relative; }
 
 /* Making a folder without leaving the picker. */
@@ -534,6 +538,7 @@ main { position: relative; }
    peach, failed bad; a row with no record is drawn dashed and faint. The
    narrative is lilac and set in a serif, so it never reads as a row.
    ===================================================================== */
+/* stylelint-disable-next-line no-duplicate-selectors -- a second rule for this selector sits beside the feature that needs it; merging would move a declaration across other rules */
 :root {
   --run: var(--sky);
   --ask: var(--peach);
@@ -715,7 +720,6 @@ main { position: relative; }
   font-style: italic; font-size: 13.5px; line-height: 1.5; color: var(--ink-dim);
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 22em; overflow-y: auto;
   resize: vertical; }
-.act-note { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-faint); }
 
 /* ---- needs you ---- */
 .task-ask { margin: 0 12px 12px; padding: 13px 15px; border-radius: 13px;
@@ -848,10 +852,10 @@ main { position: relative; }
    applied only when the effective theme is light. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fbf8f9; --bg-sunk: #f2ecef; --bg-raise: #ffffff; --line: #e3d9df;
+  --bg: #fbf8f9; --bg-sunk: #f2ecef; --bg-raise: #fff; --line: #e3d9df;
   --ink: #221b22; --ink-dim: #4f4550; --ink-faint: #665c65;
   --rose: #b83a6c; --peach: #a95512; --mint: #1f7a45; --sky: #245f9a; --lilac: #6a45b8;
-  --bad: #b8323f; --card: #ffffff;
+  --bad: #b8323f; --card: #fff;
   --wash-run: #245f9a12; --wash-ask: #a9551216; --wash-done: #1f7a4512; --wash-halt: #b8323f10;
 }
 :root[data-theme="light"] body { background:
@@ -897,7 +901,9 @@ main { position: relative; }
 
 /* ---- a run finds you (notify.js) ---- */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-           overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+           overflow: hidden; white-space: nowrap; border: 0;
+           /* stylelint-disable-next-line property-no-deprecated -- the long-standing visually-hidden recipe; switching to clip-path would change the computed style */
+           clip: rect(0 0 0 0); }
 .run-dot { flex: none; font-size: 11px; line-height: 1; padding: 3px 7px 3px 6px; border-radius: 99px;
            border: 1px solid currentColor; white-space: nowrap; }
 .run-dot::before { content: "●"; margin-right: 4px; font-size: 9px; }

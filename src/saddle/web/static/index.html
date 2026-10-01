@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
@@ -10,8 +10,8 @@
   <aside id="sidebar">
     <div class="side-head">
       <span class="brand">saddle</span>
-      <button id="settings" title="Settings and personas">⚙</button>
-      <button id="new-session" title="New session">+</button>
+      <button type="button" id="settings" title="Settings and personas">⚙</button>
+      <button type="button" id="new-session" title="New session">+</button>
     </div>
     <div id="run-list" hidden></div>
     <div id="session-list"></div>
@@ -20,7 +20,8 @@
       <label>Persona
         <select id="persona"></select>
       </label>
-      <label>Temperature <output id="temp-value">1.0</output>
+      <!-- [html-validate-disable-next multiple-labeled-controls, no-redundant-for -- an output is labelable and comes first, so without for the label names the output, not the slider] -->
+      <label for="temp">Temperature <output id="temp-value">1.0</output>
         <input id="temp" type="range" min="0" max="2" step="0.1" value="1">
       </label>
       <label>Thinking
@@ -32,7 +33,7 @@
         </select>
       </label>
       <label>Folder
-        <button id="pick-folder" class="folder"><span id="folder-name">—</span></button>
+        <button type="button" id="pick-folder" class="folder"><span id="folder-name">—</span></button>
       </label>
     </div>
   </aside>
@@ -42,7 +43,7 @@
   <main>
     <header id="topbar">
       <button id="menu" type="button" title="Sessions" aria-label="Sessions">☰</button>
-      <input id="title" spellcheck="false" aria-label="Session title">
+      <input type="text" id="title" spellcheck="false" aria-label="Session title">
       <span id="where" class="where" title="The session's folder and its git branch"><span id="where-folder"></span><span id="where-branch"></span></span>
       <span id="mode-chip" class="mode-chip" title="This session's lane: what Enter does"></span>
       <span id="full-access-banner" class="full-access-banner" role="status" hidden
@@ -86,6 +87,7 @@
           <button type="button" id="lane-chip" aria-haspopup="listbox" aria-expanded="false"
                   aria-controls="lane-menu" title="Lane: what Enter does (Shift+Tab cycles)">
             <span id="lane-name">Ask</span><span class="lane-caret" aria-hidden="true">▾</span></button>
+          <!-- [html-validate-disable-next prefer-native-element -- a popup of options with a description each, kept open by the lane chip: a native select cannot hold the two-line options] -->
           <ul id="lane-menu" role="listbox" aria-label="Lane" tabindex="-1" hidden>
             <li role="option" data-lane="ask"><b>Ask</b><span>Read-only. Reads and searches your folder, then answers. Cannot edit or run anything.</span></li>
             <li role="option" data-lane="edit"><b>Edit</b><span>Unaudited, edits your folder. Writes files and runs commands directly; nothing checks the work.</span></li>
@@ -117,16 +119,16 @@
   <div id="folder-path" class="mono"></div>
   <div id="folder-entries"></div>
   <div class="folder-new">
-    <input id="folder-name-new" placeholder="new folder name" spellcheck="false"
+    <input type="text" id="folder-name-new" placeholder="new folder name" spellcheck="false"
            maxlength="64">
     <button id="folder-make" type="button">Create here</button>
   </div>
   <p id="folder-error" class="hint"></p>
-  <menu>
-    <button id="folder-up">Up</button>
-    <button id="folder-cancel">Cancel</button>
-    <button id="folder-use" class="primary">Use this folder</button>
-  </menu>
+  <div class="folder-actions">
+    <button type="button" id="folder-up">Up</button>
+    <button type="button" id="folder-cancel">Cancel</button>
+    <button type="button" id="folder-use" class="primary">Use this folder</button>
+  </div>
 </dialog>
 
 <dialog id="settings-dialog">
@@ -135,7 +137,8 @@
      persona or thinking level only affects that session.</p>
   <div class="settings-grid">
     <label>Default persona <select id="default-persona"></select></label>
-    <label>Default temperature <output id="default-temp-value">1.0</output>
+    <!-- [html-validate-disable-next multiple-labeled-controls, no-redundant-for -- an output is labelable and comes first, so without for the label names the output, not the slider] -->
+    <label for="default-temp">Default temperature <output id="default-temp-value">1.0</output>
       <input id="default-temp" type="range" min="0" max="2" step="0.1" value="1">
     </label>
     <label>Default thinking
@@ -154,7 +157,7 @@
   <div class="persona-edit">
     <select id="persona-pick" size="6"></select>
     <div class="persona-body">
-      <input id="persona-name" placeholder="name" spellcheck="false" maxlength="40">
+      <input type="text" id="persona-name" placeholder="name" spellcheck="false" maxlength="40">
       <textarea id="persona-prompt" rows="8" spellcheck="false"
                 placeholder="What this persona tells the model to be."></textarea>
       <div class="persona-actions">
@@ -187,6 +190,7 @@
   <h3 id="pw-title">A command needs your password</h3>
   <p class="hint">A command this session runs with full access asked:</p>
   <p id="pw-prompt" class="mono"></p>
+  <!-- [html-validate-disable-next autocomplete-password -- a one-time command password: the browser must not offer to save or fill it] -->
   <input id="pw-input" type="password" autocomplete="off" spellcheck="false" aria-label="Password">
   <p class="hint">It goes to that command only. The model never sees it, and saddle does not store it.</p>
   <div class="dialog-actions">
