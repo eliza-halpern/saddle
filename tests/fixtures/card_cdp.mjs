@@ -35,7 +35,9 @@ async function target() {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
       const page = list.find((t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
-    } catch {}
+    } catch {
+      // Chrome is not listening yet; poll again.
+    }
     await sleep(200);
   }
   throw new Error("chrome did not start");

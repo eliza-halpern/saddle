@@ -29,7 +29,9 @@ async function target() {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
       const page = list.find((t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
-    } catch {}
+    } catch {
+      // Chrome is not listening yet; poll again.
+    }
     await sleep(200);
   }
   throw new Error("chrome did not start");
@@ -51,20 +53,6 @@ try {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
-  };
-  const key = async (k, modifiers = 0) => {
-    const code = { Enter: 13, Escape: 27 }[k];
-    const text = k === "Enter" ? "\r" : undefined;
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers, text });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers });
-    await sleep(400);
-  };
-  const type = async (text) => {
-    await js(`document.querySelector("#input").focus()`);
-    await send("Input.insertText", { text });
-    await sleep(100);
   };
   const shot = async (name) => {
     if (!shots) return;

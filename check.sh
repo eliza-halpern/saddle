@@ -17,6 +17,8 @@ uv run actionlint .github/workflows/*.yml
 uv lock --check
 # ShellCheck on every tracked shell script; the hooks have no extension, so each is named.
 uv run shellcheck check.sh ci-mutate.sh tools/githooks/commit-msg tools/githooks/pre-commit tools/githooks/pre-push
+# ESLint over the browser files, the node test and the nine browser drivers.
+npx --no-install eslint .
 # The suite runs on as many pytest-xdist workers as the audit uses on this repo
 # (`[tool.saddle] test-workers` in pyproject.toml); pytest-cov combines every
 # worker's lines for the 100% line and branch gate in `addopts`. `worksteal`

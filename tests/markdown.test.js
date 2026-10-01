@@ -528,8 +528,8 @@ test("a created file is shown as the file, highlighted", () => {
 
   const body = detail.children[1];
   assert.strictEqual(body.tagName, "CODE");
-  const tokens = body.children.map((c) => [c.className, c.textContent]);
-  assert.deepStrictEqual(tokens, [
+  const parts = body.children.map((c) => [c.className, c.textContent]);
+  assert.deepStrictEqual(parts, [
     ["c-keyword", "def"], ["c-keyword", "return"], ["c-string", '"hi"'],
   ]);
   assert.strictEqual(body.textContent, 'def greet(name):\n    return "hi"');
@@ -680,7 +680,7 @@ test("a second click restarts the feedback window", async () => {
   const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
   const live = new Set();
   let next = 1;
-  globalThis.setTimeout = (callback) => { const id = next++; live.add(id); return id; };
+  globalThis.setTimeout = () => { const id = next++; live.add(id); return id; };
   globalThis.clearTimeout = (id) => { live.delete(id); };
   try {
     const button = copyButton("twice", "code");

@@ -521,11 +521,11 @@ function setStatus(kind, detail) {
   node.textContent = detail || kind;
   // While a turn runs the send button stops it: one control, two jobs, so
   // the thing you reach for is always under the cursor you just used.
-  const send = $("#send");
+  const sendButton = $("#send");
   const working = kind === "working" || kind === "needs";
-  send.textContent = working ? "■" : "↑";
-  send.title = working ? "Stop" : "Send";
-  send.classList.toggle("stopping", working);
+  sendButton.textContent = working ? "■" : "↑";
+  sendButton.title = working ? "Stop" : "Send";
+  sendButton.classList.toggle("stopping", working);
 }
 
 /* ---------- sessions ---------- */
@@ -812,7 +812,7 @@ async function send() {
   const body = others.length
     ? `${text}\n\n[also attached in uploads/: ${others.join(", ")}]`
     : text;
-  const turn = newTurn(input.value.trim());
+  newTurn(input.value.trim());
   followBottom();          // sending is an intent to watch the reply
   input.value = "";
   paintSuggestion();

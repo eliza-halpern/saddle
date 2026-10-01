@@ -36,8 +36,8 @@ const runWatch = {
 
 /* A dot with a dark ring on a light halo, so it reads on a dark tab strip
    and a light one alike. Idle is a hollow rose ring. */
-function faviconFor(runState) {
-  const look = RUN_LOOK[runState];
+function faviconFor(kind) {
+  const look = RUN_LOOK[kind];
   const body = look
     ? `<circle cx='8' cy='8' r='6.5' fill='#fff'/><circle cx='8' cy='8' r='5' fill='${look.color}' stroke='#211d22' stroke-width='1.5'/>`
     : `<circle cx='8' cy='8' r='6.5' fill='#fff'/><circle cx='8' cy='8' r='4.5' fill='none' stroke='#d9749a' stroke-width='2.5'/>`;
@@ -62,11 +62,11 @@ function paintTab() {
   link.href = faviconFor(look ? now.state : null);
 }
 
-function paintDot(sid, runState) {
+function paintDot(sid, kind) {
   const row = document.querySelector(`.session[data-sid="${sid}"]`);
   if (!row) return;
   let dot = row.querySelector(".run-dot");
-  const look = RUN_LOOK[runState];
+  const look = RUN_LOOK[kind];
   if (!look) {
     if (dot) dot.remove();
     return;
@@ -75,8 +75,8 @@ function paintDot(sid, runState) {
     dot = document.createElement("span");
     row.insertBefore(dot, row.querySelector(".kill"));
   }
-  dot.className = `run-dot rs-${runState}`;
-  dot.dataset.state = runState;
+  dot.className = `run-dot rs-${kind}`;
+  dot.dataset.state = kind;
   dot.textContent = look.word;
   dot.title = `Latest run: ${look.word}`;
 }
@@ -105,11 +105,11 @@ function notifyPref() {
   try { return localStorage.getItem(NOTIFY_KEY) === "on"; } catch { return false; }
 }
 
-function maybeNotify(sid, runState, task) {
+function maybeNotify(sid, kind, task) {
   if (document.visibilityState !== "hidden") return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   if (!notifyPref()) return;
-  const look = RUN_LOOK[runState];
+  const look = RUN_LOOK[kind];
   const note = new Notification(`${look.glyph} ${look.word} · ${sessionName(sid)}`,
                                 { body: task || "", tag: `saddle-${sid}` });
   note.onclick = () => {
