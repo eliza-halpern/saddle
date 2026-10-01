@@ -66,6 +66,13 @@ select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "EM", "PT", "RUF"]
 [tool.mypy]
 strict = true
 warn_unused_ignores = true
+# `tools/` and `benchmark/` are directories of scripts, not packages, and the
+# tests import them as `tools.x` and `benchmark.x` while the same files given
+# on the command line are the top-level modules `x`: mypy refuses that as
+# "found twice". Naming each module root fixes one name per file. `tests`
+# is a root because the tests import their siblings bare.
+explicit_package_bases = true
+mypy_path = ["src", "tests", "."]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -94,8 +101,9 @@ test-timeout = 3600
 # against 1209-1378 s serially. Read like test-timeout, from the starting commit.
 test-workers = 8
 # The finish audit runs this beside the suite and refuses on a failure: the
-# same strict mypy check.sh runs, so a run's new test file is type-checked too.
-static-check = ["mypy", "src", "tests"]
+# same strict mypy check.sh runs, so a run's new test file or script is
+# type-checked too.
+static-check = ["mypy", "src", "tests", "tools", "benchmark/stall_check.py"]
 # The browser tests drive Chrome with node; the audit's sandbox hides HOME, where
 # node may live, so name both here (docs/CLI.md, "Commands the sandbox shows").
 # Read like test-timeout, from the starting commit.

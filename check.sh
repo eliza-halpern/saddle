@@ -11,7 +11,7 @@ if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modu
 fi
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src tests
+uv run mypy src tests tools benchmark/stall_check.py
 # CI workflows lint clean (shellcheck included) and uv.lock matches pyproject.toml.
 uv run actionlint .github/workflows/*.yml
 uv lock --check
