@@ -175,6 +175,7 @@ def run_node_gate(
     test_selection: Collection[str] | None = None,
     on_suite: Callable[[str, CapturedRun], None] | None = None,
     skip_report: Path | None = None,
+    test_only_additions: bool = False,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -229,6 +230,11 @@ def run_node_gate(
     `saddle.impact.build` reads. `skip_report` is where the current-tree
     suite run also leaves pytest's report of the tests it skipped
     (`evidence.run_suite_capture`); the caller reads it.
+
+    `test_only_additions` (the audit sets it) adds `gates.check_test_only_additions`
+    to the `dead-code` check: a function, class or constant the change adds
+    that only tests reach is refused. A plan's nodes leave it off, since an
+    `impl` node may be gated before the node that uses what it writes.
     """
     gate = node.deterministic_gate
     workers = 1 if node.kind == "test" else test_workers
@@ -503,6 +509,12 @@ def run_node_gate(
         property_oracle=property_oracle,
         property_targets=property_targets,
         property_out_of_scope=property_out_of_scope,
+        test_only_additions=test_only_additions,
+        pyproject_text=(
+            (workdir / "pyproject.toml").read_text()
+            if test_only_additions and (workdir / "pyproject.toml").is_file()
+            else None
+        ),
     )
     result = run_tier1(node, inputs)
     ran = IMPACT_RAN.format(ran=len(test_sources) - len(skipped), of=len(test_sources))

@@ -541,6 +541,7 @@ def audit_tree(
                 recorder=recorder,
                 test_timeout=limit,
                 test_workers=workers,
+                test_only_additions=True,
             )
         checks, mutation = audit_checks(gated.checks, gated.mutation, copy)
     result = AuditResult(

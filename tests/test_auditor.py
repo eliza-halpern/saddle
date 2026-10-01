@@ -401,6 +401,7 @@ def test_tier0_resolves_what_the_build_system_installs_for_setup_py(
     unresolved (known-bad). No python on PATH has zz_build_helper, so the
     verdict does not depend on what the machine happens to have installed."""
     monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
+    (clean_tree / "n.py").write_text(USES_LIVE)
     (clean_tree / "pyproject.toml").write_text(_BUILD_PYPROJECT)
     auditor = Auditor(clean_tree)
     good = auditor.tier0("setup.py", _SETUP_PY)
@@ -423,6 +424,7 @@ def test_imports_no_longer_vouch_that_a_declared_build_requirement_exists(
     has (a hallucinated one) passes tier 0 when setup.py imports it. The build
     itself still fails; tier 0 no longer says so."""
     monkeypatch.setenv("PATH", f"/usr/bin{os.pathsep}/bin")
+    (clean_tree / "n.py").write_text(USES_LIVE)
     (clean_tree / "pyproject.toml").write_text(
         '[build-system]\nrequires = ["zz-no-index-has-this"]\n'
     )
@@ -913,3 +915,56 @@ def test_draw_map_draws_once_and_refuses_a_project_limit_it_cannot_use(tmp_path:
     with pytest.raises(AuditError, match="no-such-key"):
         Auditor(bad, "HEAD", AuditorConfig(impact=memo)).draw_map()
     assert memo.tests is None
+
+
+# -- code only a test reaches (the copy-button run) ---------------------------------------------
+
+WIRING_MODULE = 'def live():\n    return 2\n\n\ndef copy_button_wiring():\n    return "wired"\n'
+# `n.py` imports `m` and uses `live`, so the module is production code; the wiring is only tested.
+USES_LIVE = "import m\n\n\ndef f():\n    return m.live()\n"
+WIRING_TEST = (
+    "from m import copy_button_wiring\n\n\n"
+    'def test_wiring():\n    assert copy_button_wiring() == "wired"\n'
+)
+
+
+def _dead_code(result: Findings) -> Any:
+    return next(f for f in result.findings if f.gate == "dead-code")
+
+
+def test_a_function_only_a_test_calls_is_refused_at_tier1_and_named(clean_tree: Path) -> None:
+    """The run that padded a JavaScript-only change with a Python function and a test for it:
+    the tests pass and cover it, and the audit still refuses, naming the symbol."""
+    (clean_tree / "m.py").write_text(WIRING_MODULE)
+    (clean_tree / "test_m.py").write_text(WIRING_TEST)
+    (clean_tree / "n.py").write_text(USES_LIVE)
+    result = Auditor(clean_tree).tier1()
+    dead = _dead_code(result)
+    assert dead.verdict == "fail"
+    assert dead.reason == "evidence-thin"
+    assert "m.py: copy_button_wiring (referenced only by test_m.py)" in dead.detail
+    assert _verdicts(result)["tests"] == "pass"
+    assert _verdicts(result)["coverage"] == "pass"
+    assert not result.passed
+
+
+def test_the_same_function_with_a_production_caller_passes_tier1(clean_tree: Path) -> None:
+    (clean_tree / "m.py").write_text(WIRING_MODULE)
+    (clean_tree / "test_m.py").write_text(WIRING_TEST)
+    (clean_tree / "n.py").write_text(
+        "import m\n\n\ndef f():\n    return m.live() if m.copy_button_wiring() else 0\n"
+    )
+    result = Auditor(clean_tree).tier1()
+    assert _verdicts(result)["dead-code"] == "pass", _dead_code(result).detail
+    assert result.passed
+
+
+def test_a_pyproject_entry_point_is_a_production_caller_at_tier1(clean_tree: Path) -> None:
+    (clean_tree / "m.py").write_text(WIRING_MODULE)
+    (clean_tree / "test_m.py").write_text(WIRING_TEST)
+    (clean_tree / "n.py").write_text(USES_LIVE)
+    (clean_tree / "pyproject.toml").write_text(
+        '[project.scripts]\nwiring = "m:copy_button_wiring"\n'
+    )
+    result = Auditor(clean_tree).tier1()
+    assert _verdicts(result)["dead-code"] == "pass", _dead_code(result).detail

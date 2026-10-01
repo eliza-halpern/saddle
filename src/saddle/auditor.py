@@ -1403,6 +1403,7 @@ class Auditor:
                         test_workers=workers,
                         test_selection=selection,
                         skip_report=copy / SKIP_REPORT_NAME,
+                        test_only_additions=True,
                         # A whole-suite run under a memo (re)draws the map.
                         on_suite=(
                             functools.partial(_record_impact, memo, copy)

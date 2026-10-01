@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import re
+import tomllib
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
@@ -1266,6 +1267,351 @@ def check_dead_additions(
     )
 
 
+# Decorators that wrap a definition without registering it anywhere: a function
+# behind one of these is still reached only by whoever names it. Any other
+# decorator is taken as registration (a route, a command, a plugin hook).
+_TRANSPARENT_DECORATORS: Final = frozenset(
+    {
+        "abstractmethod",
+        "asynccontextmanager",
+        "cache",
+        "cached_property",
+        "classmethod",
+        "contextmanager",
+        "dataclass",
+        "final",
+        "lru_cache",
+        "overload",
+        "property",
+        "runtime_checkable",
+        "staticmethod",
+        "total_ordering",
+        "wraps",
+    }
+)
+
+
+def _is_test_code(path: str) -> bool:
+    """Test code: a module pytest collects, a `conftest.py`, or anything under `tests/`.
+
+    A helper or fixture under `tests/` is test code although pytest never
+    collects it, and a caller there is no more production than a test is.
+    """
+    return (
+        _is_test_file(path)
+        or PurePath(path).name == "conftest.py"
+        or "tests" in PurePath(path).parts[:-1]
+    )
+
+
+def _module_names(path: str) -> set[str]:
+    """The dotted names an entry point could import `path` as (`src/` layout or not)."""
+    parts = list(PurePath(path).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    names = {".".join(parts)}
+    if parts[:1] == ["src"]:
+        names.add(".".join(parts[1:]))
+    return names
+
+
+def _entry_point_targets(pyproject: str) -> set[tuple[str, str]]:
+    """`(module, name)` for every `[project.scripts]`, `gui-scripts` and entry-point value.
+
+    Raises `tomllib.TOMLDecodeError` when `pyproject` does not parse; the
+    caller reports that rather than reading it as "no entry points".
+    """
+    project = tomllib.loads(pyproject).get("project", {})
+    tables = [project.get("scripts"), project.get("gui-scripts")]
+    tables.extend(project.get("entry-points", {}).values())
+    targets: set[tuple[str, str]] = set()
+    for table in tables:
+        for value in table.values() if isinstance(table, dict) else ():
+            module, colon, attr = str(value).partition(":")
+            if colon:
+                targets.add((module.strip(), attr.split("[")[0].strip().split(".")[0]))
+    return targets
+
+
+def _module_level_names(tree: ast.Module) -> dict[str, ast.stmt]:
+    """Every module-level function, class and assigned name, with its statement."""
+    names: dict[str, ast.stmt] = {}
+    for statement in tree.body:
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names[statement.name] = statement
+        elif isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    names[target.id] = statement
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and statement.value is not None
+            and isinstance(statement.target, ast.Name)
+        ):
+            names[statement.target.id] = statement
+    return names
+
+
+def _imported_names(tree: ast.Module) -> set[str]:
+    """Every dotted-name part an import statement of the module spells."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names.update((node.module or "").split("."))
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names.update(alias.name.split("."))
+    return names
+
+
+def _runs_as_a_script(path: str, tree: ast.Module) -> bool:
+    """A `__main__.py`, or a module with an `if __name__ == ...` guard: run without an importer."""
+    return PurePath(path).name == "__main__.py" or any(
+        isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Name)
+        and node.left.id == "__name__"
+        for node in ast.walk(tree)
+    )
+
+
+def _references(tree: ast.Module) -> list[tuple[str, int]]:
+    """Each `(name, line)` the module reads: names, attribute tails, imports, `__all__` entries.
+
+    Strings and docstrings are not references, except the entries of an
+    `__all__`, which export the name they spell.
+    """
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            found.append((node.id, node.lineno))
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            found.append((node.attr, node.lineno))
+        elif isinstance(node, ast.ImportFrom):
+            found.extend((alias.name, node.lineno) for alias in node.names)
+    for statement in tree.body:
+        targets = (
+            statement.targets
+            if isinstance(statement, ast.Assign)
+            else [statement.target]
+            if isinstance(statement, ast.AnnAssign | ast.AugAssign)
+            else []
+        )
+        if any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+            found.extend(
+                (child.value, statement.lineno)
+                for child in ast.walk(statement)
+                if isinstance(child, ast.Constant) and isinstance(child.value, str)
+            )
+    return found
+
+
+def check_test_only_additions(
+    sources: Mapping[str, str],
+    added: Mapping[str, Collection[int]],
+    *,
+    baseline: Mapping[str, str] | None = None,
+    pyproject: str | None = None,
+) -> GateCheck:
+    """A definition only a test calls is not production code.
+
+    A run changed only browser JavaScript, which the mutation gate cannot
+    see, and so added `copy_button_wiring` to a Python module with no
+    production caller, plus a test that called it, so that the gate had
+    something to mutate. `check_dead_additions` passed it: the function was
+    public, and the test's mention counted as the tree mentioning it.
+
+    This asks the question the other way round. Every module-level
+    function, class or constant the diff adds to a non-test module -- public
+    or private -- must be reached from production code: a name or attribute
+    read in a non-test module outside its own body (recursion does not
+    count, and neither does a read inside another definition that is itself
+    only for tests), an import of it, an `__all__` entry, a decorator that
+    registers it somewhere, or a `pyproject.toml` entry point. A string or a
+    docstring that spells it is not a caller. Test code is `_is_test_code`.
+
+    References are matched by name, not resolved to a module, so a common
+    name another module also reads passes: the rule leans towards
+    accepting. Methods are not judged one by one, since a method is reached
+    by protocols and overrides no name search can see; a class that is only
+    for tests takes its methods with it. A definition the baseline's copy
+    of the module already had is not an addition.
+
+    Only a module production code reaches is judged: one some non-test
+    module imports (matched by the module's own name, over-wide on purpose),
+    that a `pyproject.toml` entry point names, or that runs as a script. A
+    function added to a standalone module nothing imports -- a small library
+    whose callers are its tests -- is the change itself, not padding, and
+    refusing it would refuse correct work; the copy-button function sat in a
+    module the whole app imports. A module that might be imported by a file
+    that does not parse is judged.
+
+    A file that does not parse never reads as "no references": an added
+    module that does not parse, a non-test module that does and spells a
+    candidate's name, or a `pyproject.toml` that does not parse while a
+    candidate is unreached, fails the check naming the file.
+    """
+    old = baseline or {}
+    candidates: list[tuple[str, str, int, int]] = []
+    unreadable: list[str] = []
+    for path in sorted(added):
+        source = sources.get(path)
+        if source is None or _is_test_code(path):
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            unreadable.append(f"{path} does not parse")
+            continue
+        try:
+            before = set(_module_level_names(ast.parse(old[path]))) if path in old else set()
+        except SyntaxError:
+            before = set()
+        lines = set(added[path])
+        for name, statement in _module_level_names(tree).items():
+            span = {n.lineno for n in ast.walk(statement) if isinstance(n, ast.stmt)}
+            registered = any(
+                _decorator_name(decorator) not in _TRANSPARENT_DECORATORS
+                for decorator in getattr(statement, "decorator_list", ())
+            )
+            if (
+                span <= lines
+                and name not in before
+                and not registered
+                and not (name.startswith("__") and name.endswith("__"))
+            ):
+                start, end = _statement_span(statement)
+                candidates.append((path, name, start, end))
+    if not candidates and not unreadable:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail="no function, class or constant added to a non-test module",
+            basis=f"modules={len(added)}",
+        )
+    reads: list[tuple[str, str, int]] = []
+    in_tests: dict[str, set[str]] = {}
+    unparsed: dict[str, str] = {}
+    imported: dict[str, set[str]] = {}
+    scripts: set[str] = set()
+    for path, text in sorted(sources.items()):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            if not _is_test_code(path):
+                unparsed[path] = text
+            continue
+        found = _references(tree)
+        if _is_test_code(path):
+            for name, _ in found:
+                in_tests.setdefault(name, set()).add(path)
+        else:
+            reads.extend((path, name, line) for name, line in found)
+            imported[path] = _imported_names(tree)
+            if _runs_as_a_script(path, tree):
+                scripts.add(path)
+    entry: set[tuple[str, str]] = set()
+    bad_toml = ""
+    if pyproject is not None:
+        try:
+            entry = _entry_point_targets(pyproject)
+        except tomllib.TOMLDecodeError as exc:
+            bad_toml = str(exc)
+
+    def reached(path: str) -> bool:
+        where = PurePath(path)
+        stem = where.parent.name if where.stem == "__init__" else where.stem
+        return (
+            path in scripts
+            or any(module in {m for m, _ in entry} for module in _module_names(path))
+            or any(stem in names for other, names in imported.items() if other != path)
+            or any(stem in text for text in unparsed.values())
+        )
+
+    judged = [c for c in candidates if reached(c[0])]
+    skipped = sorted({c[0] for c in candidates} - {c[0] for c in judged})
+    candidates = judged
+    if not candidates and not unreadable:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail="no function, class or constant added to a module production code imports"
+            + (f"; not judged, nothing imports {', '.join(skipped)}" if skipped else ""),
+            basis=f"modules={len(added)} unreached-modules={len(skipped)}",
+        )
+    holders: list[set[int | None]] = [set() for _ in candidates]
+    for path, name, line in reads:
+        inside = next(
+            (i for i, c in enumerate(candidates) if c[0] == path and c[2] <= line <= c[3]), None
+        )
+        for index, (_, spelled, _, _) in enumerate(candidates):
+            if spelled == name and inside != index:
+                holders[index].add(inside)
+    for index, (path, name, _, _) in enumerate(candidates):
+        if any((module, name) in entry for module in _module_names(path)):
+            holders[index].add(None)
+    live = {i for i, held in enumerate(holders) if None in held}
+    grew = True
+    while grew:
+        grew = False
+        for index, held in enumerate(holders):
+            if index not in live and held & live:
+                live.add(index)
+                grew = True
+    dead = [i for i in range(len(candidates)) if i not in live]
+    # Name what to act on: a definition that another dead one uses is cut with it.
+    roots = [i for i in dead if not holders[i] & set(dead)] or dead
+    listing: list[str] = []
+    for index in roots:
+        path, name, _, _ = candidates[index]
+        if bad_toml:
+            unreadable.append(
+                f"pyproject.toml does not parse ({bad_toml}), so no entry point of {name} is known"
+            )
+            continue
+        blind = sorted(other for other, text in unparsed.items() if name in text)
+        if blind:
+            unreadable.append(f"{', '.join(blind)} does not parse and spells {name}")
+            continue
+        callers = sorted(in_tests.get(name, ()))
+        how = (
+            f"referenced only by {', '.join(callers)}"
+            if callers
+            else "used only by other definitions no production code reaches"
+            if holders[index]
+            else "referenced by nothing"
+        )
+        listing.append(f"{path}: {name} ({how})")
+    rest = [candidates[i][1] for i in dead if i not in roots]
+    if listing and rest:
+        more = f" (+{len(rest) - 8} more)" if len(rest) > 8 else ""
+        listing.append(f"and what only these use: {', '.join(rest[:8])}{more}")
+    if unreadable or listing:
+        said = [
+            *listing,
+            *dict.fromkeys(f"cannot tell whether code reaches it: {why}" for why in unreadable),
+        ]
+        return GateCheck(
+            name="dead-code",
+            passed=False,
+            detail=(
+                "; ".join(said)
+                + ". A definition that exists only for tests is not production code: "
+                "wire each into production code that runs, or delete it and its tests"
+            ),
+            basis=f"test-only-definitions={len(dead)} unreadable={len(unreadable)}",
+        )
+    return GateCheck(
+        name="dead-code",
+        passed=True,
+        detail="every function, class and constant added is reached from production code"
+        + (f"; not judged, nothing imports {', '.join(skipped)}" if skipped else ""),
+        basis=(
+            f"modules={len(added)} definitions={len(candidates)} unreached-modules={len(skipped)}"
+        ),
+    )
+
+
 def _check_behaviour_preserved(coverage: GateCheck, mutation: MutationOutcome) -> GateCheck:
     """Red-phase stand-in for a node whose diff changes no test.
 
@@ -2088,6 +2434,12 @@ class Tier1Inputs:
     # Property modules the change qualifies that the node's declared
     # pytest scope excludes, so a pass by vacuity names them.
     property_out_of_scope: tuple[str, ...] = ()
+    # The audit's extra dead-code question (`check_test_only_additions`): whether anything
+    # production reaches what the change added. Off for a plan's nodes, where an `impl`
+    # node may be gated before the node that wires it; `pyproject_text` is the tree's
+    # `pyproject.toml` (its entry points), or None when it has none.
+    test_only_additions: bool = False
+    pyproject_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2331,6 +2683,32 @@ def _not_required(name: str) -> GateCheck:
     )
 
 
+def _with_test_only_additions(dead: GateCheck, inputs: Tier1Inputs) -> GateCheck:
+    """`dead` (the private-definition check) joined with the test-only check when asked for.
+
+    Both answer the one `dead-code` gate: it fails when either does, and
+    then says what each found.
+    """
+    if not inputs.test_only_additions:
+        return dead
+    only = check_test_only_additions(
+        inputs.sources,
+        inputs.added_lines,
+        baseline=inputs.baseline_sources,
+        pyproject=inputs.pyproject_text,
+    )
+    if only.passed:
+        return dead
+    if dead.passed:
+        return only
+    return GateCheck(
+        name="dead-code",
+        passed=False,
+        detail=f"{only.detail}; also {dead.detail}",
+        basis=f"{only.basis} {dead.basis}",
+    )
+
+
 def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
     """Run all thirteen Tier-1 checks against `node`'s gate spec and aggregate.
 
@@ -2383,11 +2761,14 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         coverage,
         _not_required("dead-code")
         if is_spec
-        else check_dead_additions(
-            inputs.sources,
-            inputs.added_lines,
-            suite_passed=tests.passed,
-            run_without=inputs.dead_code_runner,
+        else _with_test_only_additions(
+            check_dead_additions(
+                inputs.sources,
+                inputs.added_lines,
+                suite_passed=tests.passed,
+                run_without=inputs.dead_code_runner,
+            ),
+            inputs,
         ),
         _not_required("public-deletions")
         if is_spec

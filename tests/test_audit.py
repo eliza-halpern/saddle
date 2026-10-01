@@ -740,3 +740,25 @@ def test_saddle_audit_reports_a_missing_tool_as_an_error_not_a_verdict(
     assert code == cli.AUDIT_COULD_NOT_AUDIT
     assert "'mutmut'" in err
     assert "verdict" not in out
+
+
+def test_audit_refuses_a_function_only_a_test_calls_and_names_it(clean_tree: Path) -> None:
+    """`saddle audit` asks the same question as the tiered auditor: tests pass, coverage
+    is full, and a new function nothing but its test calls is still refused."""
+    (clean_tree / "m.py").write_text(
+        'def live():\n    return 2\n\n\ndef copy_button_wiring():\n    return "wired"\n'
+    )
+    (clean_tree / "n.py").write_text("import m\n\n\ndef f():\n    return m.live()\n")
+    (clean_tree / "test_m.py").write_text(
+        "from m import copy_button_wiring\n\n\n"
+        'def test_wiring():\n    assert copy_button_wiring() == "wired"\n'
+    )
+    result = audit_tree(clean_tree)
+    assert result.verdict == "refuse"
+    refused = [check for check in result.checks if check.status == "fail"]
+    dead = next(check for check in refused if check.name == "dead-code")
+    assert "m.py: copy_button_wiring" in dead.detail
+    assert {check.name for check in result.checks if check.status == "pass"} >= {
+        "tests",
+        "coverage",
+    }
