@@ -45,6 +45,9 @@
       <input id="title" spellcheck="false" aria-label="Session title">
       <span id="where" class="where" title="The session's folder and its git branch"><span id="where-folder"></span><span id="where-branch"></span></span>
       <span id="mode-chip" class="mode-chip" title="This session's lane: what Enter does"></span>
+      <span id="full-access-banner" class="full-access-banner" role="status" hidden
+            title="Full access is on: this session's Edit commands run as you, outside the sandbox">⚠ Unsandboxed
+        <button id="full-access-off" type="button" title="Turn full access off: commands are sandboxed again, and any still running are stopped">Turn off</button></span>
       <span id="meter" title="context used"><i></i><b></b></span>
       <span id="status" class="status idle">idle</span>
       <button id="theme-toggle" type="button" title="Light or dark theme" aria-label="Toggle light or dark theme">◐</button>
@@ -99,6 +102,8 @@
       </div>
       <div class="mode-bar">
         <p id="mode-desc"></p>
+        <button type="button" id="full-access-open" class="full-access-open" hidden
+                title="Let this session's commands run outside the sandbox">Full access…</button>
         <p id="lane-hint"><span id="lane-suggest" hidden></span><span class="lane-keys">⇧Tab lane · ⇧⏎ newline</span></p>
       </div>
       <p id="mode-note" class="mode-note" role="alert" hidden></p>
@@ -161,6 +166,22 @@
     </div>
   </div>
   <div class="dialog-actions"><button id="settings-close" type="button">Close</button></div>
+</dialog>
+<dialog id="full-access-dialog" aria-labelledby="fa-title">
+  <h3 id="fa-title">Give this session full access?</h3>
+  <p>With full access, the commands this session runs in Edit <b>run as you, outside the sandbox</b>:</p>
+  <ul class="fa-grants">
+    <li>your whole filesystem, not only this folder, including your SSH keys and saddle's API key</li>
+    <li>your network</li>
+    <li>nothing a command does can be undone</li>
+  </ul>
+  <p class="hint">Only this session. A new session always starts sandboxed, Task runs are always
+     sandboxed, and you can turn it off at any time.</p>
+  <div class="dialog-actions">
+    <button id="fa-keep" type="button" class="primary" autofocus>Keep sandboxed</button>
+    <button id="fa-grant" type="button" class="danger"
+            data-confirm="run commands as me, outside the sandbox">Turn on full access</button>
+  </div>
 </dialog>
 <dialog id="rewind-dialog">
   <h3 id="rewind-title">Try this again</h3>

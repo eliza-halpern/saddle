@@ -132,6 +132,7 @@ function finishTool(event) {
       ? `${(event.duration_ms / 1000).toFixed(1)}s`
       : `${event.duration_ms}ms`;
   fillToolDetail(row.details, row.detail, event.detail);
+  markUnsandboxed(row.details, event.detail);
   if (event.preview) showPreview(row.details, event.preview, event.version);
   if (!event.ok) row.details.open = true;             // a failure should not need a click
 }
@@ -147,6 +148,10 @@ function terminalBlock(id) {
   summary.appendChild(el("span", "label", `Terminal ${id}`));
   summary.appendChild(el("span", "ms", "live"));
   details.appendChild(summary);
+  // Output events carry no label, so the session's setting marks the block.
+  // A sandboxed command still streaming when access is turned on reads as
+  // unsandboxed: wrong in the safe direction only.
+  if (state.fullAccess) badgeUnsandboxed(details);
   const body = el("div", "tool-detail terminal");
   details.appendChild(body);
   details.open = true;
@@ -254,6 +259,7 @@ function renderHistory(info) {
   if (info.reasoning_effort) $("#effort").value = info.reasoning_effort;
   if (info.temperature !== undefined) showTemperature(info.temperature);
   showMode(info.mode);
+  showFullAccess(info.full_access);
   showWhere(info.workdir, info.branch);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
@@ -352,6 +358,7 @@ function pastToolRow(call) {
   // watched it and turned back into flat text on reload, because history
   // set textContent directly.
   fillToolDetail(details, detail, call.detail);
+  markUnsandboxed(details, call.detail);
   details.appendChild(detail);
   return details;
 }
@@ -609,6 +616,7 @@ function showMode(mode) {
   document.body.dataset.mode = lane.id;  // page-level hook: task mode quiets the chat-only chrome
   $("#input").placeholder = lane.placeholder;
   $("#mode-note").hidden = true;
+  paintFullAccess();
   if (lane.id !== "task") closeRunConfirm();
   paintSuggestion();
 }
@@ -618,14 +626,67 @@ async function setMode(mode) {
   showMode(mode);
   $("#input").focus();
   try {
-    await api(`/api/sessions/${state.sessionId}`, {
+    const session = await api(`/api/sessions/${state.sessionId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: state.mode }),
     });
+    showFullAccess(session.full_access);   // leaving Edit ends full access
   } catch (error) {
     notice(String(error.message || error), "error");
   }
 }
+
+/* ---------- full access (#124) ----------
+   A session's Edit commands can run outside the sandbox, only after the
+   dialog's explicit yes; its default answer is No ("Keep sandboxed" has the
+   focus, and Enter or Escape keeps it). While it is on, the topbar says so
+   on every screen and each command it ran carries a badge. */
+function paintFullAccess() {
+  const on = Boolean(state.fullAccess);
+  $("#full-access-banner").hidden = !on;
+  $("#full-access-open").hidden = on || state.mode !== "edit";
+  document.body.dataset.fullAccess = on ? "on" : "off";
+}
+
+function showFullAccess(on) {
+  state.fullAccess = Boolean(on);
+  paintFullAccess();
+}
+
+async function setFullAccess(on) {
+  const body = on ? { on: true, confirm: $("#fa-grant").dataset.confirm } : { on: false };
+  try {
+    const session = await api(`/api/sessions/${state.sessionId}/full-access`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    showFullAccess(session.full_access);
+  } catch (error) {
+    notice(String(error.message || error), "error");
+  }
+}
+
+/* The server puts this on the first line of every command result while full
+   access is on (`tools.UNSANDBOXED`); the badge sits on the summary, so it
+   shows while the row is folded, live and after a reload alike. */
+const UNSANDBOXED_MARK = "[UNSANDBOXED:";
+function badgeUnsandboxed(details) {
+  details.classList.add("unsandboxed");
+  const summary = details.querySelector("summary");
+  if (summary.querySelector(".unsandboxed-badge")) return;
+  const badge = el("span", "unsandboxed-badge", "unsandboxed");
+  badge.title = "Full access was on: this command ran as you, outside the sandbox";
+  summary.insertBefore(badge, summary.querySelector(".label"));
+}
+
+function markUnsandboxed(details, text) {
+  if (typeof text === "string" && text.startsWith(UNSANDBOXED_MARK)) badgeUnsandboxed(details);
+}
+
+$("#full-access-open").onclick = () => $("#full-access-dialog").showModal();
+$("#fa-keep").onclick = () => $("#full-access-dialog").close();
+$("#fa-grant").onclick = () => { $("#full-access-dialog").close(); setFullAccess(true); };
+$("#full-access-off").onclick = () => setFullAccess(false);
 
 /* Shift+Tab: the next enabled lane, wrapping. */
 function nextLane(from, step = 1) {

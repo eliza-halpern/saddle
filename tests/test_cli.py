@@ -2445,7 +2445,7 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                 [--base-url BASE_URL] [--model MODEL]\n"
         "                 [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
         "                 [--reasoning-effort {none,low,medium,xhigh}]\n"
-        "                 [--mode {ask,edit}]\n"
+        "                 [--mode {ask,edit}] [--full-access]\n"
         "\n"
         "options:\n"
         "  -h, --help            show this help message and exit\n"
@@ -2462,6 +2462,9 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --mode {ask,edit}     ask (default): read-only tools, as in the web chat's\n"
         "                        Ask lane. edit: may write files and run commands in\n"
         "                        --workdir, unaudited.\n"
+        "  --full-access         With --mode edit: commands run as you, outside the\n"
+        "                        sandbox. Asks you to confirm first; anything but y or\n"
+        "                        yes starts nothing.\n"
     )
 
 
@@ -2480,6 +2483,7 @@ def test_up_parser_defaults_and_overrides() -> None:
         "temperature": 0.0,
         "reasoning_effort": "medium",
         "mode": "ask",
+        "full_access": False,
     }
     full = parser.parse_args(
         [
@@ -2500,6 +2504,7 @@ def test_up_parser_defaults_and_overrides() -> None:
             "low",
             "--mode",
             "edit",
+            "--full-access",
         ]
     )
     assert vars(full) == {
@@ -2512,6 +2517,7 @@ def test_up_parser_defaults_and_overrides() -> None:
         "temperature": 0.5,
         "reasoning_effort": "low",
         "mode": "edit",
+        "full_access": True,
     }
 
 

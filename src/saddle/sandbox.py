@@ -765,15 +765,23 @@ class Sandbox:
         require_isolation: bool = False,
         network: Network = "host",
         tmp: Path | None = None,
+        unsandboxed: bool = False,
     ) -> Sandbox:
-        """A sandbox for `root`; with `require_isolation`, never an unisolated one."""
+        """A sandbox for `root`; with `require_isolation`, never an unisolated one.
+
+        `unsandboxed` is a person's deliberate choice (a session's full access):
+        commands run as them, with no isolation. A lane that requires isolation
+        can never be given it."""
+        if unsandboxed and require_isolation:
+            msg = "this lane requires isolation, so it cannot run unsandboxed"
+            raise ValueError(msg)
         problem = isolation_problem() if prefer_bwrap else "bwrap is not installed"
         if problem is not None and require_isolation:
             msg = f"this lane needs isolation and bwrap cannot provide it: {problem}"
             raise IsolationUnavailableError(msg)
         return cls(
             root=root.resolve(),
-            isolation="bwrap" if problem is None else "none",
+            isolation="bwrap" if problem is None and not unsandboxed else "none",
             on_output=on_output,
             env=dict(env or {}),
             network=network,

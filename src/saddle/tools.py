@@ -422,6 +422,20 @@ class ToolContext:
     syntax_guard: bool = False
     """Tier-0 guard: refuse a write that leaves a `.py` file unparseable,
     unless the file was already unparseable before it."""
+    full_access: bool = False
+    """The session's full access (`Session.full_access`): `box` runs commands
+    unsandboxed, and every command result says so (`UNSANDBOXED`). The file
+    tools stay inside the folder either way. A task never sets it."""
+
+    def revoke_full_access(self) -> None:
+        """End full access now, even mid-turn: stop every command still running
+        outside the sandbox, and let the next command build a sandboxed box."""
+        if self.full_access and self.sandbox is not None:
+            for terminal_id, terminal in list(self.sandbox.terminals.items()):
+                if terminal.running:
+                    self.sandbox.kill(terminal_id)
+        self.full_access = False
+        self.sandbox = None
 
     def guard(self, path: Path, name: str, before: str | None, after: str) -> str | None:
         """A refusal result for this write, or None to let it through."""
@@ -449,6 +463,7 @@ class ToolContext:
                 self.workdir,
                 on_output=self.on_output,
                 env=project_command_env(project_env(self.workdir)),
+                unsandboxed=self.full_access,
             )
         return self.sandbox
 
@@ -701,23 +716,38 @@ def _bounded(ctx: ToolContext, asked: int) -> tuple[int, str]:
     return left, f" (capped at the {left}s left in this run's time budget)"
 
 
+UNSANDBOXED: Final = (
+    "[UNSANDBOXED: full access is on for this session, so this command ran as you, "
+    "outside the sandbox]"
+)
+"""The first line of every command result while a session has full access
+(`ToolContext.full_access`): the model reads it, the page shows it on each
+command, and the journal keeps it in the call's span."""
+
+
+def _marked(ctx: ToolContext, result: str) -> str:
+    return f"{UNSANDBOXED}\n{result}" if ctx.full_access else result
+
+
 def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     command = _text(args, "command", "run_command")
     box = ctx.box()
     if bool(args.get("background")):
         terminal = box.start(command)
-        return (
+        return _marked(
+            ctx,
             f"started terminal {terminal.id} (isolation: {box.isolation}). "
-            "Use read_terminal or wait_for_terminal."
+            "Use read_terminal or wait_for_terminal.",
         )
     timeout, capped = _bounded(ctx, int(args.get("timeout") or DEFAULT_TIMEOUT))
     terminal = box.run(command, timeout=timeout)
     if terminal.running:
-        return (
+        return _marked(
+            ctx,
             f"still running after {timeout}s{capped} as terminal {terminal.id}; "
-            f"output so far:\n{terminal.output()}"
+            f"output so far:\n{terminal.output()}",
         )
-    return f"exit {terminal.exit_code}\n{terminal.output()}"
+    return _marked(ctx, f"exit {terminal.exit_code}\n{terminal.output()}")
 
 
 def _read_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -725,7 +755,7 @@ def _read_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if terminal is None:
         return f"error: no terminal {args['id']!r}"
     state = "running" if terminal.running else f"exited {terminal.exit_code}"
-    return f"[{state}]\n{terminal.output()}"
+    return _marked(ctx, f"[{state}]\n{terminal.output()}")
 
 
 def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -735,11 +765,12 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     timeout, capped = _bounded(ctx, int(args.get("timeout") or 60))
     terminal = box.wait(str(args["id"]), timeout=timeout)
     if terminal.running:
-        return (
+        return _marked(
+            ctx,
             f"terminal {terminal.id} still running after {timeout}s{capped} "
-            f"(not killed; wait again if you want)\n{terminal.output()}"
+            f"(not killed; wait again if you want)\n{terminal.output()}",
         )
-    return f"exit {terminal.exit_code}\n{terminal.output()}"
+    return _marked(ctx, f"exit {terminal.exit_code}\n{terminal.output()}")
 
 
 # Naming the handler signature is what makes `handler(ctx, args)` a str

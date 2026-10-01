@@ -96,6 +96,7 @@ from saddle.task_passes import extract as extract_requirements
 from saddle.task_requirements import ProbeTree, RequirementsError
 from saddle.task_requirements import load as requirements_load
 from saddle.task_units import task_units
+from saddle.tools import UNSANDBOXED
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
 from saddle.vllm import (
@@ -1994,6 +1995,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="ask (default): read-only tools, as in the web chat's Ask lane. "
         "edit: may write files and run commands in --workdir, unaudited.",
     )
+    up.add_argument(
+        "--full-access",
+        action="store_true",
+        help="With --mode edit: commands run as you, outside the sandbox. "
+        "Asks you to confirm first; anything but y or yes starts nothing.",
+    )
     auto = sub.add_parser(
         "auto", help="Run one task autonomously in a worktree; the result is a branch."
     )
@@ -2274,6 +2281,25 @@ def _api_key() -> str | None:
     return _key_from_file(Path(KEY_FILE).expanduser())
 
 
+FULL_ACCESS_PROMPT: Final = (
+    "Full access: the commands this chat runs will run as you, outside the sandbox, "
+    "with your whole filesystem, your network and your credentials, and nothing a "
+    "command does can be undone.\nTurn full access on? [y/N] "
+)
+
+
+def confirm_full_access(stdin: IO[str], stdout: IO[str]) -> bool:
+    """Ask before `saddle up --full-access` starts; only y or yes turns it on,
+    and the answer No (or nothing at all) starts nothing."""
+    stdout.write(FULL_ACCESS_PROMPT)
+    stdout.flush()
+    if stdin.readline().strip().lower() in ("y", "yes"):
+        stdout.write(f"{UNSANDBOXED}\n")
+        return True
+    stdout.write("Full access was not turned on; nothing started.\n")
+    return False
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -2397,6 +2423,12 @@ def main(
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             return run_requirements(args, client, stdout=stdout or sys.stdout)
     if args.command == "up":
+        if args.full_access:
+            if args.mode != "edit":
+                print("error: --full-access applies to --mode edit only", file=stderr or sys.stderr)
+                return 2
+            if not confirm_full_access(stdin or sys.stdin, stdout or sys.stdout):
+                return 1
         with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
             try:
                 check_server(client, base_url=args.base_url, model=args.model)
@@ -2410,6 +2442,7 @@ def main(
                 temperature=args.temperature,
                 reasoning_effort=args.reasoning_effort,
                 mode=args.mode,
+                full_access=args.full_access,
             )
             return run_chat(
                 chat_options,

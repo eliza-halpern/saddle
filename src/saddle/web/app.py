@@ -63,7 +63,13 @@ from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import Packet, compile_packet, display_record, render_packet_text
 from saddle.sandbox import OutsideRootError, resolve_within
-from saddle.sessions import BUILTIN_PERSONAS, DEFAULT_TITLE, SESSION_MODES, SessionStore
+from saddle.sessions import (
+    BUILTIN_PERSONAS,
+    DEFAULT_TITLE,
+    SESSION_MODES,
+    FullAccessRefusedError,
+    SessionStore,
+)
 from saddle.titles import title_for, words_title
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
 from saddle.undo import UndoLog
@@ -435,14 +441,20 @@ class ChatServer:
             session = self.store.get(session_id)
             messages = self.store.load_messages(session_id)
             workdir = Path(session.workdir)
-            if live.context is None or live.context.workdir != workdir:
+            if (
+                live.context is None
+                or live.context.workdir != workdir
+                or live.context.full_access != session.full_access
+            ):
                 # Terminal output arrives on the reader thread, after the tool
                 # call that started it has already returned, so it is pushed
                 # to the session's subscribers rather than yielded by the turn.
+                # Rebuilt when full access changes, so its sandbox follows it.
                 live.context = ToolContext(
                     workdir=workdir,
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
+                    full_access=session.full_access,
                 )
             tools = scope_turn(live.context, session.mode)
             live.turn += 1
@@ -683,7 +695,19 @@ def build_app(
             return JSONResponse(
                 {"error": f"mode must be one of {', '.join(SESSION_MODES)}"}, status_code=400
             )
-        session = store.update(request.path_params["sid"], **body)
+        if "full_access" in body:
+            return JSONResponse(
+                {"error": "full access is set at /full-access, with its confirmation"},
+                status_code=400,
+            )
+        sid = request.path_params["sid"]
+        had_full_access = store.get(sid).full_access
+        session = store.update(sid, **body)
+        live = server.live.get(sid)
+        if had_full_access and not session.full_access and live and live.context:
+            # Leaving Edit ended full access (`SessionStore.update`): stop what
+            # still runs outside the sandbox now, not at the next turn.
+            live.context.revoke_full_access()
         # The Live is deliberately kept. It used to be dropped here "because
         # the workdir or persona may have moved", but a Live is not a cache of
         # the session -- it holds the *subscriber queues* of every connected
@@ -696,6 +720,22 @@ def build_app(
         # anything else did. The workdir case it was guarding is already
         # handled in `_run`, which rebuilds the tool context whenever the
         # session has moved.
+        return JSONResponse(session.__dict__)
+
+    async def full_access(request: Request) -> JSONResponse:
+        """Turn the session's full access on (only with `FULL_ACCESS_CONFIRM`)
+        or off. Off takes effect at once: commands still running outside the
+        sandbox are stopped and the next command is sandboxed again."""
+        sid = request.path_params["sid"]
+        body = await request.json()
+        on = body.get("on") is True
+        try:
+            session = store.set_full_access(sid, on, confirm=str(body.get("confirm", "")))
+        except FullAccessRefusedError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        live = server.live.get(sid)
+        if not on and live is not None and live.context is not None:
+            live.context.revoke_full_access()
         return JSONResponse(session.__dict__)
 
     async def delete_session(request: Request) -> JSONResponse:
@@ -1216,6 +1256,7 @@ def build_app(
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
                     mode=session.mode,
+                    full_access=session.full_access,
                     branch=git_branch(Path(session.workdir)),
                     context_used=estimate_tokens(store.load_messages(sid)),
                     context_limit=server.window or 175_000,
@@ -1280,6 +1321,7 @@ def build_app(
             Route("/api/sessions/{sid}", patch_session, methods=["PATCH"]),
             Route("/api/sessions/{sid}", delete_session, methods=["DELETE"]),
             Route("/api/sessions/{sid}/restore", restore_session, methods=["POST"]),
+            Route("/api/sessions/{sid}/full-access", full_access, methods=["POST"]),
             Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/file", workdir_file),

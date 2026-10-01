@@ -31,6 +31,9 @@ class ChatOptions:
     """The lane, as in the web chat's `Session.mode`: "ask" offers read-only
     tools and refuses any other call; "edit" may write files and run
     commands in `workdir`, unaudited. Ask is the default in both chats."""
+    full_access: bool = False
+    """`saddle up --full-access`, confirmed at the prompt: Edit-lane commands
+    run outside the sandbox, as in the web chat's `Session.full_access`."""
 
 
 def _stream_response(
@@ -192,7 +195,7 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     # run_command in turn N must still be there for read_terminal or
     # wait_for_terminal in turn N+1. Built here, not inside the loop, so two
     # sessions (two `run_chat` calls) never share it.
-    context = ToolContext(workdir=options.workdir)
+    context = ToolContext(workdir=options.workdir, full_access=options.full_access)
     try:
         while True:
             display.show_prompt()

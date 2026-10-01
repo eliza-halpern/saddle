@@ -168,6 +168,9 @@ class SessionInfo(Event):
     reasoning_effort: str = "xhigh"
     temperature: float = 1.0
     mode: str = "ask"
+    full_access: bool = False
+    """The session's Edit-lane commands run outside the sandbox
+    (`Session.full_access`); the page shows a banner while it is on."""
     branch: str = ""
     """The folder's git branch, or "" when it is not a git checkout."""
     context_used: int = 0

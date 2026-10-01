@@ -94,6 +94,17 @@ commands in the folder, unaudited. task: open the Run strip for an audited
 which was the default, not a choice) reads as ask: nothing was opted in."""
 
 
+FULL_ACCESS_CONFIRM: Final = "run commands as me, outside the sandbox"
+"""What a caller must send, word for word, to turn a session's full access on
+(`SessionStore.set_full_access`). Turning it off needs nothing. The phrase is
+the grant itself, so a client cannot switch it on without saying what it does."""
+
+
+class FullAccessRefusedError(ValueError):
+    """Full access was asked for without its confirmation, or through a path
+    that is not `SessionStore.set_full_access`."""
+
+
 @dataclass
 class Session:
     id: str
@@ -113,6 +124,15 @@ class Session:
     auto_title: bool = True
     """False once someone renames the session by hand: a title the user chose
     is never overwritten by the model."""
+    full_access: bool = False
+    """The Edit lane's commands run as you, outside the sandbox: your whole
+    filesystem, your network, your credentials, and nothing a command does can
+    be undone. Off by default. It is set only by `SessionStore.set_full_access`
+    with `FULL_ACCESS_CONFIRM`, never by `update` and never by the model (no
+    tool changes a session), and a new session never starts with it. It exists
+    only in the Edit lane: it is granted there, and changing the lane away from
+    Edit turns it off, so coming back means confirming again. Task runs ignore
+    it: they are always isolated."""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     deleted_at: float | None = None
@@ -286,8 +306,24 @@ class SessionStore:
                 continue
             if session.system_prompt.strip():
                 continue
+            if session.full_access:
+                continue  # a new session never starts with full access
             return session
         return None
+
+    def set_full_access(self, session_id: str, on: bool, *, confirm: str = "") -> Session:
+        """Turn a session's full access on, only with `FULL_ACCESS_CONFIRM`
+        word for word, or off, which needs nothing."""
+        if on and confirm != FULL_ACCESS_CONFIRM:
+            message = f'full access needs the confirmation "{FULL_ACCESS_CONFIRM}"'
+            raise FullAccessRefusedError(message)
+        session = self.get(session_id)
+        if on and session.mode != "edit":
+            message = "full access is for the Edit lane: switch the session to Edit first"
+            raise FullAccessRefusedError(message)
+        session.full_access = on
+        self._save_meta(session)
+        return session
 
     def create(
         self,
@@ -360,10 +396,15 @@ class SessionStore:
         return Session(**data)
 
     def update(self, session_id: str, **changes: Any) -> Session:
+        if "full_access" in changes:
+            message = "full access is set only by set_full_access, with its confirmation"
+            raise FullAccessRefusedError(message)
         session = self.get(session_id)
         for key, value in changes.items():
             if hasattr(session, key) and value is not None:
                 setattr(session, key, value)
+        if session.mode != "edit":
+            session.full_access = False  # leaving Edit ends it
         self._save_meta(session)
         return session
 
