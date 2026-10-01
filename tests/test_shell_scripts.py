@@ -140,8 +140,18 @@ def test_shellcheck_exits_non_zero_on_a_bad_script_and_zero_on_a_good_one(tmp_pa
     assert run_shellcheck(good).returncode == 0
 
 
+SCRIPTS = tracked_shell_scripts() if IN_CHECKOUT else []
+
+
 @needs_checkout
-@pytest.mark.parametrize("name", tracked_shell_scripts() if IN_CHECKOUT else [])
+def test_the_scripts_the_shellcheck_test_runs_over_are_found() -> None:
+    """Parametrizing over an empty list would run no shellcheck test and say nothing."""
+    assert "tools/githooks/pre-push" in SCRIPTS
+    assert "check.sh" in SCRIPTS
+
+
+@needs_checkout
+@pytest.mark.parametrize("name", SCRIPTS)
 def test_every_tracked_shell_script_passes_shellcheck(name: str) -> None:
     done = run_shellcheck(ROOT / name)
     assert done.returncode == 0, done.stdout
