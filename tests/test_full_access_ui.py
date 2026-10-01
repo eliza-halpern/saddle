@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_ui3_mode import BROWSER, NoModel, serving
+from browser_guard import BROWSER
+from test_ui3_mode import NoModel, serving
 
 from saddle.sessions import SessionStore
 from saddle.tools import UNSANDBOXED

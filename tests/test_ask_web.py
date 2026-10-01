@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from starlette.testclient import TestClient
 from test_ask_test_edits import Learner, repo  # noqa: F401 -- the fixture
 from test_ui3_mode import _server_of, serving
@@ -33,7 +33,6 @@ from saddle.sessions import SessionStore
 from saddle.web.app import ChatServer, build_app
 
 CDP = Path(__file__).parent / "fixtures" / "ask_cdp.mjs"
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 
 
 @pytest.fixture

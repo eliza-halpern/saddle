@@ -13,12 +13,12 @@ the title prefix does not outlive the user looking at the finished run.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from starlette.testclient import TestClient
 from test_ui3_mode import NoModel, _server_of, serving
 
@@ -122,7 +122,6 @@ def _browser(
     return got
 
 
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 needs_browser = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
 
 

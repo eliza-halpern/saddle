@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from packet_seed import GUARDED_SEEDED, git, make_repo, seed
 from test_ui3_mode import NoModel, serving
 
@@ -30,7 +30,6 @@ from saddle.sessions import SessionStore
 from saddle.web.app import build_app
 
 CDP = Path(__file__).parent / "fixtures" / "packet_cdp.mjs"
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 pytestmark = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
 
 

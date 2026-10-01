@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import time
 from collections.abc import Iterator
@@ -31,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from test_ui3_mode import _server_of, serving
 from test_web_tasks import call, repo  # noqa: F401 -- the fixture
 
@@ -40,7 +40,6 @@ from saddle.vllm import StreamToken
 from saddle.web.app import build_app
 
 CDP = Path(__file__).parent / "fixtures" / "card_cdp.mjs"
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 pytestmark = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
 
 THOUGHT = (

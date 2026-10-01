@@ -12,7 +12,6 @@ mode is unchanged; a Task-mode Enter never sends a chat message.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import threading
 import time
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from starlette.testclient import TestClient
 
 from saddle.sessions import SESSION_MODES, SessionStore
@@ -201,9 +201,6 @@ def _browser(base: str, sid: str, step: str) -> dict[str, Any]:
     assert out.returncode == 0, out.stderr
     result: dict[str, Any] = json.loads(out.stdout.strip().splitlines()[-1])
     return result
-
-
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 
 
 @pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")

@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from starlette.testclient import TestClient
 from test_ask_budget import Reader, repo  # noqa: F401 -- the fixture
-from test_ask_web import BROWSER, app_for, start
+from test_ask_web import app_for, start
 from test_ui3_mode import _server_of, serving
 from test_web_tasks import idle, wait_for
 

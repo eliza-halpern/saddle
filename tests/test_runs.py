@@ -19,13 +19,13 @@ from __future__ import annotations
 import json
 import os
 import queue
-import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
+from browser_guard import BROWSER
 from starlette.testclient import TestClient
 from test_ui3_mode import NoModel, _server_of, serving
 
@@ -445,7 +445,6 @@ def test_the_ledger_moves_the_phase(tmp_path: Path) -> None:
 
 # -- the browser --------------------------------------------------------------
 
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 needs_browser = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
 
 

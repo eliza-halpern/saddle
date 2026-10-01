@@ -213,13 +213,12 @@ def test_git_branch_is_empty_when_git_cannot_run(
 
 # -- the browser --------------------------------------------------------------
 
-import shutil  # noqa: E402
 import subprocess  # noqa: E402
 
+from browser_guard import BROWSER  # noqa: E402
 from test_ui3_mode import NoModel, serving  # noqa: E402
 
 CDP = Path(__file__).parent / "fixtures" / "lanechip_cdp.mjs"
-BROWSER = shutil.which("node") and shutil.which("google-chrome")
 needs_browser = pytest.mark.skipif(not BROWSER, reason="needs node and google-chrome")
 
 
