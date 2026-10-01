@@ -148,8 +148,10 @@ SYNTHETIC = {
 def write_section(path: str, content: str) -> str:
     """*content* as the envelope spells it: one write section, whole file.
 
-    This is the encoder the corpus is built with and the exact inverse of
-    `slice.whole_file_reconstruction`, which is the decoder the run uses.
+    This is the encoder the corpus is built with and the inverse of
+    `slice.whole_file_reconstruction`, which is the decoder the run uses,
+    up to one byte: the decoder gives every line a newline and ignores the
+    `\\ No newline` marker, so a file without a final newline decodes with one.
     """
     lines = content.split("\n")
     tail = ""
