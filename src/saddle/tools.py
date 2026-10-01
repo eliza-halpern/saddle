@@ -268,6 +268,19 @@ DISPUTE_SCHEMA: Final[dict[str, Any]] = _tool(
     ["claim", "finding", "evidence"],
 )
 
+REFUSE_TOOL: Final = "refuse"
+REFUSE_SCHEMA: Final[dict[str, Any]] = _tool(
+    REFUSE_TOOL,
+    "Decline the task on grounds you will not act on -- it is harmful, out of "
+    "scope, or against your policy. Give the reason you are declining; no evidence "
+    "is needed (a refusal is not a factual claim about the code). The reason is "
+    "sealed and the run ends needing a person to review it. This is not a pass and "
+    "not a finish. Use `dispute` instead when the task's premise is factually false "
+    "and you can show it; use this when you simply will not do the task.",
+    {"reason": {"type": "string"}},
+    ["reason"],
+)
+
 PREMISE_TOOL: Final = "premise_check"
 """`saddle auto --premise-check`: before its first edit the model shows the
 problem the task describes (`engine._premise`). Saddle reruns the commands and

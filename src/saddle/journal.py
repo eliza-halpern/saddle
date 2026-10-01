@@ -634,6 +634,11 @@ AUDIT_QUESTION_STOP: Final = "needs you: the audit asks "
 PREMISE_DISPUTED_STOP: Final = "needs you: the task's premise is disputed: "
 """The stop reason when the model calls `dispute` (`engine._dispute`): the run
 ends needing a person, who reads the claim and the rerun evidence."""
+REFUSED_STOP: Final = "needs you: the task was refused: "
+"""The stop reason when the model calls `refuse` (`engine._refuse`): the model
+declines the task on grounds it will not act on (harmful, out of scope, against
+policy). Unlike a dispute it carries no evidence -- a refusal is not a factual
+claim about the code -- only the model's reason, and a person reviews it."""
 STALL_STOP: Final = "needs you: stalled"
 """The stop-reason prefix when `--stall-check` ejects a stalled run
 (`engine.STALLED`): the run made no progress and ends needing a person to read

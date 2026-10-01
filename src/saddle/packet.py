@@ -53,6 +53,7 @@ from saddle.journal import (
     GUARDED_STOP_PREFIX,
     P1_EXTRACT_SPAN,
     PREMISE_DISPUTED_STOP,
+    REFUSED_STOP,
     SEALED_CUT,
     STALL_STOP,
     ProofRecord,
@@ -926,6 +927,17 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             f"Needs you: the model disputes the task's premise ({claim}). It made no "
             "claim of done: read its finding and the evidence saddle reran, then agree "
             "(close the task) or disagree (run it again with a note)."
+        )
+    elif outcome.name == "auto:stopped" and outcome.detail.startswith(f"stopped: {REFUSED_STOP}"):
+        # The model declined the task (`engine._refuse`) -- harmful, out of scope,
+        # or against policy. No evidence: a refusal is not a factual claim about the
+        # code. A person decides whether the task was fair to ask.
+        verdict = "needs_you"
+        reason = outcome.detail.split(";")[0].removeprefix(f"stopped: {REFUSED_STOP}")
+        verdict_text = (
+            f"Needs you: the model refused the task ({reason}). It made no claim of done "
+            "and did not dispute the premise; read its reason, then withdraw the task or "
+            "re-scope it."
         )
     elif outcome.name == "auto:stopped" and outcome.detail.startswith(
         f"stopped: {GUARDED_STOP_PREFIX}"

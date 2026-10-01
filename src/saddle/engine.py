@@ -51,6 +51,7 @@ from saddle.journal import (
     GUARDED_STOP_PREFIX,
     MAX_THINKING_CHARS,
     PREMISE_DISPUTED_STOP,
+    REFUSED_STOP,
     STALL_STOP,
     append_record,
     append_span,
@@ -78,6 +79,7 @@ from saddle.tools import (
     FINISH_TOOL,
     INSTALL_TOOL,
     PREMISE_TOOL,
+    REFUSE_TOOL,
     REFUSED,
     TOOLS,
     ToolContext,
@@ -174,7 +176,9 @@ STALLED: Final = (
 `STALL_STOP`, which the packet matches to render a needs-you verdict; no
 semicolon, so the verdict line keeps the whole reason."""
 
-STALL_TOOLS: Final = frozenset({"write_file", "edit_file", "premise_check", "dispute", "finish"})
+STALL_TOOLS: Final = frozenset(
+    {"write_file", "edit_file", "premise_check", "dispute", "refuse", "finish"}
+)
 """A call to any of these is a progress-action: it exempts the run from the
 stall check for the rest of the run. An attempt counts (the run engaged), so a
 refused edit or a premise_check that failed to reproduce still exempts."""
@@ -463,6 +467,10 @@ class AutoRun:
     dispute: dict[str, Any] | None = None
     """The model's `dispute` (`_dispute`): its claim, finding and each evidence
     command with saddle's own rerun output; sealed in the outcome. None unless called."""
+    refusal: dict[str, Any] | None = None
+    """The model's `refuse` (`_refuse`): its reason for declining the task; sealed
+    in the outcome. None unless called. No evidence -- a refusal is not a claim
+    about the code."""
     surfaced: str | None = None
     """The summary of the finish that was accepted with surfaced not-proven
     findings (`FINISH_SURFACED`); None until one is. A run that then stops
@@ -1051,6 +1059,8 @@ def run_turn(
                     result = auto.feed.check()
                 elif auto is not None and call.name == DISPUTE_TOOL:
                     result = _dispute(auto, call.arguments, options.workdir, ctx)
+                elif auto is not None and call.name == REFUSE_TOOL:
+                    result = _refuse(auto, call.arguments)
                 elif auto is not None and call.name == PREMISE_TOOL:
                     result = _premise(auto, call.arguments, options.workdir, ctx)
                 elif (
@@ -1786,6 +1796,29 @@ def _dispute(auto: AutoRun, arguments: str, workdir: Path, ctx: ToolContext) -> 
     )
 
 
+def _refuse(auto: AutoRun, arguments: str) -> str:
+    """The model declines the task on grounds it will not act on -- harmful, out
+    of scope, or against policy. Unlike `dispute` it carries no evidence: a
+    refusal is not a factual claim about the code, so there is nothing to rerun.
+    The reason is sealed and the run ends "needs you" (`REFUSED_STOP`) for a
+    person to review. A refusal with no reason is not recorded; the run goes on."""
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        args = None
+    if not isinstance(args, dict):
+        return "error: refuse needs a JSON object with a reason"
+    reason = args.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return "error: refuse refused: say why you are declining the task"
+    auto.refusal = {"reason": reason}
+    auto.stop(f"{REFUSED_STOP}{reason.strip().splitlines()[0]}")
+    return (
+        "refusal recorded: the run ends here, needing a person, who reads your reason. "
+        "It is not a pass and not a finish."
+    )
+
+
 NARRATIVE_LABEL: Final = "narrative, not evidence"
 
 
@@ -1851,6 +1884,7 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
         "unchanged_refusals": auto.unchanged_refusals,
         "unresolved_findings": auto.unresolved,
         **({"dispute": auto.dispute} if auto.dispute is not None else {}),
+        **({"refusal": auto.refusal} if auto.refusal is not None else {}),
         **({"premise": auto.premise} if auto.premise is not None else {}),
         # The last completed audit (the finish audit if finish was called):
         # its tree id, findings and verdict. None for arm E, or when nothing

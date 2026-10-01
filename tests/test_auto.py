@@ -863,6 +863,79 @@ def test_a_dispute_without_evidence_is_refused_and_the_run_goes_on(
     assert told[-1]["content"].startswith("error: dispute refused")
 
 
+# -- refuse: the model declines a task it will not do ---------------------------
+
+
+def test_a_refusal_ends_the_run_needing_you_with_its_reason_sealed(repo: Path) -> None:
+    """The model declines the task (harmful, out of scope, against policy): its
+    reason is sealed whole, the run ends needing a person, and the packet says
+    it was refused -- not a pass, not a finish, not a disputed premise. Offered
+    on every run; nothing is rerun, as a refusal is not a claim about the code."""
+    client = Scripted([[call("refuse", reason="it asks for malware\nsecond line")]])
+    result = auto(repo, client)
+    assert result.outcome == "stopped"
+    assert result.reason == "needs you: the task was refused: it asks for malware"
+    sealed = sidecar(result)
+    assert sealed["refusal"] == {"reason": "it asks for malware\nsecond line"}
+    assert "dispute" not in sealed
+    assert "refuse" in [t["function"]["name"] for t in client.asked[0]["tools"]]
+    from saddle.packet import compile_packet
+
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "needs_you"
+    assert packet.verdict_text.startswith(
+        "Needs you: the model refused the task (it asks for malware)."
+    )
+    assert "did not dispute the premise" in packet.verdict_text
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{}, {"reason": ""}, {"reason": "  \n "}, {"reason": 7}],
+    ids=["no-reason", "empty-reason", "blank-reason", "not-text"],
+)
+def test_a_refusal_without_a_reason_is_refused_and_the_run_goes_on(
+    repo: Path, arguments: dict[str, Any]
+) -> None:
+    """A refusal must say why: without a reason nothing is sealed, the model is
+    told what is missing, and the run continues to its own end."""
+    client = Scripted(
+        [
+            [call("refuse", **arguments)],
+            [call("edit_file", path="calc.py", old="a - b", new="a + b")],
+            finish(),
+        ]
+    )
+    result = auto(repo, client)
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+    assert "refusal" not in sidecar(result)
+    told = [m for m in client.asked[1]["messages"] if m.get("role") == "tool"]
+    assert told[-1]["content"] == "error: refuse refused: say why you are declining the task"
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "ends"),
+    [
+        ("refuse", {"reason": "it asks for malware"}, "needs you: the task was refused: "),
+        ("read_file", {"path": "calc.py"}, "needs you: stalled"),
+    ],
+    ids=["refuse", "read-control"],
+)
+def test_a_refusal_after_hedging_past_the_warmup_is_a_refusal_not_a_stall(
+    repo: Path, tool: str, arguments: dict[str, Any], ends: str
+) -> None:
+    """`refuse` is a progress-action (`STALL_TOOLS`): a model that turns the task
+    over past the stall warmup and then declines it is recorded as refusing, not
+    ejected as stalled in that same round. The control is the same round with a
+    plain read in place of the refusal: it stalls."""
+    hedged = [StreamToken(stream="reasoning", text=HEDGY), call(tool, **arguments)]
+    result = auto(
+        repo, Scripted([hedged]), stall_check=True, time_budget_s=100000, clock=Clock(700)
+    )
+    assert result.outcome == "stopped"
+    assert result.reason.startswith(ends)
+
+
 @pytest.mark.parametrize("formats", [True, False], ids=["format-at-finish", "default"])
 def test_format_at_finish_formats_the_changed_files_and_says_so_only_when_asked(
     repo: Path, formats: bool
@@ -1016,6 +1089,28 @@ def test_a_dispute_that_is_not_an_object_or_names_no_finding_is_refused(
     _dispute(run, good, tmp_path, ToolContext(workdir=tmp_path))
     assert run.dispute is not None
     assert run.reason.startswith("needs you")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ("{", "error: refuse needs a JSON object with a reason"),
+        ('["a reason"]', "error: refuse needs a JSON object with a reason"),
+        ("", "error: refuse refused: say why"),
+    ],
+    ids=["not-json", "not-object", "no-arguments"],
+)
+def test_a_refusal_that_is_not_an_object_is_refused(arguments: str, refusal: str) -> None:
+    from saddle.engine import _refuse
+
+    run = _run()
+    told = _refuse(run, arguments)
+    assert told.startswith(refusal)
+    assert (run.refusal, run.outcome) == (None, "")
+    told = _refuse(run, json.dumps({"reason": "out of scope"}))
+    assert told.startswith("refusal recorded")
+    assert run.refusal == {"reason": "out of scope"}
+    assert run.reason == "needs you: the task was refused: out of scope"
 
 
 @pytest.mark.parametrize("tool", ["premise_check", "dispute"])
