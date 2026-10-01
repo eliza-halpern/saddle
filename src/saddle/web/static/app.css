@@ -1012,3 +1012,9 @@ dialog button.danger { background: transparent; color: var(--bad); border-color:
 .unsandboxed-badge { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .05em;
   text-transform: uppercase; color: var(--bad); border: 1px solid var(--bad); border-radius: 4px;
   padding: 0 5px; margin-right: 6px; }
+#password-dialog { max-width: 440px; }
+#password-dialog h3::before { content: "🔑 "; }
+#password-dialog #pw-prompt { margin: 6px 0 10px; color: var(--ink); }
+#password-dialog #pw-input { width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit;
+  background: var(--bg-sunk); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
+#password-dialog .dialog-actions { gap: 9px; }

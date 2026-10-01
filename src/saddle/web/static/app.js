@@ -213,6 +213,12 @@ function handle(event) {
     case "tool.end":
       finishTool(event);
       break;
+    case "password.request":
+      askPassword(event);
+      break;
+    case "password.done":
+      if (state.passwordId === event.id) closePassword();
+      break;
     case "terminal.output":
       terminalBlock(event.id).textContent += event.chunk;
       break;
@@ -682,6 +688,46 @@ function badgeUnsandboxed(details) {
 function markUnsandboxed(details, text) {
   if (typeof text === "string" && text.startsWith(UNSANDBOXED_MARK)) badgeUnsandboxed(details);
 }
+
+/* A full-access command's sudo asks for a password (#125). What is typed
+   goes to that command only: posted once, then the field is cleared. */
+function askPassword(event) {
+  state.passwordId = event.id;
+  $("#pw-prompt").textContent = event.prompt || "password:";
+  $("#pw-input").value = "";
+  if (!$("#password-dialog").open) $("#password-dialog").showModal();
+  $("#pw-input").focus();
+}
+
+function closePassword() {
+  $("#pw-input").value = "";
+  state.passwordId = null;
+  if ($("#password-dialog").open) $("#password-dialog").close();
+}
+
+async function answerPassword(cancel) {
+  const id = state.passwordId;
+  if (!id) return;
+  const body = cancel ? { id, cancel: true } : { id, password: $("#pw-input").value };
+  closePassword();
+  try {
+    await api(`/api/sessions/${state.sessionId}/password`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+  } catch (error) {
+    notice(String(error.message || error), "error");
+  }
+}
+
+$("#pw-send").onclick = () => answerPassword(false);
+$("#pw-cancel").onclick = () => answerPassword(true);
+$("#pw-input").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); answerPassword(false); }
+});
+$("#password-dialog").addEventListener("cancel", (event) => {   // Escape
+  event.preventDefault();
+  answerPassword(true);
+});
 
 $("#full-access-open").onclick = () => $("#full-access-dialog").showModal();
 $("#fa-keep").onclick = () => $("#full-access-dialog").close();

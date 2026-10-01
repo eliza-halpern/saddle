@@ -23,9 +23,10 @@ import secrets
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
@@ -50,6 +51,8 @@ from saddle.engine import run_turn as run_turn  # an injection seam: the tests r
 from saddle.events import (
     ErrorEvent,
     Event,
+    PasswordRequest,
+    PasswordSettled,
     SessionInfo,
     SessionTitle,
     TaskState,
@@ -280,6 +283,11 @@ def history_for_display(
     return shown
 
 
+PASSWORD_WAIT_S: Final = 300
+"""How long a `sudo` password request waits for the person before the command
+is refused, as if they had cancelled."""
+
+
 @dataclass
 class Live:
     """A session's in-memory half: subscribers, its tools, its turn counter.
@@ -298,6 +306,25 @@ class Live:
     busy: bool = False
     cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
+    passwords: dict[str, queue.Queue[str | None]] = field(default_factory=dict)
+    """Open `sudo` password requests (#125), by id, each waiting on the page."""
+
+    def ask_password(self, prompt: str) -> str | None:
+        """Ask the page for a full-access command's `sudo` password; None if
+        the person cancels or nobody answers within `PASSWORD_WAIT_S`. The
+        password only passes through here: it is returned to the helper and
+        never published, stored or logged."""
+        request_id = uuid.uuid4().hex[:12]
+        answer: queue.Queue[str | None] = queue.Queue(maxsize=1)
+        self.passwords[request_id] = answer
+        self.publish(PasswordRequest(id=request_id, prompt=prompt))
+        try:
+            return answer.get(timeout=PASSWORD_WAIT_S)
+        except queue.Empty:
+            return None
+        finally:
+            self.passwords.pop(request_id, None)
+            self.publish(PasswordSettled(id=request_id))
 
     def subscribe(self) -> queue.Queue[Event | None]:
         channel: queue.Queue[Event | None] = queue.Queue()
@@ -455,6 +482,7 @@ class ChatServer:
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
                     full_access=session.full_access,
+                    ask_password=live.ask_password,
                 )
             tools = scope_turn(live.context, session.mode)
             live.turn += 1
@@ -737,6 +765,19 @@ def build_app(
         if not on and live is not None and live.context is not None:
             live.context.revoke_full_access()
         return JSONResponse(session.__dict__)
+
+    async def password(request: Request) -> JSONResponse:
+        """The person's answer to a `sudo` password request: {"id", "password"}
+        or {"id", "cancel": true}. Handed to the waiting command and dropped;
+        the reply never repeats it."""
+        live = server.live.get(request.path_params["sid"])
+        body = await request.json()
+        waiting = live.passwords.get(str(body.get("id"))) if live is not None else None
+        if waiting is None:
+            return JSONResponse({"error": "no such password request"}, status_code=404)
+        given = body.get("password")
+        waiting.put(None if body.get("cancel") or not isinstance(given, str) else given)
+        return JSONResponse({"ok": True})
 
     async def delete_session(request: Request) -> JSONResponse:
         """Hide the session; it is removed once the undo window has passed.
@@ -1322,6 +1363,7 @@ def build_app(
             Route("/api/sessions/{sid}", delete_session, methods=["DELETE"]),
             Route("/api/sessions/{sid}/restore", restore_session, methods=["POST"]),
             Route("/api/sessions/{sid}/full-access", full_access, methods=["POST"]),
+            Route("/api/sessions/{sid}/password", password, methods=["POST"]),
             Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/file", workdir_file),

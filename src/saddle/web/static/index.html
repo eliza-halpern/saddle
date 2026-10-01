@@ -183,6 +183,17 @@
             data-confirm="run commands as me, outside the sandbox">Turn on full access</button>
   </div>
 </dialog>
+<dialog id="password-dialog" aria-labelledby="pw-title">
+  <h3 id="pw-title">A command needs your password</h3>
+  <p class="hint">A command this session runs with full access asked:</p>
+  <p id="pw-prompt" class="mono"></p>
+  <input id="pw-input" type="password" autocomplete="off" spellcheck="false" aria-label="Password">
+  <p class="hint">It goes to that command only. The model never sees it, and saddle does not store it.</p>
+  <div class="dialog-actions">
+    <button id="pw-cancel" type="button">Cancel</button>
+    <button id="pw-send" type="button" class="primary">Send password</button>
+  </div>
+</dialog>
 <dialog id="rewind-dialog">
   <h3 id="rewind-title">Try this again</h3>
   <p class="hint" id="rewind-hint"></p>

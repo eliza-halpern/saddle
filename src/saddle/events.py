@@ -99,6 +99,24 @@ class TerminalOutput(Event):
 
 
 @dataclass(frozen=True)
+class PasswordRequest(Event):
+    """A full-access command's `sudo` asks the person for a password (#125).
+    It carries sudo's prompt; the answer never comes back as an event."""
+
+    id: str
+    prompt: str
+    kind: str = "password.request"
+
+
+@dataclass(frozen=True)
+class PasswordSettled(Event):
+    """The request `id` was answered, cancelled or timed out: close its box."""
+
+    id: str
+    kind: str = "password.done"
+
+
+@dataclass(frozen=True)
 class Context(Event):
     """How full the window is. Sent each turn so filling up is visible
     before compaction evicts anything, rather than announced after."""

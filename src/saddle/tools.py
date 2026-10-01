@@ -22,11 +22,13 @@ import difflib
 import functools
 import importlib.metadata
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from saddle.askpass import Askpass
 from saddle.edits import first_divergence, loose_spans
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
@@ -427,6 +429,12 @@ class ToolContext:
     unsandboxed, and every command result says so (`UNSANDBOXED`). The file
     tools stay inside the folder either way. A task never sets it."""
 
+    ask_password: Callable[[str], str | None] | None = None
+    """How a full-access command's `sudo` asks the person for a password
+    (`askpass`): given sudo's prompt, the password, or None to refuse. None
+    here (a terminal chat, a test) gives `sudo` nobody to ask."""
+    askpass: Askpass | None = None
+
     def revoke_full_access(self) -> None:
         """End full access now, even mid-turn: stop every command still running
         outside the sandbox, and let the next command build a sandboxed box."""
@@ -434,6 +442,9 @@ class ToolContext:
             for terminal_id, terminal in list(self.sandbox.terminals.items()):
                 if terminal.running:
                     self.sandbox.kill(terminal_id)
+        if self.askpass is not None:
+            self.askpass.close()
+            self.askpass = None
         self.full_access = False
         self.sandbox = None
 
@@ -459,10 +470,14 @@ class ToolContext:
         """The chat lanes' sandbox on the user's folder, with the folder's own
         virtualenv first on PATH when it has one (`sandbox.project_env`)."""
         if self.sandbox is None:
+            env = project_command_env(project_env(self.workdir))
+            if self.full_access and self.ask_password is not None:
+                self.askpass = Askpass(self.ask_password)
+                env.update(self.askpass.env(env.get("PATH", os.environ.get("PATH", ""))))
             self.sandbox = Sandbox.for_workdir(
                 self.workdir,
                 on_output=self.on_output,
-                env=project_command_env(project_env(self.workdir)),
+                env=env,
                 unsandboxed=self.full_access,
             )
         return self.sandbox
