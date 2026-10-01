@@ -270,3 +270,19 @@ def test_main_exits_with_its_verdict_when_run_as_a_script(
             runpy.run_path(stall_check.__file__, run_name="__main__")
         assert exc_info.value.code == expected
     assert "tripwire A" in capsys.readouterr().out
+
+
+def test_a_gap_of_exactly_the_limit_is_silent_and_one_second_more_trips() -> None:
+    # Tripwire B fires on a gap LONGER than the limit; a gap that only reaches it does not.
+    assert stall_check.check_silence([0.0, 600.0], 600.0) is None
+    tripped = stall_check.check_silence([0.0, 601.0], 600.0)
+    assert tripped == "tripwire B: 601s without progress"
+
+
+def test_the_repeat_that_reaches_the_limit_trips_and_one_fewer_does_not() -> None:
+    # Tripwire A fires when the run of identical calls REACHES the limit.
+    call = ("read_file", '["a.py"]')
+    assert stall_check.check_repeats([call, call], 3) is None
+    assert stall_check.check_repeats([call, call, call], 3) == (
+        "tripwire A: read_file repeated 3x consecutively"
+    )
