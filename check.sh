@@ -17,7 +17,6 @@ uv run actionlint .github/workflows/*.yml
 uv lock --check
 # ShellCheck on every tracked shell script; the hooks have no extension, so each is named.
 uv run shellcheck check.sh ci-mutate.sh tools/githooks/commit-msg tools/githooks/pre-commit tools/githooks/pre-push
-# ESLint over the browser files, the node test and the nine browser drivers.
 # ESLint over the browser files, the node test and the nine browser drivers;
 # tsc type-checks the browser scripts (JSDoc under // @ts-check).
 npx --no-install eslint .
