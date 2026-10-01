@@ -83,10 +83,14 @@ norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist",
 markers = [
     "packaging: builds the sdist or wheel and inspects or installs it (tests/test_packaging.py)",
 ]
-addopts = "--cov=saddle --cov-report=term-missing --cov-fail-under=100"
+addopts = "--cov=saddle --cov=tools --cov=benchmark --cov-report=term-missing --cov-fail-under=100"
 
 [tool.coverage.run]
-source = ["saddle"]
+# `tools` and `benchmark` are directories of scripts, not packages; the gate
+# holds them to the same 100% as `saddle`. benchmark/tasks (planted defects,
+# graded against arm workdirs) is not listed: coverage does not descend into
+# directories that are not packages, and nothing imports a task.
+source = ["saddle", "tools", "benchmark"]
 branch = true
 
 [tool.saddle]
