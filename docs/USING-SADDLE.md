@@ -494,9 +494,11 @@ The chat card does not show the rows above in table order (`static/tasks.js`,
      `.saddle/worktrees/<id>` worktree; the ledger is kept. Neither is sealed in the
      ledger: each attempt is appended to the session's `actions.log`.
    - Ask about this run switches the session to Ask and puts the packet's recap in
-     the message box, ending with `Full report: <path>`, the `packet.md` written beside
-     the run's ledger (below). It sends nothing; the Ask lane can read the file on
-     request.
+     the message box, then one line of review checks (production code only tests call
+     is a defect; a changed old test needs a `flip:` label and evidence other than the
+     new code failing it; skipped and not-proven items are findings), ending with
+     `Full report: <path>`, the `packet.md` written beside the run's ledger (below).
+     It sends nothing; the Ask lane can read the file on request.
    - Download full report saves one markdown file, `saddle-packet-<id>.md`: the full
      packet, rendered fresh from the sealed ledger (`render_packet_text`) by
      `GET /api/sessions/<sid>/tasks/<id>/packet.md`. The same text is written beside

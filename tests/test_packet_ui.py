@@ -170,6 +170,30 @@ def test_discard_confirms_then_deletes_the_branch(tmp_path: Path) -> None:
     assert git(repo, "branch", "--list", branch) == ""
 
 
+def test_ask_about_this_run_adds_one_line_of_review_checks_before_the_report(
+    tmp_path: Path,
+) -> None:
+    # The pre-fill is the one review prompt that reaches a model whatever
+    # persona the session uses. Its extra line must be one line of its own,
+    # between the recap and the report path (the last line, which the test
+    # above pins), and must not be a line the packet already prints: a recap
+    # alone would otherwise pass for it. The wording is not pinned; what the
+    # line does to a model is measured by a replay probe, not asserted here.
+    got, _repo, _branch = page(tmp_path, "audited", "chat", mode="task")
+    paragraphs = got["input"].strip().split("\n\n")
+    assert paragraphs[0].startswith('About the run "make add add":')
+    assert paragraphs[-1].startswith("Full report: ")
+    checks = paragraphs[-2]
+    assert checks.strip()
+    assert "\n" not in checks
+    report = Path(paragraphs[-1].removeprefix("Full report: ").strip())
+    assert checks not in report.read_text(encoding="utf-8")
+    # Known-bad shape: with the line missing, the paragraph before the report
+    # is the recap's last one, which the packet does print.
+    recap_tail = paragraphs[1].splitlines()[-1]
+    assert recap_tail in report.read_text(encoding="utf-8")
+
+
 def test_ask_about_this_run_seeds_the_composer_with_the_recap(tmp_path: Path) -> None:
     # The session starts in Task, so the lane switch is what is under test:
     # "Ask about this run" must leave Task (where Enter opens the Run strip)

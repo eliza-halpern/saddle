@@ -18,7 +18,7 @@ from saddle.engine import MIN_OUTPUT, TurnOptions, _user_message
 from saddle.labels import describe, label_for
 from saddle.memory import KEEP_RECENT, compact, estimate_tokens
 from saddle.sandbox import OutsideRootError, Sandbox, resolve_within
-from saddle.sessions import SessionStore
+from saddle.sessions import BUILTIN_PERSONAS, SessionStore
 from saddle.tools import ToolContext, execute_tool
 from saddle.vllm import ToolCall
 
@@ -263,6 +263,25 @@ def test_an_explicit_system_prompt_overrides_the_persona(tmp_path: Path) -> None
     assert store.get(session.id).prompt_text().startswith("You are a careful")
     store.update(session.id, system_prompt="custom")
     assert store.get(session.id).prompt_text() == "custom"
+
+
+def test_the_reviewer_persona_is_what_the_model_is_sent_until_the_user_edits_it(
+    tmp_path: Path,
+) -> None:
+    # Structural only: which text reaches the model. What the text makes a
+    # model do is measured by replaying a fixed review case, not asserted
+    # on the wording here.
+    store = SessionStore(tmp_path)
+    session = store.create(workdir=str(tmp_path), persona="reviewer")
+    builtin = BUILTIN_PERSONAS["reviewer"]
+    assert builtin.strip()
+    assert store.get(session.id).prompt_text() == builtin
+    assert store.get(session.id).prompt_text(store.personas()) == builtin
+    store.save_persona("reviewer", "my own reviewer")
+    assert store.get(session.id).prompt_text(store.personas()) == "my own reviewer"
+    # Deleting the user's entry restores the builtin.
+    store.delete_persona("reviewer")
+    assert store.get(session.id).prompt_text(store.personas()) == builtin
 
 
 def test_a_traversing_session_id_is_refused(tmp_path: Path) -> None:

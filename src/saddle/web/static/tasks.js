@@ -1179,7 +1179,12 @@ function actionRow(card, packet) {
     // The compact recap, then where the full packet is on disk: the Ask
     // lane's read_file can open it on demand; the human sees a short message.
     const report = info && info.report ? `\n\nFull report: ${info.report}` : "";
-    input.value = `About the run "${packet.task}":\n\n${recap}${report}\n`;
+    // One line of what to check, since the message may be sent as it stands:
+    // the review is only as honest as what it was told to look for.
+    const checks = "In your review: code only tests call is a defect; a changed "
+      + "old test needs a flip: label and evidence other than the new code "
+      + "failing it; skipped and not-proven items are findings.";
+    input.value = `About the run "${packet.task}":\n\n${recap}\n\n${checks}${report}\n`;
     input.dispatchEvent(new Event("input"));
     input.focus();
   };
