@@ -289,6 +289,19 @@ def test_the_budget_counts_what_is_admitted_and_admits_up_to_it_inclusive(
 
 
 @BOTH
+def test_a_file_with_no_content_does_not_stop_the_walk(
+    tool: Module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`a_empty.py` has nothing to admit; `b.py`, named after it, is still read."""
+    repo, sha = _commit_files(tmp_path, {"a_empty.py": "", "b.py": "x = 1\n"})
+    monkeypatch.setattr(tool, "REPO", repo)
+
+    cases = tool.build_cases(commits=5)
+
+    assert _admitted(tool, cases) == [f"{sha[:8]}:b.py"]
+
+
+@BOTH
 def test_a_path_with_a_space_in_it_is_one_path(
     tool: Module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
