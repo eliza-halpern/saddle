@@ -311,7 +311,11 @@ def _node_setup_violations(config: Any, root: Path) -> list[str]:
     return found
 
 
-REAL_WORKFLOW_TEXT = WORKFLOW.read_text()
+def _real_workflow_text() -> str:
+    """The tracked workflow, read when a test runs and never at import: mutmut's
+    work copy carries no `.github/`, and a read at module level there fails
+    collection for every mutant run (`tests/test_mutmut_layout.py`)."""
+    return WORKFLOW.read_text()
 
 
 def _replace(old: str, new: str) -> Callable[[str], str]:
@@ -392,7 +396,7 @@ def test_reader_refuses_what_it_does_not_understand(text: str) -> None:
 
 
 def test_ci_runs_exactly_the_local_gate() -> None:
-    workflow = read_yaml(REAL_WORKFLOW_TEXT)
+    workflow = read_yaml(_real_workflow_text())
     assert ci_violations(workflow, ROOT) == []
     # The reader saw the steps: the two commands CI runs are the ones the policy names.
     runs = {
@@ -494,7 +498,7 @@ def test_ci_runs_exactly_the_local_gate() -> None:
 def test_ci_that_could_diverge_from_the_local_gate_is_refused(
     mutate: Callable[[str], str], expected: str
 ) -> None:
-    found = ci_violations(read_yaml(mutate(REAL_WORKFLOW_TEXT)), ROOT)
+    found = ci_violations(read_yaml(mutate(_real_workflow_text())), ROOT)
     assert any(expected in f for f in found), found
 
 
