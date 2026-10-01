@@ -1062,7 +1062,13 @@ def test_feedback_and_the_finish_gate_are_the_same_with_test_edits_allowed(repo:
     edit_test = call(
         "edit_file", "t1", path="tests/test_calc.py", old="add(2, 2) == 4", new="add(2, 3) == 5"
     )
-    client = Reactive([[edit_test], [CHECK], [FINISH]])
+    labelled = call(
+        "finish",
+        "f9",
+        summary="Moved a pin.\n\nflip: test_add -- the spec's own example is add(2, 3) == 5, which "
+        "the old input (2, 2) never exercised",
+    )
+    client = Reactive([[edit_test], [CHECK], [labelled]], tail=[labelled])
     fake = FakeAuditor()
     result, _ = run(repo, client, "E+A+F", auditor=fake, allow_test_edits=True)
     assert result.outcome == "finished"
