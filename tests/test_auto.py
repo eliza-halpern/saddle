@@ -291,6 +291,55 @@ def test_test_paths(path: str, protected: bool) -> None:
     assert is_test_path(path, ("tests/", "")) is protected
 
 
+@pytest.mark.parametrize(
+    ("path", "protected"),
+    [
+        ("tests/markdown.test.js", True),
+        ("tests/fixtures/x.mjs", True),
+        ("src/pkg/tests/helper.js", True),
+        ("web/__tests__/app.js", True),
+        ("web/app.spec.ts", True),
+        ("src/saddle/web/static/markdown.js", False),
+        ("src/saddle/testing_tools/helper.js", False),
+    ],
+)
+def test_the_guard_covers_test_code_in_every_language(path: str, protected: bool) -> None:
+    """The tier-0 guard names a JavaScript test, a fixture and a nested
+    `tests` directory as test files, as it does a `test_*.py`, and leaves
+    browser source alone. The roots here are deliberately not `tests`, so a
+    top-level `tests/` is matched by the name rule and not the root rule."""
+    assert is_test_path(path, ("spec",)) is protected
+
+
+def test_a_javascript_test_edit_is_refused_when_tests_are_read_only(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "markdown.test.js"
+    target.write_text("// original\n")
+    ctx = ToolContext(workdir=tmp_path, protected_tests=DEFAULT_TEST_ROOTS)
+    result = execute_tool(
+        call("write_file", path="tests/markdown.test.js", content="// rewritten\n"),
+        workdir=tmp_path,
+        context=ctx,
+    )
+    assert result.startswith(REFUSED)
+    assert "tests/markdown.test.js" in result
+    assert target.read_text() == "// original\n"
+
+
+def test_a_javascript_test_edit_goes_through_when_tests_are_editable(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    target = tmp_path / "tests" / "markdown.test.js"
+    target.write_text("// original\n")
+    ctx = ToolContext(workdir=tmp_path, protected_tests=None)
+    result = execute_tool(
+        call("write_file", path="tests/markdown.test.js", content="// rewritten\n"),
+        workdir=tmp_path,
+        context=ctx,
+    )
+    assert not result.startswith(REFUSED)
+    assert target.read_text() == "// rewritten\n"
+
+
 def test_guarded_roots_come_from_pytest_testpaths(tmp_path: Path) -> None:
     assert guarded_test_roots(tmp_path) == DEFAULT_TEST_ROOTS
     (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = ['spec']\n")

@@ -30,6 +30,7 @@ from typing import Any, Final
 
 from saddle.askpass import Askpass
 from saddle.edits import first_divergence, loose_spans
+from saddle.gates import is_test_code
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
     OutsideRootError,
@@ -344,26 +345,21 @@ REFUSED: Final = "error: refused by the tier-0 guard: "
 so the model reads it the way it reads every other failure; the engine
 tells a refusal apart by this prefix and records it as one."""
 
-TEST_FILE_NAMES: Final = ("conftest.py",)
-"""Files that are tests wherever they sit, besides `test_*.py`/`*_test.py`."""
-
 
 def is_test_path(relative: str, test_roots: tuple[str, ...]) -> bool:
     """Whether a workdir-relative POSIX path is a test file for the guard.
 
     Under a configured test root (`tests/` by default, or the repo's pytest
-    `testpaths`), or named like a pytest test module anywhere.
+    `testpaths`), or test code anywhere (`gates.is_test_code`: a pytest
+    module, `conftest.py`, any file under a `tests` directory at any depth,
+    a `*.test.js` script), so a nested `src/pkg/tests/helper.js` is guarded
+    as the top-level `tests/` is.
     """
     for raw in test_roots:
         root = raw.strip("/")
         if root and (relative == root or relative.startswith(root + "/")):
             return True
-    base = relative.rsplit("/", 1)[-1]
-    return (
-        base in TEST_FILE_NAMES
-        or (base.startswith("test_") and base.endswith(".py"))
-        or base.endswith("_test.py")
-    )
+    return is_test_code(relative)
 
 
 def _parses(text: str, name: str) -> SyntaxError | None:

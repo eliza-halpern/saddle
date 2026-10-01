@@ -71,6 +71,38 @@ def _is_test_file(path: str) -> bool:
     return any(fnmatch(name, pattern) for pattern in TEST_FILE_PATTERNS)
 
 
+# Directory names that mark everything beneath them as test code, whatever
+# the language or the file's own name.
+TEST_DIRECTORIES: Final = frozenset({"tests", "test", "__tests__"})
+# Test-file spellings outside pytest's: `markdown.test.js`, `app.spec.ts`.
+TEST_CODE_PATTERNS: Final = tuple(
+    f"*.{kind}.{ext}"
+    for kind in ("test", "spec")
+    for ext in ("js", "mjs", "cjs", "ts", "tsx", "jsx")
+)
+
+
+def is_test_code(path: str) -> bool:
+    """True when `path` is test code that a node on the implementation side
+    of the split may not edit, in any language.
+
+    `_is_test_file` answers a different question: would pytest collect this
+    module. `check_node_scope` asked it of who may edit a file, so
+    `tests/markdown.test.js`, a fixture under `tests/` and a `conftest.py`
+    all counted as source, and an `impl` node could rewrite the test it was
+    graded by. Test code is anything pytest collects, a `conftest.py`, a file
+    under a `tests`/`test`/`__tests__` directory, or a `*.test.*`/`*.spec.*`
+    script.
+    """
+    pure = PurePath(path)
+    return (
+        _is_test_file(path)
+        or pure.name == "conftest.py"
+        or any(part in TEST_DIRECTORIES for part in pure.parts)
+        or any(fnmatch(pure.name, pattern) for pattern in TEST_CODE_PATTERNS)
+    )
+
+
 # Fixed floor for behaviour-preserving nodes; ARCHITECTURE.md's own gate
 # example uses 85.0. Deliberately not the node's own kill_threshold.
 REFACTOR_KILL_FLOOR: Final = 85.0
@@ -1702,8 +1734,8 @@ def check_node_scope(
         return GateCheck(
             name="node-scope", passed=True, detail="refactor: edits both sides, adds nothing"
         )
-    tests = sorted(path for path in changed_files if _is_test_file(path))
-    sources = sorted(path for path in changed_files if not _is_test_file(path))
+    tests = sorted(path for path in changed_files if is_test_code(path))
+    sources = sorted(path for path in changed_files if not is_test_code(path))
     stray = tests if kind == "impl" else sources
     if stray:
         other = "test" if kind == "impl" else "source"

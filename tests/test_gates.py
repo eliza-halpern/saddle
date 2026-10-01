@@ -40,6 +40,7 @@ from saddle.gates import (
     check_test_command,
     compelled_lines,
     introduced_findings,
+    is_test_code,
     never_run_test_lines,
     packaging_script_lines,
     plan_prescribes_deletion,
@@ -1244,6 +1245,65 @@ def test_node_scope_accepts_a_node_that_stays_on_its_side() -> None:
         check_node_scope("test", ["tests/test_orders.py", "test_x.py"], may_create=True).passed
         is True
     )
+
+
+def test_an_impl_node_may_not_edit_a_javascript_test() -> None:
+    """The defect: only pytest-collectable names counted as tests, so a worker
+    rewrote `tests/markdown.test.js` while the node ran as `impl` and the
+    scope gate saw source. Known-bad: the test and its fixture are refused,
+    named. Known-good: browser source is still the `impl` node's to edit."""
+    check = check_node_scope(
+        "impl",
+        ["src/saddle/web/static/markdown.js", "tests/markdown.test.js", "tests/fixtures/dom.mjs"],
+        may_create=True,
+    )
+    assert check.passed is False
+    assert "tests/markdown.test.js" in check.detail
+    assert "tests/fixtures/dom.mjs" in check.detail
+    assert "static/markdown.js" not in check.detail
+    assert check_node_scope("impl", ["src/saddle/web/static/markdown.js"], may_create=True).passed
+
+
+def test_a_test_node_may_edit_a_javascript_test_but_not_browser_source() -> None:
+    assert check_node_scope("test", ["tests/markdown.test.js"], may_create=True).passed is True
+    check = check_node_scope(
+        "test", ["tests/markdown.test.js", "src/saddle/web/static/markdown.js"], may_create=True
+    )
+    assert check.passed is False
+    assert "src/saddle/web/static/markdown.js" in check.detail
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("tests/markdown.test.js", True),
+        ("tests/fixtures/dom_shim.js", True),
+        ("tests/fixtures/x.mjs", True),
+        ("tests/conftest.py", True),
+        ("conftest.py", True),
+        ("tests/data/rows.json", True),
+        ("src/pkg/tests/helper.js", True),
+        ("web/__tests__/app.js", True),
+        ("test/helper.rb", True),
+        ("web/app.spec.ts", True),
+        ("web/app.test.tsx", True),
+        ("web/app.test.mjs", True),
+        ("tests/test_orders.py", True),
+        ("pkg/orders_test.py", True),
+        ("src/saddle/web/static/markdown.js", False),
+        ("src/saddle/contest.py", False),
+        ("src/saddle/testing_tools/runner.py", False),
+        ("src/saddle/testing_tools/helper.js", False),
+        ("src/pkg/latest.py", False),
+        ("web/protest.js", False),
+        ("web/app.testing.js", False),
+        ("web/app.test.py.bak", False),
+        ("web/spec.js", False),
+        ("test_data.txt", False),
+    ],
+)
+def test_is_test_code_by_instance(path: str, expected: bool) -> None:
+    assert is_test_code(path) is expected
 
 
 def test_refactor_node_may_touch_both() -> None:
