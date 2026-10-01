@@ -1,3 +1,4 @@
+// @ts-check
 "use strict";
 /* The transcript is built from the same event stream the terminal renderer
    consumes, so the two cannot disagree about what happened.
@@ -14,8 +15,113 @@
      "Failed to run pytest -q" when it does not. The label comes from the
      server so the terminal and the browser say the same words. */
 
-const $ = (sel) => document.querySelector(sel);
+/**
+ * The elements of index.html that are not plain HTMLElements, by id.
+ * @typedef {{
+ *   "#settings": HTMLButtonElement,
+ *   "#new-session": HTMLButtonElement,
+ *   "#notify-toggle": HTMLButtonElement,
+ *   "#persona": HTMLSelectElement,
+ *   "#temp": HTMLInputElement,
+ *   "#effort": HTMLSelectElement,
+ *   "#pick-folder": HTMLButtonElement,
+ *   "#menu": HTMLButtonElement,
+ *   "#title": HTMLInputElement,
+ *   "#full-access-off": HTMLButtonElement,
+ *   "#theme-toggle": HTMLButtonElement,
+ *   "#composer": HTMLFormElement,
+ *   "#jump": HTMLButtonElement,
+ *   "#tc-test-edits": HTMLInputElement,
+ *   "#tc-premise": HTMLInputElement,
+ *   "#tc-stall": HTMLInputElement,
+ *   "#tc-cancel": HTMLButtonElement,
+ *   "#tc-start": HTMLButtonElement,
+ *   "#lane-chip": HTMLButtonElement,
+ *   "#attach": HTMLButtonElement,
+ *   "#input": HTMLTextAreaElement,
+ *   "#send": HTMLButtonElement,
+ *   "#full-access-open": HTMLButtonElement,
+ *   "#file-input": HTMLInputElement,
+ *   "#folder-dialog": HTMLDialogElement,
+ *   "#folder-name-new": HTMLInputElement,
+ *   "#folder-make": HTMLButtonElement,
+ *   "#folder-up": HTMLButtonElement,
+ *   "#folder-cancel": HTMLButtonElement,
+ *   "#folder-use": HTMLButtonElement,
+ *   "#settings-dialog": HTMLDialogElement,
+ *   "#default-persona": HTMLSelectElement,
+ *   "#default-temp": HTMLInputElement,
+ *   "#default-effort": HTMLSelectElement,
+ *   "#persona-pick": HTMLSelectElement,
+ *   "#persona-name": HTMLInputElement,
+ *   "#persona-prompt": HTMLTextAreaElement,
+ *   "#persona-new": HTMLButtonElement,
+ *   "#persona-delete": HTMLButtonElement,
+ *   "#persona-save": HTMLButtonElement,
+ *   "#settings-close": HTMLButtonElement,
+ *   "#full-access-dialog": HTMLDialogElement,
+ *   "#fa-keep": HTMLButtonElement,
+ *   "#fa-grant": HTMLButtonElement,
+ *   "#password-dialog": HTMLDialogElement,
+ *   "#pw-input": HTMLInputElement,
+ *   "#pw-cancel": HTMLButtonElement,
+ *   "#pw-send": HTMLButtonElement,
+ *   "#rewind-dialog": HTMLDialogElement,
+ *   "#rewind-text": HTMLTextAreaElement,
+ *   "#rewind-cancel": HTMLButtonElement,
+ *   "#rewind-go": HTMLButtonElement,
+ * }} IdTypes
+ */
 
+/**
+ * The page's fixed elements, by selector. index.html owns the ids; the type
+ * is the element index.html declares for an id listed in IdTypes, else a
+ * plain HTMLElement.
+ * @template {string} S
+ * @param {S} sel
+ * @returns {S extends keyof IdTypes ? IdTypes[S] : HTMLElement}
+ */
+const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
+
+/**
+ * A message from the server's event stream or a history reload. The wire
+ * format is the server's; `kind` says which fields follow.
+ * @typedef {{kind: string, [field: string]: any}} ServerEvent
+ */
+
+/** @typedef {{details: HTMLDetailsElement, label: HTMLElement, detail: HTMLElement, name: string}} ToolRowParts */
+/** @typedef {HTMLElement & {output?: string}} TerminalBody */
+/** @typedef {{name: string, path: string, isImage: boolean}} Attachment */
+
+/**
+ * What the page remembers between events. Fields after `mode` are set the
+ * first time they are needed, so they are optional.
+ * @typedef {object} State
+ * @property {string | null} sessionId
+ * @property {EventSource | null} stream
+ * @property {boolean} busy
+ * @property {HTMLElement | null} turnNode
+ * @property {HTMLElement | null} assistantNode
+ * @property {HTMLDetailsElement | null} reasoningNode
+ * @property {HTMLElement | null} reasoningBody
+ * @property {Map<string, ToolRowParts>} tools
+ * @property {Map<string, TerminalBody>} terminals
+ * @property {Attachment[]} attachments
+ * @property {Record<string, string>} personas
+ * @property {string | null} folder
+ * @property {string} mode
+ * @property {string | null} [activeTask]
+ * @property {HTMLElement | null} [pendingTaskTurn]
+ * @property {string | null} [historyFor]
+ * @property {{index: number, editing: boolean}} [rewind]
+ * @property {string | null} [passwordId]
+ * @property {boolean} [fullAccess]
+ * @property {string | null} [suggestion]
+ * @property {string[]} [builtinPersonas]
+ * @property {string[]} [editablePersonas]
+ */
+
+/** @type {State} */
 const state = {
   sessionId: null, stream: null, busy: false,
   turnNode: null, assistantNode: null, reasoningNode: null, reasoningBody: null,
@@ -24,6 +130,7 @@ const state = {
 
 
 
+/** @type {Set<HTMLElement>} */
 const painting = new Set();
 let paintFrame = 0;
 
@@ -43,6 +150,7 @@ function flushPaint() {
   stickToBottom(was);
 }
 
+/** @param {HTMLElement} node */
 function schedulePaint(node) {
   painting.add(node);
   if (paintFrame) return;
@@ -51,6 +159,10 @@ function schedulePaint(node) {
 
 /* ---------- transcript pieces ---------- */
 
+/**
+ * @param {string | null} prompt
+ * @returns {HTMLElement}
+ */
 function newTurn(prompt) {
   const turn = el("div", "turn");
   if (prompt) turn.appendChild(el("div", "user", prompt));
@@ -71,7 +183,7 @@ function reasoningBlock() {
   details.appendChild(body);
   details.open = true;                      // opens itself while it streams
   details.dataset.started = String(Date.now());
-  state.turnNode.appendChild(details);
+  /** @type {HTMLElement} */ (state.turnNode).appendChild(details);
   state.reasoningNode = details;
   state.reasoningBody = body;
   return details;
@@ -91,7 +203,7 @@ function foldReasoning() {
     seconds >= 60
       ? `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
       : `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
-  node.querySelector("summary span").textContent = `Thought for ${shown}`;
+  /** @type {Element} */ (node.querySelector("summary span")).textContent = `Thought for ${shown}`;
 }
 
 function assistantBlock() {
@@ -99,11 +211,15 @@ function assistantBlock() {
   if (state.reasoningNode) foldReasoning();  // the answer began: fold it away
   const node = el("div", "assistant");
   node.dataset.raw = "";
-  state.turnNode.appendChild(node);
+  /** @type {HTMLElement} */ (state.turnNode).appendChild(node);
   state.assistantNode = node;
   return node;
 }
 
+/**
+ * @param {ServerEvent} event
+ * @returns {HTMLDetailsElement}
+ */
 function toolRow(event) {
   const details = el("details", "tool running");
   const summary = el("summary");
@@ -116,18 +232,19 @@ function toolRow(event) {
   if (event.name === "run_command") detail.classList.add("terminal");
   detail.textContent = "…";
   details.appendChild(detail);
-  state.turnNode.appendChild(details);
+  /** @type {HTMLElement} */ (state.turnNode).appendChild(details);
   state.tools.set(event.id, { details, label, detail, name: event.name });
   return details;
 }
 
+/** @param {ServerEvent} event */
 function finishTool(event) {
   const row = state.tools.get(event.id);
   if (!row) return;
   row.details.classList.remove("running");
   row.details.classList.add(event.ok ? "ok" : "failed");
   row.label.textContent = event.label;               // -> past tense, or "Failed to …"
-  row.details.querySelector(".ms").textContent =
+  /** @type {Element} */ (row.details.querySelector(".ms")).textContent =
     event.duration_ms >= 1000
       ? `${(event.duration_ms / 1000).toFixed(1)}s`
       : `${event.duration_ms}ms`;
@@ -140,8 +257,12 @@ function finishTool(event) {
 /* A background command keeps producing output after the tool call that
    started it returned, so it gets its own block that fills as it runs
    rather than appearing all at once when someone reads it. */
+/**
+ * @param {string} id
+ * @returns {TerminalBody}
+ */
 function terminalBlock(id) {
-  if (state.terminals.has(id)) return state.terminals.get(id);
+  if (state.terminals.has(id)) return /** @type {TerminalBody} */ (state.terminals.get(id));
   const details = el("details", "tool running");
   const summary = el("summary");
   summary.appendChild(el("span", "dot"));
@@ -160,6 +281,20 @@ function terminalBlock(id) {
   return body;
 }
 
+/** @typedef {{id: string, title: string, run_state?: string | null, run_task?: string}} SessionInfo */
+
+/**
+ * What a caught value says: an Error's message, else the value itself.
+ * @param {unknown} error
+ */
+function errorText(error) {
+  return String((error && /** @type {{message?: unknown}} */ (error).message) || error);
+}
+
+/**
+ * @param {string} text
+ * @param {string} [kind]
+ */
 function notice(text, kind) {
   const node = el("div", `notice ${kind || ""}`, text);
   ($("#transcript").lastElementChild || $("#transcript")).appendChild(node);
@@ -167,6 +302,7 @@ function notice(text, kind) {
 
 /* ---------- event stream ---------- */
 
+/** @param {ServerEvent} event */
 function handle(event) {
   const was = atBottom();
   switch (event.kind) {
@@ -182,15 +318,17 @@ function handle(event) {
     case "turn.start":
       newTurn(null);
       break;
-    case "reasoning.delta":
+    case "reasoning.delta": {
       reasoningBlock();
+      const thought = /** @type {HTMLElement} */ (state.reasoningBody);
       // Appending a text node per frame, not `textContent +=`, which
       // re-reads and rewrites the whole transcript of the thought.
-      state.reasoningBody.dataset.reasoning = "1";
-      state.reasoningBody.dataset.pending =
-        (state.reasoningBody.dataset.pending || "") + event.text;   // never truncated
-      schedulePaint(state.reasoningBody);
+      thought.dataset.reasoning = "1";
+      thought.dataset.pending =
+        (thought.dataset.pending || "") + event.text;   // never truncated
+      schedulePaint(thought);
       break;
+    }
     case "content.delta": {
       const node = assistantBlock();
       node.dataset.raw += event.text;
@@ -224,7 +362,8 @@ function handle(event) {
       // row's header copies what the command said, not what the DOM holds.
       const body = terminalBlock(event.id);
       if (!body.output) {
-        attachCopy(body.parentNode.querySelector("summary"),
+        const row = /** @type {ParentNode} */ (body.parentNode);
+        attachCopy(/** @type {HTMLElement} */ (row.querySelector("summary")),
           () => body.output || "", "terminal output");
       }
       body.output = (body.output || "") + event.chunk;
@@ -234,8 +373,8 @@ function handle(event) {
     case "context": {
       const pct = Math.min(100, Math.round((event.used / event.limit) * 100));
       const meter = $("#meter");
-      meter.querySelector("i").style.width = `${pct}%`;
-      meter.querySelector("b").textContent =
+      /** @type {HTMLElement} */ (meter.querySelector("i")).style.width = `${pct}%`;
+      /** @type {HTMLElement} */ (meter.querySelector("b")).textContent =
         `${Math.round(event.used / 1000)}k / ${Math.round(event.limit / 1000)}k`;
       meter.classList.toggle("full", pct > 80);
       break;
@@ -266,6 +405,7 @@ function handle(event) {
   stickToBottom(was);
 }
 
+/** @param {ServerEvent} info */
 function renderHistory(info) {
   $("#title").value = info.title;
   $("#folder-name").textContent = info.workdir.split("/").slice(-2).join("/") || info.workdir;
@@ -290,7 +430,7 @@ function renderHistory(info) {
   const t = $("#transcript");
   t.textContent = "";
   const shown = (info.messages || []).filter(
-    (m) => m.role === "user" || m.role === "assistant");
+    (/** @type {ServerEvent} */ m) => m.role === "user" || m.role === "assistant");
   if (!shown.length) {
     t.appendChild(el("div", "empty", "nothing here yet — what are we making?"));
     return;
@@ -336,6 +476,11 @@ function renderHistory(info) {
   followBottom();          // a freshly opened session starts at the end
 }
 
+/**
+ * @param {Element} after
+ * @param {string} path
+ * @param {string | undefined} version
+ */
 function showPreview(after, path, version) {
   // A picture the model just drew belongs in the transcript, not behind a
   // filename the reader has to go and open somewhere else.
@@ -358,6 +503,10 @@ function showPreview(after, path, version) {
   after.insertAdjacentElement("afterend", figure);
 }
 
+/**
+ * @param {ServerEvent} call
+ * @returns {HTMLDetailsElement}
+ */
 function pastToolRow(call) {
   // The same row the live stream produced, in its settled state: the label
   // is already in the tense the outcome calls for, because the server wrote
@@ -378,6 +527,10 @@ function pastToolRow(call) {
   return details;
 }
 
+/**
+ * @param {HTMLElement} turn
+ * @param {ServerEvent[]} calls
+ */
 function pastToolRows(turn, calls) {
   for (const call of calls) {
     const row = pastToolRow(call);
@@ -393,6 +546,7 @@ async function restampTurns() {
   // message is stored -- so after a turn settles the transcript is matched
   // against the store, in order, and the retry/edit buttons appear on the
   // turn that just finished as well as on the older ones.
+  /** @type {ServerEvent[]} */
   let stored;
   try {
     stored = await api(`/api/sessions/${state.sessionId}/messages`);
@@ -405,7 +559,7 @@ async function restampTurns() {
   // Only the turns that carry a question: an assistant reply gets its own
   // .turn node, so counting all of them never matched and the restamp
   // silently never ran for a live turn.
-  const turns = [...$("#transcript").querySelectorAll(".turn")].filter(
+  const turns = /** @type {HTMLElement[]} */ ([...$("#transcript").querySelectorAll(".turn")]).filter(
     (turn) => turn.querySelector(".user"));
   if (turns.length !== asked.length) return;   // mid-stream; try again next idle
   turns.forEach((turn, position) => {
@@ -417,12 +571,16 @@ async function restampTurns() {
   });
 }
 
+/**
+ * @param {number} index
+ * @returns {HTMLElement}
+ */
 function turnTools(index) {
   const tools = el("div", "turn-tools");
-  for (const [glyph, title, edit] of [
+  for (const [glyph, title, edit] of /** @type {[string, string, boolean][]} */ ([
     ["↻", "Run this again", false],
     ["✎", "Edit and run again", true],
-  ]) {
+  ])) {
     const button = el("button", null, glyph);
     button.type = "button";
     button.title = title;
@@ -432,6 +590,10 @@ function turnTools(index) {
   return tools;
 }
 
+/**
+ * @param {number} index
+ * @param {boolean} editing
+ */
 async function openRewind(index, editing) {
   // Ask the server what this would change *before* offering the button, so
   // the warning is the real list of files rather than a guess.
@@ -439,7 +601,7 @@ async function openRewind(index, editing) {
   try {
     preview = await api(`/api/sessions/${state.sessionId}/rewind?index=${index}`);
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
     return;
   }
   state.rewind = { index, editing };
@@ -474,13 +636,14 @@ $("#rewind-go").onclick = async (event) => {
   event.preventDefault();
   const { index, editing } = state.rewind || {};
   if (index === undefined) return;
+  /** @type {{index: number, text?: string}} */
   const body = { index };
   if (editing) body.text = $("#rewind-text").value;
   $("#rewind-dialog").close();
 
   // Drop the turns being replaced before the new one streams in, so the
   // transcript never shows both attempts at once.
-  for (const node of [...$("#transcript").children]) {
+  for (const node of /** @type {HTMLElement[]} */ ([...$("#transcript").children])) {
     const at = Number(node.dataset.index);
     if (!Number.isNaN(at) && at >= index) node.remove();
   }
@@ -494,7 +657,7 @@ $("#rewind-go").onclick = async (event) => {
       body: JSON.stringify(body),
     });
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
     return;
   }
   state.busy = true;
@@ -508,6 +671,7 @@ $("#rewind-go").onclick = async (event) => {
   }
 };
 
+/** @param {string} sessionId */
 function connect(sessionId) {
   if (state.stream) state.stream.close();
   state.stream = new EventSource(`/api/sessions/${sessionId}/events`);
@@ -515,6 +679,10 @@ function connect(sessionId) {
   state.stream.onerror = () => setStatus("error");
 }
 
+/**
+ * @param {string} kind
+ * @param {string} [detail]
+ */
 function setStatus(kind, detail) {
   const node = $("#status");
   node.className = `status ${kind === "idle" ? "idle" : kind}`;
@@ -530,12 +698,20 @@ function setStatus(kind, detail) {
 
 /* ---------- sessions ---------- */
 
+/**
+ * The server's JSON replies are untyped here; each caller reads the
+ * fields it knows.
+ * @param {string} path
+ * @param {RequestInit} [options]
+ * @returns {Promise<any>}
+ */
 async function api(path, options) {
   const response = await fetch(path, options);
   if (!response.ok) throw new Error((await response.json()).error || response.statusText);
   return response.json();
 }
 
+/** @returns {Promise<SessionInfo[]>} */
 async function loadSessions() {
   const sessions = await api("/api/sessions");
   const list = $("#session-list");
@@ -561,6 +737,7 @@ async function loadSessions() {
   return sessions;
 }
 
+/** @param {string} sessionId */
 function select(sessionId) {
   drawer(false);
   state.sessionId = sessionId;
@@ -588,7 +765,7 @@ async function boot() {
     sessions = await loadSessions();
   }
   const remembered = localStorage.getItem("saddle.session");
-  select(sessions.some((s) => s.id === remembered) ? remembered : sessions[0].id);
+  select(remembered !== null && sessions.some((s) => s.id === remembered) ? remembered : sessions[0].id);
 }
 
 /* ---------- composer ---------- */
@@ -599,6 +776,10 @@ async function boot() {
    no auditor; a task runs `saddle auto` in a worktree and ends in a packet.
    Feature, Breadth and Long are shown so the shape is visible, and cannot be
    chosen: `enabled` is false and nothing below selects a disabled lane. */
+/** @typedef {{id: string, enabled: true, label: string, desc: string, placeholder: string}} Lane */
+/** @typedef {{id: string, enabled: false, label: string}} DisabledLane */
+
+/** @type {(Lane | DisabledLane)[]} */
 const LANES = [
   { id: "ask", enabled: true, label: "Ask",
     desc: "Ask: read-only. It reads and searches your folder, then answers. It cannot edit files or run commands.",
@@ -613,16 +794,22 @@ const LANES = [
   { id: "breadth", enabled: false, label: "Breadth" },
   { id: "long", enabled: false, label: "Long" },
 ];
-const laneOf = (id) => LANES.find((lane) => lane.id === id && lane.enabled);
+/**
+ * @param {string | undefined} id
+ * @returns {Lane | undefined}
+ */
+const laneOf = (id) => /** @type {Lane | undefined} */ (LANES.find((lane) => lane.id === id && lane.enabled));
 // Kept by name for the code that already reads it (tasks.js, older tests).
 const MODES = Object.fromEntries(LANES.filter((l) => l.enabled).map((l) => [l.id, l]));
 
+/** @param {string | undefined} mode */
 function showMode(mode) {
-  const lane = laneOf(mode) || laneOf("ask");
+  // "ask" is always an enabled lane, so the fallback is never undefined.
+  const lane = /** @type {Lane} */ (laneOf(mode) || laneOf("ask"));
   state.mode = lane.id;
   $("#lane-name").textContent = lane.label;
   $("#lane-chip").dataset.lane = lane.id;
-  for (const option of document.querySelectorAll("#lane-menu li")) {
+  for (const option of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll("#lane-menu li"))) {
     option.setAttribute("aria-selected", String(option.dataset.lane === lane.id));
   }
   $("#mode-desc").textContent = lane.desc;
@@ -636,6 +823,7 @@ function showMode(mode) {
   paintSuggestion();
 }
 
+/** @param {string | undefined} mode */
 async function setMode(mode) {
   if (!laneOf(mode)) return;          // a disabled or unknown lane is never chosen
   showMode(mode);
@@ -647,7 +835,7 @@ async function setMode(mode) {
     });
     showFullAccess(session.full_access);   // leaving Edit ends full access
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
   }
 }
 
@@ -663,11 +851,13 @@ function paintFullAccess() {
   document.body.dataset.fullAccess = on ? "on" : "off";
 }
 
+/** @param {boolean | undefined} on */
 function showFullAccess(on) {
   state.fullAccess = Boolean(on);
   paintFullAccess();
 }
 
+/** @param {boolean} on */
 async function setFullAccess(on) {
   const body = on ? { on: true, confirm: $("#fa-grant").dataset.confirm } : { on: false };
   try {
@@ -677,7 +867,7 @@ async function setFullAccess(on) {
     });
     showFullAccess(session.full_access);
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
   }
 }
 
@@ -685,21 +875,27 @@ async function setFullAccess(on) {
    access is on (`tools.UNSANDBOXED`); the badge sits on the summary, so it
    shows while the row is folded, live and after a reload alike. */
 const UNSANDBOXED_MARK = "[UNSANDBOXED:";
+/** @param {HTMLElement} details */
 function badgeUnsandboxed(details) {
   details.classList.add("unsandboxed");
-  const summary = details.querySelector("summary");
+  const summary = /** @type {HTMLElement} */ (details.querySelector("summary"));
   if (summary.querySelector(".unsandboxed-badge")) return;
   const badge = el("span", "unsandboxed-badge", "unsandboxed");
   badge.title = "Full access was on: this command ran as you, outside the sandbox";
   summary.insertBefore(badge, summary.querySelector(".label"));
 }
 
+/**
+ * @param {HTMLElement} details
+ * @param {unknown} text
+ */
 function markUnsandboxed(details, text) {
   if (typeof text === "string" && text.startsWith(UNSANDBOXED_MARK)) badgeUnsandboxed(details);
 }
 
 /* A full-access command's sudo asks for a password (#125). What is typed
    goes to that command only: posted once, then the field is cleared. */
+/** @param {ServerEvent} event */
 function askPassword(event) {
   state.passwordId = event.id;
   $("#pw-prompt").textContent = event.prompt || "password:";
@@ -714,6 +910,7 @@ function closePassword() {
   if ($("#password-dialog").open) $("#password-dialog").close();
 }
 
+/** @param {boolean} cancel */
 async function answerPassword(cancel) {
   const id = state.passwordId;
   if (!id) return;
@@ -724,7 +921,7 @@ async function answerPassword(cancel) {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
   }
 }
 
@@ -744,6 +941,10 @@ $("#fa-grant").onclick = () => { $("#full-access-dialog").close(); setFullAccess
 $("#full-access-off").onclick = () => setFullAccess(false);
 
 /* Shift+Tab: the next enabled lane, wrapping. */
+/**
+ * @param {string} from
+ * @param {number} [step]
+ */
 function nextLane(from, step = 1) {
   const usable = LANES.filter((lane) => lane.enabled);
   const at = usable.findIndex((lane) => lane.id === from);
@@ -755,6 +956,7 @@ function nextLane(from, step = 1) {
    accident" comes back. */
 const TASK_VERB = /^(please\s+)?(make|fix|add|remove|rename|refactor|change|implement|write|update|delete|move|replace|convert|split)\b/i;
 const FILE_NAME = /\b[\w./-]+\.(py|js|mjs|ts|tsx|md|json|toml|css|html|rs|go|c|h|java|ya?ml|txt|sh)\b/i;
+/** @param {string} text */
 function suggestLane(text) {
   const t = text.trim();
   if (!t) return null;
@@ -771,6 +973,7 @@ function paintSuggestion() {
     : state.suggestion === "ask" ? "looks like a question → Tab for Ask" : "";
 }
 
+/** @param {boolean} open */
 function openLaneMenu(open) {
   const menu = $("#lane-menu");
   menu.hidden = !open;
@@ -782,6 +985,7 @@ function openLaneMenu(open) {
     menu.focus();
   }
 }
+/** @param {number} step */
 function moveLaneFocus(step) {
   const options = [...document.querySelectorAll('#lane-menu li:not([aria-disabled="true"])')];
   const at = options.findIndex((o) => o.classList.contains("active"));
@@ -789,6 +993,10 @@ function moveLaneFocus(step) {
   for (const o of options) o.classList.toggle("active", o === next);
 }
 
+/**
+ * @param {string | undefined} workdir
+ * @param {string | undefined} branch
+ */
 function showWhere(workdir, branch) {
   $("#where-folder").textContent = (workdir || "").split("/").filter(Boolean).pop() || workdir || "";
   $("#where-folder").title = workdir || "";
@@ -827,12 +1035,13 @@ async function send() {
       body: JSON.stringify({ text: body, images }),
     });
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
     setStatus("error");
     state.busy = false;
   }
 }
 
+/** @param {FileList | File[]} files */
 async function upload(files) {
   const form = new FormData();
   for (const file of files) form.append("files", file);
@@ -844,7 +1053,7 @@ async function upload(files) {
     const chip = el("span", "chip");
     if (saved.isImage) {
       const img = el("img");
-      img.src = URL.createObjectURL(file);
+      img.src = URL.createObjectURL(/** @type {File} */ (file));
       chip.appendChild(img);
     }
     chip.appendChild(el("span", null, saved.name));
@@ -860,6 +1069,7 @@ async function upload(files) {
 
 /* ---------- folder picker ---------- */
 
+/** @param {string} [path] */
 async function openFolders(path) {
   const data = await api(`/api/browse?path=${encodeURIComponent(path || state.folder || "")}`);
   $("#folder-path").textContent = data.path;
@@ -930,7 +1140,7 @@ $("#task-confirm").addEventListener("keydown", (event) => {
     event.preventDefault();
     closeRunConfirm();
     $("#input").focus();
-  } else if (event.key === "Enter" && !event.shiftKey && event.target.id !== "tc-cancel") {
+  } else if (event.key === "Enter" && !event.shiftKey && /** @type {HTMLElement} */ (event.target).id !== "tc-cancel") {
     // Enter or Ctrl+Enter anywhere in the strip starts; Cancel keeps its own Enter.
     event.preventDefault();
     startTask();
@@ -938,9 +1148,9 @@ $("#task-confirm").addEventListener("keydown", (event) => {
 });
 $("#lane-chip").onclick = (event) => {
   event.preventDefault();
-  openLaneMenu($("#lane-menu").hidden);
+  openLaneMenu(/** @type {boolean} */ ($("#lane-menu").hidden));
 };
-for (const option of document.querySelectorAll("#lane-menu li")) {
+for (const option of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll("#lane-menu li"))) {
   option.onclick = (event) => {
     event.preventDefault();
     if (option.getAttribute("aria-disabled") === "true") return;
@@ -964,28 +1174,34 @@ $("#lane-menu").addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("click", (event) => {
-  if (!$("#lane-menu").hidden && !event.target.closest(".lane")) openLaneMenu(false);
+  if (!$("#lane-menu").hidden && !/** @type {Element} */ (event.target).closest(".lane")) openLaneMenu(false);
 });
 $("#input").addEventListener("input", paintSuggestion);
 $("#input").addEventListener("input", (event) => {
-  event.target.style.height = "auto";
-  event.target.style.height = Math.min(event.target.scrollHeight, 220) + "px";
+  const box = /** @type {HTMLTextAreaElement} */ (event.target);
+  box.style.height = "auto";
+  box.style.height = Math.min(box.scrollHeight, 220) + "px";
 });
 $("#attach").onclick = () => $("#file-input").click();
 $("#tc-cancel").onclick = (event) => { event.preventDefault(); closeRunConfirm(); };
 $("#tc-start").onclick = (event) => { event.preventDefault(); startTask(); };
 $("#tc-test-edits").onchange = paintTestPolicy;
-$("#file-input").onchange = (event) => { upload(event.target.files); event.target.value = ""; };
+$("#file-input").onchange = (event) => {
+  const picker = /** @type {HTMLInputElement} */ (event.target);
+  upload(/** @type {FileList} */ (picker.files));
+  picker.value = "";
+};
 $("#transcript").addEventListener("dragover", (e) => e.preventDefault());
 $("#transcript").addEventListener("drop", (event) => {
   event.preventDefault();
-  if (event.dataTransfer.files.length) upload(event.dataTransfer.files);
+  const dropped = /** @type {DataTransfer} */ (event.dataTransfer).files;
+  if (dropped.length) upload(dropped);
 });
 $("#new-session").onclick = async (event) => {
   // The server returns the unstarted session if one exists, so this is
   // idempotent; disabling the button also stops a burst of clicks from
   // queueing requests that each wait on the same lock.
-  const button = event.currentTarget;
+  const button = /** @type {HTMLButtonElement} */ (event.currentTarget);
   if (button.disabled) return;
   button.disabled = true;
   try {
@@ -1010,7 +1226,8 @@ async function loadPersonas() {
   state.personas = reply.personas;
   state.builtinPersonas = reply.builtin;
   state.editablePersonas = reply.editable;
-  for (const id of ["#persona", "#default-persona", "#persona-pick"]) {
+  for (const id of /** @type {("#persona" | "#default-persona" | "#persona-pick")[]} */ (
+    ["#persona", "#default-persona", "#persona-pick"])) {
     const picker = $(id);
     if (!picker) continue;
     const had = picker.value;
@@ -1022,10 +1239,12 @@ async function loadPersonas() {
   }
 }
 
+/** @param {string} name */
 function personaIsBuiltin(name) {
   return (state.builtinPersonas || []).includes(name);
 }
 
+/** @param {string} name */
 function showPersona(name) {
   $("#persona-name").value = name || "";
   $("#persona-prompt").value = (state.personas || {})[name] || "";
@@ -1068,6 +1287,7 @@ async function saveDefaults() {
 
 /* The sidebar is a drawer on a narrow screen. Picking a session closes it,
    because on a phone the thing you just chose is behind it. */
+/** @param {boolean} open */
 function drawer(open) {
   $("#sidebar").classList.toggle("open", open);
   $("#scrim").classList.toggle("open", open);
@@ -1089,7 +1309,7 @@ $("#settings-close").onclick = (event) => {
 };
 $("#default-persona").onchange = saveDefaults;
 $("#default-effort").onchange = saveDefaults;
-$("#persona-pick").onchange = (event) => showPersona(event.target.value);
+$("#persona-pick").onchange = (event) => showPersona(/** @type {HTMLSelectElement} */ (event.target).value);
 $("#persona-new").onclick = (event) => {
   event.preventDefault();
   $("#persona-pick").value = "";
@@ -1126,16 +1346,17 @@ $("#persona-delete").onclick = async (event) => {
 $("#title").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: event.target.value }),
+    body: JSON.stringify({ title: /** @type {HTMLInputElement} */ (event.target).value }),
   });
   loadSessions();
 };
 $("#effort").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reasoning_effort: event.target.value }),
+    body: JSON.stringify({ reasoning_effort: /** @type {HTMLSelectElement} */ (event.target).value }),
   });
 };
+/** @param {number | string} value */
 function showTemperature(value) {
   // The slider and its readout are one control; setting the value without
   // the label leaves the number lying about what is selected.
@@ -1146,23 +1367,23 @@ function showTemperature(value) {
 // `input` fires per step, which would PATCH on every pixel of a drag, so the
 // session is written on `change` -- when the handle is let go.
 $("#temp").oninput = (event) => {
-  $("#temp-value").textContent = Number(event.target.value).toFixed(1);
+  $("#temp-value").textContent = Number(/** @type {HTMLInputElement} */ (event.target).value).toFixed(1);
 };
 $("#temp").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ temperature: Number(event.target.value) }),
+    body: JSON.stringify({ temperature: Number(/** @type {HTMLInputElement} */ (event.target).value) }),
   });
 };
 $("#default-temp").oninput = (event) => {
-  $("#default-temp-value").textContent = Number(event.target.value).toFixed(1);
+  $("#default-temp-value").textContent = Number(/** @type {HTMLInputElement} */ (event.target).value).toFixed(1);
 };
 $("#default-temp").onchange = saveDefaults;
 
 $("#persona").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ persona: event.target.value }),
+    body: JSON.stringify({ persona: /** @type {HTMLSelectElement} */ (event.target).value }),
   });
 };
 $("#pick-folder").onclick = (event) => { event.preventDefault(); openFolders(); };
@@ -1170,7 +1391,7 @@ $("#folder-up").onclick = (event) => { event.preventDefault(); openFolders($("#f
 $("#folder-cancel").onclick = (event) => { event.preventDefault(); $("#folder-dialog").close(); };
 $("#folder-use").onclick = async (event) => {
   event.preventDefault();
-  const path = $("#folder-dialog").dataset.path;
+  const path = /** @type {string} */ ($("#folder-dialog").dataset.path);
   await api(`/api/sessions/${state.sessionId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workdir: path }),
@@ -1190,6 +1411,7 @@ function systemTheme() {
   try { return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
   catch { return "dark"; }
 }
+/** @param {string | null} theme */
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
 }

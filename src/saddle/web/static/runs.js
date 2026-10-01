@@ -1,3 +1,4 @@
+// @ts-check
 "use strict";
 /* The sidebar's Runs group and the session delete toast.
 
@@ -12,19 +13,41 @@
    offers Undo for UNDO_MS; when it runs out the page asks for the real
    delete, and the server purges anything hidden longer than that anyway. */
 
+/** @type {Record<string, string>} */
 const RUN_WORDS = {
   running: "running", needs_you: "needs you", finished: "finished",
   stopped: "stopped", unchanged: "unchanged", asked: "needs you", failed: "no outcome", interrupted: "interrupted",
 };
 const RUN_ENDED_STATES = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 const UNDO_MS = 10000;
+/**
+ * One row of `/api/runs`: a run in any session, as the server reports it.
+ * @typedef {object} RunRow
+ * @property {string} run_id
+ * @property {string} session_id
+ * @property {string} session_title
+ * @property {string} task
+ * @property {string} state
+ * @property {boolean} live
+ * @property {number} [state_since]
+ * @property {number} [started]
+ * @property {number} [ended]
+ * @property {string} [lane]
+ */
+
+/** @type {{rows: RunRow[], skew: number, timer: ReturnType<typeof setInterval> | 0, undoMs: number}} */
 const runsView = { rows: [], skew: 0, timer: 0, undoMs: UNDO_MS };
 
+/**
+ * @param {unknown} text
+ * @param {number} [n]
+ */
 function firstWords(text, n = 6) {
   const words = String(text || "").trim().split(/\s+/).filter(Boolean);
   return words.slice(0, n).join(" ") + (words.length > n ? "…" : "");
 }
 
+/** @param {number} seconds */
 function shortAge(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   if (s < 60) return `${s}s`;
@@ -34,11 +57,13 @@ function shortAge(seconds) {
 }
 
 /* A run the index says was going, that no live server holds: cut off. */
+/** @param {RunRow} run */
 function shownState(run) {
   if (!run.live && !RUN_ENDED_STATES.has(run.state)) return "interrupted";
   return run.state;
 }
 
+/** @param {RunRow} run */
 function runMeta(run) {
   const now = Date.now() / 1000 + runsView.skew;
   const st = shownState(run);
@@ -48,12 +73,13 @@ function runMeta(run) {
 }
 
 function paintRunTimes() {
-  for (const row of document.querySelectorAll("#run-list .run-row")) {
+  for (const row of /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll("#run-list .run-row"))) {
     const run = runsView.rows.find((r) => r.run_id === row.dataset.run);
-    if (run) row.querySelector(".run-time").textContent = runMeta(run);
+    if (run) /** @type {Element} */ (row.querySelector(".run-time")).textContent = runMeta(run);
   }
 }
 
+/** @param {{runs?: RunRow[], now?: number}} payload */
 function renderRuns(payload) {
   runsView.rows = payload.runs || [];
   runsView.skew = (payload.now || Date.now() / 1000) - Date.now() / 1000;
@@ -86,6 +112,10 @@ function loadRuns() {
   return api("/api/runs").then(renderRuns, () => {});
 }
 
+/**
+ * @param {string} sid
+ * @param {string} runId
+ */
 async function jumpToRun(sid, runId) {
   if (sid !== state.sessionId) select(sid);
   for (let i = 0; i < 50; i++) {
@@ -103,6 +133,7 @@ async function jumpToRun(sid, runId) {
 
 /* ---------- delete with undo ---------- */
 
+/** @type {Map<string, ReturnType<typeof setTimeout>>} */
 const pendingDeletes = new Map();
 
 function hideToast() {
@@ -110,6 +141,7 @@ function hideToast() {
   if (toast) { toast.hidden = true; toast.textContent = ""; }
 }
 
+/** @param {SessionInfo} session */
 async function deleteSession(session) {
   await api(`/api/sessions/${session.id}`, { method: "DELETE" });
   const wasActive = session.id === state.sessionId;
@@ -121,7 +153,7 @@ async function deleteSession(session) {
   }, runsView.undoMs);
   pendingDeletes.set(session.id, expire);
   if (wasActive) await boot(); else await loadSessions();
-  const toast = document.getElementById("toast");
+  const toast = /** @type {HTMLElement} */ (document.getElementById("toast"));
   toast.textContent = "";
   toast.appendChild(el("span", "toast-text", `Deleted “${session.title}”.`));
   const undo = el("button", "toast-undo", "Undo");
@@ -132,6 +164,10 @@ async function deleteSession(session) {
   undo.focus();
 }
 
+/**
+ * @param {string} sid
+ * @param {boolean} reselect
+ */
 async function undoDelete(sid, reselect) {
   clearTimeout(pendingDeletes.get(sid));
   pendingDeletes.delete(sid);

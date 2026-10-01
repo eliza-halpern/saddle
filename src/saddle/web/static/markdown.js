@@ -1,3 +1,4 @@
+// @ts-check
 "use strict";
 /* The markdown renderer and the streaming painter, kept apart from the app
    so they can be exercised without a browser -- tests/test_markdown.mjs
@@ -6,11 +7,20 @@
    Nothing here touches the network, the session or the event stream: given
    text it produces nodes, and that is the whole contract. */
 
+/**
+ * Build an element. A tag the DOM library knows (`a`, `button`) gives its
+ * specific element type; a computed tag name gives a plain HTMLElement.
+ * @template {string} K
+ * @param {K} tag
+ * @param {string | null} [cls]
+ * @param {string} [text]
+ * @returns {K extends keyof HTMLElementTagNameMap ? HTMLElementTagNameMap[K] : HTMLElement}
+ */
 const el = (tag, cls, text) => {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
   if (text !== undefined) node.textContent = text;
-  return node;
+  return /** @type {any} */ (node);
 };
 
 /* ---------- content rendering ---------- */
@@ -25,6 +35,10 @@ const el = (tag, cls, text) => {
 
 const INLINE = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]+\]\([^)\s]+\))/g;
 
+/**
+ * @param {Node} parent
+ * @param {string} text
+ */
 function inlineInto(parent, text) {
   for (const bit of text.split(INLINE)) {
     if (!bit) continue;
@@ -65,10 +79,15 @@ function inlineInto(parent, text) {
   }
 }
 
+/**
+ * @param {Element} target
+ * @param {string} text
+ */
 function renderMarkdown(target, text) {
   target.textContent = "";
   const lines = text.split("\n");
   let index = 0;
+  /** @type {HTMLElement | null} */
   let list = null;
 
   const closeList = () => { list = null; };
@@ -107,14 +126,15 @@ function renderMarkdown(target, text) {
 
     const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (bullet || numbered) {
+    const listed = bullet || numbered;
+    if (listed) {
       const wanted = bullet ? "ul" : "ol";
       if (!list || list.tagName.toLowerCase() !== wanted) {
         list = el(wanted);
         target.appendChild(list);
       }
       const item = el("li");
-      inlineInto(item, (bullet || numbered)[1]);
+      inlineInto(item, listed[1]);
       list.appendChild(item);
       index += 1;
       continue;
@@ -163,6 +183,7 @@ const COMMON_NUMBER = "\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b";
 const DQ_STRING = '"(?:\\\\.|[^"\\\\\\n])*"';
 const SQ_STRING = "'(?:\\\\.|[^'\\\\\\n])*'";
 
+/** @type {Record<string, string[][] | null>} */
 const GRAMMARS = {
   python: [
     ["c-comment", "#[^\\n]*"],
@@ -267,6 +288,7 @@ const GRAMMARS = {
 };
 
 /* svg is xml; the rest are the names people actually type in a fence. */
+/** @type {Record<string, string>} */
 const LANGUAGE_ALIASES = {
   py: "python", python3: "python",
   js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
@@ -282,11 +304,17 @@ const LANGUAGE_ALIASES = {
   json5: "json", jsonc: "json",
 };
 
+/** @param {string | null | undefined} language */
 function grammarFor(language) {
   const name = String(language || "").toLowerCase();
   return GRAMMARS[LANGUAGE_ALIASES[name] || name] || null;
 }
 
+/**
+ * @param {Element} target
+ * @param {string} code
+ * @param {string | null | undefined} language
+ */
 function highlight(target, code, language) {
   const rules = grammarFor(language);
   if (!rules) {
@@ -312,12 +340,20 @@ function highlight(target, code, language) {
 
 /* ---------- tool output ---------- */
 
+/**
+ * @param {unknown} text
+ * @returns {text is string}
+ */
 function isDiff(text) {
   return typeof text === "string" && text.startsWith("--- a/");
 }
 
 /* A diff is the point of a write: "wrote 'x.py'" says nothing about what
    changed. Colour the sides so the eye finds the change without reading. */
+/**
+ * @param {Element} target
+ * @param {string} text
+ */
 function renderDiff(target, text) {
   target.textContent = "";
   for (const line of text.split("\n")) {
@@ -341,6 +377,7 @@ function renderDiff(target, text) {
 
 const CREATED = /^created '([^']*)' \((\d+) bytes\)\n([\s\S]*)$/;
 
+/** @type {Record<string, string>} */
 const EXTENSIONS = {
   py: "python", pyi: "python",
   js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
@@ -355,12 +392,17 @@ const EXTENSIONS = {
   java: "java", patch: "diff", diff: "diff",
 };
 
+/** @param {string | null | undefined} name */
 function languageForPath(name) {
   const dot = String(name || "").lastIndexOf(".");
   if (dot < 0) return null;
-  return EXTENSIONS[name.slice(dot + 1).toLowerCase()] || null;
+  return EXTENSIONS[String(name).slice(dot + 1).toLowerCase()] || null;
 }
 
+/**
+ * @param {Element} target
+ * @param {RegExpMatchArray} match
+ */
 function renderCreated(target, match) {
   target.textContent = "";
   const [, name, bytes, body] = match;
@@ -378,6 +420,11 @@ function renderCreated(target, match) {
    a created file's header line is not part of the file. The button sits
    in the row's header, not in the detail, so the detail holds the
    output and nothing else. */
+/**
+ * @param {HTMLElement} row
+ * @param {Element} detail
+ * @param {string | null | undefined} text
+ */
 function fillToolDetail(row, detail, text) {
   const created = typeof text === "string" ? text.match(CREATED) : null;
   const host = copyHostOf(row);
@@ -403,8 +450,9 @@ function fillToolDetail(row, detail, text) {
 
 /* A collapsible row carries its button in its summary, beside the label;
    anything else carries it directly. */
+/** @param {HTMLElement} row */
 function copyHostOf(row) {
-  return row.children.find((c) => c.tagName === "SUMMARY") || row;
+  return Array.from(row.children).find((c) => c.tagName === "SUMMARY") || row;
 }
 
 /* ---------- copy ----------
@@ -421,6 +469,7 @@ function copyHostOf(row) {
    clipboard holds. The layering is what makes the button work on a
    plain Linux box with nothing in front of it. */
 
+/** @param {string} text */
 async function copyText(text) {
   const nav = typeof navigator === "undefined" ? null : navigator;
   if (nav && nav.clipboard && typeof nav.clipboard.writeText === "function") {
@@ -433,7 +482,7 @@ async function copyText(text) {
   }
   // Selecting the field takes focus from the button; it goes back after,
   // so a keyboard reader is not left on a node that no longer exists.
-  const before = document.activeElement;
+  const before = /** @type {HTMLElement | null} */ (document.activeElement);
   const area = document.createElement("textarea");
   try {
     area.value = text;
@@ -457,11 +506,19 @@ async function copyText(text) {
    the window rather than letting the first click's timer cut it short. */
 const COPY_FEEDBACK_MS = 1600;
 
+/** @typedef {string | (() => string)} CopyPayload */
+/** @typedef {HTMLButtonElement & {payload: CopyPayload}} CopyButton */
+
+/**
+ * @param {CopyPayload} payload
+ * @param {string} what
+ * @returns {CopyButton}
+ */
 function copyButton(payload, what) {
-  const button = el("button", "code-copy", "Copy");
+  const button = Object.assign(el("button", "code-copy", "Copy"), { payload });
   button.type = "button";
-  button.payload = payload;
   setCopyLabel(button, what);
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let settle = null;
   button.onclick = async (event) => {
     // Inside a summary, a click would also open or close the row.
@@ -470,26 +527,41 @@ function copyButton(payload, what) {
     const text = typeof current === "function" ? current() : current;
     const ok = await copyText(text);
     button.textContent = ok ? "Copied" : "Failed";
-    clearTimeout(settle);
+    clearTimeout(settle ?? undefined);
     settle = setTimeout(() => { button.textContent = "Copy"; }, COPY_FEEDBACK_MS);
     return ok;
   };
   return button;
 }
 
+/**
+ * @param {HTMLElement} button
+ * @param {string} what
+ */
 function setCopyLabel(button, what) {
   button.title = `Copy ${what}`;
   button.setAttribute("aria-label", `Copy ${what}`);
 }
 
+/**
+ * @param {Element} host
+ * @returns {CopyButton | null}
+ */
 function copyButtonIn(host) {
-  return host.children.find((c) => c.classList.contains("code-copy")) || null;
+  const found = Array.from(host.children).find((c) => c.classList.contains("code-copy"));
+  return /** @type {CopyButton | null} */ (found || null);
 }
 
 /* The block a button belongs to. A row's fill can run twice (a re-run
    of the same tool, a reload overlapping a live fill), so a host that
    already carries its button keeps exactly one -- copying the latest
    fill, not the first. */
+/**
+ * @param {Element} host
+ * @param {CopyPayload} payload
+ * @param {string} what
+ * @returns {CopyButton}
+ */
 function attachCopy(host, payload, what) {
   const existing = copyButtonIn(host);
   if (existing) {
@@ -531,6 +603,7 @@ function watchScrolling() {
   }, { passive: true });
 }
 
+/** @param {boolean} [_was] */
 function stickToBottom(_was) {
   if (!following) return;
   const t = $("#transcript");
@@ -554,6 +627,10 @@ function followBottom() {
    only the unsettled tail. Everything before the last blank line cannot
    change any more, so it is parsed once and then left alone. */
 
+/**
+ * @param {string} raw
+ * @returns {[string, string]}
+ */
 function splitStable(raw) {
   // A blank line inside an open code fence is not a paragraph break, so the
   // search for the last settled point has to start before the fence opened.
@@ -580,16 +657,17 @@ function splitStable(raw) {
   return ["", raw];
 }
 
+/** @param {HTMLElement} node */
 function paintStream(node) {
-  let stable = node.firstElementChild;
-  let live = node.lastElementChild;
+  let stable = /** @type {HTMLElement | null} */ (node.firstElementChild);
+  let live = /** @type {HTMLElement} */ (node.lastElementChild);
   if (!stable || !stable.classList.contains("md-stable")) {
     node.textContent = "";
     stable = el("div", "md-stable");
     live = el("div", "md-live");
     node.append(stable, live);
   }
-  const [head, tail] = splitStable(node.dataset.raw);
+  const [head, tail] = splitStable(/** @type {string} */ (node.dataset.raw));
   const done = stable.dataset.raw || "";
   if (head !== done) {
     if (head.startsWith(done)) {
@@ -610,10 +688,10 @@ function paintStream(node) {
 /* Exported only when loaded by the test runner; in the browser these are
    plain globals that app.js picks up from the shared script scope. */
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = {
+  Object.assign(module.exports, {
     el, inlineInto, renderMarkdown, splitStable, paintStream,
     isDiff, renderDiff, fillToolDetail, highlight, grammarFor,
     languageForPath, CREATED,
     copyText, copyButton, attachCopy,
-  };
+  });
 }

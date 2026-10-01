@@ -10,6 +10,7 @@ new JavaScript file that no config group covers fail instead of going unlinted.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -19,6 +20,15 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 STATIC = "src/saddle/web/static"
 ESLINT_CONFIG = REPO / "eslint.config.mjs"
+
+# The checks need the repo's node_modules, configs and git index, none of which
+# mutmut's work copy carries (see test_mutmut_layout). The marker is `.git`,
+# not the config files, so deleting a config in a real checkout fails the
+# tests instead of skipping them.
+pytestmark = pytest.mark.skipif(
+    not (REPO / ".git").exists(),
+    reason="needs a git checkout with node_modules, not a mutant work copy",
+)
 
 
 def _tool(name: str) -> str:
@@ -158,3 +168,108 @@ def test_every_tracked_js_file_is_in_a_config_group_and_lints_clean() -> None:
         timeout=120,
     )
     assert lint.returncode == 0, lint.stdout
+
+
+# ---------------------------------------------------------------- tsc (types)
+
+# Static scripts that may skip `// @ts-check`, each with its reason. Empty on
+# purpose: a new entry is a decision, not a default.
+TS_CHECK_EXCEPTIONS: dict[str, str] = {}
+
+GOOD_TS = (
+    "/** @param {string} s */\n"
+    "function size(s) {\n"
+    "  return s.length;\n"
+    "}\n"
+    "size('abc');\n"
+    "Array.from(document.body.children).find((c) => c.tagName === 'SUMMARY');\n"
+)
+
+BAD_TS = [
+    # A number where a string is declared.
+    ("TS2345", "/** @param {string} s */\nfunction size(s) {\n  return s.length;\n}\nsize(1);\n"),
+    # HTMLCollection has no find: the defect fillToolDetail shipped with, which
+    # threw in a real browser while the node test's array-backed fake passed.
+    ("TS2339", "document.body.children.find((c) => c.tagName === 'SUMMARY');\n"),
+    # A parameter nobody typed.
+    ("TS7006", "function size(s) {\n  return s.length;\n}\nsize('a');\n"),
+]
+
+
+def _tsc(cwd: Path, source: str) -> subprocess.CompletedProcess[str]:
+    """Check `source` under the repo's compiler options, in a temp directory."""
+    (cwd / "x.js").write_text(source)
+    (cwd / "tsconfig.json").write_text(
+        json.dumps({"extends": str(REPO / "tsconfig.json"), "include": ["x.js"]})
+    )
+    return subprocess.run(
+        [_tool("tsc"), "-p", str(cwd / "tsconfig.json")],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize(("code", "source"), BAD_TS)
+def test_tsc_rejects_a_bad_script(tmp_path: Path, code: str, source: str) -> None:
+    result = _tsc(tmp_path, source)
+    assert result.returncode != 0, result.stdout
+    assert code in result.stdout
+
+
+def test_tsc_accepts_a_good_script(tmp_path: Path) -> None:
+    result = _tsc(tmp_path, GOOD_TS)
+    assert result.returncode == 0, result.stdout
+
+
+def test_tsc_passes_on_the_real_browser_scripts() -> None:
+    result = subprocess.run(
+        [_tool("tsc"), "-p", "tsconfig.json"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_tsconfig_lists_every_static_script() -> None:
+    on_disk = sorted(p.name for p in (REPO / STATIC).glob("*.js"))
+    assert on_disk, "no static scripts found: the census itself is broken"
+    result = subprocess.run(
+        [_tool("tsc"), "-p", "tsconfig.json", "--listFilesOnly"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    listed = {Path(line).name for line in result.stdout.splitlines() if f"/{STATIC}/" in line}
+    assert sorted(listed) == on_disk
+
+
+def test_every_static_script_opts_in_to_ts_check() -> None:
+    scripts = sorted((REPO / STATIC).glob("*.js"))
+    assert scripts, "no static scripts found: the census itself is broken"
+    for script in scripts:
+        if script.name in TS_CHECK_EXCEPTIONS:
+            continue
+        first = script.read_text().splitlines()[0]
+        assert first == "// @ts-check", f"{script.name} does not start with // @ts-check"
+
+
+def test_idtypes_names_only_elements_index_html_declares_with_that_tag() -> None:
+    # `$` returns IdTypes[selector]; a stale entry would type an element as
+    # something it is not, which is worse than the plain HTMLElement default.
+    app = (REPO / STATIC / "app.js").read_text()
+    html = (REPO / STATIC / "index.html").read_text()
+    block = app[app.index("@typedef {{") : app.index("}} IdTypes")]
+    declared = re.findall(r'"#([\w-]+)": HTML(\w+)Element', block)
+    assert len(declared) > 20, "IdTypes was not parsed: the check would be vacuous"
+    tags = {"Input": "input", "TextArea": "textarea", "Select": "select", "Dialog": "dialog"}
+    tags |= {"Button": "button", "Form": "form", "Label": "label"}
+    for ident, kind in declared:
+        found = re.search(rf'<([a-z]+)\b[^>]*\bid="{re.escape(ident)}"', html)
+        assert found, f"#{ident} is typed in IdTypes but not in index.html"
+        assert found.group(1) == tags[kind], f"#{ident} is <{found.group(1)}>, typed as {kind}"

@@ -1,3 +1,4 @@
+// @ts-check
 "use strict";
 /* Task cards: a run of `saddle auto`, started from the chat and read here.
 
@@ -14,6 +15,7 @@
    the same way and labelled "not evidence": it reads the run's events and
    writes nothing that a verdict, the ledger or the packet reads. */
 
+/** @type {Record<string, {word: string, glyph: string}>} */
 const TASK_STATES = {
   running:   { word: "running",   glyph: "●" },
   needs_you: { word: "needs you", glyph: "?" },
@@ -28,8 +30,101 @@ const TASK_STATES = {
 };
 const ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 
+/** @typedef {{box: HTMLElement, fill: HTMLElement, value: HTMLElement}} Meter */
+
+/**
+ * The model-activity strip's parts and counters (see activityStrip).
+ * @typedef {object} Activity
+ * @property {HTMLDetailsElement} box
+ * @property {HTMLElement} glance
+ * @property {HTMLElement} doing
+ * @property {HTMLElement} streamed
+ * @property {HTMLElement} tool
+ * @property {HTMLElement} tailLabel
+ * @property {HTMLElement} tail
+ * @property {string} mode
+ * @property {number} chars
+ * @property {string} text
+ * @property {string} stream
+ * @property {{text: string, ok: boolean | null} | null} lastTool
+ * @property {boolean} fresh
+ * @property {boolean} queued
+ * @property {number} spentAtStart
+ * @property {boolean} joined
+ */
+
+/**
+ * One task card: its elements and what the page knows of the run.
+ * @typedef {object} TaskCard
+ * @property {string} runId
+ * @property {string} task
+ * @property {HTMLElement} node
+ * @property {HTMLElement} pill
+ * @property {HTMLButtonElement} stop
+ * @property {HTMLElement} testsChip
+ * @property {Meter} time
+ * @property {Meter} tokens
+ * @property {HTMLElement} meters
+ * @property {HTMLElement} now
+ * @property {HTMLDetailsElement} log
+ * @property {HTMLElement} logSummary
+ * @property {HTMLElement} lines
+ * @property {HTMLElement} ask
+ * @property {HTMLElement} packet
+ * @property {Activity} activity
+ * @property {string} state
+ * @property {number} elapsed
+ * @property {number} elapsedAt
+ * @property {number} timeBudget
+ * @property {number} tokenBudget
+ * @property {number} spent
+ * @property {number} timer
+ * @property {number} count
+ * @property {string} phase
+ * @property {number} round
+ * @property {number} lastEventAt
+ * @property {number} ageTimer
+ * @property {boolean} [stopping]
+ * @property {string} [detail]
+ */
+
+/**
+ * One row of an evidence packet as the server compiles it.
+ * @typedef {object} PacketRow
+ * @property {string} key
+ * @property {string} title
+ * @property {string} status
+ * @property {string} text
+ * @property {string[]} items
+ * @property {string[]} cites
+ * @property {string} [summary]
+ */
+
+/** @typedef {{elapsed_s?: number, tokens?: number, time_budget_s?: number, token_budget?: number}} Spend */
+
+/**
+ * @typedef {object} Packet
+ * @property {string} verdict
+ * @property {string} verdict_text
+ * @property {string} [task]
+ * @property {PacketRow[]} rows
+ * @property {string[]} header
+ * @property {{text: string, flagged?: boolean}[]} narrative
+ * @property {string} narrative_label
+ * @property {Record<string, any>} records
+ * @property {string[]} [questions]
+ * @property {boolean | null} [test_edits]
+ * @property {Spend} [spend]
+ * @property {boolean} [offer_test_edits]
+ */
+
+/** What `/api/.../branch` says about a run's branch; the server owns the fields. */
+/** @typedef {{[field: string]: any}} BranchInfo */
+
+/** @type {Map<string, TaskCard>} */
 const tasks = new Map();
 
+/** @param {number} seconds */
 function fmtDuration(seconds) {
   const s = Math.max(0, Math.round(seconds));
   if (s < 60) return `${s}s`;
@@ -38,10 +133,15 @@ function fmtDuration(seconds) {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
+/** @param {number} n */
 function fmtTokens(n) {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(Math.round(n));
 }
 
+/**
+ * @param {string} label
+ * @returns {Meter}
+ */
 function meter(label) {
   const box = el("div", "tmeter");
   box.appendChild(el("span", "tmeter-label", label));
@@ -54,6 +154,12 @@ function meter(label) {
   return { box, fill, value };
 }
 
+/**
+ * @param {Meter} m
+ * @param {number} used
+ * @param {number} limit
+ * @param {string} text
+ */
 function setMeter(m, used, limit, text) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
   m.fill.style.width = `${pct}%`;
@@ -63,8 +169,15 @@ function setMeter(m, used, limit, text) {
 
 /* ---------- the card ---------- */
 
+/**
+ * @param {string} runId
+ * @param {string} task
+ * @param {HTMLElement | null | undefined} turnNode
+ * @returns {TaskCard}
+ */
 function taskCard(runId, task, turnNode) {
-  if (tasks.has(runId)) return tasks.get(runId);
+  const known = tasks.get(runId);
+  if (known) return known;
   const node = el("article", "task-card");
   node.dataset.state = "running";
   node.dataset.run = runId;
@@ -114,6 +227,7 @@ function taskCard(runId, task, turnNode) {
   node.appendChild(packet);
 
   (turnNode || state.turnNode || $("#transcript")).appendChild(node);
+  /** @type {TaskCard} */
   const card = {
     runId, task, node, pill, stop, testsChip, time, tokens, meters, now, log, logSummary, lines, ask,
     packet, activity,
@@ -126,6 +240,10 @@ function taskCard(runId, task, turnNode) {
   return card;
 }
 
+/**
+ * @param {TaskCard} card
+ * @param {boolean | null | undefined} editable
+ */
 function paintTests(card, editable) {
   if (editable === null || editable === undefined) return;
   card.testsChip.hidden = false;
@@ -133,6 +251,7 @@ function paintTests(card, editable) {
   card.testsChip.classList.toggle("ro", !editable);
 }
 
+/** @param {TaskCard} card */
 function paintState(card) {
   const look = TASK_STATES[card.state] || TASK_STATES.running;
   card.node.dataset.state = card.state;
@@ -159,6 +278,7 @@ function paintState(card) {
 
 /* The head's live line: `phase · round N · last event Xs ago`. The phase
    and round come from the server (task.phase); the age is this page's clock. */
+/** @param {TaskCard} card */
 function paintNow(card) {
   if (ENDED.has(card.state)) return;
   const age = (Date.now() - card.lastEventAt) / 1000;
@@ -167,6 +287,7 @@ function paintNow(card) {
   card.now.textContent = `${card.stopping ? "stopping · " : ""}${phase} · round ${card.round} · last event ${fmtDuration(age)} ago`;
 }
 
+/** @param {TaskCard} card */
 function tick(card) {
   // Waiting on you is not charged to the time budget (engine._ask), so the
   // clock is frozen while the card says "needs you".
@@ -180,6 +301,10 @@ function tick(card) {
                             : `~${fmtTokens(card.spent)} tokens`);
 }
 
+/**
+ * @param {TaskCard} card
+ * @param {ServerEvent} line
+ */
 function addLine(card, line) {
   const item = el("li", `tl tone-${line.tone || "info"}`);
   item.appendChild(el("span", "tl-mark", line.mark));
@@ -205,6 +330,7 @@ function activityWanted() {
   try { return localStorage.getItem(ACTIVITY_OPEN) === "1"; } catch { return false; }
 }
 
+/** @returns {Activity} */
 function activityStrip() {
   const box = el("details", "task-activity");
   box.open = activityWanted();
@@ -216,6 +342,7 @@ function activityStrip() {
   box.appendChild(head);
   const body = el("div", "act-body");
   const facts = el("dl", "act-facts");
+  /** @param {string} label */
   const fact = (label) => {
     facts.appendChild(el("dt", null, label));
     const dd = el("dd");
@@ -246,6 +373,7 @@ function activityStrip() {
   };
 }
 
+/** @type {Record<string, string>} */
 const ACT_WORDS = {
   waiting: "waiting for the model",
   thinking: "thinking",
@@ -257,6 +385,10 @@ const ACT_WORDS = {
 /* One engine event of the run, read into the strip. A reply is counted from
    its first streamed character after a tool call; progress events (however
    often they come) do not reset it. */
+/**
+ * @param {TaskCard} card
+ * @param {ServerEvent} inner
+ */
 function noteActivity(card, inner) {
   const a = card.activity;
   switch (inner.kind) {
@@ -294,6 +426,7 @@ function noteActivity(card, inner) {
 }
 
 /* Deltas arrive a token at a time: paint at most once a frame. */
+/** @param {TaskCard} card */
 function scheduleActivity(card) {
   const a = card.activity;
   if (a.queued) return;
@@ -303,6 +436,7 @@ function scheduleActivity(card) {
   else setTimeout(run, 50);
 }
 
+/** @param {TaskCard} card */
 function paintActivity(card) {
   const a = card.activity;
   const mode = card.state === "needs_you" ? "asking" : a.mode;
@@ -339,6 +473,10 @@ function paintActivity(card) {
 
 /* ---------- needs you ---------- */
 
+/**
+ * @param {TaskCard} card
+ * @param {{text: string, options?: string[]} | null | undefined} question
+ */
 function showQuestion(card, question) {
   const box = card.ask;
   box.textContent = "";
@@ -349,9 +487,10 @@ function showQuestion(card, question) {
   const input = el("textarea", "ask-input");
   input.rows = 2;
   input.placeholder = "Your answer, in words. It is sealed in the ledger.";
-  if ((question.options || []).length) {
+  const options = question.options || [];
+  if (options.length) {
     const opts = el("div", "ask-options");
-    for (const option of question.options) {
+    for (const option of options) {
       const chip = el("button", "ask-option", option);
       chip.type = "button";
       chip.onclick = (event) => {
@@ -382,7 +521,7 @@ function showQuestion(card, question) {
       });
       note.textContent = "Sent. Sealing it…";
     } catch (error) {
-      note.textContent = String(error.message || error);
+      note.textContent = errorText(error);
       send.disabled = false;
     }
   };
@@ -393,24 +532,30 @@ function showQuestion(card, question) {
   });
 }
 
+/** @param {string} runId */
 async function stopTask(runId) {
   const card = tasks.get(runId);
   if (card) { card.stopping = true; paintNow(card); }
   try {
     await api(`/api/tasks/${runId}/stop`, { method: "POST" });
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
   }
 }
 
 /* ---------- the packet ---------- */
 
+/** @type {Record<string, string>} */
 const STATUS_WORD = {
   proven: "proven", failed: "failed", observed: "recorded", absent: "no record",
   "not-proven": "not proven", question: "needs you", sanctioned: "sanctioned",
   narrative: "narrative, not evidence", cost: "sealed",
 };
 
+/**
+ * @param {string} hash
+ * @param {Record<string, unknown> | null | undefined} record
+ */
 function recordPanel(hash, record) {
   const box = el("dl", "record");
   box.dataset.hash = hash;
@@ -422,6 +567,11 @@ function recordPanel(hash, record) {
   return box;
 }
 
+/**
+ * @param {string} hash
+ * @param {Record<string, unknown> | null | undefined} record
+ * @param {HTMLElement} host
+ */
 function citeButton(hash, record, host) {
   const button = el("button", "cite", hash.slice(0, 8));
   button.type = "button";
@@ -441,6 +591,10 @@ function citeButton(hash, record, host) {
 /* A session-log line's cite: unlike a packet cite it carries only the hash, so
    it fetches the sealed record from the run's ledger on demand, opens it under
    the line, and closes it on a second click. */
+/**
+ * @param {TaskCard} card
+ * @param {string} hash
+ */
 function sessionCite(card, hash) {
   const button = el("button", "cite tl-cite", hash.slice(0, 8));
   button.type = "button";
@@ -457,14 +611,18 @@ function sessionCite(card, hash) {
     try {
       record = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/record/${hash}`);
     } catch (error) {
-      record = { hash, note: `could not load this record: ${error.message || error}` };
+      record = { hash, note: `could not load this record: ${errorText(error)}` };
     }
     if (!button.classList.contains("open")) return;  // a later click closed it while we fetched
-    button.closest("li").after(recordPanel(hash, record));
+    /** @type {Element} */ (button.closest("li")).after(recordPanel(hash, record));
   };
   return button;
 }
 
+/**
+ * @param {Packet} packet
+ * @returns {Node}
+ */
 function narrativeBlock(packet) {
   const quote = el("blockquote", "narrative-text");
   if (!packet.narrative.length) return document.createDocumentFragment();
@@ -485,6 +643,10 @@ function narrativeBlock(packet) {
 }
 
 /* `a command` in a row's text is shown as code; nothing else is parsed. */
+/**
+ * @param {HTMLElement} node
+ * @param {string} text
+ */
 function codeSpans(node, text) {
   text.split("`").forEach((part, i) => {
     if (!part) return;
@@ -493,6 +655,10 @@ function codeSpans(node, text) {
   return node;
 }
 
+/**
+ * @param {TaskCard} card
+ * @param {Packet} packet
+ */
 function renderPacket(card, packet) {
   const box = card.packet;
   box.textContent = "";
@@ -521,7 +687,8 @@ function renderPacket(card, packet) {
     verdict.appendChild(meta);
   }
   box.appendChild(verdict);
-  if ((packet.questions || []).length) box.appendChild(askedBox(packet.questions));
+  const questions = packet.questions || [];
+  if (questions.length) box.appendChild(askedBox(questions));
 
   box.appendChild(actionRow(card, packet));
   box.appendChild(summaryBand(packet));
@@ -532,9 +699,10 @@ function renderPacket(card, packet) {
   // to Details too, so no row the packet compiles is ever dropped.
   const byKey = new Map(packet.rows.map((row) => [row.key, row]));
   const rows = el("div", "rows");
-  if (byKey.has("scope")) rows.appendChild(packetRow(byKey.get("scope"), packet));
-  if (byKey.has("audit")) {
-    const audit = byKey.get("audit");
+  const scope = byKey.get("scope");
+  if (scope) rows.appendChild(packetRow(scope, packet));
+  const audit = byKey.get("audit");
+  if (audit) {
     const fold = el("details", `audit-fold s-${audit.status}`);
     const summary = el("summary", "audit-summary");
     summary.appendChild(el("span", "prow-title", "Audit"));
@@ -544,15 +712,18 @@ function renderPacket(card, packet) {
     rows.appendChild(fold);
   }
   // The task-text check (P1): whether it ran and what it judged, on the first screen.
-  if (byKey.has("p1")) rows.appendChild(packetRow(byKey.get("p1"), packet));
+  const p1 = byKey.get("p1");
+  if (p1) rows.appendChild(packetRow(p1, packet));
   // Tier-0 edit checks: their own line beside Audit, never in its count.
-  if (byKey.has("edit-checks")) rows.appendChild(packetRow(byKey.get("edit-checks"), packet));
+  const editChecks = byKey.get("edit-checks");
+  if (editChecks) rows.appendChild(packetRow(editChecks, packet));
   box.appendChild(rows);
   const details = el("details", "packet-details");
   details.appendChild(el("summary", "details-summary", "Details"));
   const placed = new Set(["tests", "mutation", "not-proven", "scope", "audit", "p1", "edit-checks"]);
   for (const key of DETAIL_ORDER) {
-    if (byKey.has(key)) details.appendChild(packetRow(byKey.get(key), packet));
+    const detailRow = byKey.get(key);
+    if (detailRow) details.appendChild(packetRow(detailRow, packet));
   }
   for (const row of packet.rows) {
     if (!placed.has(row.key) && !DETAIL_ORDER.includes(row.key)) {
@@ -567,6 +738,10 @@ function renderPacket(card, packet) {
 /* An ended run's meters show what its outcome sealed -- the numbers the
    packet's Cost row gives in words -- whether the card watched the run or
    was drawn from its recap after a reload. */
+/**
+ * @param {TaskCard} card
+ * @param {Spend | null | undefined} spend
+ */
 function paintSpend(card, spend) {
   if (!spend || typeof spend.elapsed_s !== "number") return;
   card.elapsed = spend.elapsed_s;
@@ -582,6 +757,7 @@ function paintSpend(card, spend) {
    drawn as a pass or a fail; "would refuse at full strength" is a tag. */
 const WOULD_REFUSE = "[would refuse at full strength]";
 
+/** @param {string[]} questions */
 function askedBox(questions) {
   const box = el("div", "task-asked");
   box.appendChild(el("div", "ask-kicker", `The audit asks you ${questions.length === 1 ? "a question" : `${questions.length} questions`}`));
@@ -603,12 +779,14 @@ function askedBox(questions) {
 
 const DETAIL_ORDER = ["contract", "narrative", "cost", "reproduce"];
 const BAND_KEYS = ["tests", "mutation", "not-proven"];
+/** @type {Record<string, string>} */
 const GLYPH = {
   ok: "✓", bad: "✗", info: "◐", none: "○", warn: "!",
 };
 
 /* A band line's tone: from the row's status alone. "Not proven" is ok only
    when it lists nothing. */
+/** @param {PacketRow} row */
 function lineTone(row) {
   if (row.key === "not-proven") return row.items.length ? "warn" : "ok";
   return { proven: "ok", failed: "bad", observed: "info", absent: "none", sanctioned: "info" }[
@@ -616,6 +794,7 @@ function lineTone(row) {
   ] || "none";
 }
 
+/** @param {string} text */
 function firstSentence(text) {
   const match = /^(.*?[.!?])(\s|$)/.exec(text);
   return match ? match[1] : text;
@@ -625,9 +804,10 @@ function firstSentence(text) {
    The band is green only for a finished run whose three lines are all ok;
    a stop is amber whatever its lines say, and its unresolved findings are
    listed here, not under a fold. */
+/** @param {Packet} packet */
 function summaryBand(packet) {
   const byKey = new Map(packet.rows.map((row) => [row.key, row]));
-  const lines = BAND_KEYS.filter((key) => byKey.has(key)).map((key) => byKey.get(key));
+  const lines = /** @type {PacketRow[]} */ (BAND_KEYS.filter((key) => byKey.has(key)).map((key) => byKey.get(key)));
   const tones = lines.map(lineTone);
   const tone = packet.verdict !== "finished" ? "stop"
     : tones.includes("bad") ? "bad"
@@ -665,6 +845,11 @@ function summaryBand(packet) {
   return band;
 }
 
+/**
+ * @param {PacketRow} row
+ * @param {Packet} packet
+ * @param {{listed?: boolean}} [options]
+ */
 function packetRow(row, packet, { listed = false } = {}) {
   const item = el("div", `prow s-${row.status} k-${row.key}`);
   const label = el("div", "prow-label");
@@ -704,12 +889,22 @@ function packetRow(row, packet, { listed = false } = {}) {
 
 /* ---------- what to do with the run's branch ---------- */
 
+/**
+ * @param {string} label
+ * @param {string} cls
+ */
 function actionButton(label, cls) {
   const button = el("button", `act ${cls}`, label);
   button.type = "button";
   return button;
 }
 
+/**
+ * @param {TaskCard} card
+ * @param {string} action
+ * @param {string} branch
+ * @param {object} [extra]
+ */
 async function postAction(card, action, branch, extra = {}) {
   return api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/${action}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -717,6 +912,10 @@ async function postAction(card, action, branch, extra = {}) {
   });
 }
 
+/**
+ * @param {HTMLElement} panel
+ * @param {{path: string, patch: string}[]} files
+ */
 function showDiff(panel, files) {
   panel.textContent = "";
   if (!files.length) {
@@ -734,13 +933,19 @@ function showDiff(panel, files) {
     // The run's own diff is code on screen like any other: it gets the
     // standard button, in the file's header, copying the patch as git
     // wrote it.
-    attachCopy(one.firstElementChild, file.patch, file.path);
+    attachCopy(/** @type {Element} */ (one.firstElementChild), file.patch, file.path);
     panel.appendChild(one);
   }
 }
 
 /* The confirm step lives in the page and names branch and target. Nothing
    changes until its own button is pressed; Cancel and Escape change nothing. */
+/**
+ * @param {HTMLElement} panel
+ * @param {string} text
+ * @param {string} go
+ * @param {() => void} onYes
+ */
 function confirmStrip(panel, text, go, onYes) {
   panel.textContent = "";
   panel.dataset.showing = "confirm";
@@ -749,8 +954,9 @@ function confirmStrip(panel, text, go, onYes) {
   strip.appendChild(el("p", "act-confirm-text", text));
   const yes = actionButton(go, "act-yes primary");
   const no = actionButton("Cancel", "act-no");
-  no.onclick = () => { panel.textContent = ""; };
-  strip.addEventListener("keydown", (event) => { if (event.key === "Escape") no.onclick(); });
+  const cancel = () => { panel.textContent = ""; };
+  no.onclick = cancel;
+  strip.addEventListener("keydown", (event) => { if (event.key === "Escape") cancel(); });
   yes.onclick = () => { yes.disabled = true; no.disabled = true; onYes(); };
   strip.appendChild(yes);
   strip.appendChild(no);
@@ -758,6 +964,12 @@ function confirmStrip(panel, text, go, onYes) {
   no.focus();
 }
 
+/**
+ * @param {HTMLElement} panel
+ * @param {boolean} ok
+ * @param {string} text
+ * @param {boolean} [sealed]
+ */
 function actionResult(panel, ok, text, sealed) {
   panel.textContent = "";
   panel.dataset.showing = "result";
@@ -773,6 +985,10 @@ function actionResult(panel, ok, text, sealed) {
   panel.appendChild(box);
 }
 
+/**
+ * @param {TaskCard} card
+ * @param {Packet} packet
+ */
 function actionRow(card, packet) {
   const wrap = el("div", "actions");
   const row = el("div", "act-row");
@@ -793,6 +1009,7 @@ function actionRow(card, packet) {
   row.append(view, merge, push, pushBranch, discard, chat, download);
   wrap.append(row, why, panel);
 
+  /** @type {BranchInfo | null} */
   let info = null;
   api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/branch`).then((got) => {
     info = got;
@@ -836,7 +1053,7 @@ function actionRow(card, packet) {
     else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
     else if (got.upstream && got.push_refusal) why.textContent = `Push is off: ${got.push_refusal}`;
   }).catch((error) => {
-    why.textContent = `No branch actions: ${error.message || error}`;
+    why.textContent = `No branch actions: ${errorText(error)}`;
   });
 
   view.onclick = async () => {
@@ -850,54 +1067,56 @@ function actionRow(card, packet) {
       showDiff(panel, got.files);
       panel.dataset.showing = "diff";
     } catch (error) {
-      actionResult(panel, false, String(error.message || error));
+      actionResult(panel, false, errorText(error));
     }
   };
   merge.onclick = () => {
     if (!info) return;
+    const branchInfo = info;
     if (merge.dataset.guarded) {
-      const files = info.guarded_paths.join(", ");
+      const files = branchInfo.guarded_paths.join(", ");
       confirmStrip(panel,
-        `Approve and merge ${info.branch} into ${info.target}? This run changed code that judges runs: ${files}. Its finish audit passed; you are approving these changes to saddle's judges as a person, and the approval is logged with your git identity.`,
-        `Approve and merge into ${info.target}`,
+        `Approve and merge ${branchInfo.branch} into ${branchInfo.target}? This run changed code that judges runs: ${files}. Its finish audit passed; you are approving these changes to saddle's judges as a person, and the approval is logged with your git identity.`,
+        `Approve and merge into ${branchInfo.target}`,
         async () => {
           try {
-            const got = await postAction(card, "approve", info.branch, { paths: files });
+            const got = await postAction(card, "approve", branchInfo.branch, { paths: files });
             actionResult(panel, true, got.output, got.sealed);
             merge.disabled = true;
           } catch (error) {
-            actionResult(panel, false, String(error.message || error), false);
+            actionResult(panel, false, errorText(error), false);
           }
         });
       return;
     }
     confirmStrip(panel,
-      `Merge ${info.branch} into ${info.target}? Fast-forward if possible, else cherry-pick its commits.`,
-      `Merge into ${info.target}`,
+      `Merge ${branchInfo.branch} into ${branchInfo.target}? Fast-forward if possible, else cherry-pick its commits.`,
+      `Merge into ${branchInfo.target}`,
       async () => {
         try {
-          const got = await postAction(card, "merge", info.branch);
+          const got = await postAction(card, "merge", branchInfo.branch);
           actionResult(panel, true, got.output, got.sealed);
           merge.disabled = true;
           push.disabled = true;
         } catch (error) {
-          actionResult(panel, false, String(error.message || error), false);
+          actionResult(panel, false, errorText(error), false);
         }
       });
   };
   push.onclick = () => {
     if (!info) return;
+    const branchInfo = info;
     confirmStrip(panel,
-      `Merge ${info.branch} into ${info.target}, then push ${info.target} to ${info.upstream}? The push is public to anyone who can read ${info.upstream}.`,
-      `Merge and push to ${info.upstream}`,
+      `Merge ${branchInfo.branch} into ${branchInfo.target}, then push ${branchInfo.target} to ${branchInfo.upstream}? The push is public to anyone who can read ${branchInfo.upstream}.`,
+      `Merge and push to ${branchInfo.upstream}`,
       async () => {
         try {
-          const got = await postAction(card, "merge-push", info.branch);
+          const got = await postAction(card, "merge-push", branchInfo.branch);
           actionResult(panel, true, got.output, got.sealed);
           merge.disabled = true;
           push.disabled = true;
         } catch (error) {
-          const text = String(error.message || error);
+          const text = errorText(error);
           // The merge landed even though the push failed: it cannot merge twice.
           if (text.includes("Merged locally")) merge.disabled = push.disabled = true;
           actionResult(panel, false, text, false);
@@ -906,7 +1125,8 @@ function actionRow(card, packet) {
   };
   pushBranch.onclick = () => {
     if (!info) return;
-    const pb = info.push_branch;
+    const branchInfo = info;
+    const pb = branchInfo.push_branch;
     confirmStrip(panel,
       `Push ${pb.branch} to ${pb.remote}? It goes up as a branch of the same name for a pull request; main is not touched. The leak guard runs first when the repo uses it.`,
       `Push ${pb.branch}`,
@@ -918,22 +1138,23 @@ function actionRow(card, packet) {
           });
           actionResult(panel, true, got.output, got.sealed);
         } catch (error) {
-          actionResult(panel, false, String(error.message || error), false);
+          actionResult(panel, false, errorText(error), false);
         }
       });
   };
   discard.onclick = () => {
     if (!info) return;
+    const branchInfo = info;
     confirmStrip(panel,
-      `Delete the branch ${info.branch} and its run worktree? ${info.target || "Your checkout"} is not touched.`,
-      `Delete ${info.branch}`,
+      `Delete the branch ${branchInfo.branch} and its run worktree? ${branchInfo.target || "Your checkout"} is not touched.`,
+      `Delete ${branchInfo.branch}`,
       async () => {
         try {
-          const got = await postAction(card, "discard", info.branch);
+          const got = await postAction(card, "discard", branchInfo.branch);
           actionResult(panel, true, got.output, got.sealed);
           for (const b of [view, merge, push, discard]) b.disabled = true;
         } catch (error) {
-          actionResult(panel, false, String(error.message || error), false);
+          actionResult(panel, false, errorText(error), false);
         }
       });
   };
@@ -954,7 +1175,7 @@ function actionRow(card, packet) {
     }
     // Leave Task for the read-only talk lane; Edit stays an explicit choice.
     if (typeof setMode === "function" && state.mode !== "ask") await setMode("ask");
-    const input = document.querySelector("#input");
+    const input = $("#input");
     // The compact recap, then where the full packet is on disk: the Ask
     // lane's read_file can open it on demand; the human sees a short message.
     const report = info && info.report ? `\n\nFull report: ${info.report}` : "";
@@ -968,6 +1189,10 @@ function actionRow(card, packet) {
 /* A run that stopped "audit unresolved" with tests read-only, on a finding a
    new test closes, may be right and merely unable to prove it. Say so, and
    offer the same task again with test edits allowed. */
+/**
+ * @param {TaskCard} card
+ * @param {Packet} packet
+ */
 function testEditOffer(card, packet) {
   const box = el("div", "offer");
   box.appendChild(el("p", "offer-text",
@@ -978,12 +1203,13 @@ function testEditOffer(card, packet) {
   again.onclick = (event) => {
     event.preventDefault();
     again.disabled = true;
-    launchTask(packet.task, card.timeBudget, card.tokenBudget, true);
+    launchTask(/** @type {string} */ (packet.task), card.timeBudget, card.tokenBudget, true);
   };
   box.appendChild(again);
   return box;
 }
 
+/** @param {TaskCard} card */
 async function loadPacket(card) {
   // A run that failed before it produced a packet -- e.g. its folder was not a
   // git repository -- has no ledger to compile. Show why it failed, not a raw
@@ -1006,13 +1232,17 @@ async function loadPacket(card) {
       ? `This run did not start: ${card.detail}`
       : card.state === "failed"
         ? "This run failed before it produced a packet (for example, its folder was not a git repository)."
-        : `could not load the packet: ${error.message || error}`;
+        : `could not load the packet: ${errorText(error)}`;
     card.packet.appendChild(el("p", card.detail || card.state === "failed" ? "notice" : "notice error", msg));
   }
 }
 
 /* ---------- events ---------- */
 
+/**
+ * @param {ServerEvent} event
+ * @returns {boolean}
+ */
 function handleTask(event) {
   switch (event.kind) {
     case "task.state": {
@@ -1048,7 +1278,7 @@ function handleTask(event) {
       paintState(card);
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
-      runState(state.sessionId, event.state, event.task);  // notify.js: tab, dot, live region
+      runState(/** @type {string} */ (state.sessionId), event.state, event.task);  // notify.js: tab, dot, live region
       if (event.state === "needs_you") {
         setStatus("needs", "needs you");
       } else if (event.state === "running") {
@@ -1102,6 +1332,7 @@ function handleTask(event) {
   }
 }
 
+/** @param {string} task */
 function taskBubble(task) {
   const bubble = el("div", "user task-ask-bubble");
   bubble.appendChild(el("span", "task-badge", "▶ task"));
@@ -1109,6 +1340,7 @@ function taskBubble(task) {
   return bubble;
 }
 
+/** @param {string} task */
 function taskTurn(task) {
   for (const empty of document.querySelectorAll("#transcript .empty")) empty.remove();
   const turn = newTurn(null);
@@ -1120,6 +1352,11 @@ function taskTurn(task) {
    On reload, that message is drawn as the card it stands for. */
 const RECAP = /^\[saddle task ([0-9a-f]+)\] ([^\n]*)/;
 
+/**
+ * @param {HTMLElement} turn
+ * @param {unknown} content
+ * @returns {boolean}
+ */
 function recapCard(turn, content) {
   const match = RECAP.exec(typeof content === "string" ? content : "");
   if (!match) return false;
@@ -1189,6 +1426,14 @@ async function startTask() {
                    $("#tc-premise").checked, $("#tc-stall").checked);
 }
 
+/**
+ * @param {string} text
+ * @param {number} timeBudget
+ * @param {number} tokenBudget
+ * @param {boolean} allowTestEdits
+ * @param {boolean} [premiseCheck]
+ * @param {boolean} [stallCheck]
+ */
 async function launchTask(text, timeBudget, tokenBudget, allowTestEdits,
                           premiseCheck = false, stallCheck = false) {
   if (state.busy) return;
@@ -1205,7 +1450,7 @@ async function launchTask(text, timeBudget, tokenBudget, allowTestEdits,
       }),
     });
   } catch (error) {
-    notice(String(error.message || error), "error");
+    notice(errorText(error), "error");
     setStatus("error");
     state.busy = false;
   }

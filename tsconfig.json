@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "target": "es2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": [],
+    "skipLibCheck": true
+  },
+  "include": ["browser-globals.d.ts", "src/saddle/web/static/*.js"]
+}

@@ -1,3 +1,4 @@
+// @ts-check
 "use strict";
 /* A run finds you (UX review, brief 1): the tab title, the favicon, a
    browser notification and the sidebar all say what a run is doing, so a
@@ -15,6 +16,9 @@
    they fire only while the tab is hidden; a visible tab has the title,
    the card and the live region already. */
 
+/** @typedef {{glyph: string, word: string, color: string}} RunLook */
+
+/** @type {Record<string, RunLook>} */
 const RUN_LOOK = {
   running:   { glyph: "●", word: "running",    color: "#7fb6e6" },
   needs_you: { glyph: "?", word: "needs you",  color: "#ff9d4d" },
@@ -27,6 +31,15 @@ const RUN_LIVE = new Set(["running", "needs_you"]);
 const RUN_ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 const NOTIFY_KEY = "saddle.notify";
 
+/**
+ * @typedef {object} RunWatch
+ * @property {Map<string, string | null>} seen
+ * @property {Map<string | null, string>} names
+ * @property {Map<string, string>} tasks
+ * @property {{state: string, task: string | undefined} | null} current
+ */
+
+/** @type {RunWatch} */
 const runWatch = {
   seen: new Map(),      // session id -> the last run state this page saw
   names: new Map(),     // session id -> title
@@ -36,14 +49,21 @@ const runWatch = {
 
 /* A dot with a dark ring on a light halo, so it reads on a dark tab strip
    and a light one alike. Idle is a hollow rose ring. */
+/** @param {string | null | undefined} kind */
+function lookFor(kind) {
+  return kind ? RUN_LOOK[kind] : undefined;
+}
+
+/** @param {string | null} kind */
 function faviconFor(kind) {
-  const look = RUN_LOOK[kind];
+  const look = lookFor(kind);
   const body = look
     ? `<circle cx='8' cy='8' r='6.5' fill='#fff'/><circle cx='8' cy='8' r='5' fill='${look.color}' stroke='#211d22' stroke-width='1.5'/>`
     : `<circle cx='8' cy='8' r='6.5' fill='#fff'/><circle cx='8' cy='8' r='4.5' fill='none' stroke='#d9749a' stroke-width='2.5'/>`;
   return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>${body}</svg>`)}`;
 }
 
+/** @param {string | null} sid */
 function sessionName(sid) {
   return runWatch.names.get(sid) || "saddle";
 }
@@ -51,22 +71,27 @@ function sessionName(sid) {
 function paintTab() {
   const now = runWatch.current;
   const name = sessionName(state.sessionId);
-  const look = now && RUN_LOOK[now.state];
-  document.title = look ? `${look.glyph} ${look.word} · ${now.task || name}` : name;
-  let link = document.querySelector("link[rel='icon']");
+  const look = now && lookFor(now.state);
+  document.title = now && look ? `${look.glyph} ${look.word} · ${now.task || name}` : name;
+  let link = /** @type {HTMLLinkElement | null} */ (document.querySelector("link[rel='icon']"));
   if (!link) {
     link = document.createElement("link");
     link.rel = "icon";
     document.head.appendChild(link);
   }
-  link.href = faviconFor(look ? now.state : null);
+  link.href = faviconFor(look && now ? now.state : null);
 }
 
+/**
+ * @param {string} sid
+ * @param {string | null} kind
+ */
 function paintDot(sid, kind) {
   const row = document.querySelector(`.session[data-sid="${sid}"]`);
   if (!row) return;
+  /** @type {HTMLElement | null} */
   let dot = row.querySelector(".run-dot");
-  const look = RUN_LOOK[kind];
+  const look = lookFor(kind);
   if (!look) {
     if (dot) dot.remove();
     return;
@@ -76,7 +101,7 @@ function paintDot(sid, kind) {
     row.insertBefore(dot, row.querySelector(".kill"));
   }
   dot.className = `run-dot rs-${kind}`;
-  dot.dataset.state = kind;
+  dot.dataset.state = String(kind);
   dot.textContent = look.word;
   dot.title = `Latest run: ${look.word}`;
 }
@@ -96,6 +121,7 @@ function paintMenu() {
   menu.title = label;
 }
 
+/** @param {string} text */
 function announce(text) {
   const live = document.getElementById("run-live");
   if (live) live.textContent = text;
@@ -105,6 +131,11 @@ function notifyPref() {
   try { return localStorage.getItem(NOTIFY_KEY) === "on"; } catch { return false; }
 }
 
+/**
+ * @param {string} sid
+ * @param {string} kind
+ * @param {string | undefined} task
+ */
 function maybeNotify(sid, kind, task) {
   if (document.visibilityState !== "hidden") return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
@@ -119,6 +150,11 @@ function maybeNotify(sid, kind, task) {
   };
 }
 
+/**
+ * @param {string} sid
+ * @param {string | null} runStateNow
+ * @param {string | undefined} [task]
+ */
 function runState(sid, runStateNow, task) {
   const prev = runWatch.seen.get(sid);
   runWatch.seen.set(sid, runStateNow);
@@ -126,18 +162,19 @@ function runState(sid, runStateNow, task) {
   paintDot(sid, runStateNow);
   paintMenu();
   const changed = prev !== runStateNow;
+  const look = lookFor(runStateNow);
   if (sid === state.sessionId && changed) {
-    runWatch.current = RUN_LOOK[runStateNow] ? { state: runStateNow, task: runWatch.tasks.get(sid) } : null;
+    runWatch.current = look && runStateNow ? { state: runStateNow, task: runWatch.tasks.get(sid) } : null;
     paintTab();
   }
-  if (!changed || prev === undefined || !RUN_LOOK[runStateNow]) return;
-  const look = RUN_LOOK[runStateNow];
+  if (!changed || prev === undefined || !look || !runStateNow) return;
   const where = sid === state.sessionId ? "" : ` in ${sessionName(sid)}`;
   announce(`Task ${look.word}${where}: ${runWatch.tasks.get(sid) || ""}`);
   if (runStateNow === "needs_you" || RUN_ENDED.has(runStateNow)) maybeNotify(sid, runStateNow, runWatch.tasks.get(sid));
 }
 
 /* Called with every `/api/sessions` listing, from loadSessions and the poll. */
+/** @param {SessionInfo[]} sessions */
 function noteSessions(sessions) {
   for (const s of sessions) {
     runWatch.names.set(s.id, s.title);
@@ -157,15 +194,16 @@ function runSeen() {
 }
 
 /* A different session on screen: show its run if one is live. */
+/** @param {string} sid */
 function runSelected(sid) {
   const st = runWatch.seen.get(sid);
-  runWatch.current = RUN_LIVE.has(st) ? { state: st, task: runWatch.tasks.get(sid) } : null;
+  runWatch.current = st && RUN_LIVE.has(st) ? { state: st, task: runWatch.tasks.get(sid) } : null;
   paintTab();
   paintMenu();
 }
 
 function paintNotifyControl() {
-  const button = document.getElementById("notify-toggle");
+  const button = /** @type {HTMLButtonElement | null} */ (document.getElementById("notify-toggle"));
   if (!button) return;
   if (typeof Notification === "undefined") {
     button.textContent = "Notifications unavailable";

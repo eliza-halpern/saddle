@@ -20,7 +20,7 @@ const provides = {
   "runs.js": ["deleteSession", "loadRuns"],
   "app.js": [
     "$", "state", "api", "notice", "setMode", "setStatus", "newTurn",
-    "select", "boot", "loadSessions",
+    "select", "boot", "loadSessions", "errorText",
   ],
 };
 
