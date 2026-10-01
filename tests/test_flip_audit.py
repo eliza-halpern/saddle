@@ -180,6 +180,14 @@ def test_each_python_loosening_is_refused_and_each_tightening_is_not(py_repo: Pa
     assert flip_finding(py_repo, "HEAD", "") is None
 
 
+def test_a_rewrite_the_task_ordered_needs_no_label_and_another_still_does(py_repo: Path) -> None:
+    edited(py_repo, "add(2, 2) == 4", "add(2, 2) == 5")
+    assert flip_finding(py_repo, "HEAD", "", ("test_add",)) is None
+    found = flip_finding(py_repo, "HEAD", "", ("test_parse",))
+    assert found is not None
+    assert found.verdict == "fail"
+
+
 def test_a_python_flip_line_with_evidence_is_surfaced_not_passed(py_repo: Path) -> None:
     edited(py_repo, "add(2, 2) == 4", "add(2, 2) == 5")
     message = (
@@ -327,6 +335,16 @@ def test_the_same_tree_is_accepted_once_the_summary_carries_the_label(
     assert fed.results[-1].passed
     fed.tell_summary("again\n\nflip: test_add -- the new code fails the old test")
     assert not fed.final()[0]
+
+
+def test_the_feed_passes_the_tasks_sanctioned_rewrites_to_the_check(
+    calc_repo: Path, tmp_path: Path
+) -> None:
+    edited(calc_repo, "add(2, 2) == 4", "add(2, 3) == 5")
+    fed, _ = feed_for(calc_repo, tmp_path, sanctioned_test_rewrites=("test_add",))
+    fed.tell_summary("done")
+    assert fed.final() == (True, "")
+    assert TEST_CHANGES not in [f.gate for f in fed.results[-1].findings]
 
 
 def test_without_feedback_the_finding_is_recorded_and_the_suite_still_runs(

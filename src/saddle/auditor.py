@@ -772,14 +772,20 @@ def commit_messages(root: Path, baseline: str) -> str:
     return _git_out(root, "log", "--format=%B", f"{resolved}..HEAD").decode()
 
 
-def flip_finding(root: Path, baseline: str, message: str) -> Finding | None:
+def flip_finding(
+    root: Path, baseline: str, message: str, sanctioned: Sequence[str] = ()
+) -> Finding | None:
     """The `test-changes` finding for `root`'s tree, or None when no pre-existing test changed.
+
+    A test the task itself ordered rewritten (`AuditorConfig.sanctioned_test_rewrites`)
+    needs no label: `sanction` and the red-on-baseline check already judge it.
 
     `fail` until every changed test has its `flip:` line in `message` with evidence
     `test_changes.circular_evidence` does not refuse; then `not-proven`, never
     `pass`: the label buys a person's review, not a verdict.
     """
-    judged = test_changes.judge(changed_tests(root, baseline), message)
+    changes = [c for c in changed_tests(root, baseline) if c.name not in sanctioned]
+    judged = test_changes.judge(changes, message)
     if judged is None:
         return None
     return Finding(

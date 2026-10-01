@@ -516,7 +516,11 @@ class AuditFeed:
                 if 2 in tiers and any(failing(f) for f in found):
                     return AuditResult(point, tree, tuple(found), note=EDIT_CHECKS_FIRST)
             flips = (
-                flip_finding(scratch / "tree", self.baseline, self.summary) if 1 in tiers else None
+                flip_finding(
+                    scratch / "tree", self.baseline, self.summary, self.sanctioned_test_rewrites
+                )
+                if 1 in tiers
+                else None
             )
             if flips is not None and failing(flips) and 2 in tiers and self.feedback:
                 # Cheap, and the same on a retry of this tree: refused before
