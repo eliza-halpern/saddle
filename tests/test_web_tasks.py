@@ -618,6 +618,35 @@ def test_an_unchanged_run_keeps_its_state_across_a_restart(tmp_path: Path) -> No
     assert tasks.latest_run_ref(chat) == ("failed", "t")
 
 
+def test_the_latest_run_ref_skips_spans_that_are_not_run_refs(tmp_path: Path) -> None:
+    """A chat journal holds every kind of span; only a run-ref names a run.
+
+    A span of another name with an argv long enough, and a verdict-shaped
+    detail, sits after the run-ref: it must not stand in for it. Without a
+    plain test this branch was reached only through a browser test, which a
+    machine without Chrome never runs."""
+    from saddle.journal import append_span, build_span
+
+    chat = tmp_path / "chat.jsonl"
+    run = TaskRun(run_id="r1", session_id="s", task="t", time_budget_s=1, token_budget=1)
+    run.journal = tmp_path / "r1.jsonl"
+    append_span(
+        chat, build_span(node_id="chat#1", argv=["a", "b"], duration_ms=0, exit_code=0, detail="")
+    )
+    append_span(chat, tasks.run_ref_span(run, "finished", "ok", ""))
+    other = build_span(
+        node_id="chat#2",
+        argv=["turn", "x", "later task"],
+        duration_ms=0,
+        exit_code=1,
+        detail="stopped: not a run",
+        name="chat-turn",
+    )
+    append_span(chat, other)
+    assert tasks.latest_run_ref(chat) == ("finished", "t")
+    assert tasks.latest_run_ref(tmp_path / "missing.jsonl") is None
+
+
 # -- a card rebuilt from a snapshot shows what the run has spent (#114) --------
 
 
