@@ -247,6 +247,17 @@ def build_project(root: Path, stubs: Path, script: str) -> None:
     (root / "pyproject.toml").write_text(PYPROJECT)
     (root / "src" / "mini.py").write_text(MODULE)
     (root / "tests" / "test_mini.py").write_text(TEST)
+    # Whatever else the mypy stage names (a scripts directory, a single script)
+    # exists here as a typed one-liner, so the stage judges the miniature's own
+    # code and not a missing path.
+    for stage in check_sh_stages(script):
+        for arg in stage.args if stage.exe == "mypy" else ():
+            target = root / arg
+            if arg.startswith("-") or target.exists():
+                continue
+            script_file = target if target.suffix == ".py" else target / f"{target.name}_script.py"
+            script_file.parent.mkdir(parents=True, exist_ok=True)
+            script_file.write_text("VALUE: int = 1\n")
     shutil.copy(CHECK_SH, root / "check.sh")
     build_stubs(stubs, script)
 
