@@ -9,7 +9,7 @@
 #
 # Usage: ./ci-mutate.sh BASE_SHA
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 BASE="${1:-}"
 
@@ -97,7 +97,13 @@ for mod in "${mods[@]}"; do
 done
 run_phase 480 "${globs[@]}"
 
-mapfile -t all_mods < <(ls src/saddle/*.py | xargs -n1 basename | sed 's/\.py$//' | grep -v '^__init__$' | sort)
+mapfile -t all_mods < <(
+    for file in src/saddle/*.py; do
+        name=${file##*/}
+        name=${name%.py}
+        [ "$name" = "__init__" ] || echo "$name"
+    done | sort
+)
 rest=()
 for mod in "${all_mods[@]}"; do
     skip=0
