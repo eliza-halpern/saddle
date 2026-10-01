@@ -38,7 +38,7 @@ def kinds(found: list[ChangedTest]) -> list[tuple[str, str]]:
         ("web/app.spec.ts", "js"),
         ("tests/helpers.mjs", "js"),
         ("src/web/static/app.js", None),
-        ("tests/fixtures/ask_cdp.mjs", "js"),
+        ("tests/fixtures/page_driver.mjs", "js"),
         ("pkg/calc_test.go", "other"),
         ("tests/data.json", None),
         ("tests/fixtures/test_names.txt", None),

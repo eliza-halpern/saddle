@@ -501,7 +501,7 @@ def test_check_node_scope_forbids_an_implementation_node_from_editing_tests() ->
     # CONTRIBUTING.md: "`check_node_scope` forbids an implementation node from
     # editing tests", in any language (`gates.is_test_code`): a run once rewrote
     # a JavaScript test because only pytest modules counted as tests.
-    for test_file in ("tests/test_x.py", "tests/markdown.test.js", "tests/fixtures/x_cdp.mjs"):
+    for test_file in ("tests/test_x.py", "tests/markdown.test.js", "tests/fixtures/page_driver.mjs"):
         refused = gates.check_node_scope("impl", [test_file], may_create=True)
         assert refused.passed is False, test_file
         assert test_file in refused.detail
