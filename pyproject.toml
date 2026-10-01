@@ -117,6 +117,17 @@ sandbox-expose = ["node", "google-chrome"]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.
 # mutmut 3.x runs pytest in-process; coverage is disabled for mutant runs
 # (per-run coverage is pure overhead and fails the 100% gate by design).
+# `tools/` is deliberately not a source path. Measured by mutating all three
+# scripts in a scratch copy with the tests that import them: 639 mutants, 10
+# survivors, 86 timeouts, 7 min 57 s of wall time. That is more than the whole
+# phase-1 budget in ci-mutate.sh (480 s) for scripts no run executes, and 6
+# of the 10 survivors are equivalent mutants (`check=False` spelled `None` or
+# dropped, `"latin-1"` spelled `"LATIN-1"`, header name case) that no test can
+# kill, while ci-mutate.sh fails the job on any survivor in a selected module.
+# Adopting it needs `# pragma: no mutate` on those lines, a time budget of its
+# own, and a `tools/*.py` arm in ci-mutate.sh's module mapping. The scripts'
+# tests are held to a contract mutant per behaviour group by review instead
+# (CONTRIBUTING.md), and to 100% line and branch coverage by the gate.
 source_paths = ["src/saddle/"]
 # Copied into mutants/ unmutated. benchmark/: test_stall_check imports the
 # harness. docs/: test_docs reads ARCHITECTURE.md. tools/: the diff-grammar
