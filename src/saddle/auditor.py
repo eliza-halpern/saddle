@@ -82,6 +82,7 @@ from saddle.evidence import (
     changed_statements,
     drop_test_caches,
     format_overrides,
+    git_changed_files,
     git_diff,
     read_skip_report,
     ruff_argv,
@@ -554,6 +555,19 @@ def data_only_change(copy: Path, baseline: str) -> list[str]:
     return sorted(by_file)
 
 
+MEASURABLE_SUFFIXES: Final[Mapping[str, str]] = {".py": "Python"}
+"""The file suffixes the mutation and changed-line coverage checks measure, each
+with its language's name. A changed file whose suffix is not a key is listed
+under `NOT_MEASURABLE_GATE` instead of being refused or ignored. The one place
+to widen when a language gains measurement: a suffix added here leaves the
+unmeasurable set, and the findings' wording follows the names. A browser-only
+change was refused "no mutants on changed lines" because the checks mutate
+Python only, and the model added a dead Python function for them to mutate."""
+
+NOT_MEASURABLE_GATE: Final = "not-measurable"
+"""The tier-2 finding that lists the changed files `MEASURABLE_SUFFIXES` does
+not cover. Emitted only when there is one; always `not-proven`."""
+
 SKIPPED_GATE: Final = "skipped-tests"
 """The tier-2 finding that lists the tests the audit's suite run skipped or
 expected to fail, or says it could not tell. Emitted only when there is one."""
@@ -565,11 +579,66 @@ LISTED: Final = 6
 REASON_WORDS: Final = 16
 """How many words of a skip reason a finding quotes."""
 
+MUTATION_NOT_MEASURABLE: Final = (
+    "not proven: no Python source line changed, so mutation had nothing to mutate; "
+    f"the changed files it cannot measure are listed under {NOT_MEASURABLE_GATE}. "
+    "No edit can clear this, and code added only to give mutation something to mutate "
+    "is a defect."
+)
+"""The mutation finding when mutmut generated nothing, no changed line is Python
+source and some changed file is outside `MEASURABLE_SUFFIXES`: not proven,
+never a refusal."""
+
+RED_PHASE_NOT_MEASURABLE: Final = (
+    "not proven: tests unchanged and no Python source line changed, so red-phase has no "
+    f"behaviour to measure; see {NOT_MEASURABLE_GATE}"
+)
+"""The red-phase finding in the same case (`RED_PHASE_NO_MUTANTS`)."""
+
+RED_PHASE_NO_MUTANTS: Final = "tests unchanged and no mutants decided"
+"""How `gates._check_behaviour_preserved` begins its detail when mutation decided
+nothing; the one red-phase refusal `MUTATION_NOT_MEASURABLE` also lifts."""
+
+
+def unmeasurable_files(files: Sequence[str]) -> list[str]:
+    """The paths in `files` whose suffix `MEASURABLE_SUFFIXES` does not name, sorted."""
+    return sorted(
+        f for f in set(files) if PurePosixPath(f).suffix.lower() not in MEASURABLE_SUFFIXES
+    )
+
+
+def _measured_languages() -> str:
+    """The names `MEASURABLE_SUFFIXES` gives its languages, "Python" or "JavaScript and Python"."""
+    return " and ".join(sorted(set(MEASURABLE_SUFFIXES.values())))
+
 
 def _listed(items: Sequence[str]) -> str:
     """The first `LISTED` of `items`, then how many more there are."""
     shown = ", ".join(items[:LISTED])
     return f"{shown}, ... and {len(items) - LISTED} more" if len(items) > LISTED else shown
+
+
+def not_measurable_detail(files: Sequence[str]) -> str:
+    """The `NOT_MEASURABLE_GATE` finding's words: the files, what cannot see
+    them, and that adding code only to give a check something to measure is a defect."""
+    noun = "file" if len(files) == 1 else "files"
+    return (
+        f"not mutation-measurable: {_listed(files)} ({len(files)} {noun}; the mutation and "
+        f"changed-line coverage checks measure {_measured_languages()} only). Recorded as "
+        "not proven and not refused: no edit can make these files measurable, and code "
+        "added only to give those checks something to measure is a defect. A person "
+        "reads the files."
+    )
+
+
+def source_lines_changed(copy: Path, baseline: str) -> bool:
+    """Whether any changed line is in a Python file that is not a test file:
+    the lines mutation could mutate."""
+    root = f"{copy}{os.sep}"
+    return any(
+        not is_test_file(spelled.removeprefix(root))
+        for spelled, _ in changed_statements(copy, git_diff(copy, baseline))
+    )
 
 
 def _quoted(pair: tuple[str, str], label: str = "") -> str:
@@ -1418,6 +1487,7 @@ class Auditor:
             if not shortlisted.passed:
                 survivors = _survivors(outcome, sources)
         spent = gated.mutation
+        unmeasured = unmeasurable_files(git_changed_files(copy, resolved)) if tier == 2 else []
         if (
             tier == 2
             and spent is not None
@@ -1439,6 +1509,33 @@ class Auditor:
         ):
             detail = MUTATION_DATA_ONLY.format(files=", ".join(data))
             statuses["mutation"] = ("not-proven", detail, statuses["mutation"][2])
+        elif (
+            tier == 2
+            and spent is not None
+            and spent.generated == 0
+            and spent.total == 0
+            and not spent.survivors
+            and statuses.get("mutation", ("",))[0] == "fail"
+            and unmeasured
+            and not source_lines_changed(copy, resolved)
+        ):
+            # Nothing the checks measure changed, and the files that did are listed
+            # (`NOT_MEASURABLE_GATE`): no evidence either way, never a refusal.
+            statuses["mutation"] = ("not-proven", MUTATION_NOT_MEASURABLE, statuses["mutation"][2])
+            red = statuses.get("red-phase", ("", "", None))
+            if red[0] == "fail" and red[1].startswith(RED_PHASE_NO_MUTANTS):
+                statuses["red-phase"] = ("not-proven", RED_PHASE_NOT_MEASURABLE, red[2])
+        elif unmeasured and statuses.get("mutation", ("",))[0] in ("pass", "fail"):
+            # Python lines were measured, other files were not: the verdict must not
+            # read as covering the whole change.
+            status, detail, basis = statuses["mutation"]
+            count = f"{len(unmeasured)} changed non-{_measured_languages()} file(s)"
+            statuses["mutation"] = (
+                status,
+                f"{detail}; {_measured_languages()} lines only, {count} not measurable "
+                f"(listed under {NOT_MEASURABLE_GATE})",
+                basis,
+            )
         sidecars: dict[str, Mapping[str, Any]] = {}
         if gated.mutation is not None:
             # The shortlist records `mutant_detail` as (name, status, show)
@@ -1511,6 +1608,15 @@ class Auditor:
             if gate in cites:
                 found = dataclasses.replace(found, cites=(cites[gate], *found.cites[1:]))
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
+        if unmeasured:
+            findings.append(
+                _not_proven(
+                    NOT_MEASURABLE_GATE,
+                    not_measurable_detail(unmeasured),
+                    "saddle.auditor.unmeasurable_files",
+                )
+            )
+            sidecars[NOT_MEASURABLE_GATE] = {"files": unmeasured}
         if tier == 2 and skip_reportable(self.node.deterministic_gate.test_command, copy):
             skips = read_skip_report(copy / SKIP_REPORT_NAME)
             scope = (

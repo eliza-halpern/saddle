@@ -291,7 +291,11 @@ planted-bug trees, 49 of 65 for the right reason (measured on `48eb6d6`). The op
    suite run also leaves pytest's junit report, and any skipped or xfailed test becomes a
    `skipped-tests` finding (`not-proven`, never a refusal) naming the ids and reasons, for
    the run that happened (impact-scoped or whole); a report that cannot be read says the
-   skips "could not be determined", never none.
+   skips "could not be determined", never none. A change to files the mutation and
+   changed-line coverage checks cannot measure (`auditor.MEASURABLE_SUFFIXES`: Python
+   only) is not refused for that: the finish is accepted with a `not-measurable` finding
+   (`not-proven`) naming the files, and a change that mixes Python with other files says
+   its mutation verdict covers the Python lines only.
 3. **Ledger** — the journal of §3 (`journal`, `saddle verify`), with an outcome span per
    run (`auto:finished` / `auto:stopped`), the tool-span list and the audit-span list
    sealed in the outcome's sidecar, `attempts/` sidecars beside it, and a `Saddle-Outcome`
