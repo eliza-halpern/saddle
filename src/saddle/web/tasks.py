@@ -169,6 +169,15 @@ class TaskRun:
     shown_tokens: int = 0
     """The tokens the last `run.progress` reported, a streaming reply's
     partial estimate included: what an open page's meter last showed."""
+    worktree: Path | None = None
+    """Where the run's worktree is, once `run_auto` has made it. The row keeps it
+    so a run can be found from its session after the card is gone; unset on a
+    run that failed before it had one."""
+    branch: str = ""
+    base: str = ""
+    """The commit the run's branch started from (a sha, not a branch name)."""
+    commit: str = ""
+    """The commit the run's branch ended on, once the run committed."""
 
     def spent(self) -> tuple[float, int] | None:
         """(seconds, generated tokens) the run has spent, or None before it has a budget."""
@@ -243,6 +252,12 @@ class TaskRun:
             "started": self.started,
             "ended": self.ended,
             "state_since": self.state_since,
+            # Where the run is and which commits are its own. Left out until
+            # known, so a merge into an older row never blanks a field.
+            **({"worktree": str(self.worktree)} if self.worktree is not None else {}),
+            **({"branch": self.branch} if self.branch else {}),
+            **({"base": self.base} if self.base else {}),
+            **({"commit": self.commit} if self.commit else {}),
         }
 
     def new_lines(self) -> list[TaskLine]:
@@ -446,6 +461,13 @@ def execute(
         if isinstance(event, Question | Answered):
             publish(run.state_event())
 
+    def on_worktree(worktree: Path, branch: str, base: str) -> None:
+        run.worktree, run.branch, run.base = worktree, branch, base
+        publish(run.state_event())  # the publisher writes the row: it now says where the run is
+
+    def on_commit(commit: str) -> None:
+        run.commit = commit  # the ended state event publishes it with the row
+
     options = AutoOptions(
         task=run.task,
         repo=workdir,
@@ -471,6 +493,8 @@ def execute(
             answer=run.wait_for_answer,
             cancel=lambda: run.cancelled,
             on_budget=on_budget,
+            on_worktree=on_worktree,
+            on_commit=on_commit,
         )
     except AutoError as exc:
         run.state = "failed"

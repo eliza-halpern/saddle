@@ -469,6 +469,8 @@ class AutoResult:
     outcome: str
     reason: str
     commit: str
+    base: str = ""
+    """The commit the run's branch started from (a 40-hex sha, never a branch name)."""
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -681,6 +683,8 @@ def run_auto(
     answer: Callable[[Question], str | None] | None = None,
     cancel: Callable[[], bool] | None = None,
     on_budget: Callable[[RunBudget], None] | None = None,
+    on_worktree: Callable[[Path, str, str], None] | None = None,
+    on_commit: Callable[[str], None] | None = None,
 ) -> AutoResult:
     """Run one task to `finish` or a budget, then commit what it left.
 
@@ -688,7 +692,10 @@ def run_auto(
     is the chat's stop button; `on_budget` is handed the run's own
     `RunBudget` -- the object the engine charges -- once it exists, so a
     watcher reads spend from the run's accounting rather than keeping its
-    own clock. The CLI passes none of them.
+    own clock. `on_worktree` is handed the run's worktree, branch and base
+    commit the moment the worktree exists, so a watcher can record where the
+    run lives before it ends, and `on_commit` the sha its branch ends on. The
+    CLI passes none of them.
     """
     if options.arm not in ARMS:
         msg = f"unknown arm {options.arm!r}; expected one of {', '.join(ARMS)}"
@@ -736,6 +743,9 @@ def run_auto(
     run_id = options.run_id or uuid.uuid4().hex[:12]
     base = run_base(repo)
     worktree, branch = create_worktree(repo, run_id)
+    base_commit = _git(worktree, "rev-parse", "HEAD").strip()
+    if on_worktree is not None:
+        on_worktree(worktree, branch, base_commit)
     if options.resume_patch is not None:
         _git(worktree, "apply", str(options.resume_patch.resolve()))
     root = worktree.parent.parent.parent
@@ -975,6 +985,8 @@ def run_auto(
         message += f"\n{COAUTHOR_TRAILER}"
     _git(worktree, "commit", "-q", "--allow-empty", "--no-verify", "-m", message)
     commit = _git(worktree, "rev-parse", "HEAD").strip()
+    if on_commit is not None:
+        on_commit(commit)
     return AutoResult(
         run_id=run_id,
         worktree=worktree,
@@ -983,4 +995,5 @@ def run_auto(
         outcome=auto.outcome,
         reason=auto.reason,
         commit=commit,
+        base=base_commit,
     )
