@@ -50,6 +50,7 @@ from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_PREFIXES,
     AUTO_OUTCOMES,
+    BLOCKED_STOP,
     GUARDED_STOP_PREFIX,
     P1_EXTRACT_SPAN,
     PREMISE_DISPUTED_STOP,
@@ -938,6 +939,19 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             f"Needs you: the model refused the task ({reason}). It made no claim of done "
             "and did not dispute the premise; read its reason, then withdraw the task or "
             "re-scope it."
+        )
+    elif outcome.name == "auto:stopped" and outcome.detail.startswith(f"stopped: {BLOCKED_STOP}"):
+        # The model is stuck (`engine._blocked`) on information or a decision only a
+        # person can give. What it tried is sealed in the outcome; it is shown here on
+        # one line so the reviewer reads the attempt beside the blocker.
+        verdict = "needs_you"
+        reason = outcome.detail.split(";")[0].removeprefix(f"stopped: {BLOCKED_STOP}")
+        sealed_tried = (evidence or {}).get("blocked", {}).get("tried", "")
+        tried = " ".join(str(sealed_tried).split()).rstrip(".") or "not recorded"
+        verdict_text = (
+            f"Needs you: the model is blocked ({reason}). It tried: {tried}. It made no "
+            "claim of done and did not dispute or refuse the task; give it what it needs "
+            "and run it again, or withdraw the task."
         )
     elif outcome.name == "auto:stopped" and outcome.detail.startswith(
         f"stopped: {GUARDED_STOP_PREFIX}"

@@ -60,6 +60,7 @@ from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
 from saddle.task_requirements import ProbeTree
 from saddle.tools import (
+    BLOCKED_SCHEMA,
     CHECK_SCHEMA,
     DISPUTE_SCHEMA,
     FINISH_SCHEMA,
@@ -888,6 +889,7 @@ def run_auto(
             FINISH_SCHEMA,
             DISPUTE_SCHEMA,
             REFUSE_SCHEMA,
+            BLOCKED_SCHEMA,
             *([PREMISE_SCHEMA] if options.premise_check else []),
             *([CHECK_SCHEMA] if options.check_tool else []),
             *([INSTALL_SCHEMA] if options.wheels is not None else []),

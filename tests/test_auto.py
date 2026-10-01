@@ -936,6 +936,78 @@ def test_a_refusal_after_hedging_past_the_warmup_is_a_refusal_not_a_stall(
     assert result.reason.startswith(ends)
 
 
+# -- blocked: the model is stuck on something only a person can give -------------
+
+BLOCKER = {"reason": "which of two configs is live\nmore", "tried": "read both\nran the tests."}
+
+
+def test_a_blocked_run_ends_needing_you_with_its_reason_and_attempt_sealed(repo: Path) -> None:
+    """The model is stuck on information only a person can give: what blocks it
+    and what it tried are sealed whole, the run ends needing a person, and the
+    packet says it is blocked and shows the attempt on one line -- not a pass,
+    not a finish, not a dispute and not a refusal. Offered on every run."""
+    client = Scripted([[call("blocked", **BLOCKER)]])
+    result = auto(repo, client)
+    assert result.outcome == "stopped"
+    assert result.reason == "needs you: the run is blocked: which of two configs is live"
+    sealed = sidecar(result)
+    assert sealed["blocked"] == BLOCKER
+    assert not {"dispute", "refusal"} & set(sealed)
+    assert "blocked" in [t["function"]["name"] for t in client.asked[0]["tools"]]
+    from saddle.packet import compile_packet
+
+    packet = compile_packet(result.journal)
+    assert packet.verdict == "needs_you"
+    assert packet.verdict_text.startswith(
+        "Needs you: the model is blocked (which of two configs is live). "
+        "It tried: read both ran the tests. It made no claim of done"
+    )
+
+
+@pytest.mark.parametrize(
+    ("arguments", "missing"),
+    [
+        ({"reason": "which config is live"}, "you already tried"),
+        ({"reason": "which config is live", "tried": " \n"}, "you already tried"),
+        ({"reason": "which config is live", "tried": ["read both"]}, "you already tried"),
+        ({"tried": "read both"}, "is blocking you"),
+        ({"reason": "", "tried": "read both"}, "is blocking you"),
+    ],
+    ids=["no-tried", "blank-tried", "tried-not-text", "no-reason", "empty-reason"],
+)
+def test_a_block_without_a_reason_and_an_attempt_is_refused_and_the_run_goes_on(
+    repo: Path, arguments: dict[str, Any], missing: str
+) -> None:
+    """`blocked` is not a cheap way out: it must name both the blocker and what
+    was already tried. Missing either, nothing is sealed, the model is told
+    which, and the run continues to its own end."""
+    client = Scripted(
+        [
+            [call("blocked", **arguments)],
+            [call("edit_file", path="calc.py", old="a - b", new="a + b")],
+            finish(),
+        ]
+    )
+    result = auto(repo, client)
+    assert (result.outcome, result.reason) == ("finished", "finish called")
+    assert "blocked" not in sidecar(result)
+    told = [m for m in client.asked[1]["messages"] if m.get("role") == "tool"]
+    assert told[-1]["content"] == f"error: blocked refused: say what {missing}"
+
+
+def test_a_block_after_hedging_past_the_warmup_is_a_block_not_a_stall(repo: Path) -> None:
+    """`blocked` is a progress-action (`STALL_TOOLS`): a model that turns the task
+    over past the stall warmup and then says it is stuck is recorded as blocked,
+    not ejected as stalled in that same round. (The read control is in
+    test_a_refusal_after_hedging_past_the_warmup_is_a_refusal_not_a_stall.)"""
+    hedged = [StreamToken(stream="reasoning", text=HEDGY), call("blocked", **BLOCKER)]
+    result = auto(
+        repo, Scripted([hedged]), stall_check=True, time_budget_s=100000, clock=Clock(700)
+    )
+    assert result.outcome == "stopped"
+    assert result.reason.startswith("needs you: the run is blocked: ")
+
+
 @pytest.mark.parametrize("formats", [True, False], ids=["format-at-finish", "default"])
 def test_format_at_finish_formats_the_changed_files_and_says_so_only_when_asked(
     repo: Path, formats: bool
@@ -1111,6 +1183,28 @@ def test_a_refusal_that_is_not_an_object_is_refused(arguments: str, refusal: str
     assert told.startswith("refusal recorded")
     assert run.refusal == {"reason": "out of scope"}
     assert run.reason == "needs you: the task was refused: out of scope"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ("{", "error: blocked needs a JSON object with reason and tried"),
+        ('["a reason"]', "error: blocked needs a JSON object with reason and tried"),
+        ("", "error: blocked refused: say what is blocking you"),
+    ],
+    ids=["not-json", "not-object", "no-arguments"],
+)
+def test_a_block_that_is_not_an_object_is_refused(arguments: str, refusal: str) -> None:
+    from saddle.engine import _blocked
+
+    run = _run()
+    told = _blocked(run, arguments)
+    assert told.startswith(refusal)
+    assert (run.blocked, run.outcome) == (None, "")
+    told = _blocked(run, json.dumps({"reason": "which config", "tried": "read both"}))
+    assert told.startswith("blocked recorded")
+    assert run.blocked == {"reason": "which config", "tried": "read both"}
+    assert run.reason == "needs you: the run is blocked: which config"
 
 
 @pytest.mark.parametrize("tool", ["premise_check", "dispute"])

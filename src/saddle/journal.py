@@ -639,6 +639,11 @@ REFUSED_STOP: Final = "needs you: the task was refused: "
 declines the task on grounds it will not act on (harmful, out of scope, against
 policy). Unlike a dispute it carries no evidence -- a refusal is not a factual
 claim about the code -- only the model's reason, and a person reviews it."""
+BLOCKED_STOP: Final = "needs you: the run is blocked: "
+"""The stop reason when the model calls `blocked` (`engine._blocked`): the model
+is stuck on information or a decision only a person can give. Not done, not a
+disputed premise, not a refusal: its reason and what it already tried are
+sealed, and a person unblocks the task or withdraws it."""
 STALL_STOP: Final = "needs you: stalled"
 """The stop-reason prefix when `--stall-check` ejects a stalled run
 (`engine.STALLED`): the run made no progress and ends needing a person to read

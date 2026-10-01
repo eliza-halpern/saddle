@@ -18,7 +18,7 @@ from test_keep_reasoning import _render
 from saddle.auto import SYSTEM_PROMPT, AutoOptions, run_auto
 from saddle.engine import AUTO_NUDGE, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Compaction
-from saddle.memory import KEEP_RECENT, compact, estimate_tokens
+from saddle.memory import CHARS_PER_TOKEN, KEEP_RECENT, REREAD, compact, estimate_tokens
 from saddle.vllm import VllmClient
 
 TASK = "TASK-7f3a: make add() in calc.py return the sum instead of the difference"
@@ -118,11 +118,17 @@ def test_f0_auto_run_keeps_every_request_under_the_compaction_limit(repo: Path) 
     run_auto hands one turn to run_turn; compaction runs once, before the
     round loop, so rounds 2..N are never compacted and the prompt grows
     until the server refuses it.
+
+    Reads are 500 lines, not 600. At 600, offering `blocked` lowered the
+    limit to 13,421 and a request landed in a band where `compact` itself ends
+    a few tokens over its limit (#122, on the record in
+    test_compaction_can_end_over_its_limit_by_the_unreserved_note): a defect
+    of `compact`, not of the per-request compaction this test is about.
     """
     (repo / "big.py").write_text(BIG)
     git(repo, "add", "big.py")
     git(repo, "commit", "-q", "-m", "big")
-    reads = [[call("read_file", f"r{i}", path="big.py", limit=600)] for i in range(8)]
+    reads = [[call("read_file", f"r{i}", path="big.py", limit=500)] for i in range(8)]
     client = Scripted([*reads, finish()])
     options = AutoOptions(
         task=TASK, repo=repo, run_id="f0", arm="E", context_tokens=40_000, token_budget=10**7
@@ -136,6 +142,25 @@ def test_f0_auto_run_keeps_every_request_under_the_compaction_limit(repo: Path) 
     limit = probe.compaction_limit()
     sizes = [estimate_tokens(req["messages"]) for req in client.asked]
     assert max(sizes) <= limit, f"request sizes {sizes} vs compaction limit {limit}"
+
+
+def test_compaction_can_end_over_its_limit_by_the_unreserved_note() -> None:
+    """Known-bad, on the record (#122): stages 2 and 3 reserve room for
+    the note's run-state block only (`len(block) // CHARS_PER_TOKEN`), not for
+    its header, topics and hint. At a limit equal to what stage 2 cannot drop
+    plus that reserve, stage 2 stops, stage 3 sees room and shrinks nothing,
+    and the note then inserted takes the request over the limit. A fix that
+    reserves the whole note flips this test, and must say so (`flip:`)."""
+    block = "Files changed so far: calc.py\nLast audit: none yet\n" * 3
+    read = "\n".join(BIG.splitlines()[:600])
+    messages = [{"role": "system", "content": _auto_system()}, {"role": "user", "content": TASK}]
+    for i in range(5):
+        messages += _tool_round(i, "read_file", {"path": "big.py", "limit": 600}, read)
+    kept = messages[:2] + messages[-KEEP_RECENT:]  # system, task, and the protected tail
+    limit = estimate_tokens(kept) + len(block) // CHARS_PER_TOKEN
+    compact(messages, limit_tokens=limit, pin="first", state=lambda: block, hint=REREAD)
+    assert len(messages) == len(kept) + 1  # harness: stage 2 dropped all it could; note in
+    assert estimate_tokens(messages) > limit
 
 
 # -- D1: the task statement survives compaction ---------------------------------

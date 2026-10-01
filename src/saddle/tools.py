@@ -281,6 +281,21 @@ REFUSE_SCHEMA: Final[dict[str, Any]] = _tool(
     ["reason"],
 )
 
+BLOCKED_TOOL: Final = "blocked"
+BLOCKED_SCHEMA: Final[dict[str, Any]] = _tool(
+    BLOCKED_TOOL,
+    "End the run because you are stuck: you need information or a decision only the "
+    "person who gave the task can give, and neither the repository nor the task "
+    "supplies it. Nobody answers during the run, so this ends it and returns it to "
+    "them. Say what is blocking you, and what you already tried: what you read, ran "
+    "and ruled out. It is not a way to avoid hard or long work: if the task can be "
+    "done, do it and call `finish`. Use `dispute` when the task's premise is false "
+    "and you can show it, and `refuse` when you will not do the task. This is not a "
+    "pass and not a finish. A call without both a reason and what you tried is refused.",
+    {"reason": {"type": "string"}, "tried": {"type": "string"}},
+    ["reason", "tried"],
+)
+
 PREMISE_TOOL: Final = "premise_check"
 """`saddle auto --premise-check`: before its first edit the model shows the
 problem the task describes (`engine._premise`). Saddle reruns the commands and
