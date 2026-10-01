@@ -1,0 +1,17 @@
+# Formatting options chosen to match pyproject.toml's existing style: four-space
+# indentation, long arrays kept on the lines the author broke them over, keys
+# in the order written.
+# uv.lock is written by uv and rewritten on every lock; its layout is uv's, not ours.
+# The default include already skips it; it is named so a wider include cannot pick it up.
+# benchmark/tasks holds task fixtures (planted defects, adapted reference code) that are
+# never edited to satisfy a formatter. The rest are generated or third-party trees.
+exclude = ["uv.lock", "benchmark/tasks/**", ".venv/**", "node_modules/**", "mutants/**"]
+
+[formatting]
+indent_string = "    "
+array_auto_expand = false
+array_auto_collapse = false
+column_width = 100
+reorder_keys = false
+reorder_arrays = false
+allowed_blank_lines = 1

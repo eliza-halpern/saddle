@@ -15,6 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # check.sh installs the pinned npm packages and runs the browser tests;
+      # the Node major comes from .node-version. The browser tests use the
+      # google-chrome that the runner image ships.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: ./check.sh
   mutation:
     if: github.event_name == 'workflow_dispatch'

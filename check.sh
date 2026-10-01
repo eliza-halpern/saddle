@@ -12,6 +12,9 @@ fi
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
+# CI workflows lint clean (shellcheck included) and uv.lock matches pyproject.toml.
+uv run actionlint .github/workflows/*.yml
+uv lock --check
 # The suite runs on as many pytest-xdist workers as the audit uses on this repo
 # (`[tool.saddle] test-workers` in pyproject.toml); pytest-cov combines every
 # worker's lines for the 100% line and branch gate in `addopts`. `worksteal`
