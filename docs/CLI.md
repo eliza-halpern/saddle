@@ -53,7 +53,8 @@ test-timeout = 3600   # seconds
   `saddle run`'s `HEAD`. A run that edits `pyproject.toml` does not change the limit it
   is judged under. An edit of yours takes effect once it is committed.
 - The value is a number of seconds above 0 and at most 86400 (a day). The keys saddle
-  reads in `[tool.saddle]` are `test-timeout` and `test-workers` (below).
+  reads in `[tool.saddle]` are `test-timeout`, `test-workers` and `sandbox-expose` (all
+  below), and `static-check`.
 - A value that is not usable stops the audit instead of falling back to 300 s. This
   covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
   table (such as the typo `test_timeout`), or a `pyproject.toml` that is not TOML. The
@@ -119,6 +120,37 @@ test-workers = 8
 Saddle's own repository sets `test-workers = 8`: its suite, with coverage, took 376 s
 on 8 workers against 1209 to 1378 s serially, with the same tests passing and 100% line
 and branch coverage. Its own `check.sh` runs the suite on the same number of workers.
+
+## Commands the sandbox shows
+
+The audit runs your tests in a sandbox that shows only the system directories, your
+project's virtualenv and the working tree; your home directory is empty. A test that
+needs a tool installed under it, such as `node` and a browser for a web page's tests,
+does not find the tool, and a suite that skips such tests when the tool is missing
+passes without having run them. A project names what its tests need:
+
+```toml
+[tool.saddle]
+sandbox-expose = ["node", "google-chrome"]
+```
+
+- Each name is looked up on the PATH saddle runs with, and the directory the command is
+  installed in (the parent of its `bin/`) is shown read-only, so a runtime finds its
+  libraries. Nothing can be written there, and nothing else under your home directory
+  is shown. A name that is not found is skipped; the command then fails inside the
+  sandbox as it would have.
+- The sandbox's network is unchanged: a test's own server on the loopback address works,
+  and nothing else is reachable.
+- It is read like `test-timeout`: from the commit the work starts from, never from the
+  tree being judged, so an audited change cannot give itself a tool. An edit takes
+  effect for runs that start after it is committed. The value is a list of bare command
+  names; a path, a comma or a non-list stops the audit (`error: cannot read the
+  sandbox's exposed commands: pyproject.toml at <commit>: …`).
+- `SADDLE_SANDBOX_EXPOSE` (comma-separated names, set where saddle is launched) names
+  commands for every project; the two add together.
+- The audit's own runs read it (`saddle audit`, and the checkpoints, finish audit and
+  test-impact map of `saddle auto` and the chat's Task runs). `saddle run` and the
+  commands the model itself runs in its sandbox read only the environment variable.
 
 ## saddle auto TASK
 

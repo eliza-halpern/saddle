@@ -86,6 +86,7 @@ from saddle.evidence import (
     run_capture,
     run_static_check,
     run_suite_capture,
+    sandbox_expose,
     static_check,
     suite_limit,
     suite_run,
@@ -1230,69 +1231,71 @@ class Auditor:
                 limit = suite_limit(copy, resolved).seconds
                 workers = suite_workers(copy, resolved).count
                 statics = static_check(copy, resolved)
+                exposed = sandbox_expose(copy, resolved)
             except SuiteLimitError as exc:
                 raise AuditError(str(exc)) from exc
             # One run of the battery serves both tiers: at tier 2 the tier-1
             # findings come from the same suite run, and are cached under
             # tier 1's key, unless that tree's tier 1 is already known. The
             # finish audit used to run the whole suite once per tier on one tree.
-            key1 = self._key(1, staged, resolved)
-            first = (self._cached(key1) or self._reuse(same1, key1)) if tier == 2 else None
-            if first is not None and not first.passed:
-                return self._store(_blocked_tier2(key, first))
-            p1: Future[TaskRequirementsCheck] | None = None
-            pool: ThreadPoolExecutor | None = None
-            static: Future[GateCheck] | None = None
-            if first is None and statics:
-                # Beside the tests too: a type check takes seconds, the suite minutes.
-                pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
-                static = pool.submit(
-                    contextvars.copy_context().run, _run_static, statics, copy, limit
-                )
-            if first is None and self.config.task_requirements is not None:
-                # Beside the tests, not after them: it adds to the wall only if
-                # it outlasts them. The context carries the project environment.
-                pool = pool or ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
-                p1 = pool.submit(
-                    contextvars.copy_context().run,
-                    check_tree,
-                    copy,
-                    resolved,
-                    self.config.task_requirements,
-                )
-            memo = self.config.impact
-            selection = _selection(memo, copy, resolved)
-            try:
-                gated = runner.run_node_gate(
-                    self.node,
-                    copy,
-                    baseline=resolved,
-                    tier2=tier == 2,
-                    test_timeout=limit,
-                    test_workers=workers,
-                    test_selection=selection,
-                    # A whole-suite run under a memo (re)draws the map.
-                    on_suite=(
-                        functools.partial(_record_impact, memo, copy)
-                        if memo is not None and selection is None
-                        else None
-                    ),
-                )
-            finally:
-                if pool is not None:
-                    pool.shutdown(wait=True)
-            if tier == 2:
-                if first is None:
-                    first = self._tiered(1, key1, gated, copy, resolved, limit, p1, static)
-                self._by_syntax[same1] = first.key
-                if not first.passed:
+            with sandbox.also_exposing(exposed):
+                key1 = self._key(1, staged, resolved)
+                first = (self._cached(key1) or self._reuse(same1, key1)) if tier == 2 else None
+                if first is not None and not first.passed:
                     return self._store(_blocked_tier2(key, first))
-                second = self._tiered(2, key, gated, copy, resolved, limit, None)
-                self._by_syntax[same] = second.key
-                return second
-            done = self._tiered(1, key, gated, copy, resolved, limit, p1, static)
-            self._by_syntax[same] = done.key
-            return done
+                p1: Future[TaskRequirementsCheck] | None = None
+                pool: ThreadPoolExecutor | None = None
+                static: Future[GateCheck] | None = None
+                if first is None and statics:
+                    # Beside the tests too: a type check takes seconds, the suite minutes.
+                    pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
+                    static = pool.submit(
+                        contextvars.copy_context().run, _run_static, statics, copy, limit
+                    )
+                if first is None and self.config.task_requirements is not None:
+                    # Beside the tests, not after them: it adds to the wall only if
+                    # it outlasts them. The context carries the project environment.
+                    pool = pool or ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
+                    p1 = pool.submit(
+                        contextvars.copy_context().run,
+                        check_tree,
+                        copy,
+                        resolved,
+                        self.config.task_requirements,
+                    )
+                memo = self.config.impact
+                selection = _selection(memo, copy, resolved)
+                try:
+                    gated = runner.run_node_gate(
+                        self.node,
+                        copy,
+                        baseline=resolved,
+                        tier2=tier == 2,
+                        test_timeout=limit,
+                        test_workers=workers,
+                        test_selection=selection,
+                        # A whole-suite run under a memo (re)draws the map.
+                        on_suite=(
+                            functools.partial(_record_impact, memo, copy)
+                            if memo is not None and selection is None
+                            else None
+                        ),
+                    )
+                finally:
+                    if pool is not None:
+                        pool.shutdown(wait=True)
+                if tier == 2:
+                    if first is None:
+                        first = self._tiered(1, key1, gated, copy, resolved, limit, p1, static)
+                    self._by_syntax[same1] = first.key
+                    if not first.passed:
+                        return self._store(_blocked_tier2(key, first))
+                    second = self._tiered(2, key, gated, copy, resolved, limit, None)
+                    self._by_syntax[same] = second.key
+                    return second
+                done = self._tiered(1, key, gated, copy, resolved, limit, p1, static)
+                self._by_syntax[same] = done.key
+                return done
 
     def _reuse(self, same: str, key: str) -> Findings | None:
         """The findings decided for a tree with the same syntax key, stored and
@@ -1471,6 +1474,7 @@ class Auditor:
             try:
                 limit = suite_limit(copy, resolved).seconds
                 workers = suite_workers(copy, resolved).count
+                exposed = sandbox_expose(copy, resolved)
             except SuiteLimitError as exc:
                 raise AuditError(str(exc)) from exc
             command = self.node.deterministic_gate.test_command
@@ -1481,20 +1485,23 @@ class Auditor:
                 memo.tests = impact.loads(cached.read_text())
                 if memo.tests is not None:
                     return f"map read from {cached.name}"
-            data_file = str(copy / ".coverage.map")
-            drop_test_caches(copy)
-            mode = suite_run(copy, command, workers)
-            ran = run_suite_capture(mode, command, copy, data_file, timeout=limit, contexts=True)
-            _record_impact(memo, copy, data_file, ran)
-            if memo.tests is None:
-                why = "timed out" if ran.timed_out else f"exit {ran.exit_code}"
-                return f"no map: the suite recorded no test context ({why})"
-            if cached is not None:
-                cached.parent.mkdir(parents=True, exist_ok=True)
-                partial = cached.with_suffix(".partial")
-                partial.write_text(impact.dumps(memo.tests))
-                os.replace(partial, cached)
-            return f"map drawn over {len(memo.tests)} files"
+            with sandbox.also_exposing(exposed):
+                data_file = str(copy / ".coverage.map")
+                drop_test_caches(copy)
+                mode = suite_run(copy, command, workers)
+                ran = run_suite_capture(
+                    mode, command, copy, data_file, timeout=limit, contexts=True
+                )
+                _record_impact(memo, copy, data_file, ran)
+                if memo.tests is None:
+                    why = "timed out" if ran.timed_out else f"exit {ran.exit_code}"
+                    return f"no map: the suite recorded no test context ({why})"
+                if cached is not None:
+                    cached.parent.mkdir(parents=True, exist_ok=True)
+                    partial = cached.with_suffix(".partial")
+                    partial.write_text(impact.dumps(memo.tests))
+                    os.replace(partial, cached)
+                return f"map drawn over {len(memo.tests)} files"
 
     def prime(self, tree: Path | None = None) -> None:
         """Run tiers 1 and 2 on `tree` as one run of the battery and cache both.

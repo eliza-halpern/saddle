@@ -93,7 +93,17 @@ STATIC_CHECK_KEY: Final = "static-check"
 "tests"]` in the `[tool.saddle]` table of its `pyproject.toml` (`static_check`).
 Absent, no static check runs and the audit emits no finding for it."""
 
-SADDLE_KEYS: Final = (SUITE_LIMIT_KEY, SUITE_WORKERS_KEY, STATIC_CHECK_KEY)
+SANDBOX_EXPOSE_KEY: Final = "sandbox-expose"
+"""Command names the audit's sandbox also shows the project's suite, read-only:
+`sandbox-expose = ["node", "google-chrome"]` in the `[tool.saddle]` table of its
+`pyproject.toml` (`sandbox_expose`). Absent, only the gate tools are shown."""
+
+SADDLE_KEYS: Final = (
+    SUITE_LIMIT_KEY,
+    SUITE_WORKERS_KEY,
+    STATIC_CHECK_KEY,
+    SANDBOX_EXPOSE_KEY,
+)
 """Every key saddle reads in `[tool.saddle]`. Any other key there is refused
 (`_committed_saddle_table`): a typo must not read as "not set"."""
 
@@ -636,6 +646,35 @@ def static_check(tree: Path, rev: str) -> tuple[str, ...]:
         msg = (
             f"cannot read the static check: {where}: {STATIC_CHECK_KEY} = {value!r} "
             "is not a non-empty list of command words"
+        )
+        raise SuiteLimitError(msg)
+    return tuple(value)
+
+
+def sandbox_expose(tree: Path, rev: str) -> tuple[str, ...]:
+    """The command names the project asks the audit's sandbox to show, as committed at `rev`.
+
+    A project whose tests drive a browser needs `node` and a Chrome inside the
+    sandbox, which hides HOME: without them its browser tests skip, and the
+    audit passed a suite that had not run them. Read exactly where and how
+    `suite_limit` reads `test-timeout`, so the tree under audit cannot grant
+    itself a tool: an edit to its `pyproject.toml` changes nothing for the
+    run it is part of. `sandbox.also_exposing` carries the names to the
+    confined runs. `[]` and no key both give (). A value that is not a list
+    of bare command names (a name with a path separator or a comma would
+    name a file, not a command found on PATH) raises `SuiteLimitError`
+    naming the commit and the value."""
+    table, where = _committed_saddle_table(tree, rev, "the sandbox's exposed commands")
+    if table is None or SANDBOX_EXPOSE_KEY not in table:
+        return ()
+    value = table[SANDBOX_EXPOSE_KEY]
+    if not isinstance(value, list) or not all(
+        isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", name)
+        for name in value
+    ):
+        msg = (
+            f"cannot read the sandbox's exposed commands: {where}: {SANDBOX_EXPOSE_KEY} = "
+            f"{value!r} is not a list of bare command names"
         )
         raise SuiteLimitError(msg)
     return tuple(value)

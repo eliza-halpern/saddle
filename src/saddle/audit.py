@@ -23,8 +23,9 @@ out tools' versions) all match a stored key exactly. Any other file state --
 a missing file, unparseable JSON, a mismatched key -- is a miss, never a
 verdict and never an exception. `nothing-to-audit` is never cached. The
 tests run under the project's time limit (`evidence.suite_limit`) and on its
-worker count (`evidence.suite_workers`), both read at the resolved baseline
-and so already named by the key.
+worker count (`evidence.suite_workers`), and with the commands the project asks
+its sandbox to show (`evidence.sandbox_expose`), all read at the resolved
+baseline and so already named by the key.
 
 Layering: this module imports `dag`, `evidence`, `gates`, `runner` and `sandbox`; only the
 CLI and `saddle.auditor` import it.
@@ -54,6 +55,7 @@ from saddle.evidence import (
     MutationOutcome,
     SuiteLimitError,
     run_capture,
+    sandbox_expose,
     suite_limit,
     suite_workers,
 )
@@ -528,16 +530,18 @@ def audit_tree(
         try:
             limit = suite_limit(copy, resolved).seconds
             workers = suite_workers(copy, resolved).count
+            exposed = sandbox_expose(copy, resolved)
         except SuiteLimitError as exc:
             raise AuditError(str(exc)) from exc
-        gated = run_node_gate(
-            audit_node(test_command),
-            copy,
-            baseline=resolved,
-            recorder=recorder,
-            test_timeout=limit,
-            test_workers=workers,
-        )
+        with sandbox.also_exposing(exposed):
+            gated = run_node_gate(
+                audit_node(test_command),
+                copy,
+                baseline=resolved,
+                recorder=recorder,
+                test_timeout=limit,
+                test_workers=workers,
+            )
         checks, mutation = audit_checks(gated.checks, gated.mutation, copy)
     result = AuditResult(
         verdict="refuse" if any(check.status == "fail" for check in checks) else "accept",

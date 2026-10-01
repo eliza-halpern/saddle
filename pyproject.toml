@@ -96,6 +96,10 @@ test-workers = 8
 # The finish audit runs this beside the suite and refuses on a failure: the
 # same strict mypy check.sh runs, so a run's new test file is type-checked too.
 static-check = ["mypy", "src", "tests"]
+# The browser tests drive Chrome with node; the audit's sandbox hides HOME, where
+# node may live, so name both here (docs/CLI.md, "Commands the sandbox shows").
+# Read like test-timeout, from the starting commit.
+sandbox-expose = ["node", "google-chrome"]
 
 [tool.mutmut]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.

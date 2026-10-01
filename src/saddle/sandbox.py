@@ -400,8 +400,30 @@ EXPOSE_ENV: Final = "SADDLE_SANDBOX_EXPOSE"
 """Comma-separated command names a sandboxed command may also run, beyond the
 gate tools: each is found on saddle's own PATH, and its install directory is
 shown read-only (`exposed_commands`). Unset or empty, nothing more is shown.
-For a project whose tests need a tool installed under HOME -- `node` and a
-browser for web tests, say -- which the sandbox otherwise hides."""
+A project names its own under `[tool.saddle] sandbox-expose`
+(`also_exposing`), which adds to these. For a project whose tests need a
+tool installed under HOME -- `node` and a browser for web tests, say --
+which the sandbox otherwise hides."""
+
+
+_EXPOSED: ContextVar[tuple[str, ...]] = ContextVar("saddle_exposed", default=())
+
+
+@contextmanager
+def also_exposing(names: Sequence[str]) -> Iterator[None]:
+    """Within the block (this thread, this context), `default_expose` also shows
+    each command in `names`, as `EXPOSE_ENV` would.
+
+    The names are a project's own (`evidence.sandbox_expose`, read at the
+    audit's baseline), so a gate run for that project can run its `node` and
+    browser without the person who launched saddle exporting anything. Carried
+    like `using_project_env`, so a worker thread started under
+    `contextvars.copy_context` sees it too."""
+    token = _EXPOSED.set(tuple(names))
+    try:
+        yield
+    finally:
+        _EXPOSED.reset(token)
 
 
 def exposed_commands(path: str, names: str) -> dict[Path, Path]:
@@ -459,7 +481,8 @@ def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
             site = user_site(landed)
             if site is not None:
                 binds[site] = site
-    binds.update(exposed_commands(env.get("PATH", ""), os.environ.get(EXPOSE_ENV, "")))
+    named = ",".join([os.environ.get(EXPOSE_ENV, ""), *_EXPOSED.get()])
+    binds.update(exposed_commands(env.get("PATH", ""), named))
     for venv in venvs:
         if not (venv / "pyvenv.cfg").is_file():
             continue
