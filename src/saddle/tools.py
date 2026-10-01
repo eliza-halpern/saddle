@@ -219,7 +219,8 @@ FINISH_SCHEMA: Final[dict[str, Any]] = _tool(
     FINISH_TOOL,
     "Finish the task. Call this once, when you are done, with a short account "
     "of what you changed and why. The account is kept as your narrative; it is "
-    "not treated as proof that anything works.",
+    "not treated as proof that anything works. Call it only when the task is "
+    "done, as it says so; if you cannot do the task, call `blocked` instead.",
     {"summary": {"type": "string"}},
     ["summary"],
 )
@@ -284,9 +285,10 @@ REFUSE_SCHEMA: Final[dict[str, Any]] = _tool(
 BLOCKED_TOOL: Final = "blocked"
 BLOCKED_SCHEMA: Final[dict[str, Any]] = _tool(
     BLOCKED_TOOL,
-    "End the run because you are stuck: you need information or a decision only the "
-    "person who gave the task can give, and neither the repository nor the task "
-    "supplies it. Nobody answers during the run, so this ends it and returns it to "
+    "End the run because you are stuck: you need something only the person who "
+    "gave the task can provide (information, a decision, or a tool, package or "
+    "network access this environment lacks), and neither the repository nor the "
+    "task supplies it. Nobody answers during the run, so this ends it and returns it to "
     "them. Say what is blocking you, and what you already tried: what you read, ran "
     "and ruled out. It is not a way to avoid hard or long work: if the task can be "
     "done, do it and call `finish`. Use `dispute` when the task's premise is false "

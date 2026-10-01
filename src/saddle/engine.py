@@ -103,7 +103,8 @@ cap; it is bounded by its `RunBudget` of wall time and generated tokens."""
 
 AUTO_NUDGE: Final = (
     "No one is here to reply. Keep working with the tools, or call finish "
-    "when the task is done. If it cannot be done, call finish and say why."
+    "when the task is done. If you cannot go on without something only the "
+    "person can give, call blocked."
 )
 """What an autonomous run is told when a round ends with no tool call. In
 chat that ends the turn; here it would end the run with nothing recorded

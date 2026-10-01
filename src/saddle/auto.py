@@ -113,9 +113,11 @@ SYSTEM_PROMPT: Final = (
     "tests with run_command to check it. "
     "{tests} "
     "When the task is done, call finish once with a short account of what you "
-    "changed and why. If the problem is real but cannot be done honestly, call "
-    "finish and say so. Your account is recorded as narrative; it does not count "
-    "as proof."
+    "changed and why. Your account is recorded as narrative; it does not count "
+    "as proof. Call finish only when the task is done. If the problem is real but "
+    "you cannot do it here, because something it needs is missing (a tool, a "
+    "package, network access, or information only the person has), call blocked "
+    "with what is missing and what you tried."
 )
 
 

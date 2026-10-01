@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -1006,6 +1007,25 @@ def test_a_block_after_hedging_past_the_warmup_is_a_block_not_a_stall(repo: Path
     )
     assert result.outcome == "stopped"
     assert result.reason.startswith("needs you: the run is blocked: ")
+
+
+def test_a_task_it_cannot_do_is_sent_to_blocked_never_to_finish(repo: Path) -> None:
+    """`finish` says the task is done, so nothing the model reads may send a
+    task it cannot do there. A watched run that could not do its task (no
+    package manager, no network) read "call finish and say so", ruled out
+    `dispute` as being for bugs, and spent its run dressing the gap up as done.
+    What a run is actually sent -- its system message, the nudge after a round
+    with no tool call, and the finish tool -- names `blocked` as that exit,
+    and `blocked` names a missing tool or network access, not only information."""
+    client = Scripted([[StreamToken(stream="content", text="I cannot do this here.")], finish()])
+    auto(repo, client)
+    system = client.asked[0]["messages"][0]["content"]
+    nudge = client.asked[1]["messages"][-1]["content"]
+    told = {t["function"]["name"]: t["function"]["description"] for t in client.asked[0]["tools"]}
+    for text in (system, nudge, told["finish"]):
+        assert re.search(r"call `?blocked`?", text), text
+        assert "finish and say" not in text
+    assert "network access" in told["blocked"]
 
 
 @pytest.mark.parametrize("formats", [True, False], ids=["format-at-finish", "default"])
