@@ -829,6 +829,22 @@ def test_every_tier_0_finding_names_the_file_it_checked(clean_tree: Path) -> Non
     assert "- ruff (tier 0): fail, code-wrong: n.py: " in text
 
 
+def test_a_tier_0_format_finding_quotes_the_diff_that_fixes_it(clean_tree: Path) -> None:
+    """Red before: an unformatted file's finding read only "ruff format --check
+    exited 1", and a Task-lane run whose sandbox had no ruff spent its last
+    twenty minutes guessing at the formatter. The finding quotes ruff's own
+    diff, and the text that diff describes is text the same check passes."""
+    auditor = Auditor(clean_tree)
+    found = auditor.tier0("n.py", "def f():\n    return  2\n").findings
+    bad = next(f for f in found if f.gate == "ruff")
+    assert bad.verdict == "fail"
+    assert "\n-    return  2\n+    return 2" in bad.detail
+    hunk = bad.detail.split("@@\n", 1)[1].splitlines()
+    fixed = "".join(f"{line[1:]}\n" for line in hunk if line[:1] in (" ", "+"))
+    again = auditor.tier0("n.py", fixed).findings
+    assert next(f for f in again if f.gate == "ruff").verdict == "pass"
+
+
 # -- helpers the audit leans on: impact selection, syntax key, reuse, the map ----
 
 

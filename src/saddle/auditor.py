@@ -1075,7 +1075,9 @@ class Auditor:
             (current / rel).write_text(new_text)
             lint, found = ruff_findings(current, [rel])
             overrides = format_overrides(self.repo, self.baseline_rev)
-            fmt = run_capture(ruff_argv("format", "--check", *overrides, rel), current)
+            # `--diff`, not `--check`: the same exits, and the diff it prints is
+            # what the finding hands a model that has no ruff (`check_ruff`).
+            fmt = run_capture(ruff_argv("format", "--diff", *overrides, rel), current)
             shown = run_capture(["git", "show", f"{self.baseline_rev}:{rel}"], self.repo)
             old: list[RuffFinding] = []
             if shown.exit_code == 0:
@@ -1089,6 +1091,7 @@ class Auditor:
             inherited=inherited,
             lint_exit=lint.exit_code,
             format_exit=fmt.exit_code,
+            format_diff=fmt.stdout,
         )
         roots = [
             self.repo,

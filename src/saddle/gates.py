@@ -41,6 +41,12 @@ SHELL_TIMEOUT: Final = 124
 TOOL_UNAVAILABLE: Final = 127
 # How many introduced ruff findings the gate detail names before eliding.
 RUFF_NAMED_FINDINGS: Final = 5
+RUFF_FORMAT_DIFF_LINES: Final = 60
+"""The most lines of `ruff format --diff` a format finding quotes. The diff
+is the finding: a run whose sandbox has no ruff (a Task-lane run on a box
+without it) was told only "ruff format --check exited 1" and spent its last
+twenty minutes reverse-engineering the formatter by hand. A longer diff is
+cut here; fixing the part shown shrinks it, and the next audit shows the rest."""
 # Baseline runs sampled per red-phase check. Red-phase is the only gate
 # that reasons over two runs, so its evidence is worth exactly what the
 # stability of the pre-change leg is worth; one observation cannot tell a
@@ -195,6 +201,7 @@ def check_ruff(
     inherited: int,
     lint_exit: int,
     format_exit: int,
+    format_diff: str = "",
 ) -> GateCheck:
     """The ruff gate: a node fails for lint its own diff introduced.
 
@@ -204,9 +211,12 @@ def check_ruff(
     the node inherited is reported and does not fail it (T2's impl node
     burned three attempts on a BLE001 the baseline shipped, and the fix
     that was finally accepted was a `noqa` on code it never wrote).
-    Formatting is unchanged: the harness formats the diff, so a format
-    failure is always the node's. The detail names the rules, file and
-    line (a bare `ruff check exited 1` told the worker nothing).
+    Formatting is unchanged: a format failure is always the node's. Where
+    the harness does not format for it (an auto run without
+    `--format-at-finish`), `format_diff` -- `ruff format --diff`'s output --
+    is quoted, up to `RUFF_FORMAT_DIFF_LINES`, so the changes can be made
+    without ruff. The detail names the rules, file and line (a bare
+    `ruff check exited 1` told the worker nothing).
     """
     ordered = sorted(files)
     if not ordered:
@@ -235,6 +245,20 @@ def check_ruff(
             name="ruff",
             passed=False,
             detail=f"ruff check exited {lint_exit} with no findings parsed{inherited_note}",
+        )
+    if format_exit != 0 and format_diff.strip():
+        lines = format_diff.strip().splitlines()
+        shown = "\n".join(lines[:RUFF_FORMAT_DIFF_LINES])
+        more = len(lines) - RUFF_FORMAT_DIFF_LINES
+        cut = f"\n(+{more} more diff lines: make these, and the next audit shows the rest)"
+        return GateCheck(
+            name="ruff",
+            passed=False,
+            detail=(
+                f"ruff format would reformat it{inherited_note}. Make exactly these changes "
+                "(a unified diff: - is the current line, + what it must be); you do not "
+                f"need ruff to apply them:\n{shown}{cut if more > 0 else ''}"
+            ),
         )
     if format_exit != 0:
         return GateCheck(

@@ -279,8 +279,11 @@ def render(result: AuditResult) -> str:
     said: dict[str, int] = {}
     for f in bad:
         detail = _worded(result, f)
-        # A tier-0 finding names its file (`Finding.path`) when its detail does not.
-        where = f"{f.path}: " if f.path and f.path not in detail else ""
+        # A tier-0 finding names its file (`Finding.path`) when its detail's
+        # headline does not: a format finding's quoted diff names the file in
+        # its `--- path` header, below the line the model reads first.
+        headline = detail.split("\n", 1)[0]
+        where = f"{f.path}: " if f.path and f.path not in headline else ""
         text = f"- {f.gate} (tier {f.tier}): {f.verdict}, {f.reason}: {where}{detail}"
         said[text] = said.get(text, 0) + 1
     lines.extend(text if n == 1 else f"{text} ({n} findings)" for text, n in said.items())

@@ -18,6 +18,7 @@ from saddle.gates import (
     PYTEST_COLLECTION_ERROR,
     PYTEST_TESTS_FAILED,
     RED_PHASE_SAMPLES,
+    RUFF_FORMAT_DIFF_LINES,
     RUFF_NAMED_FINDINGS,
     SHELL_TIMEOUT,
     TOOL_UNAVAILABLE,
@@ -142,6 +143,44 @@ def test_ruff_format_failure_fails() -> None:
     check = check_ruff(["n.py"], introduced=[], inherited=0, lint_exit=0, format_exit=2)
     assert check.passed is False
     assert check.detail == "ruff format --check exited 2"
+
+
+FORMAT_DIFF = "--- n.py\n+++ n.py\n@@ -1 +1 @@\n-x=1\n+x = 1\n"
+
+
+def test_ruff_format_failure_quotes_the_diff_that_fixes_it() -> None:
+    """Known-bad: an unformatted file fails, and the detail quotes ruff's diff
+    whole under its headline, so a run with no ruff can still make the change
+    (a bare "exited 1" left one reverse-engineering the formatter by hand).
+    Known-good: a clean format exit passes whatever text came with it."""
+    check = check_ruff(
+        ["n.py"], introduced=[], inherited=0, lint_exit=0, format_exit=1, format_diff=FORMAT_DIFF
+    )
+    assert check.passed is False
+    head, body = check.detail.split("\n", 1)
+    assert head.startswith("ruff format would reformat it. Make exactly these changes")
+    assert body == FORMAT_DIFF.strip()
+    clean = check_ruff(
+        ["n.py"], introduced=[], inherited=0, lint_exit=0, format_exit=0, format_diff=FORMAT_DIFF
+    )
+    assert clean.passed is True
+
+
+def test_ruff_format_diff_is_cut_past_its_line_cap() -> None:
+    lines = [f"+line {i}" for i in range(RUFF_FORMAT_DIFF_LINES + 7)]
+    check = check_ruff(
+        ["n.py"],
+        introduced=[],
+        inherited=0,
+        lint_exit=0,
+        format_exit=1,
+        format_diff="\n".join(lines),
+    )
+    assert f"\n+line {RUFF_FORMAT_DIFF_LINES - 1}\n" in check.detail
+    assert f"+line {RUFF_FORMAT_DIFF_LINES}" not in check.detail
+    assert check.detail.endswith(
+        "(+7 more diff lines: make these, and the next audit shows the rest)"
+    )
 
 
 def test_ruff_nonzero_with_nothing_parsed_fails_closed() -> None:

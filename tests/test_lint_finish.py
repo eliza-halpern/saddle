@@ -133,10 +133,14 @@ def test_the_recorded_eaf_t5_s6_tree_is_refused_at_finish_for_the_tier0_reason(
     # the post-hoc refusal, read from cells/EAF-t5/s6/audit.json: format on
     # four files and one B904 in money.py; nothing else at tier 0
     assert "- ruff (tier 0): fail" in text
-    assert "ruff format --check exited 1" in text
+    assert "ruff format would reformat it" in text
     assert "money.py:67 B904" in text
     refused = [f for f in fed.results[-1].findings if f.verdict == "fail"]
     assert {f.gate for f in refused} == {"ruff"}
+    # each format finding quotes its own file's diff, so it can be fixed without ruff
+    formats = [f for f in refused if f.detail.startswith("ruff format would reformat it")]
+    assert len(formats) == 4
+    assert all(f"--- {f.path}\n" in f.detail for f in formats)
     assert all(f.tier == 0 for f in refused)
     assert fed.unresolved() == [
         {"gate": "ruff", "reason": "code-wrong", "cites": ["saddle.gates.check_ruff"]}
