@@ -287,7 +287,11 @@ planted-bug trees, 49 of 65 for the right reason (measured on `48eb6d6`). The op
    (`gates.check_mutation_shortlist`), which surfaces instead of refusing: an open
    changed-line survivor makes the finding `not-proven` and names it, coverage becomes a
    locator (`not-proven`, never a refusal), and `not-proven` does not refuse `finish`
-   (`auditor.Findings.passed`). Detection under shortlist is unmeasured.
+   (`auditor.Findings.passed`). Detection under shortlist is unmeasured. At tier 2 the
+   suite run also leaves pytest's junit report, and any skipped or xfailed test becomes a
+   `skipped-tests` finding (`not-proven`, never a refusal) naming the ids and reasons, for
+   the run that happened (impact-scoped or whole); a report that cannot be read says the
+   skips "could not be determined", never none.
 3. **Ledger** — the journal of §3 (`journal`, `saddle verify`), with an outcome span per
    run (`auto:finished` / `auto:stopped`), the tool-span list and the audit-span list
    sealed in the outcome's sidecar, `attempts/` sidecars beside it, and a `Saddle-Outcome`
@@ -299,7 +303,9 @@ planted-bug trees, 49 of 65 for the right reason (measured on `48eb6d6`). The op
    refuses a row that claims without citing a record. Rows: verdict, Contract, Tests,
    Mutation, Scope, Audit, Edit checks, Not proven, Narrative, Cost, Reproduce. Only an
    auditor finding is `proven`/`failed`; what the executor did is `observed`; missing
-   evidence is `absent` and the row is still shown. Audit verdicts are tiers 1–2 only:
+   evidence is `absent` and the row is still shown. The Not proven row names every
+   `not-proven` finding of any gate (`packet.compile_packet`) and reads "Nothing is left
+   unproven." only when there is none. Audit verdicts are tiers 1–2 only:
    tier 0 is counted on its own Edit checks row, and `blocked` (tier 2 never ran) is
    reported as blocked, never as failed (`packet._audits`, `packet._finished_but`). The
    Mutation and coverage findings carry English compiled from the sealed record by a fixed

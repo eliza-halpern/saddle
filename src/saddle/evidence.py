@@ -30,6 +30,7 @@ from io import BytesIO
 from pathlib import Path, PurePath, PurePosixPath
 from time import perf_counter
 from typing import Any, Final
+from xml.etree import ElementTree
 
 import coverage
 
@@ -1037,6 +1038,7 @@ def run_suite_capture(
     recorder: SpanRecorder | None = None,
     timeout: float | None,
     contexts: bool = False,
+    skip_report: Path | None = None,
 ) -> CapturedRun:
     """Run the suite as `run` says, recording coverage into `data_file`.
 
@@ -1047,8 +1049,11 @@ def run_suite_capture(
     holds) must not add lines no test ran. After the run its data file, if
     it wrote one, becomes `data_file`. The serial `coverage run` is
     `run_shell_capture` of `under_coverage`, unchanged. `contexts`: see
-    `SuiteRun.covered`."""
+    `SuiteRun.covered`. `skip_report`: where pytest writes its report of the
+    tests it skipped (`skip_report_options`, read by `read_skip_report`)."""
     command = run.covered(test_command, data_file, contexts=contexts)
+    if skip_report is not None and skip_reportable(test_command, cwd):
+        command = shlex.join([*shlex.split(command), *skip_report_options(skip_report)])
     recorded = Path(run.data_file) if run.by_pytest_cov and run.data_file else None
     if run.by_pytest_cov:
         for target in {Path(data_file), *([recorded] if recorded is not None else [])}:
@@ -1059,6 +1064,93 @@ def run_suite_capture(
     if recorded is not None and recorded.is_file():
         os.replace(recorded, data_file)
     return done
+
+
+SKIP_REPORT_NAME: Final = ".saddle-skips.xml"
+"""Where a gate's suite run leaves pytest's report of its skipped tests, in the
+audited copy (beside `.coverage.tier1`, untracked, so no diff names it)."""
+
+
+def skip_reportable(test_command: str, tree: Path) -> bool:
+    """Whether `skip_report_options` can be added to `test_command` in `tree`:
+    it runs pytest, and neither the command nor the project's pytest options
+    already name a junit report (a second `--junitxml` would replace the
+    project's own, and `-p no:junitxml` would make the option an error).
+
+    A command that is not pytest has no report to ask for: its skips are not
+    observable here, which is not a failed lookup."""
+    argv = shlex.split(test_command)
+    if "pytest" not in argv or any("junit" in arg for arg in argv):
+        return False
+    for name in PYTEST_CONFIG_FILES:
+        try:
+            if "junit" in (tree / name).read_text(errors="replace"):
+                return False
+        except OSError:
+            continue
+    return True
+
+
+def skip_report_options(report: Path) -> tuple[str, ...]:
+    """The pytest options that write the junit report `read_skip_report` reads.
+
+    A junit report, not the terminal summary: it names every skipped and
+    xfailed test with its own reason, `-rs` groups equal reasons into one
+    line, and the controller writes one report whatever the xdist workers
+    ran. `xunit1` because only that family records the test's `file`. The
+    options change what pytest writes, never what a test sees or what it
+    exits with."""
+    return ("-o", "junit_family=xunit1", f"--junitxml={report}")
+
+
+@dataclass(frozen=True)
+class SkippedTests:
+    """Which tests a suite run skipped, or why that is not known.
+
+    `known` False is a lookup that failed (`why` says how): never read it as
+    "nothing was skipped". `skipped` and `xfailed` hold (test id, reason)
+    pairs; an expected failure is not proven either, so it is kept apart
+    rather than dropped or counted as a pass."""
+
+    known: bool
+    skipped: tuple[tuple[str, str], ...] = ()
+    xfailed: tuple[tuple[str, str], ...] = ()
+    why: str = ""
+
+
+def _test_id(case: ElementTree.Element) -> str:
+    """The pytest node id of a junit `testcase` (`file::Class::name`), or its
+    dotted classname and name when the report names no file."""
+    name = case.get("name", "")
+    classname = case.get("classname", "")
+    file = case.get("file", "")
+    if not file:
+        return f"{classname}.{name}" if classname else name
+    module = PurePosixPath(file).with_suffix("").as_posix().replace("/", ".")
+    nested = classname.removeprefix(module).strip(".")
+    return "::".join([file, *filter(None, nested.split(".")), name])
+
+
+def read_skip_report(report: Path) -> SkippedTests:
+    """The skipped and xfailed tests in the junit report at `report`.
+
+    A report that is missing or does not parse (the run was cut short, pytest
+    never started, the tests rewrote the file) is `known=False`, with the
+    reason: the caller must say it could not tell, not that nothing was skipped."""
+    try:
+        root = ElementTree.parse(report).getroot()
+    except (OSError, ElementTree.ParseError) as exc:
+        why = "pytest wrote no report" if isinstance(exc, OSError) else "its report did not parse"
+        return SkippedTests(known=False, why=why)
+    skipped: list[tuple[str, str]] = []
+    xfailed: list[tuple[str, str]] = []
+    for case in root.iter("testcase"):
+        mark = case.find("skipped")
+        if mark is None:
+            continue
+        pair = (_test_id(case), mark.get("message", ""))
+        (xfailed if mark.get("type") == "pytest.xfail" else skipped).append(pair)
+    return SkippedTests(known=True, skipped=tuple(skipped), xfailed=tuple(xfailed))
 
 
 def src_layout_env(tree: Path) -> dict[str, str]:

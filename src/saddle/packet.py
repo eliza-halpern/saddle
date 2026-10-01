@@ -1282,6 +1282,8 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     # -- not proven -----------------------------------------------------------------
     gaps: list[str] = []
     gap_cites: list[str] = []
+    itemised: set[str] = set()
+    """Findings a gap above already names one by one."""
     if not audits:
         gaps.append(
             "No auditor verdict: the suite, changed-line coverage and mutation "
@@ -1323,6 +1325,16 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         for entry in sealed_p1["unjudged"] if sealed_p1 is not None else []:
             gaps.append(f"Not judged by the task-text check: {entry}.")
             gap_cites.append(p1.record_hash)
+            itemised.add(p1.record_hash)
+    # Every finding that is `not-proven`, whatever its gate: the row below says
+    # "Nothing is left unproven" only when there is none, a property of the
+    # findings rather than of a list of the gates someone remembered to name.
+    for a in audits:
+        if a.verdict == "not-proven" and a.record_hash not in itemised:
+            gaps.append(
+                f"{a.name.removeprefix('audit:')} (tier {a.tier}): {a.body.split(chr(10))[0]}"
+            )
+            gap_cites.append(a.record_hash)
     for q in unanswered:
         gaps.append(f"Unanswered question: {q.detail}")
         gap_cites.append(q.record_hash)

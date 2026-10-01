@@ -174,6 +174,7 @@ def run_node_gate(
     test_workers: int = 1,
     test_selection: Collection[str] | None = None,
     on_suite: Callable[[str, CapturedRun], None] | None = None,
+    skip_report: Path | None = None,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -225,7 +226,9 @@ def run_node_gate(
     command that is not a plain pytest invocation, runs the whole suite.
     `on_suite` is called with the data file and the suite's run while the
     tree is still there; the suite then records per-test contexts, which
-    `saddle.impact.build` reads.
+    `saddle.impact.build` reads. `skip_report` is where the current-tree
+    suite run also leaves pytest's report of the tests it skipped
+    (`evidence.run_suite_capture`); the caller reads it.
     """
     gate = node.deterministic_gate
     workers = 1 if node.kind == "test" else test_workers
@@ -253,6 +256,7 @@ def run_node_gate(
         recorder=recorder,
         timeout=test_timeout,
         contexts=tier2 or on_suite is not None,
+        skip_report=skip_report,
     )
     if capture is not None:
         capture.append(suite)

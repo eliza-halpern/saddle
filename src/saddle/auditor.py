@@ -74,19 +74,23 @@ from saddle.audit import (
 from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
+    SKIP_REPORT_NAME,
     CapturedRun,
     MutationOutcome,
+    SkippedTests,
     SuiteLimitError,
     changed_statements,
     drop_test_caches,
     format_overrides,
     git_diff,
+    read_skip_report,
     ruff_argv,
     ruff_findings,
     run_capture,
     run_static_check,
     run_suite_capture,
     sandbox_expose,
+    skip_reportable,
     static_check,
     suite_limit,
     suite_run,
@@ -548,6 +552,61 @@ def data_only_change(copy: Path, baseline: str) -> list[str]:
         if not lines <= literal:
             return []
     return sorted(by_file)
+
+
+SKIPPED_GATE: Final = "skipped-tests"
+"""The tier-2 finding that lists the tests the audit's suite run skipped or
+expected to fail, or says it could not tell. Emitted only when there is one."""
+
+LISTED: Final = 6
+"""How many files or tests a not-proven finding names; the rest are counted
+(`_listed`), and the whole list is sealed beside the finding."""
+
+REASON_WORDS: Final = 16
+"""How many words of a skip reason a finding quotes."""
+
+
+def _listed(items: Sequence[str]) -> str:
+    """The first `LISTED` of `items`, then how many more there are."""
+    shown = ", ".join(items[:LISTED])
+    return f"{shown}, ... and {len(items) - LISTED} more" if len(items) > LISTED else shown
+
+
+def _quoted(pair: tuple[str, str], label: str = "") -> str:
+    """One skipped test as a finding names it: its id, its reason cut to
+    `REASON_WORDS` words, and `label` when it is not a plain skip."""
+    words = pair[1].split()
+    reason = " ".join(words[:REASON_WORDS]) + (" ..." if len(words) > REASON_WORDS else "")
+    return f"{pair[0]}{label}" + (f" ({reason})" if reason else "")
+
+
+def skipped_detail(skips: SkippedTests, scope: str) -> str | None:
+    """The `SKIPPED_GATE` finding's words, or None when the run skipped nothing.
+
+    `scope` says which run this was ("the suite run", or the impact-scoped one
+    that ran only the test files a change reaches). A run whose report could
+    not be read is said so, never counted as zero skips."""
+    if not skips.known:
+        return (
+            f"skipped tests: could not be determined for {scope} ({skips.why}); read this "
+            "as unproven, not as none skipped. It refuses nothing."
+        )
+    if not skips.skipped and not skips.xfailed:
+        return None
+    named = [_quoted(p) for p in skips.skipped] + [_quoted(p, " [xfail]") for p in skips.xfailed]
+    counts = f"{len(skips.skipped)} skipped"
+    if skips.xfailed:
+        counts += f", {len(skips.xfailed)} expected to fail (xfail)"
+    return (
+        f"{counts} in {scope}: {_listed(named)}. Not proven: whatever those tests check "
+        "was not checked here. It refuses nothing; the whole list is sealed with this finding."
+    )
+
+
+def _not_proven(gate: str, detail: str, cite: str) -> Finding:
+    """A tier-2 `not-proven` finding of a gate that is not one of the battery's
+    thirteen (see `REUSES`): emitted only when it has something to say."""
+    return Finding(gate, 2, "not-proven", "evidence-thin", detail, (cite,))
 
 
 def syntax_key(copy: Path) -> str:
@@ -1274,6 +1333,7 @@ class Auditor:
                         test_timeout=limit,
                         test_workers=workers,
                         test_selection=selection,
+                        skip_report=copy / SKIP_REPORT_NAME,
                         # A whole-suite run under a memo (re)draws the map.
                         on_suite=(
                             functools.partial(_record_impact, memo, copy)
@@ -1290,7 +1350,9 @@ class Auditor:
                     self._by_syntax[same1] = first.key
                     if not first.passed:
                         return self._store(_blocked_tier2(key, first))
-                    second = self._tiered(2, key, gated, copy, resolved, limit, None)
+                    second = self._tiered(
+                        2, key, gated, copy, resolved, limit, None, selected=selection
+                    )
                     self._by_syntax[same] = second.key
                     return second
                 done = self._tiered(1, key, gated, copy, resolved, limit, p1, static)
@@ -1315,8 +1377,11 @@ class Auditor:
         limit: float,
         p1: Future[TaskRequirementsCheck] | None,
         static: Future[GateCheck] | None = None,
+        selected: Sequence[str] | None = None,
     ) -> Findings:
-        """`tier`'s findings from one run of the battery (`_gate`), stored under `key`."""
+        """`tier`'s findings from one run of the battery (`_gate`), stored under `key`.
+        `selected` is the test files an impact-scoped suite run was limited to, None
+        for the whole suite."""
         # Every entry becomes a Finding verdict (`_finding` below), and the
         # shortlist paths write not-proven, so the table holds Verdicts.
         statuses: dict[str, tuple[Verdict, str, str | None]]
@@ -1446,6 +1511,22 @@ class Auditor:
             if gate in cites:
                 found = dataclasses.replace(found, cites=(cites[gate], *found.cites[1:]))
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
+        if tier == 2 and skip_reportable(self.node.deterministic_gate.test_command, copy):
+            skips = read_skip_report(copy / SKIP_REPORT_NAME)
+            scope = (
+                "the suite run"
+                if selected is None
+                else f"the impact-scoped run ({len(selected)} test file(s) the change can reach; "
+                "skips in the others are not counted)"
+            )
+            if (said := skipped_detail(skips, scope)) is not None:
+                findings.append(_not_proven(SKIPPED_GATE, said, "saddle.auditor.skipped_detail"))
+                sidecars[SKIPPED_GATE] = {
+                    "known": skips.known,
+                    "scope": scope,
+                    "skipped": [list(p) for p in skips.skipped],
+                    "xfailed": [list(p) for p in skips.xfailed],
+                }
         return self._store(
             Findings(
                 tier=tier,
