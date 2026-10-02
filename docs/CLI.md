@@ -53,8 +53,9 @@ test-timeout = 3600   # seconds
   `saddle run`'s `HEAD`. A run that edits `pyproject.toml` does not change the limit it
   is judged under. An edit of yours takes effect once it is committed.
 - The value is a number of seconds above 0 and at most 86400 (a day). The keys saddle
-  reads in `[tool.saddle]` are `test-timeout`, `test-workers` and `sandbox-expose` (all
-  below), `static-check`, and `prompt-benchmark` with its floor and margin (below).
+  reads in `[tool.saddle]` are `test-timeout`, `test-workers`, `sandbox-expose` and
+  `gate-checks` (all below), `static-check`, and `prompt-benchmark` with its floor and
+  margin (below).
 - A value that is not usable stops the audit instead of falling back to 300 s. This
   covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
   table (such as the typo `test_timeout`), or a `pyproject.toml` that is not TOML. The
@@ -120,6 +121,49 @@ test-workers = 8
 Saddle's own repository sets `test-workers = 8`: its suite, with coverage, took 376 s
 on 8 workers against 1209 to 1378 s serially, with the same tests passing and 100% line
 and branch coverage. Its own `check.sh` runs the suite on the same number of workers.
+
+## The project's gate stages
+
+A project's own gate is more than its tests: lint, format, types, and linters for its
+scripts, pages and docs. The audit runs the stages you name, so a change that the
+project's gate would refuse is not passed on the strength of a green suite:
+
+```toml
+[tool.saddle]
+gate-checks = [
+    ["ruff", "check", "."],
+    ["ruff", "format", "--check", "."],
+    ["npx", "--no-install", "eslint", "."],
+]
+```
+
+- Each entry is one command as a list of words, run with no shell (so a glob must be
+  written out as the files). Name the fast stages only; the suite is the audit's own
+  `tests` finding. `static-check` is one more stage and is not run twice when it is also
+  listed.
+- Every stage runs on the audited tree and on a checkout of the starting commit. The
+  `project-gate` finding (tier 1) reads: pass when the audited tree passes the stage;
+  fail when it fails a stage the starting commit passed, quoting the stage's first
+  lines; not proven when the stage was already failing at the starting commit (so the
+  change is not shown to have broken it), or when its command cannot start (the tool is
+  missing in the sandbox, named in the finding). Not proven never refuses and never
+  reads as a pass.
+- The packet's Audit row carries the finding's first line, for example `Gate: base ✓,
+  head ✓ (7 stages)` or `Gate: base ✗ (ruff format), head ✗ (ruff format, eslint)`. The
+  finding also says that the suite's whole-project coverage total is judged by the
+  project's own gate, not by the audit.
+- It is read from the commit the work starts from, like `test-timeout`: a run that edits
+  the list is judged by the list it started with, so it takes effect for runs that start
+  after it is committed. A value that is not a list of non-empty word lists stops the
+  audit (`error: cannot read the gate checks: pyproject.toml at <commit>: …`).
+- The starting commit's results are kept per tree, so the many audits of one run run the
+  stages on the starting commit once. A stage that needs files git ignores (such as
+  `node_modules`) sees the tree as the audit copies it, without them.
+- A tree with this finding is never reused for a format-only edit: a format stage judges
+  exactly what such an edit changes, so its stages run again.
+
+Saddle's own repository lists every fast stage of `check.sh` except `npm ci`, mypy (its
+`static-check`) and the suite, and a test keeps the list equal to `check.sh`.
 
 ## Commands the sandbox shows
 

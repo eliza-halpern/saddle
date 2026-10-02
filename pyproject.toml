@@ -108,6 +108,31 @@ test-workers = 8
 # same strict mypy check.sh runs, so a run's new test file or script is
 # type-checked too.
 static-check = ["mypy", "src", "tests", "tools", "benchmark/stall_check.py"]
+# The other fast stages of check.sh (everything but npm ci, mypy, which is the
+# static-check above, and the suite), each run on the audited tree and on the
+# starting commit so a stage the change broke is told from one already red
+# (docs/CLI.md, "The project's gate stages"). tests/test_gate_checks.py keeps it
+# equal to check.sh. Read from the starting commit, so it applies to runs that
+# start after it lands.
+gate-checks = [
+    ["ruff", "check", "."],
+    ["ruff", "format", "--check", "."],
+    ["actionlint", ".github/workflows/ci.yml"],
+    ["uv", "lock", "--check"],
+    [
+        "shellcheck",
+        "check.sh",
+        "ci-mutate.sh",
+        "tools/githooks/commit-msg",
+        "tools/githooks/pre-commit",
+        "tools/githooks/pre-push",
+    ],
+    ["npx", "--no-install", "eslint", "."],
+    ["npx", "--no-install", "tsc", "-p", "tsconfig.json"],
+    ["npx", "--no-install", "html-validate", "src/saddle/web/static/index.html"],
+    ["npx", "--no-install", "stylelint", "src/saddle/web/static/app.css"],
+    ["npx", "--no-install", "markdownlint-cli2"],
+]
 # The browser tests drive Chrome with node; the audit's sandbox hides HOME, where
 # node may live, so name both here (docs/CLI.md, "Commands the sandbox shows").
 # Read like test-timeout, from the starting commit.
