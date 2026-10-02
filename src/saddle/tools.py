@@ -299,6 +299,74 @@ def tools_for_mode(
     ]
 
 
+FACT_CD: Final = (
+    "Each command starts a fresh shell in the working directory: `cd` does not carry "
+    "over to the next command, so use absolute paths or cd inside the same command."
+)
+FACT_DISPLAY: Final = (
+    "FULL ACCESS: commands see the person's desktop session, so a GUI program you "
+    "start opens its window on their screen."
+)
+FACT_PROCESSES: Final = (
+    "Programs you leave running are listed by the `processes` tool; stop them with it, "
+    "never with pkill or killall -f, which can hit the person's other programs or your "
+    "own shell."
+)
+FACT_ASK_THEM: Final = (
+    "If only the person can check something (what is on their screen, whether a window "
+    "opened, how it looks or sounds), ask them and end your turn instead of guessing "
+    "or relaunching."
+)
+FACT_IMAGE: Final = (
+    "An image file (PNG, JPEG, WebP, GIF) is shown to you, screenshots you take included."
+)
+
+
+def _appended(tools: list[dict[str, Any]], name: str, *facts: str) -> list[dict[str, Any]]:
+    """`tools` with `facts` added to the end of tool `name`'s description."""
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        if tool["function"]["name"] == name:
+            text = " ".join([tool["function"]["description"], *facts])
+            tool = {**tool, "function": {**tool["function"], "description": text}}
+        out.append(tool)
+    return out
+
+
+def state_session_facts(
+    tools: list[dict[str, Any]], context: ToolContext, mode: str
+) -> list[dict[str, Any]]:
+    """Add to `run_command`'s description what is true of this chat session.
+
+    Each sentence is added only when it holds: a fresh shell per command and the
+    person to ask need a chat session (`context.processes`; a task run has
+    neither person nor list, and its tool list stays byte-identical); a window on
+    the person's screen needs full access AND a display `desktop_env` provides;
+    the process tool is named only when it is offered. Nothing here promises a
+    capability the session lacks."""
+    if mode != "edit" or context.processes is None:
+        return tools
+    env = desktop_env()
+    facts = [FACT_CD]
+    if context.full_access and ("DISPLAY" in env or "WAYLAND_DISPLAY" in env):
+        facts.append(FACT_DISPLAY)
+    # A chat session with a process list is offered the process tool (`tools_for_mode`).
+    return _appended(tools, "run_command", *facts, FACT_PROCESSES, FACT_ASK_THEM)
+
+
+def state_image_fact(
+    tools: list[dict[str, Any]], accepts_images: Callable[[], bool]
+) -> list[dict[str, Any]]:
+    """Add to `read_file`'s description that an image is shown, when the served
+    model accepts images (the probe `accepts_images` asks, cached per server). A
+    probe that fails (`VllmError`) states nothing: unknown is not a promise."""
+    try:
+        seen = accepts_images()
+    except VllmError:
+        return tools
+    return _appended(tools, "read_file", FACT_IMAGE) if seen else tools
+
+
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
     """Scope one chat turn to its lane: the schemas to offer, and the refusal.
 
@@ -321,7 +389,7 @@ def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
         research=research,
     )
     context.allowed = tuple(t["function"]["name"] for t in tools)
-    return tools
+    return state_session_facts(tools, context, mode)
 
 
 FINISH_TOOL: Final = "finish"

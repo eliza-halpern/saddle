@@ -87,6 +87,7 @@ from saddle.tools import (
     ToolContext,
     execute_tool,
     preview_for,
+    state_image_fact,
 )
 from saddle.vision import images_message, server_accepts_images
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
@@ -882,6 +883,7 @@ def run_turn(
     if ctx.images:
         # This turn's client: a session's context outlives each turn's client.
         ctx.accepts_images = lambda: server_accepts_images(client)
+        options = replace(options, tools=state_image_fact(options.tools, ctx.accepts_images))
     if ctx.undo is not None:
         # Keyed to the question this turn answers, not to len(messages)
         # before it was added -- the system prompt is inserted at 0 on the

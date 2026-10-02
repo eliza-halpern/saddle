@@ -210,3 +210,14 @@ def _stub_mutmut(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setattr(evidence, "show_all_mutants", _replay_show_all_mutants)
+
+
+@pytest.fixture(autouse=True)
+def _no_image_probe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A chat turn asks the served model whether it reads images (two requests,
+    once per server); a scripted client would hand them its next rounds. The suite
+    has no model server, so the answer is no unless a test says otherwise (the image
+    tests run the real probe against their own scripted server)."""
+    if request.module.__name__ == "test_read_image":
+        return
+    monkeypatch.setattr("saddle.engine.server_accepts_images", lambda _client: False)

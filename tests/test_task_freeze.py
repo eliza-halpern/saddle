@@ -61,3 +61,16 @@ def test_a_task_runs_tool_context_has_no_mcp_or_research_to_call(tmp_path: Path)
             context=ctx,
         )
         assert result == f"error: unknown tool {name!r}"
+
+
+def test_a_task_run_is_told_none_of_a_chat_sessions_facts(
+    repo: Path,  # noqa: F811
+) -> None:
+    from saddle import tools as tools_module
+
+    task_tools, task_prompt = offered_and_prompt(repo, "r-2")
+    for name in dir(tools_module):
+        if name.startswith("FACT_"):
+            sentence = getattr(tools_module, name)
+            assert sentence not in task_tools
+            assert sentence not in task_prompt
