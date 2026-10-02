@@ -2952,15 +2952,23 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
             if outcome.untested
             else ""
         )
-        changes = _survivor_changes(outcome, names[:5])
+        changes = _survivor_changes(outcome)
+        head = (
+            f"killed {outcome.killed} of {outcome.total} changed-line mutants "
+            f"({percent:.1f}% < {required:.1f}%){note}: "
+        )
+        # With what each survivor changes, that list is the detail: the names alone,
+        # five then "...", took the room and hid the sixth, and a watched run set out
+        # to rerun StrykerJS itself to find it.
+        listed = (
+            f"{len(names)} survived{excluded}{untested}"
+            if changes
+            else (f"survived {len(names)}: {shown}{excluded}{untested}")
+        )
         return GateCheck(
             name="mutation",
             passed=False,
-            detail=(
-                f"killed {outcome.killed} of {outcome.total} changed-line mutants "
-                f"({percent:.1f}% < {required:.1f}%){note}: survived {len(names)}: "
-                f"{shown}{excluded}{untested}{changes}"
-            ),
+            detail=f"{head}{listed}{changes}",
             basis=f"sampled n={outcome.total}",
         )
     return GateCheck(
@@ -2991,19 +2999,31 @@ def mutant_change(text: str) -> str:
     return f"`{before.strip() or before}` -> `{after.strip() or after}`{where}"
 
 
-def _survivor_changes(outcome: MutationOutcome, names: Sequence[str]) -> str:
-    """For each named survivor whose diff was recorded, what it changes: a name
-    alone (`markdown.js:39:3 Regex`, six times over) says nothing a test can be
-    written against."""
-    # In order, not by name: StrykerJS names a mutant by file, line, column and mutator,
-    # so six regex mutants on one line share one name.
-    wanted = list(names)
-    said = []
-    for detail in outcome.survivor_details:
-        if detail[0] in wanted and (change := mutant_change(detail[4])):
-            wanted.remove(detail[0])
-            said.append(f"{detail[0]}: {change}")
-    return "; what they change: " + "; ".join(said) if said else ""
+SURVIVOR_CHANGES_SHOWN: Final = 8
+"""How many survivors a mutation refusal spells out, change by change."""
+
+
+def _survivor_changes(outcome: MutationOutcome) -> str:
+    """What each survivor whose diff was recorded changes, in order, up to
+    `SURVIVOR_CHANGES_SHOWN`: a name alone (`markdown.js:39:3 Regex`, six times
+    over) says nothing a test can be written against. A survivor is named by its
+    place and the mutator that made it (StrykerJS: file:line:column and mutator; mutmut:
+    module and function), then the text it replaces and its replacement, then the
+    text just before it on its line, to find it by. "" when none was recorded."""
+    said = [
+        f"{detail[0]}: {change}"
+        for detail in outcome.survivor_details
+        if (change := mutant_change(detail[4]))
+    ]
+    if not said:
+        return ""
+    more = len(said) - SURVIVOR_CHANGES_SHOWN
+    shown = "; ".join(said[:SURVIVOR_CHANGES_SHOWN]) + (f"; and {more} more" if more > 0 else "")
+    return (
+        ". Each survivor: where it is and its mutator, `the text it replaced` -> "
+        f"`its replacement`, after `the text before it on the line` -- a test that "
+        f"tells the two apart kills it: {shown}"
+    )
 
 
 DEFAULT_MUTANT_SHORTLIST: Final = 5

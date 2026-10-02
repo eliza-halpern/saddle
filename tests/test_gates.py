@@ -3254,13 +3254,55 @@ def test_a_mutation_refusal_says_what_each_named_survivor_changes() -> None:
     )
     detail = check_mutation(outcome, 85.0).detail
     assert detail.endswith(
-        "; what they change: m.js:1:12 Regex: `\\p{N}` -> `` after `/(?<![\\p{L}`; "
+        f"2 survived{SURVIVOR_INTRO}"
+        "m.js:1:12 Regex: `\\p{N}` -> `` after `/(?<![\\p{L}`; "
         "n.py::x__mutmut_1: `+` -> `-` after `return a `"
     )
     # A survivor with no recorded diff is named as before, with nothing appended.
     bare = MutationOutcome(killed=0, total=1, generated=1, survivors=("m.js:1:1 Regex",))
-    assert "what they change" not in check_mutation(bare, 85.0).detail
+    assert check_mutation(bare, 85.0).detail.endswith("survived 1: m.js:1:1 Regex")
     assert mutant_change("+only an addition") == ""
+
+
+SURVIVOR_INTRO = (
+    ". Each survivor: where it is and its mutator, `the text it replaced` -> "
+    "`its replacement`, after `the text before it on the line` -- a test that "
+    "tells the two apart kills it: "
+)
+
+
+OLD, NEW = "abcdefghij", "KLMNOPQRST"
+
+
+def test_every_survivor_is_spelled_out_up_to_eight() -> None:
+    # A refusal named five of six survivors and hid the sixth; a watched run set out
+    # to rerun StrykerJS itself to find it.
+    def detail_of(n: int) -> MutationOutcome:
+        return MutationOutcome(
+            killed=0,
+            total=n,
+            generated=n,
+            survivors=tuple(f"m.js:1:{i} Regex" for i in range(n)),
+            survivor_details=tuple(
+                (
+                    f"m.js:1:{i} Regex",
+                    "Survived",
+                    "m.js",
+                    1,
+                    f"-x = {OLD[i]};\n+x = {NEW[i]};",
+                    False,
+                )
+                for i in range(n)
+            ),
+        )
+
+    six = check_mutation(detail_of(6), 85.0).detail
+    assert all(f"m.js:1:{i} Regex: `{OLD[i]}` -> `{NEW[i]}`" in six for i in range(6)), six
+    assert "..." not in six
+    ten = check_mutation(detail_of(10), 85.0).detail
+    assert "m.js:1:7 Regex" in ten
+    assert "m.js:1:8 Regex" not in ten
+    assert ten.endswith("; and 2 more")
 
 
 def test_survivors_that_share_a_name_each_say_their_own_change() -> None:
@@ -3282,6 +3324,6 @@ def test_survivors_that_share_a_name_each_say_their_own_change() -> None:
     )
     detail = check_mutation(outcome, 85.0).detail
     assert detail.endswith(
-        f"; what they change: {name}: `^` -> `` after `const R = /[`; "
+        f"{SURVIVOR_INTRO}{name}: `^` -> `` after `const R = /[`; "
         f"{name}: `^` -> `` after `R = /[^a]b[`"
     )

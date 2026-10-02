@@ -36,7 +36,7 @@ from saddle.auditor import (
 )
 from saddle.cli import main
 from saddle.evidence import MutationOutcome, run_argv
-from saddle.journal import read_spans, verify_journal
+from saddle.journal import SEALED_CUT, read_spans, verify_journal
 
 BASE_CODE = "def f():\n    return 1\n"
 FIXED_CODE = "def f():\n    return 2\n"
@@ -580,7 +580,13 @@ def test_tier2_seals_the_mutation_outcome_in_its_findings_sidecar(
     mutation = next(f for f in result.findings if f.gate == "mutation")
     span = next(s for s in read_spans(journal) if s.name == "audit-tier2:mutation")
     assert span.attempt_hash
-    assert json.loads(span.detail)["detail"] == mutation.detail
+    # The line holds the detail whole, or cut to fit with SEALED_CUT: a prefix of it,
+    # never another text. The sidecar below holds the outcome whole either way.
+    sealed_detail = json.loads(span.detail)["detail"]
+    assert sealed_detail == mutation.detail or (
+        sealed_detail.endswith(SEALED_CUT)
+        and mutation.detail.startswith(sealed_detail.removesuffix(SEALED_CUT))
+    )
     sealed = json.loads(attempt_sidecar_path(journal, span.span_id).read_text())
     assert (sealed["killed"], sealed["total"], sealed["untested"]) == (0, 5, 5)
     assert sorted(sealed["survivors"]) == [f"m{i}" for i in range(1, 6)]

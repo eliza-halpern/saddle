@@ -255,8 +255,10 @@ def test_run_node_gate_full_sample_catches_what_a_small_cap_hid(
     by_name = {check.name: check for check in result.checks}
     assert by_name["mutation"].detail == (
         "killed 1 of 2 changed-line mutants (50.0% < 100.0%) "
-        "(small sample: 2 mutant(s), all must die): survived 1: m2"
-        "; what they change: m2: `2` -> `4` after `return `"
+        "(small sample: 2 mutant(s), all must die): 1 survived. Each survivor: where it is "
+        "and its mutator, `the text it replaced` -> `its replacement`, after `the text "
+        "before it on the line` -- a test that tells the two apart kills it: "
+        "m2: `2` -> `4` after `return `"
     )
 
 
