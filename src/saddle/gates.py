@@ -2974,8 +2974,14 @@ def _survivor_changes(outcome: MutationOutcome, names: Sequence[str]) -> str:
     """For each named survivor whose diff was recorded, what it changes: a name
     alone (`markdown.js:39:3 Regex`, six times over) says nothing a test can be
     written against."""
-    texts = {d[0]: d[4] for d in outcome.survivor_details}
-    said = [f"{n}: {c}" for n in names if (c := mutant_change(texts.get(n, "")))]
+    # In order, not by name: StrykerJS names a mutant by file, line, column and mutator,
+    # so six regex mutants on one line share one name.
+    wanted = list(names)
+    said = []
+    for detail in outcome.survivor_details:
+        if detail[0] in wanted and (change := mutant_change(detail[4])):
+            wanted.remove(detail[0])
+            said.append(f"{detail[0]}: {change}")
     return "; what they change: " + "; ".join(said) if said else ""
 
 

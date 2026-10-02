@@ -3261,3 +3261,27 @@ def test_a_mutation_refusal_says_what_each_named_survivor_changes() -> None:
     bare = MutationOutcome(killed=0, total=1, generated=1, survivors=("m.js:1:1 Regex",))
     assert "what they change" not in check_mutation(bare, 85.0).detail
     assert mutant_change("+only an addition") == ""
+
+
+def test_survivors_that_share_a_name_each_say_their_own_change() -> None:
+    # StrykerJS names a mutant by file, line, column and mutator: six different regex
+    # mutants on one line all read "markdown.js:39:3 Regex", and a lookup by name
+    # showed one change six times.
+    first = "-const R = /[^a]b[^c]/;\n+const R = /[a]b[^c]/;"
+    second = "-const R = /[^a]b[^c]/;\n+const R = /[^a]b[c]/;"
+    name = "m.js:1:11 Regex"
+    outcome = MutationOutcome(
+        killed=0,
+        total=2,
+        generated=2,
+        survivors=(name, name),
+        survivor_details=(
+            (name, "Survived", "m.js", 1, first, False),
+            (name, "Survived", "m.js", 1, second, False),
+        ),
+    )
+    detail = check_mutation(outcome, 85.0).detail
+    assert detail.endswith(
+        f"; what they change: {name}: `^` -> `` after `const R = /[`; "
+        f"{name}: `^` -> `` after `R = /[^a]b[`"
+    )
