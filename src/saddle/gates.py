@@ -1291,19 +1291,6 @@ _TRANSPARENT_DECORATORS: Final = frozenset(
 )
 
 
-def _is_test_code(path: str) -> bool:
-    """Test code: a module pytest collects, a `conftest.py`, or anything under `tests/`.
-
-    A helper or fixture under `tests/` is test code although pytest never
-    collects it, and a caller there is no more production than a test is.
-    """
-    return (
-        _is_test_file(path)
-        or PurePath(path).name == "conftest.py"
-        or "tests" in PurePath(path).parts[:-1]
-    )
-
-
 def _module_names(path: str) -> set[str]:
     """The dotted names an entry point could import `path` as (`src/` layout or not)."""
     parts = list(PurePath(path).with_suffix("").parts)
@@ -1428,7 +1415,7 @@ def check_test_only_additions(
     count, and neither does a read inside another definition that is itself
     only for tests), an import of it, an `__all__` entry, a decorator that
     registers it somewhere, or a `pyproject.toml` entry point. A string or a
-    docstring that spells it is not a caller. Test code is `_is_test_code`.
+    docstring that spells it is not a caller. Test code is `is_test_code`.
 
     References are matched by name, not resolved to a module, so a common
     name another module also reads passes: the rule leans towards
@@ -1456,7 +1443,7 @@ def check_test_only_additions(
     unreadable: list[str] = []
     for path in sorted(added):
         source = sources.get(path)
-        if source is None or _is_test_code(path):
+        if source is None or is_test_code(path):
             continue
         try:
             tree = ast.parse(source)
@@ -1498,11 +1485,11 @@ def check_test_only_additions(
         try:
             tree = ast.parse(text)
         except SyntaxError:
-            if not _is_test_code(path):
+            if not is_test_code(path):
                 unparsed[path] = text
             continue
         found = _references(tree)
-        if _is_test_code(path):
+        if is_test_code(path):
             for name, _ in found:
                 in_tests.setdefault(name, set()).add(path)
         else:

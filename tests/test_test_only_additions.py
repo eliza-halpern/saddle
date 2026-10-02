@@ -290,6 +290,30 @@ def test_test_code_is_never_a_candidate_and_never_a_caller() -> None:
     assert _run({}, {APP: {1}}).passed
 
 
+def test_a_test_directory_of_any_spelling_is_test_code_in_both_directions() -> None:
+    """`gates.is_test_code` also counts a `test/` or `__tests__/` directory at any depth: the
+    old private predicate knew only `tests/`. What changed: such a module is no longer a
+    candidate, and a read from it no longer makes a definition production-used."""
+    for directory in ("test", "__tests__", "tests"):
+        helper = f"src/pkg/{directory}/helper.py"
+        # As a candidate: a function added there is test code, never judged.
+        assert _run({helper: WIRING}, {helper: _lines(WIRING)}).detail == (
+            "no function, class or constant added to a non-test module"
+        )
+        # As a reader: a call from there is no production caller.
+        reader = {helper: "from pkg.web.app import copy_button_wiring\ncopy_button_wiring()\n"}
+        check = _app_with(WIRING, extra=reader)
+        assert not check.passed
+        assert f"referenced only by {helper}" in check.detail
+    # A directory that merely contains the word is production code.
+    for directory in ("testing", "latest", "contest"):
+        helper = f"src/pkg/{directory}/helper.py"
+        uses = {"src/pkg/boot.py": f"from pkg.{directory} import helper\n"}
+        refused = _run({helper: WIRING, **uses}, {helper: _lines(WIRING)})
+        assert not refused.passed
+        assert f"{helper}: copy_button_wiring" in refused.detail
+
+
 def test_a_module_that_does_not_parse_is_reported_never_read_as_no_references() -> None:
     # An added module that does not parse.
     broken = _run({APP: "def (:\n"}, {APP: {1}})
