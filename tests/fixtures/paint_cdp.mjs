@@ -10,6 +10,7 @@
 //   end-first:   a delta and turn.end in one task, then two frames.
 // The turn's end must clear the frame it cancels: if the id is left behind, the
 // next delta's schedulePaint returns early and that reply is never painted.
+// Then two deltas inside one frame, and a task card's tool line in each state.
 //
 // usage: node paint_cdp.mjs <base-url> <session-id>
 import { spawn } from "node:child_process";
@@ -81,6 +82,51 @@ const ROUND = `async (order, text) => {
   return { order, pending, beforePaint, painted, frameLeft, afterFrames: count() };
 }`;
 
+// Two deltas inside one frame: the second finds the first's frame pending and
+// joins it (schedulePaint's early return), so the reply is painted once, whole.
+const TWO_IN_ONE_FRAME = `async () => {
+  const joined = "fifth streamed reply, in two deltas";
+  const count = () => document.querySelector("#transcript").textContent.split(joined).length - 1;
+  const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  handle({ kind: "turn.start" });
+  handle({ kind: "content.delta", text: "fifth streamed reply," });
+  const first = paintFrame;
+  handle({ kind: "content.delta", text: " in two deltas" });
+  const sameFrame = first !== 0 && paintFrame === first;
+  const beforePaint = count();
+  await frames();
+  const painted = count();
+  const frameLeft = paintFrame;
+  handle({ kind: "turn.end" });
+  return { sameFrame, beforePaint, painted, frameLeft, atEnd: count() };
+}`;
+
+// A task card's tool line, painted at most once a frame (scheduleActivity): a
+// frame inside a tool call shows it running, a failed call says so, and a call
+// that starts and ends inside one frame shows only its result. Which of these a
+// real run painted was left to timing; here each state gets its frame.
+const TOOL_LINE = `async () => {
+  const settle = async () => {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await new Promise((r) => setTimeout(r, 100)); // the hidden-page path paints on a 50 ms timer
+  };
+  const run = "paint-test-run";
+  handleTask({ kind: "task.state", run_id: run, task: "paint the tool line", state: "running" });
+  const card = tasks.get(run);
+  const line = () => card.activity.tool.textContent;
+  const send = (inner) => handleTask({ kind: "task.event", run_id: run, event: inner });
+  send({ kind: "tool.start", name: "read_file" });
+  await settle();
+  const running = line();
+  send({ kind: "tool.end", ok: false });
+  await settle();
+  const failed = line();
+  send({ kind: "tool.start", name: "list_dir" });
+  send({ kind: "tool.end", ok: true });
+  await settle();
+  return { running, failed, oneFrame: line() };
+}`;
+
 try {
   const ws = new WebSocket(await target());
   await new Promise((r) => ws.addEventListener("open", r));
@@ -126,7 +172,9 @@ try {
   ]) {
     rounds.push(await js(`(${ROUND})(${JSON.stringify(order)}, ${JSON.stringify(text)})`));
   }
-  console.log(JSON.stringify({ rounds }));
+  const two = await js(`(${TWO_IN_ONE_FRAME})()`);
+  const toolLine = await js(`(${TOOL_LINE})()`);
+  console.log(JSON.stringify({ rounds, two, toolLine }));
   await cov.save();
   await finish(0);
 } catch (error) {

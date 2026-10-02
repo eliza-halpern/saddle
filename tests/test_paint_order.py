@@ -1,4 +1,4 @@
-"""A streamed reply is painted once, whichever comes first: its frame or the turn's end.
+"""Streamed text is painted once, whichever comes first: its frame or the turn's end.
 
 The page paints a streamed delta on the next animation frame (`schedulePaint`)
 and paints at once when the turn ends, cancelling a frame still pending
@@ -8,12 +8,17 @@ run with no code change. The driver (`tests/fixtures/paint_cdp.mjs`) calls the
 page's own event handler in each order on purpose.
 
 Known-good: in every round the delta is not painted before its frame or the
-turn's end, is painted exactly once by either, and leaves no frame pending.
+turn's end, is painted exactly once by either, and leaves no frame pending. Two
+deltas inside one frame share it and are painted once, joined. A task card's
+tool line, painted at most once a frame too, reads "read_file …" while a call
+runs, "read_file (failed)" after a failed one, and only the result for a call
+that started and ended inside one frame.
 Known-bad: if the turn's end cancels the pending frame but leaves its id behind,
 the end-first round reports a frame left, and the next round's `schedulePaint`
 returns early, so that reply is never painted. (The frame callback's own reset
 is redundant: the `flushPaint` it calls resets a pending id itself, so removing
-it changes nothing a test can see.)
+it changes nothing a test can see.) A second delta that asks for a frame of its
+own, or a tool start that does not mark the call running, is named.
 """
 
 from __future__ import annotations
@@ -46,7 +51,8 @@ def test_a_streamed_reply_is_painted_once_whichever_comes_first(tmp_path: Path) 
             check=False,
         )
     assert out.returncode == 0, out.stderr
-    rounds = json.loads(out.stdout.strip().splitlines()[-1])["rounds"]
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    rounds = got["rounds"]
     once = {"pending": True, "beforePaint": 0, "painted": 1, "frameLeft": 0}
     assert rounds == [
         {"order": "frame-first", **once, "atEnd": 1},
@@ -54,3 +60,15 @@ def test_a_streamed_reply_is_painted_once_whichever_comes_first(tmp_path: Path) 
         {"order": "end-first", **once, "afterFrames": 1},
         {"order": "frame-first", **once, "atEnd": 1},
     ]
+    assert got["two"] == {
+        "sameFrame": True,
+        "beforePaint": 0,
+        "painted": 1,
+        "frameLeft": 0,
+        "atEnd": 1,
+    }
+    assert got["toolLine"] == {
+        "running": "read_file \u2026",
+        "failed": "read_file (failed)",
+        "oneFrame": "list_dir",
+    }
