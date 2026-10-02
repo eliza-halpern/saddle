@@ -852,10 +852,10 @@ main { position: relative; }
    applied only when the effective theme is light. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fbf8f9; --bg-sunk: #f2ecef; --bg-raise: #fff; --line: #e3d9df;
+  --bg: #fbf8f9; --bg-sunk: #f2ecef; --bg-raise: #ffffff; --line: #e3d9df;
   --ink: #221b22; --ink-dim: #4f4550; --ink-faint: #665c65;
   --rose: #b83a6c; --peach: #a95512; --mint: #1f7a45; --sky: #245f9a; --lilac: #6a45b8;
-  --bad: #b8323f; --card: #fff;
+  --bad: #b8323f; --card: #ffffff;
   --wash-run: #245f9a12; --wash-ask: #a9551216; --wash-done: #1f7a4512; --wash-halt: #b8323f10;
 }
 :root[data-theme="light"] body { background:

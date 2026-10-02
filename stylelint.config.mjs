@@ -5,6 +5,9 @@
 export default {
   extends: ["stylelint-config-standard"],
   rules: {
+    // Colours are written with six hex digits: the contrast test
+    // (tests/test_faint_contrast.py) reads each theme token as #rrggbb.
+    "color-hex-length": "long",
     // The sheet puts a short rule's declarations on one line.
     "declaration-block-single-line-max-declarations": null,
     // Blank-line placement between rules, comments, at-rules, declarations and
