@@ -2902,13 +2902,34 @@ def test_run_tier1_spares_a_compelled_definition_the_coverage_gate_would_fail() 
         covered=set(),
     )
 
-    result = run_tier1(_node(), inputs)
+    result = run_tier1(_node(kind="impl"), inputs)
     coverage = next(check for check in result.checks if check.name == "coverage")
     deletions = next(check for check in result.checks if check.name == "public-deletions")
 
     assert coverage.passed, "a line the node may not delete must not fail it"
     assert coverage.basis == "changed-lines=2 compelled-lines=2 spared-defs=n1.py:A.keep"
     assert deletions.passed, "and the definition is indeed still there"
+
+
+def test_run_tier1_names_a_compelled_looking_line_for_a_node_that_may_write_tests() -> None:
+    """#131, known-bad: only an `impl` node is compelled; `refactor` can cover it.
+
+    The inputs of the test above, gated as a plain audit's node.
+    """
+    inputs = replace(
+        _passing_inputs(),
+        baseline_sources={"n1.py": "class A:\n    def keep(self):\n        return 1\n"},
+        sources={"n1.py": "class A:\n    def keep(self):\n        return 2\n"},
+        ruff_files=["n1.py"],
+        changed={("n1.py", 2), ("n1.py", 3)},
+        covered=set(),
+    )
+
+    result = run_tier1(_node(kind="refactor"), inputs)
+    coverage = next(check for check in result.checks if check.name == "coverage")
+    assert not coverage.passed
+    assert coverage.detail == "no test runs n1.py:2, n1.py:3"
+    assert coverage.basis == "changed-lines=2"
 
 
 def test_run_tier1_still_fails_coverage_for_a_definition_the_baseline_lacked() -> None:

@@ -154,7 +154,11 @@ def test_an_approved_install_lets_the_gates_and_commands_see_the_package(
     assert (result.outcome, result.reason) == ("finished", "finish called"), result.reason
     finishes = _tool(result, "finish")
     assert finishes[0].exit_code != 0  # refused: the tests could not import it
-    [question] = asked
+    # flip: #131 -- before the install no test ran `f`, and a line in a
+    # definition the baseline had was spared; now a plain finish audit names it
+    # and the run asks to allow test edits first. The install ask is unchanged.
+    edits, question = asked
+    assert "needs a test that covers n.py:2" in edits.text
     assert "needsinstall" in question.text
     assert str(wheels.path) in question.text
     assert question.options == ["Install", "Refuse"]

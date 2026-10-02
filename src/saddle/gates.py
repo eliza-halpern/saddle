@@ -651,6 +651,10 @@ def compelled_lines(
     not delete and cannot cover -- and reachability is what separates
     the two.
 
+    The exemption belongs to a node that may not write tests (`impl`
+    under a plan); `run_tier1` hands the other kinds none, because a node
+    that may write the test can cover the definition (#131).
+
     `prefix` is the workdir the caller's `changed` set is keyed against.
     `baseline_sources` is `read_sources`, which is workdir-RELATIVE,
     while `runner.py` builds `changed` as `(str(workdir / path), line)`
@@ -3269,7 +3273,13 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             inputs.covered,
             gate.changed_line_coverage_min,
             inputs.owed_tests,
-            compelled_definitions(
+            # Only a node that may not write tests is compelled: it can
+            # neither delete the definition nor cover it. A node that may
+            # write tests (a plain audit's `refactor`, a feed finish audit)
+            # can cover it, so a changed line no test runs is reported.
+            {}
+            if may_write_tests
+            else compelled_definitions(
                 inputs.baseline_sources, inputs.sources, inputs.workdir, inputs.covered
             ),
             writable=may_write_tests,

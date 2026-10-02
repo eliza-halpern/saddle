@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pytest
 
+from saddle.audit import audit_node
 from saddle.auditor import Auditor, AuditorConfig
+from saddle.dag import Node
 from saddle.evidence import run_argv
 from saddle.gates import (
     check_changed_line_coverage,
@@ -83,6 +85,11 @@ UNCALLED = "from n import f\n\n\ndef test_f():\n    assert f() == 1\n"
 CALLED = UNCALLED + "\n\ndef test_keep():\n    from n import A\n\n    assert A().keep()\n"
 
 
+def _impl_node() -> Node:
+    """The audit's node as an `impl` node: the one kind that may not edit tests."""
+    return audit_node().model_copy(update={"kind": "impl"})
+
+
 @pytest.mark.parametrize(
     ("test", "spared"),
     [(UNCALLED, ["n.py:A.keep"]), (CALLED, [])],
@@ -91,8 +98,10 @@ CALLED = UNCALLED + "\n\ndef test_keep():\n    from n import A\n\n    assert A()
 def test_the_auditor_seals_and_the_packet_lists_each_spared_definition(
     tmp_path: Path, test: str, spared: list[str]
 ) -> None:
+    """An `impl` node (flip: was the plain audit's `refactor` node; see #131)."""
     journal = tmp_path / "proofs.jsonl"
-    found = Auditor(_tree(tmp_path, test), config=AuditorConfig(journal=journal)).tier1()
+    config = AuditorConfig(journal=journal, node=_impl_node())
+    found = Auditor(_tree(tmp_path, test), config=config).tier1()
     coverage = next(f for f in found.findings if f.gate == "coverage")
     assert coverage.verdict == "pass", coverage.detail
     assert spared_definitions(coverage.cites[-1]) == spared
@@ -108,3 +117,19 @@ def test_the_auditor_seals_and_the_packet_lists_each_spared_definition(
     ]
     if spared:
         assert span.record_hash in rows["not-proven"].cites
+
+
+def test_a_plain_audit_reports_a_changed_line_in_an_uncalled_baseline_definition(
+    tmp_path: Path,
+) -> None:
+    """#131: a node that may write tests can cover `A.keep`, so nothing spares it.
+
+    The same tree the `impl` test above passes. `audit_node` is `refactor`,
+    which is what `saddle audit` and the feed's finish audit gate as.
+    """
+    journal = tmp_path / "proofs.jsonl"
+    found = Auditor(_tree(tmp_path, UNCALLED), config=AuditorConfig(journal=journal)).tier1()
+    coverage = next(f for f in found.findings if f.gate == "coverage")
+    assert coverage.verdict != "pass"
+    assert "no test runs n.py:7" in coverage.detail, coverage.detail
+    assert spared_definitions(coverage.cites[-1]) == []
