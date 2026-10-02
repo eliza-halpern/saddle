@@ -217,6 +217,7 @@ This command runs the tiered battery on a diff with no plan: tier 0 on each chan
 | `--tiered` | off | without it, `saddle audit` runs the older flat audit (`audit.audit_tree`) |
 | `--tier2 {score,shortlist}` | `score` | as for `auto`; `shortlist` implies `--tiered` |
 | `--mutant-shortlist N` | `5` | with `--tier2 shortlist`: how many surviving mutants the mutation finding names |
+| `--attach-to LEDGER` | none | audit the commits after the ones a finished run's ledger covers and record the result in that ledger (below); implies `--tiered` |
 
 The text output prints each tier as a header, then one line per finding in the form
 `verdict gate [reason] detail`, then `verdict: accept|refuse`.
@@ -237,6 +238,40 @@ The text output prints each tier as a header, then one line per finding in the f
 
 Exit 0 prints the `OK: … ledger verifies …` line and a transcript. Exit 1 prints one
 `code@line N: message` per issue. The codes are listed in USING-SADDLE.md §8.
+
+Right after the `OK:` line, for each autonomous run in the ledger, verify says which
+commits the ledger covers (shas are shortened to 12 hex digits):
+
+| Line | Meaning |
+|---|---|
+| `covers: BASE..COMMIT on BRANCH (tree HASH)` | the run's own commit, sealed in the coverage file beside the ledger (`proofs.covers.jsonl`) |
+| `covers: not recorded (ledger predates this field, …)` | no coverage file: no commit is named, none is guessed |
+| `covers: nothing yet (the run has not ended)` | a run still going |
+| `later commits on BRANCH: none` | the branch holds nothing after the covered commit |
+| `not covered by this ledger: N later commit(s): SHA SUBJECT; …` | commits on top that no evidence in the ledger covers (the first 10 are named) |
+| `later commits on the branch: not checked (WHY)` | the lookup could not be made (not a git repository, branch gone, history rewritten, git failing); never read as "none" |
+| `coverage file: N commit record(s) name an outcome this ledger does not hold; they are not counted` | a coverage file from another run |
+
+The later commits are looked up in the `--anchor` repository, else in the checkout the
+ledger sits in. After a follow-up is attached, the first line reaches the new head, a
+`the run itself ended at …` line follows, and each follow-up is listed as
+`follow-up N: FROM..TO, K finding(s), verdict V (counts), audited after the run and attached to
+this ledger, not the run's own`. The packet's Reproduce row says the same. The coverage
+file is part of verification: an edited record, a second commit record for one outcome,
+or a follow-up that does not continue the record before it fails with
+`bad-hash`, `attempt-sidecar`, `committed-duplicate` or `followup-chain`. A follow-up
+deleted from the end of the file cannot be seen, since the file is append-only.
+
+### Attaching follow-up commits: `saddle audit --attach-to LEDGER [REV]`
+
+Commits made on a run's branch after the run (a review fix, say) are outside its
+ledger. `saddle audit --repo REPO --attach-to LEDGER` audits the commits from the newest
+commit the ledger covers up to `REV` (default: the run branch's tip) with the tiered
+battery, prints the audit as usual, and appends its verdict and every finding to the
+coverage file as a follow-up record chained to the one before it. A refusing audit is
+recorded as refusing; the exit code is the audit's. It refuses with exit 2, writing
+nothing, when the ledger does not verify, records no covered commit, `REV` is not on top
+of the covered commit, there are no commits after it, or `--baseline` is given.
 
 ## saddle chat / saddle web
 

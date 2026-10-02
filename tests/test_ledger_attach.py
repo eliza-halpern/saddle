@@ -204,11 +204,11 @@ def test_followup_audit_keeps_findings_and_untiered_checks() -> None:
     from saddle.audit import AuditCheck, AuditResult
     from saddle.auditor import Finding, Findings
 
-    finding = Finding(gate="tests", tier=1, verdict="fail", reason="r", detail="d", cites=())
+    finding = Finding(gate="tests", tier=1, verdict="fail", reason="scope", detail="d", cites=())
     tiered = cli.followup_audit((Findings(tier=1, key="k", findings=(finding,)),))
     assert tiered.verdict == "refuse"
     assert tiered.findings == (
-        {"tier": "1", "gate": "tests", "verdict": "fail", "reason": "r", "detail": "d"},
+        {"tier": "1", "gate": "tests", "verdict": "fail", "reason": "scope", "detail": "d"},
     )
     empty = AuditResult(
         verdict="nothing-to-audit",
