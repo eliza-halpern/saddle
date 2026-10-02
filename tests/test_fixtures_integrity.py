@@ -31,6 +31,7 @@ from pathlib import Path, PurePosixPath
 
 import jinja2
 import pytest
+from test_images import png_check
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_REL = "tests/fixtures"
@@ -92,7 +93,7 @@ def test_the_fixture_set_is_not_empty() -> None:
 
 # Types with a rule here. `.mjs`, `.js` and `.py` fixtures are covered by the
 # JavaScript and Python linters, and run by the tests that use them.
-HANDLED_SUFFIXES = {".json", ".jsonl", ".diff", ".txt", ".jinja", ".mjs", ".js", ".py"}
+HANDLED_SUFFIXES = {".json", ".jsonl", ".diff", ".txt", ".jinja", ".mjs", ".js", ".py", ".png"}
 
 
 def json_problem(text: str) -> str | None:
@@ -253,6 +254,12 @@ def test_jsonl_fixture_parses_line_by_line(name: str) -> None:
 def test_text_fixture_is_utf8_and_not_empty(name: str) -> None:
     data = (ROOT / FIXTURES_REL / name).read_bytes()
     assert text_problem(data, python=name.endswith(".py.txt")) is None
+
+
+@pytest.mark.parametrize("name", [n for n in FIXTURE_PATHS if n.endswith(".png")])
+def test_png_fixture_is_a_well_formed_png(name: str) -> None:
+    """The reference pictures; test_images holds the checker's known-bad instances."""
+    assert isinstance(png_check((ROOT / FIXTURES_REL / name).read_bytes()), tuple)
 
 
 @pytest.mark.parametrize("name", [n for n in FIXTURE_PATHS if n.endswith(".jinja")])

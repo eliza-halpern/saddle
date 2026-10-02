@@ -1,0 +1,11 @@
+{
+ "chrome_major": "154",
+ "fonts": [
+  "DejaVu Sans Mono|DejaVuSansMono|system",
+  "DejaVu Sans|DejaVuSans|system",
+  "Noto Sans|NotoSans-Bold|system",
+  "Noto Sans|NotoSans-Regular|system"
+ ],
+ "fonts_sha256": "3cfece3b3972ad320deb26dc593f940e19b9dfccf536d7aeecf3e0a2d3b9d26d",
+ "platform": "linux"
+}

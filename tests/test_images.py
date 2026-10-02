@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from doc_links import collect_links, local_target
 from doc_tree import ROOT, tracked
+from ui_snapshots import IMAGE_NAMES as SNAPSHOT_IMAGES
 
 IMAGE_PATTERNS = (
     "*.png",
@@ -39,9 +40,13 @@ RASTER_MAX_BYTES = 1_048_576
 # The logo is 6 KiB; an SVG past 64 KiB has embedded a bitmap or a font.
 SVG_MAX_BYTES = 65_536
 
-# Tracked images that no tracked Markdown file names, with the reason. Empty
-# today: every image is shown in README.md or docs/USING-SADDLE.md.
-UNREFERENCED: dict[str, str] = {}
+# Tracked images that no tracked Markdown file names, with the reason. The
+# docs' own images are all shown in README.md or docs/USING-SADDLE.md; the rest
+# are the UI snapshot tests' reference pictures, read by tests/test_ui_snapshots.py.
+UNREFERENCED: dict[str, str] = {
+    f"tests/fixtures/ui_snapshots/{name}": "reference picture read by tests/test_ui_snapshots.py"
+    for name in SNAPSHOT_IMAGES
+}
 
 SVG_NS = "{http://www.w3.org/2000/svg}"
 FORBIDDEN_ELEMENTS = frozenset({"script", "foreignobject", "iframe", "embed", "object"})
