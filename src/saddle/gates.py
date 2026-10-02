@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 # pytest exit codes that carry red-phase evidence (see `check_red_phase`).
 PYTEST_TESTS_FAILED: Final = 1
 PYTEST_COLLECTION_ERROR: Final = 2
+PYTEST_NO_TESTS: Final = 5
+NO_TESTS_COLLECTED: Final = "collected no tests"
+"""How the `tests` check names a run that collected nothing (pytest exit 5)."""
 # Exit code for a command killed on timeout, following GNU `timeout(1)`.
 # Pytest reserves 0-5, so this cannot collide with a real suite verdict.
 SHELL_TIMEOUT: Final = 124
@@ -519,6 +522,12 @@ def check_test_command(
         )
     if kind == "test":
         return _red_specification(test_command, exit_code, output, workdir_modules)
+    if exit_code == PYTEST_NO_TESTS:
+        return GateCheck(
+            name="tests",
+            passed=False,
+            detail=f"{test_command!r} exited {exit_code}: {NO_TESTS_COLLECTED}",
+        )
     if exit_code != 0:
         failing = failing_tests(output)
         named = ", ".join(failing[:FAILING_NAMED])

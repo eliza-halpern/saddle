@@ -1634,7 +1634,11 @@ def _tiered_audit(
     `audit_tree` would gate; an unchanged tree is `nothing-to-audit` as there.
     `--tier2 shortlist` and `--task-requirements` imply `--tiered`."""
     config = AuditorConfig(
-        test_command=test_command, cache_dir=cache, task_requirements=task_requirements
+        test_command=test_command,
+        cache_dir=cache,
+        task_requirements=task_requirements,
+        # A person's commits: a project with no tests is not proven, not refused.
+        no_tests="not-proven",
     )
     if tier2 == "shortlist":
         config = dataclasses.replace(config, tier2=tier2, mutant_shortlist=mutant_shortlist)

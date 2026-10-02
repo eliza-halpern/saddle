@@ -107,6 +107,7 @@ from saddle.evidence import (
 )
 from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
+    NO_TESTS_COLLECTED,
     TEST_ONLY_UNPROVEN,
     TOOL_UNAVAILABLE,
     GateCheck,
@@ -145,6 +146,7 @@ from saddle.jsevidence import (
     JsCoverage,
     JsTestResult,
     changed_js_lines,
+    is_js_test_file,
     js_test_files,
     measure_chrome_coverage,
     measure_coverage,
@@ -457,6 +459,15 @@ class Findings:
         )
 
 
+NoTests = Literal["refuse", "not-proven"]
+
+NO_TESTS_DETAIL: Final = (
+    "not proven: the project has no tests (none at the baseline, none collected now), "
+    "so nothing here was run; a person reads the change"
+)
+"""Every check that needs a test, for a person's audit of a project without tests."""
+
+
 @dataclass(frozen=True)
 class AuditorConfig:
     test_command: str = AUDIT_TEST_COMMAND
@@ -492,6 +503,12 @@ class AuditorConfig:
     """The task the run was given, when the caller has it: a new public function
     the task names as a whole identifier was asked for, so
     `gates.check_test_only_additions` does not judge it. Part of the cache key."""
+    no_tests: NoTests = "refuse"
+    """How a project with no tests is judged. "refuse" (the default, and a Task
+    run's): pytest collecting nothing fails `tests`, since an agent can write the
+    tests. "not-proven" (`saddle audit --tiered`, a person's commits): when the
+    baseline has no tests either, every check that needs one is not proven
+    (`NO_TESTS_DETAIL`), never a refusal no edit could clear (#129)."""
     impact: ImpactMemo | None = None
     """The test-impact map one run's audits share (`saddle.impact`). None runs
     the whole suite at every audit, as before. With a memo the first audit
@@ -1240,6 +1257,18 @@ def _test_side(path: str) -> bool:
     return any(fnmatch(parts[-1], p) for p in _TEST_NAMES) or bool(_TEST_DIRS & set(parts[:-1]))
 
 
+NO_TESTS_GATES: Final = ("tests", "coverage", "mutation", "red-phase")
+"""The checks that need a test (`full-suite` reads `tests`' status)."""
+
+
+def baseline_has_tests(copy: Path, resolved: str) -> bool:
+    """Whether the baseline tracks any test file, Python or JavaScript, by name
+    (`_test_side`, `is_js_test_file`). A test file that collects nothing still
+    counts: a change cannot be judged against tests it may have emptied."""
+    names = run_capture(["git", "ls-tree", "-r", "--name-only", resolved], copy).stdout
+    return any(_test_side(n) or is_js_test_file(n) for n in names.splitlines())
+
+
 def green_on_baseline(
     copy: Path,
     resolved: str,
@@ -1405,6 +1434,8 @@ def flip_finding(
 
 
 def _reason(gate: str, verdict: Verdict, detail: str) -> Reason:
+    if verdict == "not-proven" and detail == NO_TESTS_DETAIL:
+        return "evidence-thin"
     if verdict == "blocked" or (gate == "mutation" and detail.startswith(_TOOL_FAILURE_PREFIXES)):
         return "unknown"
     return REASONS[gate]
@@ -1714,6 +1745,7 @@ class Auditor:
                     else []
                 ),
                 *(["impact"] if self.config.impact is not None else []),
+                *(["no-tests", "not-proven"] if self.config.no_tests == "not-proven" else []),
             ]
         )
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -2210,6 +2242,19 @@ class Auditor:
         if project is not None:
             judged = project.result()
             statuses[PROJECT_GATE] = (judged.verdict, judged.detail, None)
+        tests_status, tests_detail, _ = statuses["tests"]
+        if (
+            self.config.no_tests == "not-proven"
+            and tests_status == "fail"
+            and tests_detail.endswith(NO_TESTS_COLLECTED)
+            and not baseline_has_tests(copy, resolved)
+        ):
+            # A person's commits to a project with no tests: nothing was run, and
+            # no edit to the change could make a test run. Last, so no rule above
+            # reads a check this replaces.
+            for gate in NO_TESTS_GATES:
+                if gate in statuses:
+                    statuses[gate] = ("not-proven", NO_TESTS_DETAIL, statuses[gate][2])
         wanted = TIER1 if tier == 1 else TIER2
         if STATIC_CHECK in statuses:
             wanted = (*wanted, STATIC_CHECK)
