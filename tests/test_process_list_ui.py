@@ -147,3 +147,45 @@ def test_with_nothing_running_the_chip_is_not_shown(tmp_path: Path) -> None:
             sid=sid,
         )
     assert got is True
+
+
+@needs_cgroup
+def test_on_a_phone_the_chip_next_to_the_unsandboxed_banner_causes_no_sideways_scroll(
+    tmp_path: Path,
+) -> None:
+    """With the chip, the full-access banner, the lane chip and the folder name
+    all in the topbar at 420px the page must not scroll sideways (main, without
+    the chip, does not). The chip shrinks to its dot and count."""
+    shots = os.environ.get("SADDLE_PROCESS_SHOTS", "")
+    store = SessionStore(tmp_path / "s")
+    app = build_app(store, NoModel, default_workdir=tmp_path)
+    with serving(app) as base:
+        sid = store.create(title="serve the site", workdir=str(tmp_path)).id
+        store.update(sid, mode="edit")
+        store.set_full_access(sid, True, confirm=FULL_ACCESS_CONFIRM)
+        server = _server_of(app)
+        ctx = ToolContext(workdir=tmp_path, full_access=True, processes=server.ledger(sid))
+        server._live(sid).context = ctx
+        try:
+            run(ctx, "run_command", command=f"sleep {sleep_marker()}", background=True)
+            got = drive_page(
+                base,
+                """
+                await page.width(420);
+                await page.chat(args.sid);
+                await page.until(() => !document.querySelector("#procs-chip").hidden);
+                await page.shot("phone-chip.png");
+                return await page.js(() => ({
+                  wide: document.documentElement.scrollWidth - window.innerWidth,
+                  topbar: document.querySelector("#topbar").scrollWidth
+                    - document.querySelector("#topbar").clientWidth,
+                  banner: !document.querySelector("#full-access-banner").hidden,
+                  count: document.querySelector("#procs-count").textContent,
+                }));
+                """,
+                sid=sid,
+                shots=shots,
+            )
+        finally:
+            ctx.stop_processes()
+    assert got == {"wide": 0, "topbar": 0, "banner": True, "count": "1"}
