@@ -19,7 +19,7 @@ uv lock --check
 uv run taplo fmt --check
 # ShellCheck on every tracked shell script; the hooks have no extension, so each is named.
 uv run shellcheck check.sh ci-mutate.sh tools/githooks/commit-msg tools/githooks/pre-commit tools/githooks/pre-push
-# ESLint over the browser files, the node test and the nine browser drivers;
+# ESLint over the browser files, the node test and the browser drivers and tools/chrome_coverage.mjs;
 # tsc type-checks the browser scripts (JSDoc under // @ts-check).
 npx --no-install eslint .
 npx --no-install tsc -p tsconfig.json
@@ -42,4 +42,11 @@ npx --no-install markdownlint-cli2
 # worker's lines for the 100% line and branch gate in `addopts`. `worksteal`
 # lets an idle worker take tests still queued on a busy one, as the audit does.
 workers=$(uv run python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["tool"]["saddle"]["test-workers"])')
+# The Chrome-driven tests record the browser scripts' line coverage while they run
+# (tests/fixtures/cdp_coverage.mjs); tools/chrome_coverage.mjs then holds each file
+# to its floor in tests/fixtures/js_coverage_scope.json. No Chrome: nothing is
+# measured and the check says so (an error under SADDLE_REQUIRE_BROWSER).
+rm -rf node_modules/.cache/chrome-coverage
+export SADDLE_JS_COVERAGE_DIR="$PWD/node_modules/.cache/chrome-coverage"
 uv run pytest -n "$workers" --dist worksteal
+node tools/chrome_coverage.mjs check

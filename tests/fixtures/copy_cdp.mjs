@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { coverage } from "./cdp_coverage.mjs";
 
 const [base, sid] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
@@ -72,12 +73,14 @@ try {
       pageErrors.push(thrown.exception?.description || thrown.text);
     }
   });
-  const send = (/** @type {string} */ method, params = {}) =>
+  const rawSend = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
+  const cov = coverage(rawSend);
+  const send = cov.send;
   const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -190,6 +193,7 @@ try {
   })()`);
   out.copyEvents = await js("window.copyEvents");
   console.log(JSON.stringify(out));
+  await cov.save();
   await finish(0);
 } catch (error) {
   console.error(String(/** @type {any} */ (error)?.stack || error));

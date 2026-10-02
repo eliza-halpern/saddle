@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { coverage } from "./cdp_coverage.mjs";
 
 const [base, sid, widthArg, scheme, shots, prefix = ""] = process.argv.slice(2);
 const W = Number(widthArg) || 1280;
@@ -64,12 +65,14 @@ try {
       pending.delete(msg.id);
     }
   });
-  const send = (/** @type {string} */ method, params = {}) =>
+  const rawSend = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
+  const cov = coverage(rawSend);
+  const send = cov.send;
   const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -206,6 +209,7 @@ try {
   );
   await shot("stopped-reloaded.png");
   console.log(JSON.stringify(out));
+  await cov.save();
   await finish(0);
 } catch (error) {
   console.error(String(/** @type {any} */ (error)?.stack || error));

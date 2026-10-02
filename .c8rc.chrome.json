@@ -1,0 +1,11 @@
+{
+  "all": true,
+  "include": [
+    "src/saddle/web/static/app.js",
+    "src/saddle/web/static/tasks.js",
+    "src/saddle/web/static/notify.js",
+    "src/saddle/web/static/runs.js"
+  ],
+  "reporter": ["text"],
+  "tempDirectory": "node_modules/.cache/chrome-coverage"
+}

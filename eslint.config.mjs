@@ -101,7 +101,7 @@ export default [
     languageOptions: { globals: { document: "writable", $: "writable" } },
   },
   {
-    files: ["tests/fixtures/*.mjs", "*.mjs", "src/saddle/*.mjs"],
+    files: ["tests/fixtures/*.mjs", "tools/*.mjs", "*.mjs", "src/saddle/*.mjs"],
     languageOptions: { sourceType: "module", globals: { ...globals.node } },
   },
 ];
