@@ -383,3 +383,27 @@ def test_the_commands_the_project_names_reach_the_models_sandbox_too(tmp_path: P
     detail = _command_details(result)[0]
     assert "exit 0" in detail, detail
     assert "2\nformatted by node object" in detail, detail
+
+
+def test_the_finish_audit_of_a_run_finds_the_checkouts_packages(tmp_path: Path) -> None:
+    """Red before: a watched run's finish audit took node tools from its worktree,
+    whose node_modules is only a mount point: no c8, no typescript, and 17 tests
+    that needed node_modules failed, refusing a correct change."""
+    repo = _repo(tmp_path / "repo", src=False)
+    (repo / ".gitignore").write_text(".venv/\nnode_modules/\n")
+    (repo / "tests" / "test_x.py").write_text(
+        "from pathlib import Path\n\nfrom n import f\n\n\n"
+        "def test_x():\n"
+        '    assert Path("node_modules/pkg/data.txt").read_text() == "ok"\n'
+        "    assert f() == 2\n"
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a test that reads node_modules")
+    (repo / "node_modules" / "pkg").mkdir(parents=True)
+    (repo / "node_modules" / "pkg" / "data.txt").write_text("ok")
+    # A data file: no Python line changes, so nothing but the suite's tier-1 run
+    # (which reads node_modules) can refuse the finish. The suite's own mutmut is
+    # a stub here, and would refuse a Python edit for having no mutants.
+    edit = call("write_file", "w1", path="notes.txt", content="node tools reach the audit\n")
+    result = auto(repo, Scripted([[edit], finish()]), arm="E+A+F")
+    assert result.outcome == "finished", result

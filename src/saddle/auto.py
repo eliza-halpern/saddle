@@ -842,6 +842,7 @@ def run_auto(
             p1=p1,
             p1_wait=lambda: auto.budget.time_left(),
             impact_cache=root / ".saddle" / "impact",
+            dependencies=root,
         )
     )
     guard = self_guard(worktree)

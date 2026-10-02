@@ -409,6 +409,9 @@ class AuditFeed:
     """The finish summary the model has written so far (`tell_summary`): the text
     a `flip:` line is read from. Empty until `finish` is called."""
     impact_cache: Path | None = None
+    dependencies: Path | None = None
+    """`AuditorConfig.dependencies`: the run's checkout, whose installed packages its
+    worktree lacks."""
     """Where drawn test-impact maps are kept across runs (`Auditor.draw_map`);
     `auto` passes the repository's `.saddle/impact`."""
     auditor: AuditorLike | None = None
@@ -442,6 +445,7 @@ class AuditFeed:
             # One map for the run, drawn at its start (below) or by its first
             # audit; every other audit runs the test files a change can reach.
             impact=ImpactMemo(cache=self.impact_cache),
+            dependencies=self.dependencies,
         )
         if self.auditor is None:
             self.auditor = self.factory(self.worktree, self.baseline, self._config)

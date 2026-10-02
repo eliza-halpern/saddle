@@ -2398,6 +2398,28 @@ def _tree_files(workdir: Path) -> list[str]:
     )
 
 
+DEPENDENCY_DIRS: Final = ("node_modules",)
+"""Dependency directories a project installs and git ignores, so a staged copy
+lacks them (`auditor.link_dependencies`, `_link_into_mutants`)."""
+
+
+def _link_into_mutants(workdir: Path, scratch: Path) -> None:
+    """Link `workdir`'s `DEPENDENCY_DIRS` into `scratch/mutants`, where mutmut runs
+    the tests. mutmut copies only its sources and `also_copy` there, so a test
+    that needs `node_modules` failed mutmut's stats run ("failed to collect
+    stats") and the mutation check refused every Python change to a project whose
+    tests need it. A link, not `also_copy`: that would copy the whole tree. mutmut
+    makes `mutants/` with `exist_ok` and never empties it, so the link stays."""
+    for name in DEPENDENCY_DIRS:
+        real = workdir / name
+        if not real.exists():
+            continue
+        link = scratch / "mutants" / name
+        if not link.exists() and not link.is_symlink():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(real.resolve())
+
+
 def _copyable(mutated: Collection[str], untouched: Collection[str]) -> list[str]:
     """`untouched` as entries mutmut's `also_copy` can copy.
 
@@ -2918,6 +2940,7 @@ def mutation_sample(
             # them was most of the wall on a large module. They stay `not checked`.
             wanted = lines_by_file if scope is None else scope.keep
             globs = _changed_function_globs(scratch, {rel: wanted[rel] for rel in mutable})
+            _link_into_mutants(workdir, scratch)
             ran = run_capture(
                 [
                     "timeout",

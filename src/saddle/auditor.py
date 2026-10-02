@@ -74,6 +74,7 @@ from saddle.audit import (
 from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
+    DEPENDENCY_DIRS,
     SKIP_REPORT_NAME,
     CapturedRun,
     MutationOutcome,
@@ -475,6 +476,12 @@ class AuditorConfig:
     (`gates.check_mutation_shortlist`), makes coverage a locator
     (`not-proven`, never a refusal) and turns on the finish-time behaviour in
     `feed` (format, cheap-route checks, way-out claims)."""
+    dependencies: Path | None = None
+    """Where the project's installed dependency directories (`DEPENDENCY_DIRS`) and
+    its node tools live; None: the audited repository. An autonomous run audits
+    its worktree, which holds tracked files only and has `node_modules` only as
+    a mount point, so it passes its checkout: a watched run's finish audit found
+    no c8, no typescript and no npx tools, and refused on 17 tests that needed them."""
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
     """How many open survivors a mutation finding's detail names (`--mutant-shortlist`)."""
     task_requirements: Path | None = None
@@ -1135,11 +1142,6 @@ def node_stage(argv: Sequence[str], tools: Path | None) -> tuple[str, ...]:
     return tuple(argv)
 
 
-DEPENDENCY_DIRS: Final = ("node_modules",)
-"""Dependency directories a project installs and git ignores, so a staged copy
-lacks them (`link_dependencies`)."""
-
-
 def link_dependencies(copy: Path, checkout: Path) -> tuple[Path, ...]:
     """Link each of `checkout`'s `DEPENDENCY_DIRS` into its staged `copy`, once,
     before anything runs there; the directories to show read-only.
@@ -1668,6 +1670,8 @@ class Auditor:
         self.repo = Path(repo)
         self.baseline_rev = baseline_rev
         self.config = config or AuditorConfig()
+        self.tools = Path(self.config.dependencies) if self.config.dependencies else self.repo
+        """Where `link_dependencies` and the node stages find the installed packages."""
         self.node = self.config.node or audit_node(self.config.test_command)
         self._memory: dict[str, Findings] = {}
         self._base_runs: dict[str, list[tuple[int, bool]]] = {}
@@ -1865,7 +1869,7 @@ class Auditor:
             # findings come from the same suite run, and are cached under
             # tier 1's key, unless that tree's tier 1 is already known. The
             # finish audit used to run the whole suite once per tier on one tree.
-            deps = link_dependencies(copy, tree or self.repo)
+            deps = link_dependencies(copy, self.config.dependencies or tree or self.repo)
             with sandbox.also_exposing(exposed), sandbox.also_showing(deps):
                 key1 = self._key(1, staged, resolved)
                 first = (self._cached(key1) or self._reuse(same1, key1)) if tier == 2 else None
@@ -1917,7 +1921,7 @@ class Auditor:
                         skip_report=copy / SKIP_REPORT_NAME,
                         test_only_additions=True,
                         task_text=self.config.task_text,
-                        js_tools=self.repo,
+                        js_tools=self.tools,
                         # A whole-suite run under a memo (re)draws the map.
                         on_suite=(
                             functools.partial(_record_impact, memo, copy)
@@ -1971,7 +1975,7 @@ class Auditor:
         """The project's gate stages on the audited copy and on the baseline, judged
         (`check_project_gate`). The baseline's runs are a function of its tree and
         the stages, so they are asked once per baseline (`_base_stage_runs`)."""
-        head = _gate_stage_runs(stages, copy, limit, self.repo)
+        head = _gate_stage_runs(stages, copy, limit, self.tools)
         base = self._base_stage_runs(stages, copy, resolved, limit)
         return check_project_gate(list(zip(stages, head, base, strict=True)))
 
@@ -2000,7 +2004,7 @@ class Auditor:
             with tempfile.TemporaryDirectory(prefix="saddle-gate-base-") as scratch:
                 base = Path(scratch) / "tree"
                 materialize_baseline(copy, resolved, base)
-                ran = _gate_stage_runs(stages, base, limit, self.repo)
+                ran = _gate_stage_runs(stages, base, limit, self.tools)
             recorded = [(r.exit_code, r.timed_out) for r in ran]
             if path is not None:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -2080,7 +2084,7 @@ class Auditor:
             if not shortlisted.passed:
                 survivors = _survivors(outcome, sources)
         spent = gated.mutation
-        measurable = measurable_here(copy, self.repo)
+        measurable = measurable_here(copy, self.tools)
         unmeasured = (
             unmeasurable_files(git_changed_files(copy, resolved), measurable) if tier == 2 else []
         )
@@ -2246,7 +2250,7 @@ class Auditor:
                     "xfailed": [list(p) for p in skips.xfailed],
                 }
         js_found, js_sidecars = js_findings(
-            copy, resolved, limit, self.repo, self.config.tier2 == "shortlist", tier
+            copy, resolved, limit, self.tools, self.config.tier2 == "shortlist", tier
         )
         findings.extend(js_found)
         sidecars.update(js_sidecars)
@@ -2296,7 +2300,7 @@ class Auditor:
                 memo.tests = impact.loads(cached.read_text())
                 if memo.tests is not None:
                     return f"map read from {cached.name}"
-            deps = link_dependencies(copy, tree or self.repo)
+            deps = link_dependencies(copy, self.config.dependencies or tree or self.repo)
             with sandbox.also_exposing(exposed), sandbox.also_showing(deps):
                 data_file = str(copy / ".coverage.map")
                 drop_test_caches(copy)
