@@ -244,7 +244,8 @@ class ProjectGate:
 
 def gate_stage_name(argv: Sequence[str], taken: Collection[str] = ()) -> str:
     """A short name for a stage: its tool and subcommand (`ruff format`, `eslint`),
-    skipping launchers and options; the whole command when that name is `taken`."""
+    skipping launchers and options, the tool by its file name rather than its path;
+    the whole command when that name is `taken`."""
     words = list(argv)
     while words:
         if words[:2] == ["uv", "run"]:
@@ -253,8 +254,8 @@ def gate_stage_name(argv: Sequence[str], taken: Collection[str] = ()) -> str:
             words = words[1:]
         else:
             break
-    tool = words[0] if words else " ".join(argv)
-    sub = words[1] if len(words) > 1 and re.fullmatch(r"[a-z][a-z-]*", words[1]) else ""
+    tool = PurePath(words[0]).name if words else " ".join(argv)
+    sub = words[1] if len(words) > 1 and re.fullmatch(r"[A-Za-z][\w.-]*", words[1]) else ""
     name = f"{tool} {sub}".strip()
     return " ".join(argv) if name in taken else name
 

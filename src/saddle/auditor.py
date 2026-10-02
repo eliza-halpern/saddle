@@ -83,8 +83,10 @@ from saddle.evidence import (
     changed_statements,
     drop_test_caches,
     format_overrides,
+    gate_checks,
     git_changed_files,
     git_diff,
+    materialize_baseline,
     prompt_benchmark,
     read_skip_report,
     ruff_argv,
@@ -106,10 +108,12 @@ from saddle.gates import (
     TEST_ONLY_UNPROVEN,
     TOOL_UNAVAILABLE,
     GateCheck,
+    ProjectGate,
     RuffFinding,
     TaskRequirementsCheck,
     Tier1Result,
     check_mutation_shortlist,
+    check_project_gate,
     check_ruff,
     check_static,
     check_syntax,
@@ -150,6 +154,12 @@ STATIC_CHECK: Final = "static-check"
 """The project's own static check (`evidence.static_check`, a type checker for
 saddle itself): a tier-1 gate emitted after `TIER1`, and only when the
 project's committed `[tool.saddle]` names one; without it, no finding."""
+
+PROJECT_GATE: Final = "project-gate"
+"""The project's own gate stages (`evidence.gate_checks`, plus its static check),
+each run on the audited tree and on the baseline (`gates.check_project_gate`): a
+tier-1 gate emitted after `STATIC_CHECK`, and only when the project's committed
+`[tool.saddle]` names a stage. Its first line is the packet's `Gate:` line."""
 
 TASK_REQUIREMENTS: Final = "task-requirements"
 """P1's tier-1 gate (`task_requirements.check_tree`): emitted after `TIER1`,
@@ -195,6 +205,7 @@ REUSES: Final[dict[str, str]] = {
     "full-suite": "saddle.gates.check_test_command",
     TASK_REQUIREMENTS: "saddle.gates.check_task_requirements",
     STATIC_CHECK: "saddle.gates.check_static",
+    PROJECT_GATE: "saddle.gates.check_project_gate",
 }
 
 # The calibration hook: what a failure of each gate claims about the change.
@@ -216,6 +227,7 @@ REASONS: Final[dict[str, Reason]] = {
     "requirement-binding": "evidence-thin",
     TASK_REQUIREMENTS: "code-wrong",
     STATIC_CHECK: "code-wrong",
+    PROJECT_GATE: "code-wrong",
     "node-scope": "scope",
     "target-scope": "scope",
 }
@@ -821,8 +833,13 @@ def syntax_key(copy: Path) -> str:
 def _reusable(found: Findings) -> bool:
     """Findings a format-only edit cannot change or make stale: nothing failed
     or was blocked (a failure is re-proved on the tree it is shown for), and
-    nothing not proven names lines, except the budget-bound mutation note."""
+    nothing not proven names lines, except the budget-bound mutation note. A
+    tree that holds a `PROJECT_GATE` finding is never reused: a format-only edit
+    is what a format stage (`ruff format --check`, a linter's whitespace rules)
+    judges, so its earlier pass says nothing about the reformatted tree."""
     for f in found.findings:
+        if f.gate == PROJECT_GATE:
+            return False
         if f.verdict in ("fail", "blocked") and f.reason != "sanctioned":
             return False
         if f.verdict == "not-proven" and not f.detail.startswith(MUTATION_UNMEASURED[:12]):
@@ -833,6 +850,13 @@ def _reusable(found: Findings) -> bool:
 def _run_static(argv: tuple[str, ...], copy: Path, limit: float) -> GateCheck:
     """Run the project's static check on the audited copy and judge it."""
     return check_static(argv, run_static_check(argv, copy, timeout=limit))
+
+
+def _gate_stage_runs(
+    stages: Sequence[tuple[str, ...]], tree: Path, limit: float
+) -> list[CapturedRun]:
+    """Each stage run in `tree`, in the staged copy's sandbox (`run_static_check`)."""
+    return [run_static_check(argv, tree, timeout=limit) for argv in stages]
 
 
 def _blocked_tier2(key: str, first: Findings) -> Findings:
@@ -1320,6 +1344,7 @@ class Auditor:
         self.config = config or AuditorConfig()
         self.node = self.config.node or audit_node(self.config.test_command)
         self._memory: dict[str, Findings] = {}
+        self._base_runs: dict[str, list[tuple[int, bool]]] = {}
         self._by_syntax: dict[str, str] = {}
         self._bench_seen: dict[tuple[str, tuple[str, ...]], Measured] = {}
         """A readable baseline prompt-benchmark score by (commit, command): the
@@ -1494,6 +1519,9 @@ class Auditor:
                 limit = suite_limit(copy, resolved).seconds
                 workers = suite_workers(copy, resolved).count
                 statics = static_check(copy, resolved)
+                declared = gate_checks(copy, resolved)
+                # `static-check` is one more stage of the gate, unless it is listed too.
+                stages = (*declared, *((statics,) if statics and statics not in declared else ()))
                 exposed = sandbox_expose(copy, resolved)
                 bench = prompt_benchmark(copy, resolved)
             except SuiteLimitError as exc:
@@ -1510,16 +1538,28 @@ class Auditor:
                 p1: Future[TaskRequirementsCheck] | None = None
                 pool: ThreadPoolExecutor | None = None
                 static: Future[GateCheck] | None = None
+                project: Future[ProjectGate] | None = None
                 if first is None and statics:
                     # Beside the tests too: a type check takes seconds, the suite minutes.
-                    pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
+                    pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="saddle-p1")
                     static = pool.submit(
                         contextvars.copy_context().run, _run_static, statics, copy, limit
+                    )
+                if first is None and stages:
+                    # Beside the tests too, as the static check: the base runs are cached.
+                    pool = pool or ThreadPoolExecutor(max_workers=3, thread_name_prefix="saddle-p1")
+                    project = pool.submit(
+                        contextvars.copy_context().run,
+                        self._project_gate,
+                        stages,
+                        copy,
+                        resolved,
+                        limit,
                     )
                 if first is None and self.config.task_requirements is not None:
                     # Beside the tests, not after them: it adds to the wall only if
                     # it outlasts them. The context carries the project environment.
-                    pool = pool or ThreadPoolExecutor(max_workers=2, thread_name_prefix="saddle-p1")
+                    pool = pool or ThreadPoolExecutor(max_workers=3, thread_name_prefix="saddle-p1")
                     p1 = pool.submit(
                         contextvars.copy_context().run,
                         check_tree,
@@ -1553,7 +1593,9 @@ class Auditor:
                         pool.shutdown(wait=True)
                 if tier == 2:
                     if first is None:
-                        first = self._tiered(1, key1, gated, copy, resolved, limit, p1, static)
+                        first = self._tiered(
+                            1, key1, gated, copy, resolved, limit, p1, static, project
+                        )
                     self._by_syntax[same1] = first.key
                     if not first.passed:
                         return self._store(_blocked_tier2(key, first))
@@ -1562,9 +1604,55 @@ class Auditor:
                     )
                     self._by_syntax[same] = second.key
                     return second
-                done = self._tiered(1, key, gated, copy, resolved, limit, p1, static)
+                done = self._tiered(1, key, gated, copy, resolved, limit, p1, static, project)
                 self._by_syntax[same] = done.key
                 return done
+
+    def _project_gate(
+        self, stages: Sequence[tuple[str, ...]], copy: Path, resolved: str, limit: float
+    ) -> ProjectGate:
+        """The project's gate stages on the audited copy and on the baseline, judged
+        (`check_project_gate`). The baseline's runs are a function of its tree and
+        the stages, so they are asked once per baseline (`_base_stage_runs`)."""
+        head = _gate_stage_runs(stages, copy, limit)
+        base = self._base_stage_runs(stages, copy, resolved, limit)
+        return check_project_gate(list(zip(stages, head, base, strict=True)))
+
+    def _base_stage_runs(
+        self, stages: Sequence[tuple[str, ...]], copy: Path, resolved: str, limit: float
+    ) -> list[CapturedRun]:
+        """`stages` run on the baseline's own files, from the cache when its tree and
+        stages were run before. Only each run's exit and whether it timed out are
+        kept: the baseline's output is never quoted. A cache file that cannot be
+        read is a miss, not an empty result."""
+        payload = json.dumps(
+            [PROJECT_GATE, baseline_tree(copy, resolved), stages, sandbox.environment_key()]
+        )
+        key = hashlib.sha256(payload.encode()).hexdigest()
+        recorded = self._base_runs.get(key)
+        path = None if self.config.cache_dir is None else self.config.cache_dir / f"gate-{key}.json"
+        if recorded is None and path is not None:
+            try:
+                data = json.loads(path.read_text())
+                recorded = [(int(code), bool(timed)) for code, timed in data]
+                if len(recorded) != len(stages):
+                    recorded = None
+            except (OSError, ValueError, TypeError):
+                recorded = None
+        if recorded is None:
+            with tempfile.TemporaryDirectory(prefix="saddle-gate-base-") as scratch:
+                base = Path(scratch) / "tree"
+                materialize_baseline(copy, resolved, base)
+                ran = _gate_stage_runs(stages, base, limit)
+            recorded = [(r.exit_code, r.timed_out) for r in ran]
+            if path is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(recorded))
+        self._base_runs[key] = recorded
+        return [
+            CapturedRun(argv=argv, exit_code=code, stdout="", stderr="", timed_out=timed)
+            for argv, (code, timed) in zip(stages, recorded, strict=True)
+        ]
 
     def _reuse(self, same: str, key: str) -> Findings | None:
         """The findings decided for a tree with the same syntax key, stored and
@@ -1584,6 +1672,7 @@ class Auditor:
         limit: float,
         p1: Future[TaskRequirementsCheck] | None,
         static: Future[GateCheck] | None = None,
+        project: Future[ProjectGate] | None = None,
         selected: Sequence[str] | None = None,
         bench: PromptBenchmark | None = None,
     ) -> Findings:
@@ -1740,9 +1829,14 @@ class Auditor:
         if static is not None:
             ran = static.result()
             statuses[STATIC_CHECK] = ("pass" if ran.passed else "fail", ran.detail, None)
+        if project is not None:
+            judged = project.result()
+            statuses[PROJECT_GATE] = (judged.verdict, judged.detail, None)
         wanted = TIER1 if tier == 1 else TIER2
         if STATIC_CHECK in statuses:
             wanted = (*wanted, STATIC_CHECK)
+        if PROJECT_GATE in statuses:
+            wanted = (*wanted, PROJECT_GATE)
         if TASK_REQUIREMENTS in statuses:
             wanted = (*wanted, TASK_REQUIREMENTS)
         findings = []
