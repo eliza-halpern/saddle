@@ -84,6 +84,7 @@ from saddle.evidence import (
     drop_test_caches,
     format_overrides,
     gate_checks,
+    gate_stage_languages,
     git_changed_files,
     git_diff,
     materialize_baseline,
@@ -120,6 +121,7 @@ from saddle.gates import (
     check_ruff,
     check_static,
     check_syntax,
+    gate_stage_name,
     introduced_findings,
     set_aside_kind,
     shortlist_order,
@@ -149,6 +151,7 @@ from saddle.jsevidence import (
     run_node_tests,
     stryker_entry,
 )
+from saddle.languages import FINDING_LANGUAGES, JAVASCRIPT, OTHER, classify, stage_visible, visible
 from saddle.prompt_changes import Measured, judge, measured, prompt_changes, unconfigured_detail
 from saddle.task_examples import WOULD_REFUSE
 from saddle.task_requirements import check_tree
@@ -1775,6 +1778,15 @@ class Auditor:
                 workers = suite_workers(copy, resolved).count
                 statics = static_check(copy, resolved)
                 declared = gate_checks(copy, resolved)
+                # One lookup of the diff's languages serves every filter below.
+                touched = classify(git_changed_files(copy, resolved))
+                about = gate_stage_languages(copy, resolved)
+                # A stage about a language the diff does not touch is not run or shown.
+                declared = tuple(
+                    s for s in declared if stage_visible(gate_stage_name(s), touched, about)
+                )
+                if statics and not stage_visible(gate_stage_name(statics), touched, about):
+                    statics = ()
                 # `static-check` is one more stage of the gate, unless it is listed too.
                 stages = (*declared, *((statics,) if statics and statics not in declared else ()))
                 exposed = sandbox_expose(copy, resolved)
@@ -1850,17 +1862,37 @@ class Auditor:
                 if tier == 2:
                     if first is None:
                         first = self._tiered(
-                            1, key1, gated, copy, resolved, limit, p1, static, project
+                            1,
+                            key1,
+                            gated,
+                            copy,
+                            resolved,
+                            limit,
+                            p1,
+                            static,
+                            project,
+                            touched=touched,
                         )
                     self._by_syntax[same1] = first.key
                     if not first.passed:
                         return self._store(_blocked_tier2(key, first))
                     second = self._tiered(
-                        2, key, gated, copy, resolved, limit, None, selected=selection, bench=bench
+                        2,
+                        key,
+                        gated,
+                        copy,
+                        resolved,
+                        limit,
+                        None,
+                        selected=selection,
+                        bench=bench,
+                        touched=touched,
                     )
                     self._by_syntax[same] = second.key
                     return second
-                done = self._tiered(1, key, gated, copy, resolved, limit, p1, static, project)
+                done = self._tiered(
+                    1, key, gated, copy, resolved, limit, p1, static, project, touched=touched
+                )
                 self._by_syntax[same] = done.key
                 return done
 
@@ -1931,10 +1963,13 @@ class Auditor:
         project: Future[ProjectGate] | None = None,
         selected: Sequence[str] | None = None,
         bench: PromptBenchmark | None = None,
+        touched: frozenset[str] = frozenset({OTHER}),
     ) -> Findings:
         """`tier`'s findings from one run of the battery (`_gate`), stored under `key`.
         `selected` is the test files an impact-scoped suite run was limited to, None
-        for the whole suite."""
+        for the whole suite. `touched` is the diff's languages (`languages.classify`):
+        a finding about another language is dropped unless it refuses
+        (`languages.visible`); the default hides nothing."""
         # Every entry becomes a Finding verdict (`_finding` below), and the
         # shortlist paths write not-proven, so the table holds Verdicts.
         statuses: dict[str, tuple[Verdict, str, str | None]]
@@ -2138,6 +2173,10 @@ class Auditor:
         if tier == 2 and (effect := prompt_effect(copy, resolved, limit, bench, self._bench_seen)):
             findings.append(effect[0])
             sidecars[PROMPT_EFFECT_GATE] = effect[1]
+        blind = () if JS_SUFFIX in measurable else (JAVASCRIPT,)
+        findings = [f for f in findings if visible(f.gate, f.verdict, touched, blind)]
+        shown = {f.gate for f in findings}
+        sidecars = {g: v for g, v in sidecars.items() if g in shown or g not in FINDING_LANGUAGES}
         return self._store(
             Findings(
                 tier=tier,

@@ -156,6 +156,9 @@ gate-checks = [
     ["npx", "--no-install", "stylelint", "src/saddle/web/static/app.css"],
     ["npx", "--no-install", "markdownlint-cli2"],
 ]
+# Which languages each stage is about: a stage runs only when the change touches
+# one of them (a config file touches every language). A stage not named always runs.
+gate-stage-languages = { ruff = ["python"], mypy = ["python"], shellcheck = ["shell"], eslint = ["javascript"], tsc = ["javascript"], prettier = ["javascript", "css", "html", "markdown"], c8 = ["javascript"], html-validate = ["html"], stylelint = ["css"], markdownlint-cli2 = ["markdown"] }
 # The browser tests drive Chrome with node; the audit's sandbox hides HOME, where
 # node may live, so name both here (docs/CLI.md, "Commands the sandbox shows").
 # Read like test-timeout, from the starting commit.

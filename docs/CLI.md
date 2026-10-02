@@ -54,7 +54,7 @@ test-timeout = 3600   # seconds
   is judged under. An edit of yours takes effect once it is committed.
 - The value is a number of seconds above 0 and at most 86400 (a day). The keys saddle
   reads in `[tool.saddle]` are `test-timeout`, `test-workers`, `sandbox-expose` and
-  `gate-checks` (all below), `static-check`, and `prompt-benchmark` with its floor and
+  `gate-checks` and `gate-stage-languages` (both below), `static-check`, and `prompt-benchmark` with its floor and
   margin (below).
 - A value that is not usable stops the audit instead of falling back to 300 s. This
   covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
@@ -164,6 +164,31 @@ gate-checks = [
 
 Saddle's own repository lists every fast stage of `check.sh` except `npm ci`, mypy (its
 `static-check`) and the suite, and a test keeps the list equal to `check.sh`.
+
+
+### Showing only what the change touches
+
+The audit decides the language of every changed file once (a deleted file counts):
+Python (`.py`, `.pyi`), JavaScript (`.js`, `.mjs`, `.cjs`), Markdown, shell, HTML and
+CSS. A finding about a language the change does not touch is not shown: a Python-only
+change carries no `js-*` findings, a JavaScript-only change carries no Python
+coverage, mutation or dead-code findings, and a change touching both shows both. A
+finding that refuses (a failure, a block, a question) is never hidden, so a JavaScript
+change that breaks the Python suite is still refused, and the suite still runs.
+A configuration file (`.toml`, `.json`, `.yaml`, ...) or a file of unknown type can
+change what any tool does, so a change touching one hides nothing.
+
+`gate-stage-languages` says which languages each gate stage is about:
+
+```toml
+[tool.saddle]
+gate-stage-languages = { ruff = ["python"], eslint = ["javascript"], shellcheck = ["shell"] }
+```
+
+The key is the stage's name (`ruff format`) or its tool (`ruff`), the value a list of
+`python`, `javascript`, `markdown`, `shell`, `html`, `css` or `config`. A stage runs,
+and appears in the `Gate:` line, only when the change touches one of its languages; a
+stage not named always runs. Like the stages, it is read from the starting commit.
 
 ## Commands the sandbox shows
 

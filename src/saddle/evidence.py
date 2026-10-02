@@ -37,6 +37,7 @@ import coverage
 from saddle import memcap, sandbox
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding
 from saddle.journal import SpanRecorder
+from saddle.languages import LANGUAGE_NAMES
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _MUTANT_VERDICT = re.compile(r"^\s*(\S+): (.+?)\s*$")
@@ -102,6 +103,14 @@ runs each on the audited tree and on the baseline, so a stage that was already
 red is told apart from one the change broke. `static-check` counts as one more.
 Absent, the only stage is `static-check`, when set."""
 
+GATE_STAGE_LANGUAGES_KEY: Final = "gate-stage-languages"
+"""Which languages each gate stage is about, as a table of stage name to a list of
+language names: `gate-stage-languages = {ruff = ["python"], eslint =
+["javascript"]}` in the `[tool.saddle]` table (`gate_stage_languages`). A stage
+runs, and is shown, only when the change touches one of its languages
+(`languages.stage_visible`); a stage not named is language-neutral and always
+runs. The name is the stage's `gates.gate_stage_name` or its tool alone."""
+
 SANDBOX_EXPOSE_KEY: Final = "sandbox-expose"
 """Command names the audit's sandbox also shows the project's suite, read-only:
 `sandbox-expose = ["node", "google-chrome"]` in the `[tool.saddle]` table of its
@@ -128,6 +137,7 @@ SADDLE_KEYS: Final = (
     SUITE_WORKERS_KEY,
     STATIC_CHECK_KEY,
     GATE_CHECKS_KEY,
+    GATE_STAGE_LANGUAGES_KEY,
     SANDBOX_EXPOSE_KEY,
     PROMPT_BENCHMARK_KEY,
     PROMPT_BENCHMARK_FLOOR_KEY,
@@ -709,6 +719,29 @@ def gate_checks(tree: Path, rev: str) -> tuple[tuple[str, ...], ...]:
         )
         raise SuiteLimitError(msg)
     return tuple(tuple(stage) for stage in value)
+
+
+def gate_stage_languages(tree: Path, rev: str) -> dict[str, tuple[str, ...]]:
+    """The project's `gate-stage-languages` as committed at `rev`; {} when it sets none.
+
+    Read where `gate_checks` is, so the tree under audit cannot declare a stage
+    away from its own change. A value that is not a table of non-empty lists of
+    language names (`languages.LANGUAGE_NAMES`) raises `SuiteLimitError`
+    naming the commit and the value."""
+    table, where = _committed_saddle_table(tree, rev, "the gate stage languages")
+    if table is None or GATE_STAGE_LANGUAGES_KEY not in table:
+        return {}
+    value = table[GATE_STAGE_LANGUAGES_KEY]
+    if not isinstance(value, dict) or not all(
+        isinstance(langs, list) and langs and all(x in LANGUAGE_NAMES for x in langs)
+        for langs in value.values()
+    ):
+        msg = (
+            f"cannot read the gate stage languages: {where}: {GATE_STAGE_LANGUAGES_KEY} = "
+            f"{value!r} is not a table of stage name to a list of {sorted(LANGUAGE_NAMES)}"
+        )
+        raise SuiteLimitError(msg)
+    return {str(name): tuple(langs) for name, langs in value.items()}
 
 
 def sandbox_expose(tree: Path, rev: str) -> tuple[str, ...]:
