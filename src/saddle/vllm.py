@@ -649,6 +649,12 @@ class VllmClient:
         call it made should name too (`auto._requirements`)."""
         return self._model
 
+    @property
+    def server_key(self) -> str:
+        """Which server and model this client talks to, for a fact that holds
+        per server (whether it reads images)."""
+        return f"{self._client.base_url}|{self._model}"
+
     def _post(self, payload: dict[str, Any]) -> Any:
         """POST one chat payload; map transport and status failures to errors."""
         try:

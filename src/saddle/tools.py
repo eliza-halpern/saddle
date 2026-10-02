@@ -40,7 +40,8 @@ from saddle.sandbox import (
     resolve_within,
 )
 from saddle.undo import UndoLog
-from saddle.vllm import ToolCall
+from saddle.vision import IMAGE_MAX_BYTES, data_url, image_info
+from saddle.vllm import ToolCall, VllmError
 
 PREVIEWABLE: Final = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"})
 """Extensions the transcript will show rather than name. A model that draws
@@ -412,6 +413,18 @@ class ToolContext:
     (the Ask lane). Offering fewer schemas is not enough on its own: a model
     can still emit a call to a tool it was not offered. None allows all."""
 
+    images: bool = False
+    """Whether `read_file` on an image sends the image to the model (the Ask
+    and Edit lanes). Off by default, so a Task run's `read_file` is exactly
+    what it was."""
+    accepts_images: Callable[[], bool] | None = None
+    """Asks whether the served model reads images (`vision.server_accepts_images`,
+    cached per server). None, with `images` on, reads as "not known to":
+    the result says the model was not shown the image."""
+    attachments: list[tuple[str, str, str]] = field(default_factory=list)
+    """Images `read_file` has queued this round as (call id, path, data URL);
+    the engine sends them in one user message after the round's tool results."""
+
     protected_tests: tuple[str, ...] | None = None
     """Tier-0 guard (the page's "test files read-only during
     implementation"): when set, `write_file` and `edit_file` refuse any path
@@ -510,6 +523,46 @@ def _line_number(args: Mapping[str, Any], key: str) -> int | None:
     return value
 
 
+IMAGE_SUFFIXES: Final = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+
+def _read_image(ctx: ToolContext, call_id: str | None, name: str, path: Path) -> str | None:
+    """The result for an image file, or None to read it as the text file it is.
+
+    Only a file whose own header is a PNG, JPEG, WebP or GIF counts, so a
+    text file named `.png` is read as text, as before. One over
+    `IMAGE_MAX_BYTES` is refused by name, and a server that does not read
+    images is said so in the result rather than handed bytes it cannot use.
+    """
+    size = path.stat().st_size
+    if size > IMAGE_MAX_BYTES:
+        return (
+            f"error: {name} is an image of {size:,} bytes, over the {IMAGE_MAX_BYTES:,}-byte "
+            "limit for showing one to the model; ask the user to look at it, or "
+            "resize it with run_command"
+        )
+    data = path.read_bytes()
+    info = image_info(data)
+    if info is None:
+        return None
+    described = f"{name}: {info.kind} image, {info.width}x{info.height}, {size:,} bytes"
+    try:
+        sees = ctx.accepts_images is not None and ctx.accepts_images()
+    except VllmError as exc:
+        return (
+            f"{described}. Whether the served model accepts images could not be checked "
+            f"({exc}), so it was not shown. Say so to the user and ask them to look at it."
+        )
+    if not sees:
+        return (
+            f"{described}. The served model does not accept images, so you cannot see "
+            "this file and it was not shown to you. Say so to the user and ask them to "
+            "look at it; do not guess its contents."
+        )
+    ctx.attachments.append((call_id or "", name, data_url(info.mime, data)))
+    return f"{described}. The image follows in the next message."
+
+
 def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     """The file, or a window of it by lines. A file of at most `READ_LINES`
     lines and `READ_TOKENS` tokens read without `offset`/`limit` comes back
@@ -521,6 +574,10 @@ def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     path = resolve_within(ctx.workdir, name)
     if not path.is_file():
         return f"error: cannot read {name!r}"
+    if ctx.images and path.suffix.lower() in IMAGE_SUFFIXES:
+        shown = _read_image(ctx, ctx.call_id, name, path)
+        if shown is not None:
+            return shown
     data = path.read_text(encoding="utf-8", errors="replace")
     lines = data.splitlines(keepends=True)
     total = len(lines)
