@@ -40,11 +40,20 @@ REGISTRY: dict[str, Entry] = {
         ((CHECK_SH, "uv run ruff check ."), (CHECK_SH, "uv run mypy"), (CHECK_SH, "uv run pytest")),
     ),
     ".js": Check(
-        "eslint, prettier (and tsc for the browser scripts)",
-        ((CHECK_SH, "eslint ."), (CHECK_SH, "prettier --check .")),
+        "eslint, prettier, tsc (the browser scripts; the node tests and drivers)",
+        (
+            (CHECK_SH, "eslint ."),
+            (CHECK_SH, "prettier --check ."),
+            (CHECK_SH, "tsc -p tsconfig.tests.json"),
+        ),
     ),
     ".mjs": Check(
-        "eslint and prettier", ((CHECK_SH, "eslint ."), (CHECK_SH, "prettier --check ."))
+        "eslint, prettier and tsc (the browser drivers)",
+        (
+            (CHECK_SH, "eslint ."),
+            (CHECK_SH, "prettier --check ."),
+            (CHECK_SH, "tsc -p tsconfig.tests.json"),
+        ),
     ),
     ".ts": Check("tsc", ((CHECK_SH, "tsc -p tsconfig.json"),)),
     ".html": Check(

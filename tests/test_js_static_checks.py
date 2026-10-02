@@ -328,3 +328,90 @@ def test_prettier_passes_on_the_real_tree() -> None:
         [_tool("prettier"), "--check", "."], cwd=REPO, capture_output=True, text=True, timeout=180
     )
     assert result.returncode == 0, result.stderr
+
+
+# ------------------------------------------- tsc over the node tests and drivers
+
+
+def _tsc_tests(cwd: Path, rel: str, source: str) -> subprocess.CompletedProcess[str]:
+    """Check one test-side file under tsconfig.tests.json's options, in a temp directory."""
+    _write(cwd, rel, source)
+    (cwd / "tsconfig.json").write_text(
+        json.dumps(
+            {
+                "extends": str(REPO / "tsconfig.tests.json"),
+                "include": [rel, str(REPO / "node-globals.d.ts")],
+            }
+        )
+    )
+    return subprocess.run(
+        [_tool("tsc"), "-p", str(cwd / "tsconfig.json")],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+# The globals file is listed too, so `require`, `process` and `node:` imports resolve.
+GOOD_TEST_TS = (
+    '"use strict";\n'
+    'const assert = require("node:assert");\n'
+    "/** @param {string} s */\n"
+    "const size = (s) => s.length;\n"
+    "assert.strictEqual(size('abc'), 3);\n"
+)
+BAD_TEST_TS = [
+    ("TS2345", GOOD_TEST_TS.replace("size('abc')", "size(1)")),
+    ("TS7006", GOOD_TEST_TS.replace("/** @param {string} s */\n", "")),
+    ("TS18047", "/** @type {string | null} */\nlet s = null;\nconsole.log(s.length);\n"),
+]
+
+
+@pytest.mark.parametrize(("code", "source"), BAD_TEST_TS)
+@pytest.mark.parametrize("rel", ["tests/x.test.js", "tests/fixtures/x_cdp.mjs"])
+def test_tsc_rejects_a_type_error_in_a_test_side_file(
+    tmp_path: Path, rel: str, code: str, source: str
+) -> None:
+    if rel.endswith(".mjs"):
+        source = source.replace(
+            'const assert = require("node:assert");', 'import assert from "node:assert";'
+        )
+    result = _tsc_tests(tmp_path, rel, source)
+    assert result.returncode != 0, result.stdout
+    assert code in result.stdout
+
+
+def test_tsc_accepts_a_typed_test_side_file(tmp_path: Path) -> None:
+    result = _tsc_tests(tmp_path, "tests/x.test.js", GOOD_TEST_TS)
+    assert result.returncode == 0, result.stdout
+
+
+def test_tsc_passes_on_the_real_node_tests_and_drivers() -> None:
+    result = subprocess.run(
+        [_tool("tsc"), "-p", "tsconfig.tests.json"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_tsconfig_tests_lists_every_tracked_test_side_file() -> None:
+    expected = sorted(f for f in _tracked_js() if f.startswith("tests/"))
+    assert expected, "no tracked test-side JavaScript: the census itself is broken"
+    result = subprocess.run(
+        [_tool("tsc"), "-p", "tsconfig.tests.json", "--listFilesOnly"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    listed = {
+        Path(line).relative_to(REPO).as_posix()
+        for line in result.stdout.splitlines()
+        if "/node_modules/" not in line and line.startswith(str(REPO))
+    }
+    assert set(expected) <= listed, sorted(set(expected) - listed)
