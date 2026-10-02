@@ -32,7 +32,7 @@ def kinds(found: list[ChangedTest]) -> list[tuple[str, str]]:
     [
         ("tests/test_calc.py", "python"),
         ("pkg/calc_test.py", "python"),
-        ("tests/conftest.py", None),
+        ("tests/conftest.py", "python"),
         ("src/calc.py", None),
         ("tests/markdown.test.js", "js"),
         ("web/app.spec.ts", "js"),
@@ -40,8 +40,8 @@ def kinds(found: list[ChangedTest]) -> list[tuple[str, str]]:
         ("src/web/static/app.js", None),
         ("tests/fixtures/page_driver.mjs", "js"),
         ("pkg/calc_test.go", "other"),
-        ("tests/data.json", None),
-        ("tests/fixtures/test_names.txt", None),
+        ("tests/data.json", "other"),
+        ("tests/fixtures/test_names.txt", "other"),
     ],
 )
 def test_language_reads_the_name_and_the_directory(path: str, expected: str | None) -> None:
@@ -169,9 +169,14 @@ def test_a_skip_call_in_the_body_and_a_class_or_module_mark_are_reported() -> No
     cls = BASE_PY + "\n\nclass TestGroup:\n    def test_inner(self):\n        assert 1\n"
     base = {PY: cls}
     on_class = cls.replace("class TestGroup", "@pytest.mark.skip\nclass TestGroup")
-    assert kinds(detect(base, {PY: on_class})) == [("test_inner", tc.MARKED)]
+    # the class's own decorator is code outside the tests, so it is reported as well
+    assert kinds(detect(base, {PY: on_class})) == [
+        ("test_inner", tc.MARKED),
+        (f"{PY} (code outside the tests)", tc.SUPPORT_CHANGED),
+    ]
     module = cls.replace("import pytest\n", "import pytest\n\npytestmark = pytest.mark.skip\n")
     assert {c.name for c in detect(base, {PY: module})} == {
+        f"{PY} (code outside the tests)",
         "test_add",
         "test_parse",
         "test_other",
@@ -229,7 +234,11 @@ def test_the_recorded_rewrite_of_a_pre_existing_test_is_found() -> None:
     base = (FIXTURES / "renderer_suite_base.txt").read_text()
     head = (FIXTURES / "renderer_suite_head.txt").read_text()
     found = detect({JS: base}, {JS: head})
-    assert [c.name for c in found] == ["output that is not a diff is left alone"]
+    # the recorded rewrite also extended the fake DOM above the tests
+    assert [c.name for c in found] == [
+        "output that is not a diff is left alone",
+        f"{JS} (code outside the tests)",
+    ]
     assert found[0].kind == tc.RENAMED
     assert "keeps its text and gains a copy button" in found[0].detail
 
@@ -312,7 +321,8 @@ def test_a_computed_title_is_compared_by_its_body() -> None:
 
 def test_a_function_named_test_is_not_a_test_call() -> None:
     base = "function test(a) { return a; }\n"
-    assert detect({JS: base}, {JS: base.replace("return a", "return 1")}) == []
+    found = detect({JS: base}, {JS: base.replace("return a", "return 1")})
+    assert [(c.name, c.kind) for c in found] == [(JS, tc.SUPPORT_CHANGED)]  # code, not a test
 
 
 def test_quotes_brackets_regexes_and_templates_inside_a_test_do_not_confuse_the_scan() -> None:
@@ -372,7 +382,10 @@ def test_nested_templates_and_a_broken_new_file_are_handled() -> None:
 def test_decorators_and_helpers_that_are_not_tests_are_not_read_as_changes() -> None:
     base = BASE_PY + "\n\n@pytest.mark.parametrize('n', [1])\ndef test_p(n):\n    assert n\n"
     base += "\n\ndef helper():\n    return 1\n"
-    assert detect({PY: base}, {PY: base.replace("return 1", "return 2")}) == []
+    found = detect({PY: base}, {PY: base.replace("return 1", "return 2")})
+    assert [(c.name, c.kind) for c in found] == [
+        (f"{PY} (code outside the tests)", tc.SUPPORT_CHANGED)
+    ]
 
 
 def test_a_rename_against_huge_bodies_falls_back_to_deleted(

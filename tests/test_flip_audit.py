@@ -34,7 +34,9 @@ JS = "tests/markdown.test.js"
 TITLE = "output that is not a diff is left alone"
 GOOD = (
     f"flip: {TITLE} -- a created-file row such as 'created a.svg (9 bytes)' must carry the "
-    "copy button, which the old assertion on bare text rejected"
+    "copy button, which the old assertion on bare text rejected\n"
+    f"flip: {JS} (code outside the tests) -- the fake DOM gained the select and remove calls "
+    "the copy button uses; no existing test reads them"
 )
 
 BASE_PY = """\
