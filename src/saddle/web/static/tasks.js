@@ -17,16 +17,16 @@
 
 /** @type {Record<string, {word: string, glyph: string}>} */
 const TASK_STATES = {
-  running:   { word: "running",   glyph: "●" },
+  running: { word: "running", glyph: "●" },
   needs_you: { word: "needs you", glyph: "?" },
-  finished:  { word: "finished",  glyph: "✓" },
-  stopped:   { word: "stopped",   glyph: "■" },
+  finished: { word: "finished", glyph: "✓" },
+  stopped: { word: "stopped", glyph: "■" },
   // Ended needing you: the finish audit asked a question. Not stopped, not
   // failed, and nothing waits on an answer any more.
-  asked:     { word: "needs you", glyph: "?" },
+  asked: { word: "needs you", glyph: "?" },
   unchanged: { word: "unchanged", glyph: "=" },
-  failed:    { word: "no outcome", glyph: "!" },
-  loading:   { word: "loading",   glyph: "…" },
+  failed: { word: "no outcome", glyph: "!" },
+  loading: { word: "loading", glyph: "…" },
 };
 const ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 
@@ -193,7 +193,10 @@ function taskCard(runId, task, turnNode) {
   const stop = el("button", "task-stop", "Stop");
   stop.type = "button";
   stop.title = "Stop at the next safe point. The run ends stopped, and what it did is kept.";
-  stop.onclick = (event) => { event.preventDefault(); stopTask(runId); };
+  stop.onclick = (event) => {
+    event.preventDefault();
+    stopTask(runId);
+  };
   head.appendChild(stop);
   node.appendChild(head);
 
@@ -229,11 +232,34 @@ function taskCard(runId, task, turnNode) {
   (turnNode || state.turnNode || $("#transcript")).appendChild(node);
   /** @type {TaskCard} */
   const card = {
-    runId, task, node, pill, stop, testsChip, time, tokens, meters, now, log, logSummary, lines, ask,
-    packet, activity,
-    state: "running", elapsed: 0, elapsedAt: Date.now(), timeBudget: 0, tokenBudget: 0,
-    spent: 0, timer: 0, count: 0,
-    phase: "starting", round: 1, lastEventAt: Date.now(), ageTimer: 0,
+    runId,
+    task,
+    node,
+    pill,
+    stop,
+    testsChip,
+    time,
+    tokens,
+    meters,
+    now,
+    log,
+    logSummary,
+    lines,
+    ask,
+    packet,
+    activity,
+    state: "running",
+    elapsed: 0,
+    elapsedAt: Date.now(),
+    timeBudget: 0,
+    tokenBudget: 0,
+    spent: 0,
+    timer: 0,
+    count: 0,
+    phase: "starting",
+    round: 1,
+    lastEventAt: Date.now(),
+    ageTimer: 0,
   };
   tasks.set(runId, card);
   paintState(card);
@@ -294,11 +320,20 @@ function tick(card) {
   const live = card.state === "running" ? (Date.now() - card.elapsedAt) / 1000 : 0;
   const elapsed = card.elapsed + live;
   const budget = card.timeBudget;
-  setMeter(card.time, elapsed, budget,
-           budget ? `${fmtDuration(elapsed)} of ${fmtDuration(budget)}` : fmtDuration(elapsed));
-  setMeter(card.tokens, card.spent, card.tokenBudget,
-           card.tokenBudget ? `~${fmtTokens(card.spent)} of ${fmtTokens(card.tokenBudget)}`
-                            : `~${fmtTokens(card.spent)} tokens`);
+  setMeter(
+    card.time,
+    elapsed,
+    budget,
+    budget ? `${fmtDuration(elapsed)} of ${fmtDuration(budget)}` : fmtDuration(elapsed),
+  );
+  setMeter(
+    card.tokens,
+    card.spent,
+    card.tokenBudget,
+    card.tokenBudget
+      ? `~${fmtTokens(card.spent)} of ${fmtTokens(card.tokenBudget)}`
+      : `~${fmtTokens(card.spent)} tokens`,
+  );
 }
 
 /**
@@ -309,7 +344,7 @@ function addLine(card, line) {
   const item = el("li", `tl tone-${line.tone || "info"}`);
   item.appendChild(el("span", "tl-mark", line.mark));
   item.appendChild(el("span", "tl-text", line.text));
-  item.appendChild(sessionCite(card, line.cite));  // click to open the sealed record, again to close
+  item.appendChild(sessionCite(card, line.cite)); // click to open the sealed record, again to close
   item.title = `ledger record ${line.cite}`;
   card.lines.appendChild(item);
   card.count += 1;
@@ -324,10 +359,14 @@ function addLine(card, line) {
    reply, the last tool call, and a short tail of the latest stream. None of
    it is sealed; it is folded by default and says so on its face. */
 const ACTIVITY_OPEN = "saddle.activityOpen";
-const STREAM_WINDOW = 40000;  // chars of the current reply's stream kept for the scrollable monitor
+const STREAM_WINDOW = 40000; // chars of the current reply's stream kept for the scrollable monitor
 
 function activityWanted() {
-  try { return localStorage.getItem(ACTIVITY_OPEN) === "1"; } catch { return false; }
+  try {
+    return localStorage.getItem(ACTIVITY_OPEN) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /** @returns {Activity} */
@@ -357,16 +396,37 @@ function activityStrip() {
   const tail = el("blockquote", "act-tail");
   body.appendChild(tailLabel);
   body.appendChild(tail);
-  body.appendChild(el("p", "act-note",
-    "Live from the model's stream. Nothing here is sealed or cited; the ledger lines above and the packet are the record."));
+  body.appendChild(
+    el(
+      "p",
+      "act-note",
+      "Live from the model's stream. Nothing here is sealed or cited; the ledger lines above and the packet are the record.",
+    ),
+  );
   box.appendChild(body);
   box.addEventListener("toggle", () => {
-    try { localStorage.setItem(ACTIVITY_OPEN, box.open ? "1" : "0"); } catch { /* per-browser nicety only */ }
+    try {
+      localStorage.setItem(ACTIVITY_OPEN, box.open ? "1" : "0");
+    } catch {
+      /* per-browser nicety only */
+    }
   });
   return {
-    box, glance, doing, streamed, tool, tailLabel, tail,
-    mode: "waiting", chars: 0, text: "", stream: "", lastTool: null, fresh: true, queued: false,
-    spentAtStart: 0,  // the run's measured tokens when this reply began; the reply's exact count is the rise from here
+    box,
+    glance,
+    doing,
+    streamed,
+    tool,
+    tailLabel,
+    tail,
+    mode: "waiting",
+    chars: 0,
+    text: "",
+    stream: "",
+    lastTool: null,
+    fresh: true,
+    queued: false,
+    spentAtStart: 0, // the run's measured tokens when this reply began; the reply's exact count is the rise from here
     // A card rebuilt after a reload joins a reply part-way: its counts are
     // "since this page opened" until the next tool call starts a new reply.
     joined: true,
@@ -395,7 +455,12 @@ function noteActivity(card, inner) {
     case "reasoning.delta":
     case "content.delta": {
       const stream = inner.kind === "reasoning.delta" ? "reasoning" : "reply";
-      if (a.fresh) { a.chars = 0; a.text = ""; a.fresh = false; a.spentAtStart = card.spent || 0; }
+      if (a.fresh) {
+        a.chars = 0;
+        a.text = "";
+        a.fresh = false;
+        a.spentAtStart = card.spent || 0;
+      }
       if (a.stream !== stream) a.text = "";
       a.stream = stream;
       a.mode = stream === "reasoning" ? "thinking" : "writing";
@@ -431,7 +496,10 @@ function scheduleActivity(card) {
   const a = card.activity;
   if (a.queued) return;
   a.queued = true;
-  const run = () => { a.queued = false; paintActivity(card); };
+  const run = () => {
+    a.queued = false;
+    paintActivity(card);
+  };
   if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(run);
   else setTimeout(run, 50);
 }
@@ -452,13 +520,18 @@ function paintActivity(card) {
   const since = a.joined ? " since this page opened" : "";
   a.streamed.textContent = replyTokens
     ? `${tokens}${since} (measured)`
-    : a.chars ? `streaming${since}; tokens are counted when the reply ends`
-    : `nothing streamed${since || " yet"}`;
+    : a.chars
+      ? `streaming${since}; tokens are counted when the reply ends`
+      : `nothing streamed${since || " yet"}`;
   a.tool.textContent = a.lastTool
     ? `${a.lastTool.text}${a.lastTool.ok === null ? " …" : a.lastTool.ok ? "" : " (failed)"}`
     : `none${since || " yet"}`;
-  a.tailLabel.textContent = a.stream === "reasoning" ? "latest reasoning, not evidence"
-    : a.stream === "reply" ? "latest reply text, not evidence" : "";
+  a.tailLabel.textContent =
+    a.stream === "reasoning"
+      ? "latest reasoning, not evidence"
+      : a.stream === "reply"
+        ? "latest reply text, not evidence"
+        : "";
   // Show the whole current reply's stream in a scrollable box, so the reasoning
   // can be read back rather than only its last few tokens. Trim a partial first
   // word once the window fills. Follow the live end only when the reader is
@@ -480,7 +553,10 @@ function paintActivity(card) {
 function showQuestion(card, question) {
   const box = card.ask;
   box.textContent = "";
-  if (!question) { box.hidden = true; return; }
+  if (!question) {
+    box.hidden = true;
+    return;
+  }
   box.hidden = false;
   box.appendChild(el("div", "ask-kicker", "The run is paused until you answer"));
   box.appendChild(el("p", "ask-text", question.text));
@@ -512,11 +588,15 @@ function showQuestion(card, question) {
   send.onclick = async (event) => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text) { note.textContent = "Type or pick an answer first."; return; }
+    if (!text) {
+      note.textContent = "Type or pick an answer first.";
+      return;
+    }
     send.disabled = true;
     try {
       await api(`/api/tasks/${card.runId}/answer`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
       note.textContent = "Sent. Sealing it…";
@@ -535,7 +615,10 @@ function showQuestion(card, question) {
 /** @param {string} runId */
 async function stopTask(runId) {
   const card = tasks.get(runId);
-  if (card) { card.stopping = true; paintNow(card); }
+  if (card) {
+    card.stopping = true;
+    paintNow(card);
+  }
   try {
     await api(`/api/tasks/${runId}/stop`, { method: "POST" });
   } catch (error) {
@@ -547,9 +630,15 @@ async function stopTask(runId) {
 
 /** @type {Record<string, string>} */
 const STATUS_WORD = {
-  proven: "proven", failed: "failed", observed: "recorded", absent: "no record",
-  "not-proven": "not proven", question: "needs you", sanctioned: "sanctioned",
-  narrative: "narrative, not evidence", cost: "sealed",
+  proven: "proven",
+  failed: "failed",
+  observed: "recorded",
+  absent: "no record",
+  "not-proven": "not proven",
+  question: "needs you",
+  sanctioned: "sanctioned",
+  narrative: "narrative, not evidence",
+  cost: "sealed",
 };
 
 /**
@@ -605,7 +694,7 @@ function sessionCite(card, hash) {
     const open = host.querySelector(`.record[data-hash="${hash}"]`);
     for (const other of host.querySelectorAll(".record")) other.remove();
     for (const other of host.querySelectorAll(".cite.open")) other.classList.remove("open");
-    if (open) return;  // it was open: the removal above collapsed it
+    if (open) return; // it was open: the removal above collapsed it
     button.classList.add("open");
     let record;
     try {
@@ -613,7 +702,7 @@ function sessionCite(card, hash) {
     } catch (error) {
       record = { hash, note: `could not load this record: ${errorText(error)}` };
     }
-    if (!button.classList.contains("open")) return;  // a later click closed it while we fetched
+    if (!button.classList.contains("open")) return; // a later click closed it while we fetched
     /** @type {Element} */ (button.closest("li")).after(recordPanel(hash, record));
   };
   return button;
@@ -666,12 +755,17 @@ function renderPacket(card, packet) {
   box.appendChild(el("div", "packet-kicker", "Evidence packet · compiled from the ledger"));
 
   const verdict = el("div", `verdict v-${packet.verdict}`);
-  const word = {
-    finished: "Finished", stopped: "Stopped", unchanged: "Unchanged", needs_you: "Needs you", unrecorded: "No outcome",
-  }[packet.verdict] || packet.verdict;
+  const word =
+    {
+      finished: "Finished",
+      stopped: "Stopped",
+      unchanged: "Unchanged",
+      needs_you: "Needs you",
+      unrecorded: "No outcome",
+    }[packet.verdict] || packet.verdict;
   const top = el("div", "verdict-top");
   top.appendChild(el("span", "verdict-word", word));
-  const audited = packet.rows.some((r) => r.key === "audit" || (r.status === "proven"));
+  const audited = packet.rows.some((r) => r.key === "audit" || r.status === "proven");
   if (packet.verdict === "finished" && !audited) {
     top.appendChild(el("span", "verdict-tag", "not audited"));
   }
@@ -760,7 +854,13 @@ const WOULD_REFUSE = "[would refuse at full strength]";
 /** @param {string[]} questions */
 function askedBox(questions) {
   const box = el("div", "task-asked");
-  box.appendChild(el("div", "ask-kicker", `The audit asks you ${questions.length === 1 ? "a question" : `${questions.length} questions`}`));
+  box.appendChild(
+    el(
+      "div",
+      "ask-kicker",
+      `The audit asks you ${questions.length === 1 ? "a question" : `${questions.length} questions`}`,
+    ),
+  );
   for (const text of questions) {
     const p = el("p", "ask-text");
     const parts = text.split(WOULD_REFUSE);
@@ -770,8 +870,13 @@ function askedBox(questions) {
     });
     box.appendChild(p);
   }
-  box.appendChild(el("p", "asked-note",
-    "Not a pass and not a failure: the run ended so you can decide. Read the branch, then merge it, discard it, or run the task again with your answer."));
+  box.appendChild(
+    el(
+      "p",
+      "asked-note",
+      "Not a pass and not a failure: the run ended so you can decide. Read the branch, then merge it, discard it, or run the task again with your answer.",
+    ),
+  );
   return box;
 }
 
@@ -781,7 +886,11 @@ const DETAIL_ORDER = ["contract", "narrative", "cost", "reproduce"];
 const BAND_KEYS = ["tests", "mutation", "not-proven"];
 /** @type {Record<string, string>} */
 const GLYPH = {
-  ok: "✓", bad: "✗", info: "◐", none: "○", warn: "!",
+  ok: "✓",
+  bad: "✗",
+  info: "◐",
+  none: "○",
+  warn: "!",
 };
 
 /* A band line's tone: from the row's status alone. "Not proven" is ok only
@@ -789,9 +898,7 @@ const GLYPH = {
 /** @param {PacketRow} row */
 function lineTone(row) {
   if (row.key === "not-proven") return row.items.length ? "warn" : "ok";
-  return { proven: "ok", failed: "bad", observed: "info", absent: "none", sanctioned: "info" }[
-    row.status
-  ] || "none";
+  return { proven: "ok", failed: "bad", observed: "info", absent: "none", sanctioned: "info" }[row.status] || "none";
 }
 
 /** @param {string} text */
@@ -809,10 +916,14 @@ function summaryBand(packet) {
   const byKey = new Map(packet.rows.map((row) => [row.key, row]));
   const lines = /** @type {PacketRow[]} */ (BAND_KEYS.filter((key) => byKey.has(key)).map((key) => byKey.get(key)));
   const tones = lines.map(lineTone);
-  const tone = packet.verdict !== "finished" ? "stop"
-    : tones.includes("bad") ? "bad"
-    : tones.length === BAND_KEYS.length && tones.every((t) => t === "ok") ? "ok"
-    : "partial";
+  const tone =
+    packet.verdict !== "finished"
+      ? "stop"
+      : tones.includes("bad")
+        ? "bad"
+        : tones.length === BAND_KEYS.length && tones.every((t) => t === "ok")
+          ? "ok"
+          : "partial";
   const band = el("div", `band band-${tone}`);
   band.dataset.tone = tone;
   lines.forEach((row, i) => {
@@ -826,9 +937,10 @@ function summaryBand(packet) {
     glyph.setAttribute("aria-hidden", "true");
     head.appendChild(glyph);
     head.appendChild(el("span", "band-title", row.title));
-    const text = row.key === "not-proven" && row.items.length
-      ? `${row.items.length} thing${row.items.length === 1 ? "" : "s"} this packet cannot vouch for.`
-      : firstSentence(row.text);
+    const text =
+      row.key === "not-proven" && row.items.length
+        ? `${row.items.length} thing${row.items.length === 1 ? "" : "s"} this packet cannot vouch for.`
+        : firstSentence(row.text);
     head.appendChild(codeSpans(el("span", "band-text"), text));
     const listed = row.key === "not-proven" && row.items.length > 0;
     if (listed) {
@@ -854,8 +966,9 @@ function packetRow(row, packet, { listed = false } = {}) {
   const item = el("div", `prow s-${row.status} k-${row.key}`);
   const label = el("div", "prow-label");
   label.appendChild(el("span", "prow-title", row.title));
-  label.appendChild(el("span", "prow-status",
-    row.key === "narrative" ? packet.narrative_label : (STATUS_WORD[row.status] || row.status)));
+  label.appendChild(
+    el("span", "prow-status", row.key === "narrative" ? packet.narrative_label : STATUS_WORD[row.status] || row.status),
+  );
   item.appendChild(label);
   const body = el("div", "prow-body");
   if (row.key === "narrative") {
@@ -907,7 +1020,8 @@ function actionButton(label, cls) {
  */
 async function postAction(card, action, branch, extra = {}) {
   return api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/${action}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm: branch, ...extra }),
   });
 }
@@ -954,10 +1068,18 @@ function confirmStrip(panel, text, go, onYes) {
   strip.appendChild(el("p", "act-confirm-text", text));
   const yes = actionButton(go, "act-yes primary");
   const no = actionButton("Cancel", "act-no");
-  const cancel = () => { panel.textContent = ""; };
+  const cancel = () => {
+    panel.textContent = "";
+  };
   no.onclick = cancel;
-  strip.addEventListener("keydown", (event) => { if (event.key === "Escape") cancel(); });
-  yes.onclick = () => { yes.disabled = true; no.disabled = true; onYes(); };
+  strip.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") cancel();
+  });
+  yes.onclick = () => {
+    yes.disabled = true;
+    no.disabled = true;
+    onYes();
+  };
   strip.appendChild(yes);
   strip.appendChild(no);
   panel.appendChild(strip);
@@ -979,8 +1101,13 @@ function actionResult(panel, ok, text, sealed) {
   // verbatim by the card's readers, and a button label would sit inside it.
   attachCopy(box, text, "output");
   if (sealed === false) {
-    box.appendChild(el("p", "act-note",
-      "Not sealed in the ledger: there is no ledger record for user actions. Logged to this session's actions.log."));
+    box.appendChild(
+      el(
+        "p",
+        "act-note",
+        "Not sealed in the ledger: there is no ledger record for user actions. Logged to this session's actions.log.",
+      ),
+    );
   }
   panel.appendChild(box);
 }
@@ -1011,50 +1138,54 @@ function actionRow(card, packet) {
 
   /** @type {BranchInfo | null} */
   let info = null;
-  api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/branch`).then((got) => {
-    info = got;
-    view.disabled = !got.exists;
-    discard.disabled = !got.exists;
-    merge.disabled = !got.exists || !!got.merge_refusal;
-    // Merge needs one auditor verdict, not all of them: a run with no proven
-    // Mutation row may merge, and the button says what it is merging without.
-    const mutation = packet.rows.find((r) => r.key === "mutation");
-    const unproven = !mutation || mutation.status !== "proven";
-    // The "(mutation unproven)" suffix explains why an ENABLED merge lands
-    // without a mutation proof; on a disabled button it only adds noise, so drop it.
-    merge.textContent = (got.target ? `Merge into ${got.target}` : "Merge")
-      + (unproven && !merge.disabled ? " (mutation unproven)" : "");
-    merge.classList.toggle("unproven", unproven);
-    push.hidden = !got.upstream;
-    push.disabled = merge.disabled || !!got.push_refusal;
-    push.textContent = `Merge and push to ${got.upstream}`
-      + (unproven && !push.disabled ? " (mutation unproven)" : "");
-    push.classList.toggle("unproven", unproven);
-    // A run the self-guard held changed saddle's judges: its finish audit
-    // passed, but only a person may land it. Merge becomes Approve and merge.
-    const guarded = got.guarded_paths && got.guarded_paths.length > 0;
-    merge.dataset.guarded = guarded ? "1" : "";
-    if (guarded) {
-      merge.disabled = !got.exists || !!got.approve_refusal;
-      merge.textContent = got.target ? `Approve and merge into ${got.target}` : "Approve and merge";
-      merge.classList.remove("unproven");
-      push.hidden = true;
-    }
-    const pb = got.push_branch;
-    pushBranch.hidden = !pb || !pb.branch || pb.on_main;
-    if (pb && !pushBranch.hidden) {
-      pushBranch.textContent = `Push ${pb.branch} to ${pb.remote}`;
-      pushBranch.disabled = !!pb.refusal;
-      pushBranch.title = pb.refusal || "";
-    }
-    if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
-    else if (guarded && got.approve_refusal) why.textContent = `Approve is off: ${got.approve_refusal}`;
-    else if (guarded) why.textContent = `Changes saddle's judges: ${got.guarded_paths.join(", ")}. Only you can approve it.`;
-    else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
-    else if (got.upstream && got.push_refusal) why.textContent = `Push is off: ${got.push_refusal}`;
-  }).catch((error) => {
-    why.textContent = `No branch actions: ${errorText(error)}`;
-  });
+  api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/branch`)
+    .then((got) => {
+      info = got;
+      view.disabled = !got.exists;
+      discard.disabled = !got.exists;
+      merge.disabled = !got.exists || !!got.merge_refusal;
+      // Merge needs one auditor verdict, not all of them: a run with no proven
+      // Mutation row may merge, and the button says what it is merging without.
+      const mutation = packet.rows.find((r) => r.key === "mutation");
+      const unproven = !mutation || mutation.status !== "proven";
+      // The "(mutation unproven)" suffix explains why an ENABLED merge lands
+      // without a mutation proof; on a disabled button it only adds noise, so drop it.
+      merge.textContent =
+        (got.target ? `Merge into ${got.target}` : "Merge") +
+        (unproven && !merge.disabled ? " (mutation unproven)" : "");
+      merge.classList.toggle("unproven", unproven);
+      push.hidden = !got.upstream;
+      push.disabled = merge.disabled || !!got.push_refusal;
+      push.textContent =
+        `Merge and push to ${got.upstream}` + (unproven && !push.disabled ? " (mutation unproven)" : "");
+      push.classList.toggle("unproven", unproven);
+      // A run the self-guard held changed saddle's judges: its finish audit
+      // passed, but only a person may land it. Merge becomes Approve and merge.
+      const guarded = got.guarded_paths && got.guarded_paths.length > 0;
+      merge.dataset.guarded = guarded ? "1" : "";
+      if (guarded) {
+        merge.disabled = !got.exists || !!got.approve_refusal;
+        merge.textContent = got.target ? `Approve and merge into ${got.target}` : "Approve and merge";
+        merge.classList.remove("unproven");
+        push.hidden = true;
+      }
+      const pb = got.push_branch;
+      pushBranch.hidden = !pb || !pb.branch || pb.on_main;
+      if (pb && !pushBranch.hidden) {
+        pushBranch.textContent = `Push ${pb.branch} to ${pb.remote}`;
+        pushBranch.disabled = !!pb.refusal;
+        pushBranch.title = pb.refusal || "";
+      }
+      if (!got.exists) why.textContent = `The branch ${got.branch} is gone.`;
+      else if (guarded && got.approve_refusal) why.textContent = `Approve is off: ${got.approve_refusal}`;
+      else if (guarded)
+        why.textContent = `Changes saddle's judges: ${got.guarded_paths.join(", ")}. Only you can approve it.`;
+      else if (got.merge_refusal) why.textContent = `Merge is off: ${got.merge_refusal}`;
+      else if (got.upstream && got.push_refusal) why.textContent = `Push is off: ${got.push_refusal}`;
+    })
+    .catch((error) => {
+      why.textContent = `No branch actions: ${errorText(error)}`;
+    });
 
   view.onclick = async () => {
     if (panel.dataset.showing === "diff") {
@@ -1075,7 +1206,8 @@ function actionRow(card, packet) {
     const branchInfo = info;
     if (merge.dataset.guarded) {
       const files = branchInfo.guarded_paths.join(", ");
-      confirmStrip(panel,
+      confirmStrip(
+        panel,
         `Approve and merge ${branchInfo.branch} into ${branchInfo.target}? This run changed code that judges runs: ${files}. Its finish audit passed; you are approving these changes to saddle's judges as a person, and the approval is logged with your git identity.`,
         `Approve and merge into ${branchInfo.target}`,
         async () => {
@@ -1086,10 +1218,12 @@ function actionRow(card, packet) {
           } catch (error) {
             actionResult(panel, false, errorText(error), false);
           }
-        });
+        },
+      );
       return;
     }
-    confirmStrip(panel,
+    confirmStrip(
+      panel,
       `Merge ${branchInfo.branch} into ${branchInfo.target}? Fast-forward if possible, else cherry-pick its commits.`,
       `Merge into ${branchInfo.target}`,
       async () => {
@@ -1101,12 +1235,14 @@ function actionRow(card, packet) {
         } catch (error) {
           actionResult(panel, false, errorText(error), false);
         }
-      });
+      },
+    );
   };
   push.onclick = () => {
     if (!info) return;
     const branchInfo = info;
-    confirmStrip(panel,
+    confirmStrip(
+      panel,
       `Merge ${branchInfo.branch} into ${branchInfo.target}, then push ${branchInfo.target} to ${branchInfo.upstream}? The push is public to anyone who can read ${branchInfo.upstream}.`,
       `Merge and push to ${branchInfo.upstream}`,
       async () => {
@@ -1121,31 +1257,36 @@ function actionRow(card, packet) {
           if (text.includes("Merged locally")) merge.disabled = push.disabled = true;
           actionResult(panel, false, text, false);
         }
-      });
+      },
+    );
   };
   pushBranch.onclick = () => {
     if (!info) return;
     const branchInfo = info;
     const pb = branchInfo.push_branch;
-    confirmStrip(panel,
+    confirmStrip(
+      panel,
       `Push ${pb.branch} to ${pb.remote}? It goes up as a branch of the same name for a pull request; main is not touched. The leak guard runs first when the repo uses it.`,
       `Push ${pb.branch}`,
       async () => {
         try {
           const got = await api(`/api/sessions/${state.sessionId}/tasks/${card.runId}/push-branch`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ confirm: pb.branch }),
           });
           actionResult(panel, true, got.output, got.sealed);
         } catch (error) {
           actionResult(panel, false, errorText(error), false);
         }
-      });
+      },
+    );
   };
   discard.onclick = () => {
     if (!info) return;
     const branchInfo = info;
-    confirmStrip(panel,
+    confirmStrip(
+      panel,
       `Delete the branch ${branchInfo.branch} and its run worktree? ${branchInfo.target || "Your checkout"} is not touched.`,
       `Delete ${branchInfo.branch}`,
       async () => {
@@ -1156,7 +1297,8 @@ function actionRow(card, packet) {
         } catch (error) {
           actionResult(panel, false, errorText(error), false);
         }
-      });
+      },
+    );
   };
   // One markdown file, rendered fresh from the sealed ledger by the server
   // (packet.md beside the run's proofs.jsonl); the click is in actions.log.
@@ -1181,9 +1323,10 @@ function actionRow(card, packet) {
     const report = info && info.report ? `\n\nFull report: ${info.report}` : "";
     // One line of what to check, since the message may be sent as it stands:
     // the review is only as honest as what it was told to look for.
-    const checks = "In your review: code only tests call is a defect; a changed "
-      + "old test needs a flip: label and evidence other than the new code "
-      + "failing it; skipped and not-proven items are findings.";
+    const checks =
+      "In your review: code only tests call is a defect; a changed " +
+      "old test needs a flip: label and evidence other than the new code " +
+      "failing it; skipped and not-proven items are findings.";
     input.value = `About the run "${packet.task}":\n\n${recap}\n\n${checks}${report}\n`;
     input.dispatchEvent(new Event("input"));
     input.focus();
@@ -1200,9 +1343,14 @@ function actionRow(card, packet) {
  */
 function testEditOffer(card, packet) {
   const box = el("div", "offer");
-  box.appendChild(el("p", "offer-text",
-    "Tests were read-only, so it could not write the test the auditor asked for. "
-    + "The change may be correct; this run cannot show it."));
+  box.appendChild(
+    el(
+      "p",
+      "offer-text",
+      "Tests were read-only, so it could not write the test the auditor asked for. " +
+        "The change may be correct; this run cannot show it.",
+    ),
+  );
   const again = el("button", "offer-run primary", "Run again with test edits allowed");
   again.type = "button";
   again.onclick = (event) => {
@@ -1261,7 +1409,7 @@ function handleTask(event) {
         state.pendingTaskTurn = null;
       }
       const card = taskCard(event.run_id, event.task, host);
-      if (watched) card.activity.joined = false;  // this page saw the run start
+      if (watched) card.activity.joined = false; // this page saw the run start
       const was = card.state;
       if (event.time_budget_s) card.timeBudget = event.time_budget_s;
       if (event.token_budget) card.tokenBudget = event.token_budget;
@@ -1283,7 +1431,7 @@ function handleTask(event) {
       paintState(card);
       showQuestion(card, event.state === "needs_you" ? event.question : null);
       state.activeTask = ENDED.has(event.state) ? null : event.run_id;
-      runState(/** @type {string} */ (state.sessionId), event.state, event.task);  // notify.js: tab, dot, live region
+      runState(/** @type {string} */ (state.sessionId), event.state, event.task); // notify.js: tab, dot, live region
       if (event.state === "needs_you") {
         setStatus("needs", "needs you");
       } else if (event.state === "running") {
@@ -1291,7 +1439,7 @@ function handleTask(event) {
       }
       if (ENDED.has(event.state)) {
         if (event.detail && event.state === "failed") {
-          card.detail = event.detail;  // why it failed, for loadPacket when there is no packet
+          card.detail = event.detail; // why it failed, for loadPacket when there is no packet
           card.now.textContent = event.detail;
         }
         loadPacket(card);
@@ -1300,7 +1448,10 @@ function handleTask(event) {
     }
     case "task.line": {
       const card = tasks.get(event.run_id);
-      if (card) { addLine(card, event); card.lastEventAt = Date.now(); }
+      if (card) {
+        addLine(card, event);
+        card.lastEventAt = Date.now();
+      }
       return true;
     }
     case "task.phase": {
@@ -1320,12 +1471,15 @@ function handleTask(event) {
       if (inner.kind === "run.progress") {
         // Once a reply today; more often if the engine reports mid-reply.
         // Same shape either way: each one is the run's total so far.
-        if (typeof inner.elapsed_s === "number") { card.elapsed = inner.elapsed_s; card.elapsedAt = Date.now(); }
+        if (typeof inner.elapsed_s === "number") {
+          card.elapsed = inner.elapsed_s;
+          card.elapsedAt = Date.now();
+        }
         if (typeof inner.tokens === "number") card.spent = inner.tokens;
         if (inner.time_budget_s) card.timeBudget = inner.time_budget_s;
         if (inner.token_budget) card.tokenBudget = inner.token_budget;
         tick(card);
-        scheduleActivity(card);  // a new measured total means the reply's exact tokens can show
+        scheduleActivity(card); // a new measured total means the reply's exact tokens can show
       } else {
         noteActivity(card, inner);
       }
@@ -1370,12 +1524,15 @@ function recapCard(turn, content) {
   const card = taskCard(runId, task, turn);
   card.state = "loading";
   card.log.hidden = true;
-  card.meters.hidden = true;  // until the packet says what the run spent
+  card.meters.hidden = true; // until the packet says what the run spent
   paintState(card);
   loadPacket(card).then(() => {
     const verdict = card.packet.querySelector(".verdict");
     const cls = verdict ? [...verdict.classList].find((c) => c.startsWith("v-")) : null;
-    card.state = cls ? { "v-finished": "finished", "v-stopped": "stopped", "v-unchanged": "unchanged", "v-needs_you": "asked" }[cls] || "failed" : "failed";
+    card.state = cls
+      ? { "v-finished": "finished", "v-stopped": "stopped", "v-unchanged": "unchanged", "v-needs_you": "asked" }[cls] ||
+        "failed"
+      : "failed";
     paintState(card);
   });
   return true;
@@ -1397,11 +1554,13 @@ function openRunConfirm() {
   $("#mode-note").hidden = true;
   $("#tc-what").textContent = text;
   $("#tc-folder").textContent = state.folder || "this folder";
-  api("/api/task-policy").then((policy) => {
-    $("#tc-test-edits").checked = !!policy.test_edits;
-    $("#tc-p1").hidden = !policy.task_text_check;
-    paintTestPolicy();
-  }).catch(() => {});
+  api("/api/task-policy")
+    .then((policy) => {
+      $("#tc-test-edits").checked = !!policy.test_edits;
+      $("#tc-p1").hidden = !policy.task_text_check;
+      paintTestPolicy();
+    })
+    .catch(() => {});
   $("#task-confirm").hidden = false;
   $("#tc-start").focus();
 }
@@ -1427,8 +1586,7 @@ async function startTask() {
   input.style.height = "auto";
   // No time or token limit (engine.NO_LIMIT): a run stops at finish, an
   // error, the stall check or your Stop button, never at a clock.
-  await launchTask(text, 0, 0, $("#tc-test-edits").checked,
-                   $("#tc-premise").checked, $("#tc-stall").checked);
+  await launchTask(text, 0, 0, $("#tc-test-edits").checked, $("#tc-premise").checked, $("#tc-stall").checked);
 }
 
 /**
@@ -1439,8 +1597,7 @@ async function startTask() {
  * @param {boolean} [premiseCheck]
  * @param {boolean} [stallCheck]
  */
-async function launchTask(text, timeBudget, tokenBudget, allowTestEdits,
-                          premiseCheck = false, stallCheck = false) {
+async function launchTask(text, timeBudget, tokenBudget, allowTestEdits, premiseCheck = false, stallCheck = false) {
   if (state.busy) return;
   state.pendingTaskTurn = taskTurn(text);
   followBottom();
@@ -1448,10 +1605,15 @@ async function launchTask(text, timeBudget, tokenBudget, allowTestEdits,
   setStatus("working", "starting task");
   try {
     await api(`/api/sessions/${state.sessionId}/task`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text, time_budget_s: timeBudget || 0, token_budget: tokenBudget || 0,
-        allow_test_edits: allowTestEdits, premise_check: premiseCheck, stall_check: stallCheck,
+        text,
+        time_budget_s: timeBudget || 0,
+        token_budget: tokenBudget || 0,
+        allow_test_edits: allowTestEdits,
+        premise_check: premiseCheck,
+        stall_check: stallCheck,
       }),
     });
   } catch (error) {

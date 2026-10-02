@@ -15,8 +15,14 @@
 
 /** @type {Record<string, string>} */
 const RUN_WORDS = {
-  running: "running", needs_you: "needs you", finished: "finished",
-  stopped: "stopped", unchanged: "unchanged", asked: "needs you", failed: "no outcome", interrupted: "interrupted",
+  running: "running",
+  needs_you: "needs you",
+  finished: "finished",
+  stopped: "stopped",
+  unchanged: "unchanged",
+  asked: "needs you",
+  failed: "no outcome",
+  interrupted: "interrupted",
 };
 const RUN_ENDED_STATES = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
 const UNDO_MS = 10000;
@@ -43,7 +49,10 @@ const runsView = { rows: [], skew: 0, timer: 0, undoMs: UNDO_MS };
  * @param {number} [n]
  */
 function firstWords(text, n = 6) {
-  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const words = String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   return words.slice(0, n).join(" ") + (words.length > n ? "…" : "");
 }
 
@@ -68,7 +77,7 @@ function runMeta(run) {
   const now = Date.now() / 1000 + runsView.skew;
   const st = shownState(run);
   if (st === "needs_you") return `waiting ${shortAge(now - (run.state_since || now))}`;
-  const end = RUN_ENDED_STATES.has(st) || st === "interrupted" ? (run.ended || run.state_since) : now;
+  const end = RUN_ENDED_STATES.has(st) || st === "interrupted" ? run.ended || run.state_since : now;
   return shortAge((end || now) - (run.started || now));
 }
 
@@ -138,7 +147,10 @@ const pendingDeletes = new Map();
 
 function hideToast() {
   const toast = document.getElementById("toast");
-  if (toast) { toast.hidden = true; toast.textContent = ""; }
+  if (toast) {
+    toast.hidden = true;
+    toast.textContent = "";
+  }
 }
 
 /** @param {SessionInfo} session */
@@ -152,7 +164,8 @@ async function deleteSession(session) {
     hideToast();
   }, runsView.undoMs);
   pendingDeletes.set(session.id, expire);
-  if (wasActive) await boot(); else await loadSessions();
+  if (wasActive) await boot();
+  else await loadSessions();
   const toast = /** @type {HTMLElement} */ (document.getElementById("toast"));
   toast.textContent = "";
   toast.appendChild(el("span", "toast-text", `Deleted “${session.title}”.`));
@@ -173,7 +186,8 @@ async function undoDelete(sid, reselect) {
   pendingDeletes.delete(sid);
   hideToast();
   await api(`/api/sessions/${sid}/restore`, { method: "POST" });
-  if (reselect) select(sid); else await loadSessions();
+  if (reselect) select(sid);
+  else await loadSessions();
 }
 
 document.addEventListener("keydown", (event) => {

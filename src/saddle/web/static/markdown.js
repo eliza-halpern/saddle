@@ -44,11 +44,15 @@ function inlineInto(parent, text) {
     if (!bit) continue;
     if (bit.startsWith("`") && bit.endsWith("`") && bit.length > 2) {
       parent.appendChild(el("code", null, bit.slice(1, -1)));
-    } else if ((bit.startsWith("**") && bit.endsWith("**") && bit.length > 4) ||
-               (bit.startsWith("__") && bit.endsWith("__") && bit.length > 4)) {
+    } else if (
+      (bit.startsWith("**") && bit.endsWith("**") && bit.length > 4) ||
+      (bit.startsWith("__") && bit.endsWith("__") && bit.length > 4)
+    ) {
       parent.appendChild(el("strong", null, bit.slice(2, -2)));
-    } else if ((bit.startsWith("*") && bit.endsWith("*") && bit.length > 2) ||
-               (bit.startsWith("_") && bit.endsWith("_") && bit.length > 2)) {
+    } else if (
+      (bit.startsWith("*") && bit.endsWith("*") && bit.length > 2) ||
+      (bit.startsWith("_") && bit.endsWith("_") && bit.length > 2)
+    ) {
       parent.appendChild(el("em", null, bit.slice(1, -1)));
     } else if (bit.startsWith("[") && bit.includes("](")) {
       const cut = bit.indexOf("](");
@@ -90,13 +94,16 @@ function renderMarkdown(target, text) {
   /** @type {HTMLElement | null} */
   let list = null;
 
-  const closeList = () => { list = null; };
+  const closeList = () => {
+    list = null;
+  };
 
   while (index < lines.length) {
     const line = lines[index];
 
     const fence = line.match(/^\s*```(\w*)\s*$/);
-    if (fence) {                                   // fenced code
+    if (fence) {
+      // fenced code
       closeList();
       const body = [];
       index += 1;
@@ -150,12 +157,19 @@ function renderMarkdown(target, text) {
       continue;
     }
 
-    if (!line.trim()) { closeList(); index += 1; continue; }
+    if (!line.trim()) {
+      closeList();
+      index += 1;
+      continue;
+    }
 
-    closeList();                                    // paragraph: gather until blank
+    closeList(); // paragraph: gather until blank
     const para = [];
-    while (index < lines.length && lines[index].trim() &&
-           !/^\s*```|^#{1,4}\s|^\s*[-*+]\s|^\s*\d+[.)]\s|^\s*>/.test(lines[index])) {
+    while (
+      index < lines.length &&
+      lines[index].trim() &&
+      !/^\s*```|^#{1,4}\s|^\s*[-*+]\s|^\s*\d+[.)]\s|^\s*>/.test(lines[index])
+    ) {
       para.push(lines[index++]);
     }
     const node = el("p");
@@ -189,15 +203,27 @@ const GRAMMARS = {
     ["c-comment", "#[^\\n]*"],
     ["c-string", "'''[\\s\\S]*?'''|\"\"\"[\\s\\S]*?\"\"\"|" + SQ_STRING + "|" + DQ_STRING],
     ["c-decorator", "@[\\w.]+"],
-    ["c-keyword", "\\b(?:def|class|return|if|elif|else|for|while|import|from|as|with|try|except|finally|raise|yield|lambda|pass|break|continue|and|or|not|in|is|None|True|False|async|await|global|nonlocal|assert|del|match|case)\\b"],
-    ["c-builtin", "\\b(?:self|cls|print|len|range|str|int|float|bool|list|dict|set|tuple|open|enumerate|zip|sorted|any|all|isinstance|super|Exception|ValueError|TypeError|OSError|KeyError|RuntimeError)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:def|class|return|if|elif|else|for|while|import|from|as|with|try|except|finally|raise|yield|lambda|pass|break|continue|and|or|not|in|is|None|True|False|async|await|global|nonlocal|assert|del|match|case)\\b",
+    ],
+    [
+      "c-builtin",
+      "\\b(?:self|cls|print|len|range|str|int|float|bool|list|dict|set|tuple|open|enumerate|zip|sorted|any|all|isinstance|super|Exception|ValueError|TypeError|OSError|KeyError|RuntimeError)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   javascript: [
     ["c-comment", "//[^\\n]*|/\\*[\\s\\S]*?\\*/"],
     ["c-string", "`(?:\\\\.|[^`\\\\])*`|" + SQ_STRING + "|" + DQ_STRING],
-    ["c-keyword", "\\b(?:const|let|var|function|return|if|else|for|while|do|of|in|new|class|extends|import|export|default|from|async|await|try|catch|finally|throw|typeof|instanceof|delete|void|yield|switch|case|break|continue|null|undefined|true|false|this|super)\\b"],
-    ["c-builtin", "\\b(?:console|document|window|Math|JSON|Object|Array|String|Number|Boolean|Promise|Set|Map|Error)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:const|let|var|function|return|if|else|for|while|do|of|in|new|class|extends|import|export|default|from|async|await|try|catch|finally|throw|typeof|instanceof|delete|void|yield|switch|case|break|continue|null|undefined|true|false|this|super)\\b",
+    ],
+    [
+      "c-builtin",
+      "\\b(?:console|document|window|Math|JSON|Object|Array|String|Number|Boolean|Promise|Set|Map|Error)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   typescript: null,
@@ -210,7 +236,10 @@ const GRAMMARS = {
   bash: [
     ["c-comment", "#[^\\n]*"],
     ["c-string", "'[^'\\n]*'|" + DQ_STRING],
-    ["c-keyword", "\\b(?:if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function|return|export|local|readonly|set|shift|source|trap|exit)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function|return|export|local|readonly|set|shift|source|trap|exit)\\b",
+    ],
     ["c-builtin", "\\b(?:echo|cd|ls|cat|grep|sed|awk|find|curl|git|python|pip|make|sudo|chmod|mkdir|rm|cp|mv)\\b"],
     ["c-variable", "\\$\\{?[A-Za-z_][\\w]*\\}?|\\$[0-9@*?#]"],
     ["c-number", "\\b\\d+\\b"],
@@ -247,37 +276,61 @@ const GRAMMARS = {
   sql: [
     ["c-comment", "--[^\\n]*|/\\*[\\s\\S]*?\\*/"],
     ["c-string", SQ_STRING],
-    ["c-keyword", "\\b(?:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|INDEX|DROP|ALTER|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|AS|AND|OR|NOT|NULL|PRIMARY|KEY|FOREIGN|REFERENCES|DISTINCT|UNION|CASE|WHEN|THEN|ELSE|END)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|INDEX|DROP|ALTER|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|ORDER|HAVING|LIMIT|OFFSET|AS|AND|OR|NOT|NULL|PRIMARY|KEY|FOREIGN|REFERENCES|DISTINCT|UNION|CASE|WHEN|THEN|ELSE|END)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   rust: [
     ["c-comment", "//[^\\n]*|/\\*[\\s\\S]*?\\*/"],
     ["c-string", 'r?#*"(?:\\\\.|[^"\\\\])*"#*'],
     ["c-decorator", "#!?\\[[^\\]\\n]*\\]"],
-    ["c-keyword", "\\b(?:fn|let|mut|const|static|struct|enum|impl|trait|for|in|if|else|match|while|loop|break|continue|return|use|mod|pub|crate|self|super|where|as|dyn|move|async|await|ref|unsafe|type)\\b"],
-    ["c-builtin", "\\b(?:Option|Result|Some|None|Ok|Err|Vec|String|Box|Rc|Arc|HashMap|bool|u8|u16|u32|u64|usize|i8|i16|i32|i64|isize|f32|f64|str)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:fn|let|mut|const|static|struct|enum|impl|trait|for|in|if|else|match|while|loop|break|continue|return|use|mod|pub|crate|self|super|where|as|dyn|move|async|await|ref|unsafe|type)\\b",
+    ],
+    [
+      "c-builtin",
+      "\\b(?:Option|Result|Some|None|Ok|Err|Vec|String|Box|Rc|Arc|HashMap|bool|u8|u16|u32|u64|usize|i8|i16|i32|i64|isize|f32|f64|str)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   go: [
     ["c-comment", "//[^\\n]*|/\\*[\\s\\S]*?\\*/"],
     ["c-string", "`[^`]*`|" + DQ_STRING],
-    ["c-keyword", "\\b(?:func|var|const|type|struct|interface|map|chan|package|import|return|if|else|for|range|switch|case|default|break|continue|go|defer|select|fallthrough|nil|true|false)\\b"],
-    ["c-builtin", "\\b(?:string|int|int8|int16|int32|int64|uint|uint8|byte|rune|float32|float64|bool|error|make|new|len|cap|append|copy|delete|panic|recover)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:func|var|const|type|struct|interface|map|chan|package|import|return|if|else|for|range|switch|case|default|break|continue|go|defer|select|fallthrough|nil|true|false)\\b",
+    ],
+    [
+      "c-builtin",
+      "\\b(?:string|int|int8|int16|int32|int64|uint|uint8|byte|rune|float32|float64|bool|error|make|new|len|cap|append|copy|delete|panic|recover)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   c: [
     ["c-comment", "//[^\\n]*|/\\*[\\s\\S]*?\\*/"],
     ["c-string", DQ_STRING + "|" + SQ_STRING],
     ["c-decorator", "^\\s*#\\s*\\w+"],
-    ["c-keyword", "\\b(?:auto|break|case|char|const|continue|default|do|double|else|enum|extern|float|for|goto|if|inline|int|long|register|return|short|signed|sizeof|static|struct|switch|typedef|union|unsigned|void|volatile|while|class|public|private|protected|virtual|template|typename|namespace|using|new|delete|this|nullptr|true|false)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:auto|break|case|char|const|continue|default|do|double|else|enum|extern|float|for|goto|if|inline|int|long|register|return|short|signed|sizeof|static|struct|switch|typedef|union|unsigned|void|volatile|while|class|public|private|protected|virtual|template|typename|namespace|using|new|delete|this|nullptr|true|false)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   java: [
     ["c-comment", "//[^\\n]*|/\\*[\\s\\S]*?\\*/"],
     ["c-string", DQ_STRING + "|" + SQ_STRING],
     ["c-decorator", "@[A-Za-z_]\\w*"],
-    ["c-keyword", "\\b(?:public|private|protected|static|final|abstract|class|interface|extends|implements|new|return|if|else|for|while|do|switch|case|default|break|continue|try|catch|finally|throw|throws|import|package|void|this|super|null|true|false|instanceof|synchronized|volatile|transient|enum|record)\\b"],
-    ["c-builtin", "\\b(?:String|Integer|Long|Double|Boolean|Object|List|Map|Set|Optional|Exception|System|int|long|double|float|char|byte|short|boolean)\\b"],
+    [
+      "c-keyword",
+      "\\b(?:public|private|protected|static|final|abstract|class|interface|extends|implements|new|return|if|else|for|while|do|switch|case|default|break|continue|try|catch|finally|throw|throws|import|package|void|this|super|null|true|false|instanceof|synchronized|volatile|transient|enum|record)\\b",
+    ],
+    [
+      "c-builtin",
+      "\\b(?:String|Integer|Long|Double|Boolean|Object|List|Map|Set|Optional|Exception|System|int|long|double|float|char|byte|short|boolean)\\b",
+    ],
     ["c-number", COMMON_NUMBER],
   ],
   diff: [
@@ -290,18 +343,48 @@ const GRAMMARS = {
 /* svg is xml; the rest are the names people actually type in a fence. */
 /** @type {Record<string, string>} */
 const LANGUAGE_ALIASES = {
-  py: "python", python3: "python",
-  js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-  ts: "javascript", tsx: "javascript", typescript: "javascript", node: "javascript",
-  sh: "bash", shell: "bash", zsh: "bash", console: "bash", terminal: "bash",
-  svg: "xml", html: "xml", xhtml: "xml", vue: "xml", markup: "xml",
-  scss: "css", sass: "css", less: "css",
+  py: "python",
+  python3: "python",
+  js: "javascript",
+  jsx: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  ts: "javascript",
+  tsx: "javascript",
+  typescript: "javascript",
+  node: "javascript",
+  sh: "bash",
+  shell: "bash",
+  zsh: "bash",
+  console: "bash",
+  terminal: "bash",
+  svg: "xml",
+  html: "xml",
+  xhtml: "xml",
+  vue: "xml",
+  markup: "xml",
+  scss: "css",
+  sass: "css",
+  less: "css",
   yml: "yaml",
-  postgres: "sql", postgresql: "sql", psql: "sql", mysql: "sql", sqlite: "sql",
-  rs: "rust", golang: "go",
-  "c++": "c", cpp: "c", cc: "c", h: "c", hpp: "c", objc: "c", cs: "c", csharp: "c",
+  postgres: "sql",
+  postgresql: "sql",
+  psql: "sql",
+  mysql: "sql",
+  sqlite: "sql",
+  rs: "rust",
+  golang: "go",
+  "c++": "c",
+  cpp: "c",
+  cc: "c",
+  h: "c",
+  hpp: "c",
+  objc: "c",
+  cs: "c",
+  csharp: "c",
   patch: "diff",
-  json5: "json", jsonc: "json",
+  json5: "json",
+  jsonc: "json",
 };
 
 /** @param {string | null | undefined} language */
@@ -318,12 +401,11 @@ function grammarFor(language) {
 function highlight(target, code, language) {
   const rules = grammarFor(language);
   if (!rules) {
-    target.textContent = code;        // unknown language: readable, uncoloured
+    target.textContent = code; // unknown language: readable, uncoloured
     return;
   }
   target.textContent = "";
-  const pattern = new RegExp(
-    rules.map(([, source]) => `(${source})`).join("|"), "gm");
+  const pattern = new RegExp(rules.map(([, source]) => `(${source})`).join("|"), "gm");
   let last = 0;
   for (const match of code.matchAll(pattern)) {
     if (match.index > last) {
@@ -358,11 +440,15 @@ function renderDiff(target, text) {
   target.textContent = "";
   for (const line of text.split("\n")) {
     const cls =
-      line.startsWith("+++") || line.startsWith("---") ? "d-file"
-      : line.startsWith("@@") ? "d-hunk"
-      : line.startsWith("+") ? "d-add"
-      : line.startsWith("-") ? "d-del"
-      : "d-ctx";
+      line.startsWith("+++") || line.startsWith("---")
+        ? "d-file"
+        : line.startsWith("@@")
+          ? "d-hunk"
+          : line.startsWith("+")
+            ? "d-add"
+            : line.startsWith("-")
+              ? "d-del"
+              : "d-ctx";
     target.appendChild(el("div", cls, line || " "));
   }
 }
@@ -379,24 +465,56 @@ const CREATED = /^created '([^']*)' \((\d+) bytes\)\n([\s\S]*)$/;
 
 /** @type {Record<string, string>} */
 const EXTENSIONS = {
-  py: "python", pyi: "python",
-  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
-  ts: "javascript", tsx: "javascript",
-  json: "json", jsonl: "json",
-  sh: "bash", bash: "bash", zsh: "bash",
-  svg: "xml", html: "xml", htm: "xml", xml: "xml", vue: "xml",
-  css: "css", scss: "css", sass: "css", less: "css",
-  yaml: "yaml", yml: "yaml",
-  toml: "toml", sql: "sql", rs: "rust", go: "go",
-  c: "c", h: "c", cpp: "c", hpp: "c", cc: "c", cs: "c",
-  java: "java", patch: "diff", diff: "diff",
+  py: "python",
+  pyi: "python",
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "javascript",
+  ts: "javascript",
+  tsx: "javascript",
+  json: "json",
+  jsonl: "json",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  svg: "xml",
+  html: "xml",
+  htm: "xml",
+  xml: "xml",
+  vue: "xml",
+  css: "css",
+  scss: "css",
+  sass: "css",
+  less: "css",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  sql: "sql",
+  rs: "rust",
+  go: "go",
+  c: "c",
+  h: "c",
+  cpp: "c",
+  hpp: "c",
+  cc: "c",
+  cs: "c",
+  java: "java",
+  patch: "diff",
+  diff: "diff",
 };
 
 /** @param {string | null | undefined} name */
 function languageForPath(name) {
   const dot = String(name || "").lastIndexOf(".");
   if (dot < 0) return null;
-  return EXTENSIONS[String(name).slice(dot + 1).toLowerCase()] || null;
+  return (
+    EXTENSIONS[
+      String(name)
+        .slice(dot + 1)
+        .toLowerCase()
+    ] || null
+  );
 }
 
 /**
@@ -486,7 +604,7 @@ async function copyText(text) {
   const area = document.createElement("textarea");
   try {
     area.value = text;
-    area.setAttribute("readonly", "");  // a copy does not open a keyboard
+    area.setAttribute("readonly", ""); // a copy does not open a keyboard
     area.style.position = "fixed";
     area.style.left = "-9999px";
     document.body.appendChild(area);
@@ -494,7 +612,7 @@ async function copyText(text) {
     return !!document.execCommand("copy");
   } catch {
     return false;
-  /* c8 ignore next -- the catch above returns, so nothing escapes the try: the finally's rethrow edge cannot run */
+    /* c8 ignore next -- the catch above returns, so nothing escapes the try: the finally's rethrow edge cannot run */
   } finally {
     area.remove();
     if (before && typeof before.focus === "function") before.focus();
@@ -523,13 +641,18 @@ function copyButton(payload, what) {
   let settle = null;
   button.onclick = async (event) => {
     // Inside a summary, a click would also open or close the row.
-    if (event) { event.preventDefault(); event.stopPropagation(); }
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
     const current = button.payload;
     const text = typeof current === "function" ? current() : current;
     const ok = await copyText(text);
     button.textContent = ok ? "Copied" : "Failed";
     clearTimeout(settle ?? undefined);
-    settle = setTimeout(() => { button.textContent = "Copy"; }, COPY_FEEDBACK_MS);
+    settle = setTimeout(() => {
+      button.textContent = "Copy";
+    }, COPY_FEEDBACK_MS);
     return ok;
   };
   return button;
@@ -596,12 +719,16 @@ function atBottom() {
 
 function watchScrolling() {
   const t = $("#transcript");
-  t.addEventListener("scroll", () => {
-    if (Math.abs(t.scrollTop - lastSet) < 2) return;   // our own
-    following = atBottom();
-    const jump = $("#jump");
-    if (jump) jump.hidden = following;
-  }, { passive: true });
+  t.addEventListener(
+    "scroll",
+    () => {
+      if (Math.abs(t.scrollTop - lastSet) < 2) return; // our own
+      following = atBottom();
+      const jump = $("#jump");
+      if (jump) jump.hidden = following;
+    },
+    { passive: true },
+  );
 }
 
 /** @param {boolean} [_was] */
@@ -651,7 +778,10 @@ function splitStable(raw) {
     // so keep walking back until the break has an even number of fences
     // before it. Missing this split a code block in half mid-stream.
     let before = 0;
-    for (const f of fences) { if (f >= cut) break; before++; }
+    for (const f of fences) {
+      if (f >= cut) break;
+      before++;
+    }
     if (before % 2 === 0) return [raw.slice(0, cut + 1), raw.slice(cut + 1)];
     cut = raw.lastIndexOf("\n\n", cut - 1);
   }
@@ -679,7 +809,7 @@ function paintStream(node) {
       renderMarkdown(chunk, head.slice(done.length));
       while (chunk.firstChild) stable.appendChild(chunk.firstChild);
     } else {
-      renderMarkdown(stable, head);   // a fence opened: the split point moved
+      renderMarkdown(stable, head); // a fence opened: the split point moved
     }
     stable.dataset.raw = head;
   }
@@ -690,10 +820,24 @@ function paintStream(node) {
    plain globals that app.js picks up from the shared script scope. */
 if (typeof module !== "undefined" && module.exports) {
   Object.assign(module.exports, {
-    el, inlineInto, renderMarkdown, splitStable, paintStream,
-    isDiff, renderDiff, fillToolDetail, highlight, grammarFor,
-    languageForPath, CREATED,
-    copyText, copyButton, attachCopy,
-    atBottom, stickToBottom, followBottom, watchScrolling,
+    el,
+    inlineInto,
+    renderMarkdown,
+    splitStable,
+    paintStream,
+    isDiff,
+    renderDiff,
+    fillToolDetail,
+    highlight,
+    grammarFor,
+    languageForPath,
+    CREATED,
+    copyText,
+    copyButton,
+    attachCopy,
+    atBottom,
+    stickToBottom,
+    followBottom,
+    watchScrolling,
   });
 }

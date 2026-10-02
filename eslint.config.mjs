@@ -9,27 +9,50 @@ import globals from "globals";
 const STATIC = "src/saddle/web/static/";
 const provides = {
   "markdown.js": [
-    "el", "fillToolDetail", "attachCopy", "renderMarkdown", "paintStream",
-    "renderDiff", "atBottom", "stickToBottom", "followBottom", "watchScrolling",
+    "el",
+    "fillToolDetail",
+    "attachCopy",
+    "renderMarkdown",
+    "paintStream",
+    "renderDiff",
+    "atBottom",
+    "stickToBottom",
+    "followBottom",
+    "watchScrolling",
   ],
   "tasks.js": [
-    "handleTask", "recapCard", "stopTask", "startTask", "openRunConfirm",
-    "closeRunConfirm", "paintTestPolicy",
+    "handleTask",
+    "recapCard",
+    "stopTask",
+    "startTask",
+    "openRunConfirm",
+    "closeRunConfirm",
+    "paintTestPolicy",
   ],
   "notify.js": ["runState", "noteSessions", "runSelected"],
   "runs.js": ["deleteSession", "loadRuns"],
   "app.js": [
-    "$", "state", "api", "notice", "setMode", "setStatus", "newTurn",
-    "select", "boot", "loadSessions", "errorText",
+    "$",
+    "state",
+    "api",
+    "notice",
+    "setMode",
+    "setStatus",
+    "newTurn",
+    "select",
+    "boot",
+    "loadSessions",
+    "errorText",
   ],
 };
 
-const sharedGlobals = (file) => Object.fromEntries(
-  Object.entries(provides)
-    .filter(([name]) => name !== file)
-    .flatMap(([, names]) => names)
-    .map((name) => [name, "readonly"]),
-);
+const sharedGlobals = (file) =>
+  Object.fromEntries(
+    Object.entries(provides)
+      .filter(([name]) => name !== file)
+      .flatMap(([, names]) => names)
+      .map((name) => [name, "readonly"]),
+  );
 
 const staticFiles = Object.keys(provides).map((file) => ({
   files: [STATIC + file],
@@ -65,10 +88,7 @@ export default [
     rules: {
       // A top-level name in one script is another script's global, so a
       // name this file never reads may be read by a sibling.
-      "no-unused-vars": [
-        "error",
-        { vars: "local", args: "after-used", argsIgnorePattern: "^_", caughtErrors: "all" },
-      ],
+      "no-unused-vars": ["error", { vars: "local", args: "after-used", argsIgnorePattern: "^_", caughtErrors: "all" }],
     },
   },
   {

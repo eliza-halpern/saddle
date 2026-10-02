@@ -18,11 +18,20 @@ import { join } from "node:path";
 const [base, sid] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-copy-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  "--host-resolver-rules=MAP saddle-ui.test 127.0.0.1",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    "--host-resolver-rules=MAP saddle-ui.test 127.0.0.1",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const pageErrors = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
@@ -38,7 +47,9 @@ async function target() {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
       const page = list.find((t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
-    } catch { /* chrome is still starting */ }
+    } catch {
+      /* chrome is still starting */
+    }
     await sleep(200);
   }
   throw new Error("chrome did not start");
@@ -51,22 +62,31 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
     if (msg.method === "Runtime.exceptionThrown") {
       const thrown = msg.params.exceptionDetails;
       pageErrors.push(thrown.exception?.description || thrown.text);
     }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
   const until = async (cond, ms = 8000) => {
-    for (let t = 0; t < ms; t += 100) { if (await js(cond).catch(() => false)) return true; await sleep(100); }
+    for (let t = 0; t < ms; t += 100) {
+      if (await js(cond).catch(() => false)) return true;
+      await sleep(100);
+    }
     throw new Error(`timed out waiting for ${cond}`);
   };
   // A real click: scroll the node to the middle, then press and release the
@@ -87,11 +107,14 @@ try {
   await send("Emulation.setFocusEmulationEnabled", { enabled: true });
   const origin = new URL(base).origin;
   const granted = await send("Browser.grantPermissions", {
-    origin, permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
+    origin,
+    permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
   });
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
     try { localStorage.setItem("saddle.session", ${JSON.stringify(sid)}); } catch { /* none */ }
-  ` });
+  `,
+  });
   await send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   await send("Page.enable");
   await send("Runtime.enable");

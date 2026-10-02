@@ -1,0 +1,15 @@
+# Prettier formats JavaScript and JSON only; stylelint, html-validate and
+# markdownlint own the other web and prose files.
+*.css
+*.html
+*.md
+*.yml
+*.jsonc
+node_modules/
+.venv/
+.stryker-tmp/
+mutants/
+reports/
+package-lock.json
+# Fixtures keep their exact bytes: tests and golden files compare them.
+tests/fixtures/**/*.json

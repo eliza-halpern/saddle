@@ -11,10 +11,19 @@ import { join } from "node:path";
 const [base, sid, step, shots, scheme, prefix = ""] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-lane-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -44,11 +53,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -57,10 +72,23 @@ try {
   const key = async (k, modifiers = 0) => {
     const code = { Enter: 13, Escape: 27, Tab: 9, ArrowDown: 40 }[k];
     const text = k === "Enter" ? "\r" : undefined;
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers, text });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      modifiers,
+      text,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      modifiers,
+    });
     await sleep(400);
   };
   const type = async (text) => {
@@ -73,7 +101,8 @@ try {
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, prefix + name), Buffer.from(s.result.data, "base64"));
   };
-  const look = () => js(`(() => ({
+  const look = () =>
+    js(`(() => ({
     stripVisible: !document.querySelector("#task-confirm").hidden,
     focus: document.activeElement && document.activeElement.id,
     desc: document.querySelector("#mode-desc").textContent.trim(),
@@ -94,7 +123,9 @@ try {
     await send("Page.navigate", { url: `${base}/` });
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      const ready = await js(`typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`).catch(() => false);
+      const ready = await js(
+        `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`,
+      ).catch(() => false);
       if (ready) break;
     }
     await sleep(300);
@@ -118,7 +149,8 @@ try {
   await send("Runtime.enable");
   await load();
   const out = {};
-  const options = () => js(`[...document.querySelectorAll("#lane-menu li")].map((li) => ({
+  const options = () =>
+    js(`[...document.querySelectorAll("#lane-menu li")].map((li) => ({
     lane: li.dataset.lane, label: li.querySelector("b").textContent,
     desc: li.querySelector("span").textContent, disabled: li.getAttribute("aria-disabled") === "true" }))`);
   if (step === "chip") {
@@ -179,7 +211,9 @@ try {
       if (await js(`!state.busy && document.querySelectorAll("details.tool:not(.running)").length > 0`)) break;
     }
     await sleep(400);
-    await js(`document.querySelectorAll(".tool, .tool summary, details").forEach((d) => { if (d.tagName === "DETAILS") d.open = true; })`);
+    await js(
+      `document.querySelectorAll(".tool, .tool summary, details").forEach((d) => { if (d.tagName === "DETAILS") d.open = true; })`,
+    );
     await sleep(200);
     await shot("ask-refused-edit.png");
     out.after = await look();
@@ -196,6 +230,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

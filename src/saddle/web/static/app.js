@@ -123,19 +123,30 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
 
 /** @type {State} */
 const state = {
-  sessionId: null, stream: null, busy: false,
-  turnNode: null, assistantNode: null, reasoningNode: null, reasoningBody: null,
-  tools: new Map(), terminals: new Map(), attachments: [], personas: {}, folder: null, mode: "ask",
+  sessionId: null,
+  stream: null,
+  busy: false,
+  turnNode: null,
+  assistantNode: null,
+  reasoningNode: null,
+  reasoningBody: null,
+  tools: new Map(),
+  terminals: new Map(),
+  attachments: [],
+  personas: {},
+  folder: null,
+  mode: "ask",
 };
-
-
 
 /** @type {Set<HTMLElement>} */
 const painting = new Set();
 let paintFrame = 0;
 
 function flushPaint() {
-  if (paintFrame) { cancelAnimationFrame(paintFrame); paintFrame = 0; }
+  if (paintFrame) {
+    cancelAnimationFrame(paintFrame);
+    paintFrame = 0;
+  }
   if (!painting.size) return;
   const was = atBottom();
   for (const node of painting) {
@@ -154,7 +165,10 @@ function flushPaint() {
 function schedulePaint(node) {
   painting.add(node);
   if (paintFrame) return;
-  paintFrame = requestAnimationFrame(() => { paintFrame = 0; flushPaint(); });
+  paintFrame = requestAnimationFrame(() => {
+    paintFrame = 0;
+    flushPaint();
+  });
 }
 
 /* ---------- transcript pieces ---------- */
@@ -181,7 +195,7 @@ function reasoningBlock() {
   details.appendChild(summary);
   const body = el("div", "reasoning-body");
   details.appendChild(body);
-  details.open = true;                      // opens itself while it streams
+  details.open = true; // opens itself while it streams
   details.dataset.started = String(Date.now());
   /** @type {HTMLElement} */ (state.turnNode).appendChild(details);
   state.reasoningNode = details;
@@ -208,7 +222,7 @@ function foldReasoning() {
 
 function assistantBlock() {
   if (state.assistantNode) return state.assistantNode;
-  if (state.reasoningNode) foldReasoning();  // the answer began: fold it away
+  if (state.reasoningNode) foldReasoning(); // the answer began: fold it away
   const node = el("div", "assistant");
   node.dataset.raw = "";
   /** @type {HTMLElement} */ (state.turnNode).appendChild(node);
@@ -224,7 +238,7 @@ function toolRow(event) {
   const details = el("details", "tool running");
   const summary = el("summary");
   summary.appendChild(el("span", "dot"));
-  const label = el("span", "label", event.present);   // present tense, while running
+  const label = el("span", "label", event.present); // present tense, while running
   summary.appendChild(label);
   summary.appendChild(el("span", "ms", ""));
   details.appendChild(summary);
@@ -243,15 +257,13 @@ function finishTool(event) {
   if (!row) return;
   row.details.classList.remove("running");
   row.details.classList.add(event.ok ? "ok" : "failed");
-  row.label.textContent = event.label;               // -> past tense, or "Failed to …"
+  row.label.textContent = event.label; // -> past tense, or "Failed to …"
   /** @type {Element} */ (row.details.querySelector(".ms")).textContent =
-    event.duration_ms >= 1000
-      ? `${(event.duration_ms / 1000).toFixed(1)}s`
-      : `${event.duration_ms}ms`;
+    event.duration_ms >= 1000 ? `${(event.duration_ms / 1000).toFixed(1)}s` : `${event.duration_ms}ms`;
   fillToolDetail(row.details, row.detail, event.detail);
   markUnsandboxed(row.details, event.detail);
   if (event.preview) showPreview(row.details, event.preview, event.version);
-  if (!event.ok) row.details.open = true;             // a failure should not need a click
+  if (!event.ok) row.details.open = true; // a failure should not need a click
 }
 
 /* A background command keeps producing output after the tool call that
@@ -324,8 +336,7 @@ function handle(event) {
       // Appending a text node per frame, not `textContent +=`, which
       // re-reads and rewrites the whole transcript of the thought.
       thought.dataset.reasoning = "1";
-      thought.dataset.pending =
-        (thought.dataset.pending || "") + event.text;   // never truncated
+      thought.dataset.pending = (thought.dataset.pending || "") + event.text; // never truncated
       schedulePaint(thought);
       break;
     }
@@ -363,8 +374,11 @@ function handle(event) {
       const body = terminalBlock(event.id);
       if (!body.output) {
         const row = /** @type {ParentNode} */ (body.parentNode);
-        attachCopy(/** @type {HTMLElement} */ (row.querySelector("summary")),
-          () => body.output || "", "terminal output");
+        attachCopy(
+          /** @type {HTMLElement} */ (row.querySelector("summary")),
+          () => body.output || "",
+          "terminal output",
+        );
       }
       body.output = (body.output || "") + event.chunk;
       body.appendChild(document.createTextNode(event.chunk));
@@ -388,7 +402,7 @@ function handle(event) {
       break;
     case "turn.end":
       flushPaint();
-      foldReasoning();                       // a turn with no answer text still folds
+      foldReasoning(); // a turn with no answer text still folds
       setStatus("idle");
       state.busy = false;
       break;
@@ -400,7 +414,7 @@ function handle(event) {
       state.activeTask = null;
       break;
     default:
-      handleTask(event);        // task.* events: the task card (tasks.js)
+      handleTask(event); // task.* events: the task card (tasks.js)
   }
   stickToBottom(was);
 }
@@ -430,7 +444,8 @@ function renderHistory(info) {
   const t = $("#transcript");
   t.textContent = "";
   const shown = (info.messages || []).filter(
-    (/** @type {ServerEvent} */ m) => m.role === "user" || m.role === "assistant");
+    (/** @type {ServerEvent} */ m) => m.role === "user" || m.role === "assistant",
+  );
   if (!shown.length) {
     t.appendChild(el("div", "empty", "nothing here yet — what are we making?"));
     return;
@@ -473,7 +488,7 @@ function renderHistory(info) {
     }
     t.appendChild(turn);
   }
-  followBottom();          // a freshly opened session starts at the end
+  followBottom(); // a freshly opened session starts at the end
 }
 
 /**
@@ -551,17 +566,16 @@ async function restampTurns() {
   try {
     stored = await api(`/api/sessions/${state.sessionId}/messages`);
   } catch {
-    return;                       // the buttons are a convenience, not the turn
+    return; // the buttons are a convenience, not the turn
   }
-  const asked = stored
-    .map((message, index) => (message.role === "user" ? index : -1))
-    .filter((index) => index >= 0);
+  const asked = stored.map((message, index) => (message.role === "user" ? index : -1)).filter((index) => index >= 0);
   // Only the turns that carry a question: an assistant reply gets its own
   // .turn node, so counting all of them never matched and the restamp
   // silently never ran for a live turn.
-  const turns = /** @type {HTMLElement[]} */ ([...$("#transcript").querySelectorAll(".turn")]).filter(
-    (turn) => turn.querySelector(".user"));
-  if (turns.length !== asked.length) return;   // mid-stream; try again next idle
+  const turns = /** @type {HTMLElement[]} */ ([...$("#transcript").querySelectorAll(".turn")]).filter((turn) =>
+    turn.querySelector(".user"),
+  );
+  if (turns.length !== asked.length) return; // mid-stream; try again next idle
   turns.forEach((turn, position) => {
     turn.dataset.index = String(asked[position]);
     // A task's bubble stands for a run, not a question: no retry on it.
@@ -584,7 +598,10 @@ function turnTools(index) {
     const button = el("button", null, glyph);
     button.type = "button";
     button.title = title;
-    button.onclick = (event) => { event.preventDefault(); openRewind(index, edit); };
+    button.onclick = (event) => {
+      event.preventDefault();
+      openRewind(index, edit);
+    };
     tools.appendChild(button);
   }
   return tools;
@@ -653,7 +670,8 @@ $("#rewind-go").onclick = async (event) => {
   let result;
   try {
     result = await api(`/api/sessions/${state.sessionId}/rewind`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
   } catch (error) {
@@ -726,7 +744,7 @@ async function loadSessions() {
     kill.setAttribute("aria-label", `Delete session ${session.title}`);
     kill.onclick = async (event) => {
       event.stopPropagation();
-      await deleteSession(session);  // runs.js: hidden now, gone after the undo toast
+      await deleteSession(session); // runs.js: hidden now, gone after the undo toast
     };
     row.appendChild(kill);
     row.onclick = () => select(session.id);
@@ -741,7 +759,7 @@ async function loadSessions() {
 function select(sessionId) {
   drawer(false);
   state.sessionId = sessionId;
-  state.historyFor = null;          // a different transcript: rebuild it
+  state.historyFor = null; // a different transcript: rebuild it
   state.tools.clear();
   state.terminals.clear();
   localStorage.setItem("saddle.session", sessionId);
@@ -760,8 +778,11 @@ async function boot() {
   await loadPersonas();
   let sessions = await loadSessions();
   if (!sessions.length) {
-    await api("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" },
-                                 body: JSON.stringify({}) });
+    await api("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
     sessions = await loadSessions();
   }
   const remembered = localStorage.getItem("saddle.session");
@@ -781,15 +802,27 @@ async function boot() {
 
 /** @type {(Lane | DisabledLane)[]} */
 const LANES = [
-  { id: "ask", enabled: true, label: "Ask",
+  {
+    id: "ask",
+    enabled: true,
+    label: "Ask",
     desc: "Ask: read-only. It reads and searches your folder, then answers. It cannot edit files or run commands.",
-    placeholder: "ask about this folder (read-only, nothing changes)" },
-  { id: "edit", enabled: true, label: "Edit",
+    placeholder: "ask about this folder (read-only, nothing changes)",
+  },
+  {
+    id: "edit",
+    enabled: true,
+    label: "Edit",
     desc: "Edit: unaudited, edits your folder. It writes files and runs commands directly; nothing checks the work and there is no packet.",
-    placeholder: "this will edit your folder directly, unaudited" },
-  { id: "task", enabled: true, label: "Task · Small",
+    placeholder: "this will edit your folder directly, unaudited",
+  },
+  {
+    id: "task",
+    enabled: true,
+    label: "Task · Small",
     desc: "Task · Small: an audited run on a new branch in a copy of your folder, ending in an evidence packet. Enter shows the run before it starts.",
-    placeholder: "describe the job; Enter shows the run before it starts" },
+    placeholder: "describe the job; Enter shows the run before it starts",
+  },
   { id: "feature", enabled: false, label: "Feature" },
   { id: "breadth", enabled: false, label: "Breadth" },
   { id: "long", enabled: false, label: "Long" },
@@ -815,7 +848,7 @@ function showMode(mode) {
   $("#mode-desc").textContent = lane.desc;
   $("#mode-chip").textContent = lane.id;
   $("#mode-chip").dataset.mode = lane.id;
-  document.body.dataset.mode = lane.id;  // page-level hook: task mode quiets the chat-only chrome
+  document.body.dataset.mode = lane.id; // page-level hook: task mode quiets the chat-only chrome
   $("#input").placeholder = lane.placeholder;
   $("#mode-note").hidden = true;
   paintFullAccess();
@@ -825,15 +858,16 @@ function showMode(mode) {
 
 /** @param {string | undefined} mode */
 async function setMode(mode) {
-  if (!laneOf(mode)) return;          // a disabled or unknown lane is never chosen
+  if (!laneOf(mode)) return; // a disabled or unknown lane is never chosen
   showMode(mode);
   $("#input").focus();
   try {
     const session = await api(`/api/sessions/${state.sessionId}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: state.mode }),
     });
-    showFullAccess(session.full_access);   // leaving Edit ends full access
+    showFullAccess(session.full_access); // leaving Edit ends full access
   } catch (error) {
     notice(errorText(error), "error");
   }
@@ -862,7 +896,8 @@ async function setFullAccess(on) {
   const body = on ? { on: true, confirm: $("#fa-grant").dataset.confirm } : { on: false };
   try {
     const session = await api(`/api/sessions/${state.sessionId}/full-access`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     showFullAccess(session.full_access);
@@ -918,7 +953,9 @@ async function answerPassword(cancel) {
   closePassword();
   try {
     await api(`/api/sessions/${state.sessionId}/password`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
   } catch (error) {
     notice(errorText(error), "error");
@@ -928,16 +965,23 @@ async function answerPassword(cancel) {
 $("#pw-send").onclick = () => answerPassword(false);
 $("#pw-cancel").onclick = () => answerPassword(true);
 $("#pw-input").addEventListener("keydown", (event) => {
-  if (event.key === "Enter") { event.preventDefault(); answerPassword(false); }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    answerPassword(false);
+  }
 });
-$("#password-dialog").addEventListener("cancel", (event) => {   // Escape
+$("#password-dialog").addEventListener("cancel", (event) => {
+  // Escape
   event.preventDefault();
   answerPassword(true);
 });
 
 $("#full-access-open").onclick = () => $("#full-access-dialog").showModal();
 $("#fa-keep").onclick = () => $("#full-access-dialog").close();
-$("#fa-grant").onclick = () => { $("#full-access-dialog").close(); setFullAccess(true); };
+$("#fa-grant").onclick = () => {
+  $("#full-access-dialog").close();
+  setFullAccess(true);
+};
 $("#full-access-off").onclick = () => setFullAccess(false);
 
 /* Shift+Tab: the next enabled lane, wrapping. */
@@ -954,7 +998,8 @@ function nextLane(from, step = 1) {
 /* A guess from the words alone, shown as a hint and never acted on: only
    Tab (the user) takes it. Choosing the lane silently is how "ran a task by
    accident" comes back. */
-const TASK_VERB = /^(please\s+)?(make|fix|add|remove|rename|refactor|change|implement|write|update|delete|move|replace|convert|split)\b/i;
+const TASK_VERB =
+  /^(please\s+)?(make|fix|add|remove|rename|refactor|change|implement|write|update|delete|move|replace|convert|split)\b/i;
 const FILE_NAME = /\b[\w./-]+\.(py|js|mjs|ts|tsx|md|json|toml|css|html|rs|go|c|h|java|ya?ml|txt|sh)\b/i;
 /** @param {string} text */
 function suggestLane(text) {
@@ -969,8 +1014,12 @@ function paintSuggestion() {
   const want = suggestLane($("#input").value);
   state.suggestion = want && want !== state.mode ? want : null;
   box.hidden = !state.suggestion;
-  box.textContent = state.suggestion === "task" ? "looks like a task → Tab"
-    : state.suggestion === "ask" ? "looks like a question → Tab for Ask" : "";
+  box.textContent =
+    state.suggestion === "task"
+      ? "looks like a task → Tab"
+      : state.suggestion === "ask"
+        ? "looks like a question → Tab for Ask"
+        : "";
 }
 
 /** @param {boolean} open */
@@ -1017,11 +1066,9 @@ async function send() {
   // files are named so it knows to read them from uploads/.
   const images = state.attachments.filter((a) => a.isImage).map((a) => a.path);
   const others = state.attachments.filter((a) => !a.isImage).map((a) => a.name);
-  const body = others.length
-    ? `${text}\n\n[also attached in uploads/: ${others.join(", ")}]`
-    : text;
+  const body = others.length ? `${text}\n\n[also attached in uploads/: ${others.join(", ")}]` : text;
   newTurn(input.value.trim());
-  followBottom();          // sending is an intent to watch the reply
+  followBottom(); // sending is an intent to watch the reply
   input.value = "";
   paintSuggestion();
   input.style.height = "auto";
@@ -1031,7 +1078,8 @@ async function send() {
   setStatus("working");
   try {
     await api(`/api/sessions/${state.sessionId}/message`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: body, images }),
     });
   } catch (error) {
@@ -1079,7 +1127,10 @@ async function openFolders(path) {
   list.textContent = "";
   for (const entry of data.entries) {
     const button = el("button", null, entry.name + "/");
-    button.onclick = (event) => { event.preventDefault(); openFolders(entry.path); };
+    button.onclick = (event) => {
+      event.preventDefault();
+      openFolders(entry.path);
+    };
     list.appendChild(button);
   }
   $("#folder-error").textContent = "";
@@ -1089,21 +1140,34 @@ async function openFolders(path) {
 async function makeFolder() {
   const name = $("#folder-name-new").value.trim();
   const here = $("#folder-dialog").dataset.path;
-  if (!name) { $("#folder-error").textContent = "give the folder a name"; return; }
+  if (!name) {
+    $("#folder-error").textContent = "give the folder a name";
+    return;
+  }
   const reply = await fetch("/api/browse", {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: here, name }),
   });
   const body = await reply.json();
-  if (!reply.ok) { $("#folder-error").textContent = body.error || "could not create"; return; }
+  if (!reply.ok) {
+    $("#folder-error").textContent = body.error || "could not create";
+    return;
+  }
   $("#folder-name-new").value = "";
   // Step into it: making a folder here almost always means working in it.
   await openFolders(body.path);
 }
 
-$("#folder-make").onclick = (event) => { event.preventDefault(); makeFolder(); };
+$("#folder-make").onclick = (event) => {
+  event.preventDefault();
+  makeFolder();
+};
 $("#folder-name-new").addEventListener("keydown", (event) => {
-  if (event.key === "Enter") { event.preventDefault(); makeFolder(); }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    makeFolder();
+  }
 });
 
 /* ---------- wiring ---------- */
@@ -1128,12 +1192,18 @@ $("#input").addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Tab" && !event.shiftKey && state.suggestion) {
-    event.preventDefault();         // the user took the hint; nothing else does
+    event.preventDefault(); // the user took the hint; nothing else does
     setMode(state.suggestion);
     return;
   }
-  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitComposer(); }
-  if (event.key === "Escape" && !$("#task-confirm").hidden) { event.preventDefault(); closeRunConfirm(); }
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    submitComposer();
+  }
+  if (event.key === "Escape" && !$("#task-confirm").hidden) {
+    event.preventDefault();
+    closeRunConfirm();
+  }
 });
 $("#task-confirm").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -1174,7 +1244,7 @@ $("#lane-menu").addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("click", (event) => {
-  if (!$("#lane-menu").hidden && !/** @type {Element} */ (event.target).closest(".lane")) openLaneMenu(false);
+  if (!$("#lane-menu").hidden && !(/** @type {Element} */ (event.target).closest(".lane"))) openLaneMenu(false);
 });
 $("#input").addEventListener("input", paintSuggestion);
 $("#input").addEventListener("input", (event) => {
@@ -1183,8 +1253,14 @@ $("#input").addEventListener("input", (event) => {
   box.style.height = Math.min(box.scrollHeight, 220) + "px";
 });
 $("#attach").onclick = () => $("#file-input").click();
-$("#tc-cancel").onclick = (event) => { event.preventDefault(); closeRunConfirm(); };
-$("#tc-start").onclick = (event) => { event.preventDefault(); startTask(); };
+$("#tc-cancel").onclick = (event) => {
+  event.preventDefault();
+  closeRunConfirm();
+};
+$("#tc-start").onclick = (event) => {
+  event.preventDefault();
+  startTask();
+};
 $("#tc-test-edits").onchange = paintTestPolicy;
 $("#file-input").onchange = (event) => {
   const picker = /** @type {HTMLInputElement} */ (event.target);
@@ -1210,7 +1286,8 @@ $("#new-session").onclick = async (event) => {
     // the server fill its default. `saddle-dev work` still overrides it by
     // PATCHing the session's workdir after it creates the session.
     const session = await api("/api/sessions", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
     select(session.id);
@@ -1226,8 +1303,11 @@ async function loadPersonas() {
   state.personas = reply.personas;
   state.builtinPersonas = reply.builtin;
   state.editablePersonas = reply.editable;
-  for (const id of /** @type {("#persona" | "#default-persona" | "#persona-pick")[]} */ (
-    ["#persona", "#default-persona", "#persona-pick"])) {
+  for (const id of /** @type {("#persona" | "#default-persona" | "#persona-pick")[]} */ ([
+    "#persona",
+    "#default-persona",
+    "#persona-pick",
+  ])) {
     const picker = $(id);
     if (!picker) continue;
     const had = picker.value;
@@ -1276,7 +1356,8 @@ async function openSettings() {
 
 async function saveDefaults() {
   await api("/api/settings", {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       persona: $("#default-persona").value,
       reasoning_effort: $("#default-effort").value,
@@ -1294,7 +1375,10 @@ function drawer(open) {
   $("#scrim").hidden = !open;
 }
 watchScrolling();
-$("#jump").onclick = (event) => { event.preventDefault(); followBottom(); };
+$("#jump").onclick = (event) => {
+  event.preventDefault();
+  followBottom();
+};
 
 $("#menu").onclick = (event) => {
   event.preventDefault();
@@ -1302,7 +1386,10 @@ $("#menu").onclick = (event) => {
 };
 $("#scrim").onclick = () => drawer(false);
 
-$("#settings").onclick = (event) => { event.preventDefault(); openSettings(); };
+$("#settings").onclick = (event) => {
+  event.preventDefault();
+  openSettings();
+};
 $("#settings-close").onclick = (event) => {
   event.preventDefault();
   $("#settings-dialog").close();
@@ -1319,9 +1406,13 @@ $("#persona-new").onclick = (event) => {
 $("#persona-save").onclick = async (event) => {
   event.preventDefault();
   const name = $("#persona-name").value.trim();
-  if (!name) { $("#persona-note").textContent = "A persona needs a name."; return; }
+  if (!name) {
+    $("#persona-note").textContent = "A persona needs a name.";
+    return;
+  }
   const reply = await fetch(`/api/personas/${encodeURIComponent(name)}`, {
-    method: "PUT", headers: { "Content-Type": "application/json" },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt: $("#persona-prompt").value }),
   });
   if (!reply.ok) {
@@ -1345,14 +1436,16 @@ $("#persona-delete").onclick = async (event) => {
 };
 $("#title").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title: /** @type {HTMLInputElement} */ (event.target).value }),
   });
   loadSessions();
 };
 $("#effort").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reasoning_effort: /** @type {HTMLSelectElement} */ (event.target).value }),
   });
 };
@@ -1371,7 +1464,8 @@ $("#temp").oninput = (event) => {
 };
 $("#temp").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ temperature: Number(/** @type {HTMLInputElement} */ (event.target).value) }),
   });
 };
@@ -1382,18 +1476,29 @@ $("#default-temp").onchange = saveDefaults;
 
 $("#persona").onchange = async (event) => {
   await api(`/api/sessions/${state.sessionId}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ persona: /** @type {HTMLSelectElement} */ (event.target).value }),
   });
 };
-$("#pick-folder").onclick = (event) => { event.preventDefault(); openFolders(); };
-$("#folder-up").onclick = (event) => { event.preventDefault(); openFolders($("#folder-dialog").dataset.parent); };
-$("#folder-cancel").onclick = (event) => { event.preventDefault(); $("#folder-dialog").close(); };
+$("#pick-folder").onclick = (event) => {
+  event.preventDefault();
+  openFolders();
+};
+$("#folder-up").onclick = (event) => {
+  event.preventDefault();
+  openFolders($("#folder-dialog").dataset.parent);
+};
+$("#folder-cancel").onclick = (event) => {
+  event.preventDefault();
+  $("#folder-dialog").close();
+};
 $("#folder-use").onclick = async (event) => {
   event.preventDefault();
   const path = /** @type {string} */ ($("#folder-dialog").dataset.path);
   await api(`/api/sessions/${state.sessionId}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workdir: path }),
   });
   state.folder = path;
@@ -1405,11 +1510,18 @@ $("#folder-use").onclick = async (event) => {
 /* Theme: an explicit choice wins and persists; with none, follow the system
    setting (and its live changes). The CSS reads data-theme on <html>. */
 function storedTheme() {
-  try { return localStorage.getItem("saddle.theme"); } catch { return null; }
+  try {
+    return localStorage.getItem("saddle.theme");
+  } catch {
+    return null;
+  }
 }
 function systemTheme() {
-  try { return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
-  catch { return "dark"; }
+  try {
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  } catch {
+    return "dark";
+  }
 }
 /** @param {string | null} theme */
 function applyTheme(theme) {
@@ -1419,13 +1531,19 @@ function initTheme() {
   applyTheme(storedTheme() || systemTheme());
   try {
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (event) => {
-      if (!storedTheme()) applyTheme(event.matches ? "dark" : "light");  // only while unset
+      if (!storedTheme()) applyTheme(event.matches ? "dark" : "light"); // only while unset
     });
-  } catch { /* older browsers: no live follow, the initial read still holds */ }
+  } catch {
+    /* older browsers: no live follow, the initial read still holds */
+  }
 }
 $("#theme-toggle").onclick = () => {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  try { localStorage.setItem("saddle.theme", next); } catch { /* per-browser nicety only */ }
+  try {
+    localStorage.setItem("saddle.theme", next);
+  } catch {
+    /* per-browser nicety only */
+  }
   applyTheme(next);
 };
 initTheme();

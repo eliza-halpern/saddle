@@ -12,10 +12,19 @@ import { join } from "node:path";
 const [base, sid, option, tokensK, shots, prefix = "ask"] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-ask-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -45,11 +54,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -58,10 +73,23 @@ try {
   const key = async (k, modifiers = 0) => {
     const code = { Enter: 13, Escape: 27 }[k];
     const text = k === "Enter" ? "\r" : undefined;
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers, text });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      modifiers,
+      text,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      modifiers,
+    });
     await sleep(400);
   };
   const shot = async (name) => {
@@ -80,7 +108,10 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Page.navigate", { url: `${base}/` });
-  await until(`typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`, "the page");
+  await until(
+    `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`,
+    "the page",
+  );
   await js(`document.querySelector("#input").focus()`);
   await send("Input.insertText", { text: "f(None) should be 0" });
   await key("Enter");
@@ -97,7 +128,9 @@ try {
   await js(`document.querySelector(".task-ask").scrollIntoView({ block: "center" })`);
   await sleep(300);
   await shot(`${prefix}-1-question.png`);
-  const picked = await js(`(() => { const b = [...document.querySelectorAll(".task-ask .ask-option")].find((b) => b.textContent === ${JSON.stringify(option)}); if (!b) return false; b.click(); return true; })()`);
+  const picked = await js(
+    `(() => { const b = [...document.querySelectorAll(".task-ask .ask-option")].find((b) => b.textContent === ${JSON.stringify(option)}); if (!b) return false; b.click(); return true; })()`,
+  );
   if (!picked) throw new Error(`no option ${option}`);
   out.typed = await js(`document.querySelector(".task-ask .ask-input").value`);
   await js(`document.querySelector(".task-ask .ask-send").click()`);
@@ -116,6 +149,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

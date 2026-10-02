@@ -5,8 +5,13 @@
    after it sees the same names it sees in a page. */
 
 class TextNode {
-  constructor(text) { this.data = String(text); this.parent = null; }
-  get textContent() { return this.data; }
+  constructor(text) {
+    this.data = String(text);
+    this.parent = null;
+  }
+  get textContent() {
+    return this.data;
+  }
   // Escaped, like a real serializer: the renderer's safety property is that
   // model output lands in text nodes, and a shim that does not escape would
   // report that as safe no matter what the renderer did.
@@ -42,24 +47,50 @@ function live(collection) {
 }
 
 class HTMLCollection {
-  constructor(read) { this[READ] = read; return live(this); }
-  get length() { return this[READ]().length; }
-  item(index) { return this[READ]()[index] || null; }
+  constructor(read) {
+    this[READ] = read;
+    return live(this);
+  }
+  get length() {
+    return this[READ]().length;
+  }
+  item(index) {
+    return this[READ]()[index] || null;
+  }
   namedItem(name) {
     return this[READ]().find((n) => n.id === name || (n.attrs && n.attrs.name === name)) || null;
   }
-  [Symbol.iterator]() { return this[READ]()[Symbol.iterator](); }
+  [Symbol.iterator]() {
+    return this[READ]()[Symbol.iterator]();
+  }
 }
 
 class NodeList {
-  constructor(read) { this[READ] = read; return live(this); }
-  get length() { return this[READ]().length; }
-  item(index) { return this[READ]()[index] || null; }
-  forEach(callback, thisArg) { this[READ]().forEach((n, i) => callback.call(thisArg, n, i, this)); }
-  keys() { return this[READ]().keys(); }
-  values() { return this[READ]().values(); }
-  entries() { return this[READ]().entries(); }
-  [Symbol.iterator]() { return this[READ]().values(); }
+  constructor(read) {
+    this[READ] = read;
+    return live(this);
+  }
+  get length() {
+    return this[READ]().length;
+  }
+  item(index) {
+    return this[READ]()[index] || null;
+  }
+  forEach(callback, thisArg) {
+    this[READ]().forEach((n, i) => callback.call(thisArg, n, i, this));
+  }
+  keys() {
+    return this[READ]().keys();
+  }
+  values() {
+    return this[READ]().values();
+  }
+  entries() {
+    return this[READ]().entries();
+  }
+  [Symbol.iterator]() {
+    return this[READ]().values();
+  }
 }
 
 class Element {
@@ -71,27 +102,50 @@ class Element {
     this._cls = "";
     this.style = {};
   }
-  get childNodes() { return new NodeList(() => this._kids); }
+  get childNodes() {
+    return new NodeList(() => this._kids);
+  }
   get children() {
     return new HTMLCollection(() => this._kids.filter((n) => n instanceof Element));
   }
-  get firstChild() { return this._kids[0] || null; }
-  get firstElementChild() { return this.children.item(0); }
-  get lastElementChild() { return this.children.item(this.children.length - 1); }
-  set className(v) { this._cls = v || ""; }
-  get className() { return this._cls; }
+  get firstChild() {
+    return this._kids[0] || null;
+  }
+  get firstElementChild() {
+    return this.children.item(0);
+  }
+  get lastElementChild() {
+    return this.children.item(this.children.length - 1);
+  }
+  set className(v) {
+    this._cls = v || "";
+  }
+  get className() {
+    return this._cls;
+  }
   get classList() {
     const self = this;
     return {
       contains: (c) => self._cls.split(/\s+/).includes(c),
-      add: (c) => { if (!self.classList.contains(c)) self._cls = (self._cls + " " + c).trim(); },
-      remove: (c) => { self._cls = self._cls.split(/\s+/).filter((x) => x !== c).join(" "); },
+      add: (c) => {
+        if (!self.classList.contains(c)) self._cls = (self._cls + " " + c).trim();
+      },
+      remove: (c) => {
+        self._cls = self._cls
+          .split(/\s+/)
+          .filter((x) => x !== c)
+          .join(" ");
+      },
     };
   }
-  setAttribute(name, value) { (this.attrs ||= {})[name] = value; }
+  setAttribute(name, value) {
+    (this.attrs ||= {})[name] = value;
+  }
   // The legacy copy path hands a selected field to execCommand("copy");
   // the shim remembers the last selection the way the selection range does.
-  select() { global.document.__lastSelected = this; }
+  select() {
+    global.document.__lastSelected = this;
+  }
   remove() {
     if (this.parent) {
       const kids = this.parent._kids;
@@ -111,8 +165,12 @@ class Element {
     this._kids.push(node);
     return node;
   }
-  append(...nodes) { for (const n of nodes) this.appendChild(n); }
-  get textContent() { return this._kids.map((n) => n.textContent).join(""); }
+  append(...nodes) {
+    for (const n of nodes) this.appendChild(n);
+  }
+  get textContent() {
+    return this._kids.map((n) => n.textContent).join("");
+  }
   set textContent(v) {
     for (const kid of this._kids) kid.parent = null;
     this._kids = [];
@@ -152,14 +210,19 @@ global.document = {
    click, because the renderer reads it at click time, not load time. */
 function setNavigator(value) {
   Object.defineProperty(globalThis, "navigator", {
-    value, configurable: true, writable: true,
+    value,
+    configurable: true,
+    writable: true,
   });
 }
 
 function workingNavigator() {
   return {
     clipboard: {
-      writeText: (text) => { clipboard.writes.push(text); return Promise.resolve(); },
+      writeText: (text) => {
+        clipboard.writes.push(text);
+        return Promise.resolve();
+      },
     },
   };
 }
@@ -174,5 +237,12 @@ function resetClipboard() {
 }
 
 module.exports = {
-  TextNode, Element, HTMLCollection, NodeList, clipboard, setNavigator, workingNavigator, resetClipboard,
+  TextNode,
+  Element,
+  HTMLCollection,
+  NodeList,
+  clipboard,
+  setNavigator,
+  workingNavigator,
+  resetClipboard,
 };

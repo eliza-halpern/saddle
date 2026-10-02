@@ -57,13 +57,10 @@ test("a run's time is its wait, its duration, or its age so far", () => {
   assert.strictEqual(runMeta({ live: true, state: "needs_you", state_since: now - 125 }), "waiting 2m");
   assert.strictEqual(runMeta({ live: true, state: "needs_you" }), "waiting 0s");
   // Ended: start to end, not start to now.
-  assert.strictEqual(
-    runMeta({ live: false, state: "finished", started: now - 5000, ended: now - 4000 }), "16m");
-  assert.strictEqual(
-    runMeta({ live: false, state: "stopped", started: now - 100, state_since: now - 40 }), "1m");
+  assert.strictEqual(runMeta({ live: false, state: "finished", started: now - 5000, ended: now - 4000 }), "16m");
+  assert.strictEqual(runMeta({ live: false, state: "stopped", started: now - 100, state_since: now - 40 }), "1m");
   // Cut off: the same, ended-style.
-  assert.strictEqual(
-    runMeta({ live: false, state: "running", started: now - 100, ended: now - 70 }), "30s");
+  assert.strictEqual(runMeta({ live: false, state: "running", started: now - 100, ended: now - 70 }), "30s");
   // Still running: start to now.
   assert.strictEqual(runMeta({ live: true, state: "running", started: now - 3700 }), "1h 1m");
   // No timestamps at all: zero, never NaN.

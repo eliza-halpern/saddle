@@ -23,11 +23,22 @@ import { join } from "node:path";
 const [base, sid, outDir, extraCss = ""] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-snap-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  "--force-color-profile=srgb", "--font-render-hinting=none", "--disable-lcd-text",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    "--force-color-profile=srgb",
+    "--font-render-hinting=none",
+    "--disable-lcd-text",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const pageErrors = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
@@ -43,7 +54,9 @@ async function target() {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
       const page = list.find((t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
-    } catch { /* chrome is still starting */ }
+    } catch {
+      /* chrome is still starting */
+    }
     await sleep(200);
   }
   throw new Error("chrome did not start");
@@ -55,44 +68,68 @@ async function target() {
 // A selector is looked up inside the transcript, first match.
 const VIEWS = {
   chat: {
-    from: ".turn:nth-child(1)", to: ".turn:nth-child(2)",
+    from: ".turn:nth-child(1)",
+    to: ".turn:nth-child(2)",
     select: [
-      ["user", ".user"], ["heading", ".assistant h4"], ["paragraph", ".assistant p"],
-      ["strong", ".assistant strong"], ["inline-code", ".assistant p code"],
-      ["list", ".assistant ul"], ["list-item", ".assistant li"],
-      ["code-block", ".assistant pre"], ["code-text", ".assistant pre code"],
-      ["code-keyword", ".assistant pre .c-keyword"], ["copy", ".assistant pre .code-copy"],
+      ["user", ".user"],
+      ["heading", ".assistant h4"],
+      ["paragraph", ".assistant p"],
+      ["strong", ".assistant strong"],
+      ["inline-code", ".assistant p code"],
+      ["list", ".assistant ul"],
+      ["list-item", ".assistant li"],
+      ["code-block", ".assistant pre"],
+      ["code-text", ".assistant pre code"],
+      ["code-keyword", ".assistant pre .c-keyword"],
+      ["copy", ".assistant pre .code-copy"],
     ],
   },
   "tool-collapsed": {
-    from: "details.tool", to: "details.tool", closed: true,
+    from: "details.tool",
+    to: "details.tool",
+    closed: true,
     select: [
-      ["row", "details.tool"], ["summary", "details.tool > summary"],
-      ["dot", "details.tool .dot"], ["label", "details.tool .label"],
+      ["row", "details.tool"],
+      ["summary", "details.tool > summary"],
+      ["dot", "details.tool .dot"],
+      ["label", "details.tool .label"],
       ["copy", "details.tool > summary > .code-copy"],
     ],
   },
   "tool-expanded": {
-    from: "details.tool", to: "details.tool", closed: false,
+    from: "details.tool",
+    to: "details.tool",
+    closed: false,
     select: [
-      ["row", "details.tool"], ["summary", "details.tool > summary"],
-      ["dot", "details.tool .dot"], ["label", "details.tool .label"],
+      ["row", "details.tool"],
+      ["summary", "details.tool > summary"],
+      ["dot", "details.tool .dot"],
+      ["label", "details.tool .label"],
       ["copy", "details.tool > summary > .code-copy"],
       ["output", "details.tool .tool-detail"],
     ],
   },
   packet: {
-    from: ".packet", to: ".packet", closed: true,
+    from: ".packet",
+    to: ".packet",
+    closed: true,
     select: [
-      ["packet", ".packet"], ["kicker", ".packet .packet-kicker"], ["verdict", ".packet .verdict"],
-      ["verdict-word", ".packet .verdict-word"], ["actions", ".packet .actions"],
-      ["view-diff", ".packet .act-diff"], ["merge", ".packet .act-merge"],
-      ["discard", ".packet .act-discard"], ["ask", ".packet .act-chat"],
-      ["download", ".packet .act-download"], ["band", ".packet .band"],
+      ["packet", ".packet"],
+      ["kicker", ".packet .packet-kicker"],
+      ["verdict", ".packet .verdict"],
+      ["verdict-word", ".packet .verdict-word"],
+      ["actions", ".packet .actions"],
+      ["view-diff", ".packet .act-diff"],
+      ["merge", ".packet .act-merge"],
+      ["discard", ".packet .act-discard"],
+      ["ask", ".packet .act-chat"],
+      ["download", ".packet .act-download"],
+      ["band", ".packet .band"],
       ["tests-line", ".packet .band-line.k-tests"],
       ["mutation-line", ".packet .band-line.k-mutation"],
       ["not-proven-line", ".packet .band-line.k-not-proven"],
-      ["glyph", ".packet .band-glyph"], ["rows", ".packet .rows"],
+      ["glyph", ".packet .band-glyph"],
+      ["rows", ".packet .rows"],
       ["details", ".packet .packet-details"],
     ],
   },
@@ -107,29 +144,40 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
     if (msg.method === "Runtime.exceptionThrown") {
       const thrown = msg.params.exceptionDetails;
       pageErrors.push(thrown.exception?.description || thrown.text);
     }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
   const until = async (cond, ms = 8000) => {
-    for (let t = 0; t < ms; t += 100) { if (await js(cond).catch(() => false)) return true; await sleep(100); }
+    for (let t = 0; t < ms; t += 100) {
+      if (await js(cond).catch(() => false)) return true;
+      await sleep(100);
+    }
     throw new Error(`timed out waiting for ${cond}`);
   };
 
   const version = await send("Browser.getVersion");
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
     try { localStorage.setItem("saddle.session", ${JSON.stringify(sid)}); } catch { /* none */ }
-  ` });
+  `,
+  });
   await send("Emulation.setDeviceMetricsOverride", { ...VIEWPORT, deviceScaleFactor: 1, mobile: false });
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   await send("Page.enable");
@@ -137,12 +185,15 @@ try {
   await send("DOM.enable");
   await send("CSS.enable");
   await send("Page.navigate", { url: `${base}/` });
-  await until(`!!document.querySelector(".assistant pre .code-copy") && !!document.querySelector("details.tool") && !!document.querySelector(".packet .band")`);
+  await until(
+    `!!document.querySelector(".assistant pre .code-copy") && !!document.querySelector("details.tool") && !!document.querySelector(".packet .band")`,
+  );
 
   await js(`(() => {
     const style = document.createElement("style");
     style.textContent = ${JSON.stringify(
-      "*,*::before,*::after,::details-content{animation:none!important;transition:none!important;caret-color:transparent!important}\n" + extraCss,
+      "*,*::before,*::after,::details-content{animation:none!important;transition:none!important;caret-color:transparent!important}\n" +
+        extraCss,
     )};
     document.head.append(style);
     // A run's ids, its branch name and the ledger's head hash are random per
@@ -161,7 +212,9 @@ try {
     const found = await send("DOM.querySelector", { nodeId: doc.result.root.nodeId, selector });
     if (!found.result?.nodeId) return [];
     const r = await send("CSS.getPlatformFontsForNode", { nodeId: found.result.nodeId });
-    return (r.result?.fonts || []).map((f) => `${f.familyName}|${f.postScriptName}|${f.isCustomFont ? "web" : "system"}`);
+    return (r.result?.fonts || []).map(
+      (f) => `${f.familyName}|${f.postScriptName}|${f.isCustomFont ? "web" : "system"}`,
+    );
   };
 
   const out = {
@@ -213,16 +266,21 @@ try {
         return { clip: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, elements,
                  inViewport: y0 >= 0 && y1 <= innerHeight && x0 >= 0 && x1 <= innerWidth };
       })()`);
-      if (!measured.inViewport) throw new Error(`${theme}/${name} does not fit the ${VIEWPORT.width}x${VIEWPORT.height} viewport`);
+      if (!measured.inViewport)
+        throw new Error(`${theme}/${name} does not fit the ${VIEWPORT.width}x${VIEWPORT.height} viewport`);
       const fonts = new Set();
       for (const [, selector] of view.select) for (const f of await fontsOf(selector)) fonts.add(f);
       const shot = await send("Page.captureScreenshot", {
-        format: "png", captureBeyondViewport: false, clip: { ...measured.clip, scale: 1 },
+        format: "png",
+        captureBeyondViewport: false,
+        clip: { ...measured.clip, scale: 1 },
       });
       writeFileSync(join(outDir, `${theme}-${name}.png`), Buffer.from(shot.result.data, "base64"));
       out.views[`${theme}/${name}`] = {
-        width: measured.clip.width, height: measured.clip.height,
-        fonts: [...fonts].sort(), elements: measured.elements,
+        width: measured.clip.width,
+        height: measured.clip.height,
+        fonts: [...fonts].sort(),
+        elements: measured.elements,
       };
     }
   }

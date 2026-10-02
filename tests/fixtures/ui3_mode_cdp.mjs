@@ -11,10 +11,19 @@ import { join } from "node:path";
 const [base, sid, step, shots] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-ui3-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -44,11 +53,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -57,10 +72,23 @@ try {
   const key = async (k, modifiers = 0) => {
     const code = { Enter: 13, Escape: 27 }[k];
     const text = k === "Enter" ? "\r" : undefined;
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers, text });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      modifiers,
+      text,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      modifiers,
+    });
     await sleep(400);
   };
   const type = async (text) => {
@@ -73,7 +101,8 @@ try {
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, name), Buffer.from(s.result.data, "base64"));
   };
-  const look = () => js(`(() => ({
+  const look = () =>
+    js(`(() => ({
     stripVisible: !document.querySelector("#task-confirm").hidden,
     focus: document.activeElement && document.activeElement.id,
     desc: document.querySelector("#mode-desc").textContent.trim(),
@@ -87,7 +116,9 @@ try {
     await send("Page.navigate", { url: `${base}/` });
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      const ready = await js(`typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`).catch(() => false);
+      const ready = await js(
+        `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`,
+      ).catch(() => false);
       if (ready) break;
     }
     await sleep(300);
@@ -127,7 +158,9 @@ try {
     await shot("1-chat-mode.png");
     await key("Enter");
     out.afterEnter = await look();
-    await js(`document.querySelector("#lane-chip").click(); document.querySelector('#lane-menu li[data-lane="task"]').click()`);
+    await js(
+      `document.querySelector("#lane-chip").click(); document.querySelector('#lane-menu li[data-lane="task"]').click()`,
+    );
     await sleep(500);
     out.afterSwitch = await look();
     await load();
@@ -141,6 +174,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

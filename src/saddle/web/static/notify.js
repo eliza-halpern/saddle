@@ -20,12 +20,12 @@
 
 /** @type {Record<string, RunLook>} */
 const RUN_LOOK = {
-  running:   { glyph: "●", word: "running",    color: "#7fb6e6" },
-  needs_you: { glyph: "?", word: "needs you",  color: "#ff9d4d" },
-  finished:  { glyph: "✓", word: "finished",   color: "#5fcf86" },
-  stopped:   { glyph: "■", word: "stopped",    color: "#e8697a" },
-  asked:     { glyph: "?", word: "needs you",  color: "#ff9d4d" },
-  failed:    { glyph: "!", word: "no outcome", color: "#e8697a" },
+  running: { glyph: "●", word: "running", color: "#7fb6e6" },
+  needs_you: { glyph: "?", word: "needs you", color: "#ff9d4d" },
+  finished: { glyph: "✓", word: "finished", color: "#5fcf86" },
+  stopped: { glyph: "■", word: "stopped", color: "#e8697a" },
+  asked: { glyph: "?", word: "needs you", color: "#ff9d4d" },
+  failed: { glyph: "!", word: "no outcome", color: "#e8697a" },
 };
 const RUN_LIVE = new Set(["running", "needs_you"]);
 const RUN_ENDED = new Set(["finished", "stopped", "unchanged", "asked", "failed"]);
@@ -41,10 +41,10 @@ const NOTIFY_KEY = "saddle.notify";
 
 /** @type {RunWatch} */
 const runWatch = {
-  seen: new Map(),      // session id -> the last run state this page saw
-  names: new Map(),     // session id -> title
-  tasks: new Map(),     // session id -> the latest run's task
-  current: null,        // { state, task } shown in the tab, or null when idle
+  seen: new Map(), // session id -> the last run state this page saw
+  names: new Map(), // session id -> title
+  tasks: new Map(), // session id -> the latest run's task
+  current: null, // { state, task } shown in the tab, or null when idle
 };
 
 /* A dot with a dark ring on a light halo, so it reads on a dark tab strip
@@ -128,7 +128,11 @@ function announce(text) {
 }
 
 function notifyPref() {
-  try { return localStorage.getItem(NOTIFY_KEY) === "on"; } catch { return false; }
+  try {
+    return localStorage.getItem(NOTIFY_KEY) === "on";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -141,8 +145,10 @@ function maybeNotify(sid, kind, task) {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
   if (!notifyPref()) return;
   const look = RUN_LOOK[kind];
-  const note = new Notification(`${look.glyph} ${look.word} · ${sessionName(sid)}`,
-                                { body: task || "", tag: `saddle-${sid}` });
+  const note = new Notification(`${look.glyph} ${look.word} · ${sessionName(sid)}`, {
+    body: task || "",
+    tag: `saddle-${sid}`,
+  });
   note.onclick = () => {
     window.focus();
     if (sid !== state.sessionId) select(sid);
@@ -212,12 +218,12 @@ function paintNotifyControl() {
   }
   const on = Notification.permission === "granted" && notifyPref();
   button.setAttribute("aria-pressed", String(on));
-  button.textContent = Notification.permission === "denied"
-    ? "Notifications blocked"
-    : on ? "Notifying when hidden" : "Notify me";
-  button.title = Notification.permission === "denied"
-    ? "The browser blocks notifications for this page; allow them in its site settings."
-    : "Notify when a run needs you or ends while this tab is in the background.";
+  button.textContent =
+    Notification.permission === "denied" ? "Notifications blocked" : on ? "Notifying when hidden" : "Notify me";
+  button.title =
+    Notification.permission === "denied"
+      ? "The browser blocks notifications for this page; allow them in its site settings."
+      : "Notify when a run needs you or ends while this tab is in the background.";
 }
 
 async function toggleNotify() {
@@ -227,7 +233,9 @@ async function toggleNotify() {
   if (permission === "default") permission = await Notification.requestPermission();
   try {
     localStorage.setItem(NOTIFY_KEY, permission === "granted" && !wasOn ? "on" : "off");
-  } catch { /* storage refused: nothing is remembered, and nothing fires */ }
+  } catch {
+    /* storage refused: nothing is remembered, and nothing fires */
+  }
   paintNotifyControl();
 }
 

@@ -11,10 +11,19 @@ import { join } from "node:path";
 const [base, sid, step, other, shots] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-runs-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -44,11 +53,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -63,7 +78,9 @@ try {
     await send("Page.navigate", { url: `${base}/` });
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      const ready = await js(`typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`).catch(() => false);
+      const ready = await js(
+        `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`,
+      ).catch(() => false);
       if (ready) break;
     }
     await sleep(300);
@@ -79,18 +96,24 @@ try {
     })()`);
   };
 
-
-
   const until = async (cond, ms = 8000) => {
-    for (let t = 0; t < ms; t += 100) { if (await js(cond)) return true; await sleep(100); }
+    for (let t = 0; t < ms; t += 100) {
+      if (await js(cond)) return true;
+      await sleep(100);
+    }
     return false;
   };
-  const start = (s, text) => js(`fetch("/api/sessions/${s}/task", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: ${JSON.stringify(text)}})}).then((r) => r.json()).then((j) => j.run_id)`);
+  const start = (s, text) =>
+    js(
+      `fetch("/api/sessions/${s}/task", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: ${JSON.stringify(text)}})}).then((r) => r.json()).then((j) => j.run_id)`,
+    );
   const listed = () => js(`[...document.querySelectorAll("#session-list .session")].map((r) => r.dataset.sid)`);
 
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
     try { localStorage.setItem("saddle.session", ${JSON.stringify(sid)}); } catch {}
-  ` });
+  `,
+  });
   await send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 2, mobile: false });
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
   await send("Page.enable");
@@ -101,7 +124,9 @@ try {
     await start(other, "ask which schema the loader should use for v2 files");
     await sleep(300);
     await start(sid, "fix the parser");
-    await until(`document.querySelectorAll("#run-list .run-row").length === 2 && !!document.querySelector('#run-list .run-row[data-state="needs_you"]')`);
+    await until(
+      `document.querySelectorAll("#run-list .run-row").length === 2 && !!document.querySelector('#run-list .run-row[data-state="needs_you"]')`,
+    );
     await sleep(1200);
     out.active = await js(`state.sessionId`);
     out.rows = await js(`[...document.querySelectorAll("#run-list .run-row")].map((r) => ({
@@ -111,7 +136,9 @@ try {
     await shot("sidebar-runs-dark.png");
     await js(`document.querySelector('#run-list .run-row[data-sid="${other}"]').click()`);
     await until(`state.sessionId === ${JSON.stringify(other)} && !!document.querySelector(".task-card.flash")`);
-    out.jumped = await js(`({ active: state.sessionId, card: !!document.querySelector('.task-card[data-state="needs_you"]') })`);
+    out.jumped = await js(
+      `({ active: state.sessionId, card: !!document.querySelector('.task-card[data-state="needs_you"]') })`,
+    );
     await shot("runs-jump-dark.png");
   } else if (step === "phase") {
     await start(sid, "fix the parser");
@@ -144,6 +171,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

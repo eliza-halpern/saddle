@@ -17,10 +17,19 @@ const [base, sid, widthArg, scheme, shots, prefix = ""] = process.argv.slice(2);
 const W = Number(widthArg) || 1280;
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-card-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -50,11 +59,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -69,7 +84,9 @@ try {
   };
   const shot = async (name) => {
     if (!shots) return;
-    await js(`(() => { const c = document.querySelector(".task-card"); if (c) c.scrollIntoView({ block: "start" }); })()`);
+    await js(
+      `(() => { const c = document.querySelector(".task-card"); if (c) c.scrollIntoView({ block: "start" }); })()`,
+    );
     await sleep(250);
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, `${prefix}${name}`), Buffer.from(s.result.data, "base64"));
@@ -80,7 +97,8 @@ try {
   };
   // What the card shows, read from the DOM, plus the elapsed seconds its
   // meter is drawing (the card's own numbers, not the server's).
-  const card = () => js(`(() => {
+  const card = () =>
+    js(`(() => {
     const n = document.querySelector(".task-card");
     if (!n) return null;
     const c = tasks.get(n.dataset.run);
@@ -111,7 +129,12 @@ try {
     };
   })()`);
 
-  await send("Emulation.setDeviceMetricsOverride", { width: W, height: W < 700 ? 812 : 900, deviceScaleFactor: 1, mobile: W < 700 });
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: W,
+    height: W < 700 ? 812 : 900,
+    deviceScaleFactor: 1,
+    mobile: W < 700,
+  });
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: scheme || "dark" }] });
   await send("Page.enable");
   await send("Runtime.enable");
@@ -125,8 +148,14 @@ try {
   await js(`(() => { window.__posts = 0; const f = window.fetch; window.fetch = (u, o) => {
     if (o && o.method && o.method !== "GET") window.__posts += 1; return f(u, o); }; })()`);
   await js(`launchTask("make add add", 1800, 100000, true)`);
-  const posts = await (async () => { await until(`!!document.querySelector(".task-card")`, "the card"); return js(`window.__posts`); })();
-  await until(`(() => { const n = document.querySelector(".task-card"); return n && tasks.get(n.dataset.run).activity.chars > 200; })()`, "a streaming reply");
+  const posts = await (async () => {
+    await until(`!!document.querySelector(".task-card")`, "the card");
+    return js(`window.__posts`);
+  })();
+  await until(
+    `(() => { const n = document.querySelector(".task-card"); return n && tasks.get(n.dataset.run).activity.chars > 200; })()`,
+    "a streaming reply",
+  );
   out.streaming = [await card()];
   await sleep(1500);
   out.streaming.push(await card());
@@ -150,7 +179,11 @@ try {
   out.afterReload = await card();
   await shot("reloaded.png");
   // The first tool call ends the reply the reloaded page joined part-way.
-  await until(`/Read calc.py/.test(document.querySelectorAll(".task-card .act-facts dd")[2].textContent)`, "the first tool call", 150);
+  await until(
+    `/Read calc.py/.test(document.querySelectorAll(".task-card .act-facts dd")[2].textContent)`,
+    "the first tool call",
+    150,
+  );
   await until(`tasks.get(document.querySelector(".task-card").dataset.run).activity.chars > 0`, "the next reply");
   await sleep(400);
   out.afterTool = await card();
@@ -161,14 +194,19 @@ try {
   out.stopped = await card();
   await shot("stopped.png");
   await load();
-  await until(`!!document.querySelector(".task-card .packet .verdict") && document.querySelector(".task-card").dataset.state !== "loading"`, "the recap card");
+  await until(
+    `!!document.querySelector(".task-card .packet .verdict") && document.querySelector(".task-card").dataset.state !== "loading"`,
+    "the recap card",
+  );
   await sleep(600);
   out.recap = await card();
-  out.cost = await js(`[...document.querySelectorAll(".task-card .prow.k-cost .prow-text")].map((p) => p.textContent)[0] || ""`);
+  out.cost = await js(
+    `[...document.querySelectorAll(".task-card .prow.k-cost .prow-text")].map((p) => p.textContent)[0] || ""`,
+  );
   await shot("stopped-reloaded.png");
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

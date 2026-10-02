@@ -12,10 +12,19 @@ import { join } from "node:path";
 const [base, sid, step, other, perm, shots] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-notify-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -45,11 +54,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -64,7 +79,9 @@ try {
     await send("Page.navigate", { url: `${base}/` });
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      const ready = await js(`typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`).catch(() => false);
+      const ready = await js(
+        `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#mode-chip") && document.querySelector("#mode-chip").textContent !== ""`,
+      ).catch(() => false);
       if (ready) break;
     }
     await sleep(300);
@@ -80,8 +97,8 @@ try {
     })()`);
   };
 
-
-  const look = () => js(`(() => ({
+  const look = () =>
+    js(`(() => ({
     title: document.title,
     icon: (document.querySelector("link[rel='icon']") || {}).href || "",
     live: document.querySelector("#run-live").textContent,
@@ -92,16 +109,29 @@ try {
     control: document.querySelector("#notify-toggle").textContent,
   }))()`);
   const until = async (cond, ms = 8000) => {
-    for (let t = 0; t < ms; t += 100) { if (await js(cond)) return true; await sleep(100); }
+    for (let t = 0; t < ms; t += 100) {
+      if (await js(cond)) return true;
+      await sleep(100);
+    }
     return false;
   };
-  const setVis = async (v) => { await js(`window.__vis = ${JSON.stringify(v)}; document.dispatchEvent(new Event("visibilitychange"))`); await sleep(150); };
-  const answer = (s) => js(`fetch("/api/tasks/" + window.__lastRun["${s}"] + "/answer", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: "yes"})}).then((r) => r.status)`);
-  const start = (s, text) => js(`fetch("/api/sessions/${s}/task", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: ${JSON.stringify(text)}})}).then((r) => r.json()).then((j) => { (window.__lastRun = window.__lastRun || {})["${s}"] = j.run_id; return j.run_id; })`);
+  const setVis = async (v) => {
+    await js(`window.__vis = ${JSON.stringify(v)}; document.dispatchEvent(new Event("visibilitychange"))`);
+    await sleep(150);
+  };
+  const answer = (s) =>
+    js(
+      `fetch("/api/tasks/" + window.__lastRun["${s}"] + "/answer", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: "yes"})}).then((r) => r.status)`,
+    );
+  const start = (s, text) =>
+    js(
+      `fetch("/api/sessions/${s}/task", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: ${JSON.stringify(text)}})}).then((r) => r.json()).then((j) => { (window.__lastRun = window.__lastRun || {})["${s}"] = j.run_id; return j.run_id; })`,
+    );
 
   // Stubs installed before any page script: a controllable visibilityState
   // and a Notification that records instead of showing.
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
     window.__vis = "visible"; window.__notes = []; window.__requests = 0;
     // "control" starts undecided and the prompt answers with <perm>.
     window.__perm = ${JSON.stringify(step === "control" ? "default" : perm)};
@@ -111,7 +141,8 @@ try {
       static requestPermission() { window.__requests += 1; window.__perm = ${JSON.stringify(perm)}; return Promise.resolve(window.__perm); } };
     try { localStorage.setItem("saddle.session", ${JSON.stringify(sid)}); } catch {}
     try { localStorage.setItem("saddle.notify", ${JSON.stringify(step === "control" ? "off" : "on")}); } catch {}
-  ` });
+  `,
+  });
   await send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 2, mobile: false });
   await send("Page.enable");
   await send("Runtime.enable");
@@ -133,7 +164,9 @@ try {
   } else if (step === "other") {
     await setVis("hidden");
     await start(other, "ask about the schema");
-    await until(`(document.querySelector('.session[data-sid="${other}"] .run-dot') || {dataset: {}}).dataset.state === "needs_you"`);
+    await until(
+      `(document.querySelector('.session[data-sid="${other}"] .run-dot') || {dataset: {}}).dataset.state === "needs_you"`,
+    );
     out.otherNeeds = await look();
     await setVis("visible");
     await start(sid, "tidy the imports");
@@ -167,6 +200,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

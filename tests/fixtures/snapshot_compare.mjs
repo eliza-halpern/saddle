@@ -19,16 +19,19 @@ const reference = PNG.sync.read(readFileSync(referencePath));
 const actual = PNG.sync.read(readFileSync(actualPath));
 
 if (reference.width !== actual.width || reference.height !== actual.height) {
-  console.log(JSON.stringify({
-    error: "size",
-    reference: [reference.width, reference.height],
-    actual: [actual.width, actual.height],
-  }));
+  console.log(
+    JSON.stringify({
+      error: "size",
+      reference: [reference.width, reference.height],
+      actual: [actual.width, actual.height],
+    }),
+  );
 } else {
   const { width, height } = reference;
   const diff = new PNG({ width, height });
   const differing = pixelmatch(reference.data, actual.data, diff.data, width, height, {
-    threshold: Number(threshold), includeAA: true,
+    threshold: Number(threshold),
+    includeAA: true,
   });
   if (differing > 0) writeFileSync(diffPath, PNG.sync.write(diff));
   console.log(JSON.stringify({ width, height, differing }));

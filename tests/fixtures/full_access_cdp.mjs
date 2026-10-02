@@ -12,10 +12,19 @@ import { join } from "node:path";
 const [base, sid, shots] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-fa-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -45,11 +54,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -58,15 +73,27 @@ try {
   const key = async (k) => {
     const code = { Enter: 13, Escape: 27 }[k];
     const text = k === "Enter" ? "\r" : undefined;
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, text });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k,
-      windowsVirtualKeyCode: code, nativeVirtualKeyCode: code });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+      text,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: k,
+      code: k,
+      windowsVirtualKeyCode: code,
+      nativeVirtualKeyCode: code,
+    });
     await sleep(400);
   };
   // A real mouse click at the element's centre, as a person would make it.
   const click = async (selector) => {
-    const box = await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    const box =
+      await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
     for (const type of ["mousePressed", "mouseReleased"]) {
       await send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: "left", clickCount: 1 });
@@ -78,7 +105,8 @@ try {
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, name), Buffer.from(s.result.data, "base64"));
   };
-  const look = () => js(`(() => ({
+  const look = () =>
+    js(`(() => ({
     dialogOpen: document.querySelector("#full-access-dialog").open,
     focus: document.activeElement && document.activeElement.id,
     banner: !document.querySelector("#full-access-banner").hidden,
@@ -91,7 +119,9 @@ try {
     await send("Page.navigate", { url: `${base}/` });
     for (let i = 0; i < 50; i++) {
       await sleep(200);
-      const ready = await js(`typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent !== ""`).catch(() => false);
+      const ready = await js(
+        `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent !== ""`,
+      ).catch(() => false);
       if (ready) break;
     }
     await sleep(400);
@@ -115,13 +145,13 @@ try {
   await click("#full-access-open");
   out.opened = await look();
   await shot("1-dialog.png");
-  await key("Enter");                      // the default answer
+  await key("Enter"); // the default answer
   out.afterEnter = await look();
   await click("#full-access-open");
-  await key("Escape");                     // closing it is No too
+  await key("Escape"); // closing it is No too
   out.afterEscape = await look();
   await click("#full-access-open");
-  await click("#fa-grant");                // the only yes
+  await click("#fa-grant"); // the only yes
   out.afterGrant = await look();
   await load();
   out.afterReload = await look();
@@ -131,18 +161,19 @@ try {
   await click("#full-access-open");
   await click("#fa-grant");
   out.afterRegrant = await look();
-  const lane = async (name) => {         // the lane menu, clicked as a person would
+  const lane = async (name) => {
+    // the lane menu, clicked as a person would
     await click("#lane-chip");
     await click(`#lane-menu li[data-lane="${name}"]`);
   };
-  await lane("ask");                       // leaving Edit ends it
+  await lane("ask"); // leaving Edit ends it
   out.afterAsk = await look();
   await shot("3-left-edit.png");
-  await lane("edit");                      // and coming back does not restore it
+  await lane("edit"); // and coming back does not restore it
   out.afterBack = await look();
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

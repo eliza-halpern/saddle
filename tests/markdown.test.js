@@ -15,16 +15,18 @@ const path = require("node:path");
 
 /* The fake DOM, the clipboard recorder and the navigator switch live in the
    shared shim; requiring it installs the global `document` and `navigator`. */
-const {
-  clipboard, setNavigator, resetClipboard,
-} = require("./fixtures/dom_shim.js");
+const { clipboard, setNavigator, resetClipboard } = require("./fixtures/dom_shim.js");
 
 const md = require(path.join(__dirname, "..", "src", "saddle", "web", "static", "markdown.js"));
 const { el, renderMarkdown, splitStable, paintStream } = md;
 
 /* ---------- helpers ---------- */
 
-const oneShot = (raw) => { const n = el("div"); renderMarkdown(n, raw); return n.html; };
+const oneShot = (raw) => {
+  const n = el("div");
+  renderMarkdown(n, raw);
+  return n.html;
+};
 
 function streamed(raw, chunk = 7) {
   const node = el("div");
@@ -49,7 +51,7 @@ const SAMPLES = {
   "heading and inline marks": "### Title\n\nBody **bold**, *italic* and `code`.\n\n> quote\n\nEnd.",
   "no blank lines at all": "A single line with no breaks at all and some `inline`.",
   "unterminated fence": "Text.\n\n```js\nconst x = 1;\n",
-  "link": "See [docs](https://example.test/y) please.\n\nNext.",
+  link: "See [docs](https://example.test/y) please.\n\nNext.",
   "trailing blank lines": "Body.\n\n\n\n",
   "fence immediately after prose": "Prose.\n```\ncode\n```\nTail.",
 };
@@ -134,14 +136,12 @@ for (const [name, href] of [
     const node = el("div");
     renderMarkdown(node, `try [here](${href}) please`);
     const para = node.children[0];
-    assert.strictEqual(Array.from(para.children).filter((c) => c.tagName === "A").length, 0,
-                       `${href} became a link`);
+    assert.strictEqual(Array.from(para.children).filter((c) => c.tagName === "A").length, 0, `${href} became a link`);
     // ...and it is still legible: the label and the target both survive.
     assert.ok(para.textContent.includes("here"), para.textContent);
     assert.ok(para.textContent.includes(href), para.textContent);
   });
 }
-
 
 /* ---------- tool output ---------- */
 
@@ -158,14 +158,15 @@ test("a unified diff is recognised, other output is not", () => {
 
 test("added lines are marked added and removed lines removed", () => {
   const node = el("div");
-  renderDiff(node,
+  renderDiff(
+    node,
     "--- a/frog.svg\n+++ b/frog.svg\n@@ -39,5 +39,5 @@\n" +
-    " <!-- Blushing cheeks -->\n" +
-    '-  <ellipse rx="10" fill="#F48FB1"/>\n' +
-    '+  <ellipse rx="13" fill="#F06292"/>');
+      " <!-- Blushing cheeks -->\n" +
+      '-  <ellipse rx="10" fill="#F48FB1"/>\n' +
+      '+  <ellipse rx="13" fill="#F06292"/>',
+  );
   const classes = Array.from(node.children).map((c) => c.className);
-  assert.deepStrictEqual(classes,
-    ["d-file", "d-file", "d-hunk", "d-ctx", "d-del", "d-add"]);
+  assert.deepStrictEqual(classes, ["d-file", "d-file", "d-hunk", "d-ctx", "d-del", "d-add"]);
   // The +++ header must not be mistaken for an added line, nor --- for a
   // removed one: they are three characters of the same prefix.
   assert.strictEqual(node.children[1].textContent, "+++ b/frog.svg");
@@ -183,8 +184,10 @@ test("the live row and a reloaded row fill identically", () => {
   // They had separate code and disagreed: the live one coloured a diff and
   // the stored one printed it flat, so a diff lost its colours on reload.
   const diff = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new";
-  const liveRow = el("div"), liveDetail = el("div");
-  const pastRow = el("div"), pastDetail = el("div");
+  const liveRow = el("div"),
+    liveDetail = el("div");
+  const pastRow = el("div"),
+    pastDetail = el("div");
   fillToolDetail(liveRow, liveDetail, diff);
   fillToolDetail(pastRow, pastDetail, diff);
 
@@ -195,18 +198,19 @@ test("the live row and a reloaded row fill identically", () => {
 });
 
 test("output that is not a diff is left alone", () => {
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   fillToolDetail(row, detail, "created 'frog.svg' (1692 bytes)");
   assert.strictEqual(detail.textContent, "created 'frog.svg' (1692 bytes)");
   assert.ok(!row.classList.contains("has-diff"));
 });
 
 test("an empty result says so rather than showing nothing", () => {
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   fillToolDetail(row, detail, "");
   assert.strictEqual(detail.textContent, "(no output)");
 });
-
 
 /* ---------- syntax highlighting ---------- */
 
@@ -232,10 +236,8 @@ test("python gets its comments, strings, keywords and numbers", () => {
 test("a keyword inside a string stays a string", () => {
   // Order inside a grammar is the whole trick: strings and comments are
   // matched before keywords, or every quoted word gets recoloured.
-  assert.deepStrictEqual(tokens('x = "return if for"', "python"),
-                         [["c-string", '"return if for"']]);
-  assert.deepStrictEqual(tokens('# return if for', "python"),
-                         [["c-comment", "# return if for"]]);
+  assert.deepStrictEqual(tokens('x = "return if for"', "python"), [["c-string", '"return if for"']]);
+  assert.deepStrictEqual(tokens("# return if for", "python"), [["c-comment", "# return if for"]]);
 });
 
 test("a triple-quoted docstring is one string, not three", () => {
@@ -265,11 +267,21 @@ test("json tells a key from a string value", () => {
 
 test("the aliases people actually type all resolve", () => {
   for (const [alias, real] of [
-    ["py", "python"], ["js", "javascript"], ["ts", "javascript"],
-    ["tsx", "javascript"], ["sh", "bash"], ["zsh", "bash"],
-    ["svg", "xml"], ["html", "xml"], ["yml", "yaml"],
-    ["cpp", "c"], ["rs", "rust"], ["golang", "go"], ["patch", "diff"],
-    ["scss", "css"], ["psql", "sql"],
+    ["py", "python"],
+    ["js", "javascript"],
+    ["ts", "javascript"],
+    ["tsx", "javascript"],
+    ["sh", "bash"],
+    ["zsh", "bash"],
+    ["svg", "xml"],
+    ["html", "xml"],
+    ["yml", "yaml"],
+    ["cpp", "c"],
+    ["rs", "rust"],
+    ["golang", "go"],
+    ["patch", "diff"],
+    ["scss", "css"],
+    ["psql", "sql"],
   ]) {
     assert.ok(grammarFor(alias), `${alias} has no grammar`);
     assert.strictEqual(grammarFor(alias), grammarFor(real), alias);
@@ -296,15 +308,15 @@ test("highlighting never loses a character", () => {
   // Tokens are spans and the gaps between them are text nodes; if the two
   // do not tile the input, code silently goes missing.
   const samples = [
-    ['def f(x):\n    return x  # done', "python"],
+    ["def f(x):\n    return x  # done", "python"],
     ['<svg><rect fill="#fff"/></svg>', "svg"],
     ['{"a": [1, 2, null], "b": true}', "json"],
     ['for f in *.py; do echo "$f"; done', "bash"],
-    ['const x = `a ${b} c`; // note', "js"],
-    ['SELECT * FROM t WHERE a = 1', "sql"],
+    ["const x = `a ${b} c`; // note", "js"],
+    ["SELECT * FROM t WHERE a = 1", "sql"],
     ['fn main() { println!("hi"); }', "rust"],
-    ['body { color: #fff; margin: 0 }', "css"],
-    ['key: value  # comment', "yaml"],
+    ["body { color: #fff; margin: 0 }", "css"],
+    ["key: value  # comment", "yaml"],
   ];
   for (const [code, language] of samples) {
     const node = el("code");
@@ -322,7 +334,6 @@ test("highlighted code is still built from text nodes, never markup", () => {
   assert.ok(node.html.includes("&lt;img"));
   assert.strictEqual(node.textContent, 'x = "<img src=x onerror=alert(1)>"');
 });
-
 
 /* ---------- transcript ordering ---------- */
 
@@ -349,7 +360,7 @@ test("a turn's blocks are released when a tool starts", () => {
     state.assistantNode.appendChild(document.createTextNode(text));
   };
   const callTool = (name) => {
-    state.assistantNode = null;          // the fix
+    state.assistantNode = null; // the fix
     state.reasoningNode = null;
     transcript.appendChild(el("div", "tool", name));
   };
@@ -368,7 +379,8 @@ test("a turn's blocks are released when a tool starts", () => {
       ["assistant", "now I will change it"],
       ["tool", "Edited a.py"],
       ["assistant", "done"],
-    ]);
+    ],
+  );
 });
 
 test("without releasing the cache the text jumps above the tools", () => {
@@ -390,10 +402,11 @@ test("without releasing the cache the text jumps above the tools", () => {
 
   // Both sentences are in one block, and that block is before the tool.
   assert.deepStrictEqual(
-    Array.from(transcript.children).map((c) => c.className), ["assistant", "tool"]);
+    Array.from(transcript.children).map((c) => c.className),
+    ["assistant", "tool"],
+  );
   assert.strictEqual(transcript.children[0].textContent, "first and second");
 });
-
 
 /* ---------- a newly written file ---------- */
 
@@ -402,9 +415,9 @@ const { languageForPath, CREATED } = md;
 test("a created file is shown as the file, highlighted", () => {
   // "created 'x.py' (42 bytes)" says nothing about what was written, and a
   // new file is the one case with no diff to read instead.
-  const row = el("div"), detail = el("div");
-  fillToolDetail(row, detail,
-    "created 'greet.py' (46 bytes)\ndef greet(name):\n    return \"hi\"");
+  const row = el("div"),
+    detail = el("div");
+  fillToolDetail(row, detail, "created 'greet.py' (46 bytes)\ndef greet(name):\n    return \"hi\"");
 
   assert.ok(row.classList.contains("has-diff"));
   const head = detail.children[0];
@@ -415,17 +428,26 @@ test("a created file is shown as the file, highlighted", () => {
   assert.strictEqual(body.tagName, "CODE");
   const parts = Array.from(body.children).map((c) => [c.className, c.textContent]);
   assert.deepStrictEqual(parts, [
-    ["c-keyword", "def"], ["c-keyword", "return"], ["c-string", '"hi"'],
+    ["c-keyword", "def"],
+    ["c-keyword", "return"],
+    ["c-string", '"hi"'],
   ]);
   assert.strictEqual(body.textContent, 'def greet(name):\n    return "hi"');
 });
 
 test("the language comes from the file's own extension", () => {
   for (const [name, language] of [
-    ["a.py", "python"], ["a.svg", "xml"], ["index.html", "xml"],
-    ["app.tsx", "javascript"], ["Cargo.toml", "toml"], ["q.sql", "sql"],
-    ["run.sh", "bash"], ["a.rs", "rust"], ["main.go", "go"],
-    ["styles.scss", "css"], ["deep/nested/file.json", "json"],
+    ["a.py", "python"],
+    ["a.svg", "xml"],
+    ["index.html", "xml"],
+    ["app.tsx", "javascript"],
+    ["Cargo.toml", "toml"],
+    ["q.sql", "sql"],
+    ["run.sh", "bash"],
+    ["a.rs", "rust"],
+    ["main.go", "go"],
+    ["styles.scss", "css"],
+    ["deep/nested/file.json", "json"],
   ]) {
     assert.strictEqual(languageForPath(name), language, name);
   }
@@ -436,14 +458,16 @@ test("the language comes from the file's own extension", () => {
 });
 
 test("a created file with no recognised extension is still readable", () => {
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   fillToolDetail(row, detail, "created 'notes.txt' (5 bytes)\nhello");
   assert.strictEqual(detail.children[1].textContent, "hello");
-  assert.strictEqual(detail.children[1].children.length, 0);   // uncoloured
+  assert.strictEqual(detail.children[1].children.length, 0); // uncoloured
 });
 
 test("an empty new file says so without pretending to show content", () => {
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   fillToolDetail(row, detail, "created 'empty.py' (0 bytes)\n");
   assert.strictEqual(detail.children[0].textContent, "created empty.py (0 bytes)");
   assert.strictEqual(detail.children[1].textContent, "");
@@ -453,9 +477,9 @@ test("only the exact created shape is treated as a file body", () => {
   // Anything else -- a command's output, an error, a message that merely
   // mentions the word -- must not be parsed as a file.
   for (const text of [
-    "created 'x.py' (42 bytes)",                 // header with no body
-    "I created 'x.py' (42 bytes)\nstuff",        // not at the start
-    "created x.py (42 bytes)\nstuff",            // unquoted
+    "created 'x.py' (42 bytes)", // header with no body
+    "I created 'x.py' (42 bytes)\nstuff", // not at the start
+    "created x.py (42 bytes)\nstuff", // unquoted
     "error: cannot write 'x.py'",
     "x.py unchanged",
   ]) {
@@ -514,7 +538,8 @@ test("a diff row's button copies the diff verbatim, blank line intact", async ()
   // The renderer pads a blank line to a space for equal row heights; the
   // copy must carry the tool's text, not the renderer's padding.
   resetClipboard();
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   const diff = "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n\n+added";
   fillToolDetail(row, detail, diff);
   const button = row.children[row.children.length - 1];
@@ -526,7 +551,8 @@ test("a diff row's button copies the diff verbatim, blank line intact", async ()
 
 test("a created file's button copies the file, not its header", async () => {
   resetClipboard();
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   fillToolDetail(row, detail, "created 'a.py' (12 bytes)\nx = 1\ny = 2");
   const button = row.children[row.children.length - 1];
   assert.strictEqual(button.className, "code-copy");
@@ -540,7 +566,8 @@ test("a tool row keeps exactly one button across re-fills, copying the latest", 
   // not leave a second button behind, and the one left copies the latest
   // fill; a re-fill with no content has nothing to copy, so it drops it.
   resetClipboard();
-  const row = el("div"), detail = el("div");
+  const row = el("div"),
+    detail = el("div");
   fillToolDetail(row, detail, "first");
   fillToolDetail(row, detail, "second");
   const buttons = Array.from(row.children).filter((c) => c.className === "code-copy");
@@ -552,7 +579,9 @@ test("a tool row keeps exactly one button across re-fills, copying the latest", 
 });
 
 test("the button goes in a row's summary and leaves the detail as output only", () => {
-  const row = el("details"), summary = el("summary"), detail = el("div");
+  const row = el("details"),
+    summary = el("summary"),
+    detail = el("div");
   row.appendChild(summary);
   row.appendChild(detail);
   fillToolDetail(row, detail, "some output");
@@ -562,11 +591,18 @@ test("the button goes in a row's summary and leaves the detail as output only", 
 
 test("a second click restarts the feedback window", async () => {
   resetClipboard();
-  const realSetTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const realSetTimeout = globalThis.setTimeout,
+    realClearTimeout = globalThis.clearTimeout;
   const live = new Set();
   let next = 1;
-  globalThis.setTimeout = () => { const id = next++; live.add(id); return id; };
-  globalThis.clearTimeout = (id) => { live.delete(id); };
+  globalThis.setTimeout = () => {
+    const id = next++;
+    live.add(id);
+    return id;
+  };
+  globalThis.clearTimeout = (id) => {
+    live.delete(id);
+  };
   try {
     const button = copyButton("twice", "code");
     await button.onclick();
@@ -580,7 +616,8 @@ test("a second click restarts the feedback window", async () => {
 
 test("a click inside a summary does not toggle the row", async () => {
   resetClipboard();
-  let prevented = 0, stopped = 0;
+  let prevented = 0,
+    stopped = 0;
   const button = copyButton("x", "code");
   await button.onclick({ preventDefault: () => prevented++, stopPropagation: () => stopped++ });
   assert.strictEqual(prevented, 1);
@@ -594,7 +631,10 @@ test("the fallback copy cleans up its field even when selecting throws", async (
   const realCreate = document.createElement;
   document.createElement = (tag) => {
     const node = realCreate(tag);
-    if (tag === "textarea") node.select = () => { throw new Error("no selection"); };
+    if (tag === "textarea")
+      node.select = () => {
+        throw new Error("no selection");
+      };
     return node;
   };
   try {
@@ -657,7 +697,10 @@ test("the button settles back to Copy after the feedback window", async () => {
   resetClipboard();
   const realSetTimeout = globalThis.setTimeout;
   const timers = [];
-  globalThis.setTimeout = (callback, delay) => { timers.push({ callback, delay }); return 0; };
+  globalThis.setTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return 0;
+  };
   try {
     const button = copyButton("transient", "code");
     await button.onclick();
@@ -711,7 +754,6 @@ test("a click on a block that is still streaming copies what has arrived", async
   assert.strictEqual(clipboard.writes[0], "def f():\n    return 4");
 });
 
-
 /* ---------- the remaining branches, each with the behaviour it carries ---------- */
 
 test("underscore marks render like asterisk marks", () => {
@@ -727,7 +769,8 @@ test("a tool result that is not text says so and offers nothing to copy", () => 
   // A missing result (null or undefined) is neither a diff nor a created
   // file nor output; it reads as no output, with no button.
   for (const missing of [undefined, null]) {
-    const row = el("div"), detail = el("div");
+    const row = el("div"),
+      detail = el("div");
     fillToolDetail(row, detail, missing);
     assert.strictEqual(detail.textContent, "(no output)", String(missing));
     assert.strictEqual(row.children.length, 0, String(missing));
@@ -736,7 +779,7 @@ test("a tool result that is not text says so and offers nothing to copy", () => 
 
 test("a page with no navigator at all still copies through the field", async () => {
   resetClipboard();
-  delete globalThis.navigator;   // not undefined-valued: not declared at all
+  delete globalThis.navigator; // not undefined-valued: not declared at all
   const ok = await copyButton("no navigator", "code").onclick();
   assert.strictEqual(ok, true);
   assert.deepStrictEqual(clipboard.writes, ["no navigator"]);
@@ -812,11 +855,20 @@ function scrollBox({ scrollHeight, clientHeight, scrollTop }) {
   let top = scrollTop;
   const listeners = {};
   return {
-    scrollHeight, clientHeight,
-    get scrollTop() { return top; },
-    set scrollTop(v) { top = Math.max(0, Math.min(v, this.scrollHeight - this.clientHeight)); },
-    addEventListener(type, fn, options) { listeners[type] = { fn, options }; },
-    fire(type) { listeners[type].fn(); },
+    scrollHeight,
+    clientHeight,
+    get scrollTop() {
+      return top;
+    },
+    set scrollTop(v) {
+      top = Math.max(0, Math.min(v, this.scrollHeight - this.clientHeight));
+    },
+    addEventListener(type, fn, options) {
+      listeners[type] = { fn, options };
+    },
+    fire(type) {
+      listeners[type].fn();
+    },
     listeners,
   };
 }
@@ -825,7 +877,7 @@ function withPage(box, jump, body) {
   const registry = { "#transcript": box, "#jump": jump };
   global.$ = (selector) => registry[selector] || null;
   try {
-    followBottom();   // the module's state is global: start from following
+    followBottom(); // the module's state is global: start from following
     body();
   } finally {
     delete global.$;
@@ -836,9 +888,9 @@ test("the bottom is within 24 pixels of the end, not 24 or more", () => {
   const box = scrollBox({ scrollHeight: 1000, clientHeight: 400, scrollTop: 577 });
   global.$ = () => box;
   try {
-    assert.strictEqual(atBottom(), true);     // 23 away
+    assert.strictEqual(atBottom(), true); // 23 away
     box.scrollTop = 576;
-    assert.strictEqual(atBottom(), false);    // 24 away
+    assert.strictEqual(atBottom(), false); // 24 away
   } finally {
     delete global.$;
   }
@@ -860,20 +912,20 @@ test("scrolling away stops following until the reader returns or jumps", () => {
   withPage(box, jump, () => {
     watchScrolling();
     assert.deepStrictEqual(box.listeners.scroll.options, { passive: true });
-    box.scrollTop = 100;               // the reader scrolls up
+    box.scrollTop = 100; // the reader scrolls up
     box.fire("scroll");
     assert.strictEqual(jump.hidden, false, "the jump control should appear");
     box.scrollHeight = 1500;
     stickToBottom();
     assert.strictEqual(box.scrollTop, 100, "followed a reader who scrolled away");
-    box.scrollTop = 1090;              // back within reach of the end
+    box.scrollTop = 1090; // back within reach of the end
     box.fire("scroll");
     assert.strictEqual(jump.hidden, true);
     box.scrollHeight = 1800;
     stickToBottom();
     assert.strictEqual(box.scrollTop, 1400);
     box.scrollTop = 0;
-    box.fire("scroll");                // away again, then the jump control
+    box.fire("scroll"); // away again, then the jump control
     followBottom();
     assert.strictEqual(jump.hidden, true);
     assert.strictEqual(box.scrollTop, 1400);

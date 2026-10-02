@@ -18,10 +18,19 @@ import { join } from "node:path";
 const [base, step, sid, other, shots] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-uxfix-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -51,11 +60,17 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
@@ -77,7 +92,8 @@ try {
     await send("Emulation.setDeviceMetricsOverride", { width: w, height: 860, deviceScaleFactor: 1, mobile: w < 700 });
     await sleep(500);
   };
-  const header = () => js(`({ status: document.querySelector("#status").textContent,
+  const header = () =>
+    js(`({ status: document.querySelector("#status").textContent,
     send: document.querySelector("#send").textContent, busy: state.busy, sid: state.sessionId })`);
   await width(1280);
   await send("Page.enable");
@@ -87,7 +103,10 @@ try {
   const out = {};
   if (step === "switch") {
     await js(`select(${JSON.stringify(sid)})`);
-    await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`, "session A");
+    await until(
+      `state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`,
+      "session A",
+    );
     // Budgets left the UI; start with an explicit token budget through the
     // page's own launcher so the 80%-budget question still fires as the vehicle
     // this test needs (a run with a pending question).
@@ -106,22 +125,29 @@ try {
     await js(`select(${JSON.stringify(sid)})`);
     // Soft: when the defect is present, submitting in B stopped A's run, so
     // there is no question to come back to; report what is there instead.
-    await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "A's question again", 50).catch(() => {});
+    await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "A's question again", 50).catch(
+      () => {},
+    );
     await sleep(500);
     out.backOnA = await header();
   } else if (step === "phone") {
     await width(400);
     await js(`select(${JSON.stringify(sid)})`);
-    await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`, "session A");
+    await until(
+      `state.sessionId === ${JSON.stringify(sid)} && document.querySelector("#mode-chip").textContent === "task"`,
+      "session A",
+    );
     // Budgets left the UI; start with an explicit token budget through the
     // page's own launcher so the 80%-budget question still fires as the vehicle
     // this test needs (a run with a pending question).
     await js(`launchTask("f(None) should be 0", 0, 1000, false)`);
     await until(`!!document.querySelector(".task-ask:not([hidden]) .ask-text")`, "the question");
-    const pill = () => js(`(() => { const n = document.querySelector("#status"); const r = n.getBoundingClientRect();
+    const pill = () =>
+      js(`(() => { const n = document.querySelector("#status"); const r = n.getBoundingClientRect();
       return { text: n.textContent, display: getComputedStyle(n).display, width: r.width,
                onScreen: r.right <= innerWidth && r.width > 0 }; })()`);
-    const menu = () => js(`(() => { const n = document.querySelector("#menu"); const a = getComputedStyle(n, "::after");
+    const menu = () =>
+      js(`(() => { const n = document.querySelector("#menu"); const a = getComputedStyle(n, "::after");
       return { needs: n.classList.contains("needs"), label: n.getAttribute("aria-label"),
                after: a.content, afterWidth: parseFloat(a.width) || 0, color: a.backgroundColor,
                drawerOpen: document.querySelector("#sidebar").classList.contains("open") }; })()`);
@@ -134,12 +160,17 @@ try {
     await shot("phone-B-other-needs-you-400.png");
   } else if (step === "jump") {
     await js(`select(${JSON.stringify(sid)})`);
-    await until(`state.sessionId === ${JSON.stringify(sid)} && document.querySelectorAll("#transcript .turn").length > 5`, "the transcript");
+    await until(
+      `state.sessionId === ${JSON.stringify(sid)} && document.querySelectorAll("#transcript .turn").length > 5`,
+      "the transcript",
+    );
     for (const w of [400, 1280]) {
       await width(w);
       await js(`followBottom()`);
       await sleep(300);
-      await js(`(() => { const t = document.querySelector("#transcript"); t.scrollTop = 0; t.dispatchEvent(new Event("scroll")); })()`);
+      await js(
+        `(() => { const t = document.querySelector("#transcript"); t.scrollTop = 0; t.dispatchEvent(new Event("scroll")); })()`,
+      );
       await sleep(400);
       out[w] = await js(`(() => { const j = document.querySelector("#jump").getBoundingClientRect();
         const c = document.querySelector("#composer").getBoundingClientRect();
@@ -151,6 +182,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }

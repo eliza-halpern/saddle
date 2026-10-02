@@ -12,10 +12,19 @@ import { join } from "node:path";
 const [base, sid, step, shots, prefix = "", width = "1200"] = process.argv.slice(2);
 const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-packet-"));
-const chrome = spawn("google-chrome", [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "about:blank",
-], { stdio: "ignore" });
+const chrome = spawn(
+  "google-chrome",
+  [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${prof}`,
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (code) => {
   chrome.kill();
@@ -45,18 +54,27 @@ try {
   const pending = new Map();
   ws.addEventListener("message", (m) => {
     const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg);
+      pending.delete(msg.id);
+    }
   });
-  const send = (method, params = {}) => new Promise((resolve) => {
-    const n = ++id; pending.set(n, resolve); ws.send(JSON.stringify({ id: n, method, params }));
-  });
+  const send = (method, params = {}) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      pending.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
   const js = async (expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
   const until = async (cond, ms = 8000) => {
-    for (let t = 0; t < ms; t += 100) { if (await js(cond).catch(() => false)) return true; await sleep(100); }
+    for (let t = 0; t < ms; t += 100) {
+      if (await js(cond).catch(() => false)) return true;
+      await sleep(100);
+    }
     throw new Error(`timed out waiting for ${cond}`);
   };
   const shot = async (name) => {
@@ -64,22 +82,38 @@ try {
     const s = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     writeFileSync(join(shots, prefix + name), Buffer.from(s.result.data, "base64"));
   };
-  const click = async (sel) => { await js(`document.querySelector(${JSON.stringify(sel)}).click()`); await sleep(300); };
+  const click = async (sel) => {
+    await js(`document.querySelector(${JSON.stringify(sel)}).click()`);
+    await sleep(300);
+  };
   // Scroll the packet's top to the top of the transcript, as a reader lands.
-  const toPacket = (sel = ".packet") => js(`(() => { const n = document.querySelector(${JSON.stringify(sel)}); n.scrollIntoView({block: "start"}); return true; })()`);
+  const toPacket = (sel = ".packet") =>
+    js(
+      `(() => { const n = document.querySelector(${JSON.stringify(sel)}); n.scrollIntoView({block: "start"}); return true; })()`,
+    );
 
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
     try { localStorage.setItem("saddle.session", ${JSON.stringify(sid)}); } catch {}
-  ` });
+  `,
+  });
   const w = Number(width);
-  await send("Emulation.setDeviceMetricsOverride", { width: w, height: w < 700 ? 820 : 900, deviceScaleFactor: 2, mobile: w < 700 });
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: w,
+    height: w < 700 ? 820 : 900,
+    deviceScaleFactor: 2,
+    mobile: w < 700,
+  });
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Page.navigate", { url: `${base}/` });
-  await until(`!!document.querySelector(".packet .band") && !!document.querySelector(".act-why") && (document.querySelector(".act-merge").textContent !== "Merge" || document.querySelector(".act-why").textContent !== "")`);
+  await until(
+    `!!document.querySelector(".packet .band") && !!document.querySelector(".act-why") && (document.querySelector(".act-merge").textContent !== "Merge" || document.querySelector(".act-why").textContent !== "")`,
+  );
   await sleep(200);
 
-  const read = () => js(`(() => {
+  const read = () =>
+    js(`(() => {
     const p = document.querySelector(".packet");
     const band = p.querySelector(".band");
     const details = p.querySelector(".packet-details");
@@ -150,7 +184,9 @@ try {
     out.closed = await js(`document.querySelector(".act-panel").textContent`);
   } else if (step === "merge" || step === "merge-cancel" || step === "push") {
     await click(step === "push" ? ".act-push" : ".act-merge");
-    out.confirm = await js(`(() => { const c = document.querySelector(".act-confirm"); return c ? { text: c.querySelector(".act-confirm-text").textContent, yes: c.querySelector(".act-yes").textContent, focus: document.activeElement.textContent } : null; })()`);
+    out.confirm = await js(
+      `(() => { const c = document.querySelector(".act-confirm"); return c ? { text: c.querySelector(".act-confirm-text").textContent, yes: c.querySelector(".act-yes").textContent, focus: document.activeElement.textContent } : null; })()`,
+    );
     await toPacket(".actions");
     await shot("merge-confirm.png");
     if (step === "merge-cancel") {
@@ -159,7 +195,9 @@ try {
     } else {
       await click(".act-yes");
       await until(`!!document.querySelector(".act-result")`);
-      out.result = await js(`(() => { const r = document.querySelector(".act-result"); return { ok: r.classList.contains("ok"), output: r.querySelector(".act-output").textContent, note: (r.querySelector(".act-note") || {}).textContent || "" }; })()`);
+      out.result = await js(
+        `(() => { const r = document.querySelector(".act-result"); return { ok: r.classList.contains("ok"), output: r.querySelector(".act-output").textContent, note: (r.querySelector(".act-note") || {}).textContent || "" }; })()`,
+      );
       await toPacket(".actions");
       await shot("merge-result.png");
     }
@@ -188,6 +226,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String(error && error.stack || error));
+  console.error(String((error && error.stack) || error));
   await finish(1);
 }
