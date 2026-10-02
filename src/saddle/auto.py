@@ -48,6 +48,7 @@ from saddle.evidence import (
     format_overrides,
     ruff_argv,
     run_capture,
+    sandbox_expose,
     src_layout_env,
     suite_workers,
 )
@@ -954,16 +955,22 @@ def run_auto(
     if options.resume_tmp is not None:
         # symlinks kept as links: pytest leaves dangling `pytest-current` ones
         shutil.copytree(options.resume_tmp, run_tmp, dirs_exist_ok=True, symlinks=True)
-    context = ToolContext(
-        workdir=worktree,
-        sandbox=Sandbox.for_workdir(
+    # The commands the project names for its gates' sandbox (`[tool.saddle]
+    # sandbox-expose`, read at the run's start) are shown to the model's too: a
+    # watched run's commands had no `node`, so its node tests failed and the
+    # project's node_modules/.bin tools (`#!/usr/bin/env node`) could not start.
+    with sandbox.also_exposing(sandbox_expose(worktree, "HEAD")):
+        command_sandbox = Sandbox.for_workdir(
             worktree,
             env=run_env,
             require_isolation=True,
             network="none",
             tmp=run_tmp,
             mounted=mounted,
-        ),
+        )
+    context = ToolContext(
+        workdir=worktree,
+        sandbox=command_sandbox,
         protected_tests=roots,
         syntax_guard=True,
         time_left=lambda: auto.budget.time_left(),

@@ -9,6 +9,7 @@ and its prompt never said where it was or how the audit runs the tests.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -353,3 +354,32 @@ def test_without_node_modules_nothing_is_mounted_or_said(tmp_path: Path) -> None
     client = Scripted([finish()])
     auto(_repo(tmp_path / "repo", src=False), client)
     assert "node_modules/.bin/<tool>" not in _system(client)
+
+
+NODE_ON_PATH = shutil.which("node")
+node_hidden_by_the_sandbox = pytest.mark.skipif(
+    NODE_ON_PATH is None or not Path(NODE_ON_PATH).resolve().is_relative_to(Path.home()),
+    reason="needs a node installed under HOME, which the sandbox hides unless it is named",
+)
+
+
+@node_hidden_by_the_sandbox
+def test_the_commands_the_project_names_reach_the_models_sandbox_too(tmp_path: Path) -> None:
+    """Red before: the project's `sandbox-expose` reached the audit's sandbox only.
+    A watched run's commands had no `node` ('node: No such file or directory' in
+    13 tests), and its node_modules/.bin tools, `#!/usr/bin/env node` scripts,
+    could not start."""
+    repo = _repo(tmp_path / "repo", src=False)
+    (repo / ".gitignore").write_text(".venv/\nnode_modules/\n")
+    (repo / "pyproject.toml").write_text('[tool.saddle]\nsandbox-expose = ["node"]\n')
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "expose node")
+    tool = repo / "node_modules" / ".bin" / "fmt"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/usr/bin/env node\nconsole.log('formatted by node ' + typeof process);\n")
+    tool.chmod(0o755)
+    command = "node -e 'console.log(1 + 1)'; node_modules/.bin/fmt"
+    result = auto(repo, Scripted([[call("run_command", "r1", command=command)], finish()]))
+    detail = _command_details(result)[0]
+    assert "exit 0" in detail, detail
+    assert "2\nformatted by node object" in detail, detail
