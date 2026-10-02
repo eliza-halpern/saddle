@@ -315,3 +315,41 @@ def test_the_prompt_says_how_many_workers_the_audit_runs_the_suite_on(tmp_path: 
         auto(repo, client)
         said[name] = f"pass `-n {workers}` too" in _system(client)
     assert said == {"both": True, "no-xdist": False, "serial": False}
+
+
+NODE_PROBE = (
+    "node_modules/.bin/fmt; touch node_modules/new 2>&1 || echo refused-write; "
+    "echo n.py changed > n.py; git status --porcelain"
+)
+
+
+def test_the_models_commands_run_the_checkouts_node_tools_and_git_does_not_see_them(
+    tmp_path: Path,
+) -> None:
+    """Red before: a watched run's JavaScript fix failed the prettier stage the
+    finish audit runs, and the model could not run prettier: its worktree held
+    tracked files only ("I can't run c8 here because there's no node_modules")."""
+    repo = _repo(tmp_path / "repo", src=False)
+    (repo / ".gitignore").write_text(".venv/\nnode_modules/\n")
+    git(repo, "commit", "-qam", "ignore node_modules")
+    tool = repo / "node_modules" / ".bin" / "fmt"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("#!/bin/sh\necho formatted-by-the-checkouts-tool\n")
+    tool.chmod(0o755)
+    client = Scripted([[call("run_command", "r1", command=NODE_PROBE)], finish()])
+    result = auto(repo, client)
+    detail = _command_details(result)[0]
+    assert "formatted-by-the-checkouts-tool" in detail, detail
+    assert "refused-write" in detail, detail
+    assert "?? node_modules" not in detail, detail
+    assert " M n.py" in detail, detail
+    assert "node_modules/.bin/<tool>" in _system(client)
+    committed = git(repo, "show", "--name-only", "--format=", result.branch)
+    assert committed.split() == ["n.py"]
+    assert not (repo / "node_modules" / "new").exists()
+
+
+def test_without_node_modules_nothing_is_mounted_or_said(tmp_path: Path) -> None:
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)
+    assert "node_modules/.bin/<tool>" not in _system(client)

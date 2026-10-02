@@ -159,8 +159,30 @@ ENVIRONMENT_PROMPT: Final = (
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
     "first. This run has {minutes} and {tokens} generated tokens; it stops at "
-    "either limit, so leave room to call finish.{workers}{coverage}{feed}"
+    "either limit, so leave room to call finish.{workers}{coverage}{node}{feed}"
 )
+
+NODE_TOOLS_PROMPT: Final = (
+    " The project's installed JavaScript packages are in `node_modules`, read-only. "
+    "`npx` is not on PATH: where the project runs `npx --no-install <tool>` (its "
+    "formatter, linter or type checker), run `node_modules/.bin/<tool>` with the same "
+    "arguments. The audit runs those tools too, so run them on the files you change."
+)
+"""Said when the run's worktree has the checkout's `node_modules` (`node_modules_mount`).
+A watched run's JavaScript fix failed the project's prettier stage, which the
+finish audit runs, and it had no way to run prettier: its worktree held tracked
+files only ("I can't run c8 here because there's no node_modules")."""
+
+
+def node_modules_mount(checkout: Path, worktree: Path) -> tuple[tuple[Path, Path], ...]:
+    """The checkout's `node_modules`, to mount read-only at the worktree's own
+    (`Sandbox.mounted`); none when the checkout has none. A git worktree holds
+    tracked files only, and `node_modules` is git-ignored."""
+    modules = checkout / "node_modules"
+    if not modules.is_dir():
+        return ()
+    return ((modules.resolve(), worktree / "node_modules"),)
+
 
 FEED_PROMPT: Final = (
     " While you work, saddle audits snapshots of this worktree in the "
@@ -197,6 +219,7 @@ def environment_prompt(
     time_budget_s: float,
     token_budget: int,
     feed: bool = False,
+    node_tools: bool = False,
 ) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
@@ -251,6 +274,7 @@ def environment_prompt(
         tokens=f"{token_budget:,}",
         coverage=coverage,
         workers=workers,
+        node=NODE_TOOLS_PROMPT if node_tools else "",
         feed=FEED_PROMPT if feed else "",
     )
 
@@ -888,6 +912,7 @@ def run_auto(
         "are read-only: an edit to one is refused."
     )
     run_env = {**COMMAND_ENV, **sandbox.project_command_env(project), **src_layout_env(worktree)}
+    mounted = node_modules_mount(repo_root(repo), worktree)
     turn_options = TurnOptions(
         workdir=worktree,
         journal=journal,
@@ -901,6 +926,7 @@ def run_auto(
             options.time_budget_s,
             options.token_budget,
             feed=options.arm == "E+A+F",
+            node_tools=bool(mounted),
         )
         + (CHECK_PROMPT if options.check_tool else "")
         + (PREMISE_PROMPT if options.premise_check else "")
@@ -936,6 +962,7 @@ def run_auto(
             require_isolation=True,
             network="none",
             tmp=run_tmp,
+            mounted=mounted,
         ),
         protected_tests=roots,
         syntax_guard=True,

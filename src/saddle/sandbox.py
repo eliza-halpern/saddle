@@ -637,11 +637,13 @@ def bwrap_argv(
     expose: Sequence[tuple[Path, Path]],
     writable: Sequence[Path] = (),
     tmp: Path | None = None,
+    mounted: Sequence[tuple[Path, Path]] = (),
 ) -> list[str]:
     """`argv` wrapped in bwrap: `root` (and each of `writable`) is the only
     writable place, and nothing else outside the system dirs, the
     interpreter and `expose` exists. `/tmp` is empty, or `tmp` when given
-    (`Sandbox.tmp`); never the host's."""
+    (`Sandbox.tmp`); never the host's. `mounted` are read-only `(source, dest)`
+    binds inside `root`, made after it so it does not hide them."""
     wrapped = ["bwrap"]
     for name in SYSTEM_DIRS:
         path = Path(name)
@@ -664,6 +666,8 @@ def bwrap_argv(
     for path in writable:
         wrapped += ["--bind", str(path), str(path)]
     wrapped += ["--bind", str(root), str(root), *_git_binds(root)]
+    for source, dest in mounted:
+        wrapped += ["--ro-bind", str(source), str(dest)]
     wrapped += ["--unshare-all"]
     if network == "host":
         wrapped += ["--share-net"]
@@ -821,6 +825,11 @@ class Sandbox:
     """Hard memory cap in bytes for each command and everything it starts
     (`memcap`); `for_workdir` sets it from `SADDLE_MEMORY_MAX`. There is no
     uncapped setting."""
+    mounted: tuple[tuple[Path, Path], ...] = ()
+    """Read-only `(source, dest)` binds inside `root` (`bwrap_argv`): an autonomous
+    run's worktree sees the checkout's `node_modules` there, as a directory git
+    ignores, so the model can run the project's JavaScript tools. A link would be
+    a file to git, and land in the run's commit."""
     tmp: Path | None = None
     """A private directory every command sees as `/tmp`, so what one command
     leaves there the next can read; None gives each command an empty `/tmp`.
@@ -840,6 +849,7 @@ class Sandbox:
         network: Network = "host",
         tmp: Path | None = None,
         unsandboxed: bool = False,
+        mounted: Sequence[tuple[Path, Path]] = (),
     ) -> Sandbox:
         """A sandbox for `root`; with `require_isolation`, never an unisolated one.
 
@@ -862,6 +872,7 @@ class Sandbox:
             expose=default_expose(command_env(env or {})),
             memory_max=memcap.memory_max(),
             tmp=tmp,
+            mounted=tuple(mounted),
         )
 
     def _argv(self, command: str) -> list[str]:
@@ -874,6 +885,7 @@ class Sandbox:
             network=self.network,
             expose=self.expose,
             tmp=self.tmp,
+            mounted=self.mounted,
         )
 
     def run(self, command: str, *, timeout: int = DEFAULT_TIMEOUT) -> Terminal:
