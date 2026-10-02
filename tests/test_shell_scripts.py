@@ -162,6 +162,7 @@ def test_every_tracked_shell_script_passes_shellcheck(name: str) -> None:
 UV_STUB = """#!/bin/sh
 echo "$*" >> "$UV_LOG"
 case "$*" in
+    *"saddle.jsevidence"*) exit "${JS_EXIT:-0}" ;;
     *"mutmut results"*) printf '%s' "${MUT_RESULTS:-}"; exit 0 ;;
     *"mutmut run"*) exit "${MUT_RUN_EXIT:-0}" ;;
 esac
@@ -269,3 +270,29 @@ def test_ci_mutate_without_a_base_runs_everything(tmp_path: Path) -> None:
     assert done.returncode == 0
     assert "no diff base; running full mutation" in done.stdout
     assert calls[0] == "run --frozen mutmut run"
+
+
+def test_ci_mutate_runs_the_javascript_phase_only_for_a_changed_js_file(tmp_path: Path) -> None:
+    repo = mutate_repo(tmp_path)
+    commit_change(repo, "static/a.js", "src/saddle/a.py")
+    done, calls = run_mutate(repo, tmp_path, "HEAD~1")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "javascript phase" in done.stdout
+    (js,) = [c for c in calls if "saddle.jsevidence" in c]
+    assert js.startswith("run --frozen python -c ")
+    assert js.endswith(" HEAD~1")
+    assert calls.index(js) < calls.index("run --frozen mutmut run saddle.a*")
+    other = mutate_repo(tmp_path / "other")
+    commit_change(other, "src/saddle/a.py")
+    _, other_calls = run_mutate(other, tmp_path, "HEAD~1")
+    assert not any("jsevidence" in c for c in other_calls)
+
+
+def test_ci_mutate_fails_on_a_javascript_survivor_before_any_python_mutation(
+    tmp_path: Path,
+) -> None:
+    repo = mutate_repo(tmp_path)
+    commit_change(repo, "static/a.js", "src/saddle/a.py")
+    done, calls = run_mutate(repo, tmp_path, "HEAD~1", JS_EXIT="1")
+    assert done.returncode == 1
+    assert not any("mutmut" in c for c in calls)

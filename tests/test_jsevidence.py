@@ -433,7 +433,10 @@ def test_the_two_runs_merge_into_one_population_and_a_failed_run_stays_visible()
     assert both.budget_spent
     assert dict(both.statuses) == {"killed": 3, "survived": 1, "Killed": 1, "Survived": 1}
     failed = MutationOutcome(killed=0, total=0, generated=0, survivors=("stryker run exited 1: x",))
-    assert "stryker run exited 1: x" in js.merge_outcomes(py, failed).survivors
+    # a failed engine is the verdict itself: no kill rate from the other run stands over it
+    assert js.merge_outcomes(py, failed) == failed
+    assert js.merge_outcomes(failed, py) == failed
+    assert js.merge_outcomes(MutationOutcome(0, 0, 0, ()), other) == other
 
 
 # -- the CI phase ----------------------------------------------------------------------

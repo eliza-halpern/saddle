@@ -73,6 +73,20 @@ if [ "$FULL_RUN" -eq 1 ]; then
     exit 0
 fi
 
+# JavaScript (StrykerJS, over the changed lines of the diff's non-test .js
+# files): any survivor, or a tool that could not run, fails the job.
+js_phase() {
+    if ! git diff --name-only "$BASE...HEAD" -- '*.js' | grep -q .; then
+        return 0
+    fi
+    if [ -f package-lock.json ] && [ ! -d node_modules/@stryker-mutator/core ]; then
+        npm ci --ignore-scripts --no-audit --no-fund || return 1
+    fi
+    echo "javascript phase: StrykerJS over the diff's changed .js lines"
+    uv run --frozen python -c 'import sys; from saddle.jsevidence import main; sys.exit(main(sys.argv[1:]))' "$BASE"
+}
+js_phase || exit 1
+
 mapfile -t changed < <(git diff --name-only "$BASE...HEAD" -- src/saddle tests)
 mods=()
 for path in ${changed[@]+"${changed[@]}"}; do
