@@ -341,3 +341,20 @@ def test_the_audit_refuses_padding_in_javascript_and_passes_the_used_function(
     used = {**only_tests_call(), "static/app.js": APP + "onlyTested();\n"}
     good = Auditor(build(tmp_path / "good", used), "HEAD").tier1()
     assert _dead_code(good).verdict == "pass", _dead_code(good).detail
+
+
+@needs_typescript
+def test_the_analysis_never_writes_into_the_tree_it_reads(tmp_path: Path) -> None:
+    # The audit runs other tools over the same tree at the same time: eslint once
+    # crashed (ENOENT scandir '.saddle') because this analysis made and removed a
+    # scratch config there mid-walk. A read-only root makes any such write fail.
+    root = build(tmp_path, only_tests_call())
+    before = sorted(p.name for p in root.iterdir())
+    root.chmod(0o555)
+    try:
+        report = judged(root)
+    finally:
+        root.chmod(0o755)
+    assert not report.problem, report.problem
+    assert [f.name for f in report.findings] == ["onlyTested"]
+    assert sorted(p.name for p in root.iterdir()) == before

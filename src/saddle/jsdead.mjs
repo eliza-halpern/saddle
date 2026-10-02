@@ -18,6 +18,7 @@
 // (`module.exports = { f }`, `exports.f = f`, `export { f }`) are not use: the page
 // scripts share globals through <script> tags, so the use is another script's.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -111,12 +112,13 @@ const ranges = new Map(
   ]),
 );
 
-const configDir = path.join(root, ".saddle");
+// The scratch config lives outside the tree: the audit runs other tools over the same
+// tree at the same time, and a directory made and removed there broke their walks.
+const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "saddle-jsdead-config-"));
 const configFile = path.join(configDir, "jsdead.tsconfig.json");
 let api;
 let program;
 try {
-  fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(
     configFile,
     JSON.stringify({
@@ -128,7 +130,7 @@ try {
   program = api.updateSnapshot({ openProject: configFile }).getProjects()[0].program;
 } catch (error) {
   if (api) api.close();
-  fs.rmSync(configFile, { force: true });
+  fs.rmSync(configDir, { recursive: true, force: true });
   say({
     unavailable: `typescript's parser could not start: ${String(error instanceof Error ? error.message : error).split("\n")[0]}`,
   });
@@ -285,12 +287,7 @@ for (const abs of jsFiles) {
   visit(sf);
 }
 api.close();
-fs.rmSync(configFile, { force: true });
-try {
-  fs.rmdirSync(configDir); // only when it was ours: a `.saddle` with anything in it stays
-} catch {
-  // not empty
-}
+fs.rmSync(configDir, { recursive: true, force: true });
 
 // The page: <script src> files and the names an inline handler or inline script uses.
 for (const abs of files.filter((f) => HTML.test(f))) {
