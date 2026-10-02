@@ -134,7 +134,7 @@ for (const [name, href] of [
     const node = el("div");
     renderMarkdown(node, `try [here](${href}) please`);
     const para = node.children[0];
-    assert.strictEqual(para.children.filter((c) => c.tagName === "A").length, 0,
+    assert.strictEqual(Array.from(para.children).filter((c) => c.tagName === "A").length, 0,
                        `${href} became a link`);
     // ...and it is still legible: the label and the target both survive.
     assert.ok(para.textContent.includes("here"), para.textContent);
@@ -163,7 +163,7 @@ test("added lines are marked added and removed lines removed", () => {
     " <!-- Blushing cheeks -->\n" +
     '-  <ellipse rx="10" fill="#F48FB1"/>\n' +
     '+  <ellipse rx="13" fill="#F06292"/>');
-  const classes = node.children.map((c) => c.className);
+  const classes = Array.from(node.children).map((c) => c.className);
   assert.deepStrictEqual(classes,
     ["d-file", "d-file", "d-hunk", "d-ctx", "d-del", "d-add"]);
   // The +++ header must not be mistaken for an added line, nor --- for a
@@ -190,8 +190,8 @@ test("the live row and a reloaded row fill identically", () => {
 
   assert.strictEqual(pastDetail.html, liveDetail.html);
   assert.ok(pastRow.classList.contains("has-diff"));
-  assert.strictEqual(pastDetail.children.filter((c) => c.className === "d-add").length, 1);
-  assert.strictEqual(pastDetail.children.filter((c) => c.className === "d-del").length, 1);
+  assert.strictEqual(Array.from(pastDetail.children).filter((c) => c.className === "d-add").length, 1);
+  assert.strictEqual(Array.from(pastDetail.children).filter((c) => c.className === "d-del").length, 1);
 });
 
 test("output that is not a diff is left alone", () => {
@@ -215,7 +215,7 @@ const { highlight, grammarFor } = md;
 function tokens(code, language) {
   const node = el("code");
   highlight(node, code, language);
-  return node.children.map((c) => [c.className, c.textContent]);
+  return Array.from(node.children).map((c) => [c.className, c.textContent]);
 }
 
 test("python gets its comments, strings, keywords and numbers", () => {
@@ -361,7 +361,7 @@ test("a turn's blocks are released when a tool starts", () => {
   say("done");
 
   assert.deepStrictEqual(
-    transcript.children.map((c) => [c.className, c.textContent]),
+    Array.from(transcript.children).map((c) => [c.className, c.textContent]),
     [
       ["assistant", "first, I will look at the file"],
       ["tool", "Read a.py"],
@@ -390,7 +390,7 @@ test("without releasing the cache the text jumps above the tools", () => {
 
   // Both sentences are in one block, and that block is before the tool.
   assert.deepStrictEqual(
-    transcript.children.map((c) => c.className), ["assistant", "tool"]);
+    Array.from(transcript.children).map((c) => c.className), ["assistant", "tool"]);
   assert.strictEqual(transcript.children[0].textContent, "first and second");
 });
 
@@ -413,7 +413,7 @@ test("a created file is shown as the file, highlighted", () => {
 
   const body = detail.children[1];
   assert.strictEqual(body.tagName, "CODE");
-  const parts = body.children.map((c) => [c.className, c.textContent]);
+  const parts = Array.from(body.children).map((c) => [c.className, c.textContent]);
   assert.deepStrictEqual(parts, [
     ["c-keyword", "def"], ["c-keyword", "return"], ["c-string", '"hi"'],
   ]);
@@ -490,9 +490,9 @@ const findPre = (root) => {
 test("a fenced code block carries a corner button that names its language", () => {
   const node = el("div");
   renderMarkdown(node, "Here you go.\n\n```python\ndef f():\n    return 1\n```\n\nDone.");
-  const pre = node.children.find((c) => c.tagName === "PRE");
+  const pre = Array.from(node.children).find((c) => c.tagName === "PRE");
   assert.ok(pre, "no code block");
-  const button = pre.children.find((c) => c.className === "code-copy");
+  const button = Array.from(pre.children).find((c) => c.className === "code-copy");
   assert.ok(button, "the block has no copy button");
   assert.strictEqual(button.textContent, "Copy");
   assert.strictEqual(button.title, "Copy code (python)");
@@ -502,7 +502,7 @@ test("clicking the button copies the code, not the fences or the language", asyn
   resetClipboard();
   const node = el("div");
   renderMarkdown(node, "```\nline one\nline two\n```");
-  const button = node.children[0].children.find((c) => c.className === "code-copy");
+  const button = Array.from(node.children[0].children).find((c) => c.className === "code-copy");
   assert.ok(button);
   const ok = await button.onclick();
   assert.strictEqual(ok, true);
@@ -543,12 +543,12 @@ test("a tool row keeps exactly one button across re-fills, copying the latest", 
   const row = el("div"), detail = el("div");
   fillToolDetail(row, detail, "first");
   fillToolDetail(row, detail, "second");
-  const buttons = row.children.filter((c) => c.className === "code-copy");
+  const buttons = Array.from(row.children).filter((c) => c.className === "code-copy");
   assert.strictEqual(buttons.length, 1);
   assert.strictEqual(await buttons[0].onclick(), true);
   assert.strictEqual(clipboard.writes[0], "second");
   fillToolDetail(row, detail, "");
-  assert.strictEqual(row.children.filter((c) => c.className === "code-copy").length, 0);
+  assert.strictEqual(Array.from(row.children).filter((c) => c.className === "code-copy").length, 0);
 });
 
 test("the button goes in a row's summary and leaves the detail as output only", () => {
@@ -557,7 +557,7 @@ test("the button goes in a row's summary and leaves the detail as output only", 
   row.appendChild(detail);
   fillToolDetail(row, detail, "some output");
   assert.strictEqual(detail.textContent, "some output");
-  assert.strictEqual(summary.children.filter((c) => c.className === "code-copy").length, 1);
+  assert.strictEqual(Array.from(summary.children).filter((c) => c.className === "code-copy").length, 1);
 });
 
 test("a second click restarts the feedback window", async () => {
@@ -689,7 +689,7 @@ test("a streamed fence settles with its button intact", () => {
   }
   assert.ok(settledPre, "the fence never settled");
   assert.strictEqual(settledPre.children[0].tagName, "CODE");
-  const button = settledPre.children.find((c) => c.className === "code-copy");
+  const button = Array.from(settledPre.children).find((c) => c.className === "code-copy");
   assert.ok(button, "the settled block has no button");
 });
 
@@ -704,7 +704,7 @@ test("a click on a block that is still streaming copies what has arrived", async
   }
   const pre = findPre(node.lastElementChild);
   assert.ok(pre);
-  const button = pre.children.find((c) => c.className === "code-copy");
+  const button = Array.from(pre.children).find((c) => c.className === "code-copy");
   assert.ok(button);
   const ok = await button.onclick();
   assert.strictEqual(ok, true);
