@@ -1393,12 +1393,37 @@ def _references(tree: ast.Module) -> list[tuple[str, int]]:
     return found
 
 
+# Source suffixes in languages the Python gates cannot measure: changes to these files are the
+# work the mutation and changed-line coverage checks never see (browser scripts, styles, markup,
+# shell, systems languages). Data, config and prose are deliberately absent: a README edit beside
+# a new library function does not say the function is padding.
+OTHER_LANGUAGE_SUFFIXES: Final = frozenset(
+    {
+        ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte",
+        ".css", ".scss", ".sass", ".less", ".html", ".htm", ".jinja", ".j2",
+        ".sh", ".bash", ".rs", ".go", ".c", ".h", ".cc", ".cpp", ".java", ".kt",
+        ".rb", ".php", ".swift", ".lua",
+    }
+)  # fmt: skip
+
+TEST_ONLY_UNPROVEN: Final = "not proven: "
+"""How `check_test_only_additions` begins a passing detail that names public
+definitions it could not place: the auditor reports it `not-proven`."""
+
+
+def _names_identifier(text: str, name: str) -> bool:
+    """`name` appears in `text` as a whole identifier (case-sensitive), not inside a longer one."""
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text) is not None
+
+
 def check_test_only_additions(
     sources: Mapping[str, str],
     added: Mapping[str, Collection[int]],
     *,
     baseline: Mapping[str, str] | None = None,
     pyproject: str | None = None,
+    task_text: str | None = None,
+    touched: Collection[str] = (),
 ) -> GateCheck:
     """A definition only a test calls is not production code.
 
@@ -1437,6 +1462,29 @@ def check_test_only_additions(
     module that does not parse, a non-test module that does and spells a
     candidate's name, or a `pyproject.toml` that does not parse while a
     candidate is unreached, fails the check naming the file.
+
+    A library's callers are its users, so a public function added to a
+    library module and called only by its tests can be the whole, correct
+    change (the task said "add `sub`"): refusing it pushes the model to
+    invent a production caller, the padding defect in reverse. Three
+    signals separate it from the recorded case, which was a helper added
+    to an application module to give a gate something to measure, in a run
+    whose task never named it and whose real work was in browser files.
+    (1) A private name (`_helper`) has no library excuse and is always
+    refused. (2) A public name the task text spells as a whole identifier
+    (`task_text`, case-sensitive) was asked for and is not judged; a short
+    common word the task happens to use excuses a function of that name,
+    which leans to accepting. (3) Otherwise a public name is refused when
+    `touched` (every file the diff changes) holds non-test source in a
+    language `OTHER_LANGUAGE_SUFFIXES` lists: the task's real work is in
+    files this function does not serve, which is the recorded shape. A
+    change with no such file is a Python-only change, where "a library
+    function nobody has called yet" and "padding" look the same to the
+    code: it passes with a detail starting `TEST_ONLY_UNPROVEN`, which the
+    auditor reports `not-proven` (never a refusal) and a person reads.
+    Rejected: the new test file being added by the same diff (a library
+    function's test usually is too), and an ever-present task (plain
+    `saddle audit` has none; the default there is signal 3 alone).
     """
     old = baseline or {}
     candidates: list[tuple[str, str, int, int]] = []
@@ -1535,7 +1583,11 @@ def check_test_only_additions(
             if spelled == name and inside != index:
                 holders[index].add(inside)
     for index, (path, name, _, _) in enumerate(candidates):
-        if any((module, name) in entry for module in _module_names(path)):
+        if any((module, name) in entry for module in _module_names(path)) or (
+            not name.startswith("_")
+            and task_text is not None
+            and _names_identifier(task_text, name)
+        ):
             holders[index].add(None)
     live = {i for i, held in enumerate(holders) if None in held}
     grew = True
@@ -1549,6 +1601,11 @@ def check_test_only_additions(
     # Name what to act on: a definition that another dead one uses is cut with it.
     roots = [i for i in dead if not holders[i] & set(dead)] or dead
     listing: list[str] = []
+    unplaced: list[str] = []
+    padded = any(
+        not is_test_code(f) and PurePath(f).suffix.lower() in OTHER_LANGUAGE_SUFFIXES
+        for f in touched
+    )
     for index in roots:
         path, name, _, _ = candidates[index]
         if bad_toml:
@@ -1568,11 +1625,11 @@ def check_test_only_additions(
             if holders[index]
             else "referenced by nothing"
         )
-        listing.append(f"{path}: {name} ({how})")
+        (listing if name.startswith("_") or padded else unplaced).append(f"{path}: {name} ({how})")
     rest = [candidates[i][1] for i in dead if i not in roots]
-    if listing and rest:
+    if (listing or unplaced) and rest:
         more = f" (+{len(rest) - 8} more)" if len(rest) > 8 else ""
-        listing.append(f"and what only these use: {', '.join(rest[:8])}{more}")
+        (listing or unplaced).append(f"and what only these use: {', '.join(rest[:8])}{more}")
     if unreadable or listing:
         said = [
             *listing,
@@ -1587,6 +1644,20 @@ def check_test_only_additions(
                 "wire each into production code that runs, or delete it and its tests"
             ),
             basis=f"test-only-definitions={len(dead)} unreadable={len(unreadable)}",
+        )
+    if unplaced:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail=(
+                TEST_ONLY_UNPROVEN
+                + "; ".join(unplaced)
+                + ". Public, and no production code reaches it; no non-Python source changed "
+                "beside it and the task text does not name it. A library function a task "
+                "asked for looks exactly like this, so it is not refused; code added only to "
+                "give a check something to measure is a defect. A person reads it"
+            ),
+            basis=f"test-only-definitions={len(dead)} unproven=1",
         )
     return GateCheck(
         name="dead-code",
@@ -2427,6 +2498,8 @@ class Tier1Inputs:
     # `pyproject.toml` (its entry points), or None when it has none.
     test_only_additions: bool = False
     pyproject_text: str | None = None
+    # The task text the audit was given, if any: a public name it spells was asked for.
+    task_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2683,9 +2756,12 @@ def _with_test_only_additions(dead: GateCheck, inputs: Tier1Inputs) -> GateCheck
         inputs.added_lines,
         baseline=inputs.baseline_sources,
         pyproject=inputs.pyproject_text,
+        task_text=inputs.task_text,
+        touched=inputs.touched_files,
     )
     if only.passed:
-        return dead
+        # A placed-nowhere public name is not a refusal, but it must stay visible.
+        return only if only.detail.startswith(TEST_ONLY_UNPROVEN) and dead.passed else dead
     if dead.passed:
         return only
     return GateCheck(

@@ -386,6 +386,8 @@ class AuditFeed:
     factory: AuditorFactory = default_auditor
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten; see `auditor.sanction`."""
+    task: str | None = None
+    """The task text, handed to every audit (`AuditorConfig.task_text`)."""
     tier2: Tier2Mode = "score"
     """`--tier2`; "shortlist" turns on this module's shortlist behaviour too."""
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
@@ -434,6 +436,7 @@ class AuditFeed:
         self._config = AuditorConfig(
             journal=self.journal,
             sanctioned_test_rewrites=self.sanctioned_test_rewrites,
+            task_text=self.task,
             tier2=self.tier2,
             mutant_shortlist=self.mutant_shortlist,
             # One map for the run, drawn at its start (below) or by its first

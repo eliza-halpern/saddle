@@ -749,6 +749,7 @@ def test_audit_refuses_a_function_only_a_test_calls_and_names_it(clean_tree: Pat
         'def live():\n    return 2\n\n\ndef copy_button_wiring():\n    return "wired"\n'
     )
     (clean_tree / "n.py").write_text("import m\n\n\ndef f():\n    return m.live()\n")
+    (clean_tree / "copy.js").write_text("export const copy = 1;\n")  # the task's real work
     (clean_tree / "test_m.py").write_text(
         "from m import copy_button_wiring\n\n\n"
         'def test_wiring():\n    assert copy_button_wiring() == "wired"\n'
@@ -762,3 +763,23 @@ def test_audit_refuses_a_function_only_a_test_calls_and_names_it(clean_tree: Pat
         "tests",
         "coverage",
     }
+
+
+def test_audit_passes_a_python_only_library_function_and_says_it_is_not_proven(
+    clean_tree: Path,
+) -> None:
+    """With no browser file beside it, the same function is not refused by the dead-code check;
+    `saddle audit` has no not-proven status, so it reads as a pass whose detail says so."""
+    (clean_tree / "m.py").write_text(
+        'def live():\n    return 2\n\n\ndef copy_button_wiring():\n    return "wired"\n'
+    )
+    (clean_tree / "test_m.py").write_text(
+        "from m import copy_button_wiring\n\n\n"
+        'def test_wiring():\n    assert copy_button_wiring() == "wired"\n'
+    )
+    (clean_tree / "n.py").write_text("import m\n\n\ndef f():\n    return m.live()\n")
+    result = audit_tree(clean_tree)
+    dead = next(check for check in result.checks if check.name == "dead-code")
+    assert dead.status == "pass"
+    assert dead.detail.startswith("not proven: ")
+    assert "m.py: copy_button_wiring" in dead.detail

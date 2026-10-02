@@ -176,6 +176,7 @@ def run_node_gate(
     on_suite: Callable[[str, CapturedRun], None] | None = None,
     skip_report: Path | None = None,
     test_only_additions: bool = False,
+    task_text: str | None = None,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -235,6 +236,8 @@ def run_node_gate(
     to the `dead-code` check: a function, class or constant the change adds
     that only tests reach is refused. A plan's nodes leave it off, since an
     `impl` node may be gated before the node that uses what it writes.
+    `task_text` is the task the audit was given, if any: a public name it spells
+    was asked for (`gates.check_test_only_additions`).
     """
     gate = node.deterministic_gate
     workers = 1 if node.kind == "test" else test_workers
@@ -510,6 +513,7 @@ def run_node_gate(
         property_targets=property_targets,
         property_out_of_scope=property_out_of_scope,
         test_only_additions=test_only_additions,
+        task_text=task_text,
         pyproject_text=(
             (workdir / "pyproject.toml").read_text()
             if test_only_additions and (workdir / "pyproject.toml").is_file()

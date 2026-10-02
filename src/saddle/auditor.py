@@ -103,6 +103,7 @@ from saddle.evidence import (
 )
 from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
+    TEST_ONLY_UNPROVEN,
     TOOL_UNAVAILABLE,
     GateCheck,
     RuffFinding,
@@ -447,6 +448,10 @@ class AuditorConfig:
     """`--task-requirements`: a sealed P1 file. Tier 1 then runs the
     `task-requirements` gate beside the tests, and the file's bytes join the
     cache key, so a changed file never reuses a verdict."""
+    task_text: str | None = None
+    """The task the run was given, when the caller has it: a new public function
+    the task names as a whole identifier was asked for, so
+    `gates.check_test_only_additions` does not judge it. Part of the cache key."""
     impact: ImpactMemo | None = None
     """The test-impact map one run's audits share (`saddle.impact`). None runs
     the whole suite at every audit, as before. With a memo the first audit
@@ -1348,6 +1353,11 @@ class Auditor:
                     if self.config.task_requirements is not None
                     else []
                 ),
+                *(
+                    ["task-text", hashlib.sha256(self.config.task_text.encode()).hexdigest()]
+                    if self.config.task_text is not None
+                    else []
+                ),
                 *(["impact"] if self.config.impact is not None else []),
             ]
         )
@@ -1530,6 +1540,7 @@ class Auditor:
                         test_selection=selection,
                         skip_report=copy / SKIP_REPORT_NAME,
                         test_only_additions=True,
+                        task_text=self.config.task_text,
                         # A whole-suite run under a memo (re)draws the map.
                         on_suite=(
                             functools.partial(_record_impact, memo, copy)
@@ -1589,6 +1600,11 @@ class Auditor:
             statuses = {
                 c.name: ("pass" if c.passed else "fail", c.detail, c.basis) for c in gated.checks
             }
+        dead_status, dead_detail, dead_basis = statuses["dead-code"]
+        if dead_status == "pass" and dead_detail.startswith(TEST_ONLY_UNPROVEN):
+            # Public names no production code reaches, in a change that gives no sign of
+            # padding: listed for a person, never a refusal (`check_test_only_additions`).
+            statuses["dead-code"] = ("not-proven", dead_detail, dead_basis)
         if self.config.tier2 == "shortlist" and statuses.get("coverage", ("",))[0] == "fail":
             # Under the shortlist, coverage is a locator. An uncovered changed line is
             # "not proven", never a refusal; the detail keeps its lines.

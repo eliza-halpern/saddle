@@ -938,6 +938,7 @@ def test_a_function_only_a_test_calls_is_refused_at_tier1_and_named(clean_tree: 
     (clean_tree / "m.py").write_text(WIRING_MODULE)
     (clean_tree / "test_m.py").write_text(WIRING_TEST)
     (clean_tree / "n.py").write_text(USES_LIVE)
+    (clean_tree / "copy.js").write_text("export const copy = 1;\n")  # the task's real work
     result = Auditor(clean_tree).tier1()
     dead = _dead_code(result)
     assert dead.verdict == "fail"
@@ -968,3 +969,35 @@ def test_a_pyproject_entry_point_is_a_production_caller_at_tier1(clean_tree: Pat
     )
     result = Auditor(clean_tree).tier1()
     assert _verdicts(result)["dead-code"] == "pass", _dead_code(result).detail
+
+
+def test_a_library_function_only_a_test_calls_is_not_refused_but_listed_not_proven(
+    clean_tree: Path,
+) -> None:
+    """The library shape: a Python-only change whose new public function only its test calls
+    (the task said "add it"). The audit does not refuse it; it records it not proven."""
+    (clean_tree / "m.py").write_text(WIRING_MODULE)
+    (clean_tree / "test_m.py").write_text(WIRING_TEST)
+    (clean_tree / "n.py").write_text(USES_LIVE)
+    result = Auditor(clean_tree).tier1()
+    dead = _dead_code(result)
+    assert dead.verdict == "not-proven"
+    assert dead.reason == "evidence-thin"
+    assert "m.py: copy_button_wiring (referenced only by test_m.py)" in dead.detail
+    assert result.passed
+
+
+def test_a_function_the_task_text_names_is_judged_as_asked_for_and_the_key_follows_it(
+    clean_tree: Path,
+) -> None:
+    (clean_tree / "m.py").write_text(WIRING_MODULE)
+    (clean_tree / "test_m.py").write_text(WIRING_TEST)
+    (clean_tree / "n.py").write_text(USES_LIVE)
+    (clean_tree / "copy.js").write_text("export const copy = 1;\n")
+    refused = Auditor(clean_tree).tier1()
+    asked = Auditor(
+        clean_tree, "HEAD", AuditorConfig(task_text="Add a copy_button_wiring helper.")
+    ).tier1()
+    assert _verdicts(refused)["dead-code"] == "fail"
+    assert _verdicts(asked)["dead-code"] == "pass"
+    assert asked.key != refused.key

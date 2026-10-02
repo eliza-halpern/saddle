@@ -1516,3 +1516,21 @@ def transcript_verdict(journal: Path) -> tuple[str, str]:
     spans = read_spans(journal)
     start = next(s for s in spans if s.name == "auto:start")
     return _auto_verdict(start, spans)
+
+
+def test_the_runs_task_reaches_the_audit_config_as_its_task_text(repo: Path) -> None:
+    """`AutoOptions.task` is what the audit reads to tell a function the task asked for from
+    one added only to give a check something to measure."""
+    seen: list[str | None] = []
+
+    def factory(worktree: Path, baseline: str, config: AuditorConfig) -> FakeAuditor:
+        seen.append(config.task_text)
+        return FakeAuditor()
+
+    options = AutoOptions(
+        task="make add add", repo=repo, run_id="t", arm="E+A", auditor_factory=factory
+    )
+    run_auto(options, cast(VllmClient, Reactive([[EDIT_COMMENT], [CHECK], [FINISH]])))
+    assert seen == ["make add add"]
+    assert AuditFeed(repo, "HEAD", repo / "j.jsonl", "s", factory=factory).task is None
+    assert seen[-1] is None

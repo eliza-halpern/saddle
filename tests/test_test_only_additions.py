@@ -15,6 +15,7 @@ import pytest
 from test_gates import _node, _passing_inputs
 
 from saddle.gates import (
+    TEST_ONLY_UNPROVEN,
     GateCheck,
     Tier1Inputs,
     check_dead_additions,
@@ -28,6 +29,7 @@ WIRING = (
     '    """Pin the copy button\'s assets."""\n'
     '    return ("markdown.js", "app.js")\n'
 )
+BROWSER_FILE = "src/pkg/web/static/app.js"
 SERVE = "def serve():\n    return 1\n"
 CLI = "from pkg.web.app import serve\n\n\ndef main():\n    return serve()\n"
 TEST_CALLS = (
@@ -47,18 +49,41 @@ def _run(
     baseline: Mapping[str, str] | None = None,
     pyproject: str | None = None,
     imported: bool = True,
+    task_text: str | None = None,
+    touched: tuple[str, ...] = (BROWSER_FILE,),
 ) -> GateCheck:
     """The check over `sources`, with `CLI` (which imports `APP`'s module) in the tree unless
-    `imported` is False: a module production code does not import is not judged."""
+    `imported` is False: a module production code does not import is not judged. `touched`
+    defaults to the recorded diff's other file, a browser script, so a public name is judged
+    as it was there; the library tests pass their own."""
     tree = {"src/pkg/cli.py": CLI, **sources} if imported else sources
-    return check_test_only_additions(tree, added, baseline=baseline, pyproject=pyproject)
+    return check_test_only_additions(
+        tree,
+        added,
+        baseline=baseline,
+        pyproject=pyproject,
+        task_text=task_text,
+        touched=touched,
+    )
 
 
-def _app_with(added_text: str, *, extra: Mapping[str, str] | None = None) -> GateCheck:
+def _app_with(
+    added_text: str,
+    *,
+    extra: Mapping[str, str] | None = None,
+    task_text: str | None = None,
+    touched: tuple[str, ...] = (BROWSER_FILE,),
+) -> GateCheck:
     """`APP` gains `added_text` after `SERVE`; `extra` are the other modules of the tree."""
     sources = {APP: SERVE + "\n\n" + added_text, **(extra or {})}
     start = SERVE.count("\n") + 3
-    return _run(sources, {APP: _lines(added_text, start)}, baseline={APP: SERVE})
+    return _run(
+        sources,
+        {APP: _lines(added_text, start)},
+        baseline={APP: SERVE},
+        task_text=task_text,
+        touched=touched,
+    )
 
 
 def test_the_copy_button_run_is_refused_and_the_symbol_named() -> None:
@@ -415,6 +440,159 @@ def test_a_module_is_reached_by_an_import_an_entry_point_a_script_guard_or_an_un
     assert not package.passed
 
 
+# -- a library's callers are its users --------------------------------------------------------
+
+LIB_BASE = {
+    "mylib/__init__.py": "from mylib.core import add\n",
+    "mylib/core.py": "def add(a, b):\n    return a + b\n",
+    "tests/test_core.py": "from mylib import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+}
+LIB_CORE = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+LIB_TESTS = (
+    "from mylib import add\nfrom mylib.core import sub\n\n\n"
+    "def test_add():\n    assert add(1, 2) == 3\n\n\n"
+    "def test_sub():\n    assert sub(3, 1) == 2\n"
+)
+
+
+def _library(
+    core: str = LIB_CORE,
+    *,
+    task_text: str | None = None,
+    touched: tuple[str, ...] = ("mylib/core.py", "tests/test_core.py"),
+) -> GateCheck:
+    """The library probe: `mylib/core.py` gains a function and its test; `mylib/__init__.py`
+    (production) imports the module. The added lines are the ones past the baseline's two."""
+    head = {**LIB_BASE, "mylib/core.py": core, "tests/test_core.py": LIB_TESTS}
+    return check_test_only_additions(
+        head,
+        {"mylib/core.py": set(range(5, core.count("\n") + 1))},
+        baseline=LIB_BASE,
+        task_text=task_text,
+        touched=touched,
+    )
+
+
+def test_a_public_function_added_to_a_library_module_is_not_refused() -> None:
+    """The legitimate input the earlier rule rejected: the task said "add `sub`", the module
+    is imported by the package, and only its test calls it."""
+    check = _library()
+    assert check.passed
+    assert check.detail.startswith(TEST_ONLY_UNPROVEN)
+    assert "mylib/core.py: sub (referenced only by tests/test_core.py)" in check.detail
+    assert check.basis == "test-only-definitions=1 unproven=1"
+
+
+def test_the_same_function_beside_browser_changes_is_refused() -> None:
+    """The recorded shape: the real work is in files the Python gates cannot see."""
+    check = _library(touched=("mylib/core.py", "tests/test_core.py", "web/static/app.js"))
+    assert not check.passed
+    assert "mylib/core.py: sub (referenced only by tests/test_core.py)" in check.detail
+    assert "not production code" in check.detail
+
+
+def test_only_other_language_source_in_the_diff_marks_the_recorded_shape() -> None:
+    def refused(*files: str) -> bool:
+        return not _library(touched=("mylib/core.py", *files)).passed
+
+    for browser in ("web/app.js", "web/app.css", "web/index.html", "a/b.tsx", "x/run.sh", "W.JS"):
+        assert refused(browser), browser
+    # Prose, data and config beside a new library function do not say it is padding.
+    for quiet in ("README.md", "docs/guide.rst", "pyproject.toml", "data/rows.json", "uv.lock"):
+        assert not refused(quiet), quiet
+    # A browser test script is test code, not the task's work.
+    for test_script in ("web/app.test.js", "tests/dom_shim.js", "web/__tests__/a.js"):
+        assert not refused(test_script), test_script
+    # Python and a path with no suffix are not "other language".
+    assert not refused("mylib/other.py", "Makefile")
+
+
+def test_a_private_function_only_tests_call_is_refused_whatever_else_changed() -> None:
+    private = "def add(a, b):\n    return a + b\n\n\ndef _sub(a, b):\n    return a - b\n"
+    for touched in (("mylib/core.py",), ("mylib/core.py", "web/app.js")):
+        head = {**LIB_BASE, "mylib/core.py": private}
+        check = check_test_only_additions(
+            {**head, "tests/test_core.py": "from mylib.core import _sub\n\n_sub(1, 2)\n"},
+            {"mylib/core.py": {5, 6}},
+            baseline=LIB_BASE,
+            touched=touched,
+        )
+        assert not check.passed
+        assert "mylib/core.py: _sub (referenced only by tests/test_core.py)" in check.detail
+    # ... even when the task text spells it.
+    named = check_test_only_additions(
+        {**LIB_BASE, "mylib/core.py": private},
+        {"mylib/core.py": {5, 6}},
+        baseline=LIB_BASE,
+        task_text="add _sub to mylib",
+    )
+    assert not named.passed
+
+
+def test_a_public_name_the_task_text_spells_was_asked_for() -> None:
+    asked = _library(task_text="Add a `sub` function to the library that subtracts.")
+    assert asked.passed
+    assert not asked.detail.startswith(TEST_ONLY_UNPROVEN)
+    assert (
+        asked.detail == "every function, class and constant added is reached from production code"
+    )
+    # Asked for beside browser changes too: the task names it, so it is not padding.
+    beside = _library(
+        task_text="sub(a, b) must subtract",
+        touched=("mylib/core.py", "web/app.js"),
+    )
+    assert beside.passed
+
+
+def test_a_task_text_names_a_whole_identifier_and_nothing_longer_or_in_another_case() -> None:
+    # Known-bad: spelled inside longer words or identifiers, or in another case, it is not named.
+    for text in ("add a subtract function", "a subtle change", "my_sub_helper", "SUB it", "sub_"):
+        check = _library(task_text=text, touched=("mylib/core.py", "web/app.js"))
+        assert not check.passed, text
+    # Known-good: punctuation, backticks and parentheses delimit it.
+    for text in ("`sub`", "sub()", "(sub)", "call sub.", "sub,add", "a.sub"):
+        assert _library(task_text=text, touched=("mylib/core.py", "web/app.js")).passed, text
+
+
+def test_a_task_text_that_does_not_name_it_leaves_a_library_function_unproven() -> None:
+    check = _library(task_text="Subtract numbers in the maths package.")
+    assert check.passed
+    assert check.detail.startswith(TEST_ONLY_UNPROVEN)
+
+
+def test_a_public_root_keeps_its_private_helpers_with_it() -> None:
+    core = (
+        LIB_CORE
+        + "\n\ndef _twice(x):\n    return x * 2\n\n\ndef double(x):\n    return _twice(x)\n"
+    )
+    check = check_test_only_additions(
+        {
+            **LIB_BASE,
+            "mylib/core.py": core,
+            "tests/test_core.py": "from mylib.core import double\n",
+        },
+        {"mylib/core.py": set(range(5, core.count("\n") + 1))},
+        baseline=LIB_BASE,
+        touched=("mylib/core.py",),
+    )
+    assert check.passed
+    assert check.detail.startswith(TEST_ONLY_UNPROVEN)
+    assert "and what only these use: _twice" in check.detail
+
+
+def test_a_refusal_wins_over_a_not_proven_name_beside_it() -> None:
+    core = LIB_CORE + "\n\ndef _orphan():\n    return 0\n"
+    check = check_test_only_additions(
+        {**LIB_BASE, "mylib/core.py": core, "tests/test_core.py": LIB_TESTS},
+        {"mylib/core.py": set(range(5, core.count("\n") + 1))},
+        baseline=LIB_BASE,
+        touched=("mylib/core.py",),
+    )
+    assert not check.passed
+    assert "mylib/core.py: _orphan (referenced by nothing)" in check.detail
+    assert "sub" not in check.detail
+
+
 # -- the gate: `run_tier1` joins this to `dead-code` only when the audit asks -----------------
 
 
@@ -429,6 +607,7 @@ def _wired(**changes: object) -> Tier1Inputs:
         sources=sources,
         added_lines={APP: tuple(sorted(_lines(WIRING)))},
         baseline_sources={},
+        touched_files=(APP, BROWSER_FILE),
         **changes,  # type: ignore[arg-type]
     )
 
@@ -503,3 +682,28 @@ def test_a_spec_node_is_not_asked(kind: str) -> None:
     inputs = _wired(test_only_additions=True)
     checks = {c.name: c for c in run_tier1(node, inputs).checks}
     assert checks["dead-code"].passed == (kind == "test")
+
+
+def test_run_tier1_keeps_a_not_proven_name_visible_and_lets_a_refusal_win() -> None:
+    library = replace(_wired(test_only_additions=True), touched_files=(APP,))
+    shown = _dead_code(library)
+    assert shown.passed
+    assert shown.detail.startswith(TEST_ONLY_UNPROVEN)
+    # A refusal of the older check is not hidden behind a not-proven note.
+    lone = "@register\ndef _lone():\n    return 1\n" + WIRING
+    both = replace(
+        library,
+        sources={**library.sources, APP: lone},
+        added_lines={APP: tuple(sorted(_lines(lone)))},
+        dead_code_runner=lambda _edited: 0,
+    )
+    refused = _dead_code(both)
+    assert not refused.passed
+    assert not refused.detail.startswith(TEST_ONLY_UNPROVEN)
+
+
+def test_run_tier1_hands_the_task_text_to_the_check() -> None:
+    inputs = _wired(test_only_additions=True, task_text="wire `copy_button_wiring` in")
+    check = _dead_code(inputs)
+    assert check.passed
+    assert check.detail == "every private definition added is mentioned elsewhere in the tree"

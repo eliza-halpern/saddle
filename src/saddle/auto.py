@@ -810,6 +810,7 @@ def run_auto(
             factory=options.auditor_factory,
             project_env=project,
             sanctioned_test_rewrites=options.sanctioned_test_rewrites,
+            task=options.task,
             tier2=options.tier2,
             mutant_shortlist=options.mutant_shortlist,
             p1=p1,
