@@ -80,3 +80,9 @@ def test_also_showing_shows_a_directory_to_every_confined_run_inside_the_block(
     assert written.returncode != 0
     assert not (tools / "x").exists()
     assert after.returncode != 0
+
+
+def test_a_confined_run_is_marked_as_confined(tmp_path: Path) -> None:
+    _argv, env = sandbox.confine(["true"], tmp_path)
+    assert env[sandbox.CONFINED_ENV] == "1"
+    assert sandbox.command_env({}).get(sandbox.CONFINED_ENV) is None

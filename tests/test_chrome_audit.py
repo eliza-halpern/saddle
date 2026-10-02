@@ -14,6 +14,7 @@ whose "Chrome tests" skip, stay silent or fail.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from collections.abc import Mapping
@@ -30,10 +31,20 @@ from saddle.auditor import JS_COVERAGE_GATE, Auditor
 from saddle.evidence import CapturedRun
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
 from saddle.jsevidence import JsCoverage, measure_chrome_coverage, read_coverage_scope
+from saddle.sandbox import CONFINED_ENV
 
 REPO = Path(__file__).resolve().parents[1]
 SCOPE = "tests/fixtures/js_coverage_scope.json"
 RUNS_JS = "src/saddle/web/static/runs.js"
+# The two real audits below run a whole audit, Chrome included, of a copy of this
+# repository. Inside an audit's own sandbox that nests one confinement in another,
+# which cannot reproduce the outer run (4 of its 32 Chrome tests failed there; all
+# 164 pass one level deep), so there they skip and the outer audit lists them as
+# not proven. check.sh runs them.
+not_nested = pytest.mark.skipif(
+    os.environ.get(CONFINED_ENV) == "1",
+    reason="a real audit inside an audit's sandbox: nested confinement (check.sh runs it)",
+)
 needs_chrome = pytest.mark.skipif(
     not BROWSER
     or not (REPO / "node_modules/c8/bin/c8.js").is_file()
@@ -340,6 +351,7 @@ def audited(root: Path) -> Any:
 
 
 @needs_chrome
+@not_nested
 def test_a_changed_runs_line_a_real_chrome_test_reaches_passes(tmp_path: Path) -> None:
     root = real_copy(tmp_path)
     path = root / RUNS_JS
@@ -350,6 +362,7 @@ def test_a_changed_runs_line_a_real_chrome_test_reaches_passes(tmp_path: Path) -
 
 
 @needs_chrome
+@not_nested
 def test_a_changed_runs_line_in_an_unreached_branch_fails_naming_it(tmp_path: Path) -> None:
     root = real_copy(tmp_path)
     path = root / RUNS_JS

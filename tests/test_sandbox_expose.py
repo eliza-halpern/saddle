@@ -67,3 +67,24 @@ def test_default_expose_carries_the_setting_and_only_with_it(
     assert prefix.resolve() not in without
     assert prefix.resolve() in shown
     assert sandbox.EXPOSE_ENV not in sandbox.ENV_KEEP  # the setting never reaches a command
+
+
+def test_a_binary_straight_in_local_bin_shows_itself_not_the_rest_of_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `uv` lives at ~/.local/bin/uv: the parent of its bin/ is ~/.local, which holds
+    # every other user-installed tool. Shown whole, a second named tool's link in
+    # ~/.local/bin could not be bound inside it, and bwrap refused to start.
+    home = tmp_path / "home"
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    (home / ".local" / "share" / "secret").mkdir(parents=True)
+    uv = local_bin / "uv"
+    uv.write_text("#!/bin/sh\nexit 0\n")
+    uv.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    assert exposed_commands(str(local_bin), "uv") == {uv.resolve(): uv.resolve()}
+    prefix, _real, on_path = install(tmp_path)
+    both = exposed_commands(f"{local_bin}{os.pathsep}{on_path}", "uv,rt")
+    assert (home / ".local").resolve() not in both
+    assert both[prefix.resolve()] == prefix.resolve()

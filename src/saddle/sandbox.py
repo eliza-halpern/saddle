@@ -396,6 +396,13 @@ def layers_on(venv: Path) -> Path | None:
     return None
 
 
+CONFINED_ENV: Final = "SADDLE_CONFINED"
+"""Set to `1` in every `confine`d gate run (the audit's suite, mutation, gate
+stages), so a test can tell it runs inside an audit's sandbox: a test that runs
+a whole audit of its own there nests one confinement in another, which cannot
+reproduce the outer run, and says so by skipping (the outer audit then lists it
+as not proven)."""
+
 EXPOSE_ENV: Final = "SADDLE_SANDBOX_EXPOSE"
 """Comma-separated command names a sandboxed command may also run, beyond the
 gate tools: each is found on saddle's own PATH, and its install directory is
@@ -451,7 +458,9 @@ def exposed_commands(path: str, names: str) -> dict[Path, Path]:
     The command's resolved file is shown at the spelling found on `path` (so a
     link in a hidden `~/.local/bin` still runs), and the directory it is
     installed in is shown whole -- the parent of its `bin/` when it sits in one,
-    else its own directory -- because a runtime needs its libraries beside it.
+    else its own directory -- because a runtime needs its libraries beside it;
+    but never a prefix many tools share (`_shared_prefixes`), whose tool shows
+    its file alone.
     A name not found is skipped: the command then fails inside the sandbox as
     it would have, rather than saddle refusing to start."""
     binds: dict[Path, Path] = {}
@@ -461,10 +470,24 @@ def exposed_commands(path: str, names: str) -> dict[Path, Path]:
             continue
         spelled, landed = Path(found).absolute(), Path(found).resolve()
         home = landed.parent.parent if landed.parent.name == "bin" else landed.parent
-        binds[home] = home
+        if home in _shared_prefixes():
+            # A binary installed straight into ~/.local/bin: the prefix is everyone's,
+            # so the file alone is shown, never the rest of ~/.local.
+            binds[landed] = landed
+        else:
+            binds[home] = home
         if spelled != landed:
             binds[spelled] = landed
     return binds
+
+
+def _shared_prefixes() -> frozenset[Path]:
+    """Install prefixes many tools share under HOME. Showing one whole for a single
+    tool would show the others' files too, and a later bind of a file inside it
+    (another named tool's link in `~/.local/bin`) could not be made, so bwrap
+    would not start at all."""
+    home = Path.home().resolve()
+    return frozenset({home, home / ".local"})
 
 
 def default_expose(env: Mapping[str, str]) -> tuple[tuple[Path, Path], ...]:
@@ -682,7 +705,8 @@ def confine(
     files' `node_modules`, which the staged copy leaves out)."""
     project = _PROJECT_ENV.get()
     venv = {"VIRTUAL_ENV": str(project)} if project is not None else {}
-    env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **venv, **(extra_env or {})})
+    base = {"PATH": gate_path(os.environ.get("PATH", "")), CONFINED_ENV: "1", **venv}
+    env = command_env({**base, **(extra_env or {})})
     return _confined(argv, root, env, writable, (*shown, *_SHOWN.get()))
 
 
