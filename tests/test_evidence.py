@@ -3139,3 +3139,37 @@ def test_format_overrides_of_a_config_that_does_not_parse_are_none(tmp_path: Pat
     (tmp_path / ".ruff.toml").write_text("line-length = 90\n")
     assert run_argv(["git", "commit", "-q", "-am", "fixed"], tmp_path) == 0
     assert format_overrides(tmp_path, "HEAD") == ("--config", "line-length = 90")
+
+
+def test_real_mutmut_runs_tests_that_read_the_projects_node_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before: mutmut ran the tests in `mutants/`, which held only its sources
+    and `also_copy`; a test reading `node_modules` failed its stats run ("failed
+    to collect stats") and the mutation check refused every Python change to a
+    project whose tests need it (`_link_into_mutants`)."""
+    _without_stubbed_mutmut(monkeypatch)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    (workdir / ".gitignore").write_text("node_modules/\n")
+    (workdir / "n.py").write_text("def f(x):\n    return x + 1\n")
+    (workdir / "test_f.py").write_text(
+        "from pathlib import Path\n\nfrom n import f\n\n\ndef test_f():\n"
+        '    assert Path("node_modules/pkg/data.txt").read_text() == "ok"\n'
+        "    assert f(1) == 2\n"
+    )
+    (workdir / "node_modules" / "pkg").mkdir(parents=True)
+    (workdir / "node_modules" / "pkg" / "data.txt").write_text("ok")
+    for argv in (["init", "-q"], ["add", "-A"]):
+        assert run_argv(["git", *argv], workdir) == 0
+    # The audit shows the checkout's node_modules to every confined run (`also_showing`).
+    with sandbox.also_showing([(workdir / "node_modules").resolve()]):
+        outcome = mutation_sample(
+            workdir,
+            {(str(workdir / "n.py"), 2)},
+            10,
+            test_files={"test_f.py"},
+            select_tests=("test_f.py::test_f",),
+        )
+    assert outcome.total > 0, outcome
+    assert outcome.killed == outcome.total, outcome
