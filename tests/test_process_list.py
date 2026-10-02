@@ -517,3 +517,60 @@ def test_termination_survives_a_process_that_is_gone_or_not_ours_and_gives_up_po
         assert stubborn.wait(timeout=5) is not None
     finally:
         stubborn.kill()
+
+
+# -- a program a command backgrounds outlives it, in full access only (#136) --------------------
+
+BACKGROUNDED = {
+    "bare-ampersand": "sleep {s} &",
+    "nohup": "nohup sleep {s} &",
+    "disown": "sleep {s} & disown",
+}
+
+
+@needs_cgroup
+@pytest.mark.parametrize("how", list(BACKGROUNDED))
+def test_in_full_access_a_backgrounded_program_outlives_its_command_is_listed_and_stopped(
+    full: ToolContext, how: str
+) -> None:
+    sleep = marker()
+    command = BACKGROUNDED[how].format(s=sleep)
+    started = time.monotonic()
+    result = run(full, "run_command", command=command, timeout=30)
+    assert "exit 0" in result  # the command ended; it did not wait for the program
+    assert time.monotonic() - started < 10
+    (pid,) = wait_for(sleep, 1)
+    time.sleep(0.5)
+    assert alive(pid)  # the known-bad this admits: it outlived its command
+    (entry,) = processes_of(full).entries()
+    assert (entry.pid, entry.ran) == (pid, command)
+    stopped = full.revoke_full_access()
+    assert [e.pid for e in stopped] == [pid]
+    wait_gone(pid)
+
+
+@pytest.mark.parametrize("how", list(BACKGROUNDED))
+def test_a_sandboxed_command_still_ends_every_program_it_backgrounded(
+    tmp_path: Path, how: str
+) -> None:
+    ctx = ToolContext(workdir=tmp_path, processes=ProcessLedger())  # Edit, no full access
+    sleep = marker()
+    run(ctx, "run_command", command=BACKGROUNDED[how].format(s=sleep) + " sleep 0.5")
+    assert ctx.box().outlive is False
+    time.sleep(0.5)
+    assert pids_running(sleep) == []
+    ctx.stop_processes()
+
+
+def test_a_box_without_a_process_list_never_lets_a_program_outlive_its_command(
+    tmp_path: Path,
+) -> None:
+    from saddle.sandbox import Sandbox
+
+    for unsandboxed in (True, False):
+        box = Sandbox.for_workdir(tmp_path, unsandboxed=unsandboxed)
+        assert box.outlive is False
+        sleep = marker()
+        box.run(f"sleep {sleep} >/dev/null 2>&1 & sleep 0.5")
+        time.sleep(0.3)
+        assert pids_running(sleep) == [], unsandboxed
