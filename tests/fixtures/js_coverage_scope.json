@@ -24,6 +24,7 @@
     "tests/test_lanechip.py",
     "tests/test_notify.py",
     "tests/test_packet_ui.py",
+    "tests/test_outside_ui.py",
     "tests/test_process_list_ui.py",
     "tests/test_paint_order.py",
     "tests/test_runs.py",

@@ -108,6 +108,41 @@ the user) carry it into the checkout. Every git command saddle runs there
 passes `-c core.fsmonitor= -c core.hooksPath=/dev/null`, so a hook or an
 fsmonitor in the repo's config is not run on its behalf.
 
+## Full access and the side-effect record
+
+With full access (Edit lane only, confirmed by the person) the boundary above
+moves for one session. Commands run as the person, and the file tools
+(`read_file`, `write_file`, `edit_file`, `list_dir`) take absolute, `~`,
+`$HOME` and `..` paths; `search` stays inside the folder. The rule is in the
+tools' own descriptions, which are sent with every request, so a model meets it
+before it can meet a refusal. Without full access, or in a Task run, every
+path is still required to stay inside the folder.
+
+Nothing outside the folder changes without a record (`sideeffects.py`):
+
+- Before the first change to a file outside the folder, by a file tool or by a
+  command that names it, the original is copied to the session's
+  `outside/blobs/`. Larger than 8 MiB, or past 200 files of a named
+  directory, a file is listed as "no backup" and Undo says it cannot restore it.
+- The record lists files created, changed and deleted (read from the disk when
+  the page asks, so a write that changed nothing shows nothing), downloads
+  (`curl`/`wget` URL with credentials and query removed, host, size), and
+  package installs and removals (`apt`, `dnf`, `pacman`, `flatpak`, `pip`,
+  `npm -g`), with the programs still running beside it (the process list).
+- A command is attributed by the paths it names, read before and after it
+  runs. Only programs whose effects are their arguments (`KNOWN`: `cp`, `mv`,
+  `sed -i`, `tar`, `curl` and so on) count as tracked. Any other command (a
+  script, `make install`, a variable in a path, a background command) is
+  listed under **Not tracked** with the reason, never left out. A change made
+  to a path the command does not name is invisible to the record; the page says
+  so.
+- Undo restores backed-up files byte for byte. Files the session created are
+  removed only after the person confirms, on the page and in the request
+  (`confirm: true`). A package or a download is reversed by hand.
+
+The page shows an "outside changes" chip in the top bar once there is anything
+to review, and its dialog holds the lists and the Undo buttons.
+
 ## Background terminals
 
 A build takes minutes; blocking the conversation on it is what makes an
