@@ -180,6 +180,18 @@ def test_the_baseline_runs_are_asked_once_per_baseline(
     assert counter.calls == 3
 
 
+def test_the_baseline_runs_are_kept_in_memory_when_there_is_no_cache_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = Counter(monkeypatch)
+    tree = project(tmp_path)
+    auditor = Auditor(tree)
+    auditor.tier1()
+    (tree / "test_n.py").write_text(TEST_BODY.format(value=2) + "x = 1  # BADFMT\n")
+    auditor.tier1()
+    assert counter.calls == 1
+
+
 def test_a_tree_holding_the_gate_finding_is_never_reused_for_a_format_only_edit() -> None:
     """A format stage judges exactly what a format-only edit changes."""
     gate_finding = Finding(PROJECT_GATE, 1, "pass", "code-wrong", "Gate: ...", ())
