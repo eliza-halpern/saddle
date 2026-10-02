@@ -227,6 +227,22 @@ def test_the_prompt_says_the_finish_audit_runs_new_tests_on_the_old_code(tmp_pat
     assert said == {"E+A+F": True, "E": False}
 
 
+def test_the_prompt_holds_each_rewritten_test_to_failing_on_the_old_code(
+    tmp_path: Path,
+) -> None:
+    """Red before: the prompt said the finish audit runs "your new and changed
+    tests" on the original code and "others may pass there", but the audit
+    refuses each rewritten test that passes there
+    (test_sanction_red.py::test_a_rewrite_that_passes_on_both_trees_is_not_sanctioned).
+    "May pass" covers only new tests; the rewrite rule is stated."""
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client, arm="E+A+F")
+    system = _system(client)
+    assert "new and changed tests" not in system
+    assert "other new tests may pass there" in system
+    assert "each rewritten test must fail on the original code" in system
+
+
 def test_the_prompt_says_a_pinned_test_rewrite_is_put_to_a_person(tmp_path: Path) -> None:
     """Red before: a watched run had to rewrite two tests that pinned the
     masking its task removed, found the rewrite refused, and went looking
