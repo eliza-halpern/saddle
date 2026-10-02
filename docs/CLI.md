@@ -54,7 +54,7 @@ test-timeout = 3600   # seconds
   is judged under. An edit of yours takes effect once it is committed.
 - The value is a number of seconds above 0 and at most 86400 (a day). The keys saddle
   reads in `[tool.saddle]` are `test-timeout`, `test-workers` and `sandbox-expose` (all
-  below), and `static-check`.
+  below), `static-check`, and `prompt-benchmark` with its floor and margin (below).
 - A value that is not usable stops the audit instead of falling back to 300 s. This
   covers a string such as `"2400"`, `true`, zero, more than a day, another key in the
   table (such as the typo `test_timeout`), or a `pyproject.toml` that is not TOML. The
@@ -151,6 +151,65 @@ sandbox-expose = ["node", "google-chrome"]
 - The audit's own runs read it (`saddle audit`, and the checkpoints, finish audit and
   test-impact map of `saddle auto` and the chat's Task runs). `saddle run` and the
   commands the model itself runs in its sandbox read only the environment variable.
+
+## A prompt benchmark for changed prompts
+
+No test, coverage figure or mutant can judge what a changed prompt does to a model, and
+a mutant inside a prompt string is a text-only mutant the audit leaves out. So when a
+change edits prompt text, the audit says so in a tier-2 finding named `prompt-effect`:
+measured when the project provides a way to measure it, otherwise not proven, by name.
+
+What counts as prompt text is deliberately narrow (`saddle.prompt_changes`): a
+module-level UPPER_CASE constant whose last name segment is `PROMPT`, `PROMPTS`, `RULE`,
+`RULES`, `PERSONAS`, `GRAMMAR` or `INSTRUCTIONS` and that holds prose (`SYSTEM_PROMPT`,
+`EDIT_RULES`), or a function or method whose name ends in `_prompt`, judged by the string
+text in its body (an f-string by its whole expression; docstrings and `raise` messages
+excluded). Values are compared as the parser reads them, so re-wrapping a string, joining
+`"a" + "b"` or reordering a dict is no change. Not detected: a prompt assembled across
+helpers or under another name, an inline argument, a tool description, a prompt kept in a
+data file. A changed Python file that cannot be parsed on one side is named in the
+finding, never read as unchanged.
+
+```toml
+[tool.saddle]
+prompt-benchmark = ["python", "tools/prompt_bench.py"]
+prompt-benchmark-floor = 0.8     # optional: a head score below this fails
+prompt-benchmark-margin = 0.05   # optional: a head score more than this below the baseline's fails
+```
+
+- With no `prompt-benchmark`, the finding is `not-proven` and reads "prompt text changed:
+  `path: NAME`; no test, coverage or mutation result measures a prompt's effect, and this
+  project configures no prompt benchmark". It refuses nothing, and the packet's Not proven
+  row lists it. **Saddle's own repository configures none**: its benchmark needs a model
+  server and lives outside the repository, so a change to saddle's prompts is reported as
+  not proven.
+- With one, the audit runs the command on the head tree and on a copy of the baseline
+  commit's tree (the baseline's readable score is kept for the rest of the run), under the
+  same sandbox, memory cap and `test-timeout` as the static check. The sandbox has no
+  network, so the command can score cases that run in the tree (a recorded-response
+  replay, a deterministic checker over stored model outputs) and cannot call a model
+  server. It must exit 0 and its **last stdout line** must be JSON such as
+  `{"score": 0.83, "n": 12, "label": "smoke"}`: `score` a finite number, `n` (cases,
+  optional) a non-negative integer, `label` (optional) a string. Earlier lines are the
+  command's own log.
+- The finding then reads `base 0.8 (n=12) -> head 0.83 (n=12)` and the whole record
+  (command, both readings, the bars) is sealed with it. With neither bar set it stays
+  `not-proven`: the numbers are reported, not judged.
+- With `prompt-benchmark-floor`, a head score below it **fails**; with
+  `prompt-benchmark-margin`, a head score more than that below a readable baseline score
+  fails. Meeting every bar set is a `pass`. A margin with no readable baseline score is
+  `not-proven`.
+- A benchmark that exits non-zero, times out, cannot be launched or prints no readable
+  score on its last line is `not-proven` ("ran but produced no readable score"), never a
+  pass and never a fail: a command that cannot run in the sandbox is no evidence about
+  the prompt. A person runs it.
+- The three keys are read like `test-timeout`: from the commit the work starts from,
+  never from the tree being judged, so an audited change can neither drop the benchmark
+  nor lower its own floor. A floor or margin with no `prompt-benchmark`, a bar that is
+  not a finite number (a margin below 0 included), or a command that is not a non-empty
+  list of words stops the audit with `error: cannot read the prompt benchmark: …`.
+- A prompt-only change also leaves mutation not proven (`module-level constants only`);
+  the two notes are both listed, and neither says nothing is left unproven.
 
 ## saddle auto TASK
 
