@@ -2261,8 +2261,7 @@ class Auditor:
             # no edit to the change could make a test run. Last, so no rule above
             # reads a check this replaces.
             for gate in NO_TESTS_GATES:
-                if gate in statuses:
-                    statuses[gate] = ("not-proven", NO_TESTS_DETAIL, statuses[gate][2])
+                statuses[gate] = ("not-proven", NO_TESTS_DETAIL, statuses[gate][2])
         wanted = TIER1 if tier == 1 else TIER2
         if STATIC_CHECK in statuses:
             wanted = (*wanted, STATIC_CHECK)
