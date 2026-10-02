@@ -22,6 +22,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -40,6 +41,7 @@ from saddle.evidence import (
     materialize_baseline,
     mutation_text,
     run_capture,
+    src_layout_env,
     tree_memory_limit,
 )
 from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE
@@ -305,6 +307,8 @@ class CoverageScope:
 
     measured: frozenset[str] = frozenset()
     not_measured: Mapping[str, str] = field(default_factory=dict)
+    chrome_measured: frozenset[str] = frozenset()
+    chrome_tests: tuple[str, ...] = ()
     problem: str = ""
 
 
@@ -317,10 +321,24 @@ def read_coverage_scope(workdir: Path) -> CoverageScope:
     try:
         data = json.loads(path.read_text())
         return CoverageScope(
-            frozenset(data["measured"]), {str(k): str(v) for k, v in data["not_measured"].items()}
+            frozenset(data["measured"]),
+            {str(k): str(v) for k, v in data["not_measured"].items()},
+            frozenset(data.get("chrome_measured", {})),
+            tuple(str(t) for t in data.get("chrome_tests", ())),
         )
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         return CoverageScope(problem=f"{COVERAGE_SCOPE} could not be read: {exc!r}")
+
+
+CHROME_COVERAGE_ENV: Final = "SADDLE_JS_COVERAGE_DIR"
+"""The directory the Chrome-driven tests write V8 coverage into when it is set."""
+
+CHROME_RC: Final = ".c8rc.chrome.json"
+"""c8's configuration for the page scripts the Chrome-driven tests load."""
+
+NO_CHROME: Final = "no Chrome ran"
+"""Why the page scripts have no line coverage when the Chrome-driven tests left
+none (no browser, or every one of them skipped)."""
 
 
 def c8_entry(workdir: Path, tools: Path | None = None) -> Path | None:
@@ -420,6 +438,101 @@ def measure_coverage(
             return JsCoverage(parse_lcov(report.read_text(), workdir))
         except ValueError as exc:
             return JsCoverage(problem=f"the c8 report did not parse: {exc}")
+
+
+def measure_chrome_coverage(
+    workdir: Path,
+    tests: Sequence[str],
+    *,
+    tools: Path | None = None,
+    recorder: SpanRecorder | None = None,
+    timeout: float = JS_TEST_TIMEOUT_S,
+    workers: int = 1,
+) -> JsCoverage:
+    """Per-line counts of the page scripts while the Chrome-driven pytest files
+    `tests` (relative to `workdir`) run in a real Chrome.
+
+    The tests run confined, with `CHROME_COVERAGE_ENV` naming a scratch
+    directory outside the tree that the drivers write V8 coverage into; c8 then
+    reports it under `CHROME_RC`. A page script no test loaded is reported with
+    every line unrun, so a run that left no coverage files must never reach c8:
+    it is the problem `NO_CHROME`, as is a run in which any test skipped (a
+    skipped driver's lines would read as unrun, a failure the change did not
+    earn). A red suite, a timeout, or a report that does not parse is a problem
+    too: coverage read off a failed run is a number about the wrong program."""
+    entry = c8_entry(workdir, tools)
+    if entry is None:
+        return JsCoverage(problem="c8 was not found in node_modules")
+    entry = entry.resolve()
+    modules = entry.parents[2]
+    shown = [] if modules.is_relative_to(workdir.resolve()) else [modules]
+    with tempfile.TemporaryDirectory(prefix="saddle-chrome-") as tmp:
+        out = Path(tmp)
+        raw = out / "v8"
+        raw.mkdir()
+        ran = run_capture(
+            [
+                "python",
+                "-m",
+                "pytest",
+                "-q",
+                "--no-cov",
+                "-p",
+                "no:cacheprovider",
+                *(["-n", str(workers)] if workers > 1 else []),
+                *tests,
+            ],
+            workdir,
+            recorder=recorder,
+            timeout=timeout,
+            memory_limit=tree_memory_limit(),
+            writable=[out],
+            extra_env={**src_layout_env(workdir), CHROME_COVERAGE_ENV: str(raw)},
+            shown=shown,
+        )
+        if ran.exit_code == TOOL_UNAVAILABLE:
+            return JsCoverage(
+                problem=f"the Chrome tests could not be launched: {ran.stderr.strip()}"
+            )
+        if ran.exit_code == SHELL_TIMEOUT:
+            return JsCoverage(problem="the Chrome tests timed out")
+        if ran.exit_code != 0:
+            last = (ran.stdout.strip().splitlines() or ["no output"])[-1]
+            return JsCoverage(problem=f"the Chrome tests exited {ran.exit_code}: {last}")
+        skipped = re.search(r"(\d+) skipped", ran.stdout)
+        if skipped or not any(raw.glob("coverage-*.json")):
+            why = f"{skipped.group(1)} Chrome tests skipped" if skipped else NO_CHROME
+            return JsCoverage(problem=why)
+        report = run_capture(
+            [
+                "node",
+                str(entry),
+                "report",
+                f"--config={CHROME_RC}",
+                f"--temp-directory={raw}",
+                "--reporter=lcovonly",
+                f"--reports-dir={out / 'report'}",
+                "--check-coverage=false",
+            ],
+            workdir,
+            recorder=recorder,
+            timeout=timeout,
+            memory_limit=tree_memory_limit(),
+            writable=[out],
+            shown=shown,
+        )
+        if report.exit_code != 0:
+            last = (report.stderr.strip().splitlines() or ["no output"])[-1]
+            return JsCoverage(
+                problem=f"c8 report of the Chrome coverage exited {report.exit_code}: {last}"
+            )
+        lcov = out / "report" / "lcov.info"
+        if not lcov.is_file():
+            return JsCoverage(problem="c8 wrote no lcov report of the Chrome coverage")
+        try:
+            return JsCoverage(parse_lcov(lcov.read_text(), workdir))
+        except ValueError as exc:
+            return JsCoverage(problem=f"the c8 report of the Chrome coverage did not parse: {exc}")
 
 
 def stryker_entry(workdir: Path, tools: Path | None = None) -> Path | None:

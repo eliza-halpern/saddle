@@ -29,5 +29,18 @@
       "branches": 76.0,
       "functions": 87.0
     }
-  }
+  },
+  "chrome_tests": [
+    "tests/test_ask_web.py",
+    "tests/test_card_ui.py",
+    "tests/test_copy_button_ui.py",
+    "tests/test_full_access_ui.py",
+    "tests/test_lanechip.py",
+    "tests/test_notify.py",
+    "tests/test_packet_ui.py",
+    "tests/test_runs.py",
+    "tests/test_ui3_mode.py",
+    "tests/test_ui_snapshots.py",
+    "tests/test_uxfix.py"
+  ]
 }

@@ -145,6 +145,7 @@ from saddle.jsevidence import (
     JsTestResult,
     changed_js_lines,
     js_test_files,
+    measure_chrome_coverage,
     measure_coverage,
     read_coverage_scope,
     red_phase,
@@ -898,13 +899,15 @@ def js_coverage_finding(
         return None
     scope = read_coverage_scope(copy)
     measured = sorted(f for f in changed if f in scope.measured)
-    unmeasured = sorted(f for f in changed if f not in scope.measured)
+    chrome = sorted(f for f in changed if f in scope.chrome_measured and f not in scope.measured)
+    unmeasured = sorted(f for f in changed if f not in scope.measured and f not in chrome)
     why = {f: scope.not_measured.get(f, "in no coverage list") for f in unmeasured}
-    named = "; ".join(f"{f} ({why[f]})" for f in unmeasured)
     cite = "saddle.gates.check_js_coverage"
     problem = scope.problem
     check = None
     sidecar: dict[str, Any] = {"changed": changed, "not_line_measured": unmeasured}
+    hits: dict[str, Mapping[int, int]] = {}
+    judged = list(measured)
     if measured:
         got = (
             measure_coverage(copy, measured, tests, tools=tools, timeout=limit)
@@ -917,8 +920,36 @@ def js_coverage_finding(
         elif absent:
             problem = f"c8 reported no lines for {', '.join(absent)}"
         else:
-            check = check_js_coverage({f: changed[f] for f in measured}, got.lines)
-            sidecar["hits"] = {f: sorted(got.lines[f].items()) for f in measured}
+            hits.update(got.lines)
+        if got.problem or absent:
+            judged = []
+    if chrome:
+        # A page script's lines come from the Chrome-driven tests the scope names,
+        # run only now that a changed line lies in one of them (they are the slow part).
+        seen = (
+            measure_chrome_coverage(
+                copy,
+                scope.chrome_tests,
+                tools=tools,
+                timeout=limit,
+                workers=suite_workers(copy, resolved).count,
+            )
+            if scope.chrome_tests
+            else JsCoverage(problem="the coverage scope names no Chrome test")
+        )
+        gone = [f for f in chrome if f not in seen.lines]
+        if seen.problem or gone:
+            reason = seen.problem or f"c8 reported no lines for {', '.join(gone)}"
+            unmeasured = sorted([*unmeasured, *chrome])
+            why.update(dict.fromkeys(chrome, reason))
+            sidecar["not_line_measured"] = unmeasured
+        else:
+            hits.update(seen.lines)
+            judged += chrome
+    named = "; ".join(f"{f} ({why[f]})" for f in unmeasured)
+    if judged:
+        check = check_js_coverage({f: changed[f] for f in judged}, hits)
+        sidecar["hits"] = {f: sorted(hits[f].items()) for f in judged}
     if check is not None and not check.passed:
         detail = check.detail
         if unmeasured:
