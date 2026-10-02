@@ -718,3 +718,21 @@ def test_run_tier1_hands_the_task_text_to_the_check() -> None:
     check = _dead_code(inputs)
     assert check.passed
     assert check.detail == "every private definition added is mentioned elsewhere in the tree"
+
+
+def test_a_function_with_a_docstring_is_judged_as_the_audit_spells_its_added_lines() -> None:
+    # The audit's added lines are statement lines, docstrings left out
+    # (`evidence.changed_statements`); a span that kept the docstring was never
+    # wholly added, and saddle's audit passed a padded function for it.
+    module = (
+        "def word_underscores(text):\n"
+        '    """Offsets of underscores inside words."""\n'
+        "    return [i for i, c in enumerate(text) if c == '_']\n"
+    )
+    calls = {
+        "test_w.py": "from w import word_underscores\n\n\n"
+        "def test_w():\n    assert word_underscores('a_b') == [1]\n"
+    }
+    refused = _run({"w.py": module, **calls}, {"w.py": {1, 3}}, imported=False)
+    assert not refused.passed
+    assert "w.py: word_underscores (referenced only by test_w.py)" in refused.detail

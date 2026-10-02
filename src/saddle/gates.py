@@ -1636,6 +1636,22 @@ def check_js_test_only_additions(
     )
 
 
+def _docstring_lines(node: ast.AST) -> set[int]:
+    """First lines of the docstrings in `node`: the leading string of each function or
+    class body, as `evidence.statement_lines` leaves them out (gates does not import it)."""
+    found = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and inner.body:
+            first = inner.body[0]
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                found.add(first.lineno)
+    return found
+
+
 def check_test_only_additions(
     sources: Mapping[str, str],
     added: Mapping[str, Collection[int]],
@@ -1726,7 +1742,12 @@ def check_test_only_additions(
             before = set()
         lines = set(added[path])
         for name, statement in _module_level_names(tree).items():
-            span = {n.lineno for n in ast.walk(statement) if isinstance(n, ast.stmt)}
+            # Docstrings are not statements to the added lines either
+            # (`evidence.changed_statements` exempts them), so a span that kept them
+            # was never wholly added: a padding function with a docstring escaped.
+            span = {
+                n.lineno for n in ast.walk(statement) if isinstance(n, ast.stmt)
+            } - _docstring_lines(statement)
             registered = any(
                 _decorator_name(decorator) not in _TRANSPARENT_DECORATORS
                 for decorator in getattr(statement, "decorator_list", ())
