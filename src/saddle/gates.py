@@ -16,6 +16,7 @@ import tomllib
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from os.path import commonprefix
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -2924,13 +2925,14 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
             if outcome.untested
             else ""
         )
+        changes = _survivor_changes(outcome, names[:5])
         return GateCheck(
             name="mutation",
             passed=False,
             detail=(
                 f"killed {outcome.killed} of {outcome.total} changed-line mutants "
                 f"({percent:.1f}% < {required:.1f}%){note}: survived {len(names)}: "
-                f"{shown}{excluded}{untested}"
+                f"{shown}{excluded}{untested}{changes}"
             ),
             basis=f"sampled n={outcome.total}",
         )
@@ -2943,6 +2945,32 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
         ),
         basis=f"sampled n={outcome.total}",
     )
+
+
+def mutant_change(text: str) -> str:
+    """What a mutant changes, from its `-`/`+` lines (`evidence.mutation_text`):
+    the part of the first changed line that differs, old then new, with the
+    text the two share left out but for a few characters before it, so the
+    change can be found on a long line. "" when there is no line pair."""
+    old = next((line[1:] for line in text.splitlines() if line.startswith("-")), None)
+    new = next((line[1:] for line in text.splitlines() if line.startswith("+")), None)
+    if old is None or new is None:
+        return ""
+    head = len(commonprefix([old, new]))
+    tail = len(commonprefix([old[head:][::-1], new[head:][::-1]]))
+    before, after = old[head : len(old) - tail], new[head : len(new) - tail]
+    lead = old[max(0, head - 12) : head].lstrip()
+    where = f" after `{lead}`" if lead else ""
+    return f"`{before.strip() or before}` -> `{after.strip() or after}`{where}"
+
+
+def _survivor_changes(outcome: MutationOutcome, names: Sequence[str]) -> str:
+    """For each named survivor whose diff was recorded, what it changes: a name
+    alone (`markdown.js:39:3 Regex`, six times over) says nothing a test can be
+    written against."""
+    texts = {d[0]: d[4] for d in outcome.survivor_details}
+    said = [f"{n}: {c}" for n in names if (c := mutant_change(texts.get(n, "")))]
+    return "; what they change: " + "; ".join(said) if said else ""
 
 
 DEFAULT_MUTANT_SHORTLIST: Final = 5

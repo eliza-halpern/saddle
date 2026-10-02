@@ -41,6 +41,7 @@ from saddle.gates import (
     compelled_lines,
     introduced_findings,
     is_test_code,
+    mutant_change,
     never_run_test_lines,
     packaging_script_lines,
     plan_prescribes_deletion,
@@ -3234,3 +3235,29 @@ def test_a_failed_suite_names_its_failing_tests() -> None:
     capped = check_test_command("pytest -q", lambda _c: 1, output=many).detail
     assert capped.endswith(f"test_{FAILING_NAMED - 1} and 2 more")
     assert check_test_command("pytest -q", lambda _c: 1, output="").detail == "'pytest -q' exited 1"
+
+
+def test_a_mutation_refusal_says_what_each_named_survivor_changes() -> None:
+    # Saddle's audit of a JS fix refused on six survivors all named
+    # "markdown.js:39:3 Regex": nothing a test could be written against.
+    regex = "-const R = /(?<![\\p{L}\\p{N}])_/gu;\n+const R = /(?<![\\p{L}])_/gu;"
+    sign = "-    return a + b\n+    return a - b"
+    outcome = MutationOutcome(
+        killed=0,
+        total=2,
+        generated=2,
+        survivors=("m.js:1:12 Regex", "n.py::x__mutmut_1"),
+        survivor_details=(
+            ("m.js:1:12 Regex", "Survived", "m.js", 1, regex, False),
+            ("n.py::x__mutmut_1", "survived", "n.py", 2, sign, False),
+        ),
+    )
+    detail = check_mutation(outcome, 85.0).detail
+    assert detail.endswith(
+        "; what they change: m.js:1:12 Regex: `\\p{N}` -> `` after `/(?<![\\p{L}`; "
+        "n.py::x__mutmut_1: `+` -> `-` after `return a `"
+    )
+    # A survivor with no recorded diff is named as before, with nothing appended.
+    bare = MutationOutcome(killed=0, total=1, generated=1, survivors=("m.js:1:1 Regex",))
+    assert "what they change" not in check_mutation(bare, 85.0).detail
+    assert mutant_change("+only an addition") == ""
