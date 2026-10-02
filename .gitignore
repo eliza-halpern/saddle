@@ -25,3 +25,5 @@ dist/
 CLAUDE.local.md
 # Node tooling for the browser files, docs and styles (package-lock.json)
 node_modules/
+# c8's raw V8 coverage (.c8rc.json): in the tree, where an audit's staged copy can write it
+.c8-tmp/

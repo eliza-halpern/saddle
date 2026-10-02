@@ -2,7 +2,7 @@
   "all": true,
   "include": ["src/saddle/web/static/markdown.js"],
   "reporter": ["text"],
-  "tempDirectory": "node_modules/.cache/c8",
+  "tempDirectory": ".c8-tmp",
   "checkCoverage": true,
   "perFile": true,
   "lines": 100,

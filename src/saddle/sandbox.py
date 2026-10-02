@@ -426,6 +426,25 @@ def also_exposing(names: Sequence[str]) -> Iterator[None]:
         _EXPOSED.reset(token)
 
 
+_SHOWN: ContextVar[tuple[Path, ...]] = ContextVar("saddle_shown", default=())
+
+
+@contextmanager
+def also_showing(paths: Sequence[Path]) -> Iterator[None]:
+    """Within the block (this thread, this context), every `confine`d run also
+    shows each directory in `paths` read-only at its own path, as its `shown`
+    argument does.
+
+    The audit shows the checkout's git-ignored dependency directories, which its
+    staged copy leaves out, so the suite it runs sees what the project's own gate
+    sees. Carried like `also_exposing`."""
+    token = _SHOWN.set(tuple(paths))
+    try:
+        yield
+    finally:
+        _SHOWN.reset(token)
+
+
 def exposed_commands(path: str, names: str) -> dict[Path, Path]:
     """Read-only `{destination: source}` binds for each command in `names`.
 
@@ -664,7 +683,7 @@ def confine(
     project = _PROJECT_ENV.get()
     venv = {"VIRTUAL_ENV": str(project)} if project is not None else {}
     env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **venv, **(extra_env or {})})
-    return _confined(argv, root, env, writable, shown)
+    return _confined(argv, root, env, writable, (*shown, *_SHOWN.get()))
 
 
 def _confined(

@@ -1124,6 +1124,29 @@ def node_stage(argv: Sequence[str], tools: Path | None) -> tuple[str, ...]:
     return tuple(argv)
 
 
+DEPENDENCY_DIRS: Final = ("node_modules",)
+"""Dependency directories a project installs and git ignores, so a staged copy
+lacks them (`link_dependencies`)."""
+
+
+def link_dependencies(copy: Path, checkout: Path) -> tuple[Path, ...]:
+    """Link each of `checkout`'s `DEPENDENCY_DIRS` into its staged `copy`, once,
+    before anything runs there; the directories to show read-only.
+
+    The copy leaves out what git ignores, so a suite that needs `node_modules`
+    failed in the audit and passed in the project's own gate: 80 of saddle's own
+    tests did, and every change to it was refused. Linked once for the whole
+    audit, not per gate stage, so no run sees it come and go. The copy is
+    scratch, deleted with the audit; its staged tree id is taken before."""
+    shown = []
+    for name in DEPENDENCY_DIRS:
+        real, link = checkout / name, copy / name
+        if real.is_dir() and not link.exists() and not link.is_symlink():
+            link.symlink_to(real.resolve())
+            shown.append(real.resolve())
+    return tuple(shown)
+
+
 def _gate_stage_runs(
     stages: Sequence[tuple[str, ...]], tree: Path, limit: float, tools: Path | None = None
 ) -> list[CapturedRun]:
@@ -1831,7 +1854,8 @@ class Auditor:
             # findings come from the same suite run, and are cached under
             # tier 1's key, unless that tree's tier 1 is already known. The
             # finish audit used to run the whole suite once per tier on one tree.
-            with sandbox.also_exposing(exposed):
+            deps = link_dependencies(copy, tree or self.repo)
+            with sandbox.also_exposing(exposed), sandbox.also_showing(deps):
                 key1 = self._key(1, staged, resolved)
                 first = (self._cached(key1) or self._reuse(same1, key1)) if tier == 2 else None
                 if first is not None and not first.passed:
@@ -2250,7 +2274,8 @@ class Auditor:
                 memo.tests = impact.loads(cached.read_text())
                 if memo.tests is not None:
                     return f"map read from {cached.name}"
-            with sandbox.also_exposing(exposed):
+            deps = link_dependencies(copy, tree or self.repo)
+            with sandbox.also_exposing(exposed), sandbox.also_showing(deps):
                 data_file = str(copy / ".coverage.map")
                 drop_test_caches(copy)
                 mode = suite_run(copy, command, workers)

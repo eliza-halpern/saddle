@@ -60,3 +60,23 @@ def test_run_capture_passes_shown_to_the_confined_run(tmp_path: Path) -> None:
     assert (shut.exit_code, shut.stdout) == (0, "from the tools")
     hidden = run_capture(["cat", str(tools / "note.txt")], work, memory_limit=tree_memory_limit())
     assert hidden.exit_code != 0
+
+
+@needs_sandbox
+def test_also_showing_shows_a_directory_to_every_confined_run_inside_the_block(
+    tmp_path: Path,
+) -> None:
+    # The audit shows the checkout's node_modules to every run on its staged copy
+    # (the suite, mutation, the gate stages) without passing `shown` to each.
+    tools, work = _tools(tmp_path)
+    with sandbox.also_showing([tools]):
+        argv, env = sandbox.confine(["cat", str(tools / "note.txt")], work)
+        inside = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+        argv, env = sandbox.confine(["sh", "-c", f"touch {tools}/x"], work)
+        written = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+    argv, env = sandbox.confine(["cat", str(tools / "note.txt")], work)
+    after = subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+    assert (inside.returncode, inside.stdout) == (0, "from the tools")
+    assert written.returncode != 0
+    assert not (tools / "x").exists()
+    assert after.returncode != 0

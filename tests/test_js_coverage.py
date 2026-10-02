@@ -67,13 +67,21 @@ def _c8_args() -> list[str]:
     return list(stages[0].args)
 
 
-def _c8(cwd: Path) -> subprocess.CompletedProcess[str]:
+def _c8(cwd: Path, scratch: Path) -> subprocess.CompletedProcess[str]:
+    """check.sh's c8 command in `cwd`, writing its raw coverage under `scratch`:
+    the audit runs the same command as a gate stage in the same tree while this
+    suite runs, and c8 empties its directory when it starts."""
     c8 = REPO / "node_modules" / ".bin" / "c8"
     assert c8.exists(), f"{c8} is missing: run `npm ci` (check.sh does)"
     node = shutil.which("node")
     assert node, "node is required: the JavaScript checks are part of the gate"
     return subprocess.run(
-        [str(c8), *_c8_args()], cwd=cwd, capture_output=True, text=True, timeout=180, check=False
+        [str(c8), "--temp-directory", str(scratch / "c8"), *_c8_args()],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
     )
 
 
@@ -93,8 +101,8 @@ def _c8_test_files() -> list[str]:
     return [a for a in _c8_args() if a.endswith(".test.js")]
 
 
-def test_the_real_tree_meets_the_requirement() -> None:
-    result = _c8(REPO)
+def test_the_real_tree_meets_the_requirement(tmp_path: Path) -> None:
+    result = _c8(REPO, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     # The report names every measured file, so a vacuous run (nothing measured) is visible.
     for rel in _scope()[0]:
@@ -105,7 +113,7 @@ def test_a_measured_file_with_an_untested_branch_fails(tmp_path: Path) -> None:
     root = _tree(tmp_path)
     target = root / STATIC / "markdown.js"
     target.write_text(target.read_text() + "\nfunction neverCalled(x) {\n  return x ? 1 : 2;\n}\n")
-    result = _c8(root)
+    result = _c8(root, tmp_path)
     assert result.returncode != 0, result.stdout
     assert re.search(r"ERROR: Coverage for (lines|functions|branches|statements)", result.stderr)
 
@@ -117,7 +125,7 @@ def test_a_suite_that_loses_a_behaviours_test_fails(tmp_path: Path) -> None:
     start = text.index('test("underscore marks render like asterisk marks"')
     end = text.index("\ntest(", start)
     suite.write_text(text[:start] + text[end:])
-    result = _c8(root)
+    result = _c8(root, tmp_path)
     assert result.returncode != 0, result.stdout
     assert "ERROR: Coverage for" in result.stderr
 
