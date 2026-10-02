@@ -54,6 +54,9 @@ from saddle import memcap
 from saddle.procs import ProcessLedger, Tracked
 
 DEFAULT_TIMEOUT: Final = 120
+OUTLIVE_DRAIN_S: Final = 0.5
+"""How long a finished command's remaining output is waited for when a program it
+backgrounded may still hold its pipe (`Sandbox.outlive`)."""
 MAX_CAPTURE: Final = 400_000
 """Per-terminal output cap. Beyond this the head and tail are kept: an
 unbounded buffer is how a `yes` loop takes the whole session down."""
@@ -855,6 +858,12 @@ class Sandbox:
     """Where every command's scope is recorded (`procs`), so what it leaves
     running can be listed and stopped. Only a chat session sets it; a task's
     box records nothing."""
+    outlive: bool = False
+    """Whether a program a command backgrounds (`nohup x &`, `x & disown`)
+    outlives the command. Only a full-access session's box with a process list
+    sets it (`for_workdir`): that list tracks the program by cgroup and stops it
+    when access ends. Everywhere else the end of a command kills its process
+    group, as it always did (every task run, every sandboxed command)."""
     tmp: Path | None = None
     """A private directory every command sees as `/tmp`, so what one command
     leaves there the next can read; None gives each command an empty `/tmp`.
@@ -900,6 +909,7 @@ class Sandbox:
             tmp=tmp,
             mounted=tuple(mounted),
             ledger=ledger,
+            outlive=unsandboxed and ledger is not None,
         )
 
     def _argv(self, command: str) -> list[str]:
@@ -956,7 +966,7 @@ class Sandbox:
                 )
             )
 
-        def pump() -> None:
+        def read() -> None:
             assert process.stdout is not None
             for line in process.stdout:
                 terminal._append(line)
@@ -965,8 +975,19 @@ class Sandbox:
                         self.on_output(terminal.id, line)
                     except Exception:  # a broken listener must not stop the command
                         self.on_output = None
-            code = process.wait()
-            _kill_group(process.pid)  # nothing it started outlives it
+
+        def pump() -> None:
+            if self.outlive:
+                # A program the command backgrounded keeps the pipe open, so
+                # the command is over when its shell is, not at end of output.
+                reader = threading.Thread(target=read, daemon=True)
+                reader.start()
+                code = process.wait()
+                reader.join(timeout=OUTLIVE_DRAIN_S)
+            else:
+                read()
+                code = process.wait()
+                _kill_group(process.pid)  # nothing it started outlives it
             if cap.oom_killed():
                 terminal._append(f"\n{cap.reason()}\n")
             terminal.exit_code = code
