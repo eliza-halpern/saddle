@@ -273,3 +273,58 @@ def test_idtypes_names_only_elements_index_html_declares_with_that_tag() -> None
         found = re.search(rf'<([a-z]+)\b[^>]*\bid="{re.escape(ident)}"', html)
         assert found, f"#{ident} is typed in IdTypes but not in index.html"
         assert found.group(1) == tags[kind], f"#{ident} is <{found.group(1)}>, typed as {kind}"
+
+
+# ------------------------------------------------------------ prettier (format)
+
+
+def _prettier(cwd: Path, *files: str) -> subprocess.CompletedProcess[str]:
+    """`prettier --check` under copies of the repo's config and ignore file."""
+    for name in (".prettierrc.json", ".prettierignore"):
+        shutil.copy(REPO / name, cwd / name)
+    return subprocess.run(
+        [_tool("prettier"), "--check", *files],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+FORMATTED = 'const a = { b: 1, c: [2, 3] };\nexport function f(x) {\n  return x + "s";\n}\n'
+# Single quotes, no spaces in the braces, a missing semicolon: every one a prettier verdict.
+UNFORMATTED = "const a = {b:1,c:[2,3]}\nexport function f(x){ return x + 's' }\n"
+
+
+@pytest.mark.parametrize(
+    "rel", ["tests/x.test.js", "tests/fixtures/x_cdp.mjs", "tests/fixtures/y.js"]
+)
+def test_prettier_rejects_an_unformatted_file_and_accepts_a_formatted_one(
+    tmp_path: Path, rel: str
+) -> None:
+    bad = _prettier(tmp_path, _write(tmp_path, rel, UNFORMATTED))
+    assert bad.returncode != 0, bad.stdout
+    assert rel in bad.stderr
+    assert _prettier(tmp_path, _write(tmp_path, rel, FORMATTED)).returncode == 0
+
+
+def test_prettier_wraps_at_the_repo_width(tmp_path: Path) -> None:
+    # 110 columns on one line is formatted at width 120 and a defect at the default 80.
+    line = "const x = [" + ", ".join(["1"] * 36) + "];\n"
+    assert 100 < len(line) <= 120
+    assert _prettier(tmp_path, _write(tmp_path, "x.js", line)).returncode == 0
+
+
+def test_prettier_leaves_fixture_json_bytes_alone(tmp_path: Path) -> None:
+    # Fixture JSON keeps its exact bytes, so the ignore file hides it; JSON elsewhere is checked.
+    messy = '{"a":1,\n"b":[1,2]}\n'
+    fixture = _write(tmp_path, "tests/fixtures/g.json", messy)
+    assert _prettier(tmp_path, fixture).returncode == 0
+    assert _prettier(tmp_path, _write(tmp_path, "g.json", messy)).returncode != 0
+
+
+def test_prettier_passes_on_the_real_tree() -> None:
+    result = subprocess.run(
+        [_tool("prettier"), "--check", "."], cwd=REPO, capture_output=True, text=True, timeout=180
+    )
+    assert result.returncode == 0, result.stderr

@@ -23,6 +23,9 @@ uv run shellcheck check.sh ci-mutate.sh tools/githooks/commit-msg tools/githooks
 # tsc type-checks the browser scripts (JSDoc under // @ts-check).
 npx --no-install eslint .
 npx --no-install tsc -p tsconfig.json
+# Prettier formats the JavaScript and the root JSON configs as `ruff format` does the Python
+# (.prettierrc.json; .prettierignore names what other checkers own and the exact-bytes fixtures).
+npx --no-install prettier --check .
 # The node tests run under c8 (.c8rc.json): 100% lines, branches and functions on
 # each file listed as measured in tests/fixtures/js_coverage_scope.json.
 npx --no-install c8 node --test tests/markdown.test.js tests/classic_scripts.test.js

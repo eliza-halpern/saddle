@@ -39,8 +39,13 @@ REGISTRY: dict[str, Entry] = {
         "ruff, ruff format, mypy strict, pytest at 100% coverage",
         ((CHECK_SH, "uv run ruff check ."), (CHECK_SH, "uv run mypy"), (CHECK_SH, "uv run pytest")),
     ),
-    ".js": Check("eslint (and tsc for the browser scripts)", ((CHECK_SH, "eslint ."),)),
-    ".mjs": Check("eslint", ((CHECK_SH, "eslint ."),)),
+    ".js": Check(
+        "eslint, prettier (and tsc for the browser scripts)",
+        ((CHECK_SH, "eslint ."), (CHECK_SH, "prettier --check .")),
+    ),
+    ".mjs": Check(
+        "eslint and prettier", ((CHECK_SH, "eslint ."), (CHECK_SH, "prettier --check ."))
+    ),
     ".ts": Check("tsc", ((CHECK_SH, "tsc -p tsconfig.json"),)),
     ".html": Check(
         "html-validate (the page only)",
@@ -56,7 +61,10 @@ REGISTRY: dict[str, Entry] = {
         "png_check, in the image test and the fixture integrity rule",
         (FIXTURES, ("tests/test_images.py", "png_check")),
     ),
-    ".json": Check("the fixture integrity rule (fixtures only)", (FIXTURES,)),
+    ".json": Check(
+        "the fixture integrity rule (fixtures) and prettier (the other JSON)",
+        (FIXTURES, (CHECK_SH, "prettier --check .")),
+    ),
     ".jsonl": Check("the fixture integrity rule (fixtures only)", (FIXTURES,)),
     ".diff": Check("the fixture integrity rule (git apply --check expectations)", (FIXTURES,)),
     ".jinja": Check("the fixture integrity rule (loads and renders)", (FIXTURES,)),
@@ -64,6 +72,10 @@ REGISTRY: dict[str, Entry] = {
     "tools/githooks/commit-msg": Check("shellcheck", ((CHECK_SH, "tools/githooks/commit-msg"),)),
     "tools/githooks/pre-commit": Check("shellcheck", ((CHECK_SH, "tools/githooks/pre-commit"),)),
     "tools/githooks/pre-push": Check("shellcheck", ((CHECK_SH, "tools/githooks/pre-push"),)),
+    ".prettierignore": Check(
+        "test_prettier_leaves_fixture_json_bytes_alone (it hides fixtures; the rest is checked)",
+        (("tests/test_js_static_checks.py", "test_prettier_leaves_fixture_json_bytes_alone"),),
+    ),
     ".jsonc": NotChecked(
         "only .markdownlint-cli2.jsonc; its own parse is exercised by every markdownlint run"
     ),

@@ -141,6 +141,7 @@ gate-checks = [
     ],
     ["npx", "--no-install", "eslint", "."],
     ["npx", "--no-install", "tsc", "-p", "tsconfig.json"],
+    ["npx", "--no-install", "prettier", "--check", "."],
     [
         "npx",
         "--no-install",
