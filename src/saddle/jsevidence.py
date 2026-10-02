@@ -27,7 +27,7 @@ import shutil
 import tempfile
 import xml.etree.ElementTree as ET  # node's own report, never a document from the tree
 from collections.abc import Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
@@ -285,6 +285,141 @@ def changed_js_lines(workdir: Path, diff: str) -> set[tuple[str, int]]:
         if stripped and not stripped.startswith(_COMMENT):
             found.add((str(path), number))
     return found
+
+
+C8_PACKAGE: Final = Path("node_modules/c8/bin/c8.js")
+
+COVERAGE_SCOPE: Final = "tests/fixtures/js_coverage_scope.json"
+"""The tracked file naming which `.js` files the node tests are held to line
+coverage on (`measured`) and which are knowingly outside it (`not_measured`,
+each with its reason)."""
+
+NOT_LINE_MEASURED: Final = "not line-measured"
+"""What a changed line of a `.js` file reads when no line coverage exists for it."""
+
+
+@dataclass(frozen=True)
+class CoverageScope:
+    """`COVERAGE_SCOPE` as data. `problem` is why it could not be read: an
+    unreadable scope leaves every file unlisted, never a silent all-measured."""
+
+    measured: frozenset[str] = frozenset()
+    not_measured: Mapping[str, str] = field(default_factory=dict)
+    problem: str = ""
+
+
+def read_coverage_scope(workdir: Path) -> CoverageScope:
+    """The tree's `COVERAGE_SCOPE`; a tree without one has an empty scope (no
+    file is line-measured), a malformed one carries a `problem`."""
+    path = workdir / COVERAGE_SCOPE
+    if not path.is_file():
+        return CoverageScope()
+    try:
+        data = json.loads(path.read_text())
+        return CoverageScope(
+            frozenset(data["measured"]), {str(k): str(v) for k, v in data["not_measured"].items()}
+        )
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        return CoverageScope(problem=f"{COVERAGE_SCOPE} could not be read: {exc!r}")
+
+
+def c8_entry(workdir: Path, tools: Path | None = None) -> Path | None:
+    """c8's script, found as `stryker_entry` finds StrykerJS."""
+    for root in (workdir, tools):
+        if root is not None and (root / C8_PACKAGE).is_file():
+            return root / C8_PACKAGE
+    return None
+
+
+@dataclass(frozen=True)
+class JsCoverage:
+    """c8's per-line execution counts: `lines[file][line]` is how often a test
+    ran it, for every line V8 reports. `problem` is why none could be had."""
+
+    lines: Mapping[str, Mapping[int, int]] = field(default_factory=dict)
+    problem: str = ""
+
+
+def parse_lcov(text: str, root: Path) -> dict[str, dict[int, int]]:
+    """`{file relative to root: {line: hits}}` from an lcov report's `SF` and
+    `DA` records. Raises `ValueError` on a `DA` record outside a file or one
+    that is not two integers: a report that does not parse is a problem to
+    name, never zero lines."""
+    found: dict[str, dict[int, int]] = {}
+    current: dict[int, int] | None = None
+    for raw in text.splitlines():
+        if raw.startswith("SF:"):
+            name = raw[3:]
+            rel = os.path.relpath(name, root) if os.path.isabs(name) else os.path.normpath(name)
+            current = found.setdefault(Path(rel).as_posix(), {})
+        elif raw.startswith("DA:"):
+            if current is None:
+                msg = f"an lcov DA record outside a file: {raw!r}"
+                raise ValueError(msg)
+            number, hits = raw[3:].split(",")[:2]
+            current[int(number)] = int(hits)
+    return found
+
+
+def measure_coverage(
+    workdir: Path,
+    include: Sequence[str],
+    tests: Sequence[str],
+    *,
+    tools: Path | None = None,
+    recorder: SpanRecorder | None = None,
+    timeout: float = JS_TEST_TIMEOUT_S,
+) -> JsCoverage:
+    """Per-line counts for the `include` files (relative to `workdir`) while
+    every `tests` file runs under c8.
+
+    The report and c8's raw data go to a temp directory, never into the tree,
+    and c8's own thresholds are off: the audit judges the changed lines, not a
+    percentage. A run that could not start, timed out, failed a test, or left no
+    report names the problem and returns no lines: coverage read off a red
+    suite would be a number about the wrong program."""
+    entry = c8_entry(workdir, tools)
+    if entry is None:
+        return JsCoverage(problem="c8 was not found in node_modules")
+    entry = entry.resolve()
+    modules = entry.parents[2]
+    with tempfile.TemporaryDirectory(prefix="saddle-c8-") as tmp:
+        out = Path(tmp)
+        ran = run_capture(
+            [
+                "node",
+                str(entry),
+                "--reporter=lcov",
+                f"--reports-dir={out / 'report'}",
+                f"--temp-directory={out / 'v8'}",
+                "--check-coverage=false",
+                "--all",
+                *(f"--include={rel}" for rel in include),
+                "node",
+                "--test",
+                *tests,
+            ],
+            workdir,
+            recorder=recorder,
+            timeout=timeout,
+            memory_limit=tree_memory_limit(),
+            writable=[out],
+            shown=[] if modules.is_relative_to(workdir.resolve()) else [modules],
+        )
+        if ran.exit_code == TOOL_UNAVAILABLE:
+            return JsCoverage(problem=f"c8 could not be launched: {ran.stderr.strip()}")
+        if ran.exit_code == SHELL_TIMEOUT:
+            return JsCoverage(problem="c8 timed out")
+        if ran.exit_code != 0:
+            last = (ran.stderr.strip().splitlines() or ["no output"])[-1]
+            return JsCoverage(problem=f"the node tests under c8 exited {ran.exit_code}: {last}")
+        report = out / "report" / "lcov.info"
+        if not report.is_file():
+            return JsCoverage(problem="c8 wrote no lcov report")
+        try:
+            return JsCoverage(parse_lcov(report.read_text(), workdir))
+        except ValueError as exc:
+            return JsCoverage(problem=f"the c8 report did not parse: {exc}")
 
 
 def stryker_entry(workdir: Path, tools: Path | None = None) -> Path | None:

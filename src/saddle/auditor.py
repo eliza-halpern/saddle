@@ -112,6 +112,7 @@ from saddle.gates import (
     RuffFinding,
     TaskRequirementsCheck,
     Tier1Result,
+    check_js_coverage,
     check_js_red_phase,
     check_js_tests,
     check_mutation_shortlist,
@@ -134,7 +135,19 @@ from saddle.journal import (
     scrub_thinking,
     write_attempt_sidecar,
 )
-from saddle.jsevidence import JS_SUFFIX, js_test_files, red_phase, run_node_tests, stryker_entry
+from saddle.jsevidence import (
+    COVERAGE_SCOPE,
+    JS_SUFFIX,
+    NOT_LINE_MEASURED,
+    JsCoverage,
+    changed_js_lines,
+    js_test_files,
+    measure_coverage,
+    read_coverage_scope,
+    red_phase,
+    run_node_tests,
+    stryker_entry,
+)
 from saddle.prompt_changes import Measured, judge, measured, prompt_changes, unconfigured_detail
 from saddle.task_examples import WOULD_REFUSE
 from saddle.task_requirements import check_tree
@@ -604,6 +617,13 @@ touches a `.js` file; `not-proven` when node, or a test file, cannot be had."""
 NO_NODE_TEST: Final = "no node test file in the tree, so the changed .js files have no test run"
 """The `JS_TESTS_GATE` detail for a tree with no `.js` test."""
 
+JS_COVERAGE_GATE: Final = "js-coverage"
+"""The tier-2 finding of changed-line coverage for `.js` (`gates.check_js_coverage`),
+the counterpart of the Python `coverage` check: emitted when a non-test `.js`
+code line changed. `fail` when a changed line of a line-measured file runs in no
+node test; `not-proven` for a changed file coverage is not measured on
+(`jsevidence.COVERAGE_SCOPE`), or when c8 or the report is missing."""
+
 JS_RED_PHASE_GATE: Final = "js-red-phase"
 """The tier-2 finding of the new or changed `.js` tests run on the baseline
 (`gates.check_js_red_phase`). Emitted only when such a test exists."""
@@ -673,9 +693,18 @@ def not_measurable_detail(files: Sequence[str], measurable: Mapping[str, str] | 
     """The `NOT_MEASURABLE_GATE` finding's words: the files, what cannot see
     them, and that adding code only to give a check something to measure is a defect."""
     noun = "file" if len(files) == 1 else "files"
+    named = MEASURABLE_SUFFIXES if measurable is None else measurable
+    # `.js` is measured only in the files the coverage scope lists as measured;
+    # saying "JavaScript" alone would read as every `.js` file.
+    scoped = (
+        f", and JavaScript changed-line coverage only in the files {COVERAGE_SCOPE} lists as "
+        f"measured (see {JS_COVERAGE_GATE})"
+        if JS_SUFFIX in named
+        else ""
+    )
     return (
         f"not mutation-measurable: {_listed(files)} ({len(files)} {noun}; the mutation and "
-        f"changed-line coverage checks measure {_measured_languages(measurable)} only). "
+        f"changed-line coverage checks measure {_measured_languages(measurable)} only{scoped}). "
         "Recorded as not proven and not refused: no edit can make these files measurable, and code "
         "added only to give those checks something to measure is a defect. A person "
         "reads the files."
@@ -839,8 +868,76 @@ def _not_proven(gate: str, detail: str, cite: str) -> Finding:
     return Finding(gate, 2, "not-proven", "evidence-thin", detail, (cite,))
 
 
+def js_coverage_finding(
+    copy: Path,
+    resolved: str,
+    limit: float,
+    tools: Path | None,
+    tests: Sequence[str],
+) -> tuple[Finding, dict[str, Any]] | None:
+    """Changed-line coverage of the `.js` files, or None when no non-test `.js`
+    code line changed.
+
+    The changed code lines are `jsevidence.changed_js_lines` (blank and comment
+    lines are not code, and V8 reports them as run or unrun with the function
+    around them). A file listed `measured` in the coverage scope is run under
+    c8 and judged (`gates.check_js_coverage`); a file listed `not_measured`, or
+    in neither list, is "not line-measured" and makes the finding not-proven:
+    never a pass, never skipped. c8 or its report missing is not-proven naming
+    it. A failing measured line outranks not-proven.
+    """
+    root = f"{copy}{os.sep}"
+    changed: dict[str, list[int]] = {}
+    for spelled, line in sorted(changed_js_lines(copy, git_diff(copy, resolved))):
+        changed.setdefault(spelled.removeprefix(root), []).append(line)
+    if not changed:
+        return None
+    scope = read_coverage_scope(copy)
+    measured = sorted(f for f in changed if f in scope.measured)
+    unmeasured = sorted(f for f in changed if f not in scope.measured)
+    why = {f: scope.not_measured.get(f, "in no coverage list") for f in unmeasured}
+    named = "; ".join(f"{f} ({why[f]})" for f in unmeasured)
+    cite = "saddle.gates.check_js_coverage"
+    problem = scope.problem
+    check = None
+    sidecar: dict[str, Any] = {"changed": changed, "not_line_measured": unmeasured}
+    if measured:
+        got = (
+            measure_coverage(copy, measured, tests, tools=tools, timeout=limit)
+            if tests
+            else JsCoverage(problem=NO_NODE_TEST)
+        )
+        absent = [f for f in measured if f not in got.lines]
+        if got.problem:
+            problem = f"{problem}; {got.problem}" if problem else got.problem
+        elif absent:
+            problem = f"c8 reported no lines for {', '.join(absent)}"
+        else:
+            check = check_js_coverage({f: changed[f] for f in measured}, got.lines)
+            sidecar["hits"] = {f: sorted(got.lines[f].items()) for f in measured}
+    if check is not None and not check.passed:
+        detail = check.detail
+        if unmeasured:
+            detail += f"; also {NOT_LINE_MEASURED}: {named}"
+        return Finding(JS_COVERAGE_GATE, 2, "fail", REASONS["coverage"], detail, (cite,)), sidecar
+    parts = []
+    if problem:
+        parts.append(f"coverage could not be measured: {problem}")
+    if unmeasured:
+        parts.append(f"{NOT_LINE_MEASURED}: {named}")
+    if not parts:
+        assert check is not None
+        return Finding(
+            JS_COVERAGE_GATE, 2, "pass", REASONS["coverage"], check.detail, (cite,)
+        ), sidecar
+    detail = "not proven: " + "; ".join(parts)
+    if check is not None:
+        detail += f" ({check.detail} in the measured files)"
+    return _not_proven(JS_COVERAGE_GATE, detail, cite), sidecar
+
+
 def js_findings(
-    copy: Path, resolved: str, limit: float
+    copy: Path, resolved: str, limit: float, tools: Path | None = None, locator: bool = False
 ) -> tuple[list[Finding], dict[str, Mapping[str, Any]]]:
     """The `.js` tests' findings and their sidecars, for a change that touches a
     `.js` file: nothing otherwise.
@@ -857,6 +954,14 @@ def js_findings(
     tests = js_test_files(copy)
     ran = run_node_tests(copy, tests, timeout=limit)
     cite = "saddle.gates.check_js_tests"
+    covered = js_coverage_finding(copy, resolved, limit, tools, tests)
+    if covered is not None:
+        gap = covered[0]
+        if locator and gap.verdict == "fail":
+            # Under the shortlist, coverage is a locator, as the Python check is.
+            gap = dataclasses.replace(gap, verdict="not-proven")
+        found.append(gap)
+        sidecars[JS_COVERAGE_GATE] = covered[1]
     if ran.problem or not tests:
         found.append(_not_proven(JS_TESTS_GATE, ran.problem or NO_NODE_TEST, cite))
         return found, sidecars
@@ -2004,7 +2109,9 @@ class Auditor:
                     "xfailed": [list(p) for p in skips.xfailed],
                 }
         if tier == 2:
-            js_found, js_sidecars = js_findings(copy, resolved, limit)
+            js_found, js_sidecars = js_findings(
+                copy, resolved, limit, self.repo, self.config.tier2 == "shortlist"
+            )
             findings.extend(js_found)
             sidecars.update(js_sidecars)
         if tier == 2 and (effect := prompt_effect(copy, resolved, limit, bench, self._bench_seen)):

@@ -1970,6 +1970,35 @@ def check_js_tests(results: Sequence[JsTestRow], exit_code: int) -> GateCheck:
     return GateCheck(name="js-tests", passed=True, detail=f"node --test: {counts}")
 
 
+def check_js_coverage(
+    changed: Mapping[str, Collection[int]], hits: Mapping[str, Mapping[int, int]]
+) -> GateCheck:
+    """Every changed line of a line-measured `.js` file that c8 reports must run.
+
+    `changed` is the changed code lines per file (blank and comment lines
+    already left out: V8 reports every line, a blank one inside an unrun
+    function as unrun), `hits` the lines c8 reported with their counts
+    (`jsevidence.measure_coverage`). A changed line c8 does not report is not
+    executable and is not judged; a reported line with no hits is named as
+    `check_changed_line_coverage` names Python's, `file:line`, with no ratio.
+    """
+    judged = {
+        (file, line)
+        for file, lines in changed.items()
+        for line in lines
+        if line in hits.get(file, {})
+    }
+    missing = sorted((f, n) for f, n in judged if hits[f][n] == 0)
+    if missing:
+        gaps = ", ".join(f"{file}:{line}" for file, line in missing)
+        return GateCheck(name="js-coverage", passed=False, detail=f"no test runs {gaps}")
+    return GateCheck(
+        name="js-coverage",
+        passed=True,
+        detail=f"every executable changed line runs ({len(judged)})",
+    )
+
+
 def check_js_red_phase(
     head: Sequence[JsTestRow], base: Sequence[JsTestRow], base_exit: int
 ) -> GateCheck:
