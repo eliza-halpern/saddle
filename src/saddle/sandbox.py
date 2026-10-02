@@ -640,6 +640,7 @@ def confine(
     *,
     writable: Sequence[Path] = (),
     extra_env: Mapping[str, str] | None = None,
+    shown: Sequence[Path] = (),
 ) -> tuple[list[str], dict[str, str]]:
     """The argv and environment that run a gate's `argv` on the tree at `root`.
 
@@ -656,15 +657,22 @@ def confine(
     tools, then saddle's own as the fallback. `default_expose` shows the
     venv each tool it finds lives in read-only; saddle's own is inside
     `sys.prefix`, shown regardless.
-    `extra_env` is laid over the scrubbed environment last."""
+    `extra_env` is laid over the scrubbed environment last. `shown` are
+    directories outside `root` that the run may read and not write, each at
+    its own path: a tool whose files live beside the project (the browser
+    files' `node_modules`, which the staged copy leaves out)."""
     project = _PROJECT_ENV.get()
     venv = {"VIRTUAL_ENV": str(project)} if project is not None else {}
     env = command_env({"PATH": gate_path(os.environ.get("PATH", "")), **venv, **(extra_env or {})})
-    return _confined(argv, root, env, writable)
+    return _confined(argv, root, env, writable, shown)
 
 
 def _confined(
-    argv: Sequence[str], root: Path, env: dict[str, str], writable: Sequence[Path] = ()
+    argv: Sequence[str],
+    root: Path,
+    env: dict[str, str],
+    writable: Sequence[Path] = (),
+    shown: Sequence[Path] = (),
 ) -> tuple[list[str], dict[str, str]]:
     """`confine` for an environment already built: `argv` under bwrap with
     `root` writable, or unwrapped where bwrap cannot start."""
@@ -679,7 +687,7 @@ def _confined(
         real,
         argv,
         network=GATE_NETWORK,
-        expose=(*expose, *_bare_tools(env, expose)),
+        expose=(*expose, *_bare_tools(env, expose), *((p.resolve(), p.resolve()) for p in shown)),
         writable=extra,
     )
     return wrapped, env

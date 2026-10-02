@@ -463,6 +463,7 @@ def run_capture(
     memory_limit: int | None = None,
     writable: Sequence[Path] = (),
     extra_env: Mapping[str, str] | None = None,
+    shown: Sequence[Path] = (),
 ) -> CapturedRun:
     """Run `argv` in `cwd`; journal its span and return exit plus output.
 
@@ -483,7 +484,7 @@ def run_capture(
     also confined (`sandbox.confine`): `cwd` and `writable` are the only
     places it can write, it sees nothing else outside the system dirs and
     the gate-tool venvs, it has no network, and its environment is the
-    scrubbed allowlist.
+    scrubbed allowlist. `shown` adds read-only directories to what it sees.
     """
     start = perf_counter()
     cap = None if memory_limit is None else memcap.cap(memory_limit)
@@ -495,7 +496,9 @@ def run_capture(
             # (`systemd-run` exits 1, which reads as "tests failed").
             if shutil.which(argv[0], path=sandbox.gate_path(os.environ.get("PATH", ""))) is None:
                 raise FileNotFoundError(2, "No such file or directory", argv[0])
-            confined, env = sandbox.confine(argv, cwd, writable=writable, extra_env=extra_env)
+            confined, env = sandbox.confine(
+                argv, cwd, writable=writable, extra_env=extra_env, shown=shown
+            )
             launched, lent = cap.wrap(confined, env)
             proc = _run_as_group(launched, cwd, timeout, lent)
     except subprocess.TimeoutExpired as expired:
