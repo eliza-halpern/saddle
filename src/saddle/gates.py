@@ -1529,6 +1529,112 @@ def _names_identifier(text: str, name: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text) is not None
 
 
+@dataclass(frozen=True)
+class JsDeadFinding:
+    """One top-level JavaScript definition the change added that production code does not
+    reach, as `jsdead.mjs` reports it. `kind` is `test-only` (only `callers`, test files, name it),
+    `chain` (only other unreached definitions use it) or `nothing`."""
+
+    file: str
+    line: int
+    name: str
+    kind: str
+    callers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class JsDeadReport:
+    """What the JavaScript reach analysis said. `problem` is why it could not run (node or
+    TypeScript missing, a failed run): never an empty list standing for it. `unresolved` are
+    definitions it could not place, as `(file, line, name, why)`; `also` names the unreached
+    definitions only a finding uses."""
+
+    findings: tuple[JsDeadFinding, ...] = ()
+    unresolved: tuple[tuple[str, int, str, str], ...] = ()
+    also: tuple[str, ...] = ()
+    problem: str = ""
+
+
+def check_js_test_only_additions(
+    report: JsDeadReport,
+    *,
+    task_text: str | None = None,
+    touched: Collection[str] = (),
+) -> GateCheck:
+    """`check_test_only_additions` for JavaScript: the same rule, over `jsdead.mjs`'s findings.
+
+    A function, class or constant added to a non-test `.js` file that only tests reach
+    (`test-only`), or that nothing reaches (`nothing`, dead code), is refused when it is private
+    (`_name`) or, for a test-only public name, when the change also touches non-test source in
+    another file the other gates measure (the work is elsewhere: the padding shape); a public
+    test-only name in a change that touches nothing else passes with a detail starting
+    `TEST_ONLY_UNPROVEN` (a library function). A public name the task text spells was asked for.
+    A name that nothing reaches is dead whatever the change touches. Anything the analysis could
+    not place, or a run that could not happen, is `TEST_ONLY_UNPROVEN` and never a pass or a
+    refusal. Findings read `file:line: name (why)`.
+    """
+    if report.problem:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail=(
+                f"{TEST_ONLY_UNPROVEN}the JavaScript reach analysis could not run: {report.problem}"
+            ),
+            basis="js-reach=unavailable",
+        )
+    refused: list[str] = []
+    listed: list[str] = []
+    for found in report.findings:
+        private = found.name.startswith("_")
+        asked = not private and task_text is not None and _names_identifier(task_text, found.name)
+        if asked:
+            continue
+        where = f"{found.file}:{found.line}: {found.name}"
+        padded = any(
+            other != found.file
+            and not is_test_code(other)
+            and PurePath(other).suffix.lower() in OTHER_LANGUAGE_SUFFIXES | {".py"}
+            for other in touched
+        )
+        if found.kind == "test-only":
+            how = f"referenced only by {', '.join(found.callers)}"
+            (refused if private or padded else listed).append(f"{where} ({how})")
+        elif found.kind == "chain":
+            refused.append(f"{where} (used only by other definitions no production code reaches)")
+        else:
+            refused.append(f"{where} (referenced by nothing)")
+    if refused and report.also:
+        more = f" (+{len(report.also) - 8} more)" if len(report.also) > 8 else ""
+        refused.append(f"and what only these use: {', '.join(report.also[:8])}{more}")
+    if refused:
+        return GateCheck(
+            name="dead-code",
+            passed=False,
+            detail=(
+                "; ".join(refused)
+                + ". A definition that exists only for tests, or for nothing, is not production "
+                "code: wire each into code the page or the program runs, or delete it and its tests"
+            ),
+            basis=f"js-dead-definitions={len(refused)}",
+        )
+    unplaced = [f"{file}:{line}: {name} ({why})" for file, line, name, why in report.unresolved] + [
+        f"{item} (public; only tests call it)" for item in listed
+    ]
+    if unplaced:
+        return GateCheck(
+            name="dead-code",
+            passed=True,
+            detail=TEST_ONLY_UNPROVEN + "; ".join(unplaced),
+            basis=f"js-unplaced={len(unplaced)}",
+        )
+    return GateCheck(
+        name="dead-code",
+        passed=True,
+        detail="no JavaScript definition added that production code does not reach",
+        basis="js-reach=clean",
+    )
+
+
 def check_test_only_additions(
     sources: Mapping[str, str],
     added: Mapping[str, Collection[int]],
@@ -2719,6 +2825,9 @@ class Tier1Inputs:
     pyproject_text: str | None = None
     # The task text the audit was given, if any: a public name it spells was asked for.
     task_text: str | None = None
+    # The JavaScript half of that question (`check_js_test_only_additions`): the reach
+    # analysis of the `.js` files the change added to, or None when it has none.
+    js_dead: JsDeadReport | None = None
 
 
 @dataclass(frozen=True)
@@ -2978,16 +3087,40 @@ def _with_test_only_additions(dead: GateCheck, inputs: Tier1Inputs) -> GateCheck
         task_text=inputs.task_text,
         touched=inputs.touched_files,
     )
-    if only.passed:
+    checks = [only]
+    if inputs.js_dead is not None:
+        checks.append(
+            check_js_test_only_additions(
+                inputs.js_dead, task_text=inputs.task_text, touched=inputs.touched_files
+            )
+        )
+    failing = [c for c in checks if not c.passed]
+    if not failing:
         # A placed-nowhere public name is not a refusal, but it must stay visible.
-        return only if only.detail.startswith(TEST_ONLY_UNPROVEN) and dead.passed else dead
+        unproven = [c for c in checks if c.detail.startswith(TEST_ONLY_UNPROVEN)]
+        if unproven and dead.passed:
+            detail = TEST_ONLY_UNPROVEN + "; ".join(
+                c.detail.removeprefix(TEST_ONLY_UNPROVEN) for c in unproven
+            )
+            return GateCheck(
+                name="dead-code",
+                passed=True,
+                detail=detail,
+                basis=" ".join(c.basis or "" for c in unproven),
+            )
+        return dead
     if dead.passed:
-        return only
+        return GateCheck(
+            name="dead-code",
+            passed=False,
+            detail="; ".join(c.detail for c in failing),
+            basis=" ".join(c.basis or "" for c in failing),
+        )
     return GateCheck(
         name="dead-code",
         passed=False,
-        detail=f"{only.detail}; also {dead.detail}",
-        basis=f"{only.basis} {dead.basis}",
+        detail="; ".join([*(c.detail for c in failing), f"also {dead.detail}"]),
+        basis=" ".join([*(c.basis or "" for c in failing), dead.basis or ""]),
     )
 
 

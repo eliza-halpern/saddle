@@ -994,7 +994,9 @@ def test_a_function_the_task_text_names_is_judged_as_asked_for_and_the_key_follo
     (clean_tree / "m.py").write_text(WIRING_MODULE)
     (clean_tree / "test_m.py").write_text(WIRING_TEST)
     (clean_tree / "n.py").write_text(USES_LIVE)
-    (clean_tree / "copy.js").write_text("export const copy = 1;\n")
+    # A style file, not a script: a changed script is also put to the JavaScript reach
+    # analysis, which needs node and TypeScript this tree does not carry.
+    (clean_tree / "copy.css").write_text(".copy { color: red; }\n")
     refused = Auditor(clean_tree).tier1()
     asked = Auditor(
         clean_tree, "HEAD", AuditorConfig(task_text="Add a copy_button_wiring helper.")

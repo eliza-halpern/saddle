@@ -55,6 +55,7 @@ from saddle.gates import (
     run_tier1,
 )
 from saddle.journal import SpanRecorder
+from saddle.jsdead import analyse as analyse_js_dead
 from saddle.jsevidence import changed_js_lines, merge_outcomes, stryker_entry
 from saddle.jsevidence import mutation_sample as js_mutation_sample
 
@@ -240,7 +241,9 @@ def run_node_gate(
     that only tests reach is refused. A plan's nodes leave it off, since an
     `impl` node may be gated before the node that uses what it writes.
     `task_text` is the task the audit was given, if any: a public name it spells
-    was asked for (`gates.check_test_only_additions`).
+    was asked for (`gates.check_test_only_additions`). The same question is asked of
+    the `.js` files the change added to (`jsdead.analyse`, in `js_tools`' or the
+    tree's `node_modules`), and node or TypeScript missing is `not proven`.
 
     A changed `.js` line is mutated too, at tier 2, when StrykerJS is installed
     in `workdir` or in `js_tools` (the checkout a staged `workdir` was copied
@@ -253,6 +256,11 @@ def run_node_gate(
     diff = git_diff(workdir, baseline, recorder=recorder)
     changed = changed_statements(workdir, diff)
     js_changed = changed_js_lines(workdir, diff) if stryker_entry(workdir, js_tools) else set()
+    js_dead = (
+        analyse_js_dead(workdir, diff, tools=js_tools, recorder=recorder)
+        if test_only_additions
+        else None
+    )
     changed_files = sorted({path for path, _ in changed})
     added = git_added_files(workdir, baseline, recorder=recorder)
     # Every file the diff names (git decides, so deletions and non-Python
@@ -528,6 +536,7 @@ def run_node_gate(
         property_out_of_scope=property_out_of_scope,
         test_only_additions=test_only_additions,
         task_text=task_text,
+        js_dead=js_dead,
         pyproject_text=(
             (workdir / "pyproject.toml").read_text()
             if test_only_additions and (workdir / "pyproject.toml").is_file()
