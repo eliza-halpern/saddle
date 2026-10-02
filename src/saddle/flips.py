@@ -32,9 +32,10 @@ import difflib
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Final, Literal
+
+from saddle.gates import is_test_code
 
 ASSERTION_CHANGED: Final = "assertion-changed"
 RAISES_REMOVED: Final = "expectation-removed"
@@ -43,6 +44,7 @@ BODY_CHANGED: Final = "body-changed"
 DELETED: Final = "deleted"
 RENAMED: Final = "renamed"
 FILE_CHANGED: Final = "file-changed"
+SUPPORT_CHANGED: Final = "support-changed"
 UNREADABLE: Final = "unreadable"
 
 FLIP_RULE: Final = (
@@ -65,7 +67,6 @@ _OTHER_SUFFIXES: Final = frozenset(
     {".go", ".rs", ".rb", ".java", ".kt", ".cs", ".php", ".swift", ".c", ".cc", ".cpp", ".sh"}
     | {".bats", ".lua", ".pl", ".r"}
 )
-_TEST_DIRS: Final = frozenset({"tests", "test", "__tests__"})
 
 Language = Literal["python", "js", "other"]
 
@@ -82,27 +83,36 @@ class ChangedTest:
     detail: str
 
 
-def language(path: str) -> Language | None:
-    """The language a file's tests are read in, or None when it is not test code.
-
-    Python by pytest's collection rule (`test_*.py`, `*_test.py`); JavaScript and
-    TypeScript by name (`*.test.*`, `*.spec.*`) or by living under a `tests`, `test`
-    or `__tests__` directory, which is where every test lives that the name rule
-    misses; any other language only by a test-shaped file name, and then it is
-    compared as a whole file (`FILE_CHANGED`).
-    """
+def _named_like_a_test(path: str) -> bool:
+    """A test-shaped file name in a language `gates.is_test_code` does not name:
+    `calc_test.go`, `parse.test.rb`. Kept beside it so no language that was read
+    before the rule was shared is read less."""
     pure = PurePosixPath(path)
-    name = pure.name
-    marked = ".test." in name or ".spec." in name
-    if pure.suffix == ".py":
-        return "python" if fnmatch(name, "test_*.py") or fnmatch(name, "*_test.py") else None
-    if pure.suffix in _JS_SUFFIXES:
-        return "js" if marked or _TEST_DIRS & set(pure.parts[:-1]) else None
-    if pure.suffix in _OTHER_SUFFIXES and (
-        marked or pure.stem.startswith("test_") or pure.stem.endswith("_test")
-    ):
-        return "other"
-    return None
+    return pure.suffix in _OTHER_SUFFIXES and (
+        ".test." in pure.name
+        or ".spec." in pure.name
+        or pure.stem.startswith("test_")
+        or pure.stem.endswith("_test")
+    )
+
+
+def language(path: str) -> Language | None:
+    """How a test-code file is read, or None when it is not test code.
+
+    Whether it is test code is `gates.is_test_code`'s answer (pytest modules,
+    `conftest.py`, anything under a `tests`/`test`/`__tests__` directory,
+    `*.test.*`/`*.spec.*` scripts), plus `_named_like_a_test`. This function only
+    chooses the reading: a Python file by `ast` and a JavaScript or TypeScript
+    file by the masking scan, both test by test AND for the code outside the
+    tests (a `conftest.py`, a shared fake DOM, a helper), and anything else
+    (data fixtures, other languages) as a whole file (`FILE_CHANGED`).
+    """
+    if not (is_test_code(path) or _named_like_a_test(path)):
+        return None
+    suffix = PurePosixPath(path).suffix
+    if suffix == ".py":
+        return "python"
+    return "js" if suffix in _JS_SUFFIXES else "other"
 
 
 # -- Python ----------------------------------------------------------------------
@@ -201,6 +211,22 @@ def _py_tests(source: str) -> dict[str, _PyTest]:
 
     visit(tree, module_marks)
     return found
+
+
+class _WithoutTests(ast.NodeTransformer):
+    """The module with every `test*` function taken out, wherever it sits."""
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
+        return None if node.name.startswith("test") else self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST | None:
+        return None if node.name.startswith("test") else self.generic_visit(node)
+
+
+def _py_residue(source: str) -> str:
+    """The module's code outside its tests, as `ast.unparse` writes it: comments and
+    layout are gone, quote style is normalised, every literal and docstring stays."""
+    return ast.unparse(_WithoutTests().visit(ast.parse(source)))
 
 
 def _lost(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:
@@ -474,7 +500,7 @@ def _collapse(plain: str, masked: str, start: int, stop: int, holes: list[tuple[
     return "".join(out).strip()
 
 
-def _js_calls(src: str) -> list[_Call]:
+def _js_calls(src: str) -> tuple[list[_Call], str]:
     masked, plain = _mask(src)
     partner = _partners(masked)
     found: list[_Call] = []
@@ -509,7 +535,12 @@ def _js_calls(src: str) -> list[_Call]:
         modifier = _modifier(masked, call.start)
         own = modifier + _collapse(plain, masked, bodies[call.start], call.stop + 1, direct)
         owned.append(_Call(call.title, call.group, call.start, call.stop, call.named, own))
-    return owned
+    top = [
+        (c.named, _after_statement(masked, c.stop))
+        for c in found
+        if not any(o.start < c.start and c.stop < o.stop for o in found)
+    ]
+    return owned, _collapse(plain, masked, 0, len(src), top)
 
 
 def _after_statement(masked: str, close: int) -> int:
@@ -573,22 +604,39 @@ def _js_changes(
 # -- every language -----------------------------------------------------------------
 
 
-def _js_tests(text: str) -> dict[str, list[str]]:
-    return _group_by_title(_js_calls(text))
+def _js_tests(text: str) -> tuple[dict[str, list[str]], str]:
+    """A script's tests by title, and its code outside them (comments and whitespace
+    outside literals normalised away)."""
+    calls, residue = _js_calls(text)
+    return _group_by_title(calls), residue
 
 
 def detect(base: Mapping[str, str], head: Mapping[str, str]) -> list[ChangedTest]:
-    """The pre-existing tests the tree changed.
+    """The pre-existing test code the tree changed: its tests, and everything else in it.
 
-    `base` is the baseline's text of each test file that differs in the tree, and
-    `head` the tree's text of those same paths (a path missing from `head` was
-    deleted) together with every test file the tree added: a test that moved to
-    another file is found there, and is not reported as lost. A file whose text
-    is the same in both is skipped.
+    `base` is the baseline's text of each test-code file that differs in the tree
+    (`language` says which files those are), and `head` the tree's text of those
+    same paths (a path missing from `head` was deleted) together with every test
+    file the tree added: a test that moved to another file is found there, and is
+    not reported as lost. A file whose text is the same in both is skipped, and a
+    file the tree added is never a change.
+
+    Two readings of each Python and JavaScript file. Test by test: a test whose
+    expectations changed, vanished or was renamed. And the code outside the tests
+    (a `conftest.py`, a shared fake DOM, a helper, a fixture, an import): compared
+    whole, after comments and layout are normalised away, and any difference is a
+    `SUPPORT_CHANGED` named by the path, or `<path> (code outside the tests)` when
+    the file also holds tests. Every test that leans on shared code changes meaning
+    when that code does, so adding a top-level helper or an import to a test module
+    asks for a label too; that cost is deliberate, since a redefinition added later
+    in a module shadows what was there. A comment or layout edit is free; a
+    formatting change that alters code tokens (quote style in JavaScript, a
+    trailing comma) is not. Any other file is compared byte for byte.
     """
     changes: list[ChangedTest] = []
     py_before: dict[str, dict[str, _PyTest]] = {}
     js_before: dict[str, dict[str, list[str]]] = {}
+    outside_before: dict[str, tuple[str, bool]] = {}
     for path, text in base.items():
         kind = language(path)
         if kind is None or head.get(path) == text:
@@ -596,26 +644,39 @@ def detect(base: Mapping[str, str], head: Mapping[str, str]) -> list[ChangedTest
         try:
             if kind == "python":
                 py_before[path] = _py_tests(text)
+                outside_before[path] = (_py_residue(text), bool(py_before[path]))
             elif kind == "js":
-                js_before[path] = _js_tests(text)
+                js_before[path], residue = _js_tests(text)
+                outside_before[path] = (residue, bool(js_before[path]))
             else:
                 changes.append(_other(path, head.get(path)))
         except (SyntaxError, ValueError) as exc:
             changes.append(ChangedTest(path, path, UNREADABLE, f"baseline: {_short(str(exc))}"))
     py_head: dict[str, dict[str, _PyTest]] = {}
     js_head: dict[str, dict[str, list[str]]] = {}
+    outside_head: dict[str, str] = {}
     for path, text in head.items():
         kind = language(path)
         try:
             if kind == "python":
                 py_head[path] = _py_tests(text)
+                outside_head[path] = _py_residue(text)
             elif kind == "js":
-                js_head[path] = _js_tests(text)
+                js_head[path], outside_head[path] = _js_tests(text)
         except (SyntaxError, ValueError) as exc:
-            if path in py_before or path in js_before:
+            if path in outside_before:
                 changes.append(ChangedTest(path, path, UNREADABLE, f"tree: {_short(str(exc))}"))
                 py_before.pop(path, None)
                 js_before.pop(path, None)
+                del outside_before[path]
+    for path, (before, has_tests) in outside_before.items():
+        after = outside_head.get(path, "")
+        if path not in head and has_tests:
+            continue  # a deleted test module: each of its tests is reported as deleted
+        if after != before:
+            name = f"{path} (code outside the tests)" if has_tests else path
+            said = _first_difference(before, after) if path in head else "the file is deleted"
+            changes.append(ChangedTest(path, name, SUPPORT_CHANGED, said))
     py_names = {n for tests in py_before.values() for n in tests}
     js_names = {n for tests in js_before.values() for n in tests}
     for path, tests in py_before.items():
@@ -639,7 +700,7 @@ def _other(path: str, head: str | None) -> ChangedTest:
         path,
         path,
         FILE_CHANGED,
-        f"a test file in a language this check cannot read test by test: {said}",
+        f"a file this check cannot read test by test (data, or another language): {said}",
     )
 
 

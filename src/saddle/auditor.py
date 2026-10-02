@@ -850,11 +850,13 @@ def _git_out(root: Path, *argv: str) -> bytes:
 
 
 def changed_tests(root: Path, baseline: str) -> list[flips.ChangedTest]:
-    """The pre-existing tests `root`'s tree changed against `baseline`, read-only.
+    """The pre-existing test code `root`'s tree changed against `baseline`, read-only.
 
-    Every test file git says differs from the baseline, as the baseline had it
-    and as the tree has it, plus every test file the tree added (a test that
-    moved is found there). A file that is not UTF-8 is reported as unreadable.
+    Every test-code file (`flips.language`) git says differs from the baseline, as
+    the baseline had it and as the tree has it, plus every Python or JavaScript
+    file the tree added (a test that moved is found there; a new file is never a
+    change). A Python or JavaScript file that is not UTF-8 is reported as
+    unreadable; data and other languages are compared byte for byte.
     """
     resolved = _git_out(root, "rev-parse", "--verify", f"{baseline}^{{commit}}").decode().strip()
     listing = _git_out(root, "diff", "--name-status", "--no-renames", "-z", resolved)
@@ -866,6 +868,11 @@ def changed_tests(root: Path, baseline: str) -> list[flips.ChangedTest]:
     unreadable: list[flips.ChangedTest] = []
 
     def put(into: dict[str, str], path: str, data: bytes, where: str) -> None:
+        if flips.language(path) == "other":
+            # Data and other languages are compared byte for byte: surrogateescape
+            # round-trips any bytes, so a binary fixture is read, never refused.
+            into[path] = data.decode(errors="surrogateescape")
+            return
         try:
             into[path] = data.decode()
         except UnicodeDecodeError:
@@ -881,7 +888,7 @@ def changed_tests(root: Path, baseline: str) -> list[flips.ChangedTest]:
         if kind != "D":
             put(head, path, (root / path).read_bytes(), "tree")
     for path in (p for p in untracked.split("\0") if p):
-        if flips.language(path) is not None:
+        if flips.language(path) in ("python", "js"):  # a new file is never a change
             put(head, path, (root / path).read_bytes(), "tree")
     # An unreadable file is reported once, not also as a file whose tests all vanished.
     for bad in {c.path for c in unreadable}:
