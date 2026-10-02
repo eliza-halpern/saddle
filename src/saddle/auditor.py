@@ -92,6 +92,7 @@ from saddle.evidence import (
     prompt_benchmark,
     read_skip_report,
     ruff_argv,
+    ruff_configured,
     ruff_findings,
     run_capture,
     run_prompt_benchmark,
@@ -1820,10 +1821,16 @@ class Auditor:
             (current / rel).parent.mkdir(parents=True)
             (current / rel).write_text(new_text)
             lint, found = ruff_findings(current, [rel])
+            configured = ruff_configured(self.repo, self.baseline_rev)
             overrides = format_overrides(self.repo, self.baseline_rev)
             # `--diff`, not `--check`: the same exits, and the diff it prints is
             # what the finding hands a model that has no ruff (`check_ruff`).
-            fmt = run_capture(ruff_argv("format", "--diff", *overrides, rel), current)
+            # Not run where the project did not choose ruff (#130).
+            fmt = (
+                run_capture(ruff_argv("format", "--diff", *overrides, rel), current)
+                if configured
+                else None
+            )
             shown = run_capture(["git", "show", f"{self.baseline_rev}:{rel}"], self.repo)
             old: list[RuffFinding] = []
             if shown.exit_code == 0:
@@ -1836,8 +1843,9 @@ class Auditor:
             introduced=tuple(introduced),
             inherited=inherited,
             lint_exit=lint.exit_code,
-            format_exit=fmt.exit_code,
-            format_diff=fmt.stdout,
+            format_exit=0 if fmt is None else fmt.exit_code,
+            format_diff="" if fmt is None else fmt.stdout,
+            format_checked=fmt is not None,
         )
         roots = [
             self.repo,

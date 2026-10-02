@@ -256,6 +256,8 @@ def test_a_single_files_edit_checks_render_byte_identically_to_the_old_ledger(
     repo.mkdir()
     (repo / "n.py").write_text(FIXED)
     (repo / ".gitignore").write_text("__pycache__/\n.saddle/\n")
+    # A project that chose ruff, so the clean detail is the old text (#130).
+    (repo / "ruff.toml").write_text("line-length = 88\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "baseline")

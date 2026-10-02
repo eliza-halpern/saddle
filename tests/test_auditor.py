@@ -830,19 +830,25 @@ def test_every_tier_0_finding_names_the_file_it_checked(clean_tree: Path) -> Non
     it meant. Each tier-0 finding carries its file, and the model's text names it."""
     from saddle.feed import AuditResult, render
 
-    found = Auditor(clean_tree).tier0("n.py", "def f():\n    return  2\n").findings
+    found = Auditor(clean_tree).tier0("n.py", "def f():\n    return missing(2)\n").findings
     assert {f.path for f in found} == {"n.py"}
     ruff = next(f for f in found if f.gate == "ruff")
     assert ruff.verdict == "fail"
     text = render(AuditResult("finish", "t" * 12, found))
-    assert "- ruff (tier 0): fail, code-wrong: n.py: " in text
+    line = next(x for x in text.splitlines() if x.startswith("- ruff (tier 0): fail"))
+    assert "n.py" in line
+    assert "F821" in line
 
 
 def test_a_tier_0_format_finding_quotes_the_diff_that_fixes_it(clean_tree: Path) -> None:
     """Red before: an unformatted file's finding read only "ruff format --check
     exited 1", and a Task-lane run whose sandbox had no ruff spent its last
     twenty minutes guessing at the formatter. The finding quotes ruff's own
-    diff, and the text that diff describes is text the same check passes."""
+    diff, and the text that diff describes is text the same check passes.
+    The format check runs where the baseline configures ruff (#130)."""
+    (clean_tree / "ruff.toml").write_text("line-length = 88\n")
+    _git(clean_tree, "add", "ruff.toml")
+    _git(clean_tree, "commit", "-m", "configure ruff", "--", "ruff.toml")
     auditor = Auditor(clean_tree)
     found = auditor.tier0("n.py", "def f():\n    return  2\n").findings
     bad = next(f for f in found if f.gate == "ruff")

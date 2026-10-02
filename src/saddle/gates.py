@@ -344,6 +344,11 @@ def check_project_gate(
     return ProjectGate(verdict, "\n".join([line, *notes, scope]))
 
 
+FORMAT_NOT_CONFIGURED: Final = "format not checked: the project does not configure ruff"
+"""Appended to a `ruff` detail where the baseline configures no ruff (`evidence.ruff_configured`):
+the defect rules ran, ruff's formatting defaults did not judge someone else's style."""
+
+
 def check_ruff(
     files: Collection[str],
     *,
@@ -352,6 +357,7 @@ def check_ruff(
     lint_exit: int,
     format_exit: int,
     format_diff: str = "",
+    format_checked: bool = True,
 ) -> GateCheck:
     """The ruff gate: a node fails for lint its own diff introduced.
 
@@ -366,7 +372,9 @@ def check_ruff(
     `--format-at-finish`), `format_diff` -- `ruff format --diff`'s output --
     is quoted, up to `RUFF_FORMAT_DIFF_LINES`, so the changes can be made
     without ruff. The detail names the rules, file and line (a bare
-    `ruff check exited 1` told the worker nothing).
+    `ruff check exited 1` told the worker nothing). `format_checked` is False
+    where the project configures no ruff (`evidence.ruff_configured`): the
+    format run is not judged, and a pass says so (`FORMAT_NOT_CONFIGURED`).
     """
     ordered = sorted(files)
     if not ordered:
@@ -395,6 +403,12 @@ def check_ruff(
             name="ruff",
             passed=False,
             detail=f"ruff check exited {lint_exit} with no findings parsed{inherited_note}",
+        )
+    if not format_checked:
+        return GateCheck(
+            name="ruff",
+            passed=True,
+            detail=f"{len(ordered)} file(s) clean{inherited_note}; {FORMAT_NOT_CONFIGURED}",
         )
     if format_exit != 0 and format_diff.strip():
         lines = format_diff.strip().splitlines()
@@ -2830,6 +2844,9 @@ class Tier1Inputs:
     # `compelled_lines` can speak the same spelling. Empty means
     # those sets are already workdir-relative.
     workdir: str = ""
+    # False where the project configures no ruff (`evidence.ruff_configured`):
+    # `ruff_format_exit` then judges nothing (#130).
+    ruff_format_checked: bool = True
     # Nodes the plan still owes tests from. Non-empty defers an
     # uncovered changed line instead of failing the node for it.
     owed_tests: tuple[str, ...] = ()
@@ -3235,6 +3252,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
         inherited=inputs.ruff_inherited,
         lint_exit=inputs.ruff_lint_exit,
         format_exit=inputs.ruff_format_exit,
+        format_checked=inputs.ruff_format_checked,
     )
     tests = check_test_command(
         gate.test_command,

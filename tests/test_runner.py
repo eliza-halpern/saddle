@@ -12,7 +12,7 @@ import pytest
 
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
-from saddle.gates import RED_PHASE_SAMPLES, GateCheck
+from saddle.gates import FORMAT_NOT_CONFIGURED, RED_PHASE_SAMPLES, GateCheck
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import _stub_module, read_sources, red_phase_command, run_node_gate
 
@@ -72,6 +72,7 @@ def _worktree(
     baseline_code: str = "def f():\n    return 1\n",
     fixed_code: str = "def f():\n    return 2\n",
     baseline_test: str | None = None,
+    ruff_config: bool = False,
 ) -> None:
     setup = (
         ["git", "init"],
@@ -86,6 +87,10 @@ def _worktree(
     for earlier in sorted(root.glob("test_*.py")):
         assert run_argv(["git", "add", earlier.name], root) == 0
     assert run_argv(["git", "add", "n.py"], root) == 0
+    if ruff_config:
+        # The project chose ruff, so the format check judges it (#130).
+        (root / "ruff.toml").write_text("line-length = 88\n")
+        assert run_argv(["git", "add", "ruff.toml"], root) == 0
     if baseline_test is not None:
         (root / test_name).write_text(baseline_test)
         assert run_argv(["git", "add", test_name], root) == 0
@@ -276,7 +281,7 @@ def test_run_node_gate_records_tool_spans(tmp_path: Path) -> None:
     test_body = test_body.replace(
         "    assert f() == 2\n", "    assert f() is not None\n    assert f() == 2\n"
     )
-    _worktree(tmp_path, test_body, baseline_test=baseline_test)
+    _worktree(tmp_path, test_body, baseline_test=baseline_test, ruff_config=True)
     journal = tmp_path / "proofs.jsonl"
     result = run_node_gate(
         _node(kind="refactor"), tmp_path, recorder=SpanRecorder(path=journal, node_id="n1")
@@ -332,13 +337,33 @@ def test_run_node_gate_capture_collects_suite_and_ruff_runs(tmp_path: Path) -> N
     test_body = (
         "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
     )
-    _worktree(tmp_path, test_body, baseline_test=test_body)
+    _worktree(tmp_path, test_body, baseline_test=test_body, ruff_config=True)
     captured: list[CapturedRun] = []
     result = run_node_gate(_node(), tmp_path, capture=captured)
     assert result.passed is True
     assert [run.argv[0] for run in captured] == ["coverage", "ruff", "ruff"]
     assert all(run.exit_code == 0 for run in captured)
     assert "1 passed" in captured[0].stdout
+
+
+def test_run_node_gate_skips_ruff_format_where_the_project_has_no_ruff_config(
+    tmp_path: Path,
+) -> None:
+    """Known-good: with no ruff configuration at the baseline, the format run
+    never happens and the row says so; the defect-rule run still does (#130)."""
+    test_body = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body, baseline_test=test_body)
+    captured: list[CapturedRun] = []
+    result = run_node_gate(_node(), tmp_path, capture=captured)
+    assert result.passed is True
+    assert [run.argv[:2] for run in captured] == [
+        ("coverage", "run"),
+        ("ruff", "check"),
+    ]
+    ruff = next(check for check in result.checks if check.name == "ruff")
+    assert ruff.detail.endswith(FORMAT_NOT_CONFIGURED)
 
 
 def test_run_node_gate_ignores_stale_bytecode(
@@ -685,7 +710,12 @@ def test_run_node_gate_inherited_lint_does_not_fail_and_a_shift_is_still_inherit
     clean_add = "import os\n\n\ndef g():\n    return 0\n\n\ndef f():\n    return 2\n"
     test_body = "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
     _worktree(
-        tmp_path, test_body, baseline_code=dirty, fixed_code=clean_add, baseline_test=test_body
+        tmp_path,
+        test_body,
+        baseline_code=dirty,
+        fixed_code=clean_add,
+        baseline_test=test_body,
+        ruff_config=True,
     )
     captured: list[CapturedRun] = []
     result = run_node_gate(_node(), tmp_path, capture=captured)

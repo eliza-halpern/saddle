@@ -145,7 +145,7 @@ def _node_dict(
     }
 
 
-def _slice_repo(root: Path) -> None:
+def _slice_repo(root: Path, *, ruff_config: bool = False) -> None:
     setup = (
         ["git", "init"],
         ["git", "config", "user.email", "test@example.com"],
@@ -158,6 +158,9 @@ def _slice_repo(root: Path) -> None:
         "from n import f\n\n\ndef test_f():  # REQ-001\n    assert f() == 2\n"
     )
     assert run_argv(["git", "add", "n.py", "test_n.py"], root) == 0
+    if ruff_config:
+        (root / "ruff.toml").write_text("line-length = 88\n")
+        assert run_argv(["git", "add", "ruff.toml"], root) == 0
     assert run_argv(["git", "commit", "-m", "baseline"], root) == 0
 
 
@@ -745,7 +748,7 @@ def test_autofix_ignores_changed_non_python_files(tmp_path: Path) -> None:
 
 
 def test_run_slice_pass_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _slice_repo(tmp_path)
+    _slice_repo(tmp_path, ruff_config=True)
     dag = Dag.model_validate({"nodes": [_node_dict("n1", [])]})
     journal = tmp_path / "proofs.jsonl"
     ticks = iter([0.0, 1.0, 2.0, 3.0])

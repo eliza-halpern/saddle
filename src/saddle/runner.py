@@ -38,6 +38,7 @@ from saddle.evidence import (
     property_modules,
     pytest_scope,
     ruff_argv,
+    ruff_configured,
     ruff_findings,
     run_capture,
     run_shell_capture,
@@ -404,16 +405,23 @@ def run_node_gate(
 
     if ruff_files:
         lint_run, current_findings = ruff_findings(workdir, ruff_files, recorder=recorder)
-        format_run = run_capture(
-            ruff_argv("format", "--check", *format_overrides(workdir, baseline), *ruff_files),
-            workdir,
-            recorder=recorder,
+        # Formatting is judged only where the project chose ruff (#130).
+        format_checked = ruff_configured(workdir, baseline)
+        format_run = (
+            run_capture(
+                ruff_argv("format", "--check", *format_overrides(workdir, baseline), *ruff_files),
+                workdir,
+                recorder=recorder,
+            )
+            if format_checked
+            else None
         )
         if capture is not None:
-            capture.extend((lint_run, format_run))
-        lint_exit, format_exit = lint_run.exit_code, format_run.exit_code
+            capture.extend((lint_run,) if format_run is None else (lint_run, format_run))
+        lint_exit = lint_run.exit_code
+        format_exit = 0 if format_run is None else format_run.exit_code
     else:
-        current_findings, lint_exit, format_exit = [], 0, 0
+        current_findings, lint_exit, format_exit, format_checked = [], 0, 0, True
     introduced, inherited = introduced_findings(current_findings, baseline_findings)
 
     sample = gate.mutation_sample
@@ -511,6 +519,7 @@ def run_node_gate(
         ruff_inherited=inherited,
         ruff_lint_exit=lint_exit,
         ruff_format_exit=format_exit,
+        ruff_format_checked=format_checked,
         test_runner=lambda _command: current_exit,
         changed=changed,
         covered=covered,

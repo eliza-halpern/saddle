@@ -323,6 +323,29 @@ def format_overrides(tree: Path, rev: str) -> tuple[str, ...]:
     return ()
 
 
+def ruff_configured(tree: Path, rev: str) -> bool:
+    """Whether the project chose ruff at `rev`: a `.ruff.toml`, a `ruff.toml`, or a
+    `[tool.ruff]` table in `pyproject.toml` (`RUFF_CONFIGS`). Read at the commit, as
+    `format_overrides` reads its settings, so a tree cannot opt out by deleting its
+    config. A `pyproject.toml` that does not parse counts as configured: the check
+    then runs, as it did before this rule."""
+    for name, section in RUFF_CONFIGS:
+        shown = run_capture(["git", "show", f"{rev}:./{name}"], tree)
+        if shown.exit_code != 0:
+            continue
+        if not section:
+            return True
+        try:
+            data: object = tomllib.loads(shown.stdout)
+        except tomllib.TOMLDecodeError:
+            return True
+        for key in section:
+            data = data.get(key) if isinstance(data, dict) else None
+        if isinstance(data, dict):
+            return True
+    return False
+
+
 def ruff_version() -> str:
     """The installed ruff's version (`ruff --version`), or "unavailable"."""
     try:

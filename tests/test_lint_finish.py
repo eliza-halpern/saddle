@@ -130,9 +130,36 @@ def test_the_recorded_eaf_t5_s6_tree_is_refused_at_finish_for_the_tier0_reason(
     fed, auditor = feed_for(repo, tmp_path)
     accepted, text = fed.final()
     assert not accepted
-    # the post-hoc refusal, read from cells/EAF-t5/s6/audit.json: format on
-    # four files and one B904 in money.py; nothing else at tier 0
+    # The recorded project configures no ruff (#130), so the post-hoc refusal's
+    # format findings no longer apply; its one B904 in money.py still refuses.
     assert "- ruff (tier 0): fail" in text
+    assert "ruff format would reformat it" not in text
+    assert "money.py:67 B904" in text
+    refused = [f for f in fed.results[-1].findings if f.verdict == "fail"]
+    assert {f.gate for f in refused} == {"ruff"}
+    assert len(refused) == 1
+    assert all(f.tier == 0 for f in refused)
+    assert fed.unresolved() == [
+        {"gate": "ruff", "reason": "code-wrong", "cites": ["saddle.gates.check_ruff"]}
+    ]
+    # tier 0 ran over exactly the changed Python files, once each
+    assert auditor.tier0_files == changed_python(repo, recorded)
+    assert "money.py" in auditor.tier0_files  # an added file counts (diff-filter A)
+
+
+def test_the_recorded_tree_is_also_refused_for_format_where_the_project_configures_ruff(
+    repo: Path,
+    tmp_path: Path,
+    recorded: dict,  # type: ignore[type-arg]
+) -> None:
+    """The format half of the original refusal, on a baseline that chose ruff."""
+    (repo / "ruff.toml").write_text("line-length = 88\n")
+    git(repo, "add", "ruff.toml")
+    git(repo, "commit", "-q", "-m", "configure ruff")
+    write_tree(repo, recorded["finished"])
+    fed, _auditor = feed_for(repo, tmp_path)
+    accepted, text = fed.final()
+    assert not accepted
     assert "ruff format would reformat it" in text
     assert "money.py:67 B904" in text
     refused = [f for f in fed.results[-1].findings if f.verdict == "fail"]
@@ -141,13 +168,6 @@ def test_the_recorded_eaf_t5_s6_tree_is_refused_at_finish_for_the_tier0_reason(
     formats = [f for f in refused if f.detail.startswith("ruff format would reformat it")]
     assert len(formats) == 4
     assert all(f"--- {f.path}\n" in f.detail for f in formats)
-    assert all(f.tier == 0 for f in refused)
-    assert fed.unresolved() == [
-        {"gate": "ruff", "reason": "code-wrong", "cites": ["saddle.gates.check_ruff"]}
-    ]
-    # tier 0 ran over exactly the changed Python files, once each
-    assert auditor.tier0_files == changed_python(repo, recorded)
-    assert "money.py" in auditor.tier0_files  # an added file counts (diff-filter A)
 
 
 def test_a_clean_change_to_the_same_baseline_finishes(repo: Path, tmp_path: Path) -> None:
