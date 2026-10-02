@@ -100,6 +100,17 @@ def test_a_stage_whose_tool_cannot_start_is_not_proven_and_names_the_tool() -> N
     assert gate.detail.splitlines()[0] == "Gate: base ✓, head ✗ (eslint) (2 stages)"
 
 
+def test_a_command_the_sandbox_could_not_find_is_missing_not_red() -> None:
+    """The sandbox reports a command it cannot exec on stderr and exits 1."""
+    seen = run(1, "bwrap: execvp npx: No such file or directory\n")
+    gate = check_project_gate([(ESLINT, seen, seen)])
+    assert gate.verdict == "not-proven"
+    assert "npx could not be launched here" in gate.detail
+    other = run(1, "bwrap: execvp node: No such file or directory\n")
+    assert "was failing at the base" in check_project_gate([(ESLINT, RED, other)]).detail
+    assert check_project_gate([(ESLINT, other, OK)]).verdict == "fail"
+
+
 def test_a_regression_outranks_a_not_proven_stage() -> None:
     gate = check_project_gate([(ESLINT, run(TOOL_UNAVAILABLE), OK), (RUFF, RED, OK)])
     assert gate.verdict == "fail"

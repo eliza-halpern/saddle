@@ -20,6 +20,7 @@ from saddle import auditor as auditor_mod
 from saddle import evidence, gates, impact, runner
 from saddle.audit import AuditError, audit_node
 from saddle.auditor import (
+    PROJECT_GATE,
     REASONS,
     REUSES,
     STATIC_CHECK,
@@ -124,10 +125,10 @@ def test_tiers_partition_the_thirteen_gates() -> None:
     gates = set(TIER0) - {"imports"} | set(TIER1) | set(TIER2) - {"full-suite"}
     assert gates == THIRTEEN
     assert len(TIER0) + len(TIER1) + len(TIER2) == 15
-    # Two tier-1 findings are emitted only when configured, and are not among
-    # the thirteen: P1's gate (a requirements file) and the project's own
-    # static check (`[tool.saddle] static-check`).
-    conditional = {TASK_REQUIREMENTS, STATIC_CHECK}
+    # Three tier-1 findings are emitted only when configured, and are not among
+    # the thirteen: P1's gate (a requirements file), the project's own static
+    # check (`[tool.saddle] static-check`) and its gate stages (`gate-checks`).
+    conditional = {TASK_REQUIREMENTS, STATIC_CHECK, PROJECT_GATE}
     assert not conditional & (THIRTEEN | set(TIER1))
     assert set(REUSES) == set(REASONS) == set(TIER0) | set(TIER1) | set(TIER2) | conditional
     assert set(REASONS.values()) <= {"code-wrong", "evidence-thin", "scope", "unknown"}

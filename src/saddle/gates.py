@@ -260,8 +260,11 @@ def gate_stage_name(argv: Sequence[str], taken: Collection[str] = ()) -> str:
     return " ".join(argv) if name in taken else name
 
 
-def _state(run: CapturedRun) -> str:
-    if run.exit_code == TOOL_UNAVAILABLE:
+def _state(argv: Sequence[str], run: CapturedRun) -> str:
+    """`missing` when the command could not start: exit 127, or the sandbox's own
+    "no such file" for the command (it exits 1, which would read as a red stage)."""
+    exec_failed = f"execvp {argv[0]}: No such file or directory" in run.stdout + run.stderr
+    if run.exit_code == TOOL_UNAVAILABLE or (run.exit_code != 0 and exec_failed):
         return "missing"
     if run.timed_out:
         return "timeout"
@@ -300,7 +303,7 @@ def check_project_gate(
     for argv, head, base in stages:
         name = gate_stage_name(argv, taken)
         taken.append(name)
-        named.append((name, argv, _state(head), _state(base), head))
+        named.append((name, argv, _state(argv, head), _state(argv, base), head))
     head_red = [n for n, _, h, _, _ in named if h != "ok"]
     base_red = [n for n, _, _, b, _ in named if b != "ok"]
     count = f"{len(named)} stage{'s' if len(named) != 1 else ''}"
