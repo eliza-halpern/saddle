@@ -221,7 +221,8 @@ def test_the_prompt_says_the_finish_audit_runs_new_tests_on_the_old_code(tmp_pat
     for arm in ("E+A+F", "E"):
         client = Scripted([finish()])
         auto(_repo(tmp_path / arm.replace("+", "p"), src=False), client, arm=arm)
-        said[arm] = "against the original code, where they must fail" in _system(client)
+        wording = "against the original code, where at least one of them must fail"
+        said[arm] = wording in _system(client)
     assert said == {"E+A+F": True, "E": False}
 
 
