@@ -78,6 +78,11 @@
  *   "#pw-input": HTMLInputElement,
  *   "#pw-cancel": HTMLButtonElement,
  *   "#pw-send": HTMLButtonElement,
+ *   "#approval-dialog": HTMLDialogElement,
+ *   "#approval-title": HTMLElement,
+ *   "#approval-lines": HTMLElement,
+ *   "#approval-decline": HTMLButtonElement,
+ *   "#approval-approve": HTMLButtonElement,
  *   "#rewind-dialog": HTMLDialogElement,
  *   "#rewind-text": HTMLTextAreaElement,
  *   "#rewind-cancel": HTMLButtonElement,
@@ -130,6 +135,7 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
  * @property {string | null} [historyFor]
  * @property {{index: number, editing: boolean}} [rewind]
  * @property {string | null} [passwordId]
+ * @property {string | null} [approvalId]
  * @property {boolean} [fullAccess]
  * @property {ProcessRow[]} [processes]
  * @property {OutsideView} [outside]
@@ -384,6 +390,12 @@ function handle(event) {
       break;
     case "password.done":
       if (state.passwordId === event.id) closePassword();
+      break;
+    case "approval.request":
+      askApproval(event);
+      break;
+    case "approval.done":
+      if (state.approvalId === event.id) closeApproval();
       break;
     case "terminal.output": {
       // Append text nodes; the raw text rides along so the button in the
@@ -1247,6 +1259,47 @@ $("#password-dialog").addEventListener("cancel", (event) => {
   // Escape
   event.preventDefault();
   answerPassword(true);
+});
+
+/* Something needs a yes or no (#139, #93): an MCP server's descriptions, a
+   large download, a command running what the web reader brought back. The
+   lines are shown as text, never as markup. */
+/** @param {ServerEvent} event */
+function askApproval(event) {
+  state.approvalId = event.id;
+  $("#approval-title").textContent = event.title || "Approve?";
+  $("#approval-lines").textContent = (event.lines || []).join("\n");
+  if (!$("#approval-dialog").open) $("#approval-dialog").showModal();
+  $("#approval-decline").focus();
+}
+
+function closeApproval() {
+  state.approvalId = null;
+  if ($("#approval-dialog").open) $("#approval-dialog").close();
+}
+
+/** @param {boolean} approve */
+async function answerApproval(approve) {
+  const id = state.approvalId;
+  if (!id) return;
+  closeApproval();
+  try {
+    await api(`/api/sessions/${state.sessionId}/approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, approve }),
+    });
+  } catch (error) {
+    notice(errorText(error), "error");
+  }
+}
+
+$("#approval-approve").onclick = () => answerApproval(true);
+$("#approval-decline").onclick = () => answerApproval(false);
+$("#approval-dialog").addEventListener("cancel", (event) => {
+  // Escape declines
+  event.preventDefault();
+  answerApproval(false);
 });
 
 $("#full-access-open").onclick = () => $("#full-access-dialog").showModal();

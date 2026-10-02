@@ -533,6 +533,11 @@ class SessionStore:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def downloads_dir(self, session_id: str) -> Path:
+        """The session's download area: files the web reader saved, outside the
+        project and out of the acting session's file tools' reach."""
+        return self._dir(session_id) / "downloads"
+
     def undo_dir(self, session_id: str) -> Path:
         """Where a session's file snapshots live, beside its transcript."""
         return self._dir(session_id) / "undo"

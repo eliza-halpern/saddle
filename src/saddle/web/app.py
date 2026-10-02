@@ -30,6 +30,7 @@ from typing import Any, Final
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import (
@@ -45,10 +46,13 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from saddle import capabilities
 from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET, AutoError, repo_root
 from saddle.engine import TurnOptions
 from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
 from saddle.events import (
+    ApprovalRequest,
+    ApprovalSettled,
     ErrorEvent,
     Event,
     PasswordRequest,
@@ -76,7 +80,7 @@ from saddle.sessions import (
 )
 from saddle.sideeffects import SideEffects
 from saddle.titles import title_for, words_title
-from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
+from saddle.tools import PREVIEWABLE, ToolContext, attach_mcp, preview_for, scope_turn
 from saddle.undo import UndoLog
 from saddle.vision import is_image_followup
 from saddle.vllm import VllmClient
@@ -315,6 +319,8 @@ class Live:
     """The session's process list (`ChatServer.ledger`)."""
     passwords: dict[str, queue.Queue[str | None]] = field(default_factory=dict)
     """Open `sudo` password requests (#125), by id, each waiting on the page."""
+    approvals: dict[str, queue.Queue[bool]] = field(default_factory=dict)
+    """Open approval requests (#139, #93), by id, each waiting on the page."""
 
     def ask_password(self, prompt: str) -> str | None:
         """Ask the page for a full-access command's `sudo` password; None if
@@ -332,6 +338,22 @@ class Live:
         finally:
             self.passwords.pop(request_id, None)
             self.publish(PasswordSettled(id=request_id))
+
+    def ask_approval(self, title: str, lines: list[str]) -> bool:
+        """Ask the page for a yes or no (an MCP server's descriptions, a large
+        download, a command running what the web reader brought back); no if the
+        person declines or nobody answers within `PASSWORD_WAIT_S`."""
+        request_id = uuid.uuid4().hex[:12]
+        answer: queue.Queue[bool] = queue.Queue(maxsize=1)
+        self.approvals[request_id] = answer
+        self.publish(ApprovalRequest(id=request_id, title=title, lines=tuple(lines)))
+        try:
+            return answer.get(timeout=PASSWORD_WAIT_S)
+        except queue.Empty:
+            return False
+        finally:
+            self.approvals.pop(request_id, None)
+            self.publish(ApprovalSettled(id=request_id))
 
     def subscribe(self) -> queue.Queue[Event | None]:
         channel: queue.Queue[Event | None] = queue.Queue()
@@ -505,6 +527,8 @@ class ChatServer:
                 # call that started it has already returned, so it is pushed
                 # to the session's subscribers rather than yielded by the turn.
                 # Rebuilt when full access changes, so its sandbox follows it.
+                if live.context is not None and live.context.mcp is not None:
+                    live.context.mcp.close()  # the old context's servers end with it
                 live.context = ToolContext(
                     workdir=workdir,
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
@@ -512,10 +536,15 @@ class ChatServer:
                     full_access=session.full_access,
                     effects=SideEffects(self.store.outside_dir(session_id)),
                     ask_password=live.ask_password,
+                    approve=live.ask_approval,
                     processes=self.ledger(session_id),
                     images=True,
                 )
+            # Every turn, so a capability the person switched on or off applies now.
+            attach_mcp(live.context, self.store.downloads_dir(session_id))
             tools = scope_turn(live.context, session.mode)
+            for problem in live.context.mcp.unreported() if live.context.mcp is not None else []:
+                live.publish(ErrorEvent(message=problem))  # allowlisted, but not in use
             live.turn += 1
             with self.client_factory() as client:
                 options = TurnOptions(
@@ -867,6 +896,25 @@ def build_app(
             return JSONResponse({"error": "no such password request"}, status_code=404)
         given = body.get("password")
         waiting.put(None if body.get("cancel") or not isinstance(given, str) else given)
+        return JSONResponse({"ok": True})
+
+    async def capabilities_status(_: Request) -> JSONResponse:
+        """Which opt-in capabilities are on and working: the page's later panel
+        reads this. Asks the search backend, so it runs off the event loop."""
+        try:
+            rows = await run_in_threadpool(capabilities.status)
+        except capabilities.CapabilityError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse({"capabilities": [row.as_json() for row in rows]})
+
+    async def approval(request: Request) -> JSONResponse:
+        """The person's answer to an approval request: {"id", "approve": bool}."""
+        live = server.live.get(request.path_params["sid"])
+        body = await request.json()
+        waiting = live.approvals.get(str(body.get("id"))) if live is not None else None
+        if waiting is None:
+            return JSONResponse({"error": "no such approval request"}, status_code=404)
+        waiting.put(body.get("approve") is True)
         return JSONResponse({"ok": True})
 
     async def delete_session(request: Request) -> JSONResponse:
@@ -1460,6 +1508,8 @@ def build_app(
             Route("/api/sessions/{sid}/outside", outside, methods=["GET"]),
             Route("/api/sessions/{sid}/outside/undo", outside_undo, methods=["POST"]),
             Route("/api/sessions/{sid}/password", password, methods=["POST"]),
+            Route("/api/sessions/{sid}/approval", approval, methods=["POST"]),
+            Route("/api/capabilities", capabilities_status, methods=["GET"]),
             Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/file", workdir_file),

@@ -29,9 +29,18 @@ from pathlib import Path
 from typing import Any, Final
 
 from saddle.askpass import Askpass
+from saddle.capabilities import Switches
+from saddle.capabilities import load as load_switches
 from saddle.edits import first_divergence, loose_spans
 from saddle.gates import is_test_code
+from saddle.mcpclient import Approvals, McpError, McpHost, load_config
 from saddle.procs import Entry, ProcessLedger
+from saddle.research import (
+    RESEARCH_SCHEMA,
+    RESEARCH_TOOL,
+    Researcher,
+    domains_from_env,
+)
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
     OutsideRootError,
@@ -42,6 +51,7 @@ from saddle.sandbox import (
     project_env,
     resolve_within,
 )
+from saddle.searx import search_url_from_env
 from saddle.sideeffects import SideEffects, Watch, expand_home
 from saddle.undo import UndoLog
 from saddle.vision import IMAGE_MAX_BYTES, data_url, image_info
@@ -254,14 +264,21 @@ task run is never given these."""
 
 
 def tools_for_mode(
-    mode: str, *, processes: bool = False, outside: bool = False
+    mode: str,
+    *,
+    processes: bool = False,
+    outside: bool = False,
+    extra: list[dict[str, Any]] | None = None,
+    research: bool = False,
 ) -> list[dict[str, Any]]:
     """The tool schemas a chat turn in `mode` offers: read-only unless Edit.
-    Edit adds the process tool when the session keeps a process list, and, with
-    `outside` (full access with a side-effect record), the file tools that say
-    they reach outside the folder."""
+    Edit adds the process tool when the session keeps a process list, with
+    `outside` (full access with a side-effect record) the file tools that say
+    they reach outside the folder, and `extra` (the session's approved MCP
+    tools, #139); Ask never gets those. `research` adds the web reader's tool
+    (#93) to either lane."""
     if mode != "edit":
-        return list(ASK_TOOLS)
+        return [*ASK_TOOLS, *([RESEARCH_SCHEMA] if research else [])]
     base = [
         {
             **tool,
@@ -274,7 +291,12 @@ def tools_for_mode(
         else tool
         for tool in TOOLS
     ]
-    return [*base, *([PROCESSES_SCHEMA] if processes else [])]
+    return [
+        *base,
+        *([PROCESSES_SCHEMA] if processes else []),
+        *(extra or []),
+        *([RESEARCH_SCHEMA] if research else []),
+    ]
 
 
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
@@ -286,8 +308,17 @@ def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
     `context.allowed` to exactly those names, so a call to any other tool is
     refused before it runs. Set on every turn, because a context outlives a
     lane change."""
+    extra = context.mcp.schemas("acting") if mode == "edit" and context.mcp is not None else None
+    research = False
+    if context.research is not None:
+        context.research.downloads_allowed = mode == "edit"
+        research = mode in ("ask", "edit") and context.research.unavailable() is None
     tools = tools_for_mode(
-        mode, processes=context.processes is not None, outside=context.outside_files
+        mode,
+        processes=context.processes is not None,
+        outside=context.outside_files,
+        extra=extra,
+        research=research,
     )
     context.allowed = tuple(t["function"]["name"] for t in tools)
     return tools
@@ -566,6 +597,20 @@ class ToolContext:
     in it, the page shows it, and `stop_processes` empties it. None (a task run,
     a direct test) records nothing and offers no process tool."""
 
+    mcp: McpHost | None = None
+    """The session's MCP servers (`mcpclient`, #139): the Edit lane offers the
+    approved tools of the person's allowlist and `execute_tool` calls them.
+    None (a task run, a direct test) means no MCP tool exists."""
+
+    research: Researcher | None = None
+    """The session's web reader (`research`, #93): the `research` tool in the Ask
+    and Edit lanes, and the hold on a full-access command that runs something it
+    brought back. None (a task run, a direct test) means no such tool exists."""
+    approve: Callable[[str, list[str]], bool] | None = None
+    """Asks the person a yes or no (a title and the lines to read): an MCP server
+    to allow, a large download, a command that runs what the reader brought back.
+    None here (a terminal chat, a test) asks nobody, and nobody is a no."""
+
     ask_password: Callable[[str], str | None] | None = None
     """How a full-access command's `sudo` asks the person for a password
     (`askpass`): given sudo's prompt, the password, or None to refuse. None
@@ -576,6 +621,10 @@ class ToolContext:
         """Stop every command still running from this session, and everything
         they left behind; what the process list held."""
         stopped = self.processes.stop_all() if self.processes is not None else []
+        if self.mcp is not None:
+            self.mcp.close()  # its servers were in the list; drop the connections too
+        if self.research is not None:
+            self.research.close()
         if self.sandbox is not None:
             for terminal_id, terminal in list(self.sandbox.terminals.items()):
                 if terminal.running:
@@ -589,6 +638,10 @@ class ToolContext:
         stopped: list[Entry] = []
         if self.full_access:
             stopped = self.stop_processes()
+        if self.mcp is not None:
+            self.mcp.close()  # a server restarts in the sandbox the session now has
+        if self.research is not None:
+            self.research.approved_commands.clear()  # what was approved was approved as full access
         if self.askpass is not None:
             self.askpass.close()
             self.askpass = None
@@ -973,6 +1026,10 @@ def _settled(
 
 def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     command = _text(args, "command", "run_command")
+    if ctx.full_access and ctx.research is not None:
+        held = ctx.research.hold(command)
+        if held is not None:
+            return f"error: {held}"
     box = ctx.box()
     watch = _watched(ctx, command)
     if bool(args.get("background")):
@@ -1067,9 +1124,107 @@ _HANDLERS: Final[dict[str, _Handler]] = {
 }
 
 
+def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = None) -> None:
+    """Give a chat session the capabilities the person switched on
+    (`capabilities`; all are off by default), and take away those switched off:
+    MCP servers for the Edit lane, run in the session's own box, and the web
+    reader (its servers in a sandbox over `downloads`, never the project). Called
+    every turn, so a switch the person flips applies from the next turn; a switch
+    that is off, or no allowlist, leaves the session without. A broken allowlist
+    raises `McpConfigError` naming the fault, and a broken switch file
+    `CapabilityError`, only when a switch needs them."""
+    on = switches if switches is not None else load_switches()
+    config = load_config() if (on.mcp or on.research) else {}
+    readers = any(spec.access == "reader" for spec in config.values())
+
+    def ask(title: str, lines: list[str]) -> bool:
+        return ctx.approve is not None and ctx.approve(title, lines)
+
+    if ctx.mcp is not None and not (on.mcp and config):
+        ctx.mcp.close()
+        ctx.mcp = None
+    if on.mcp and config:
+        if ctx.mcp is None:
+            ctx.mcp = McpHost(config, Approvals(), ctx.box, ask=ask)
+        else:
+            ctx.mcp.config = config
+    if ctx.research is not None and not (on.research and readers):
+        ctx.research.close()
+        ctx.research = None
+    if on.research and readers:
+        if ctx.research is None:
+            ctx.research = Researcher(
+                config,
+                Approvals(),
+                downloads,
+                ledger=ctx.processes,
+                search_url=search_url_from_env(),
+                domains=domains_from_env(),
+                approve=ask,
+            )
+        ctx.research.config = config
+        ctx.research.search_enabled = on.search
+        ctx.research.browser_enabled = on.browser
+
+
+def _mcp_call(ctx: ToolContext, call: ToolCall) -> str:
+    """Call one `mcp__server__tool`: only when this turn offered it, with the
+    arguments its schema declares, and every failure an "error: " result."""
+    assert ctx.mcp is not None
+    if ctx.allowed is None or call.name not in ctx.allowed:
+        return (
+            f"{REFUSED}{call.name!r} is not available in this lane or turn. Nothing was "
+            "run. MCP tools are offered only in the Edit lane, for servers the person approved."
+        )
+    try:
+        args = json.loads(call.arguments) if call.arguments.strip() else {}
+        if not isinstance(args, dict):
+            return "error: arguments must be a JSON object"
+    except ValueError as exc:
+        return f"error: arguments are not valid JSON: {exc}"
+    ctx.call_id = call.id
+    try:
+        return ctx.mcp.call(
+            call.name, args, access="acting", limit_tokens=READ_TOKENS, count=ctx.count_tokens
+        )
+    except McpError as exc:
+        return f"error: {exc}"
+
+
+def _research_call(ctx: ToolContext, call: ToolCall) -> str:
+    """The `research` tool: only when this turn offered it, with its two
+    arguments, and every failure an "error: " result."""
+    assert ctx.research is not None
+    if ctx.allowed is None or call.name not in ctx.allowed:
+        return (
+            f"{REFUSED}{call.name!r} is not available in this turn. Nothing was run. "
+            "Research is offered in the Ask and Edit lanes when the person has a web reader."
+        )
+    try:
+        args = json.loads(call.arguments) if call.arguments.strip() else {}
+        if not isinstance(args, dict):
+            return "error: arguments must be a JSON object"
+    except ValueError as exc:
+        return f"error: arguments are not valid JSON: {exc}"
+    extra = sorted(set(args) - {"question", "want"})
+    if extra:
+        return f"error: research does not take {', '.join(extra)}; its arguments are question, want"
+    question, want = args.get("question"), args.get("want", "summary")
+    if not isinstance(question, str) or not question.strip():
+        return "error: research needs a question"
+    if want not in ("value", "summary", "download"):
+        return "error: want must be value, summary or download"
+    ctx.call_id = call.id
+    return ctx.research.research(question, want)
+
+
 def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None = None) -> str:
     """Run one tool call; every failure becomes an "error: ..." string."""
     ctx = context or ToolContext(workdir=workdir)
+    if ctx.mcp is not None and ctx.mcp.owns(call.name):
+        return _mcp_call(ctx, call)
+    if call.name == RESEARCH_TOOL and ctx.research is not None:
+        return _research_call(ctx, call)
     provider = _provider_by_name(call.name)
     handler = _HANDLERS.get(call.name) or (provider.handler if provider is not None else None)
     if handler is not None and ctx.allowed is not None and call.name not in ctx.allowed:

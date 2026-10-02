@@ -44,6 +44,7 @@ from saddle.auto import (
     AutoOptions,
     run_auto,
 )
+from saddle.capabilities import run as run_capabilities
 from saddle.chat import ChatOptions, run_chat
 from saddle.covers import (
     SHORT,
@@ -84,6 +85,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
+from saddle.mcp_cmd import run_mcp
 from saddle.packet import compile_packet, render_packet_text
 from saddle.refstore import ReferenceSetError
 from saddle.rule_d_run import (
@@ -99,6 +101,7 @@ from saddle.rule_d_run import hook as rule_d_hook
 from saddle.rule_d_run import load as rule_d_load
 from saddle.rule_d_run import plan_record as rule_d_plan_record
 from saddle.rule_d_run import seal_plan as rule_d_seal_plan
+from saddle.searx import run_search
 from saddle.sessions import DEFAULT_WORKDIR
 from saddle.slice import (
     DEADLINE_EXIT,
@@ -2116,6 +2119,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --mode edit: commands run as you, outside the sandbox. "
         "Asks you to confirm first; anything but y or yes starts nothing.",
     )
+    mcp_cmd = sub.add_parser(
+        "mcp", help="List the MCP allowlist, or approve a server's tools after reading them."
+    )
+    mcp_cmd.add_argument("mcp_action", choices=["list", "approve"])
+    mcp_cmd.add_argument("server", nargs="?", help="The allowlisted server (approve).")
+    caps_cmd = sub.add_parser(
+        "capabilities",
+        help="Show which opt-in capabilities (mcp, research, search, browser) are on and working.",
+    )
+    caps_cmd.add_argument(
+        "capability_action", nargs="?", choices=["status", "enable", "disable"], default="status"
+    )
+    caps_cmd.add_argument("capability", nargs="?", help="mcp, research, search or browser.")
+    search_cmd = sub.add_parser(
+        "search", help="Set up or check the local SearXNG the web reader searches with."
+    )
+    search_cmd.add_argument("search_action", choices=["setup", "status", "stop"])
     auto = sub.add_parser(
         "auto", help="Run one task autonomously in a worktree; the result is a branch."
     )
@@ -2436,8 +2456,30 @@ def main(
         "audit",
         "auto",
         "requirements",
+        "mcp",
+        "search",
+        "capabilities",
     ):
         return 0
+    if args.command == "capabilities":
+        return run_capabilities(
+            args.capability_action,
+            args.capability,
+            stdout=stdout or sys.stdout,
+            stderr=stderr or sys.stderr,
+        )
+    if args.command == "search":
+        return run_search(
+            args.search_action, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
+        )
+    if args.command == "mcp":
+        return run_mcp(
+            args.mcp_action,
+            args.server,
+            stdin=stdin or sys.stdin,
+            stdout=stdout or sys.stdout,
+            stderr=stderr or sys.stderr,
+        )
     if args.command == "verify":
         journal = Path(args.journal)
         anchor = (

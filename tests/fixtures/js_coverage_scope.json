@@ -16,6 +16,7 @@
   },
   "chrome_test_helper": "tests/chrome_page.py",
   "chrome_tests": [
+    "tests/test_approval_ui.py",
     "tests/test_ask_web.py",
     "tests/test_card_ui.py",
     "tests/test_chrome_page.py",
