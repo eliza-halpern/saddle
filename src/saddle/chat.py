@@ -12,6 +12,7 @@ from rich.console import Console
 
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.procs import ProcessLedger
+from saddle.sideeffects import SideEffects
 from saddle.timeline import Timeline
 from saddle.tools import ToolContext, execute_tool, scope_turn
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
@@ -197,7 +198,10 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     # wait_for_terminal in turn N+1. Built here, not inside the loop, so two
     # sessions (two `run_chat` calls) never share it.
     context = ToolContext(
-        workdir=options.workdir, full_access=options.full_access, processes=ProcessLedger()
+        workdir=options.workdir,
+        full_access=options.full_access,
+        processes=ProcessLedger(),
+        effects=SideEffects(options.journal.parent / "outside") if options.full_access else None,
     )
     try:
         while True:

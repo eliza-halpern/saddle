@@ -537,6 +537,10 @@ class SessionStore:
         """Where a session's file snapshots live, beside its transcript."""
         return self._dir(session_id) / "undo"
 
+    def outside_dir(self, session_id: str) -> Path:
+        """Where a session's side-effect record and its backups live (#137)."""
+        return self._dir(session_id) / "outside"
+
     def processes_path(self, session_id: str) -> Path:
         """Where a session's process list is kept, beside its transcript."""
         return self._dir(session_id) / "processes.json"

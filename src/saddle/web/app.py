@@ -74,6 +74,7 @@ from saddle.sessions import (
     FullAccessRefusedError,
     SessionStore,
 )
+from saddle.sideeffects import SideEffects
 from saddle.titles import title_for, words_title
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
 from saddle.undo import UndoLog
@@ -509,6 +510,7 @@ class ChatServer:
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
                     full_access=session.full_access,
+                    effects=SideEffects(self.store.outside_dir(session_id)),
                     ask_password=live.ask_password,
                     processes=self.ledger(session_id),
                     images=True,
@@ -825,6 +827,34 @@ def build_app(
                 status_code=404,
             )
         return JSONResponse({"stopped": [entry.as_json()]})
+
+    async def outside(request: Request) -> JSONResponse:
+        """The session's side-effect record (#137): what its full-access commands
+        and file tools changed outside the folder, what was fetched or installed,
+        what could not be tracked, and the programs still running (the process
+        list's entries, so the page can link the two)."""
+        sid = request.path_params["sid"]
+        store.get(sid)
+        view = SideEffects(store.outside_dir(sid)).view()
+        view["processes"] = [e.as_json() for e in server.ledger(sid).entries()]
+        return JSONResponse(view)
+
+    async def outside_undo(request: Request) -> JSONResponse:
+        """Put back what the record has a backup of. Removing the files the
+        session created needs `{"delete_created": true, "confirm": true}`: the
+        page asks first, and the server refuses the one without the other."""
+        sid = request.path_params["sid"]
+        store.get(sid)
+        body = await request.json()
+        delete = body.get("delete_created") is True
+        if delete and body.get("confirm") is not True:
+            return JSONResponse(
+                {"error": "removing created files needs the person's confirmation"},
+                status_code=400,
+            )
+        record = SideEffects(store.outside_dir(sid))
+        done = record.undo(delete_created=delete)
+        return JSONResponse({**done, "record": record.view()})
 
     async def password(request: Request) -> JSONResponse:
         """The person's answer to a `sudo` password request: {"id", "password"}
@@ -1427,6 +1457,8 @@ def build_app(
             Route("/api/sessions/{sid}/full-access", full_access, methods=["POST"]),
             Route("/api/sessions/{sid}/processes", processes, methods=["GET"]),
             Route("/api/sessions/{sid}/processes/stop", stop_processes, methods=["POST"]),
+            Route("/api/sessions/{sid}/outside", outside, methods=["GET"]),
+            Route("/api/sessions/{sid}/outside/undo", outside_undo, methods=["POST"]),
             Route("/api/sessions/{sid}/password", password, methods=["POST"]),
             Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),

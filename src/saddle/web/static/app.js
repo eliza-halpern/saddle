@@ -63,6 +63,14 @@
  *   "#procs-dialog": HTMLDialogElement,
  *   "#procs-close": HTMLButtonElement,
  *   "#procs-stop-all": HTMLButtonElement,
+ *   "#outside-chip": HTMLButtonElement,
+ *   "#outside-dialog": HTMLDialogElement,
+ *   "#outside-close": HTMLButtonElement,
+ *   "#outside-restore": HTMLButtonElement,
+ *   "#outside-remove": HTMLButtonElement,
+ *   "#outside-confirm-yes": HTMLButtonElement,
+ *   "#outside-confirm-no": HTMLButtonElement,
+ *   "#outside-processes": HTMLButtonElement,
  *   "#full-access-dialog": HTMLDialogElement,
  *   "#fa-keep": HTMLButtonElement,
  *   "#fa-grant": HTMLButtonElement,
@@ -97,6 +105,8 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
 /** @typedef {HTMLElement & {output?: string}} TerminalBody */
 /** @typedef {{name: string, path: string, isImage: boolean}} Attachment */
 /** @typedef {{id: number, pid: number, command: string, started: number, ran: string, processes: number}} ProcessRow */
+/** @typedef {{path: string, change: string, backup: string, via: string, command: string | null}} OutsideFile */
+/** @typedef {{files: OutsideFile[], downloads: {source: string, host: string, path: string | null, size: number | null}[], packages: {manager: string, action: string, packages: string[], exit: number | null}[], not_tracked: {command: string, reasons: string[]}[], undone: {restored: string[], deleted: string[]}[], processes: ProcessRow[], limits: string, can_restore: number, can_delete: number, empty: boolean}} OutsideView */
 
 /**
  * What the page remembers between events. Fields after `mode` are set the
@@ -122,6 +132,7 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
  * @property {string | null} [passwordId]
  * @property {boolean} [fullAccess]
  * @property {ProcessRow[]} [processes]
+ * @property {OutsideView} [outside]
  * @property {string | null} [suggestion]
  * @property {string[]} [builtinPersonas]
  * @property {string[]} [editablePersonas]
@@ -412,6 +423,7 @@ function handle(event) {
       setStatus("idle");
       state.busy = false;
       refreshProcesses();
+      refreshOutside();
       break;
     case "idle":
       flushPaint();
@@ -437,6 +449,7 @@ function renderHistory(info) {
   showMode(info.mode);
   showFullAccess(info.full_access);
   refreshProcesses();
+  refreshOutside();
   showWhere(info.workdir, info.branch);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
@@ -1010,6 +1023,161 @@ $("#procs-chip").onclick = async () => {
 $("#procs-close").onclick = () => $("#procs-dialog").close();
 $("#procs-stop-all").onclick = () => stopProcesses({ all: true });
 setInterval(refreshProcesses, 3000);
+
+/* ---------- outside changes (#137) ----------
+   What a full-access session changed outside its folder: files (each backed
+   up first), downloads, packages, and the commands that could not be tracked.
+   The chip shows once there is anything to review; the dialog lists it and
+   offers Undo. Undo restores backed-up files; removing files the session
+   created asks first. */
+
+/** @param {number | null} bytes */
+function sizeText(bytes) {
+  if (bytes === null) return "size unknown";
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * @param {string} id
+ * @param {string} heading
+ * @param {HTMLElement[]} rows
+ */
+function fillOutsideSection(id, heading, rows) {
+  const box = $(id);
+  box.textContent = "";
+  box.hidden = rows.length === 0;
+  if (rows.length === 0) return;
+  box.appendChild(el("h4", "outside-heading", heading));
+  const list = el("ul", "outside-list");
+  for (const row of rows) list.appendChild(row);
+  box.appendChild(list);
+}
+
+/**
+ * @param {string} head
+ * @param {string} meta
+ * @param {string} [badge]
+ */
+function outsideRow(head, meta, badge) {
+  const item = el("li", "outside-row");
+  const top = el("div", "outside-head");
+  top.appendChild(el("code", "outside-path", head));
+  if (badge) top.appendChild(el("span", `outside-badge ${badge}`, badge));
+  item.appendChild(top);
+  if (meta) item.appendChild(el("span", "proc-meta", meta));
+  return item;
+}
+
+/** @param {string} command */
+function shortCommand(command) {
+  return command.length > 70 ? `${command.slice(0, 69)}…` : command;
+}
+
+/** @param {OutsideFile} f */
+function fileMeta(f) {
+  const how = f.command ? `${f.via}: ${shortCommand(f.command)}` : f.via;
+  const original = f.change === "created" ? "new file, no original" : f.backup;
+  return `${original} · by ${how}`;
+}
+
+/** @param {OutsideView} view */
+function paintOutside(view) {
+  state.outside = view;
+  const count = view.files.length + view.downloads.length + view.packages.length + view.not_tracked.length;
+  $("#outside-chip").hidden = view.empty;
+  $("#outside-count").textContent = String(count);
+  const dialog = $("#outside-dialog");
+  if (!dialog.open) return;
+  fillOutsideSection(
+    "#outside-files",
+    "Files",
+    view.files.map((f) => outsideRow(f.path, fileMeta(f), f.change)),
+  );
+  fillOutsideSection(
+    "#outside-downloads",
+    "Downloads",
+    view.downloads.map((d) => outsideRow(d.source, `${sizeText(d.size)}${d.path ? ` · saved to ${d.path}` : ""}`)),
+  );
+  fillOutsideSection(
+    "#outside-packages",
+    "Packages",
+    view.packages.map((p) => outsideRow(`${p.manager} ${p.action} ${p.packages.join(" ")}`, "reverse these by hand")),
+  );
+  fillOutsideSection(
+    "#outside-untracked",
+    "Not tracked",
+    view.not_tracked.map((n) => outsideRow(n.command, n.reasons.join("; "), "not tracked")),
+  );
+  fillOutsideSection(
+    "#outside-undone",
+    "Undone",
+    view.undone.map((u) => outsideRow(`${u.restored.length} restored, ${u.deleted.length} removed`, "")),
+  );
+  $("#outside-limits").textContent = view.limits;
+  $("#outside-empty").hidden = !view.empty;
+  const running = (view.processes || []).length;
+  $("#outside-processes").hidden = running === 0;
+  $("#outside-processes").textContent = `${running} program${running === 1 ? "" : "s"} still running: open the list`;
+  $("#outside-restore").disabled = view.can_restore === 0;
+  $("#outside-restore").textContent = `Restore ${view.can_restore} file${view.can_restore === 1 ? "" : "s"}`;
+  $("#outside-remove").hidden = view.can_delete === 0;
+  $("#outside-remove").textContent = `Remove ${view.can_delete} created file${view.can_delete === 1 ? "" : "s"}…`;
+  $("#outside-confirm-text").textContent =
+    `Remove the ${view.can_delete} file${view.can_delete === 1 ? "" : "s"} this session created? This cannot be undone.`;
+}
+
+async function refreshOutside() {
+  if (!state.sessionId || document.hidden) return;
+  if (state.mode !== "edit" && !$("#outside-dialog").open) return;
+  try {
+    paintOutside(await api(`/api/sessions/${state.sessionId}/outside`));
+  } catch {
+    // The record is a convenience to look at; a failed look leaves the last one showing.
+  }
+}
+
+/** @param {boolean} deleteCreated */
+async function undoOutside(deleteCreated) {
+  $("#outside-confirm").hidden = true;
+  try {
+    const body = deleteCreated ? { delete_created: true, confirm: true } : {};
+    const done = await api(`/api/sessions/${state.sessionId}/outside/undo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const parts = [`${done.restored.length} restored`];
+    if (deleteCreated) parts.push(`${done.deleted.length} removed`);
+    if (done.failed.length) parts.push(`${done.failed.length} could not be restored (no backup)`);
+    notice(`Undo: ${parts.join(", ")}.`);
+    paintOutside({ ...done.record, processes: state.outside ? state.outside.processes : [] });
+    refreshOutside();
+  } catch (error) {
+    notice(errorText(error), "error");
+  }
+}
+
+$("#outside-chip").onclick = async () => {
+  $("#outside-confirm").hidden = true;
+  $("#outside-dialog").showModal();
+  await refreshOutside();
+};
+$("#outside-close").onclick = () => $("#outside-dialog").close();
+$("#outside-restore").onclick = () => undoOutside(false);
+$("#outside-remove").onclick = () => {
+  $("#outside-confirm").hidden = false;
+};
+$("#outside-confirm-no").onclick = () => {
+  $("#outside-confirm").hidden = true;
+};
+$("#outside-confirm-yes").onclick = () => undoOutside(true);
+$("#outside-processes").onclick = () => {
+  $("#outside-dialog").close();
+  $("#procs-chip").click();
+};
+setInterval(refreshOutside, 3000);
 
 /* The server puts this on the first line of every command result while full
    access is on (`tools.UNSANDBOXED`); the badge sits on the summary, so it

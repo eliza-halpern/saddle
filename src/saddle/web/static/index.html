@@ -48,6 +48,8 @@
       <span id="mode-chip" class="mode-chip" title="This session's lane: what Enter does"></span>
       <button id="procs-chip" class="procs-chip" type="button" hidden
               title="Programs this session's commands started and left running"><span class="procs-dot" aria-hidden="true"></span><span id="procs-count">0</span><span class="procs-label"> running</span></button>
+      <button id="outside-chip" class="procs-chip" type="button" hidden
+              title="What this session changed outside its folder: review it, undo it"><span id="outside-count">0</span><span class="procs-label"> outside changes</span></button>
       <span id="full-access-banner" class="full-access-banner" role="status" hidden
             title="Full access is on: this session's Edit commands run as you, outside the sandbox">⚠ Unsandboxed
         <button id="full-access-off" type="button" title="Turn full access off: commands are sandboxed again, and any still running are stopped">Turn off</button></span>
@@ -198,6 +200,29 @@
   <div class="dialog-actions">
     <button id="procs-close" type="button" class="primary">Close</button>
     <button id="procs-stop-all" type="button" class="danger">Stop all</button>
+  </div>
+</dialog>
+<dialog id="outside-dialog" aria-labelledby="outside-title">
+  <h3 id="outside-title">Changes outside the folder</h3>
+  <p id="outside-limits" class="hint"></p>
+  <p id="outside-empty" class="hint" hidden>Nothing outside the folder has been changed by this session.</p>
+  <div id="outside-files" class="outside-section" hidden></div>
+  <div id="outside-downloads" class="outside-section" hidden></div>
+  <div id="outside-packages" class="outside-section" hidden></div>
+  <div id="outside-untracked" class="outside-section" hidden></div>
+  <div id="outside-undone" class="outside-section" hidden></div>
+  <button id="outside-processes" type="button" class="outside-link" hidden></button>
+  <div id="outside-confirm" class="outside-confirm" role="alertdialog" hidden>
+    <p id="outside-confirm-text" class="warn-head"></p>
+    <div class="dialog-actions">
+      <button id="outside-confirm-no" type="button">Keep them</button>
+      <button id="outside-confirm-yes" type="button" class="danger">Remove them</button>
+    </div>
+  </div>
+  <div class="dialog-actions">
+    <button id="outside-close" type="button" class="primary">Close</button>
+    <button id="outside-remove" type="button" class="danger" hidden></button>
+    <button id="outside-restore" type="button">Restore</button>
   </div>
 </dialog>
 <dialog id="password-dialog" aria-labelledby="pw-title">

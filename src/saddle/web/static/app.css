@@ -1062,8 +1062,27 @@ dialog button.danger { background: transparent; color: var(--bad); border-color:
   /* The topbar is full on a phone: the chip keeps its dot and count, and the
      folder name gives way while the chip shows. */
   .procs-label { display: none; }
-  body:has(#procs-chip:not([hidden])) #where { display: none; }
+  body:has(#procs-chip:not([hidden])) #where,
+  body:has(#outside-chip:not([hidden])) #where { display: none; }
 }
+/* ---------- outside changes (#137) ---------- */
+#outside-dialog { max-width: 640px; width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow: auto; }
+.outside-section { margin: 10px 0; }
+.outside-heading { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-dim); }
+.outside-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.outside-row { display: grid; gap: 2px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-sunk); }
+.outside-head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.outside-path { overflow-wrap: anywhere; font-size: 13px; min-width: 0; }
+.outside-badge { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--ink-dim); }
+.outside-badge.changed, .outside-badge.deleted { color: var(--bad); border-color: var(--bad); }
+.outside-badge.created { color: var(--ink); }
+.outside-badge.not.tracked { color: var(--bad); border-color: var(--bad); }
+.outside-link { margin: 4px 0; font: inherit; font-size: 12.5px; background: none; border: none; padding: 0;
+  color: var(--ink-dim); text-decoration: underline; cursor: pointer; text-align: left; }
+.outside-confirm { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--bad); border-radius: 8px; }
+.outside-confirm[hidden] { display: none; }
+#outside-dialog .dialog-actions { gap: 9px; flex-wrap: wrap; }
 #password-dialog { max-width: 440px; }
 #password-dialog h3::before { content: "🔑 "; }
 #password-dialog #pw-prompt { margin: 6px 0 10px; color: var(--ink); }
