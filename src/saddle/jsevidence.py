@@ -309,6 +309,9 @@ class CoverageScope:
     not_measured: Mapping[str, str] = field(default_factory=dict)
     chrome_measured: frozenset[str] = frozenset()
     chrome_tests: tuple[str, ...] = ()
+    chrome_helper: str = ""
+    """Where the project shows how to write a Chrome-driven test (`chrome_test_helper`):
+    named when a changed page-script line runs in no test, so the gap says how to close it."""
     problem: str = ""
 
 
@@ -325,6 +328,7 @@ def read_coverage_scope(workdir: Path) -> CoverageScope:
             {str(k): str(v) for k, v in data["not_measured"].items()},
             frozenset(data.get("chrome_measured", {})),
             tuple(str(t) for t in data.get("chrome_tests", ())),
+            str(data.get("chrome_test_helper", "")),
         )
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         return CoverageScope(problem=f"{COVERAGE_SCOPE} could not be read: {exc!r}")

@@ -162,6 +162,36 @@ def test_a_changed_line_chrome_never_ran_fails_naming_it_and_a_run_one_passes(
     assert (ok.verdict, ok.detail) == ("pass", "every executable changed line runs (2)")
 
 
+def test_a_page_script_gap_names_the_projects_chrome_test_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The audit is the same for every project; where to learn to write a
+    # Chrome-driven test is the project's own (`chrome_test_helper`).
+    def with_helper(root: Path, measured: list[str]) -> Path:
+        scope = json.loads((root / SCOPE).read_text())
+        scope.update(chrome_test_helper="tests/chrome_page.py", measured=measured)
+        (root / SCOPE).write_text(json.dumps(scope))
+        return root
+
+    monkeypatch.setattr(auditor, "measure_chrome_coverage", lambda *_a, **_k: lines({1: 3, 2: 0}))
+    got = verdict(with_helper(small(tmp_path / "a", SILENT), []))
+    assert (got.verdict, got.detail) == (
+        "fail",
+        "no test runs static/p.js:2"
+        " (page code runs in a Chrome-driven test: see tests/chrome_page.py)",
+    )
+    # A gap only in node-measured code is closed by a node test: no Chrome hint.
+    root = with_helper(small(tmp_path / "b", SILENT), ["static/a.js"])
+    monkeypatch.setattr(auditor, "measure_chrome_coverage", lambda *_a, **_k: lines({1: 1, 2: 1}))
+    monkeypatch.setattr(
+        auditor, "measure_coverage", lambda *_a, **_k: JsCoverage({"static/a.js": {6: 0}})
+    )
+    (root / "static/a.js").write_text("a\nb\nc\nd\ne\nf\n")
+    (root / "tests/a.test.js").write_text("// a node test\n")
+    node_only = verdict(root)
+    assert (node_only.verdict, node_only.detail) == ("fail", "no test runs static/a.js:6")
+
+
 def test_a_chrome_report_missing_a_changed_file_is_not_proven(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -328,4 +358,9 @@ def test_a_changed_runs_line_in_an_unreached_branch_fails_naming_it(tmp_path: Pa
     )
     got = audited(root)
     assert got is not None
-    assert (got[0].verdict, got[0].detail) == ("fail", f"no test runs {RUNS_JS}:64")
+    # This repository's scope names its Chrome test helper, so the gap says where to look.
+    assert (got[0].verdict, got[0].detail) == (
+        "fail",
+        f"no test runs {RUNS_JS}:64"
+        " (page code runs in a Chrome-driven test: see tests/chrome_page.py)",
+    )

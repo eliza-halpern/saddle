@@ -3,8 +3,8 @@
     "src/saddle/web/static/markdown.js"
   ],
   "not_measured": {
-    "src/saddle/web/static/app.js": "page wiring over the live DOM; only the Chrome-driven tests run; their line coverage is held by `chrome_measured` it",
-    "src/saddle/web/static/tasks.js": "page wiring over the live DOM; only the Chrome-driven tests run; their line coverage is held by `chrome_measured` it",
+    "src/saddle/web/static/app.js": "page wiring over the live DOM; only the Chrome-driven tests run it; their line coverage is held by `chrome_measured`",
+    "src/saddle/web/static/tasks.js": "page wiring over the live DOM; only the Chrome-driven tests run it; their line coverage is held by `chrome_measured`",
     "src/saddle/web/static/notify.js": "pure helpers are tested under node (tests/classic_scripts.test.js); the rest is page wiring that only the Chrome-driven tests run; their line coverage is held by `chrome_measured`",
     "src/saddle/web/static/runs.js": "pure helpers are tested under node (tests/classic_scripts.test.js); the rest is page wiring that only the Chrome-driven tests run; their line coverage is held by `chrome_measured`"
   },
@@ -30,6 +30,7 @@
       "functions": 87.0
     }
   },
+  "chrome_test_helper": "tests/chrome_page.py",
   "chrome_tests": [
     "tests/test_ask_web.py",
     "tests/test_card_ui.py",

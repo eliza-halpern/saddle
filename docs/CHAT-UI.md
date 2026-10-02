@@ -248,3 +248,49 @@ The pictures under `docs/screenshots` are hand-captured whole-window views of
 states (a live task card, a run strip, a finding delivered mid-run, an offer
 after an unresolved audit) that these tests do not seed; the snapshot driver
 crops elements and does not regenerate them.
+
+## Writing a Chrome-driven test
+
+The page scripts (`app.js`, `tasks.js`, `notify.js`, `runs.js`) run only in a
+browser, so their line coverage comes from the Chrome-driven tests. When the
+audit reports a changed page-script line that no test runs, it points here
+through `chrome_test_helper` in `tests/fixtures/js_coverage_scope.json`. A new
+test needs no driver of its own:
+
+```python
+from chrome_page import drive_page, served_chat
+
+
+def test_the_title_field_shows_the_session_title(tmp_path: Path) -> None:
+    with served_chat(tmp_path, title="parser work") as site:
+        got = drive_page(
+            site.base,
+            """
+            await page.chat(args.sid);
+            return await page.js(() => document.querySelector("#title").value);
+            """,
+            sid=site.sid,
+        )
+    assert got == "parser work"
+```
+
+`drive_page` runs the body on a fresh headless Chrome page and returns what it
+returns; keyword arguments arrive as `args`. The page API (`goto`, `chat`, `js`,
+`until`, `click`, `type`, `key`, `width`, `shot`, `send`) is listed at the top
+of `tests/fixtures/cdp_page.mjs`. Four things it does so a test does not have
+to:
+
+- Each Chrome gets a DevTools port of its own. Drivers once drew random ports,
+  and two parallel tests sometimes drove the same page.
+- `page.chat(sid)` returns once the session's first render is done. That render
+  rebuilds the transcript, so a test that starts earlier can lose its own turns.
+- `page.click` finds and clicks in one step, retried until the element exists,
+  so a list re-rendered by a poll cannot hand it a stale element.
+- A failed wait names what it waited for, and an exception in the page fails the
+  test with the page's message.
+
+A function given to `page.js` or `page.until` runs inside the page, so it can
+read nothing from the test; pass values after it and they arrive as JSON. Add
+the module to `chrome_tests` in the scope file, or the audit never reads its
+coverage: `tests/test_chrome_page.py` fails naming any module that imports
+`chrome_page` and is not listed.
