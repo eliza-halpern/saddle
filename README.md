@@ -175,6 +175,10 @@ To work on saddle itself, see [CONTRIBUTING.md](CONTRIBUTING.md#start-here).
 - A user systemd manager (`systemd-run --user --scope` works) for the per-command memory
   cap; without one saddle falls back to a weaker per-process address-space ceiling.
   `SADDLE_MEMORY_MAX` sets the cap (bytes, or a number with K, M, G or T; default `6G`).
+- Optional, off by default: `pip install 'saddle-harness[mcp]'` adds MCP servers and the
+  web reader (`saddle capabilities` says what is on and working; docs/CLI.md has the
+  opt-in switches, `saddle search` for a local SearXNG, and the research tool). Docker is
+  needed only for `saddle search setup`.
 
 ## Security model
 

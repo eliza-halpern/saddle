@@ -37,29 +37,25 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import os
 import re
 import shlex
+import shutil
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from contextlib import AbstractAsyncContextManager, suppress
-from dataclasses import dataclass, field
+from contextlib import suppress
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal, TextIO
-
-import mcp_types as types
-from mcp import Client
-from mcp.client._transport import TransportStreams
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from types import ModuleType
+from typing import Any, Final, Literal, TextIO
 
 from saddle.procs import Tracked
-
-if TYPE_CHECKING:
-    from saddle.sandbox import Sandbox
+from saddle.sandbox import Sandbox, also_exposing, command_env, default_expose
 
 CONFIG_ENV: Final = "SADDLE_MCP_CONFIG"
 """Overrides where the allowlist is read from."""
@@ -106,6 +102,13 @@ class ServerSpec:
     version: str
     access: Access
     tools: tuple[str, ...]
+    expose: tuple[str, ...] = ()
+    """Commands shown read-only inside the server's sandbox (as `SADDLE_EXPOSE`
+    does for gates): the `node`, `npx` or `uvx` an installed server needs."""
+    expose_paths: tuple[str, ...] = ()
+    """Directories shown read-only at their own path inside the server's sandbox:
+    where an installed server and its runtime live (`~/.hermes/node`, a
+    `node_modules`), which a command name alone does not show."""
 
 
 @dataclass(frozen=True)
@@ -137,7 +140,7 @@ def _spec(name: str, raw: object) -> ServerSpec:
     if not isinstance(raw, dict):
         msg = f"server {name!r}: expected an object with command, version, access and tools"
         raise McpConfigError(msg)
-    unknown = sorted(set(raw) - {"command", "version", "access", "tools"})
+    unknown = sorted(set(raw) - {"command", "version", "access", "tools", "expose", "expose_paths"})
     if unknown:
         msg = f"server {name!r}: unknown key {', '.join(unknown)}"
         raise McpConfigError(msg)
@@ -181,7 +184,21 @@ def _spec(name: str, raw: object) -> ServerSpec:
     if too_long:
         msg = f"server {name!r}: {too_long[0]!r} makes a tool name over {MAX_NAME} characters"
         raise McpConfigError(msg)
-    return ServerSpec(name, tuple(command), version, access, tuple(tools))
+    expose = raw.get("expose", [])
+    if not isinstance(expose, list) or not all(
+        isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9._+-]+", item) for item in expose
+    ):
+        msg = f"server {name!r}: expose must be a list of command names (node, npx, uvx)"
+        raise McpConfigError(msg)
+    paths = raw.get("expose_paths", [])
+    if not isinstance(paths, list) or not all(
+        isinstance(item, str) and item.startswith(("/", "~")) for item in paths
+    ):
+        msg = f"server {name!r}: expose_paths must be a list of absolute paths (or ~/...)"
+        raise McpConfigError(msg)
+    return ServerSpec(
+        name, tuple(command), version, access, tuple(tools), tuple(expose), tuple(paths)
+    )
 
 
 def load_config(path: Path | None = None) -> dict[str, ServerSpec]:
@@ -214,6 +231,8 @@ def fingerprint(spec: ServerSpec, tools: list[ToolInfo]) -> str:
         "command": list(spec.command),
         "version": spec.version,
         "access": spec.access,
+        "expose": list(spec.expose),
+        "expose_paths": list(spec.expose_paths),
         "tools": sorted(
             ({"name": t.name, "description": t.description, "schema": t.schema} for t in tools),
             key=lambda row: str(row["name"]),
@@ -236,6 +255,10 @@ class Approvals:
         if not isinstance(data, dict):
             return {}
         return {str(k): v for k, v in data.items() if isinstance(v, str)}
+
+    def knows(self, name: str) -> bool:
+        """Whether the person approved this server once, in some form."""
+        return name in self._read()
 
     def is_approved(self, spec: ServerSpec, tools: list[ToolInfo]) -> bool:
         return self._read().get(spec.name) == fingerprint(spec, tools)
@@ -273,24 +296,6 @@ def tool_schema(spec: ServerSpec, tool: ToolInfo) -> dict[str, Any]:
     }
 
 
-def render_result(name: str, result: types.CallToolResult) -> str:
-    """A tool result as the text the model reads. Text blocks as they are;
-    anything else is named and left out; a server's own error is an
-    "error: " result."""
-    parts: list[str] = []
-    for block in result.content:
-        if isinstance(block, types.TextContent):
-            parts.append(block.text)
-        else:
-            parts.append(f"[{block.type} content from the server was not shown]")
-    if not parts and result.structured_content is not None:
-        parts.append(json.dumps(result.structured_content))
-    text = "\n".join(parts) or "(the server returned no content)"
-    if result.is_error:
-        return f"error: MCP tool {name!r} reported an error: {text}"
-    return text
-
-
 def clip_result(text: str, limit: int, count: Callable[[str], int | None] | None) -> str:
     """`text` cut to whole lines that fit `limit` tokens (the model's tokenizer
     when `count` is given, else `limit` // 4 lines), with what was left out said."""
@@ -318,31 +323,36 @@ def clip_result(text: str, limit: int, count: Callable[[str], int | None] | None
     )
 
 
-class _Transport:
-    """The SDK's stdio transport with the server's stderr kept, so a crash can
-    say what the server last wrote."""
-
-    def __init__(self, params: StdioServerParameters, errlog: TextIO) -> None:
-        self._inner: AbstractAsyncContextManager[TransportStreams] = stdio_client(params, errlog)
-
-    async def __aenter__(self) -> TransportStreams:
-        return await self._inner.__aenter__()
-
-    async def __aexit__(self, *exc: Any) -> bool | None:
-        return await self._inner.__aexit__(*exc)
+SDK_MISSING: Final = (
+    "the MCP SDK is not installed: install saddle with its mcp extra "
+    "(pip install 'saddle-harness[mcp]')"
+)
 
 
-async def _list_all(client: Client) -> list[ToolInfo]:
-    """Every tool the server lists, following its pages: a server that pages its
-    list would otherwise look as though it offered only the first page."""
-    listed: list[ToolInfo] = []
-    cursor: str | None = None
-    while True:
-        page = await client.list_tools(cursor=cursor)
-        listed += [ToolInfo(t.name, t.description or "", dict(t.input_schema)) for t in page.tools]
-        cursor = page.next_cursor
-        if cursor is None:
-            return listed
+def command_missing(spec: ServerSpec) -> str | None:
+    """Why `spec`'s command cannot start here (its program is not installed), or None."""
+    program = spec.command[0]
+    if shutil.which(program) is None and not Path(program).expanduser().exists():
+        return f"{program} is not installed"
+    return None
+
+
+def load_sdk() -> ModuleType:
+    """`saddle.mcpsdk`, or `McpError` saying the extra is not installed."""
+    try:
+        return importlib.import_module("saddle.mcpsdk")
+    except ImportError as exc:
+        msg = f"{SDK_MISSING} ({exc})"
+        raise McpError(msg) from exc
+
+
+def sdk_problem() -> str | None:
+    """None when the SDK is installed, else why MCP is unavailable."""
+    try:
+        load_sdk()
+    except McpError as exc:
+        return str(exc)
+    return None
 
 
 def _find_child(marker: str) -> int | None:
@@ -368,7 +378,7 @@ class _Conn:
 
     spec: ServerSpec
     tools: list[ToolInfo]
-    queue: asyncio.Queue[tuple[str, dict[str, Any], float, Future[types.CallToolResult]] | None]
+    queue: asyncio.Queue[tuple[str, dict[str, Any], float, Future[Any]] | None]
     task: asyncio.Task[None]
     errlog: TextIO
 
@@ -382,10 +392,15 @@ class McpHost:
     approvals: Approvals
     box: Callable[[], Sandbox]
     """The session's sandbox when a server is started (`ToolContext.box`)."""
+    ask: Callable[[str, list[str]], bool] | None = None
+    """Asks the person (a title and the lines to read; their yes or no) when a
+    server is not approved, so the page can show its descriptions and record the
+    approval, as `saddle mcp approve` does. None asks nobody."""
     start_timeout: float = START_TIMEOUT_S
     call_timeout: float = CALL_TIMEOUT_S
     problems: dict[str, str] = field(default_factory=dict)
     """Servers that are allowlisted but unusable, and why."""
+    _told: set[str] = field(default_factory=set, repr=False)
     _loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
     _conns: dict[str, _Conn] = field(default_factory=dict, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -405,27 +420,24 @@ class McpHost:
     # -- starting a server ----------------------------------------------------
 
     async def _serve(
-        self, spec: ServerSpec, ready: Future[_Conn], box: Sandbox, errlog: TextIO
+        self, spec: ServerSpec, ready: Future[_Conn], box: Sandbox, errlog: TextIO, sdk: ModuleType
     ) -> None:
         """The task that owns one server's client for its whole life."""
         marker = os.urandom(8).hex()
         argv, env, cap = box.stdio_launch("exec " + shlex.join(spec.command))
-        params = StdioServerParameters(
-            command=argv[0],
-            args=argv[1:],
-            env={**env, "SADDLE_MCP_ID": marker},
-            cwd=str(box.root),
-        )
         queue: asyncio.Queue[Any] = asyncio.Queue()
         registrar = asyncio.create_task(self._register(spec, box, marker, cap.unit))
         try:
             async with asyncio.timeout(self.start_timeout):
-                client_cm = Client(_Transport(params, errlog), mode="legacy")
+                client_cm = sdk.client(
+                    argv, {**env, "SADDLE_MCP_ID": marker}, str(box.root), errlog
+                )
                 await client_cm.__aenter__()
             try:
                 task = asyncio.current_task()
                 assert task is not None
-                conn = _Conn(spec, await _list_all(client_cm), queue, task, errlog)
+                listed = [ToolInfo(*row) for row in await sdk.list_all(client_cm)]
+                conn = _Conn(spec, listed, queue, task, errlog)
                 ready.set_result(conn)
                 while (item := await queue.get()) is not None:
                     name, arguments, timeout, answer = item
@@ -463,18 +475,38 @@ class McpHost:
                 return
             await asyncio.sleep(0.02)
 
+    @staticmethod
+    def _shown(spec: ServerSpec, box: Sandbox) -> Sandbox:
+        """`box` with what the server's entry names shown read-only inside it: its
+        commands (`expose`) and its directories (`expose_paths`). A directory that
+        is not there is a named failure, before anything starts."""
+        if not (spec.expose or spec.expose_paths):
+            return box
+        with also_exposing(spec.expose):
+            shown = default_expose(command_env(box.env))
+        where = [Path(item).expanduser() for item in spec.expose_paths]
+        absent = [str(path) for path in where if not path.exists()]
+        if absent:
+            msg = (
+                f"MCP server {spec.name!r} could not start: expose_paths names {absent[0]}, "
+                "which does not exist"
+            )
+            raise McpError(msg)
+        return replace(box, expose=(*shown, *((path.resolve(), path) for path in where)))
+
     def _connect(self, spec: ServerSpec) -> _Conn:
         with self._lock:
             conn = self._conns.get(spec.name)
             if conn is not None and not conn.task.done():
                 return conn
             self._conns.pop(spec.name, None)
-        box = self.box()
+        sdk = load_sdk()
+        box = self._shown(spec, self.box())
         errlog = tempfile.TemporaryFile("w+", encoding="utf-8")
         ready: Future[_Conn] = Future()
 
         async def start() -> None:
-            self._tasks.add(asyncio.create_task(self._serve(spec, ready, box, errlog)))
+            self._tasks.add(asyncio.create_task(self._serve(spec, ready, box, errlog, sdk)))
 
         self._run(start(), 10)
         try:
@@ -526,6 +558,15 @@ class McpHost:
             except McpError as exc:
                 self.problems[name] = str(exc)
                 continue
+            if not approved and self.ask is not None:
+                title = (
+                    f"MCP server {name} changed since you approved it"
+                    if self.approvals.knows(name)
+                    else f"Allow MCP server {name}?"
+                )
+                if self.ask(title, render_review(spec, tools).splitlines()):
+                    self.approvals.approve(spec, tools)
+                    approved = True
             if not approved:
                 self.problems[name] = (
                     f"MCP server {name!r} is not approved (or changed since it was): "
@@ -537,12 +578,20 @@ class McpHost:
             offered += [tool_schema(spec, tool) for tool in tools]
         return offered
 
+    def unreported(self) -> list[str]:
+        """The `problems` the person has not been told yet, each once, so a server
+        that is allowlisted but not usable is said to them and not skipped
+        silently."""
+        fresh = [text for text in self.problems.values() if text not in self._told]
+        self._told.update(fresh)
+        return fresh
+
     def owns(self, tool_name: str, access: Access = "acting") -> bool:
         """Whether `tool_name` is `mcp__server__tool` of an allowlisted `access`
         server's exposed tools (by the config alone: it starts nothing)."""
-        return self._split(tool_name, access) is not None
+        return self.split(tool_name, access) is not None
 
-    def _split(self, tool_name: str, access: Access) -> tuple[ServerSpec, str] | None:
+    def split(self, tool_name: str, access: Access) -> tuple[ServerSpec, str] | None:
         for spec in self.config.values():
             head = f"{PREFIX}{spec.name}__"
             if spec.access == access and tool_name.startswith(head):
@@ -565,7 +614,7 @@ class McpHost:
         """Call `mcp__server__tool`. Refused unless the server is allowlisted for
         `access`, the tool is one the allowlist exposes, and the person has
         approved exactly what the server describes now."""
-        found = self._split(tool_name, access)
+        found = self.split(tool_name, access)
         if found is None:
             msg = f"{tool_name!r} is not an MCP tool this session may call"
             raise McpError(msg)
@@ -586,7 +635,7 @@ class McpHost:
                 f"{', '.join(sorted(declared)) or 'none'}"
             )
             raise McpError(msg)
-        answer: Future[types.CallToolResult] = Future()
+        answer: Future[Any] = Future()
 
         async def send() -> None:
             await conn.queue.put((tool, arguments, self.call_timeout, answer))
@@ -609,7 +658,7 @@ class McpHost:
                 f"({_describe(exc)}){tail}; no result was returned"
             )
             raise McpError(msg) from exc
-        return clip_result(render_result(tool_name, result), limit_tokens, count)
+        return clip_result(load_sdk().render_result(tool_name, result), limit_tokens, count)
 
     # -- stopping ------------------------------------------------------------
 
@@ -639,6 +688,8 @@ class McpHost:
 
 
 def _describe(exc: BaseException) -> str:
+    while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
+        exc = exc.exceptions[0]  # the SDK wraps a failed start in a task group
     return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
 
 

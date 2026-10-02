@@ -117,6 +117,26 @@ class PasswordSettled(Event):
 
 
 @dataclass(frozen=True)
+class ApprovalRequest(Event):
+    """Something needs the person's yes or no: an MCP server's tool descriptions,
+    a large download, a command that runs what the web reader brought back
+    (#139, #93). `lines` are what they should read before answering."""
+
+    id: str
+    title: str
+    lines: tuple[str, ...]
+    kind: str = "approval.request"
+
+
+@dataclass(frozen=True)
+class ApprovalSettled(Event):
+    """The request `id` was answered or timed out: close its box."""
+
+    id: str
+    kind: str = "approval.done"
+
+
+@dataclass(frozen=True)
 class Context(Event):
     """How full the window is. Sent each turn so filling up is visible
     before compaction evicts anything, rather than announced after."""

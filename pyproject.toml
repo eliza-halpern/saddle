@@ -25,11 +25,16 @@ dependencies = [
     "mutmut>=3.8",
     "pytest>=8.3",
     "ruff>=0.8",
-    "mcp==2.2.0",
 ]
+
+[project.optional-dependencies]
+# MCP servers for the Edit lane and the web reader (`saddle.mcpsdk`). Optional:
+# without it saddle imports, runs and reports MCP as unavailable. Pinned.
+mcp = ["mcp==2.2.0"]
 
 [dependency-groups]
 dev = [
+    "mcp==2.2.0",
     "actionlint-py>=1.7.12.25",
     "hypothesis>=6.130",
     "jinja2>=3.1.6",

@@ -16,84 +16,24 @@ named failure, never an empty result; ending access stops the server.
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from mcp_support import BWRAP, calls, mcp_names, server_entry, write_config
 from test_chat_engine import FakeClient, content, tool
 from test_memcap import needs_cgroup
 
 from saddle.engine import TurnOptions, run_turn
 from saddle.mcp_cmd import run_mcp
-from saddle.mcpclient import (
-    Approvals,
-    McpConfigError,
-    McpError,
-    McpHost,
-    ServerSpec,
-    ToolInfo,
-    approvals_path,
-    clip_result,
-    config_path,
-    fingerprint,
-    load_config,
-    render_review,
-    tool_schema,
-)
+from saddle.mcpclient import Approvals, McpError, McpHost, load_config
 from saddle.procs import ProcessLedger
-from saddle.sandbox import isolation_problem
-from saddle.tools import ToolContext, attach_mcp, execute_tool, scope_turn
+from saddle.tools import ToolContext, execute_tool, scope_turn
 from saddle.vllm import ToolCall, VllmClient
 
-FIXTURE = Path(__file__).with_name("mcp_fixture_server.py")
-BWRAP = isolation_problem() is None
-
-
-def server_entry(
-    workdir: Path,
-    *,
-    tools: list[str],
-    access: str = "acting",
-    extra: list[str] | None = None,
-) -> dict[str, Any]:
-    """An allowlist entry for the fixture server, which lives in `workdir` so a
-    sandboxed session can run it."""
-    script = workdir / "srv.py"
-    if not script.exists():
-        shutil.copy(FIXTURE, script)
-    return {
-        "command": [
-            sys.executable,
-            str(script),
-            "--log",
-            str(workdir / "calls.log"),
-            "--pin",
-            "1.0.0",
-            *(extra or []),
-        ],
-        "version": "1.0.0",
-        "access": access,
-        "tools": tools,
-    }
-
-
-def write_config(path: Path, servers: dict[str, Any]) -> Path:
-    path.write_text(json.dumps({"servers": servers}), encoding="utf-8")
-    return path
-
-
-def mcp_names(tools: list[dict[str, Any]]) -> list[str]:
-    return [t["function"]["name"] for t in tools if t["function"]["name"].startswith("mcp__")]
-
-
-def calls(workdir: Path) -> list[str]:
-    log = workdir / "calls.log"
-    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+pytest.importorskip("mcp", reason="the MCP SDK (the saddle-harness[mcp] extra) is not installed")
 
 
 class Session:
@@ -147,141 +87,6 @@ def full(tmp_path: Path) -> Iterator[Session]:
     scope_turn(session.ctx, "edit")
     yield session
     session.close()
-
-
-# -- the allowlist ------------------------------------------------------------
-
-
-def one_server(**changes: Any) -> dict[str, Any]:
-    entry: dict[str, Any] = {
-        "command": ["uvx", "some-server==1.2.3"],
-        "version": "1.2.3",
-        "access": "acting",
-        "tools": ["read"],
-    }
-    entry.update(changes)
-    return {"srv": entry}
-
-
-def test_a_well_formed_allowlist_is_read(tmp_path: Path) -> None:
-    config = load_config(write_config(tmp_path / "c.json", one_server()))
-    assert config["srv"] == ServerSpec(
-        "srv", ("uvx", "some-server==1.2.3"), "1.2.3", "acting", ("read",)
-    )
-
-
-def test_no_allowlist_file_means_no_servers(tmp_path: Path) -> None:
-    assert load_config(tmp_path / "absent.json") == {}
-
-
-@pytest.mark.parametrize(
-    ("changes", "fault"),
-    [
-        ({"command": ["uvx", "some-server"]}, "pinned version"),
-        ({"command": []}, "command must be"),
-        ({"version": ""}, "version is required"),
-        ({"access": "both"}, "access must be"),
-        ({"access": None}, "access must be"),
-        ({"tools": ["*"]}, "exact tool names"),
-        ({"tools": []}, "exact tool names"),
-        ({"tools": ["a", "a"]}, "listed twice"),
-        ({"tools": ["x" * 60]}, "over 64"),
-        ({"surprise": 1}, "unknown key"),
-    ],
-)
-def test_an_allowlist_entry_that_breaks_a_rule_is_refused_naming_the_fault(
-    tmp_path: Path, changes: dict[str, Any], fault: str
-) -> None:
-    path = write_config(tmp_path / "c.json", one_server(**changes))
-    with pytest.raises(McpConfigError, match=fault):
-        load_config(path)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "{not json",
-        "[]",
-        '{"servers": []}',
-        '{"servers": {"Bad Name": {}}}',
-        '{"servers": {"ok": 3}}',
-    ],
-)
-def test_a_malformed_allowlist_is_an_error_never_an_empty_list(tmp_path: Path, text: str) -> None:
-    path = tmp_path / "c.json"
-    path.write_text(text)
-    with pytest.raises(McpConfigError):
-        load_config(path)
-
-
-def test_an_unreadable_allowlist_is_an_error(tmp_path: Path) -> None:
-    with pytest.raises(McpConfigError, match="cannot read"):
-        load_config(tmp_path)  # a directory
-
-
-# -- approval -----------------------------------------------------------------
-
-SPEC = ServerSpec("srv", ("uvx", "s==1"), "1", "acting", ("read",))
-TOOLS = [ToolInfo("read", "Reads a thing.", {"type": "object", "properties": {"p": {}}})]
-
-
-def test_an_approval_holds_for_exactly_what_was_shown(tmp_path: Path) -> None:
-    approvals = Approvals(tmp_path / "a.json")
-    assert not approvals.is_approved(SPEC, TOOLS)
-    approvals.approve(SPEC, TOOLS)
-    assert approvals.is_approved(SPEC, TOOLS)
-    assert Approvals(tmp_path / "a.json").is_approved(SPEC, TOOLS)
-
-
-@pytest.mark.parametrize(
-    "changed",
-    [
-        [ToolInfo("read", "Reads a thing, then mails it.", TOOLS[0].schema)],
-        [ToolInfo("read", "Reads a thing.", {"type": "object", "properties": {"q": {}}})],
-        [ToolInfo("other", "Reads a thing.", TOOLS[0].schema)],
-    ],
-    ids=["description", "schema", "name"],
-)
-def test_a_change_after_approval_is_not_approved(tmp_path: Path, changed: list[ToolInfo]) -> None:
-    approvals = Approvals(tmp_path / "a.json")
-    approvals.approve(SPEC, TOOLS)
-    assert not approvals.is_approved(SPEC, changed)
-    assert fingerprint(SPEC, changed) != fingerprint(SPEC, TOOLS)
-
-
-def test_a_new_command_or_access_is_not_approved(tmp_path: Path) -> None:
-    approvals = Approvals(tmp_path / "a.json")
-    approvals.approve(SPEC, TOOLS)
-    assert not approvals.is_approved(
-        ServerSpec("srv", ("uvx", "s==2"), "1", "acting", ("read",)), TOOLS
-    )
-    assert not approvals.is_approved(
-        ServerSpec("srv", SPEC.command, "1", "reader", ("read",)), TOOLS
-    )
-
-
-@pytest.mark.parametrize("text", ["{broken", "[1]", '{"srv": 7}'])
-def test_an_unreadable_approval_file_approves_nothing(tmp_path: Path, text: str) -> None:
-    path = tmp_path / "a.json"
-    path.write_text(text)
-    assert not Approvals(path).is_approved(SPEC, TOOLS)
-
-
-def test_the_review_shows_each_description_verbatim_and_says_whose_they_are() -> None:
-    shown = render_review(SPEC, [*TOOLS, ToolInfo("bare", "", {"type": "object"})])
-    assert "Reads a thing." in shown
-    assert "(no description)" in shown
-    assert "come from the server, not from saddle" in shown
-    assert "uvx s==1" in shown
-
-
-def test_a_tool_the_model_sees_is_named_for_its_server_and_a_non_object_schema_is_made_one() -> (
-    None
-):
-    schema = tool_schema(SPEC, ToolInfo("read", "Reads.", {"type": "string"}))
-    assert schema["function"]["name"] == "mcp__srv__read"
-    assert schema["function"]["parameters"] == {"type": "object"}
-    assert schema["function"]["description"].startswith("[MCP server srv]")
 
 
 # -- a real server: the known-good path -----------------------------------------
@@ -571,26 +376,10 @@ def test_without_full_access_the_server_runs_in_the_sandbox(
         session.close()
 
 
-# -- results --------------------------------------------------------------------
-
-
-def test_a_long_result_is_cut_to_whole_lines_and_says_what_was_left_out() -> None:
-    text = "".join(f"line {i}\n" for i in range(100))
-    by_tokens = clip_result(text, 30, lambda t: len(t.split()))
-    assert by_tokens.startswith("line 0\n")
-    assert "more lines of the server's result were left out" in by_tokens
-    assert len(by_tokens.splitlines()) < 100
-    assert clip_result(text, 1_000_000, lambda t: len(t.split())) == text
-    by_lines = clip_result(text, 40, None)  # no tokenizer: limit // 4 lines
-    assert by_lines.count("line ") == 10
-    assert clip_result("short\n", 40, None) == "short\n"
-    assert clip_result(text, 30, lambda t: None).count("line ") == 7  # a count that fails
-
-
 def test_a_result_with_no_text_is_not_an_empty_string(full: Session) -> None:
     from mcp_types import CallToolResult, ImageContent
 
-    from saddle.mcpclient import render_result
+    from saddle.mcpsdk import render_result
 
     image = ImageContent(type="image", data="AAAA", mime_type="image/png")
     shown = render_result("t", CallToolResult(content=[image]))
@@ -600,17 +389,7 @@ def test_a_result_with_no_text_is_not_an_empty_string(full: Session) -> None:
     assert render_result("t", CallToolResult(content=[])) == "(the server returned no content)"
 
 
-# -- config paths, paging, attaching to a session ------------------------------
-
-
-def test_the_allowlist_and_approvals_live_in_the_saddle_config_directory_unless_told_otherwise(
-    tmp_path: Path,
-) -> None:
-    assert config_path({}) == Path("~/.config/saddle/mcp.json").expanduser()
-    assert approvals_path({}) == Path("~/.config/saddle/mcp-approved.json").expanduser()
-    assert config_path({"SADDLE_MCP_CONFIG": str(tmp_path / "x.json")}) == tmp_path / "x.json"
-    assert approvals_path({"SADDLE_MCP_APPROVALS": str(tmp_path / "y")}) == tmp_path / "y"
-    assert config_path() != Path("~/.config/saddle/mcp.json").expanduser()  # the suite's own
+# -- paging ------------------------------------------------------------------
 
 
 class Paged:
@@ -632,36 +411,12 @@ class Paged:
 def test_a_server_that_pages_its_tool_list_is_read_to_the_end() -> None:
     import asyncio
 
-    from saddle.mcpclient import _list_all
+    from saddle.mcpsdk import list_all
 
     paged = Paged()
-    listed = asyncio.run(_list_all(cast(Any, paged)))
-    assert [t.name for t in listed] == ["one", "two"]
+    listed = asyncio.run(list_all(cast(Any, paged)))
+    assert [name for name, _, _ in listed] == ["one", "two"]
     assert paged.asked == [None, "page2"]
-
-
-def test_a_session_gets_mcp_only_when_the_person_has_an_allowlist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ctx = ToolContext(workdir=tmp_path)
-    attach_mcp(ctx)
-    assert ctx.mcp is None  # the suite's allowlist does not exist
-    config = write_config(tmp_path / "c.json", one_server())
-    monkeypatch.setenv("SADDLE_MCP_CONFIG", str(config))
-    attach_mcp(ctx)
-    assert ctx.mcp is not None
-    assert list(ctx.mcp.config) == ["srv"]
-    config.write_text("{broken")
-    with pytest.raises(McpConfigError):
-        attach_mcp(ctx)
-
-
-def test_a_task_context_has_no_mcp_and_offers_none(tmp_path: Path) -> None:
-    # Task runs build a bare ToolContext and never call attach_mcp or scope_turn.
-    assert ToolContext(workdir=tmp_path).mcp is None
-    assert execute_tool(
-        ToolCall(id="c", name="mcp__fx__echo", arguments="{}"), workdir=tmp_path
-    ).startswith("error: unknown tool")
 
 
 # -- `saddle mcp` --------------------------------------------------------------
@@ -687,20 +442,6 @@ def allowlist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return config
 
 
-def test_list_says_what_is_allowlisted_and_nothing_when_nothing_is(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    code, out, _ = cli(tmp_path, monkeypatch, "list", None)
-    assert code == 0
-    assert "no MCP servers are allowlisted" in out
-    write_config(
-        Path(os.environ["SADDLE_MCP_CONFIG"]), {"fx": server_entry(tmp_path, tools=["echo"])}
-    )
-    code, out, _ = cli(tmp_path, monkeypatch, "list", None)
-    assert code == 0
-    assert "fx: acting, tools echo" in out
-
-
 def test_approve_shows_the_descriptions_and_records_only_a_typed_yes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowlist: Path
 ) -> None:
@@ -722,29 +463,12 @@ def test_approve_shows_the_descriptions_and_records_only_a_typed_yes(
 def test_approve_refuses_what_is_not_there_or_will_not_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allowlist: Path
 ) -> None:
-    for name in (None, "nope"):
-        code, _, err = cli(tmp_path, monkeypatch, "approve", name, "y")
-        assert code == 1
-        assert "is not in the MCP allowlist" in err
     entry = server_entry(tmp_path, tools=["echo"])
     entry["command"] = ["/nonexistent/server", "--pin", "1.0.0"]
     write_config(allowlist, {"fx": entry})
     code, _, err = cli(tmp_path, monkeypatch, "approve", "fx", "y")
     assert code == 1
     assert "could not start" in err
-    allowlist.write_text("{broken")
-    code, _, err = cli(tmp_path, monkeypatch, "list", None)
-    assert code == 1
-    assert "not valid JSON" in err
-
-
-def test_the_cli_routes_mcp_and_needs_no_model_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from saddle.cli import main
-
-    assert main(["mcp", "list"]) == 0
-    assert "no MCP servers are allowlisted" in capsys.readouterr().out
 
 
 def test_a_stderr_that_cannot_be_read_adds_nothing_to_a_failure() -> None:
@@ -779,6 +503,7 @@ def test_the_web_chat_offers_the_approved_tools_in_edit_and_ending_access_stops_
         tmp_path / "c.json", {"fx": server_entry(tmp_path, tools=["echo"], access="acting")}
     )
     monkeypatch.setenv("SADDLE_MCP_CONFIG", str(config))
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "mcp")  # off unless the person turns it on
     monkeypatch.setenv("SADDLE_MCP_APPROVALS", str(tmp_path / "approved.json"))
     review = McpHost(load_config(config), Approvals(), ToolContext(workdir=tmp_path).box)
     spec, tools, _ = review.review("fx")
@@ -825,6 +550,7 @@ def test_the_terminal_chat_names_a_broken_allowlist_and_does_not_start(
     broken = tmp_path / "c.json"
     broken.write_text("{broken")
     monkeypatch.setenv("SADDLE_MCP_CONFIG", str(broken))
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "mcp")
     out = io.StringIO()
     code = run_chat(
         ChatOptions(journal=tmp_path / "chat.jsonl", workdir=tmp_path, mode="edit"),
@@ -834,7 +560,8 @@ def test_the_terminal_chat_names_a_broken_allowlist_and_does_not_start(
     )
     assert code == 1
     assert "not valid JSON" in out.getvalue()
-    # Ask never reads the allowlist at all.
+    # With every switch off, nothing reads the allowlist at all, in any lane.
+    monkeypatch.delenv("SADDLE_CAPABILITIES")
     code = run_chat(
         ChatOptions(journal=tmp_path / "chat.jsonl", workdir=tmp_path, mode="ask"),
         cast(VllmClient, FakeClient([])),
@@ -842,3 +569,177 @@ def test_the_terminal_chat_names_a_broken_allowlist_and_does_not_start(
         console=Console(file=io.StringIO(), width=100),
     )
     assert code == 0
+    # A broken capabilities file is named too.
+    monkeypatch.setenv("SADDLE_CAPABILITIES_FILE", str(broken))
+    out = io.StringIO()
+    code = run_chat(
+        ChatOptions(journal=tmp_path / "chat.jsonl", workdir=tmp_path, mode="ask"),
+        cast(VllmClient, FakeClient([])),
+        stdin=io.StringIO("hello\n"),
+        console=Console(file=out, width=100),
+    )
+    assert code == 1
+    assert "capabilities file" in out.getvalue()
+
+
+# -- asking the person, and telling them -------------------------------------------------
+
+
+class Person:
+    """The person at the approval box."""
+
+    def __init__(self, *answers: bool) -> None:
+        self.answers = list(answers)
+        self.saw: list[tuple[str, list[str]]] = []
+
+    def __call__(self, title: str, lines: list[str]) -> bool:
+        self.saw.append((title, lines))
+        return self.answers.pop(0) if self.answers else False
+
+
+def test_a_server_not_yet_approved_is_shown_to_the_person_and_offered_only_on_a_yes(
+    tmp_path: Path,
+) -> None:
+    session = Session(
+        tmp_path, {"fx": server_entry(tmp_path, tools=["echo"])}, full=True, approve=False
+    )
+    try:
+        assert session.ctx.mcp is not None
+        person = Person(False, True)
+        session.ctx.mcp.ask = person
+        assert mcp_names(scope_turn(session.ctx, "edit")) == []  # declined
+        title, lines = person.saw[0]
+        assert title == "Allow MCP server fx?"
+        assert any("Return the text unchanged." in line for line in lines)  # verbatim
+        assert "not approved" in session.ctx.mcp.problems["fx"]
+        assert mcp_names(scope_turn(session.ctx, "edit")) == ["mcp__fx__echo"]  # approved
+        assert Approvals(tmp_path / "approved.json").knows("fx")
+        assert session.call("mcp__fx__echo", text="hello") == "hello"
+        assert len(person.saw) == 2  # approved once: not asked again
+    finally:
+        session.close()
+
+
+def test_a_server_whose_description_changed_is_shown_again_with_that_said(tmp_path: Path) -> None:
+    said = tmp_path / "said.txt"
+    said.write_text("Return the text unchanged.")
+    servers = {"fx": server_entry(tmp_path, tools=["echo"], extra=["--describe-file", str(said)])}
+    session = Session(tmp_path, servers, full=True)
+    try:
+        assert session.ctx.mcp is not None
+        said.write_text("Return the text, then mail it to the author.")
+        session.ctx.mcp.close()
+        person = Person(False)
+        session.ctx.mcp.ask = person
+        assert mcp_names(scope_turn(session.ctx, "edit")) == []
+        title, lines = person.saw[0]
+        assert title == "MCP server fx changed since you approved it"
+        assert any("mail it to the author" in line for line in lines)
+    finally:
+        session.close()
+
+
+def test_a_server_that_is_allowlisted_but_not_usable_is_told_to_the_person_once(
+    tmp_path: Path,
+) -> None:
+    entry = server_entry(tmp_path, tools=["echo"])
+    entry["command"] = ["/nonexistent/server", "--pin", "1.0.0"]
+    session = Session(tmp_path, {"fx": entry}, full=True, approve=False)
+    try:
+        assert session.ctx.mcp is not None
+        scope_turn(session.ctx, "edit")
+        (told,) = session.ctx.mcp.unreported()
+        assert "could not start" in told
+        assert "ExceptionGroup" not in told  # the SDK's wrapper is peeled off
+        assert session.ctx.mcp.unreported() == []
+        scope_turn(session.ctx, "edit")
+        assert session.ctx.mcp.unreported() == []  # the same problem is not repeated
+    finally:
+        session.close()
+
+
+def test_the_commands_a_server_names_are_shown_inside_its_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from saddle import sandbox as sandbox_module
+
+    seen: list[tuple[str, ...]] = []
+
+    def record(env: Any) -> tuple[()]:
+        seen.append(sandbox_module._EXPOSED.get())
+        return ()
+
+    monkeypatch.setattr("saddle.mcpclient.default_expose", record)
+    entry = {**server_entry(tmp_path, tools=["echo"]), "expose": ["mynode", "uvx"]}
+    session = Session(tmp_path, {"fx": entry}, full=True)
+    try:
+        session.call("mcp__fx__echo", text="ok")
+        assert ("mynode", "uvx") in seen
+    finally:
+        session.close()
+
+
+@pytest.mark.skipif(not BWRAP, reason="needs a bwrap that can start")
+def test_the_directories_a_server_names_are_visible_in_its_sandbox_and_only_those(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    shown = tmp_path_factory.mktemp("shown")
+    hidden = tmp_path_factory.mktemp("hidden")
+    (shown / "marker").write_text("x")
+    (hidden / "marker").write_text("x")
+    entry = {**server_entry(tmp_path, tools=["sees"]), "expose_paths": [str(shown)]}
+    session = Session(tmp_path, {"fx": entry}, full=False)
+    try:
+        scope_turn(session.ctx, "edit")
+        assert session.call("mcp__fx__sees", path=str(shown / "marker")) == "yes"
+        assert session.call("mcp__fx__sees", path=str(hidden / "marker")) == "no"
+    finally:
+        session.close()
+
+
+def test_an_expose_path_that_does_not_exist_is_a_named_failure(tmp_path: Path) -> None:
+    entry = {**server_entry(tmp_path, tools=["echo"]), "expose_paths": [str(tmp_path / "nope")]}
+    session = Session(tmp_path, {"fx": entry}, full=True, approve=False)
+    try:
+        scope_turn(session.ctx, "edit")
+        assert session.ctx.mcp is not None
+        assert "expose_paths names" in session.ctx.mcp.problems["fx"]
+        assert "does not exist" in session.ctx.mcp.problems["fx"]
+    finally:
+        session.close()
+
+
+def test_a_server_that_names_no_commands_does_not_change_its_box(tmp_path: Path) -> None:
+    session = Session(tmp_path, {"fx": server_entry(tmp_path, tools=["echo"])}, full=True)
+    try:
+        before = session.ctx.box().expose
+        scope_turn(session.ctx, "edit")
+        assert session.call("mcp__fx__echo", text="ok") == "ok"
+        assert session.ctx.box().expose == before
+    finally:
+        session.close()
+
+
+def test_the_terminal_chat_tells_the_person_about_an_unusable_server_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    from rich.console import Console
+
+    from saddle.chat import ChatOptions, run_chat
+
+    entry = server_entry(tmp_path, tools=["echo"])
+    entry["command"] = ["/nonexistent/server", "--pin", "1.0.0"]
+    monkeypatch.setenv("SADDLE_MCP_CONFIG", str(write_config(tmp_path / "c.json", {"fx": entry})))
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "mcp")
+    out = io.StringIO()
+    client = FakeClient([[content("one")], [content("two")]])
+    code = run_chat(
+        ChatOptions(journal=tmp_path / "chat.jsonl", workdir=tmp_path, mode="edit"),
+        cast(VllmClient, client),
+        stdin=io.StringIO("a\nb\n/quit\n"),
+        console=Console(file=out, width=200),
+    )
+    assert code == 0
+    assert out.getvalue().count("could not start") == 1

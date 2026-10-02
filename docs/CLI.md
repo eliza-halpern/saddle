@@ -431,12 +431,122 @@ The terminal chat. Same lanes and tool lists as the web chat's Ask and Edit
 | `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
 | `--base-url`, `--model` | as for `auto` | |
 
+## Opt-in capabilities: `saddle capabilities`
+
+Nothing that reaches the web or runs a third-party server is part of installing
+or running saddle. Four capabilities are **off until you turn them on**, and the
+model is offered a tool only when its switch is on and what it needs works:
+
+| Capability | What it gives | Needs |
+|---|---|---|
+| `mcp` | the Edit lane may call the allowlisted tools of `access: acting` MCP servers | the SDK, an `access: acting` server |
+| `research` | the `research` tool (Ask and Edit): a quarantined reader that reads the web | the SDK, an `access: reader` server (a fetch server or a browser), `bwrap` |
+| `search` | the reader's `search` tool, from a local SearXNG | `saddle search setup` running |
+| `browser` | the reader's `browser_*` tools (a Playwright server) | a reader server that offers them |
+
+`saddle capabilities` prints each as `on`, `off`, or `unavailable` with the
+reason; `saddle capabilities enable research` and `disable` write the switch to
+`~/.config/saddle/capabilities.json` (`$SADDLE_CAPABILITIES_FILE`).
+`$SADDLE_CAPABILITIES` overrides the file for one process (`research,search`, or
+`research=on,browser=off`). The page reads the same status from `GET
+/api/capabilities`. Disabled means absent from the tool list; enabled but
+unavailable is stated, not offered: with `search` on and SearXNG down, `research`
+is still offered (it works from addresses you give it) and its result says search
+is unavailable.
+
+**On by default: nothing.** The MCP SDK is the optional extra
+`pip install 'saddle-harness[mcp]'`; a saddle without it imports, runs and reports
+MCP as unavailable.
+
+## saddle search
+
+A local SearXNG for the reader's `search` tool. `saddle search setup` writes
+`settings.yml` (JSON output on, the limiter off) and a fresh secret key
+(`secret.env`, owner-readable only, passed to docker as an env file and never
+printed) under `~/.config/saddle/searxng` (`$SADDLE_SEARXNG_DIR`), then starts one
+container named `saddle-searxng` from the pinned image
+`searxng/searxng:2026.10.2-19ffbcd30@sha256:36b0907e...` (`searx.IMAGE`), published
+on `127.0.0.1:8888` only, with no restart policy: it does not start on boot.
+`saddle search status` says whether it answers JSON; `saddle search stop` stops
+and removes it. saddle touches only a container that carries its label
+`io.saddle.managed=searxng`: a container of that name that is not saddle's, and
+every other container on the machine, is left alone.
+
+`$SADDLE_SEARCH_URL` points the reader at another SearXNG (default
+`http://127.0.0.1:8888`; `setup` only runs a local one).
+
+Privacy: a query the reader sends goes from your SearXNG to the search engines
+its settings enable (SearXNG's defaults: several public engines), as any
+metasearch query does. Nothing else leaves the machine, and only the reader
+calls it. Result addresses may be opened by the reader; result snippets are page
+text and stay inside the reader.
+
+## The research tool
+
+`research(question, want)` hands a question to a separate worker turn, the
+reader, whose only tools are the `access: reader` MCP servers (`fetch`, a
+browser), `search` and `report`: no file, no shell, no project, no secret. Its
+servers run in a sandbox over the session's download area
+(`<session>/downloads`), never the project, in every session including a
+full-access one, and without `bwrap` there is no reader.
+
+- It opens only addresses the person typed, a search result gave, or a page it
+  read linked, enforced in code; it types only into a search box; tools that run
+  code or submit forms are refused even if the allowlist lists them.
+- What comes back is a typed value (a version, yes or no, an identifier, a URL, a
+  number, each matched whole by a pattern), a short cited summary (citing pages
+  it read, never repeating a run of page text), or the path, size, source and
+  hash of a download. Never raw page text.
+- A download over 10 MiB is withheld, and deleted, unless you approve it in the
+  page. The approval comes after the bytes land in the area the acting session
+  cannot read and before it is told they exist.
+- In a full-access session a command that names a file the reader downloaded or a
+  URL it reported or cited is shown to you with its source before it runs.
+- `$SADDLE_RESEARCH_DOMAINS` limits the reader to those domains; a session may
+  fetch 40 pages.
+
+Reference servers, both run through the reader on this machine (a scripted model
+drove them against a local page; the download came back as path, size, hash and
+source):
+
+```json
+{
+  "servers": {
+    "fetch": {
+      "command": ["uvx", "mcp-server-fetch==2026.8.18"],
+      "version": "2026.8.18", "access": "reader", "tools": ["fetch"],
+      "expose": ["uv", "uvx"]
+    },
+    "browser": {
+      "command": ["~/.local/share/saddle/pw-0.0.83/node_modules/.bin/playwright-mcp",
+        "--browser", "chrome", "--executable-path", "/usr/bin/google-chrome",
+        "--headless", "--isolated", "--no-sandbox"],
+      "version": "0.0.83", "access": "reader",
+      "tools": ["browser_navigate", "browser_snapshot", "browser_click", "browser_type"],
+      "expose": ["node"], "expose_paths": ["~/.local/share/saddle/pw-0.0.83"]
+    }
+  }
+}
+```
+
+`mcp-server-fetch` needs `uv` as well as `uvx` shown; Playwright's server is
+installed once (`npm i @playwright/mcp@0.0.83` in that directory), and its
+directory and `node` are shown through `expose_paths` and `expose`, because a
+sandbox hides your home. Chrome needs `--no-sandbox` inside bwrap, and
+`--isolated` keeps its profile in memory. A server's sandbox shows nothing else
+of yours.
+
 ## saddle mcp
 
 MCP (Model Context Protocol) servers the Edit lane may use. saddle starts only
 servers the person names in an allowlist file, exposes only the tools named
 there, and shows the person what each server says about its tools before the
 first use.
+
+Off by default (`saddle capabilities enable mcp`). In the web chat a server that
+is not yet approved, or whose descriptions changed since, is shown to you in a
+dialog when a turn needs it; in the terminal, approve it first with
+`saddle mcp approve`.
 
 `saddle mcp list` shows the allowlist. `saddle mcp approve NAME` starts the
 server in a sandbox over an empty folder, prints every exposed tool's
@@ -466,6 +576,11 @@ approvals are in `~/.config/saddle/mcp-approved.json`, `$SADDLE_MCP_APPROVALS`):
   so a pin cannot be only decorative.
 - `access`: `acting` (the session that edits files may call the tools) or
   `reader` (only the quarantined web reader may; never the acting session).
+- `expose` (optional): command names (`node`, `uv`, `uvx`) shown read-only inside
+  the server's sandbox, as `$SADDLE_EXPOSE` does for gates. `expose_paths`
+  (optional): directories shown read-only at their own path (where the server is
+  installed). Both are part of what you approve, and a path that is missing is a
+  named failure.
 - `tools`: exact tool names, no wildcards. The model sees `mcp__notes__search_notes`
   and nothing else the server has. A listed tool the server does not offer
   refuses the server.

@@ -112,10 +112,13 @@ def _no_real_mcp_allowlist(
 ) -> None:
     """Keep the suite away from the operator's MCP allowlist and approvals
     (`mcpclient`): a test that attaches MCP to a session must never start a
-    server the person configured."""
+    server the person configured, and every capability starts switched off."""
     nowhere = tmp_path_factory.mktemp("no-mcp")
     monkeypatch.setenv("SADDLE_MCP_CONFIG", str(nowhere / "mcp.json"))
     monkeypatch.setenv("SADDLE_MCP_APPROVALS", str(nowhere / "mcp-approved.json"))
+    monkeypatch.setenv("SADDLE_CAPABILITIES_FILE", str(nowhere / "capabilities.json"))
+    monkeypatch.delenv("SADDLE_CAPABILITIES", raising=False)
+    monkeypatch.delenv("SADDLE_SEARCH_URL", raising=False)
 
 
 @pytest.fixture(autouse=True)

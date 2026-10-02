@@ -1446,7 +1446,6 @@ source = { editable = "." }
 dependencies = [
     { name = "coverage" },
     { name = "httpx" },
-    { name = "mcp" },
     { name = "mutmut" },
     { name = "pydantic" },
     { name = "pytest" },
@@ -1457,12 +1456,18 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+mcp = [
+    { name = "mcp" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "actionlint-py" },
     { name = "hypothesis" },
     { name = "jinja2" },
     { name = "jsonschema" },
+    { name = "mcp" },
     { name = "mypy" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
@@ -1475,7 +1480,7 @@ dev = [
 requires-dist = [
     { name = "coverage", specifier = ">=7.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", specifier = "==2.2.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = "==2.2.0" },
     { name = "mutmut", specifier = ">=3.8" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pytest", specifier = ">=8.3" },
@@ -1485,6 +1490,7 @@ requires-dist = [
     { name = "starlette", specifier = ">=0.41" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]
+provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1492,6 +1498,7 @@ dev = [
     { name = "hypothesis", specifier = ">=6.130" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "jsonschema", specifier = ">=4.26.0" },
+    { name = "mcp", specifier = "==2.2.0" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pytest-cov", specifier = ">=6.0" },
     { name = "pytest-xdist", specifier = ">=3.8" },

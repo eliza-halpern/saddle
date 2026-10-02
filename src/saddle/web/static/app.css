@@ -1064,3 +1064,9 @@ dialog button.danger { background: transparent; color: var(--bad); border-color:
 #password-dialog #pw-input { width: 100%; box-sizing: border-box; padding: 8px 10px; font: inherit;
   background: var(--bg-sunk); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; }
 #password-dialog .dialog-actions { gap: 9px; }
+#approval-dialog { max-width: 560px; }
+#approval-dialog h3::before { content: "🌐 "; }
+#approval-dialog #approval-lines { margin: 6px 0 10px; max-height: 48vh; overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; padding: 8px 10px; background: var(--bg-sunk); border: 1px solid var(--line);
+  border-radius: 8px; color: var(--ink); font-size: 12.5px; }
+#approval-dialog .dialog-actions { gap: 9px; }

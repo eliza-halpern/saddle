@@ -10,6 +10,7 @@ from typing import IO, Any, Final
 
 from rich.console import Console
 
+from saddle.capabilities import CapabilityError
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.mcpclient import McpConfigError
 from saddle.procs import ProcessLedger
@@ -119,7 +120,11 @@ def _run_turn(
     node_id = f"chat#{turn}"
     ctx = context or ToolContext(workdir=options.workdir, processes=ProcessLedger())
     offered = scope_turn(ctx, options.mode)
+    for problem in ctx.mcp.unreported() if ctx.mcp is not None else []:
+        display.show_error(problem)  # a server the person allowlisted that is not in use
     messages.append({"role": "user", "content": text})
+    if ctx.research is not None:
+        ctx.research.attach_turn(client, options.journal, node_id, messages)
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     for _ in range(MAX_TOOL_ROUNDS):
@@ -200,12 +205,11 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     context = ToolContext(
         workdir=options.workdir, full_access=options.full_access, processes=ProcessLedger()
     )
-    if options.mode == "edit":
-        try:
-            attach_mcp(context)  # the person's allowlist
-        except McpConfigError as exc:
-            display.show_error(str(exc))  # a broken allowlist is named, never skipped
-            return 1
+    try:
+        attach_mcp(context, options.journal.parent / "downloads")  # what the person switched on
+    except (McpConfigError, CapabilityError) as exc:
+        display.show_error(str(exc))  # a broken allowlist or switch file is named, never skipped
+        return 1
     try:
         while True:
             display.show_prompt()
