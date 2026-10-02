@@ -90,9 +90,9 @@ def test_the_fixture_set_is_not_empty() -> None:
 
 # -- one rule per type --------------------------------------------------------
 
-# Types with a rule here. `.mjs` and `.py` fixtures are covered by the
+# Types with a rule here. `.mjs`, `.js` and `.py` fixtures are covered by the
 # JavaScript and Python linters, and run by the tests that use them.
-HANDLED_SUFFIXES = {".json", ".jsonl", ".diff", ".txt", ".jinja", ".mjs", ".py"}
+HANDLED_SUFFIXES = {".json", ".jsonl", ".diff", ".txt", ".jinja", ".mjs", ".js", ".py"}
 
 
 def json_problem(text: str) -> str | None:
