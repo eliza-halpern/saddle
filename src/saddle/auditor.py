@@ -661,6 +661,17 @@ RED_PHASE_NOT_MEASURABLE: Final = (
 """The red-phase finding in the same case (`RED_PHASE_NO_MUTANTS`)."""
 
 RED_PHASE_NO_MUTANTS: Final = "tests unchanged and no mutants decided"
+
+RED_PHASE_TESTS_UNCHANGED: Final = "tests unchanged and"
+"""How `gates.check_red_phase` begins a refusal under the refactor rule: no Python
+test changed, so changed-line coverage and a mutation floor carry the proof."""
+
+RED_PHASE_NO_PYTHON: Final = (
+    "no Python source line changed: Python's red phase has nothing to judge. Changed "
+    "JavaScript tests are judged by js-red-phase, and every changed line's mutants by mutation"
+)
+"""The red-phase finding of a change with no Python source line in it, where the
+refactor rule would otherwise refuse on another language's mutation score."""
 """How `gates._check_behaviour_preserved` begins its detail when mutation decided
 nothing; the one red-phase refusal `MUTATION_NOT_MEASURABLE` also lifts."""
 
@@ -2121,6 +2132,17 @@ class Auditor:
                 f"(listed under {NOT_MEASURABLE_GATE})",
                 basis,
             )
+        red = statuses.get("red-phase", ("", "", None))
+        if (
+            tier == 2
+            and red[0] == "fail"
+            and red[1].startswith(RED_PHASE_TESTS_UNCHANGED)
+            and not source_lines_changed(copy, resolved)
+        ):
+            # Python's refactor rule (no Python test changed, so mutation carries the
+            # proof) read a change with no Python source line in it: the mutants it
+            # scored were another language's, whose own checks judge them.
+            statuses["red-phase"] = ("not-applicable", RED_PHASE_NO_PYTHON, red[2])
         sidecars: dict[str, Mapping[str, Any]] = {}
         if gated.mutation is not None:
             # The shortlist records `mutant_detail` as (name, status, show)

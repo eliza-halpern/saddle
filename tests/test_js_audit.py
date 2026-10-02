@@ -199,3 +199,30 @@ def test_a_baseline_run_that_could_not_run_is_not_proven_never_red(
     red = finding(found, JS_RED_PHASE_GATE)
     assert (red.verdict, red.detail) == ("not-proven", "node --test timed out")
     assert found.passed
+
+
+WEAK = MutationOutcome(killed=1, total=4, generated=4, survivors=("m1", "m2", "m3"))
+
+
+@needs_node
+def test_a_js_only_change_is_never_refused_by_pythons_refactor_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Saddle's own audit refused a correct JS fix with "red-phase: tests unchanged and
+    # mutation 73.9% < 85.0%": Python's rule for a change with no Python test changed,
+    # scoring the JavaScript mutants. The JS change's own checks judge it: here the
+    # weak mutation score refuses, under its own name, and red-phase says nothing.
+    monkeypatch.setattr(runner, "mutation_sample", lambda *_a, **_k: WEAK)
+    js_only = Auditor(project(tmp_path / "js")).tier2()
+    assert finding(js_only, "red-phase") is None
+    assert finding(js_only, "mutation").verdict == "fail"
+    assert finding(js_only, JS_RED_PHASE_GATE).verdict == "pass"
+    # With a Python source line changed too, the refactor rule still binds.
+    both = project(tmp_path / "py")
+    (both / "n.py").write_text("def f():\n    return 1 + 0\n")
+    mixed = Auditor(both).tier2()
+    red = finding(mixed, "red-phase")
+    assert (red.verdict, red.detail) == (
+        "fail",
+        "tests unchanged and mutation 25.0% < 85.0%; nothing proves the change",
+    )
