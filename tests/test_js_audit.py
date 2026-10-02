@@ -1,12 +1,13 @@
 """The audit runs a changed `.js` tree's node tests itself, and counts StrykerJS mutants.
 
-Contract: when a change touches a `.js` file, the tier-2 audit records one
-result per node test (`js-tests`), runs the new or changed node tests on the
-baseline (`js-red-phase`), and, where StrykerJS is installed, counts the
-mutants of the changed `.js` lines in the `mutation` check beside the Python
-ones. Known-bad instances are real runs: a node test that fails, a new test
-that already passes on the baseline, a tree with no node test, a mutant no test
-kills. Python-only changes get none of the two findings.
+Contract: when a change touches a `.js` file, the tier-1 audit records one
+result per node test (`js-tests`), as Python's `tests` is tier 1; tier 2 runs
+the new or changed node tests on the baseline (`js-red-phase`) and, where
+StrykerJS is installed, counts the mutants of the changed `.js` lines in the
+`mutation` check beside the Python ones. Known-bad instances are real runs: a
+node test that fails, a new test that already passes on the baseline, a tree
+with no node test, a mutant no test kills. Python-only changes get none of the
+two findings.
 """
 
 from __future__ import annotations
@@ -81,14 +82,15 @@ def finding(found: Findings, gate: str) -> Any:
 @needs_node
 def test_new_node_tests_are_run_per_test_and_red_on_the_baseline(tmp_path: Path) -> None:
     journal = tmp_path / "ledger" / "proofs.jsonl"
-    found = Auditor(project(tmp_path), "HEAD", AuditorConfig(journal=journal)).tier2()
-    tests = finding(found, JS_TESTS_GATE)
+    auditor = Auditor(project(tmp_path), "HEAD", AuditorConfig(journal=journal))
+    tests = finding(auditor.tier1(), JS_TESTS_GATE)
+    found = auditor.tier2()
     assert (tests.verdict, tests.detail) == ("pass", "node --test: 2 passed, 0 failed, 0 skipped")
     red = finding(found, JS_RED_PHASE_GATE)
     assert red.verdict == "pass"
     assert red.detail.startswith("1 of 2 node tests fail pre-change, pass post-change")
     assert "green on the baseline: tests/a.test.js: add" in red.detail
-    (span,) = [s for s in read_spans(journal) if s.name == f"audit-tier2:{JS_TESTS_GATE}"]
+    (span,) = [s for s in read_spans(journal) if s.name == f"audit-tier1:{JS_TESTS_GATE}"]
     sidecar = json.loads(next((journal.parent / "attempts").glob(f"{span.span_id}*")).read_text())
     assert sidecar["results"] == [
         ["tests/a.test.js", "clamp low", "pass"],
@@ -108,12 +110,16 @@ def test_new_node_tests_are_run_per_test_and_red_on_the_baseline(tmp_path: Path)
 @needs_node
 def test_a_failing_node_test_refuses_the_change(tmp_path: Path) -> None:
     failing = HEAD_TEST.replace("strictEqual(add(1, 2), 3)", "strictEqual(add(1, 2), 4)")
-    found = Auditor(project(tmp_path, test=failing)).tier2()
-    tests = finding(found, JS_TESTS_GATE)
+    auditor = Auditor(project(tmp_path, test=failing))
+    first = auditor.tier1()
+    tests = finding(first, JS_TESTS_GATE)
     assert tests.verdict == "fail"
     assert "tests/a.test.js: add" in tests.detail
-    assert not found.passed
-    assert finding(found, JS_RED_PHASE_GATE).detail == "tests fail post-change"
+    assert not first.passed
+    # Tier 2 is blocked by the failing tier 1, as for Python: no red phase is run.
+    second = auditor.tier2()
+    assert not second.passed
+    assert finding(second, JS_RED_PHASE_GATE) is None
 
 
 @needs_node
@@ -128,11 +134,11 @@ def test_a_new_test_that_passes_on_the_baseline_proves_nothing(tmp_path: Path) -
 
 @needs_node
 def test_a_js_change_with_no_node_test_is_not_proven_never_a_pass(tmp_path: Path) -> None:
-    found = Auditor(project(tmp_path, test=None)).tier2()
-    tests = finding(found, JS_TESTS_GATE)
+    auditor = Auditor(project(tmp_path, test=None))
+    tests = finding(auditor.tier1(), JS_TESTS_GATE)
     assert tests.verdict == "not-proven"
     assert "no node test file in the tree" in tests.detail
-    assert finding(found, JS_RED_PHASE_GATE) is None
+    assert finding(auditor.tier2(), JS_RED_PHASE_GATE) is None
 
 
 def test_a_change_with_no_js_file_gets_neither_finding(tmp_path: Path) -> None:
@@ -141,9 +147,9 @@ def test_a_change_with_no_js_file_gets_neither_finding(tmp_path: Path) -> None:
     _init(root, FILES)
     (root / "n.py").write_text("def f():\n    return 2\n")
     (root / "test_n.py").write_text(FILES["test_n.py"].replace("== 1", "== 2"))
-    found = Auditor(root).tier2()
-    assert finding(found, JS_TESTS_GATE) is None
-    assert finding(found, JS_RED_PHASE_GATE) is None
+    auditor = Auditor(root)
+    assert finding(auditor.tier1(), JS_TESTS_GATE) is None
+    assert finding(auditor.tier2(), JS_RED_PHASE_GATE) is None
 
 
 @needs_stryker
@@ -173,9 +179,9 @@ def test_a_source_only_js_change_runs_the_tests_and_has_no_red_phase(tmp_path: P
     (root / "tests").mkdir()
     _init(root, {**FILES, "tests/a.test.js": HEAD_TEST.replace("clamp low", "add twice")})
     (root / "static/a.js").write_text(HEAD_JS)
-    found = Auditor(root).tier2()
-    assert finding(found, JS_TESTS_GATE).verdict == "pass"
-    assert finding(found, JS_RED_PHASE_GATE) is None
+    auditor = Auditor(root)
+    assert finding(auditor.tier1(), JS_TESTS_GATE).verdict == "pass"
+    assert finding(auditor.tier2(), JS_RED_PHASE_GATE) is None
 
 
 @needs_node

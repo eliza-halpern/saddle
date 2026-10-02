@@ -66,7 +66,7 @@ MEASURED = {"measured": ["static/a.js"], "not_measured": {}}
 
 @needs_c8
 def test_a_changed_line_a_test_runs_passes(tmp_path: Path) -> None:
-    found = Auditor(tree(tmp_path, test=FULL_TEST, scope=MEASURED), "HEAD").tier2()
+    found = Auditor(tree(tmp_path, test=FULL_TEST, scope=MEASURED), "HEAD").tier1()
     covered = finding(found, JS_COVERAGE_GATE)
     assert (covered.verdict, covered.detail) == ("pass", "every executable changed line runs (6)")
 
@@ -74,7 +74,7 @@ def test_a_changed_line_a_test_runs_passes(tmp_path: Path) -> None:
 @needs_c8
 def test_a_changed_line_no_test_runs_fails_naming_it(tmp_path: Path) -> None:
     root = tree(tmp_path, scope=MEASURED)
-    found = Auditor(root, "HEAD").tier2()
+    found = Auditor(root, "HEAD").tier1()
     covered = finding(found, JS_COVERAGE_GATE)
     assert covered.verdict == "fail"
     assert covered.detail == "no test runs static/a.js:6, static/a.js:7"
@@ -86,17 +86,17 @@ def test_a_changed_line_no_test_runs_fails_naming_it(tmp_path: Path) -> None:
 @needs_c8
 def test_a_comment_or_blank_line_in_an_unrun_function_is_not_counted(tmp_path: Path) -> None:
     head = HEAD_JS.replace("  return x;", "\n  // the fallthrough\n  return x;")
-    found = Auditor(tree(tmp_path, test=FULL_TEST, scope=MEASURED, head=head), "HEAD").tier2()
+    found = Auditor(tree(tmp_path, test=FULL_TEST, scope=MEASURED, head=head), "HEAD").tier1()
     assert finding(found, JS_COVERAGE_GATE).verdict == "pass"
     # the same file with the new branch unrun: only code lines are named
-    found = Auditor(tree(tmp_path / "b", scope=MEASURED, head=head), "HEAD").tier2()
+    found = Auditor(tree(tmp_path / "b", scope=MEASURED, head=head), "HEAD").tier1()
     assert finding(found, JS_COVERAGE_GATE).detail == "no test runs static/a.js:6, static/a.js:9"
 
 
 @needs_c8
 def test_a_file_the_scope_does_not_measure_is_not_proven_never_covered(tmp_path: Path) -> None:
     scope = {"measured": [], "not_measured": {"static/a.js": "page wiring"}}
-    covered = finding(Auditor(tree(tmp_path, scope=scope), "HEAD").tier2(), JS_COVERAGE_GATE)
+    covered = finding(Auditor(tree(tmp_path, scope=scope), "HEAD").tier1(), JS_COVERAGE_GATE)
     assert covered.verdict == "not-proven"
     assert covered.detail == "not proven: not line-measured: static/a.js (page wiring)"
 
@@ -106,8 +106,8 @@ def test_a_file_in_neither_list_is_not_proven_and_so_is_a_tree_with_no_scope(
     tmp_path: Path,
 ) -> None:
     listed: dict[str, Any] = {"measured": [], "not_measured": {}}
-    one = finding(Auditor(tree(tmp_path / "a", scope=listed), "HEAD").tier2(), JS_COVERAGE_GATE)
-    two = finding(Auditor(tree(tmp_path / "b"), "HEAD").tier2(), JS_COVERAGE_GATE)
+    one = finding(Auditor(tree(tmp_path / "a", scope=listed), "HEAD").tier1(), JS_COVERAGE_GATE)
+    two = finding(Auditor(tree(tmp_path / "b"), "HEAD").tier1(), JS_COVERAGE_GATE)
     for covered in (one, two):
         assert covered.verdict == "not-proven"
         assert "not line-measured: static/a.js (in no coverage list)" in covered.detail
@@ -115,7 +115,7 @@ def test_a_file_in_neither_list_is_not_proven_and_so_is_a_tree_with_no_scope(
 
 def test_without_c8_a_measured_file_is_not_proven_naming_the_tool(tmp_path: Path) -> None:
     covered = finding(
-        Auditor(tree(tmp_path, scope=MEASURED, c8=False), "HEAD").tier2(), JS_COVERAGE_GATE
+        Auditor(tree(tmp_path, scope=MEASURED, c8=False), "HEAD").tier1(), JS_COVERAGE_GATE
     )
     assert covered.verdict == "not-proven"
     assert "c8 was not found in node_modules" in covered.detail
@@ -126,7 +126,7 @@ def test_a_gap_in_a_measured_file_outranks_an_unmeasured_file(tmp_path: Path) ->
     scope = {"measured": ["static/a.js"], "not_measured": {"static/b.js": "page wiring"}}
     root = tree(tmp_path, scope=scope)
     (root / "static/b.js").write_text("let x = 1;\n")
-    found = Auditor(root, "HEAD").tier2()
+    found = Auditor(root, "HEAD").tier1()
     covered = finding(found, JS_COVERAGE_GATE)
     assert covered.verdict == "fail"
     assert covered.detail.endswith("; also not line-measured: static/b.js (page wiring)")
@@ -134,14 +134,14 @@ def test_a_gap_in_a_measured_file_outranks_an_unmeasured_file(tmp_path: Path) ->
 
 def test_a_change_with_no_js_code_line_gets_no_coverage_finding(tmp_path: Path) -> None:
     root = tree(tmp_path, scope=MEASURED, head=BASE_JS + "// a note\n")
-    assert finding(Auditor(root, "HEAD").tier2(), JS_COVERAGE_GATE) is None
+    assert finding(Auditor(root, "HEAD").tier1(), JS_COVERAGE_GATE) is None
 
 
 def test_a_malformed_scope_is_a_named_problem_not_a_silent_pass(tmp_path: Path) -> None:
     root = tree(tmp_path, c8=False)
     (root / SCOPE).parent.mkdir(parents=True, exist_ok=True)
     (root / SCOPE).write_text("{not json")
-    covered = finding(Auditor(root, "HEAD").tier2(), JS_COVERAGE_GATE)
+    covered = finding(Auditor(root, "HEAD").tier1(), JS_COVERAGE_GATE)
     assert covered.verdict == "not-proven"
     assert f"{SCOPE} could not be read" in covered.detail
 
@@ -151,7 +151,7 @@ def test_the_shortlist_reads_a_coverage_gap_as_not_proven(tmp_path: Path) -> Non
         pytest.skip("node or c8 is not installed")
     config = AuditorConfig(tier2="shortlist")
     covered = finding(
-        Auditor(tree(tmp_path, scope=MEASURED), "HEAD", config).tier2(), JS_COVERAGE_GATE
+        Auditor(tree(tmp_path, scope=MEASURED), "HEAD", config).tier1(), JS_COVERAGE_GATE
     )
     assert covered.verdict == "not-proven"
     assert covered.detail.startswith("no test runs static/a.js:6")
@@ -239,7 +239,7 @@ def test_the_not_measurable_wording_does_not_claim_every_js_file() -> None:
 def test_a_measured_js_file_with_no_node_test_is_not_proven(tmp_path: Path) -> None:
     root = tree(tmp_path, scope=MEASURED)
     (root / "tests/a.test.js").unlink()
-    covered = finding(Auditor(root, "HEAD").tier2(), JS_COVERAGE_GATE)
+    covered = finding(Auditor(root, "HEAD").tier1(), JS_COVERAGE_GATE)
     assert covered.verdict == "not-proven"
     assert "no node test file" in covered.detail
 
@@ -251,7 +251,7 @@ def test_a_covered_measured_file_beside_an_unmeasured_one_is_still_not_proven(
     scope = {"measured": ["static/a.js"], "not_measured": {"static/b.js": "page wiring"}}
     root = tree(tmp_path, test=FULL_TEST, scope=scope)
     (root / "static/b.js").write_text("let x = 1;\n")
-    covered = finding(Auditor(root, "HEAD").tier2(), JS_COVERAGE_GATE)
+    covered = finding(Auditor(root, "HEAD").tier1(), JS_COVERAGE_GATE)
     assert covered.verdict == "not-proven"
     assert covered.detail == (
         "not proven: not line-measured: static/b.js (page wiring) "
@@ -266,6 +266,6 @@ def test_a_report_without_the_measured_file_is_not_proven_never_clean(
     from saddle.jsevidence import JsCoverage
 
     monkeypatch.setattr(auditor_mod, "measure_coverage", lambda *_a, **_k: JsCoverage())
-    covered = finding(Auditor(tree(tmp_path, scope=MEASURED), "HEAD").tier2(), JS_COVERAGE_GATE)
+    covered = finding(Auditor(tree(tmp_path, scope=MEASURED), "HEAD").tier1(), JS_COVERAGE_GATE)
     assert covered.verdict == "not-proven"
     assert "c8 reported no lines for static/a.js" in covered.detail

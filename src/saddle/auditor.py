@@ -140,6 +140,7 @@ from saddle.jsevidence import (
     JS_SUFFIX,
     NOT_LINE_MEASURED,
     JsCoverage,
+    JsTestResult,
     changed_js_lines,
     js_test_files,
     measure_coverage,
@@ -610,7 +611,7 @@ NOT_MEASURABLE_GATE: Final = "not-measurable"
 not cover. Emitted only when there is one; always `not-proven`."""
 
 JS_TESTS_GATE: Final = "js-tests"
-"""The tier-2 finding of the node tests' own run (`gates.check_js_tests`): every
+"""The tier-1 finding of the node tests' own run (`gates.check_js_tests`): every
 `.js` test of the audited tree, one result each. Emitted only when the change
 touches a `.js` file; `not-proven` when node, or a test file, cannot be had."""
 
@@ -618,7 +619,7 @@ NO_NODE_TEST: Final = "no node test file in the tree, so the changed .js files h
 """The `JS_TESTS_GATE` detail for a tree with no `.js` test."""
 
 JS_COVERAGE_GATE: Final = "js-coverage"
-"""The tier-2 finding of changed-line coverage for `.js` (`gates.check_js_coverage`),
+"""The tier-1 finding of changed-line coverage for `.js` (`gates.check_js_coverage`),
 the counterpart of the Python `coverage` check: emitted when a non-test `.js`
 code line changed. `fail` when a changed line of a line-measured file runs in no
 node test; `not-proven` for a changed file coverage is not measured on
@@ -937,13 +938,20 @@ def js_coverage_finding(
 
 
 def js_findings(
-    copy: Path, resolved: str, limit: float, tools: Path | None = None, locator: bool = False
+    copy: Path,
+    resolved: str,
+    limit: float,
+    tools: Path | None = None,
+    locator: bool = False,
+    tier: int = 1,
 ) -> tuple[list[Finding], dict[str, Mapping[str, Any]]]:
-    """The `.js` tests' findings and their sidecars, for a change that touches a
-    `.js` file: nothing otherwise.
+    """The `.js` tests' findings at `tier` and their sidecars, for a change that
+    touches a `.js` file: nothing otherwise.
 
-    `js-tests` runs every node test of the tree and records each one's result;
-    `js-red-phase` runs the new or changed test files on the baseline. A tool
+    As for Python, tier 1 holds the tests and changed-line coverage: `js-tests`
+    runs every node test of the tree and records each one's result, and
+    `js-coverage` judges the changed lines, so a gap blocks tier 2. Tier 2 holds
+    `js-red-phase`, the new or changed test files run on the baseline. A tool
     that could not run, or a tree with no node test, is `not-proven` and says
     which, never a pass and never an empty list.
     """
@@ -953,6 +961,8 @@ def js_findings(
     sidecars: dict[str, Mapping[str, Any]] = {}
     tests = js_test_files(copy)
     ran = run_node_tests(copy, tests, timeout=limit)
+    if tier == 2:
+        return _js_red_phase(copy, resolved, limit, ran.results)
     cite = "saddle.gates.check_js_tests"
     covered = js_coverage_finding(copy, resolved, limit, tools, tests)
     if covered is not None:
@@ -960,16 +970,17 @@ def js_findings(
         if locator and gap.verdict == "fail":
             # Under the shortlist, coverage is a locator, as the Python check is.
             gap = dataclasses.replace(gap, verdict="not-proven")
-        found.append(gap)
+        found.append(dataclasses.replace(gap, tier=1))
         sidecars[JS_COVERAGE_GATE] = covered[1]
     if ran.problem or not tests:
-        found.append(_not_proven(JS_TESTS_GATE, ran.problem or NO_NODE_TEST, cite))
+        missing = _not_proven(JS_TESTS_GATE, ran.problem or NO_NODE_TEST, cite)
+        found.append(dataclasses.replace(missing, tier=1))
         return found, sidecars
     check = check_js_tests([r.row() for r in ran.results], ran.exit_code)
     found.append(
         Finding(
             JS_TESTS_GATE,
-            2,
+            1,
             "pass" if check.passed else "fail",
             "code-wrong",
             check.detail,
@@ -980,7 +991,18 @@ def js_findings(
         "exit_code": ran.exit_code,
         "results": [list(r.row()) for r in ran.results],
     }
-    red = red_phase(copy, resolved, ran.results, timeout=limit)
+    return found, sidecars
+
+
+def _js_red_phase(
+    copy: Path, resolved: str, limit: float, head: Sequence[JsTestResult]
+) -> tuple[list[Finding], dict[str, Mapping[str, Any]]]:
+    """Tier 2's `js-red-phase` finding: the new or changed `.js` test files run on
+    the baseline, judged against `head`, the head tree's results. Nothing when
+    no `.js` test changed."""
+    found: list[Finding] = []
+    sidecars: dict[str, Mapping[str, Any]] = {}
+    red = red_phase(copy, resolved, head, timeout=limit)
     if red is not None:
         cite = "saddle.gates.check_js_red_phase"
         if red.base.problem:
@@ -2108,12 +2130,11 @@ class Auditor:
                     "skipped": [list(p) for p in skips.skipped],
                     "xfailed": [list(p) for p in skips.xfailed],
                 }
-        if tier == 2:
-            js_found, js_sidecars = js_findings(
-                copy, resolved, limit, self.repo, self.config.tier2 == "shortlist"
-            )
-            findings.extend(js_found)
-            sidecars.update(js_sidecars)
+        js_found, js_sidecars = js_findings(
+            copy, resolved, limit, self.repo, self.config.tier2 == "shortlist", tier
+        )
+        findings.extend(js_found)
+        sidecars.update(js_sidecars)
         if tier == 2 and (effect := prompt_effect(copy, resolved, limit, bench, self._bench_seen)):
             findings.append(effect[0])
             sidecars[PROMPT_EFFECT_GATE] = effect[1]
