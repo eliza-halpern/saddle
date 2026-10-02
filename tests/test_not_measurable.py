@@ -200,18 +200,18 @@ def test_a_python_only_change_lists_nothing_and_the_packet_still_says_nothing_is
 
 def test_the_measurable_suffixes_are_one_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     files = ["a.py", "B.PY", "web/app.js", "web/app.css", "check.sh", "LICENSE", "x/y.html"]
-    assert unmeasurable_files(files) == [
-        "LICENSE",
-        "check.sh",
-        "web/app.css",
-        "web/app.js",
-        "x/y.html",
-    ]
-    assert unmeasurable_files([]) == []
-    monkeypatch.setattr(auditor_mod, "MEASURABLE_SUFFIXES", {".py": "Python", ".js": "JavaScript"})
+    without_js = ["LICENSE", "check.sh", "web/app.css", "web/app.js", "x/y.html"]
+    # flip: StrykerJS measures `.js`, so the default lookup no longer lists it; the
+    # old expectation is kept as the case of a tree without the tool and as the
+    # lookup narrowed to Python.
     assert unmeasurable_files(files) == ["LICENSE", "check.sh", "web/app.css", "x/y.html"]
+    assert unmeasurable_files(files, {".py": "Python"}) == without_js
+    assert unmeasurable_files([]) == []
     assert "measure JavaScript and Python only" in not_measurable_detail(["web/app.css"])
+    assert "measure Python only" in not_measurable_detail(["web/app.css"], {".py": "Python"})
     assert "(1 file;" in not_measurable_detail(["web/app.css"])
+    monkeypatch.setattr(auditor_mod, "MEASURABLE_SUFFIXES", {".py": "Python"})
+    assert unmeasurable_files(files) == without_js
 
 
 def test_the_model_reads_that_padding_the_check_is_a_defect(

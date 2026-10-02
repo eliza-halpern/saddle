@@ -434,3 +434,57 @@ def test_the_two_runs_merge_into_one_population_and_a_failed_run_stays_visible()
     assert dict(both.statuses) == {"killed": 3, "survived": 1, "Killed": 1, "Survived": 1}
     failed = MutationOutcome(killed=0, total=0, generated=0, survivors=("stryker run exited 1: x",))
     assert "stryker run exited 1: x" in js.merge_outcomes(py, failed).survivors
+
+
+# -- the CI phase ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def ci_project(project: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`project` committed, so the change is the base's successor."""
+    git(project, "commit", "-qm", "head")
+    monkeypatch.chdir(project)
+    return project
+
+
+def test_the_ci_phase_with_no_js_line_changed_skips(
+    ci_project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert js.main(["HEAD"]) == 0
+    assert "no JavaScript lines changed; skipping" in capsys.readouterr().out
+
+
+def test_the_ci_phase_cannot_say_what_changed_without_a_base(
+    ci_project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert js.main(["no-such-base"]) == 2
+    assert "git diff no-such-base...HEAD failed" in capsys.readouterr().out
+
+
+def test_the_ci_phase_fails_a_changed_line_when_the_tool_is_missing(
+    ci_project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert js.main(["HEAD~1"]) == 1
+    assert "survived: stryker not found in node_modules" in capsys.readouterr().out
+
+
+@needs_stryker
+def test_the_ci_phase_fails_on_a_survivor_and_passes_when_every_mutant_dies(
+    ci_project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (ci_project / "node_modules").symlink_to(REPO / "node_modules")
+    assert js.main(["HEAD~1"]) == 1
+    out = capsys.readouterr().out
+    assert "survived: static/a.js:6:7 ConditionalExpression" in out
+    # `add` alone: every mutant of its one changed line dies.
+    git(ci_project, "checkout", "-q", "HEAD~1", "--", "static/a.js")
+    (ci_project / "static" / "a.js").write_text(BASE_SRC.replace("a + b", "a - b"))
+    (ci_project / "tests" / "a.test.js").write_text(
+        TEST_HEAD.split("test('clamp low'")[0]
+        + "test('add', () => { assert.strictEqual(add(1, 2), 3); });\n"
+    )
+    git(ci_project, "commit", "-qam", "bug")
+    (ci_project / "static" / "a.js").write_text(BASE_SRC)
+    git(ci_project, "commit", "-qam", "fix")
+    assert js.main(["HEAD~1"]) == 0
+    assert "survived" not in capsys.readouterr().out

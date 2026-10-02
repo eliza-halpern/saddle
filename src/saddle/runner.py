@@ -55,6 +55,8 @@ from saddle.gates import (
     run_tier1,
 )
 from saddle.journal import SpanRecorder
+from saddle.jsevidence import changed_js_lines, merge_outcomes, stryker_entry
+from saddle.jsevidence import mutation_sample as js_mutation_sample
 
 # The placeholder survivor a `tier2=False` gate run carries in place of a
 # mutation sample: never a verdict, only a marker that nothing was measured.
@@ -177,6 +179,7 @@ def run_node_gate(
     skip_report: Path | None = None,
     test_only_additions: bool = False,
     task_text: str | None = None,
+    js_tools: Path | None = None,
 ) -> Tier1Result:
     """Gate `node` against the `workdir` worktree; `baseline` is the red ref.
 
@@ -238,11 +241,18 @@ def run_node_gate(
     `impl` node may be gated before the node that uses what it writes.
     `task_text` is the task the audit was given, if any: a public name it spells
     was asked for (`gates.check_test_only_additions`).
+
+    A changed `.js` line is mutated too, at tier 2, when StrykerJS is installed
+    in `workdir` or in `js_tools` (the checkout a staged `workdir` was copied
+    from, which holds the ignored `node_modules`): its mutants join the Python
+    ones in the `mutation` check (`jsevidence.merge_outcomes`).
     """
     gate = node.deterministic_gate
     workers = 1 if node.kind == "test" else test_workers
     sources = read_sources(workdir, "*.py")
-    changed = changed_statements(workdir, git_diff(workdir, baseline, recorder=recorder))
+    diff = git_diff(workdir, baseline, recorder=recorder)
+    changed = changed_statements(workdir, diff)
+    js_changed = changed_js_lines(workdir, diff) if stryker_entry(workdir, js_tools) else set()
     changed_files = sorted({path for path, _ in changed})
     added = git_added_files(workdir, baseline, recorder=recorder)
     # Every file the diff names (git decides, so deletions and non-Python
@@ -434,6 +444,10 @@ def run_node_gate(
             test_seconds=suite_test_seconds(suite.stdout, mode.workers if mode.parallel else 1),
         )
     )
+    if tier2 and node.kind != "test" and js_changed:
+        mutation = merge_outcomes(
+            mutation, js_mutation_sample(workdir, js_changed, tools=js_tools, recorder=recorder)
+        )
     # The property oracle, `impl` nodes only: the property-bearing
     # test modules that import a changed module run alone against the same
     # changed-line mutants, with the same exclusion set; `run_tests` narrows

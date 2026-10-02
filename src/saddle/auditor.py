@@ -112,6 +112,8 @@ from saddle.gates import (
     RuffFinding,
     TaskRequirementsCheck,
     Tier1Result,
+    check_js_red_phase,
+    check_js_tests,
     check_mutation_shortlist,
     check_project_gate,
     check_ruff,
@@ -132,6 +134,7 @@ from saddle.journal import (
     scrub_thinking,
     write_attempt_sidecar,
 )
+from saddle.jsevidence import JS_SUFFIX, js_test_files, red_phase, run_node_tests, stryker_entry
 from saddle.prompt_changes import Measured, judge, measured, prompt_changes, unconfigured_detail
 from saddle.task_examples import WOULD_REFUSE
 from saddle.task_requirements import check_tree
@@ -577,18 +580,33 @@ def data_only_change(copy: Path, baseline: str) -> list[str]:
     return sorted(by_file)
 
 
-MEASURABLE_SUFFIXES: Final[Mapping[str, str]] = {".py": "Python"}
+MEASURABLE_SUFFIXES: Final[Mapping[str, str]] = {".py": "Python", JS_SUFFIX: "JavaScript"}
 """The file suffixes the mutation and changed-line coverage checks measure, each
 with its language's name. A changed file whose suffix is not a key is listed
 under `NOT_MEASURABLE_GATE` instead of being refused or ignored. The one place
 to widen when a language gains measurement: a suffix added here leaves the
 unmeasurable set, and the findings' wording follows the names. A browser-only
 change was refused "no mutants on changed lines" because the checks mutate
-Python only, and the model added a dead Python function for them to mutate."""
+Python only, and the model added a dead Python function for them to mutate.
+`.js` is measured by StrykerJS (`jsevidence.mutation_sample`), so it counts only
+where StrykerJS is installed (`measurable_here`); without it a changed `.js` file
+is listed as not measurable, as before."""
 
 NOT_MEASURABLE_GATE: Final = "not-measurable"
 """The tier-2 finding that lists the changed files `MEASURABLE_SUFFIXES` does
 not cover. Emitted only when there is one; always `not-proven`."""
+
+JS_TESTS_GATE: Final = "js-tests"
+"""The tier-2 finding of the node tests' own run (`gates.check_js_tests`): every
+`.js` test of the audited tree, one result each. Emitted only when the change
+touches a `.js` file; `not-proven` when node, or a test file, cannot be had."""
+
+NO_NODE_TEST: Final = "no node test file in the tree, so the changed .js files have no test run"
+"""The `JS_TESTS_GATE` detail for a tree with no `.js` test."""
+
+JS_RED_PHASE_GATE: Final = "js-red-phase"
+"""The tier-2 finding of the new or changed `.js` tests run on the baseline
+(`gates.check_js_red_phase`). Emitted only when such a test exists."""
 
 SKIPPED_GATE: Final = "skipped-tests"
 """The tier-2 finding that lists the tests the audit's suite run skipped or
@@ -622,16 +640,27 @@ RED_PHASE_NO_MUTANTS: Final = "tests unchanged and no mutants decided"
 nothing; the one red-phase refusal `MUTATION_NOT_MEASURABLE` also lifts."""
 
 
-def unmeasurable_files(files: Sequence[str]) -> list[str]:
-    """The paths in `files` whose suffix `MEASURABLE_SUFFIXES` does not name, sorted."""
-    return sorted(
-        f for f in set(files) if PurePosixPath(f).suffix.lower() not in MEASURABLE_SUFFIXES
-    )
+def measurable_here(copy: Path, tools: Path | None) -> Mapping[str, str]:
+    """`MEASURABLE_SUFFIXES` less `.js` where StrykerJS cannot be had in `copy`
+    or in `tools`: a language is measured only where its mutation tool is."""
+    if stryker_entry(copy, tools) is not None:
+        return MEASURABLE_SUFFIXES
+    return {k: v for k, v in MEASURABLE_SUFFIXES.items() if k != JS_SUFFIX}
 
 
-def _measured_languages() -> str:
-    """The names `MEASURABLE_SUFFIXES` gives its languages, "Python" or "JavaScript and Python"."""
-    return " and ".join(sorted(set(MEASURABLE_SUFFIXES.values())))
+def unmeasurable_files(
+    files: Sequence[str], measurable: Mapping[str, str] | None = None
+) -> list[str]:
+    """The paths in `files` whose suffix `measurable` (default `MEASURABLE_SUFFIXES`)
+    does not name, sorted."""
+    named = MEASURABLE_SUFFIXES if measurable is None else measurable
+    return sorted(f for f in set(files) if PurePosixPath(f).suffix.lower() not in named)
+
+
+def _measured_languages(measurable: Mapping[str, str] | None = None) -> str:
+    """The names `measurable` gives its languages, "Python" or "JavaScript and Python"."""
+    named = MEASURABLE_SUFFIXES if measurable is None else measurable
+    return " and ".join(sorted(set(named.values())))
 
 
 def _listed(items: Sequence[str]) -> str:
@@ -640,14 +669,14 @@ def _listed(items: Sequence[str]) -> str:
     return f"{shown}, ... and {len(items) - LISTED} more" if len(items) > LISTED else shown
 
 
-def not_measurable_detail(files: Sequence[str]) -> str:
+def not_measurable_detail(files: Sequence[str], measurable: Mapping[str, str] | None = None) -> str:
     """The `NOT_MEASURABLE_GATE` finding's words: the files, what cannot see
     them, and that adding code only to give a check something to measure is a defect."""
     noun = "file" if len(files) == 1 else "files"
     return (
         f"not mutation-measurable: {_listed(files)} ({len(files)} {noun}; the mutation and "
-        f"changed-line coverage checks measure {_measured_languages()} only). Recorded as "
-        "not proven and not refused: no edit can make these files measurable, and code "
+        f"changed-line coverage checks measure {_measured_languages(measurable)} only). "
+        "Recorded as not proven and not refused: no edit can make these files measurable, and code "
         "added only to give those checks something to measure is a defect. A person "
         "reads the files."
     )
@@ -808,6 +837,70 @@ def _not_proven(gate: str, detail: str, cite: str) -> Finding:
     """A tier-2 `not-proven` finding of a gate that is not one of the battery's
     thirteen (see `REUSES`): emitted only when it has something to say."""
     return Finding(gate, 2, "not-proven", "evidence-thin", detail, (cite,))
+
+
+def js_findings(
+    copy: Path, resolved: str, limit: float
+) -> tuple[list[Finding], dict[str, Mapping[str, Any]]]:
+    """The `.js` tests' findings and their sidecars, for a change that touches a
+    `.js` file: nothing otherwise.
+
+    `js-tests` runs every node test of the tree and records each one's result;
+    `js-red-phase` runs the new or changed test files on the baseline. A tool
+    that could not run, or a tree with no node test, is `not-proven` and says
+    which, never a pass and never an empty list.
+    """
+    if not any(f.endswith(JS_SUFFIX) for f in git_changed_files(copy, resolved)):
+        return [], {}
+    found: list[Finding] = []
+    sidecars: dict[str, Mapping[str, Any]] = {}
+    tests = js_test_files(copy)
+    ran = run_node_tests(copy, tests, timeout=limit)
+    cite = "saddle.gates.check_js_tests"
+    if ran.problem or not tests:
+        found.append(_not_proven(JS_TESTS_GATE, ran.problem or NO_NODE_TEST, cite))
+        return found, sidecars
+    check = check_js_tests([r.row() for r in ran.results], ran.exit_code)
+    found.append(
+        Finding(
+            JS_TESTS_GATE,
+            2,
+            "pass" if check.passed else "fail",
+            "code-wrong",
+            check.detail,
+            (cite,),
+        )
+    )
+    sidecars[JS_TESTS_GATE] = {
+        "exit_code": ran.exit_code,
+        "results": [list(r.row()) for r in ran.results],
+    }
+    red = red_phase(copy, resolved, ran.results, timeout=limit)
+    if red is not None:
+        cite = "saddle.gates.check_js_red_phase"
+        if red.base.problem:
+            found.append(_not_proven(JS_RED_PHASE_GATE, red.base.problem, cite))
+        else:
+            judged = check_js_red_phase(
+                [r.row() for r in red.head], [r.row() for r in red.base.results], red.base.exit_code
+            )
+            found.append(
+                Finding(
+                    JS_RED_PHASE_GATE,
+                    2,
+                    "pass" if judged.passed else "fail",
+                    "evidence-thin",
+                    judged.detail,
+                    (cite,),
+                )
+            )
+            sidecars[JS_RED_PHASE_GATE] = {
+                "files": list(red.files),
+                "head": [list(r.row()) for r in red.head],
+                "base": [list(r.row()) for r in red.base.results],
+                "base_exit_code": red.base.exit_code,
+            }
+    return found, sidecars
 
 
 def syntax_key(copy: Path) -> str:
@@ -1581,6 +1674,7 @@ class Auditor:
                         skip_report=copy / SKIP_REPORT_NAME,
                         test_only_additions=True,
                         task_text=self.config.task_text,
+                        js_tools=self.repo,
                         # A whole-suite run under a memo (re)draws the map.
                         on_suite=(
                             functools.partial(_record_impact, memo, copy)
@@ -1720,7 +1814,10 @@ class Auditor:
             if not shortlisted.passed:
                 survivors = _survivors(outcome, sources)
         spent = gated.mutation
-        unmeasured = unmeasurable_files(git_changed_files(copy, resolved)) if tier == 2 else []
+        measurable = measurable_here(copy, self.repo)
+        unmeasured = (
+            unmeasurable_files(git_changed_files(copy, resolved), measurable) if tier == 2 else []
+        )
         if (
             tier == 2
             and spent is not None
@@ -1762,10 +1859,10 @@ class Auditor:
             # Python lines were measured, other files were not: the verdict must not
             # read as covering the whole change.
             status, detail, basis = statuses["mutation"]
-            count = f"{len(unmeasured)} changed non-{_measured_languages()} file(s)"
+            count = f"{len(unmeasured)} changed non-{_measured_languages(measurable)} file(s)"
             statuses["mutation"] = (
                 status,
-                f"{detail}; {_measured_languages()} lines only, {count} not measurable "
+                f"{detail}; {_measured_languages(measurable)} lines only, {count} not measurable "
                 f"(listed under {NOT_MEASURABLE_GATE})",
                 basis,
             )
@@ -1850,7 +1947,7 @@ class Auditor:
             findings.append(
                 _not_proven(
                     NOT_MEASURABLE_GATE,
-                    not_measurable_detail(unmeasured),
+                    not_measurable_detail(unmeasured, measurable),
                     "saddle.auditor.unmeasurable_files",
                 )
             )
@@ -1871,6 +1968,10 @@ class Auditor:
                     "skipped": [list(p) for p in skips.skipped],
                     "xfailed": [list(p) for p in skips.xfailed],
                 }
+        if tier == 2:
+            js_found, js_sidecars = js_findings(copy, resolved, limit)
+            findings.extend(js_found)
+            sidecars.update(js_sidecars)
         if tier == 2 and (effect := prompt_effect(copy, resolved, limit, bench, self._bench_seen)):
             findings.append(effect[0])
             sidecars[PROMPT_EFFECT_GATE] = effect[1]

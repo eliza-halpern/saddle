@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Final
 
+from saddle import sandbox
 from saddle.evidence import (
     CapturedRun,
     MutationOutcome,
@@ -369,6 +370,7 @@ def mutation_sample(
         return MutationOutcome(
             killed=0, total=0, generated=0, survivors=("stryker not found in node_modules",)
         )
+    entry = entry.resolve()  # the confined run sees real paths, not the link a checkout may hold
     root = os.path.realpath(workdir)
     by_file: dict[str, set[int]] = {}
     spelled: dict[str, str] = {}
@@ -475,8 +477,11 @@ def merge_outcomes(first: MutationOutcome, second: MutationOutcome) -> MutationO
     """The two mutation runs as one population: counts add, lists concatenate.
 
     An engine failure (`total == 0` with a survivor naming it) in either run
-    stays visible in the merge's survivors, so a failed JavaScript run cannot
-    hide behind a Python run that decided mutants."""
+    is the merge: a failed JavaScript run cannot hide behind a Python run that
+    decided mutants, nor the reverse, and "no mutants decided" names the tool."""
+    for failed in (first, second):
+        if failed.total == 0 and failed.survivors:
+            return failed
     tally: dict[str, int] = dict(first.statuses)
     for status, count in second.statuses:
         tally[status] = tally.get(status, 0) + count
@@ -494,3 +499,27 @@ def merge_outcomes(first: MutationOutcome, second: MutationOutcome) -> MutationO
         mutant_detail=(*first.mutant_detail, *second.mutant_detail),
         budget_spent=first.budget_spent or second.budget_spent,
     )
+
+
+def main(argv: Sequence[str]) -> int:
+    """`ci-mutate.sh`'s JavaScript phase: StrykerJS over the changed lines of the
+    non-test `.js` files `argv[0]...HEAD` changed, in the current directory.
+
+    Prints one line per survivor and returns 1 when any survived or the tool
+    failed (a named survivor, never a pass), 2 when git could not say what
+    changed, else 0. Nothing changed, or no mutants made of what did, is 0."""
+    root = Path.cwd()
+    diff = run_capture(["git", "diff", "-U0", f"{argv[0]}...HEAD", "--", "*.js"], root)
+    if diff.exit_code != 0:
+        print(f"git diff {argv[0]}...HEAD failed: {diff.stderr.strip()}")
+        return 2
+    changed = changed_js_lines(root, diff.stdout)
+    if not changed:
+        print("no JavaScript lines changed; skipping")
+        return 0
+    with sandbox.also_exposing(["node"]):
+        out = mutation_sample(root, changed, tools=root)
+    print(f"javascript mutants: {out.killed} of {out.total} killed, {out.generated} generated")
+    for name in out.survivors:
+        print(f"survived: {name}")
+    return 1 if out.survivors else 0

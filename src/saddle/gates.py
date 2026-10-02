@@ -1926,6 +1926,83 @@ def check_red_phase(
     return GateCheck(name="red-phase", passed=True, detail="fail pre-change, pass post-change")
 
 
+type JsTestRow = tuple[str, str, str]
+"""One node test as `(file, name, status)`, the status "pass", "fail" or
+"skipped" (`jsevidence.JsTestResult.row`)."""
+
+JS_NAMED: Final = 5
+"""How many failing JavaScript tests a detail names; the rest are counted."""
+
+
+def _js_names(rows: Sequence[JsTestRow]) -> str:
+    names = [f"{file}: {name}" for file, name, _ in rows]
+    more = f" and {len(names) - JS_NAMED} more" if len(names) > JS_NAMED else ""
+    return "; ".join(names[:JS_NAMED]) + more
+
+
+def check_js_tests(results: Sequence[JsTestRow], exit_code: int) -> GateCheck:
+    """Every node test the harness ran must pass; skipped ones are counted.
+
+    One pytest wrapper used to report a single pass or fail for the whole node
+    suite, so a failing test was a line in a log. Here each test is a result:
+    the detail counts them and names the failing ones. A nonzero exit with no
+    failing test (the runner itself failed) is a failure too, never a pass,
+    and no result at all is a failure: a run that found no test proves nothing.
+    """
+    passed = [r for r in results if r[2] == "pass"]
+    failed = [r for r in results if r[2] == "fail"]
+    skipped = [r for r in results if r[2] == "skipped"]
+    counts = f"{len(passed)} passed, {len(failed)} failed, {len(skipped)} skipped"
+    if not results:
+        return GateCheck(
+            name="js-tests", passed=False, detail=f"node --test ran no test (exit {exit_code})"
+        )
+    if failed:
+        return GateCheck(
+            name="js-tests", passed=False, detail=f"node --test: {counts}; {_js_names(failed)}"
+        )
+    if exit_code != 0:
+        return GateCheck(
+            name="js-tests",
+            passed=False,
+            detail=f"node --test: {counts}, yet exit {exit_code}",
+        )
+    return GateCheck(name="js-tests", passed=True, detail=f"node --test: {counts}")
+
+
+def check_js_red_phase(
+    head: Sequence[JsTestRow], base: Sequence[JsTestRow], base_exit: int
+) -> GateCheck:
+    """The new or changed node tests must fail on the baseline's sources and
+    pass on the change's, test by test.
+
+    `head` and `base` are the results of the same test files on the two trees
+    (`jsevidence.red_phase`). Pass iff every one of them passes on the head
+    and at least one fails on the baseline: a file that cannot load there
+    counts as a failure of its tests, as a missing module is Python's accepted
+    collection error. The detail names the tests that were green on the
+    baseline, which proved nothing. A baseline run that passed, or reported no
+    test, fails: "tests pass pre-change; prove nothing".
+    """
+    if any(r[2] == "fail" for r in head):
+        return GateCheck(name="js-red-phase", passed=False, detail="tests fail post-change")
+    red = [r for r in base if r[2] == "fail"]
+    if not red:
+        why = "ran no test" if not base else "pass"
+        return GateCheck(
+            name="js-red-phase",
+            passed=False,
+            detail=f"node tests {why} pre-change (exit {base_exit}); prove nothing",
+        )
+    green = [r for r in base if r[2] == "pass"]
+    kept = f"; green on the baseline: {_js_names(green)}" if green else ""
+    return GateCheck(
+        name="js-red-phase",
+        passed=True,
+        detail=f"{len(red)} of {len(base)} node tests fail pre-change, pass post-change{kept}",
+    )
+
+
 def _has_property(source: str) -> bool:
     """True when a test module drives at least one hypothesis property."""
     try:
