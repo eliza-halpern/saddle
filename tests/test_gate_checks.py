@@ -4,9 +4,9 @@ The audit runs the stages the list names on head and base (`auditor.PROJECT_GATE
 `check.sh` is what CI runs. A stage added to one and not the other would make the
 audit pass what the gate refuses, which is the defect the list exists to close.
 Known-good: the list plus the `static-check` stage equals the stages parsed from
-`check.sh` (the suite, `npm ci` and the worker count's `python -c` are not stages
-of this list). Known-bad: a stage missing from the list, an extra one, or one
-spelled differently is reported.
+`check.sh` (the suite, `npm ci`, the worker count's `python -c` and the suite's
+Chrome-coverage steps are not stages of this list). Known-bad: a stage missing
+from the list, an extra one, or one spelled differently is reported.
 """
 
 from __future__ import annotations
@@ -20,6 +20,12 @@ from test_shell_scripts import ROOT, needs_checkout
 # Stages the list does not carry: the dependency install, the suite, and the worker count
 # the suite is told (a `python -c` reading pyproject.toml).
 NOT_FAST_STAGES = frozenset({"npm", "pytest"})
+# The suite's Chrome coverage, exactly: its scratch directory cleared before the suite and its
+# floor check read after it. Both need the suite's run, so neither is a stage the audit runs alone.
+SUITE_COVERAGE_STEPS = (
+    ["rm", "-rf", "node_modules/.cache/chrome-coverage"],
+    ["node", "tools/chrome_coverage.mjs", "check"],
+)
 
 
 def stage_argv(stage: Stage) -> list[str]:
@@ -41,9 +47,10 @@ def stage_argv(stage: Stage) -> list[str]:
 
 def fast_stages(script: str) -> list[list[str]]:
     return [
-        stage_argv(s)
+        argv
         for s in check_sh_stages(script)
         if s.exe not in NOT_FAST_STAGES and not (s.exe == "python" and s.args[:1] == ("-c",))
+        if (argv := stage_argv(s)) not in SUITE_COVERAGE_STEPS
     ]
 
 
