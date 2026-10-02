@@ -15,6 +15,8 @@ uv run mypy src tests tools benchmark/stall_check.py
 # CI workflows lint clean (shellcheck included) and uv.lock matches pyproject.toml.
 uv run actionlint .github/workflows/*.yml
 uv lock --check
+# pyproject.toml and taplo.toml follow taplo.toml's formatting (uv.lock is excluded).
+uv run taplo fmt --check
 # ShellCheck on every tracked shell script; the hooks have no extension, so each is named.
 uv run shellcheck check.sh ci-mutate.sh tools/githooks/commit-msg tools/githooks/pre-commit tools/githooks/pre-push
 # ESLint over the browser files, the node test and the nine browser drivers;

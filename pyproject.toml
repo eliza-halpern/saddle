@@ -78,8 +78,19 @@ mypy_path = ["src", "tests", "."]
 testpaths = ["tests"]
 # Extends (not replaces) the defaults: task fixtures are graded against
 # arm workdirs, never collected here.
-norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist",
-                 "node_modules", "venv", "{arch}", "benchmark/tasks", "mutants"]
+norecursedirs = [
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+    "{arch}",
+    "benchmark/tasks",
+    "mutants",
+]
 markers = [
     "packaging: builds the sdist or wheel and inspects or installs it (tests/test_packaging.py)",
 ]
@@ -119,6 +130,7 @@ gate-checks = [
     ["ruff", "format", "--check", "."],
     ["actionlint", ".github/workflows/ci.yml"],
     ["uv", "lock", "--check"],
+    ["taplo", "fmt", "--check"],
     [
         "shellcheck",
         "check.sh",
