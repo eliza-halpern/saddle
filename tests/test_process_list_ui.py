@@ -18,6 +18,7 @@ import signal
 import uuid
 from pathlib import Path
 
+import pytest
 from chrome_page import drive_page
 from test_chat_server import _server_of
 from test_full_access import run
@@ -189,3 +190,55 @@ def test_on_a_phone_the_chip_next_to_the_unsandboxed_banner_causes_no_sideways_s
         finally:
             ctx.stop_processes()
     assert got == {"wide": 0, "topbar": 0, "banner": True, "count": "1"}
+
+
+@needs_cgroup
+def test_on_a_phone_both_chips_and_the_banner_cause_no_sideways_scroll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two lanes' chips met in one topbar: running programs and outside
+    changes, beside the full-access banner, at 420px. Each keeps only its
+    count, the folder name gives way, and the page does not scroll sideways."""
+    from saddle.sideeffects import SideEffects
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "app.conf").write_text("theme=dark\n")
+    monkeypatch.setenv("HOME", str(home))
+    store = SessionStore(tmp_path / "s")
+    app = build_app(store, NoModel, default_workdir=tmp_path)
+    with serving(app) as base:
+        sid = store.create(title="set up the launcher", workdir=str(tmp_path)).id
+        store.update(sid, mode="edit")
+        store.set_full_access(sid, True, confirm=FULL_ACCESS_CONFIRM)
+        server = _server_of(app)
+        ctx = ToolContext(
+            workdir=tmp_path,
+            full_access=True,
+            processes=server.ledger(sid),
+            effects=SideEffects(store.outside_dir(sid)),
+        )
+        server._live(sid).context = ctx
+        try:
+            run(ctx, "run_command", command=f"sed -i s/dark/light/ {home / 'app.conf'}")
+            run(ctx, "run_command", command=f"sleep {sleep_marker()}", background=True)
+            got = drive_page(
+                base,
+                """
+                await page.width(420);
+                await page.chat(args.sid);
+                await page.until(() => !document.querySelector("#procs-chip").hidden
+                  && !document.querySelector("#outside-chip").hidden);
+                return await page.js(() => ({
+                  wide: document.documentElement.scrollWidth - window.innerWidth,
+                  topbar: document.querySelector("#topbar").scrollWidth
+                    - document.querySelector("#topbar").clientWidth,
+                  procs: document.querySelector("#procs-count").textContent,
+                  outside: document.querySelector("#outside-count").textContent,
+                }));
+                """,
+                sid=sid,
+            )
+        finally:
+            ctx.stop_processes()
+    assert got == {"wide": 0, "topbar": 0, "procs": "1", "outside": "1"}
