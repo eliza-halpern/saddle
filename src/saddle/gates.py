@@ -227,6 +227,115 @@ def check_static(argv: Sequence[str], run: CapturedRun) -> GateCheck:
     )
 
 
+GATE_STAGE_LINES: Final = 8
+"""How many output lines of a failing gate stage the `project-gate` finding
+quotes; the stage's own errors, so the model is told which file and line."""
+
+GateVerdict = Literal["pass", "fail", "not-proven"]
+
+
+@dataclass(frozen=True)
+class ProjectGate:
+    """The project-gate finding's verdict and words (`check_project_gate`)."""
+
+    verdict: GateVerdict
+    detail: str
+
+
+def gate_stage_name(argv: Sequence[str], taken: Collection[str] = ()) -> str:
+    """A short name for a stage: its tool and subcommand (`ruff format`, `eslint`),
+    skipping launchers and options; the whole command when that name is `taken`."""
+    words = list(argv)
+    while words:
+        if words[:2] == ["uv", "run"]:
+            words = words[2:]
+        elif words[0] == "npx" or words[0].startswith("-"):
+            words = words[1:]
+        else:
+            break
+    tool = words[0] if words else " ".join(argv)
+    sub = words[1] if len(words) > 1 and re.fullmatch(r"[a-z][a-z-]*", words[1]) else ""
+    name = f"{tool} {sub}".strip()
+    return " ".join(argv) if name in taken else name
+
+
+def _state(run: CapturedRun) -> str:
+    if run.exit_code == TOOL_UNAVAILABLE:
+        return "missing"
+    if run.timed_out:
+        return "timeout"
+    return "ok" if run.exit_code == 0 else "red"
+
+
+def _mark(red: Sequence[str]) -> str:
+    return f"✗ ({', '.join(red)})" if red else "✓"
+
+
+_AT_BASE: Final = {
+    "red": "was failing at the base",
+    "timeout": "timed out at the base",
+    "missing": "could not be launched at the base",
+}
+
+
+def check_project_gate(
+    stages: Sequence[tuple[Sequence[str], CapturedRun, CapturedRun]],
+) -> ProjectGate:
+    """The project's own gate stages, each run on the head tree and on the base.
+
+    `stages` is `(argv, head run, base run)` per stage. A head that passes a
+    stage passes it. A head that fails one the base passed is a regression: the
+    finding FAILS and quotes the stage's first `GATE_STAGE_LINES` lines. A
+    stage red at the base too is `not-proven`: it was already failing, which is
+    not this change's doing, and it is neither a pass nor a refusal. A stage
+    whose command cannot start, or that timed out without the base showing the
+    contrast, is `not-proven` and names the tool: a lookup that fails must not
+    read as green. The first line is the packet's `Gate:` line; the second says
+    what this check does not judge (the suite's whole-project coverage total
+    is the project's own gate's call, `evidence.run_suite_capture` runs the
+    suite without it)."""
+    taken: list[str] = []
+    named: list[tuple[str, Sequence[str], str, str, CapturedRun]] = []
+    for argv, head, base in stages:
+        name = gate_stage_name(argv, taken)
+        taken.append(name)
+        named.append((name, argv, _state(head), _state(base), head))
+    head_red = [n for n, _, h, _, _ in named if h != "ok"]
+    base_red = [n for n, _, _, b, _ in named if b != "ok"]
+    count = f"{len(named)} stage{'s' if len(named) != 1 else ''}"
+    line = f"Gate: base {_mark(base_red)}, head {_mark(head_red)} ({count})"
+    broke = False
+    notes: list[str] = []
+    for name, argv, h, b, run in named:
+        shown = " ".join(argv)
+        if h == "ok":
+            continue
+        if h == "missing":
+            notes.append(f"{name}: not proven, {argv[0]} could not be launched here ({shown})")
+        elif b == "ok":
+            broke = True
+            how = "timed out" if h == "timeout" else f"exited {run.exit_code}"
+            lines = [x for x in (run.stdout + run.stderr).splitlines() if x.strip()]
+            quoted = "\n".join(lines[:GATE_STAGE_LINES])
+            more = len(lines) - GATE_STAGE_LINES
+            suffix = f"\n(+{more} more lines)" if more > 0 else ""
+            body = f":\n{quoted}{suffix}" if quoted else ""
+            notes.append(
+                f"{name}: the change broke it, it passed at the base ({shown} {how}){body}"
+            )
+        else:
+            at_base = _AT_BASE[b]
+            notes.append(
+                f"{name}: not proven, it {at_base}, so the change is not shown to have "
+                f"broken it ({shown})"
+            )
+    scope = (
+        "The suite's whole-project coverage total is judged by the project's own gate, not here."
+    )
+    verdict: GateVerdict = "fail" if broke else "not-proven" if notes else "pass"
+    return ProjectGate(verdict, "\n".join([line, *notes, scope]))
+
+
 def check_ruff(
     files: Collection[str],
     *,

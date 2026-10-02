@@ -94,6 +94,14 @@ STATIC_CHECK_KEY: Final = "static-check"
 "tests"]` in the `[tool.saddle]` table of its `pyproject.toml` (`static_check`).
 Absent, no static check runs and the audit emits no finding for it."""
 
+GATE_CHECKS_KEY: Final = "gate-checks"
+"""The fast, non-suite stages of the project's own gate, as a list of argv lists:
+`gate-checks = [["ruff", "check", "."], ["npx", "--no-install", "eslint", "."]]`
+in the `[tool.saddle]` table of its `pyproject.toml` (`gate_checks`). The audit
+runs each on the audited tree and on the baseline, so a stage that was already
+red is told apart from one the change broke. `static-check` counts as one more.
+Absent, the only stage is `static-check`, when set."""
+
 SANDBOX_EXPOSE_KEY: Final = "sandbox-expose"
 """Command names the audit's sandbox also shows the project's suite, read-only:
 `sandbox-expose = ["node", "google-chrome"]` in the `[tool.saddle]` table of its
@@ -119,6 +127,7 @@ SADDLE_KEYS: Final = (
     SUITE_LIMIT_KEY,
     SUITE_WORKERS_KEY,
     STATIC_CHECK_KEY,
+    GATE_CHECKS_KEY,
     SANDBOX_EXPOSE_KEY,
     PROMPT_BENCHMARK_KEY,
     PROMPT_BENCHMARK_FLOOR_KEY,
@@ -669,6 +678,34 @@ def static_check(tree: Path, rev: str) -> tuple[str, ...]:
         )
         raise SuiteLimitError(msg)
     return tuple(value)
+
+
+def gate_checks(tree: Path, rev: str) -> tuple[tuple[str, ...], ...]:
+    """The project's gate-stage argvs as committed at `rev`; () when it sets none.
+
+    A project's gate holds more than its tests (lint, format, types, linters for
+    its scripts and pages), and an audit that ran only the suite passed a change
+    the project's own gate would have refused. Read exactly where and how
+    `suite_limit` reads `test-timeout`, so the tree under audit cannot drop or
+    weaken a stage of its own gate. A value that is not a list of non-empty
+    lists of non-empty strings raises `SuiteLimitError` naming the commit and
+    the value; `[]` and no key both give ()."""
+    table, where = _committed_saddle_table(tree, rev, "the gate checks")
+    if table is None or GATE_CHECKS_KEY not in table:
+        return ()
+    value = table[GATE_CHECKS_KEY]
+    if not isinstance(value, list) or not all(
+        isinstance(stage, list)
+        and stage
+        and all(isinstance(part, str) and part.strip() for part in stage)
+        for stage in value
+    ):
+        msg = (
+            f"cannot read the gate checks: {where}: {GATE_CHECKS_KEY} = {value!r} "
+            "is not a list of non-empty command word lists"
+        )
+        raise SuiteLimitError(msg)
+    return tuple(tuple(stage) for stage in value)
 
 
 def sandbox_expose(tree: Path, rev: str) -> tuple[str, ...]:
