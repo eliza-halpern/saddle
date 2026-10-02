@@ -188,8 +188,9 @@ The window is read from the server (`max_model_len`), not assumed.
 Reasoning effort is per session and defaults to `xhigh`, because in round 3e
 every degenerate draw was at effort `low` and every clean one at `xhigh`.
 
-Other limits, all deliberate and none of them 8192: 24 tool rounds per
-turn (was 10), 200,000 characters per file read, 400,000 per terminal
+Other limits, all deliberate and none of them 8192: no cap on tool rounds
+per turn (a turn runs until the model answers or you press Stop; it was 24,
+and before that 10, and both cut real work off), 200,000 characters per file read, 400,000 per terminal
 capture (head-and-tail, so a runaway loop cannot exhaust memory), and
 reasoning itself is **never** truncated in the UI.
 

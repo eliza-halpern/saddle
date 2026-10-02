@@ -95,13 +95,6 @@ type TokenCounter = Callable[..., int | None]
 """`VllmClient.count_tokens`: the server's own tokeniser, or None if it has
 no /tokenize endpoint."""
 
-MAX_TOOL_ROUNDS: Final = 24
-"""Raised from 10: agentic turns legitimately chain many calls, and the old
-cap truncated real work. A run that hits this is reported, not silent.
-
-Applies to a chat turn only. An autonomous run (`AutoRun`) has no round
-cap; it is bounded by its `RunBudget` of wall time and generated tokens."""
-
 AUTO_NUDGE: Final = (
     "No one is here to reply. Keep working with the tools, or call finish "
     "when the task is done. If you cannot go on without something only the "
@@ -903,14 +896,12 @@ def run_turn(
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     proof = parent
-    taken = 0
     try:
+        # A chat turn has no round cap: it runs until the model answers or the
+        # person stops it (`cancel`). A cap of 24 cut a real setup task off
+        # mid-work, where the same ask took another agent about 121 calls.
         while True:
-            if auto is None:
-                if taken >= MAX_TOOL_ROUNDS:
-                    yield ErrorEvent(message=f"stopped after {MAX_TOOL_ROUNDS} tool rounds")
-                    break
-            else:
+            if auto is not None:
                 spent = auto.budget.exhausted()
                 if spent is not None:
                     auto.stop(spent)
@@ -918,7 +909,6 @@ def run_turn(
                     break
                 if not stop():
                     yield from _offer_budget(auto, options.journal, node_id)
-            taken += 1
             # Before every request, not once per turn: an autonomous run is
             # one turn, so a compaction before the loop only ever saw
             # [system, task] (pi-blackhole's CHANGELOG #38

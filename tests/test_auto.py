@@ -35,7 +35,7 @@ from saddle.auto import (
     guarded_test_roots,
     run_auto,
 )
-from saddle.engine import AUTO_NUDGE, MAX_TOOL_ROUNDS, AutoRun, RunBudget, TurnOptions, run_turn
+from saddle.engine import AUTO_NUDGE, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import ErrorEvent, Event
 from saddle.journal import (
     attempt_sidecar_path,
@@ -610,15 +610,15 @@ def test_a_finish_never_overwrites_a_stop_and_vice_versa() -> None:
     assert (other.outcome, other.reason) == ("finished", "finish called")
 
 
-def test_chat_turns_keep_the_round_cap(tmp_path: Path) -> None:
+def test_a_chat_turn_is_not_offered_finish_and_has_no_round_cap(tmp_path: Path) -> None:
+    """A chat turn is not an autonomous run: `finish` is not offered, and it runs
+    past the old 24-round cap until the model answers, then seals."""
     options = TurnOptions(workdir=tmp_path, journal=tmp_path / "j.jsonl")
-    client = Scripted([], tail=[call("list_dir")])
+    client = Scripted([[call("list_dir")]] * 40 + [[StreamToken(stream="content", text="done")]])
     events = list(run_turn(cast(VllmClient, client), [], "t", options, turn=1))
-    assert len(client.asked) == MAX_TOOL_ROUNDS
+    assert len(client.asked) == 41
     assert "finish" not in [t["function"]["name"] for t in client.asked[0]["tools"]]
-    assert next(e for e in events if isinstance(e, ErrorEvent)).message == (
-        f"stopped after {MAX_TOOL_ROUNDS} tool rounds"
-    )
+    assert not any(isinstance(e, ErrorEvent) for e in events)
     assert read_records(tmp_path / "j.jsonl")[0].kind == ""
 
 

@@ -19,7 +19,6 @@ import pytest
 
 from saddle.engine import (
     INPUT_SAFETY,
-    MAX_TOOL_ROUNDS,
     MIN_OUTPUT,
     OUTPUT_MARGIN,
     TurnOptions,
@@ -230,14 +229,41 @@ def test_several_calls_in_one_round_all_run(options: TurnOptions) -> None:
 # -- limits -------------------------------------------------------------------
 
 
-def test_a_tool_loop_is_cut_off_rather_than_run_forever(options: TurnOptions) -> None:
+LONG_TASK_ROUNDS = 60
+"""More tool rounds than the old caps (10, then 24) allowed: a setup task's
+turn in a watched trial needed far more than 24 (the same ask took another
+agent about 121 calls)."""
+
+
+def test_a_long_tool_chain_runs_until_the_model_answers(options: TurnOptions) -> None:
+    """Known-good: a turn needing many tool rounds is not cut off; it ends when
+    the model answers, sealed, with no error."""
     (options.workdir / "note.txt").write_text("x")
-    client = FakeClient([[tool("read_file", path="note.txt")]] * (MAX_TOOL_ROUNDS + 4))
+    client = FakeClient(
+        [[tool("read_file", path="note.txt")]] * LONG_TASK_ROUNDS + [[content("all set up")]]
+    )
     events = run(client, options)
-    error = those(events, ErrorEvent)[0]
-    assert error.message == f"stopped after {MAX_TOOL_ROUNDS} tool rounds"
-    assert len([e for e in events if e.kind == "tool.start"]) == MAX_TOOL_ROUNDS
-    assert events[-1].kind == "turn.end"  # still sealed
+    assert those(events, ErrorEvent) == []
+    assert len([e for e in events if e.kind == "tool.start"]) == LONG_TASK_ROUNDS
+    assert len(client.asked) == LONG_TASK_ROUNDS + 1
+    assert events[-1].kind == "turn.end"
+
+
+def test_a_looping_turn_ends_when_the_person_stops_it(options: TurnOptions) -> None:
+    """What the cap protected: a model that never stops calling tools. With no
+    cap, the person's Stop ends it between rounds, and the turn is sealed."""
+    (options.workdir / "note.txt").write_text("x")
+    client = FakeClient([[tool("read_file", path="note.txt")]] * 200)
+    stopped = {"now": False}
+    events = []
+    for event in run_turn(
+        cast(VllmClient, client), [], "hi", options, turn=1, cancel=lambda: stopped["now"]
+    ):
+        events.append(event)
+        if len([e for e in events if e.kind == "tool.end"]) == 30:
+            stopped["now"] = True
+    assert len(client.asked) == 30
+    assert events[-1].kind == "turn.end"
 
 
 def test_a_transport_failure_is_reported_and_the_turn_is_still_sealed(options: TurnOptions) -> None:

@@ -85,8 +85,8 @@ from saddle.vllm import VllmClient
 
 DEFAULT_TIME_BUDGET_S: Final = 0
 """No time limit (engine.NO_LIMIT). The wall-clock cap existed to break the
-endless loops early runs fell into; the loop guards (MAX_TOOL_ROUNDS, the
-empty-round cap, the optional stall check) stop those now, and a hard clock
+endless loops early runs fell into; the loop guards (the empty-round cap,
+the optional stall check) stop those now, and a hard clock
 only ever killed good runs at the finish line. A positive value opts back in."""
 
 DEFAULT_TOKEN_BUDGET: Final = 0
