@@ -945,11 +945,46 @@ def _run_static(argv: tuple[str, ...], copy: Path, limit: float) -> GateCheck:
     return check_static(argv, run_static_check(argv, copy, timeout=limit))
 
 
+def node_stage(argv: Sequence[str], tools: Path | None) -> tuple[str, ...]:
+    """`argv` with `npx --no-install X ...` run as `node <X's script> ...` when `tools`
+    holds `node_modules/.bin/X`; any other stage, or a tool not installed, unchanged.
+
+    npx lives under HOME and its symlinks point there, where the audit's sandbox
+    sees nothing, so every `npx` stage read not-proven. The package's own script
+    needs only node, which `sandbox-expose` shows. An unchanged `npx` argv still
+    ends not-proven, naming the tool, never passing."""
+    if tools is not None and len(argv) > 2 and tuple(argv[:2]) == ("npx", "--no-install"):
+        script = tools / "node_modules" / ".bin" / argv[2]
+        if script.is_file():
+            return ("node", str(script.resolve()), *argv[3:])
+    return tuple(argv)
+
+
 def _gate_stage_runs(
-    stages: Sequence[tuple[str, ...]], tree: Path, limit: float
+    stages: Sequence[tuple[str, ...]], tree: Path, limit: float, tools: Path | None = None
 ) -> list[CapturedRun]:
-    """Each stage run in `tree`, in the staged copy's sandbox (`run_static_check`)."""
-    return [run_static_check(argv, tree, timeout=limit) for argv in stages]
+    """Each stage run in `tree`, in the staged copy's sandbox (`run_static_check`).
+
+    With `tools` (the checkout, whose git-ignored `node_modules` a staged copy
+    lacks) the node stages run from its installed packages (`node_stage`):
+    `node_modules` is shown read-only and linked into `tree` for the run, so a
+    config that imports a package finds it, and the link is removed after, so the
+    tree is left as it was."""
+    modules = None if tools is None else tools / "node_modules"
+    if modules is None or not modules.is_dir():
+        return [run_static_check(argv, tree, timeout=limit) for argv in stages]
+    link = tree / "node_modules"
+    linked = not link.exists() and not link.is_symlink()
+    if linked:
+        link.symlink_to(modules.resolve())
+    try:
+        return [
+            run_static_check(node_stage(argv, tools), tree, timeout=limit, shown=(modules,))
+            for argv in stages
+        ]
+    finally:
+        if linked:
+            link.unlink()
 
 
 def _blocked_tier2(key: str, first: Findings) -> Findings:
@@ -1708,7 +1743,7 @@ class Auditor:
         """The project's gate stages on the audited copy and on the baseline, judged
         (`check_project_gate`). The baseline's runs are a function of its tree and
         the stages, so they are asked once per baseline (`_base_stage_runs`)."""
-        head = _gate_stage_runs(stages, copy, limit)
+        head = _gate_stage_runs(stages, copy, limit, self.repo)
         base = self._base_stage_runs(stages, copy, resolved, limit)
         return check_project_gate(list(zip(stages, head, base, strict=True)))
 
@@ -1737,7 +1772,7 @@ class Auditor:
             with tempfile.TemporaryDirectory(prefix="saddle-gate-base-") as scratch:
                 base = Path(scratch) / "tree"
                 materialize_baseline(copy, resolved, base)
-                ran = _gate_stage_runs(stages, base, limit)
+                ran = _gate_stage_runs(stages, base, limit, self.repo)
             recorded = [(r.exit_code, r.timed_out) for r in ran]
             if path is not None:
                 path.parent.mkdir(parents=True, exist_ok=True)

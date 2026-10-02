@@ -817,16 +817,20 @@ def run_prompt_benchmark(argv: Sequence[str], cwd: Path, *, timeout: float) -> C
     )
 
 
-def run_static_check(argv: Sequence[str], cwd: Path, *, timeout: float) -> CapturedRun:
+def run_static_check(
+    argv: Sequence[str], cwd: Path, *, timeout: float, shown: Sequence[Path] = ()
+) -> CapturedRun:
     """Run the project's static check in `cwd` under the memory cap, with the
     tree's own package importable (`src_layout_env`): it executes the
-    project's tooling (a type checker's plugins are code) the way its tests do."""
+    project's tooling (a type checker's plugins are code) the way its tests do.
+    `shown` adds read-only directories (a checkout's `node_modules`)."""
     return run_capture(
         list(argv),
         cwd,
         timeout=timeout,
         memory_limit=tree_memory_limit(),
         extra_env=src_layout_env(cwd),
+        shown=shown,
     )
 
 
