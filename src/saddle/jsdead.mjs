@@ -159,9 +159,7 @@ function declared(statement) {
     return statement.name ? [statement.name] : [];
   }
   if (statement.kind === K.VariableStatement) {
-    return statement.declarationList.declarations
-      .map((d) => d.name)
-      .filter((name) => name.kind === K.Identifier);
+    return statement.declarationList.declarations.map((d) => d.name).filter((name) => name.kind === K.Identifier);
   }
   return [];
 }
@@ -254,9 +252,7 @@ try {
 }
 
 const stemOf = (name) => path.basename(name).replace(/\.(js|mjs|cjs)$/, "");
-const loadedStems = new Set(
-  [...specifiers].filter((s) => !s.startsWith("<script>")).map((s) => stemOf(s)),
-);
+const loadedStems = new Set([...specifiers].filter((s) => !s.startsWith("<script>")).map((s) => stemOf(s)));
 const loadedFiles = new Set(scriptSources.map((s) => path.basename(s)));
 
 function reached(file) {
@@ -293,7 +289,7 @@ for (const ref of references) {
 }
 
 const live = new Set(judged.map((_, i) => i).filter((i) => holders[i].has(null)));
-for (let grew = true; grew; ) {
+for (let grew = true; grew;) {
   grew = false;
   holders.forEach((held, i) => {
     if (!live.has(i) && [...held].some((h) => h !== null && live.has(h))) {
