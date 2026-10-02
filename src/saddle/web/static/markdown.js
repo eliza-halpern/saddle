@@ -494,6 +494,7 @@ async function copyText(text) {
     return !!document.execCommand("copy");
   } catch {
     return false;
+  /* c8 ignore next -- the catch above returns, so nothing escapes the try: the finally's rethrow edge cannot run */
   } finally {
     area.remove();
     if (before && typeof before.focus === "function") before.focus();
@@ -693,5 +694,6 @@ if (typeof module !== "undefined" && module.exports) {
     isDiff, renderDiff, fillToolDetail, highlight, grammarFor,
     languageForPath, CREATED,
     copyText, copyButton, attachCopy,
+    atBottom, stickToBottom, followBottom, watchScrolling,
   });
 }

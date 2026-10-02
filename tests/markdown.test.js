@@ -710,3 +710,196 @@ test("a click on a block that is still streaming copies what has arrived", async
   assert.strictEqual(ok, true);
   assert.strictEqual(clipboard.writes[0], "def f():\n    return 4");
 });
+
+
+/* ---------- the remaining branches, each with the behaviour it carries ---------- */
+
+test("underscore marks render like asterisk marks", () => {
+  // Both spellings are markdown; a model writes either, and the one that
+  // is not rendered shows up as stray underscores in the reply.
+  assert.ok(oneShot("a __strong__ word").includes("<strong>strong</strong>"));
+  assert.ok(oneShot("a _slanted_ word").includes("<em>slanted</em>"));
+  // A single unpaired underscore is text, not the start of emphasis.
+  assert.ok(!oneShot("call one_two now").includes("<em>"));
+});
+
+test("a tool result that is not text says so and offers nothing to copy", () => {
+  // A missing result (null or undefined) is neither a diff nor a created
+  // file nor output; it reads as no output, with no button.
+  for (const missing of [undefined, null]) {
+    const row = el("div"), detail = el("div");
+    fillToolDetail(row, detail, missing);
+    assert.strictEqual(detail.textContent, "(no output)", String(missing));
+    assert.strictEqual(row.children.length, 0, String(missing));
+  }
+});
+
+test("a page with no navigator at all still copies through the field", async () => {
+  resetClipboard();
+  delete globalThis.navigator;   // not undefined-valued: not declared at all
+  const ok = await copyButton("no navigator", "code").onclick();
+  assert.strictEqual(ok, true);
+  assert.deepStrictEqual(clipboard.writes, ["no navigator"]);
+  assert.strictEqual(clipboard.viaExecCommand, 1);
+});
+
+test("the fallback copy gives focus back to what had it", async () => {
+  // Selecting the field takes focus; a keyboard reader must land back on
+  // the button they pressed, on success and on failure alike.
+  for (const failing of [false, true]) {
+    resetClipboard();
+    setNavigator({});
+    const focused = [];
+    document.activeElement = { focus: () => focused.push("restored") };
+    const realExec = document.execCommand;
+    if (failing) document.execCommand = () => false;
+    try {
+      const ok = await copyButton("focus", "code").onclick();
+      assert.strictEqual(ok, !failing);
+      assert.deepStrictEqual(focused, ["restored"], `failing=${failing}`);
+    } finally {
+      document.activeElement = null;
+      document.execCommand = realExec;
+    }
+  }
+});
+
+test("a focused thing that cannot take focus back does not break the copy", async () => {
+  resetClipboard();
+  setNavigator({});
+  document.activeElement = {};
+  try {
+    assert.strictEqual(await copyButton("plain", "code").onclick(), true);
+  } finally {
+    document.activeElement = null;
+  }
+});
+
+test("a button given a function copies what it returns at click time", async () => {
+  resetClipboard();
+  let n = 0;
+  const button = copyButton(() => `value ${++n}`, "code");
+  await button.onclick();
+  await button.onclick();
+  assert.deepStrictEqual(clipboard.writes, ["value 1", "value 2"]);
+});
+
+test("a settled half that is no longer a prefix is repainted whole", () => {
+  // The settled text normally only grows. If the raw text is replaced by
+  // something that does not extend it, appending the difference would keep
+  // the old words on screen.
+  const node = el("div");
+  node.dataset.raw = "Old one.\n\nOld two.\n\nOld three.";
+  paintStream(node);
+  node.dataset.raw = "Fresh.\n\nNew words here.";
+  paintStream(node);
+  const flat = el("div");
+  for (const half of Array.from(node.children)) {
+    while (half.firstChild) flat.appendChild(half.firstChild);
+  }
+  assert.strictEqual(flat.html, oneShot("Fresh.\n\nNew words here."));
+  assert.ok(!node.textContent.includes("Old"), node.textContent);
+});
+
+/* ---------- following the bottom of the transcript ---------- */
+
+const { atBottom, stickToBottom, followBottom, watchScrolling } = md;
+
+/* A scroll box that clamps like the browser's: assigning past the end lands
+   at the end, and a scroll event is fired by the test when the reader (or
+   the code's own assignment) moves it. */
+function scrollBox({ scrollHeight, clientHeight, scrollTop }) {
+  let top = scrollTop;
+  const listeners = {};
+  return {
+    scrollHeight, clientHeight,
+    get scrollTop() { return top; },
+    set scrollTop(v) { top = Math.max(0, Math.min(v, this.scrollHeight - this.clientHeight)); },
+    addEventListener(type, fn, options) { listeners[type] = { fn, options }; },
+    fire(type) { listeners[type].fn(); },
+    listeners,
+  };
+}
+
+function withPage(box, jump, body) {
+  const registry = { "#transcript": box, "#jump": jump };
+  global.$ = (selector) => registry[selector] || null;
+  try {
+    followBottom();   // the module's state is global: start from following
+    body();
+  } finally {
+    delete global.$;
+  }
+}
+
+test("the bottom is within 24 pixels of the end, not 24 or more", () => {
+  const box = scrollBox({ scrollHeight: 1000, clientHeight: 400, scrollTop: 577 });
+  global.$ = () => box;
+  try {
+    assert.strictEqual(atBottom(), true);     // 23 away
+    box.scrollTop = 576;
+    assert.strictEqual(atBottom(), false);    // 24 away
+  } finally {
+    delete global.$;
+  }
+});
+
+test("following sticks to the end as content grows", () => {
+  const box = scrollBox({ scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+  withPage(box, { hidden: false }, () => {
+    assert.strictEqual(box.scrollTop, 600);
+    box.scrollHeight = 1500;
+    stickToBottom();
+    assert.strictEqual(box.scrollTop, 1100);
+  });
+});
+
+test("scrolling away stops following until the reader returns or jumps", () => {
+  const box = scrollBox({ scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+  const jump = { hidden: true };
+  withPage(box, jump, () => {
+    watchScrolling();
+    assert.deepStrictEqual(box.listeners.scroll.options, { passive: true });
+    box.scrollTop = 100;               // the reader scrolls up
+    box.fire("scroll");
+    assert.strictEqual(jump.hidden, false, "the jump control should appear");
+    box.scrollHeight = 1500;
+    stickToBottom();
+    assert.strictEqual(box.scrollTop, 100, "followed a reader who scrolled away");
+    box.scrollTop = 1090;              // back within reach of the end
+    box.fire("scroll");
+    assert.strictEqual(jump.hidden, true);
+    box.scrollHeight = 1800;
+    stickToBottom();
+    assert.strictEqual(box.scrollTop, 1400);
+    box.scrollTop = 0;
+    box.fire("scroll");                // away again, then the jump control
+    followBottom();
+    assert.strictEqual(jump.hidden, true);
+    assert.strictEqual(box.scrollTop, 1400);
+  });
+});
+
+test("the code's own scroll is not mistaken for the reader scrolling away", () => {
+  const box = scrollBox({ scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+  withPage(box, { hidden: true }, () => {
+    watchScrolling();
+    // Content grows before the scroll event for our own write is delivered,
+    // so by the time it fires we are no longer at the bottom.
+    box.scrollHeight = 2000;
+    box.fire("scroll");
+    stickToBottom();
+    assert.strictEqual(box.scrollTop, 1600, "treated our own scroll as the reader's");
+  });
+});
+
+test("following works on a page without the jump control", () => {
+  const box = scrollBox({ scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+  withPage(box, null, () => {
+    watchScrolling();
+    box.scrollTop = 0;
+    box.fire("scroll");
+    followBottom();
+    assert.strictEqual(box.scrollTop, 600);
+  });
+});
