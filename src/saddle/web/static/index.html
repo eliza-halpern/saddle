@@ -180,7 +180,10 @@
   <ul class="fa-grants">
     <li>your whole filesystem, not only this folder, including your SSH keys and saddle's API key</li>
     <li>your network</li>
-    <li>nothing a command does can be undone</li>
+    <li>file changes saddle can attribute to a command are backed up first and can be undone
+        from the record of outside changes</li>
+    <li>everything else cannot be undone: packages, downloads, what a program it starts
+        changes, and anything the record lists as "not tracked"</li>
   </ul>
   <p class="hint">Only this session. A new session always starts sandboxed, Task runs are always
      sandboxed, and you can turn it off at any time.</p>
@@ -239,7 +242,7 @@
 </dialog>
 <dialog id="approval-dialog" aria-labelledby="approval-title">
   <h3 id="approval-title">Approve?</h3>
-  <p class="hint">Read this before you answer. Text from an MCP server or a web page is not from saddle.</p>
+  <p class="hint">Read this before you answer; a command you decline is not run. Text from an MCP server or a web page is not from saddle.</p>
   <pre id="approval-lines" class="mono"></pre>
   <div class="dialog-actions">
     <button id="approval-decline" type="button">Decline</button>

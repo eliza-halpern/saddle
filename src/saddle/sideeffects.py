@@ -38,7 +38,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
-from itertools import pairwise
+from itertools import pairwise, takewhile
 from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -85,6 +85,43 @@ _REDIRECTS: Final = frozenset({">", ">>", ">|", "&>", "2>", "2>>"})
 _URL: Final = re.compile(r"^(?:https?|ftp)://", re.IGNORECASE)
 _HEREDOC: Final = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 _ASSIGN: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_VAR: Final = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+_BRACES: Final = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
+_SHELLS: Final = frozenset({"bash", "sh", "zsh", "dash"})
+
+READ_ONLY: Final = frozenset(
+    {
+        "cat", "ls", "find", "grep", "egrep", "fgrep", "head", "tail", "wc", "file", "du",
+        "df", "echo", "printf", "stat", "which", "type", "readlink", "realpath", "pwd",
+        "date", "whoami", "id", "uname", "basename", "dirname", "sort", "uniq", "cut", "tr",
+        "diff", "cmp", "sha256sum", "sha1sum", "md5sum", "tree", "nl", "od", "xxd", "ps",
+        "pgrep", "hostname", "nproc", "free", "uptime", "lsblk", "test", "[", "[[", "true",
+        "false", "sleep", "cd", "read",
+    }
+)  # fmt: skip
+"""Programs that only read: a command made of nothing else is not recorded (#136
+F2). `find` and `sort` are in it only without the flags that write
+(`_WRITING_FLAGS`); an output redirect to anything but `/dev/null` takes a
+command out of it, and so does a substitution, which can run anything."""
+
+_WRITING_FLAGS: Final = {
+    "find": frozenset(
+        {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
+    ),
+    "sort": frozenset({"-o", "--output"}),
+}
+_SHELL_WORDS: Final = frozenset(
+    {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "}", "(", ")"}
+)
+_SHELL_ENDS: Final = frozenset({"done", "fi", "esac", ";;"})
+_SHELL_HEADS: Final = frozenset({"for", "select"})
+
+KILLERS: Final = frozenset({"pkill", "killall"})
+"""Programs that stop processes by name or pattern, so they can hit the person's
+other programs: held in a full-access session (F1)."""
+_DESTROYERS: Final = frozenset({"rm", "rmdir", "shred", "unlink", "mv"})
+_EXECS: Final = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+DEVICE_ROOTS: Final = frozenset({"dev", "proc", "sys"})
 
 
 _URL_IN_TEXT: Final = re.compile(r"(?:https?|ftp)://[^\s'\"]+", re.IGNORECASE)
@@ -104,7 +141,7 @@ def _clean_url(url: str) -> str:
     return f"{parts.scheme}://{host}{f':{port}' if port else ''}{parts.path}"
 
 
-def _clean_command(command: str) -> str:
+def clean_command(command: str) -> str:
     """A command as the record keeps it: URLs cleaned of credentials and query
     strings (a token in `?key=` must not be written to a file the page shows),
     and cut to `MAX_COMMAND` characters."""
@@ -131,6 +168,21 @@ class Plan:
     packages: list[dict[str, Any]] = field(default_factory=list)
     opaque: list[str] = field(default_factory=list)
     """Why part of the command is not attributable; empty when all of it is."""
+    read_only: bool = False
+    """The command is made only of programs that read (`READ_ONLY`): nothing to record."""
+    targets: list[Path] = field(default_factory=list)
+    """Concrete paths outside the folder a destructive command (`_note_risks`) removes,
+    moves, truncates or syncs over."""
+    unresolved: list[str] = field(default_factory=list)
+    """Targets of a destructive command that could not be resolved to paths, each with why."""
+    kills: list[str] = field(default_factory=list)
+    """Pattern-killing programs (`KILLERS`) the command runs."""
+
+
+def is_special_path(path: Path) -> bool:
+    """A path under `/dev`, `/proc` or `/sys`: not a file a session creates or loses."""
+    parts = path.parts
+    return len(parts) >= 2 and parts[0] == "/" and parts[1] in DEVICE_ROOTS
 
 
 def _strip_heredocs(command: str) -> str:
@@ -226,6 +278,125 @@ def _download(program: str, words: list[str], cwd: Path) -> tuple[str, Path | No
     return url, None
 
 
+def _statements(text: str) -> str:
+    """`text` with each unquoted newline made a `;` and comments and line
+    continuations removed: shlex reads a newline as a space, which would fold a
+    script's second line into the first one's arguments."""
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if quote:
+            out.append(char)
+            if char == "\\" and quote == '"' and i + 1 < len(text):
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if char == quote:
+                quote = ""
+        elif char == "\\" and i + 1 < len(text):
+            if text[i + 1] != "\n":
+                out.extend((char, text[i + 1]))
+            i += 2
+            continue
+        elif char in "'\"":
+            quote = char
+            out.append(char)
+        elif char == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        elif char == "\n":
+            out.append(";")
+        else:
+            out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def _expand(token: str, env: dict[str, str | None]) -> tuple[str, str]:
+    """(`token` with `~`, `$HOME` and the variables the command set earlier filled
+    in, "") or ("", why it cannot be). No general shell evaluation: a command
+    substitution, an unset variable and `~user` are not read."""
+    home = str(Path.home())
+    if token == "~" or token.startswith("~/"):
+        token = home + token[1:]
+    elif token.startswith("~"):
+        return "", "names another user's home, which is not read"
+    if "`" in token or "$(" in token:
+        return "", "names a path through a command substitution"
+    missing: list[str] = []
+
+    def fill(found: re.Match[str]) -> str:
+        name = found.group(1) or found.group(2)
+        value = env[name] if name in env else (home if name == "HOME" else None)
+        if value is None:
+            missing.append(name)
+            return found.group(0)
+        return value
+
+    text = _VAR.sub(fill, token)
+    if missing:
+        return (
+            "",
+            f"names a path through ${missing[0]}, which it does not set to a path it can read",
+        )
+    if "$" in text:
+        return "", "names a path through a variable it cannot read"
+    return text, ""
+
+
+def _resolve(token: str, cwd: Path | None, env: dict[str, str | None]) -> tuple[list[Path], str]:
+    """(the paths `token` names, "") or ([], why they cannot be read). A glob
+    names what it matches now."""
+    text, why = _expand(token, env)
+    if not why and _BRACES.search(text):
+        why = "names a path through brace expansion"
+    if not why and cwd is None and not text.startswith("/"):
+        why = "is relative to a directory a cd moved to that could not be read"
+    if why:
+        return [], why
+    base = cwd or Path("/")
+    if any(c in text for c in "*?["):
+        return [Path(p) for p in sorted(glob.glob(str(base / text)))], ""
+    return [base / text], ""
+
+
+def _only_reads(segments: list[list[str]], text: str) -> bool:
+    """Whether every program in the command is a read-only one (`READ_ONLY`), with
+    no output redirect to a file, no writing flag and no substitution."""
+    if "$(" in text or "`" in text or "<(" in text or ">(" in text:
+        return False
+    for words in segments:
+        args: list[str] = []
+        skip = False
+        for index, word in enumerate(words):
+            if skip:
+                skip = False
+                continue
+            if re.fullmatch(r"\d*(?:>>?|>\||&>>?|>&)", word):
+                target = words[index + 1] if index + 1 < len(words) else ""
+                dup = word.endswith("&") and (target.isdigit() or target == "-")
+                if target != "/dev/null" and not dup:
+                    return False
+                skip = True
+            elif word in ("<", "<<", "<<<", "<&"):
+                skip = True
+            else:
+                args.append(word)
+        while args and (args[0] in _SHELL_WORDS or _ASSIGN.match(args[0]) or args[0] in _WRAPPERS):
+            wrapper = args.pop(0)
+            while wrapper in _WRAPPERS and args and args[0].startswith("-"):
+                args.pop(0)
+        if not args or args[0] in _SHELL_HEADS or args[0] in _SHELL_ENDS:
+            continue
+        program = os.path.basename(args[0])
+        if program not in READ_ONLY or _WRITING_FLAGS.get(program, frozenset()) & set(args[1:]):
+            return False
+    return True
+
+
 def plan_command(command: str, workdir: Path) -> Plan:
     """Read a shell command's words for the paths, downloads and package calls
     in it, and for the reasons it cannot all be attributed (`Plan.opaque`).
@@ -234,14 +405,27 @@ def plan_command(command: str, workdir: Path) -> Plan:
     text; a command it cannot parse is opaque, never guessed at.
     """
     plan = Plan()
+    text = _statements(_strip_heredocs(command))
+    segments = _segments(text, plan)
+    if segments is None:
+        return plan
+    if _only_reads(segments, text):
+        plan.read_only = True
+        return plan
+    _read_segments(segments, workdir.resolve(), workdir, plan, set(), {})
+    return plan
+
+
+def _segments(text: str, plan: Plan) -> list[list[str]] | None:
+    """The simple commands of `text` as word lists, or None (with the reason in
+    `plan.opaque`) when the text cannot be split."""
     try:
-        lexer = shlex.shlex(_strip_heredocs(command), posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError as exc:
         plan.opaque.append(f"the command could not be read ({exc})")
-        return plan
-    cwd = workdir.resolve()
+        return None
     segment: list[str] = []
     segments: list[list[str]] = []
     for token in tokens:
@@ -251,16 +435,110 @@ def plan_command(command: str, workdir: Path) -> Plan:
         else:
             segment.append(token)
     segments.append(segment)
-    seen_opaque: set[str] = set()
+    return segments
+
+
+def _read_segments(
+    segments: list[list[str]],
+    cwd: Path | None,
+    workdir: Path,
+    plan: Plan,
+    seen_opaque: set[str],
+    env: dict[str, str | None],
+) -> None:
     for words in segments:
-        cwd = _read_segment(words, cwd, workdir, plan, seen_opaque)
-    return plan
+        cwd = _read_segment(words, cwd, workdir, plan, seen_opaque, env)
+
+
+def _assign(words: list[str], env: dict[str, str | None]) -> None:
+    """Remember `NAME=value` words: the value as far as it can be read, else None."""
+    for word in words:
+        name, _, value = word.partition("=")
+        text, why = _expand(value, env)
+        env[name] = None if why else text
+
+
+def _destroy(
+    plan: Plan,
+    what: str,
+    token: str,
+    cwd: Path | None,
+    workdir: Path,
+    env: dict[str, str | None],
+) -> None:
+    """Name `token` as a target of a destructive command: a path outside the folder
+    that exists is backed up (or the command is held when it is too big for that),
+    and one that cannot be resolved holds the command."""
+    paths, why = _resolve(token, cwd, env)
+    if why:
+        plan.unresolved.append(f"`{token}` ({what}) {why}")
+        return
+    base = workdir.resolve()
+    for path in paths:
+        resolved = path.resolve()
+        if is_special_path(resolved) or resolved == base or base in resolved.parents:
+            continue
+        plan.targets.append(resolved)
+        _add_resolved(resolved, workdir, plan)
+
+
+def _note_risks(
+    program: str,
+    rest: list[str],
+    cwd: Path | None,
+    workdir: Path,
+    plan: Plan,
+    env: dict[str, str | None],
+) -> None:
+    """The destructive calls this explicit set of programs makes (F1): `rm` that
+    recurses or removes a directory, `rmdir`, `shred`, `unlink`, `truncate`, `mv`,
+    `find` with `-delete` or an `-exec` of one of those, `rsync` with `--delete`,
+    and `xargs` handing one of them arguments from a pipe; plus `KILLERS`."""
+    ended = rest.index("--") if "--" in rest else len(rest)
+    plain = [w for i, w in enumerate(rest) if w != "--" and (i >= ended or not w.startswith("-"))]
+    short = "".join(w[1:] for w in rest[:ended] if w.startswith("-") and not w.startswith("--"))
+    longs = {w.split("=")[0] for w in rest[:ended] if w.startswith("--")}
+
+    def hit(what: str, tokens: list[str]) -> None:
+        for token in tokens:
+            _destroy(plan, what, token, cwd, workdir, env)
+
+    if program in KILLERS:
+        plan.kills.append(program)
+    elif program == "rm" and (set("rRd") & set(short) or {"--recursive", "--dir"} & longs):
+        hit("rm removes", plain)
+    elif program in ("rmdir", "shred", "unlink", "truncate"):
+        hit(f"{program} changes", plain)
+    elif program == "mv":
+        hit("mv moves or overwrites", plain + [f for a, f in pairwise(rest) if a == "-t"])
+    elif program == "find":
+        execs = [rest[i + 1] for i, w in enumerate(rest[:-1]) if w in _EXECS]
+        removes = any(os.path.basename(x) in _DESTROYERS for x in execs)
+        if "-delete" in rest or removes:
+            starts = list(
+                takewhile(lambda w: not w.startswith("-") and w not in ("(", "!", ")"), rest)
+            )
+            hit("find removes under", starts or ["."])
+    elif program == "rsync" and (
+        {"--remove-source-files"} | {w for w in longs if w.startswith("--delete")}
+    ):
+        hit("rsync --delete overwrites", plain[-1:])
+    elif program == "xargs" and any(os.path.basename(w) in _DESTROYERS for w in rest):
+        plan.unresolved.append(
+            "`xargs` (removes or moves) takes its targets from another command's output"
+        )
 
 
 def _read_segment(
-    words: list[str], cwd: Path, workdir: Path, plan: Plan, seen_opaque: set[str]
-) -> Path:
-    """Add one simple command to `plan`; returns the directory the next one runs in."""
+    words: list[str],
+    cwd: Path | None,
+    workdir: Path,
+    plan: Plan,
+    seen_opaque: set[str],
+    env: dict[str, str | None],
+) -> Path | None:
+    """Add one simple command to `plan`; returns the directory the next one runs in
+    (None when a `cd` moved it somewhere that could not be read)."""
     args: list[str] = []
     skip = False
     for index, word in enumerate(words):
@@ -269,21 +547,30 @@ def _read_segment(
             continue
         if word in _REDIRECTS or re.fullmatch(r"\d?>>?", word):
             target = words[index + 1] if index + 1 < len(words) else ""
-            _add_path(target, cwd, workdir, plan)
+            _add_path(target, cwd, workdir, plan, env)
+            if ">>" not in word:
+                _destroy(plan, "truncates", target, cwd, workdir, env)
             skip = True
             continue
         if word in ("<", "<<", "<<<", "<&"):
             skip = True
             continue
         args.append(word)
+    assigned: list[str] = []
     while args and (_ASSIGN.match(args[0]) or args[0] in _WRAPPERS):
         wrapper = args.pop(0)
+        if _ASSIGN.match(wrapper):
+            assigned.append(wrapper)
         while wrapper in _WRAPPERS and args and args[0].startswith("-"):
             args.pop(0)  # sudo -n, env -i
     if not args:
+        _assign(assigned, env)
         return cwd
     program = os.path.basename(args[0])
     rest = args[1:]
+    if program == "export":
+        _assign([w for w in rest if _ASSIGN.match(w)], env)
+    _note_risks(program, rest, cwd, workdir, plan, env)
     package = _package_call(program, rest)
     if package is not None:
         plan.packages.append(package)
@@ -300,31 +587,38 @@ def _read_segment(
                 _opaque(plan, seen_opaque, "`python -m pip` changes files it does not name")
         else:
             _opaque(plan, seen_opaque, f"`{program}` runs code whose changes are not visible here")
+    elif program in _SHELLS and "-c" in rest[:-1]:
+        inner = _segments(_statements(rest[rest.index("-c") + 1]), plan)
+        if inner is not None:
+            _read_segments(inner, cwd, workdir, plan, seen_opaque, dict(env))
     elif program not in KNOWN:
         _opaque(plan, seen_opaque, f"`{program}` runs code whose changes are not visible here")
     if program in ("curl", "wget"):
-        found = _download(program, [expand_home(w) for w in rest], cwd)
+        found = _download(program, [expand_home(w) for w in rest], cwd or workdir)
         if found is not None:
             plan.downloads.append(found)
-    if program == "cd" and rest:
-        return (cwd / expand_home(rest[0])).resolve()
+    if program == "cd":
+        paths, _why = _resolve(rest[0] if rest else "~", cwd, env)
+        return paths[0].resolve() if len(paths) == 1 and rest[:1] != ["-"] else None
+    if program in ("pushd", "popd"):
+        return None
     if program == "sed" and not any(w.startswith("-i") or w == "--in-place" for w in rest):
         return cwd  # sed without -i only reads its files
     if program in _NAMES_PATHS:
         for word in rest:
             if not word.startswith("-"):
-                _add_path(word, cwd, workdir, plan)
+                _add_path(word, cwd, workdir, plan, env)
         for word, following in pairwise(rest):
             if word in ("-C", "-d", "-o", "-O", "-P", "--output", "--directory", "-t"):
-                _add_path(following, cwd, workdir, plan)
+                _add_path(following, cwd, workdir, plan, env)
         for word in rest:
             for prefix in ("--output=", "--directory=", "--output-document="):
                 if word.startswith(prefix):
-                    _add_path(word.split("=", 1)[1], cwd, workdir, plan)
+                    _add_path(word.split("=", 1)[1], cwd, workdir, plan, env)
     elif program not in KNOWN:
         for word in rest:  # an opaque command still names paths worth watching
             if not word.startswith("-"):
-                _add_path(word, cwd, workdir, plan, quiet=True)
+                _add_path(word, cwd, workdir, plan, env, quiet=True)
     for _url, destination in plan.downloads:
         if destination is not None and destination not in plan.paths:
             _add_resolved(destination, workdir, plan)
@@ -340,24 +634,29 @@ def _opaque(plan: Plan, seen: set[str], reason: str) -> None:
 def _add_resolved(path: Path, workdir: Path, plan: Plan) -> None:
     resolved = path.resolve()
     base = workdir.resolve()
+    if is_special_path(resolved):
+        return
     if resolved != base and base not in resolved.parents and resolved not in plan.paths:
         plan.paths.append(resolved)
 
 
-def _add_path(token: str, cwd: Path, workdir: Path, plan: Plan, *, quiet: bool = False) -> None:
+def _add_path(
+    token: str,
+    cwd: Path | None,
+    workdir: Path,
+    plan: Plan,
+    env: dict[str, str | None],
+    *,
+    quiet: bool = False,
+) -> None:
     """Name `token` as a path the command touches, when it is outside the folder."""
     if not token or _URL.match(token):
         return
-    expanded = expand_home(token)
-    if any(mark in expanded for mark in ("$", "`")):
+    candidates, why = _resolve(token, cwd, env)
+    if why:
         if not quiet:
-            plan.opaque.append(f"`{token}` names a path through a variable or substitution")
+            plan.opaque.append(f"`{token}` {why}")
         return
-    candidates = (
-        [Path(p) for p in sorted(glob.glob(str(cwd / expanded)))]
-        if any(c in expanded for c in "*?[")
-        else [cwd / expanded]
-    )
     for candidate in candidates:
         _add_resolved(candidate, workdir, plan)
 
@@ -418,7 +717,7 @@ class SideEffects:
     def _append(self, record: dict[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         if isinstance(record.get("command"), str):
-            record = {**record, "command": _clean_command(record["command"])}
+            record = {**record, "command": clean_command(record["command"])}
         with self._path().open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({**record, "t": time.time()}, ensure_ascii=False) + "\n")
 
@@ -443,7 +742,7 @@ class SideEffects:
         recorded with `backup` saying so, never skipped. `known` is the paths
         already recorded, when the caller has just read them."""
         recorded = self._recorded() if known is None else known
-        if str(path) in recorded:
+        if str(path) in recorded or is_special_path(path):
             return False
         recorded.add(str(path))
         existed = path.is_file()
@@ -515,9 +814,54 @@ class SideEffects:
 
     # -- commands -------------------------------------------------------
 
-    def watch(self, command: str, workdir: Path) -> Watch:
-        """Plan `command` and back up every existing path it names, before it runs."""
+    def hold(self, command: str, workdir: Path) -> list[str]:
+        """Why `command` must be put to the person before it runs; empty when it may
+        run (F1). A destructive command (`_note_risks`) is held when a target cannot
+        be resolved to a path, or what it removes is too big to back up under
+        `MAX_FILE_BYTES` and `MAX_BACKUPS`; a pattern kill (`KILLERS`) is always held."""
+        plan = plan_command(command, workdir)
+        reasons = list(dict.fromkeys(plan.unresolved))
+        for program in dict.fromkeys(plan.kills):
+            reasons.append(
+                f"`{program}` stops programs by name or pattern, so it can stop your other "
+                "programs, not only this session's; the processes tool stops this "
+                "session's own"
+            )
+        files = 0
+        for target in dict.fromkeys(plan.targets):
+            try:
+                if not (target.exists() or target.is_symlink()):
+                    continue
+                inside = (
+                    [target] if target.is_symlink() or not target.is_dir() else self._walk(target)
+                )
+                if len(inside) >= MAX_WATCHED and target.is_dir():
+                    reasons.append(
+                        f"{target} holds {MAX_WATCHED} or more files, too many to back up"
+                    )
+                    continue
+                files += len(inside)
+                big = next((f for f in inside if f.lstat().st_size > MAX_FILE_BYTES), None)
+                if big is not None:
+                    reasons.append(
+                        f"{big} is over {MAX_FILE_BYTES // 2**20} MB, too large to back up"
+                    )
+            except OSError as exc:
+                reasons.append(f"{target} could not be read to back it up ({type(exc).__name__})")
+        if files > MAX_BACKUPS:
+            reasons.append(
+                f"it removes {files} files, more than the {MAX_BACKUPS} backed up per command"
+            )
+        return reasons
+
+    def watch(self, command: str, workdir: Path, approved: tuple[str, ...] = ()) -> Watch:
+        """Plan `command` and back up every existing path it names, before it runs.
+        `approved` are the reasons the person approved a held command despite; they
+        are listed as not tracked."""
         watch = Watch(command=command, plan=plan_command(command, workdir))
+        watch.plan.opaque.extend(
+            f"approved by the person, not fully backed up: {r}" for r in approved
+        )
         backups = 0
         known = self._recorded()
         for path in watch.plan.paths:
@@ -558,7 +902,7 @@ class SideEffects:
         """Record what the command did, after it ran (or, in the background, started)."""
         command = watch.command
         reasons = list(watch.plan.opaque)
-        if background:
+        if background and not watch.plan.read_only:
             reasons.append(
                 "it runs in the background, so what it changes after it returns is not seen"
             )

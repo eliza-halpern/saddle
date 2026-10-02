@@ -52,7 +52,7 @@ from saddle.sandbox import (
     resolve_within,
 )
 from saddle.searx import search_url_from_env
-from saddle.sideeffects import SideEffects, Watch, expand_home
+from saddle.sideeffects import SideEffects, Watch, clean_command, expand_home
 from saddle.undo import UndoLog
 from saddle.vision import IMAGE_MAX_BYTES, data_url, image_info
 from saddle.vllm import ToolCall, VllmError
@@ -1062,14 +1062,39 @@ def _marked(ctx: ToolContext, result: str) -> str:
     return f"{UNSANDBOXED}\n{result}" if ctx.full_access else result
 
 
-def _watched(ctx: ToolContext, command: str) -> Watch | None:
+HELD_TITLE: Final = "Run a command that can destroy files or programs?"
+
+
+def _held(ctx: ToolContext, command: str) -> tuple[str | None, tuple[str, ...]]:
+    """(a refusal result, ()) when a full-access command must be put to the person
+    and they decline (or nobody can answer); else (None, the reasons it was held
+    despite, empty when it was not held). A destructive command whose targets
+    cannot be resolved or backed up, and a pattern kill, never run silently (F1)."""
+    if not ctx.outside_files or ctx.effects is None:
+        return None, ()
+    reasons = ctx.effects.hold(command, ctx.workdir)
+    if not reasons:
+        return None, ()
+    shown = [f"command: {clean_command(command)}", "held because:", *(f"- {r}" for r in reasons)]
+    if ctx.approve is not None and ctx.approve(HELD_TITLE, shown):
+        return None, tuple(reasons)
+    return (
+        "error: this command was not run: it could destroy files saddle cannot back up "
+        "or programs that are not this session's, and the person did not approve it "
+        "(held because: " + "; ".join(reasons) + "). Nothing was changed. Name the exact "
+        "paths, or ask the person.",
+        (),
+    )
+
+
+def _watched(ctx: ToolContext, command: str, approved: tuple[str, ...] = ()) -> Watch | None:
     """Plan and back up what `command` names, before it runs, when this session
     records its side effects (full access with a record). Never stops the command:
     a watch that fails records the command as not tracked instead."""
     if not ctx.outside_files or ctx.effects is None:
         return None
     try:
-        return ctx.effects.watch(command, ctx.workdir)
+        return ctx.effects.watch(command, ctx.workdir, approved)
     except OSError as exc:
         ctx.effects.note_untracked(command, f"it could not be watched ({type(exc).__name__})")
         return None
@@ -1098,8 +1123,11 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         held = ctx.research.hold(command)
         if held is not None:
             return f"error: {held}"
+    refusal, approved = _held(ctx, command)
+    if refusal is not None:
+        return refusal
     box = ctx.box()
-    watch = _watched(ctx, command)
+    watch = _watched(ctx, command, approved)
     if bool(args.get("background")):
         terminal = box.start(command)
         _settled(ctx, watch, terminal, background=True)

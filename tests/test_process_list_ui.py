@@ -203,17 +203,19 @@ def test_on_a_phone_both_chips_and_the_banner_cause_no_sideways_scroll(
 
     home = tmp_path / "home"
     home.mkdir()
+    folder = tmp_path / "folder"  # the config lives outside it, or nothing is outside
+    folder.mkdir()
     (home / "app.conf").write_text("theme=dark\n")
     monkeypatch.setenv("HOME", str(home))
     store = SessionStore(tmp_path / "s")
     app = build_app(store, NoModel, default_workdir=tmp_path)
     with serving(app) as base:
-        sid = store.create(title="set up the launcher", workdir=str(tmp_path)).id
+        sid = store.create(title="set up the launcher", workdir=str(folder)).id
         store.update(sid, mode="edit")
         store.set_full_access(sid, True, confirm=FULL_ACCESS_CONFIRM)
         server = _server_of(app)
         ctx = ToolContext(
-            workdir=tmp_path,
+            workdir=folder,
             full_access=True,
             processes=server.ledger(sid),
             effects=SideEffects(store.outside_dir(sid)),

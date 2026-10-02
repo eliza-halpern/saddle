@@ -151,13 +151,15 @@ class Session:
     is never overwritten by the model."""
     full_access: bool = False
     """The Edit lane's commands run as you, outside the sandbox: your whole
-    filesystem, your network, your credentials, and nothing a command does can
-    be undone. Off by default. It is set only by `SessionStore.set_full_access`
-    with `FULL_ACCESS_CONFIRM`, never by `update` and never by the model (no
-    tool changes a session), and a new session never starts with it. It exists
-    only in the Edit lane: it is granted there, and changing the lane away from
-    Edit turns it off, so coming back means confirming again. Task runs ignore
-    it: they are always isolated."""
+    filesystem, your network and your credentials. File changes saddle can
+    attribute to a command are backed up and can be undone from the session's
+    record of outside changes (`sideeffects`); packages, downloads, what a program
+    it starts changes and anything listed "not tracked" cannot be. Off by default.
+    It is set only by `SessionStore.set_full_access` with `FULL_ACCESS_CONFIRM`,
+    never by `update` and never by the model (no tool changes a session), and a
+    new session never starts with it. It exists only in the Edit lane: it is
+    granted there, and changing the lane away from Edit turns it off, so coming
+    back means confirming again. Task runs ignore it: they are always isolated."""
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     deleted_at: float | None = None

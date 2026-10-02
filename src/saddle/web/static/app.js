@@ -461,7 +461,7 @@ function renderHistory(info) {
   showMode(info.mode);
   showFullAccess(info.full_access);
   refreshProcesses();
-  refreshOutside();
+  refreshOutside(true);
   showWhere(info.workdir, info.branch);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
@@ -792,6 +792,7 @@ async function loadSessions() {
 function select(sessionId) {
   drawer(false);
   state.sessionId = sessionId;
+  clearOutside(); // the previous session's count must not outlive the switch
   state.historyFor = null; // a different transcript: rebuild it
   state.tools.clear();
   state.terminals.clear();
@@ -1140,11 +1141,21 @@ function paintOutside(view) {
     `Remove the ${view.can_delete} file${view.can_delete === 1 ? "" : "s"} this session created? This cannot be undone.`;
 }
 
-async function refreshOutside() {
+/** The chip shows only the session on screen: none until its own record is read. */
+function clearOutside() {
+  state.outside = undefined;
+  $("#outside-chip").hidden = true;
+  $("#outside-count").textContent = "0";
+}
+
+/** @param {boolean} [always] read the record even outside the Edit lane (a session just opened) */
+async function refreshOutside(always = false) {
   if (!state.sessionId || document.hidden) return;
-  if (state.mode !== "edit" && !$("#outside-dialog").open) return;
+  if (!always && state.mode !== "edit" && !$("#outside-dialog").open) return;
+  const sessionId = state.sessionId;
   try {
-    paintOutside(await api(`/api/sessions/${state.sessionId}/outside`));
+    const view = await api(`/api/sessions/${sessionId}/outside`);
+    if (state.sessionId === sessionId) paintOutside(view);
   } catch {
     // The record is a convenience to look at; a failed look leaves the last one showing.
   }
