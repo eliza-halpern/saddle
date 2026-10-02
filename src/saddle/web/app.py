@@ -75,7 +75,7 @@ from saddle.sessions import (
     SessionStore,
 )
 from saddle.titles import title_for, words_title
-from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
+from saddle.tools import PREVIEWABLE, ToolContext, attach_mcp, preview_for, scope_turn
 from saddle.undo import UndoLog
 from saddle.vision import is_image_followup
 from saddle.vllm import VllmClient
@@ -504,6 +504,8 @@ class ChatServer:
                 # call that started it has already returned, so it is pushed
                 # to the session's subscribers rather than yielded by the turn.
                 # Rebuilt when full access changes, so its sandbox follows it.
+                if live.context is not None and live.context.mcp is not None:
+                    live.context.mcp.close()  # the old context's servers end with it
                 live.context = ToolContext(
                     workdir=workdir,
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
@@ -513,6 +515,7 @@ class ChatServer:
                     processes=self.ledger(session_id),
                     images=True,
                 )
+                attach_mcp(live.context)
             tools = scope_turn(live.context, session.mode)
             live.turn += 1
             with self.client_factory() as client:

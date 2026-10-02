@@ -84,6 +84,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
+from saddle.mcp_cmd import run_mcp
 from saddle.packet import compile_packet, render_packet_text
 from saddle.refstore import ReferenceSetError
 from saddle.rule_d_run import (
@@ -2116,6 +2117,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --mode edit: commands run as you, outside the sandbox. "
         "Asks you to confirm first; anything but y or yes starts nothing.",
     )
+    mcp_cmd = sub.add_parser(
+        "mcp", help="List the MCP allowlist, or approve a server's tools after reading them."
+    )
+    mcp_cmd.add_argument("mcp_action", choices=["list", "approve"])
+    mcp_cmd.add_argument("server", nargs="?", help="The allowlisted server (approve).")
     auto = sub.add_parser(
         "auto", help="Run one task autonomously in a worktree; the result is a branch."
     )
@@ -2436,8 +2442,17 @@ def main(
         "audit",
         "auto",
         "requirements",
+        "mcp",
     ):
         return 0
+    if args.command == "mcp":
+        return run_mcp(
+            args.mcp_action,
+            args.server,
+            stdin=stdin or sys.stdin,
+            stdout=stdout or sys.stdout,
+            stderr=stderr or sys.stderr,
+        )
     if args.command == "verify":
         journal = Path(args.journal)
         anchor = (

@@ -107,6 +107,18 @@ def _empty_cwd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Mon
 
 
 @pytest.fixture(autouse=True)
+def _no_real_mcp_allowlist(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the suite away from the operator's MCP allowlist and approvals
+    (`mcpclient`): a test that attaches MCP to a session must never start a
+    server the person configured."""
+    nowhere = tmp_path_factory.mktemp("no-mcp")
+    monkeypatch.setenv("SADDLE_MCP_CONFIG", str(nowhere / "mcp.json"))
+    monkeypatch.setenv("SADDLE_MCP_APPROVALS", str(nowhere / "mcp-approved.json"))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite away from the operator's actual key.
 

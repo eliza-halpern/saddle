@@ -915,6 +915,16 @@ class Sandbox:
             mounted=self.mounted,
         )
 
+    def stdio_launch(self, command: str) -> tuple[list[str], dict[str, str], memcap.Cap]:
+        """The argv, environment and memory cap to start `command` the way
+        `start` would (this box's isolation, scrubbed environment and cap),
+        for a caller that needs the process's own stdin and stdout: an MCP
+        server speaks JSON-RPC over them (`mcpclient`). The caller starts it
+        and records it in `ledger`."""
+        cap = memcap.cap(self.memory_max)
+        argv, env = cap.wrap(self._argv(command), command_env(self.env))
+        return argv, dict(env or {}), cap
+
     def run(self, command: str, *, timeout: int = DEFAULT_TIMEOUT) -> Terminal:
         """Run to completion (or timeout) and return the finished terminal."""
         terminal = self.start(command)

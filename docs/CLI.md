@@ -430,3 +430,55 @@ The terminal chat. Same lanes and tool lists as the web chat's Ask and Edit
 | `--temperature T` | `0.0` | sampling temperature |
 | `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
 | `--base-url`, `--model` | as for `auto` | |
+
+## saddle mcp
+
+MCP (Model Context Protocol) servers the Edit lane may use. saddle starts only
+servers the person names in an allowlist file, exposes only the tools named
+there, and shows the person what each server says about its tools before the
+first use.
+
+`saddle mcp list` shows the allowlist. `saddle mcp approve NAME` starts the
+server in a sandbox over an empty folder, prints every exposed tool's
+description exactly as the server gave it, and records approval only on a typed
+`y` or `yes`. There is no `--yes`. An approval is bound to the command and to
+each exposed tool's name, description and input schema, so a server that
+changes a description after an update is refused until the person approves
+again.
+
+The allowlist is `~/.config/saddle/mcp.json` (`$SADDLE_MCP_CONFIG` overrides it;
+approvals are in `~/.config/saddle/mcp-approved.json`, `$SADDLE_MCP_APPROVALS`):
+
+```json
+{
+  "servers": {
+    "notes": {
+      "command": ["uvx", "some-notes-server==1.2.3"],
+      "version": "1.2.3",
+      "access": "acting",
+      "tools": ["search_notes", "read_note"]
+    }
+  }
+}
+```
+
+- `command`: the argv that starts the server over stdio. It must name `version`,
+  so a pin cannot be only decorative.
+- `access`: `acting` (the session that edits files may call the tools) or
+  `reader` (only the quarantined web reader may; never the acting session).
+- `tools`: exact tool names, no wildcards. The model sees `mcp__notes__search_notes`
+  and nothing else the server has. A listed tool the server does not offer
+  refuses the server.
+
+A malformed file stops `saddle up --mode edit` and the web chat's Edit turns
+with an error naming the fault; it is never read as an empty list. The Edit lane
+alone offers these tools: Ask, Task, benchmark and unattended runs never do.
+Every call is journaled like a built-in tool call. A server runs in the
+session's sandbox (outside it only in a full-access session), inside its own
+memory-capped scope, and is in the session's process list, so ending access or
+stopping all processes stops it. A server that crashes, hangs past its
+timeout or cannot start is reported by name, never as an empty result.
+
+A full-access session can edit the allowlist and the approvals like any file in
+the person's home, so the allowlist confines a sandboxed session, not a
+full-access one.

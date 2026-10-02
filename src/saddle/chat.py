@@ -11,9 +11,10 @@ from typing import IO, Any, Final
 from rich.console import Console
 
 from saddle.journal import append_record, append_span, build_record, build_span
+from saddle.mcpclient import McpConfigError
 from saddle.procs import ProcessLedger
 from saddle.timeline import Timeline
-from saddle.tools import ToolContext, execute_tool, scope_turn
+from saddle.tools import ToolContext, attach_mcp, execute_tool, scope_turn
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
 
 MAX_TOOL_ROUNDS: Final = 10
@@ -199,6 +200,12 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     context = ToolContext(
         workdir=options.workdir, full_access=options.full_access, processes=ProcessLedger()
     )
+    if options.mode == "edit":
+        try:
+            attach_mcp(context)  # the person's allowlist
+        except McpConfigError as exc:
+            display.show_error(str(exc))  # a broken allowlist is named, never skipped
+            return 1
     try:
         while True:
             display.show_prompt()
