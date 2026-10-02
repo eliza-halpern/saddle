@@ -1676,7 +1676,9 @@ def check_test_only_additions(
     whose callers are its tests -- is the change itself, not padding, and
     refusing it would refuse correct work; the copy-button function sat in a
     module the whole app imports. A module that might be imported by a file
-    that does not parse is judged.
+    that does not parse is judged, and so is every module when the diff also
+    changes non-test source in another language (signal 3 below): there a new
+    module only tests import is the padding shape, not a library.
 
     A file that does not parse never reads as "no references": an added
     module that does not parse, a non-test module that does and spells a
@@ -1783,7 +1785,15 @@ def check_test_only_additions(
             or any(stem in text for text in unparsed.values())
         )
 
-    judged = [c for c in candidates if reached(c[0])]
+    # The diff's real work is in another language's source: the recorded padding shape.
+    padded = any(
+        not is_test_code(f) and PurePath(f).suffix.lower() in OTHER_LANGUAGE_SUFFIXES
+        for f in touched
+    )
+    # A module nothing imports is a library whose callers are its tests -- unless the
+    # change's work is elsewhere, where a new module only tests import serves nothing
+    # in it: saddle's audit passed exactly that beside a markdown.js fix.
+    judged = [c for c in candidates if padded or reached(c[0])]
     skipped = sorted({c[0] for c in candidates} - {c[0] for c in judged})
     candidates = judged
     if not candidates and not unreadable:
@@ -1822,10 +1832,6 @@ def check_test_only_additions(
     roots = [i for i in dead if not holders[i] & set(dead)] or dead
     listing: list[str] = []
     unplaced: list[str] = []
-    padded = any(
-        not is_test_code(f) and PurePath(f).suffix.lower() in OTHER_LANGUAGE_SUFFIXES
-        for f in touched
-    )
     for index in roots:
         path, name, _, _ = candidates[index]
         if bad_toml:

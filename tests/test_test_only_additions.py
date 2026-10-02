@@ -387,7 +387,8 @@ def test_a_module_nothing_imports_is_not_judged_and_the_same_function_in_an_impo
     calls = {
         "test_calc.py": "from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"
     }
-    quiet = _run({**library, **calls}, {"calc.py": {1, 2}}, imported=False)
+    alone = ("calc.py", "test_calc.py")
+    quiet = _run({**library, **calls}, {"calc.py": {1, 2}}, imported=False, touched=alone)
     assert quiet.passed
     assert quiet.detail == (
         "no function, class or constant added to a module production code imports"
@@ -398,6 +399,11 @@ def test_a_module_nothing_imports_is_not_judged_and_the_same_function_in_an_impo
     refused = _run({**library, **calls, **imported}, {"calc.py": {1, 2}}, imported=False)
     assert not refused.passed
     assert "calc.py: add (referenced only by test_calc.py)" in refused.detail
+    # Beside a browser change, the same new module nothing imports is the padding shape:
+    # saddle's audit passed a markdown.js fix with exactly this added beside it.
+    padding = _run({**library, **calls}, {"calc.py": {1, 2}}, imported=False)
+    assert not padding.passed
+    assert "calc.py: add (referenced only by test_calc.py)" in padding.detail
 
 
 def test_a_module_is_reached_by_an_import_an_entry_point_a_script_guard_or_an_unreadable_file() -> (
@@ -407,6 +413,7 @@ def test_a_module_is_reached_by_an_import_an_entry_point_a_script_guard_or_an_un
     added = {"src/pkg/tool.py": {1, 2}}
 
     def judged(extra: Mapping[str, str], **kw: object) -> bool:
+        kw.setdefault("touched", ("src/pkg/tool.py",))
         check = _run({**mod, **extra}, added, imported=False, **kw)  # type: ignore[arg-type]
         return "not judged" not in check.detail
 
@@ -425,7 +432,11 @@ def test_a_module_is_reached_by_an_import_an_entry_point_a_script_guard_or_an_un
     guarded = {
         "src/pkg/tool.py": 'def helper():\n    return 1\n\n\nif __name__ == "__main__":\n    pass\n'
     }
-    assert "not judged" not in _run(guarded, {"src/pkg/tool.py": {1, 2}}, imported=False).detail
+    alone = ("src/pkg/tool.py",)
+    assert (
+        "not judged"
+        not in _run(guarded, {"src/pkg/tool.py": {1, 2}}, imported=False, touched=alone).detail
+    )
     main = _run(
         {"src/pkg/__main__.py": "def helper():\n    return 1\n"},
         {"src/pkg/__main__.py": {1, 2}},
