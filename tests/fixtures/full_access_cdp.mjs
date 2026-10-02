@@ -9,9 +9,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { coverage } from "./cdp_coverage.mjs";
+import { activePort } from "./cdp_port.mjs";
 
 const [base, sid, shots] = process.argv.slice(2);
-const port = 9300 + Math.floor(Math.random() * 600);
 const prof = mkdtempSync(join(tmpdir(), "cdp-fa-"));
 const chrome = spawn(
   "google-chrome",
@@ -20,7 +20,7 @@ const chrome = spawn(
     "--no-sandbox",
     "--disable-gpu",
     "--hide-scrollbars",
-    `--remote-debugging-port=${port}`,
+    "--remote-debugging-port=0",
     `--user-data-dir=${prof}`,
     "about:blank",
   ],
@@ -37,6 +37,8 @@ const finish = async (/** @type {number} */ code) => {
 async function target() {
   for (let i = 0; i < 75; i++) {
     try {
+      const port = activePort(prof);
+      if (!port) throw new Error("Chrome has not written its DevTools port yet");
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
       const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
