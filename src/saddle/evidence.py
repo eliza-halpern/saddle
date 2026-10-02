@@ -99,11 +99,30 @@ SANDBOX_EXPOSE_KEY: Final = "sandbox-expose"
 `sandbox-expose = ["node", "google-chrome"]` in the `[tool.saddle]` table of its
 `pyproject.toml` (`sandbox_expose`). Absent, only the gate tools are shown."""
 
+PROMPT_BENCHMARK_KEY: Final = "prompt-benchmark"
+"""The project's small prompt benchmark, as an argv: `prompt-benchmark =
+["python", "bench.py"]` in the `[tool.saddle]` table (`prompt_benchmark`). The
+audit runs it only when prompt text changed (`prompt_changes`); its last stdout
+line must be JSON holding a `score`. Absent, a prompt change is listed as not
+proven."""
+
+PROMPT_BENCHMARK_FLOOR_KEY: Final = "prompt-benchmark-floor"
+"""The lowest head score the audit accepts (`prompt_benchmark`): below it the
+`prompt-effect` finding fails. Needs `prompt-benchmark`."""
+
+PROMPT_BENCHMARK_MARGIN_KEY: Final = "prompt-benchmark-margin"
+"""How far the head score may fall below the baseline's, at most
+(`prompt_benchmark`): further, the finding fails. Needs `prompt-benchmark`; the
+audit then runs the command on the baseline tree too."""
+
 SADDLE_KEYS: Final = (
     SUITE_LIMIT_KEY,
     SUITE_WORKERS_KEY,
     STATIC_CHECK_KEY,
     SANDBOX_EXPOSE_KEY,
+    PROMPT_BENCHMARK_KEY,
+    PROMPT_BENCHMARK_FLOOR_KEY,
+    PROMPT_BENCHMARK_MARGIN_KEY,
 )
 """Every key saddle reads in `[tool.saddle]`. Any other key there is refused
 (`_committed_saddle_table`): a typo must not read as "not set"."""
@@ -679,6 +698,83 @@ def sandbox_expose(tree: Path, rev: str) -> tuple[str, ...]:
         )
         raise SuiteLimitError(msg)
     return tuple(value)
+
+
+@dataclass(frozen=True)
+class PromptBenchmark:
+    """The project's prompt benchmark: the command and the bars it set."""
+
+    argv: tuple[str, ...]
+    floor: float | None = None
+    margin: float | None = None
+
+
+def _bar(table: Mapping[str, Any], key: str, where: str, *, non_negative: bool) -> float | None:
+    """A prompt-benchmark bar from the table: None when unset, else a finite
+    number (at least 0 when `non_negative`), or `SuiteLimitError`. A comparison
+    rejects nan and the infinities, and a huge integer compares exactly."""
+    if key not in table:
+        return None
+    value = table[key]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not -1e300 < value < 1e300
+        or (non_negative and value < 0)
+    ):
+        what = "a number of at least 0" if non_negative else "a finite number"
+        msg = f"cannot read the prompt benchmark: {where}: {key} = {value!r} is not {what}"
+        raise SuiteLimitError(msg)
+    return float(value)
+
+
+def prompt_benchmark(tree: Path, rev: str) -> PromptBenchmark | None:
+    """The project's prompt benchmark as committed at `rev`; None when it sets none.
+
+    Read exactly where and how `suite_limit` reads `test-timeout`, so the tree
+    under audit can neither drop its benchmark nor lower the floor or margin
+    it is judged by: a bar the audited tree supplies is the model setting its
+    own. A command that is not a non-empty list of non-empty strings, a bar that
+    is not a finite number (a margin below 0 included), or a bar set with no
+    command raises `SuiteLimitError` naming the commit and the value: a bar
+    that is silently not applied reads as a pass."""
+    table, where = _committed_saddle_table(tree, rev, "the prompt benchmark")
+    table = table or {}
+    floor = _bar(table, PROMPT_BENCHMARK_FLOOR_KEY, where, non_negative=False)
+    margin = _bar(table, PROMPT_BENCHMARK_MARGIN_KEY, where, non_negative=True)
+    if PROMPT_BENCHMARK_KEY not in table:
+        if floor is not None or margin is not None:
+            msg = (
+                f"cannot read the prompt benchmark: {where}: a floor or margin is set "
+                f"but {PROMPT_BENCHMARK_KEY} is not"
+            )
+            raise SuiteLimitError(msg)
+        return None
+    value = table[PROMPT_BENCHMARK_KEY]
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(part, str) and part.strip() for part in value)
+    ):
+        msg = (
+            f"cannot read the prompt benchmark: {where}: {PROMPT_BENCHMARK_KEY} = {value!r} "
+            "is not a non-empty list of command words"
+        )
+        raise SuiteLimitError(msg)
+    return PromptBenchmark(tuple(value), floor, margin)
+
+
+def run_prompt_benchmark(argv: Sequence[str], cwd: Path, *, timeout: float) -> CapturedRun:
+    """Run the project's prompt benchmark in `cwd`, as `run_static_check` runs
+    a static check: under the memory cap and the sandbox (no network), with the
+    tree's own package importable."""
+    return run_capture(
+        list(argv),
+        cwd,
+        timeout=timeout,
+        memory_limit=tree_memory_limit(),
+        extra_env=src_layout_env(cwd),
+    )
 
 
 def run_static_check(argv: Sequence[str], cwd: Path, *, timeout: float) -> CapturedRun:

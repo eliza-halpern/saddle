@@ -39,14 +39,23 @@ does not follow the convention, a prompt passed inline as an argument, a tool
 description, a prompt kept in a data file, and a prompt-named function nested
 inside another function. A file that cannot be read as Python on either side
 is returned in `unreadable`, never read as "nothing changed".
+
+The second half of the module is the benchmark's score contract, also pure:
+the command's last stdout line must be a JSON object such as `{"score": 0.83,
+"n": 12, "label": "smoke"}`. `score` is a finite number; `n` (how many cases
+the score is over) and `label` are optional and, if present, must be a
+non-negative integer and a string. Anything else, a command that exits
+non-zero, times out or cannot be launched is "no score", and no score is
+never a pass (`judge`).
 """
 
 from __future__ import annotations
 
 import ast
+import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 PROMPT_WORDS: Final = frozenset(
     {"PROMPT", "PROMPTS", "RULE", "RULES", "PERSONAS", "GRAMMAR", "INSTRUCTIONS"}
@@ -197,3 +206,132 @@ def prompt_changes(base: Mapping[str, str | None], head: Mapping[str, str | None
             f"{path}: {n}" for n in set(old_f) | set(new_f) if old_f.get(n) != new_f.get(n)
         )
     return PromptChanges(tuple(sorted(names)), tuple(sorted(unreadable)))
+
+
+# -- the benchmark's score ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Score:
+    """One benchmark run's reading of its last stdout line."""
+
+    score: float
+    n: int | None = None
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class Measured:
+    """A benchmark run: its score, or in `failure` why it has none."""
+
+    score: Score | None
+    failure: str = ""
+
+
+def read_score(stdout: str) -> Score | None:
+    """The score on `stdout`'s last non-blank line, or None when that line is
+    not a JSON object holding a finite numeric `score` and well-formed
+    optional `n` and `label`. Earlier lines are the command's own log."""
+    lines = stdout.strip().splitlines()
+    if not lines:
+        return None
+    try:
+        body = json.loads(lines[-1])
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    value, n, label = body.get("score"), body.get("n"), body.get("label", "")
+    if isinstance(value, bool) or not isinstance(value, int | float) or not -1e300 < value < 1e300:
+        return None
+    if "n" in body and (isinstance(n, bool) or not isinstance(n, int) or n < 0):
+        return None
+    if not isinstance(label, str):
+        return None
+    return Score(float(value), n, label)
+
+
+def measured(exit_code: int, stdout: str, *, timed_out: bool, unavailable: bool) -> Measured:
+    """A finished run as a `Measured`: a score only from a command that was
+    launched, finished in time and exited 0 with a readable last line."""
+    if unavailable:
+        return Measured(None, "could not be launched")
+    if timed_out:
+        return Measured(None, "timed out")
+    if exit_code != 0:
+        return Measured(None, f"failed to run (exit {exit_code})")
+    score = read_score(stdout)
+    if score is None:
+        return Measured(None, "ran but produced no readable score")
+    return Measured(score, "")
+
+
+def _shown(score: Score) -> str:
+    n = "" if score.n is None else f" (n={score.n})"
+    label = f" [{score.label}]" if score.label else ""
+    return f"{score.score:.4g}{n}{label}"
+
+
+def unconfigured_detail(lead: str) -> str:
+    """The finding's words when prompt text changed and the project sets no benchmark."""
+    return (
+        f"{lead}; no test, coverage or mutation result measures a prompt's effect, and this "
+        "project configures no prompt benchmark. Not proven: a person reads the change."
+    )
+
+
+def judge(
+    lead: str,
+    head: Measured,
+    base: Measured | None,
+    *,
+    floor: float | None,
+    margin: float | None,
+) -> tuple[Literal["pass", "fail", "not-proven"], str]:
+    """The verdict and words for a benchmark run on the head tree (and on the
+    baseline's, when it was run), against the bars the project set at the baseline.
+
+    Fails only on a readable head score that is below `floor`, or more than
+    `margin` below a readable baseline score. A run with no head score is
+    not proven, never a fail and never a pass: an environment the benchmark
+    cannot run in is no evidence about the prompt. With neither bar set the
+    scores are reported and not judged; a margin with no baseline score
+    cannot be judged either."""
+    if head.score is None:
+        return "not-proven", (
+            f"{lead}; the prompt benchmark {head.failure}, so the prompt's effect is not "
+            "proven. A person runs it."
+        )
+    shown = f"head {_shown(head.score)}"
+    if base is not None:
+        shown = (
+            f"base {_shown(base.score)} -> {shown}"
+            if base.score is not None
+            else f"base: the benchmark {base.failure}; {shown}"
+        )
+    got = head.score.score
+    reasons = []
+    if floor is not None and got < floor:
+        reasons.append(
+            f"head is below the floor {floor:g} (prompt-benchmark-floor, read at the baseline)"
+        )
+    if margin is not None and base is not None and base.score is not None:
+        if got < base.score.score - margin:
+            reasons.append(
+                f"head is more than {margin:g} below base "
+                f"(prompt-benchmark-margin, read at the baseline)"
+            )
+    if reasons:
+        return "fail", f"{lead}; prompt benchmark {shown}: {'; '.join(reasons)}."
+    if floor is None and margin is None:
+        return "not-proven", (
+            f"{lead}; prompt benchmark {shown}. Not proven: the project sets no "
+            "prompt-benchmark-floor or prompt-benchmark-margin, so the score is reported, "
+            "not judged."
+        )
+    if margin is not None and (base is None or base.score is None):
+        return "not-proven", (
+            f"{lead}; prompt benchmark {shown}. Not proven: a margin is set but the "
+            "baseline has no score to compare with."
+        )
+    return "pass", f"{lead}; prompt benchmark {shown}, within the project's bar."

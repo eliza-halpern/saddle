@@ -77,6 +77,7 @@ from saddle.evidence import (
     SKIP_REPORT_NAME,
     CapturedRun,
     MutationOutcome,
+    PromptBenchmark,
     SkippedTests,
     SuiteLimitError,
     changed_statements,
@@ -84,10 +85,12 @@ from saddle.evidence import (
     format_overrides,
     git_changed_files,
     git_diff,
+    prompt_benchmark,
     read_skip_report,
     ruff_argv,
     ruff_findings,
     run_capture,
+    run_prompt_benchmark,
     run_static_check,
     run_suite_capture,
     sandbox_expose,
@@ -100,6 +103,7 @@ from saddle.evidence import (
 )
 from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
+    TOOL_UNAVAILABLE,
     GateCheck,
     RuffFinding,
     TaskRequirementsCheck,
@@ -123,6 +127,7 @@ from saddle.journal import (
     scrub_thinking,
     write_attempt_sidecar,
 )
+from saddle.prompt_changes import Measured, judge, measured, prompt_changes, unconfigured_detail
 from saddle.task_examples import WOULD_REFUSE
 from saddle.task_requirements import check_tree
 
@@ -672,6 +677,116 @@ def skipped_detail(skips: SkippedTests, scope: str) -> str | None:
     )
 
 
+PROMPT_EFFECT_GATE: Final = "prompt-effect"
+"""The tier-2 finding for changed prompt text (`prompt_changes.prompt_changes`):
+what the project's prompt benchmark scored, or that none measures it. Emitted
+only when prompt text changed. Not proven unless the project sets a floor or a
+margin at its baseline (`evidence.prompt_benchmark`), then a pass or a fail."""
+
+
+def _source_at(copy: Path, rev: str, rel: str) -> str | None:
+    """`rel` as commit `rev` has it, None when `git show` finds nothing there.
+    A lookup that fails reads as an added file, which only ever adds names."""
+    shown = run_capture(["git", "show", f"{rev}:{rel}"], copy)
+    return shown.stdout if shown.exit_code == 0 else None
+
+
+def _benchmark_run(argv: Sequence[str], tree: Path, limit: float) -> Measured:
+    ran = run_prompt_benchmark(argv, tree, timeout=limit)
+    return measured(
+        ran.exit_code,
+        ran.stdout,
+        timed_out=ran.timed_out,
+        unavailable=ran.exit_code == TOOL_UNAVAILABLE,
+    )
+
+
+def _measure_json(run: Measured) -> dict[str, Any]:
+    score = run.score
+    return {
+        "score": None if score is None else score.score,
+        "n": None if score is None else score.n,
+        "label": "" if score is None else score.label,
+        "failure": run.failure,
+    }
+
+
+def prompt_effect(
+    copy: Path,
+    resolved: str,
+    limit: float,
+    bench: PromptBenchmark | None,
+    seen: dict[tuple[str, tuple[str, ...]], Measured],
+) -> tuple[Finding, dict[str, Any]] | None:
+    """The `PROMPT_EFFECT_GATE` finding and its sealed record, or None when no
+    prompt text changed between `resolved` and the audited `copy`.
+
+    Prompt text is what `prompt_changes` names, over the changed Python files
+    that are not tests. With no `bench`, the finding says so and is not proven.
+    With one, the command runs on the head tree and on a copy of the baseline's
+    (`seen` keeps a baseline score, by commit and command, for the next audit
+    of the run), and `prompt_changes.judge` reads both against the bars read at
+    the baseline."""
+    files = [
+        f for f in git_changed_files(copy, resolved) if f.endswith(".py") and not _test_side(f)
+    ]
+    heads = {
+        f: (copy / f).read_text(errors="replace") if (copy / f).is_file() else None for f in files
+    }
+    changes = prompt_changes({f: _source_at(copy, resolved, f) for f in files}, heads)
+    if not changes:
+        return None
+    parts = []
+    if changes.names:
+        parts.append(f"prompt text changed: {_listed(changes.names)}")
+    if changes.unreadable:
+        parts.append(
+            f"could not tell whether prompt text changed in {_listed(changes.unreadable)} "
+            "(not readable as Python)"
+        )
+    lead = "; ".join(parts)
+    record: dict[str, Any] = {"names": list(changes.names), "unreadable": list(changes.unreadable)}
+    verdict: Verdict = "not-proven"
+    if bench is None or not changes.names:
+        detail = (
+            unconfigured_detail(lead)
+            if bench is None
+            else f"{lead}. Not proven: a person reads the files."
+        )
+    else:
+        head = _benchmark_run(bench.argv, copy, limit)
+        base = seen.get((resolved, bench.argv))
+        if base is None:
+            with tempfile.TemporaryDirectory(prefix="saddle-prompt-base-") as scratch:
+                before = Path(scratch) / "tree"
+                shutil.copytree(copy, before, symlinks=True)
+                run_capture(["git", "reset", "--hard", "-q", resolved], before)
+                base = _benchmark_run(bench.argv, before, limit)
+            if base.score is not None:
+                seen[(resolved, bench.argv)] = base
+        verdict, detail = judge(lead, head, base, floor=bench.floor, margin=bench.margin)
+        record |= {
+            "command": list(bench.argv),
+            "floor": bench.floor,
+            "margin": bench.margin,
+            "head": _measure_json(head),
+            "base": _measure_json(base),
+        }
+    found = Finding(
+        PROMPT_EFFECT_GATE,
+        2,
+        verdict,
+        "code-wrong" if verdict == "fail" else "evidence-thin",
+        detail,
+        (
+            "saddle.prompt_changes.judge"
+            if bench is not None
+            else "saddle.prompt_changes.prompt_changes",
+        ),
+    )
+    return found, record
+
+
 def _not_proven(gate: str, detail: str, cite: str) -> Finding:
     """A tier-2 `not-proven` finding of a gate that is not one of the battery's
     thirteen (see `REUSES`): emitted only when it has something to say."""
@@ -1201,6 +1316,9 @@ class Auditor:
         self.node = self.config.node or audit_node(self.config.test_command)
         self._memory: dict[str, Findings] = {}
         self._by_syntax: dict[str, str] = {}
+        self._bench_seen: dict[tuple[str, tuple[str, ...]], Measured] = {}
+        """A readable baseline prompt-benchmark score by (commit, command): the
+        baseline does not change within a run, so it is measured once."""
         """`_key(tier, "syntax", syntax_key, baseline)` to the verdict key it was
         decided under: a format-only edit reuses it (`_reuse`)."""
 
@@ -1367,6 +1485,7 @@ class Auditor:
                 workers = suite_workers(copy, resolved).count
                 statics = static_check(copy, resolved)
                 exposed = sandbox_expose(copy, resolved)
+                bench = prompt_benchmark(copy, resolved)
             except SuiteLimitError as exc:
                 raise AuditError(str(exc)) from exc
             # One run of the battery serves both tiers: at tier 2 the tier-1
@@ -1428,7 +1547,7 @@ class Auditor:
                     if not first.passed:
                         return self._store(_blocked_tier2(key, first))
                     second = self._tiered(
-                        2, key, gated, copy, resolved, limit, None, selected=selection
+                        2, key, gated, copy, resolved, limit, None, selected=selection, bench=bench
                     )
                     self._by_syntax[same] = second.key
                     return second
@@ -1455,6 +1574,7 @@ class Auditor:
         p1: Future[TaskRequirementsCheck] | None,
         static: Future[GateCheck] | None = None,
         selected: Sequence[str] | None = None,
+        bench: PromptBenchmark | None = None,
     ) -> Findings:
         """`tier`'s findings from one run of the battery (`_gate`), stored under `key`.
         `selected` is the test files an impact-scoped suite run was limited to, None
@@ -1641,6 +1761,9 @@ class Auditor:
                     "skipped": [list(p) for p in skips.skipped],
                     "xfailed": [list(p) for p in skips.xfailed],
                 }
+        if tier == 2 and (effect := prompt_effect(copy, resolved, limit, bench, self._bench_seen)):
+            findings.append(effect[0])
+            sidecars[PROMPT_EFFECT_GATE] = effect[1]
         return self._store(
             Findings(
                 tier=tier,

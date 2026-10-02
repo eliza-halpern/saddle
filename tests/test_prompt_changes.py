@@ -13,7 +13,16 @@ from __future__ import annotations
 
 import pytest
 
-from saddle.prompt_changes import PromptChanges, prompt_changes
+from saddle.prompt_changes import (
+    Measured,
+    PromptChanges,
+    Score,
+    judge,
+    measured,
+    prompt_changes,
+    read_score,
+    unconfigured_detail,
+)
 
 OLD = 'SYSTEM_PROMPT = "You are a careful engineer. Read the code first."\n'
 
@@ -182,3 +191,126 @@ def test_a_sum_that_is_not_two_strings_is_compared_as_written() -> None:
     assert names('X_RULES = "one two three " * 2\n', 'X_RULES = "one two three " * 3\n') == (
         "m.py: X_RULES",
     )
+
+
+# -- the benchmark's score ---------------------------------------------------------
+
+
+def last_line(*lines: str) -> str:
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ('{"score": 0.83}', Score(0.83)),
+        ('log\n{"score": 1, "n": 12, "label": "smoke"}\n\n', Score(1.0, 12, "smoke")),
+        ('{"score": 0, "n": 0}', Score(0.0, 0)),
+        ('{"score": -2.5}', Score(-2.5)),
+        # the contract is the LAST line, nothing earlier and nothing later
+        ('{"score": 0.9}\ndone', None),
+        ("", None),
+        ("   \n", None),
+        ("0.83", None),
+        ('["score", 1]', None),
+        ('{"n": 3}', None),
+        ('{"score": "0.8"}', None),
+        ('{"score": true}', None),
+        ('{"score": NaN}', None),
+        ('{"score": Infinity}', None),
+        ('{"score": 0.5, "n": 1.5}', None),
+        ('{"score": 0.5, "n": -1}', None),
+        ('{"score": 0.5, "n": true}', None),
+        ('{"score": 0.5, "n": null}', None),
+        ('{"score": 0.5, "label": 3}', None),
+        ('{"score": 0.5', None),
+    ],
+)
+def test_the_last_stdout_line_must_be_a_json_score(stdout: str, expected: Score | None) -> None:
+    assert read_score(stdout) == expected
+
+
+def test_a_run_has_a_score_only_when_it_launched_finished_and_exited_zero() -> None:
+    good = last_line("log", '{"score": 0.5}')
+    assert measured(0, good, timed_out=False, unavailable=False) == Measured(Score(0.5))
+    for kwargs, why in (
+        ({"timed_out": False, "unavailable": True}, "could not be launched"),
+        ({"timed_out": True, "unavailable": False}, "timed out"),
+    ):
+        assert measured(0, good, **kwargs) == Measured(None, why)
+    # a readable score on a non-zero exit is not a score
+    assert measured(2, good, timed_out=False, unavailable=False) == Measured(
+        None, "failed to run (exit 2)"
+    )
+    assert measured(0, "no json", timed_out=False, unavailable=False) == Measured(
+        None, "ran but produced no readable score"
+    )
+
+
+LEAD = "prompt text changed: a.py: X"
+
+
+def ran(score: float, n: int | None = None, label: str = "") -> Measured:
+    return Measured(Score(score, n, label))
+
+
+def test_scores_without_a_bar_are_reported_and_not_judged() -> None:
+    verdict, text = judge(LEAD, ran(0.83, 12), ran(0.8, 12), floor=None, margin=None)
+    assert verdict == "not-proven"
+    assert "prompt benchmark base 0.8 (n=12) -> head 0.83 (n=12)." in text
+    assert "scores are reported, not judged" in text or "score is reported, not judged" in text
+    # a better head and a worse head are both only reported
+    assert judge(LEAD, ran(0.1), ran(0.9), floor=None, margin=None)[0] == "not-proven"
+
+
+def test_a_floor_is_met_or_missed_by_the_head_score_alone() -> None:
+    assert judge(LEAD, ran(0.75), None, floor=0.75, margin=None)[0] == "pass"
+    verdict, text = judge(LEAD, ran(0.74), None, floor=0.75, margin=None)
+    assert verdict == "fail"
+    assert "head is below the floor 0.75" in text
+    # the baseline's own score does not excuse a head below the floor
+    assert judge(LEAD, ran(0.74), ran(0.2), floor=0.75, margin=None)[0] == "fail"
+
+
+def test_a_margin_compares_the_head_with_a_readable_baseline() -> None:
+    assert judge(LEAD, ran(0.7), ran(0.8), floor=None, margin=0.1000001)[0] == "pass"
+    verdict, text = judge(LEAD, ran(0.69), ran(0.8), floor=None, margin=0.1)
+    assert verdict == "fail"
+    assert "head is more than 0.1 below base" in text
+    assert judge(LEAD, ran(0.99), ran(0.8), floor=None, margin=0.0)[0] == "pass"
+    both = judge(LEAD, ran(0.1), ran(0.9), floor=0.5, margin=0.1)
+    assert both[0] == "fail"
+    assert "below the floor" in both[1]
+    assert "below base" in both[1]
+
+
+def test_a_margin_without_a_baseline_score_is_not_proven_not_passed() -> None:
+    gone = Measured(None, "timed out")
+    for base in (None, gone):
+        verdict, text = judge(LEAD, ran(0.9), base, floor=None, margin=0.1)
+        assert verdict == "not-proven"
+        assert "baseline has no score to compare with" in text
+    assert (
+        "base: the benchmark timed out; head 0.9"
+        in judge(LEAD, ran(0.9), gone, floor=0.5, margin=0.1)[1]
+    )
+    # a floor still decides on the head alone
+    assert judge(LEAD, ran(0.9), gone, floor=0.5, margin=None)[0] == "pass"
+    assert judge(LEAD, ran(0.4), gone, floor=0.5, margin=0.1)[0] == "fail"
+
+
+def test_a_head_without_a_score_is_never_a_pass_or_a_fail() -> None:
+    for why in ("timed out", "failed to run (exit 3)", "ran but produced no readable score"):
+        verdict, text = judge(LEAD, Measured(None, why), ran(0.9), floor=0.99, margin=0.0)
+        assert verdict == "not-proven"
+        assert f"the prompt benchmark {why}" in text
+
+
+def test_the_score_shows_its_cases_and_label_and_the_unconfigured_note_names_the_change() -> None:
+    assert (
+        "head 0.8333 (n=3) [smoke]"
+        in judge(LEAD, ran(0.83333, 3, "smoke"), None, floor=None, margin=None)[1]
+    )
+    text = unconfigured_detail(LEAD)
+    assert text.startswith(LEAD + "; no test, coverage or mutation result measures")
+    assert "configures no prompt benchmark" in text
