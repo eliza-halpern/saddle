@@ -11,6 +11,7 @@ from typing import IO, Any, Final
 from rich.console import Console
 
 from saddle.journal import append_record, append_span, build_record, build_span
+from saddle.procs import ProcessLedger
 from saddle.timeline import Timeline
 from saddle.tools import ToolContext, execute_tool, scope_turn
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
@@ -115,7 +116,7 @@ def _run_turn(
     per tool call, which would strand a terminal after its first read.
     """
     node_id = f"chat#{turn}"
-    ctx = context or ToolContext(workdir=options.workdir)
+    ctx = context or ToolContext(workdir=options.workdir, processes=ProcessLedger())
     offered = scope_turn(ctx, options.mode)
     messages.append({"role": "user", "content": text})
     rounds: list[dict[str, Any]] = []
@@ -195,7 +196,9 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     # run_command in turn N must still be there for read_terminal or
     # wait_for_terminal in turn N+1. Built here, not inside the loop, so two
     # sessions (two `run_chat` calls) never share it.
-    context = ToolContext(workdir=options.workdir, full_access=options.full_access)
+    context = ToolContext(
+        workdir=options.workdir, full_access=options.full_access, processes=ProcessLedger()
+    )
     try:
         while True:
             display.show_prompt()
@@ -228,3 +231,5 @@ def run_chat(options: ChatOptions, client: VllmClient, *, stdin: IO[str], consol
     except KeyboardInterrupt:
         console.print()
         return 130
+    finally:
+        context.stop_processes()  # nothing the session started outlives it

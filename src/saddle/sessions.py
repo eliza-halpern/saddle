@@ -537,5 +537,9 @@ class SessionStore:
         """Where a session's file snapshots live, beside its transcript."""
         return self._dir(session_id) / "undo"
 
+    def processes_path(self, session_id: str) -> Path:
+        """Where a session's process list is kept, beside its transcript."""
+        return self._dir(session_id) / "processes.json"
+
     def journal_path(self, session_id: str) -> Path:
         return self._dir(session_id) / "chat.jsonl"

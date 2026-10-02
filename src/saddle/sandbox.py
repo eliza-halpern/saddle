@@ -47,9 +47,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
+from time import time as wall_time
 from typing import Final, Literal
 
 from saddle import memcap
+from saddle.procs import ProcessLedger, Tracked
 
 DEFAULT_TIMEOUT: Final = 120
 MAX_CAPTURE: Final = 400_000
@@ -849,6 +851,10 @@ class Sandbox:
     run's worktree sees the checkout's `node_modules` there, as a directory git
     ignores, so the model can run the project's JavaScript tools. A link would be
     a file to git, and land in the run's commit."""
+    ledger: ProcessLedger | None = None
+    """Where every command's scope is recorded (`procs`), so what it leaves
+    running can be listed and stopped. Only a chat session sets it; a task's
+    box records nothing."""
     tmp: Path | None = None
     """A private directory every command sees as `/tmp`, so what one command
     leaves there the next can read; None gives each command an empty `/tmp`.
@@ -869,6 +875,7 @@ class Sandbox:
         tmp: Path | None = None,
         unsandboxed: bool = False,
         mounted: Sequence[tuple[Path, Path]] = (),
+        ledger: ProcessLedger | None = None,
     ) -> Sandbox:
         """A sandbox for `root`; with `require_isolation`, never an unisolated one.
 
@@ -892,6 +899,7 @@ class Sandbox:
             memory_max=memcap.memory_max(),
             tmp=tmp,
             mounted=tuple(mounted),
+            ledger=ledger,
         )
 
     def _argv(self, command: str) -> list[str]:
@@ -936,6 +944,17 @@ class Sandbox:
             self.terminals[terminal.id] = terminal
             return terminal
         terminal.process = process
+        if self.ledger is not None:
+            self.ledger.record(
+                Tracked(
+                    unit=cap.unit,
+                    terminal=terminal.id,
+                    command=command,
+                    started=wall_time(),
+                    pgid=process.pid,
+                    process=process,
+                )
+            )
 
         def pump() -> None:
             assert process.stdout is not None

@@ -65,6 +65,7 @@ from saddle.journal import ProofRecord, SpanRecord, read_entries
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import Packet, compile_packet, display_record, render_packet_text
+from saddle.procs import ProcessLedger
 from saddle.sandbox import OutsideRootError, resolve_within
 from saddle.sessions import (
     BUILTIN_PERSONAS,
@@ -306,6 +307,8 @@ class Live:
     busy: bool = False
     cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
+    processes: ProcessLedger | None = None
+    """The session's process list (`ChatServer.ledger`)."""
     passwords: dict[str, queue.Queue[str | None]] = field(default_factory=dict)
     """Open `sudo` password requests (#125), by id, each waiting on the page."""
 
@@ -390,6 +393,27 @@ class ChatServer:
 
     def _live(self, session_id: str) -> Live:
         return self.live.setdefault(session_id, Live())
+
+    def end_processes(self, session_id: str, *, revoke: bool) -> list[dict[str, object]]:
+        """Stop everything still running from the session; what it stopped, as
+        JSON. `revoke` also ends full access on the live context."""
+        live = self._live(session_id)
+        ledger = self.ledger(session_id)
+        if live.context is None:
+            entries = ledger.stop_all()
+        else:
+            entries = live.context.stop_processes()
+            if revoke:
+                live.context.revoke_full_access()
+        return [entry.as_json() for entry in entries]
+
+    def ledger(self, session_id: str) -> ProcessLedger:
+        """The session's process list, kept on disk so a restart still finds
+        what its commands left running."""
+        live = self._live(session_id)
+        if live.processes is None:
+            live.processes = ProcessLedger(self.store.processes_path(session_id))
+        return live.processes
 
     def _context_window(self, client: Any) -> int:
         """Ask the server once; fall back to a conservative default."""
@@ -483,6 +507,7 @@ class ChatServer:
                     undo=UndoLog(self.store.undo_dir(session_id)),
                     full_access=session.full_access,
                     ask_password=live.ask_password,
+                    processes=self.ledger(session_id),
                 )
             tools = scope_turn(live.context, session.mode)
             live.turn += 1
@@ -729,13 +754,14 @@ def build_app(
                 status_code=400,
             )
         sid = request.path_params["sid"]
-        had_full_access = store.get(sid).full_access
+        before = store.get(sid)
         session = store.update(sid, **body)
-        live = server.live.get(sid)
-        if had_full_access and not session.full_access and live and live.context:
-            # Leaving Edit ended full access (`SessionStore.update`): stop what
-            # still runs outside the sandbox now, not at the next turn.
-            live.context.revoke_full_access()
+        stopped: list[dict[str, object]] = []
+        if before.mode == "edit" and session.mode != "edit":
+            # Leaving Edit ends full access (`SessionStore.update`) and every
+            # command still running from the session: stop them now, not at
+            # the next turn, and say what was stopped.
+            stopped = server.end_processes(sid, revoke=before.full_access)
         # The Live is deliberately kept. It used to be dropped here "because
         # the workdir or persona may have moved", but a Live is not a cache of
         # the session -- it holds the *subscriber queues* of every connected
@@ -748,7 +774,7 @@ def build_app(
         # anything else did. The workdir case it was guarding is already
         # handled in `_run`, which rebuilds the tool context whenever the
         # session has moved.
-        return JSONResponse(session.__dict__)
+        return JSONResponse({**session.__dict__, "stopped": stopped})
 
     async def full_access(request: Request) -> JSONResponse:
         """Turn the session's full access on (only with `FULL_ACCESS_CONFIRM`)
@@ -761,10 +787,40 @@ def build_app(
             session = store.set_full_access(sid, on, confirm=str(body.get("confirm", "")))
         except FullAccessRefusedError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        live = server.live.get(sid)
-        if not on and live is not None and live.context is not None:
-            live.context.revoke_full_access()
-        return JSONResponse(session.__dict__)
+        stopped = [] if on else server.end_processes(sid, revoke=True)
+        return JSONResponse({**session.__dict__, "stopped": stopped})
+
+    async def processes(request: Request) -> JSONResponse:
+        """The session's process list: what its commands started and left running."""
+        sid = request.path_params["sid"]
+        store.get(sid)
+        ledger = server.ledger(sid)
+        return JSONResponse(
+            {"tracking": ledger.tracking, "processes": [e.as_json() for e in ledger.entries()]}
+        )
+
+    async def stop_processes(request: Request) -> JSONResponse:
+        """Stop one process group of the session's list ({"id"}) or all of it
+        ({"all": true}). An id that is not in the list is refused: only the
+        session's own processes can be stopped here."""
+        sid = request.path_params["sid"]
+        store.get(sid)
+        body = await request.json()
+        ledger = server.ledger(sid)
+        if body.get("all") is True:
+            return JSONResponse({"stopped": server.end_processes(sid, revoke=False)})
+        target = body.get("id")
+        entry = (
+            ledger.stop(target)
+            if isinstance(target, int) and not isinstance(target, bool)
+            else None
+        )
+        if entry is None:
+            return JSONResponse(
+                {"error": "not one of this session's processes; nothing was stopped"},
+                status_code=404,
+            )
+        return JSONResponse({"stopped": [entry.as_json()]})
 
     async def password(request: Request) -> JSONResponse:
         """The person's answer to a `sudo` password request: {"id", "password"}
@@ -790,12 +846,14 @@ def build_app(
         if request.query_params.get("now") == "1":
             if store.get(sid).deleted_at is None:
                 return JSONResponse({"error": "restore or delete it first"}, status_code=409)
+            stopped = server.end_processes(sid, revoke=True)
             store.delete(sid)
             server.live.pop(sid, None)
-            return JSONResponse({"ok": True})
+            return JSONResponse({"ok": True, **({"stopped": stopped} if stopped else {})})
+        stopped = server.end_processes(sid, revoke=True)
         store.trash(sid)
         server.live.pop(sid, None)
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, **({"stopped": stopped} if stopped else {})})
 
     async def restore_session(request: Request) -> JSONResponse:
         return JSONResponse(store.restore(request.path_params["sid"]).__dict__)
@@ -1363,6 +1421,8 @@ def build_app(
             Route("/api/sessions/{sid}", delete_session, methods=["DELETE"]),
             Route("/api/sessions/{sid}/restore", restore_session, methods=["POST"]),
             Route("/api/sessions/{sid}/full-access", full_access, methods=["POST"]),
+            Route("/api/sessions/{sid}/processes", processes, methods=["GET"]),
+            Route("/api/sessions/{sid}/processes/stop", stop_processes, methods=["POST"]),
             Route("/api/sessions/{sid}/password", password, methods=["POST"]),
             Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),

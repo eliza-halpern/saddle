@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from saddle import memcap
 from saddle.sandbox import DESKTOP_ENV
 from saddle.tools import ToolContext, execute_tool
 from saddle.vllm import ToolCall
@@ -47,6 +48,9 @@ def seen_by_a_command(tmp_path: Path, *, full: bool) -> dict[str, str]:
 
 @pytest.fixture
 def desktop(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    # The fake bus address would send `systemd-run` (a command's memory cap) to a
+    # bus that is not there, so the cap falls back to its rlimit here.
+    monkeypatch.setattr(memcap, "cgroup_problem", lambda: "not under test")
     for name, value in VALUES.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv(SECRET, "k-secret-value")

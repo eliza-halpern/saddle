@@ -27,6 +27,7 @@ _TENSES: Final[dict[str, tuple[str, str]]] = {
     "view_image": ("Viewing", "Viewed"),
     "read_terminal": ("Reading", "Read"),
     "wait_for_terminal": ("Waiting for", "Waited for"),
+    "processes": ("Checking", "Checked"),
 }
 
 MAX_OBJECT: Final = 72
@@ -36,6 +37,8 @@ def _object_of(name: str, args: dict[str, Any]) -> str:
     """The noun phrase a label points at: a path, a command, a query."""
     if name == "list_dir" and not args.get("path"):
         return "this folder"  # "Listed" alone reads as a sentence fragment
+    if name == "processes":
+        return "session processes"
     if name in ("read_terminal", "wait_for_terminal") and args.get("id"):
         return f"terminal {args['id']}"
     for key in ("path", "file", "dir", "directory"):

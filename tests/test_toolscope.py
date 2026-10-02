@@ -29,7 +29,7 @@ from saddle.cli import build_parser
 from saddle.journal import read_spans
 from saddle.sessions import SessionStore
 from saddle.timeline import Timeline
-from saddle.tools import READ_ONLY_TOOLS, REFUSED, TOOLS
+from saddle.tools import PROCESSES_TOOL, READ_ONLY_TOOLS, REFUSED, TOOLS
 from saddle.vllm import ToolCall
 from saddle.web.app import ChatServer, build_app
 
@@ -152,7 +152,7 @@ def test_ask_is_a_strict_subset_of_edit_on_the_terminal(tmp_path: Path) -> None:
         [],
     )
     assert _names(ask[0]) == list(READ_ONLY_TOOLS)
-    assert _names(edit[0]) == _names(TOOLS)
+    assert _names(edit[0]) == [*_names(TOOLS), PROCESSES_TOOL]
     assert set(_names(ask[0])) < set(_names(edit[0]))
 
 

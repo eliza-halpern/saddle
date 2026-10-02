@@ -44,7 +44,7 @@ from saddle.journal import (
     read_spans,
     verify_journal,
 )
-from saddle.tools import REFUSED, ToolContext, execute_tool, is_test_path
+from saddle.tools import REFUSED, TOOLS, ToolContext, execute_tool, is_test_path
 from saddle.vllm import StreamToken, ToolCall, VllmClient, VllmRequestError
 
 BUGGY = "def add(a, b):\n    return a - b\n"
@@ -1130,6 +1130,16 @@ def test_without_premise_check_edits_are_not_held_and_the_tool_is_not_offered(
     assert (result.outcome, result.reason) == ("finished", "finish called")
     assert "premise" not in sidecar(result)
     assert "premise_check" not in [t["function"]["name"] for t in client.asked[0]["tools"]]
+
+
+def test_a_task_run_is_never_offered_the_edit_lanes_process_tool(repo: Path) -> None:
+    """The Task lane's tool list is `TOOLS` plus its own gate tools: the chat's
+    `processes` tool (#136) is Edit's alone, so a task run is unchanged."""
+    client = Scripted([finish()])
+    auto(repo, client)
+    offered = [t["function"]["name"] for t in client.asked[0]["tools"]]
+    assert offered[: len(TOOLS)] == [t["function"]["name"] for t in TOOLS]
+    assert "processes" not in offered
 
 
 def test_a_premise_check_whose_probe_crashes_keeps_edits_held(repo: Path) -> None:

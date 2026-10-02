@@ -31,6 +31,7 @@ from typing import Any, Final
 from saddle.askpass import Askpass
 from saddle.edits import first_divergence, loose_spans
 from saddle.gates import is_test_code
+from saddle.procs import Entry, ProcessLedger
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
     OutsideRootError,
@@ -171,9 +172,27 @@ TOOLS: Final[list[dict[str, Any]]] = [
     ),
 ]
 
+PROCESSES_TOOL: Final = "processes"
+
+PROCESSES_SCHEMA: Final[dict[str, Any]] = _tool(
+    PROCESSES_TOOL,
+    "List or stop the programs this session's commands started and left running "
+    "(servers, GUI programs, anything started with setsid, nohup or &). Only "
+    "this session's own: action=list shows each with its id, start time and the "
+    "command; action=stop with an id stops that one; action=stop_all stops them all.",
+    {
+        "action": {"type": "string", "enum": ["list", "stop", "stop_all"]},
+        "id": {"type": "integer"},
+    },
+    ["action"],
+)
+"""The Edit lane's process tool (#136). It is not in `TOOLS`, which a task run
+is given whole: a task run's tool list, prompt and sandbox are unchanged."""
+
+
 _ARGUMENTS: Final[dict[str, frozenset[str]]] = {
     tool["function"]["name"]: frozenset(tool["function"]["parameters"]["properties"])
-    for tool in TOOLS
+    for tool in [*TOOLS, PROCESSES_SCHEMA]
 }
 """Each tool's declared arguments. Anything else is refused by name, not
 dropped: `read_file` once ignored an `offset` and `limit` its schema did not
@@ -192,9 +211,12 @@ ASK_TOOLS: Final[list[dict[str, Any]]] = [
 """The schemas an Ask turn offers the model."""
 
 
-def tools_for_mode(mode: str) -> list[dict[str, Any]]:
-    """The tool schemas a chat turn in `mode` offers: read-only unless Edit."""
-    return list(TOOLS) if mode == "edit" else list(ASK_TOOLS)
+def tools_for_mode(mode: str, *, processes: bool = False) -> list[dict[str, Any]]:
+    """The tool schemas a chat turn in `mode` offers: read-only unless Edit.
+    Edit adds the process tool when the session keeps a process list."""
+    if mode != "edit":
+        return list(ASK_TOOLS)
+    return [*TOOLS, *([PROCESSES_SCHEMA] if processes else [])]
 
 
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
@@ -206,7 +228,7 @@ def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
     `context.allowed` to exactly those names, so a call to any other tool is
     refused before it runs. Set on every turn, because a context outlives a
     lane change."""
-    tools = tools_for_mode(mode)
+    tools = tools_for_mode(mode, processes=context.processes is not None)
     context.allowed = tuple(t["function"]["name"] for t in tools)
     return tools
 
@@ -426,24 +448,40 @@ class ToolContext:
     unsandboxed, and every command result says so (`UNSANDBOXED`). The file
     tools stay inside the folder either way. A task never sets it."""
 
+    processes: ProcessLedger | None = None
+    """The session's process list (`procs`): every command's scope is recorded
+    in it, the page shows it, and `stop_processes` empties it. None (a task run,
+    a direct test) records nothing and offers no process tool."""
+
     ask_password: Callable[[str], str | None] | None = None
     """How a full-access command's `sudo` asks the person for a password
     (`askpass`): given sudo's prompt, the password, or None to refuse. None
     here (a terminal chat, a test) gives `sudo` nobody to ask."""
     askpass: Askpass | None = None
 
-    def revoke_full_access(self) -> None:
-        """End full access now, even mid-turn: stop every command still running
-        outside the sandbox, and let the next command build a sandboxed box."""
-        if self.full_access and self.sandbox is not None:
+    def stop_processes(self) -> list[Entry]:
+        """Stop every command still running from this session, and everything
+        they left behind; what the process list held."""
+        stopped = self.processes.stop_all() if self.processes is not None else []
+        if self.sandbox is not None:
             for terminal_id, terminal in list(self.sandbox.terminals.items()):
                 if terminal.running:
                     self.sandbox.kill(terminal_id)
+        return stopped
+
+    def revoke_full_access(self) -> list[Entry]:
+        """End full access now, even mid-turn: stop every command still running
+        outside the sandbox and what it left behind (returned), and let the
+        next command build a sandboxed box."""
+        stopped: list[Entry] = []
+        if self.full_access:
+            stopped = self.stop_processes()
         if self.askpass is not None:
             self.askpass.close()
             self.askpass = None
         self.full_access = False
         self.sandbox = None
+        return stopped
 
     def guard(self, path: Path, name: str, before: str | None, after: str) -> str | None:
         """A refusal result for this write, or None to let it through."""
@@ -478,6 +516,7 @@ class ToolContext:
                 on_output=self.on_output,
                 env=env,
                 unsandboxed=self.full_access,
+                ledger=self.processes,
             )
         return self.sandbox
 
@@ -764,6 +803,38 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     return _marked(ctx, f"exit {terminal.exit_code}\n{terminal.output()}")
 
 
+def _processes(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    """The `processes` tool: this session's own process list, never anyone else's."""
+    ledger = ctx.processes
+    if ledger is None:
+        return f"error: unknown tool {PROCESSES_TOOL!r}"
+    action = _text(args, "action", PROCESSES_TOOL)
+    if action == "list":
+        entries = ledger.entries()
+        if not entries:
+            return "no processes are running from this session"
+        return "\n".join(entry.describe() for entry in entries)
+    if action == "stop_all":
+        stopped = ledger.stop_all()
+        return (
+            "stopped:\n" + "\n".join(e.describe() for e in stopped)
+            if stopped
+            else "nothing was running"
+        )
+    if action == "stop":
+        target = args.get("id")
+        if isinstance(target, bool) or not isinstance(target, int):
+            return "error: action=stop needs an integer id (from action=list)"
+        entry = ledger.stop(target)
+        if entry is None:
+            return (
+                f"error: {target} is not one of this session's processes; nothing was "
+                "stopped (action=list shows them)"
+            )
+        return f"stopped:\n{entry.describe()}"
+    return "error: action must be list, stop or stop_all"
+
+
 def _read_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     terminal = ctx.box().terminals.get(str(args["id"]))
     if terminal is None:
@@ -800,6 +871,7 @@ _HANDLERS: Final[dict[str, _Handler]] = {
     "run_command": _run_command,
     "read_terminal": _read_terminal,
     "wait_for_terminal": _wait_for_terminal,
+    PROCESSES_TOOL: _processes,
 }
 
 
