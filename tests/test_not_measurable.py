@@ -84,8 +84,11 @@ def test_a_browser_only_change_is_accepted_with_its_files_listed(
     found = Auditor(tree(tmp_path)).tier2()
     got = verdicts(found)
     # The two refusals the real run met, "no mutants on changed lines" and
-    # "tests unchanged and no mutants decided", are now not proven.
-    assert (got["mutation"], got["red-phase"]) == ("not-proven", "not-proven")
+    # "tests unchanged and no mutants decided", are gone: no Python changed, so
+    # Python's mutation and red-phase findings are not shown (languages.visible).
+    # What the change cannot vouch for is still said, by not-measurable.
+    assert "mutation" not in got
+    assert "red-phase" not in got
     assert got[NOT_MEASURABLE_GATE] == "not-proven"
     assert "fail" not in got.values()
     assert found.passed
@@ -95,6 +98,20 @@ def test_a_browser_only_change_is_accepted_with_its_files_listed(
     )
     assert "measure Python only" in listed
     assert "is a defect" in listed
+
+
+def test_a_browser_change_with_only_a_python_test_edit_says_no_source_line_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A Python test file is Python, so the Python findings are shown; with no
+    # Python source changed they say why they measured nothing, never refuse.
+    sampled(NOTHING, monkeypatch)
+    root = tree(tmp_path)
+    (root / "test_n.py").write_text("# f is the module's one function\n" + FILES["test_n.py"])
+    found = Auditor(root).tier2()
+    got = verdicts(found)
+    assert (got["mutation"], got["red-phase"]) == ("not-proven", "not-proven")
+    assert "fail" not in got.values()
     assert "no Python source line changed" in detail(found, "mutation")
     assert NOT_MEASURABLE_GATE in detail(found, "red-phase")
 
