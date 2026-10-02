@@ -17,8 +17,6 @@
 // html file, or inside a definition that is itself reached. Export sites alone
 // (`module.exports = { f }`, `exports.f = f`, `export { f }`) are not use: the page
 // scripts share globals through <script> tags, so the use is another script's.
-
-/* global process, console -- a node script; the eslint config names browser globals only */
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
