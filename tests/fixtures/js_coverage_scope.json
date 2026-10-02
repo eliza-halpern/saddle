@@ -1,0 +1,11 @@
+{
+  "measured": [
+    "src/saddle/web/static/markdown.js"
+  ],
+  "not_measured": {
+    "src/saddle/web/static/app.js": "page wiring over the live DOM; only the Chrome-driven tests run it",
+    "src/saddle/web/static/tasks.js": "page wiring over the live DOM; only the Chrome-driven tests run it",
+    "src/saddle/web/static/notify.js": "pure helpers are tested under node (tests/classic_scripts.test.js); the rest is page wiring that only the Chrome-driven tests run",
+    "src/saddle/web/static/runs.js": "pure helpers are tested under node (tests/classic_scripts.test.js); the rest is page wiring that only the Chrome-driven tests run"
+  }
+}

@@ -131,3 +131,11 @@ def test_the_old_children_find_bug_fails_the_node_suite(tmp_path: Path) -> None:
     bad = run_node("--test", str(work / "tests" / "markdown.test.js"))
     assert bad.returncode != 0, "the suite accepted a renderer that calls children.find"
     assert "children.find is not a function" in bad.stdout + bad.stderr
+
+
+@needs_node
+@pytest.mark.parametrize("suite", ["markdown.test.js", "classic_scripts.test.js"])
+def test_each_node_suite_passes(suite: str) -> None:
+    """Each node test file runs with the pytest suite, so the audit sees it pass or fail."""
+    result = run_node("--test", str(TESTS / suite))
+    assert result.returncode == 0, result.stdout + result.stderr
