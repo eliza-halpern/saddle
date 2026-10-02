@@ -52,18 +52,20 @@ def _subreaper() -> bool:
         return False
 
 
-def descendants(pid: int) -> list[int]:
+def descendants(pid: int, proc: Path = Path("/proc")) -> list[int]:
     """Every live process whose parent chain reaches `pid`, from /proc."""
     parent: dict[int, int] = {}
-    for entry in Path("/proc").iterdir():
+    for entry in proc.iterdir():
         if not entry.name.isdigit():
             continue
         try:
-            stat = (entry / "stat").read_text()
+            stat = (entry / "stat").read_bytes()
         except OSError:
             continue
-        # comm may hold spaces or parentheses: the ppid is after the last ")".
-        parent[int(entry.name)] = int(stat.rsplit(")", 1)[1].split()[1])
+        # comm is any bytes a process names itself, spaces, parentheses and bytes that
+        # are not UTF-8 included (one under load made this teardown raise and an audit
+        # count a failure): read bytes, and take the ppid after the last ")".
+        parent[int(entry.name)] = int(stat.rsplit(b")", 1)[1].split()[1])
     found: list[int] = []
     for child, up in parent.items():
         seen = {child}
@@ -77,8 +79,10 @@ def descendants(pid: int) -> list[int]:
 
 @functools.cache
 def _drives_a_browser(path: str) -> bool:
-    """A test module that runs a Chrome through a `tests/fixtures/*_cdp.mjs` driver."""
-    return "_cdp.mjs" in Path(path).read_text(encoding="utf-8")
+    """A test module that runs a Chrome: through a `tests/fixtures/*_cdp.mjs` driver, or
+    through `chrome_page` (whose modules name no driver)."""
+    text = Path(path).read_text(encoding="utf-8")
+    return "_cdp.mjs" in text or "chrome_page" in text
 
 
 @pytest.fixture(autouse=True)
