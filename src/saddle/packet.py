@@ -46,6 +46,7 @@ from typing import Any, Final, Literal
 
 from saddle import coverage_text, mutant_text, prompt_constants
 from saddle.anchor import anchor_issues
+from saddle.covers import packet_text
 from saddle.journal import (
     AUDIT_QUESTION_STOP,
     AUDIT_SPAN_PREFIXES,
@@ -1441,6 +1442,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
             f"The ledger verifies ({_n(len(entries), 'record')}, "
             f"{'no issues' if not issues else str(len(issues)) + ' issue(s)'}). "
             f"{_anchor_text(journal, anchor_repo, sealed=outcome is not None)}"
+            f"{packet_text(journal, spans, anchor_repo)}"
             "Re-check it, and read the change:",
             (anchor,) if anchor else (),
             (

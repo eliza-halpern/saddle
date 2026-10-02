@@ -614,6 +614,24 @@ TOOL_SPAN_HASHES: Final = "tool_span_hashes"
 AUDIT_SPAN_HASHES: Final = "audit_span_hashes"
 """The outcome sidecar's list of the run's audit records, as a set:
 the auditor writes from the feed's thread, so their order is not the run's."""
+AUTO_COMMITTED: Final = "auto:committed"
+"""The first record of a run's coverage file (`coverage_path`), sealed by
+`auto.run_auto` once the run's branch has its commit: argv is `[name, commit,
+outcome]`, `outcome` the `record_hash` of the ledger's outcome span, and the
+detail names the branch, the base sha, the commit and its tree. The commit's
+message carries the outcome span's hash, so the commit cannot be named in the
+outcome itself, and a span appended to the ledger after the outcome would
+change what a ledger's last record is; so the commit is recorded beside the
+ledger, bound to it by the outcome hash. A ledger with no coverage file
+covers no commit it can name."""
+FOLLOWUP_SPAN: Final = "followup:audit"
+"""A follow-up audit attached to a finished run's coverage file
+(`covers.attach_followup`): argv is `[name, covered_from, covered_to,
+previous]`, `previous` being the
+`record_hash` of the record it continues (the commit record, or the follow-up
+before it), so the sections form a chain. Its findings and verdict sit in its
+sealed sidecar. Not `audit`-prefixed: an audit of the run itself is held to the
+outcome's list, and this is not one."""
 COMPACTION_SPAN: Final = "compaction"
 """The span an autonomous run seals each time its context is compacted
 (`engine._compact`): argv[1] is the counts as JSON, detail the summary.
@@ -811,6 +829,76 @@ def _auto_run_issues(
     return issues
 
 
+def coverage_path(journal: Path) -> Path:
+    """The coverage file that goes with a ledger: `proofs.jsonl` -> `proofs.covers.jsonl`."""
+    return journal.with_suffix(".covers.jsonl")
+
+
+def _coverage_issues(path: Path) -> list[JournalIssue]:
+    """Verify the coverage file beside a ledger.
+
+    The file is a journal of its own (same records, same per-record hash and
+    sidecar checks); on top of that each follow-up names the record it
+    continues and starts its range where the one before ended, and no outcome
+    has two commit records. Which outcome a commit record names is not judged
+    here: `covers.read_coverage` matches it to the ledger's runs, and a record
+    that matches none is stated, not counted. Spans are hashed one by one,
+    so without the chain a follow-up could be deleted from the middle, or one
+    for another range spliced in, and every remaining hash would still check.
+    Deleting the newest follow-up leaves a shorter chain that still verifies:
+    an append-only file cannot show its own tail was cut, and the branch anchor
+    does not cover follow-ups either. No file is no issue: a ledger from before
+    the file existed covers nothing it can name.
+    """
+    cpath = coverage_path(path)
+    if not cpath.exists():
+        return []
+    _, spans, found, _ = _load_journal(cpath)
+    issues = [
+        JournalIssue(code=issue.code, line=issue.line, message=f"{cpath.name}: {issue.message}")
+        for issue in found
+    ]
+    bound: set[str] = set()
+    tip: tuple[str, str] | None = None  # (record_hash, covered_to) the next follow-up continues
+    for number, span in enumerate(spans, start=1):
+        if span.name == AUTO_COMMITTED:
+            outcome = _argv_at(span, 2)
+            if outcome in bound:
+                issues.append(
+                    JournalIssue(
+                        code="committed-duplicate",
+                        line=number,
+                        message=f"{cpath.name}: a second commit record {span.span_id!r} for "
+                        "the same outcome",
+                    )
+                )
+            bound.add(outcome)
+            tip = (span.record_hash, _argv_at(span, 1))
+        elif span.name == FOLLOWUP_SPAN:
+            if (
+                tip is None
+                or _argv_at(span, 3) != tip[0]
+                or _argv_at(span, 1) != tip[1]
+                or not span.attempt_hash
+            ):
+                issues.append(
+                    JournalIssue(
+                        code="followup-chain",
+                        line=number,
+                        message=f"{cpath.name}: follow-up {span.span_id!r} does not continue "
+                        "the record before it (a missing commit record, a gap in the range, "
+                        "or no sidecar)",
+                    )
+                )
+            tip = (span.record_hash, _argv_at(span, 2))
+    return issues
+
+
+def _argv_at(span: SpanRecord, index: int) -> str:
+    """`span.argv[index]`, or "" when the span has fewer arguments."""
+    return span.argv[index] if len(span.argv) > index else ""
+
+
 def _audit_list_issues(
     path: Path,
     in_run: Sequence[tuple[int, SpanRecord]],
@@ -926,9 +1014,12 @@ def _sidecar_diff_mismatch(sidecar: Path) -> bool:
 
 
 def verify_journal(path: Path) -> list[JournalIssue]:
-    """Verify the journal by recomputation; empty list means valid."""
+    """Verify the journal by recomputation; empty list means valid.
+
+    A coverage file beside it (`coverage_path`) is verified and bound to it too.
+    """
     _, _, issues, _ = _load_journal(path)
-    return issues
+    return issues + _coverage_issues(path)
 
 
 def _verified_contents(

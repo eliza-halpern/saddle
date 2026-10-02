@@ -54,7 +54,15 @@ from saddle.evidence import (
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
 from saddle.gates import DEFAULT_MUTANT_SHORTLIST
 from saddle.installs import Installs, WheelFolder
-from saddle.journal import P1_EXTRACT_SPAN, append_span, build_span, started_before, utc_now
+from saddle.journal import (
+    AUTO_COMMITTED,
+    P1_EXTRACT_SPAN,
+    append_span,
+    build_span,
+    coverage_path,
+    started_before,
+    utc_now,
+)
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
@@ -985,6 +993,23 @@ def run_auto(
         message += f"\n{COAUTHOR_TRAILER}"
     _git(worktree, "commit", "-q", "--allow-empty", "--no-verify", "-m", message)
     commit = _git(worktree, "rev-parse", "HEAD").strip()
+    # The commit's message holds the outcome's hash, so the outcome cannot name
+    # the commit; this record, beside the ledger and bound to its outcome, says
+    # which commit the ledger covers.
+    tree = _git(worktree, "rev-parse", "HEAD^{tree}").strip()
+    append_span(
+        coverage_path(journal),
+        build_span(
+            node_id=start.node_id,
+            argv=[AUTO_COMMITTED, commit, outcome_hash(journal, start.span_id)],
+            duration_ms=0,
+            exit_code=0,
+            detail=f"branch {branch}; base {base_commit}; commit {commit}; tree {tree}",
+            kind="agent",
+            name=AUTO_COMMITTED,
+            started_at=utc_now().isoformat(),
+        ),
+    )
     if on_commit is not None:
         on_commit(commit)
     return AutoResult(

@@ -45,6 +45,7 @@ from saddle.auto import (
     run_auto,
 )
 from saddle.chat import ChatOptions, run_chat
+from saddle.covers import verify_lines
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP
@@ -1246,6 +1247,9 @@ def run_verify(journal: Path, *, stdout: IO[str], anchor: Path | None = None) ->
     # span seals. Say that, with the counts, rather than "chain verifies".
     runs = sum(1 for span in spans if span.kind == "agent" and span.name == AUTO_START)
     total = len(records) + len(spans) + len(plans)
+    covered = verify_lines(
+        journal, spans, anchor if anchor is not None else default_anchor_repo(journal)
+    )
     lists = (
         f"outcome span list intact ({runs} autonomous run(s))"
         if runs
@@ -1256,6 +1260,7 @@ def run_verify(journal: Path, *, stdout: IO[str], anchor: Path | None = None) ->
         f"OK: {journal}: ledger verifies: {total} records ({len(records)} proof(s), "
         f"{len(spans)} span(s), {len(plans)} plan(s)), {lists}{anchored}\n"
     )
+    stdout.write("".join(f"{line}\n" for line in covered))
     for plan in plans:
         stdout.write("".join(f"{line}\n" for line in render_plan(plan)))
     stdout.write("\n")
