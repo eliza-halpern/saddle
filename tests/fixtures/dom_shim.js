@@ -5,6 +5,7 @@
    after it sees the same names it sees in a page. */
 
 class TextNode {
+  /** @param {unknown} text */
   constructor(text) {
     this.data = String(text);
     this.parent = null;
@@ -29,6 +30,7 @@ class TextNode {
    that returned an Array let the whole node suite pass. */
 const READ = Symbol("read");
 
+/** @param {any} collection */
 function live(collection) {
   return new Proxy(collection, {
     get(target, key, receiver) {
@@ -47,6 +49,10 @@ function live(collection) {
 }
 
 class HTMLCollection {
+  /** @type {() => any[]} */
+  [READ];
+
+  /** @param {() => any[]} read */
   constructor(read) {
     this[READ] = read;
     return live(this);
@@ -54,9 +60,11 @@ class HTMLCollection {
   get length() {
     return this[READ]().length;
   }
+  /** @param {number} index */
   item(index) {
     return this[READ]()[index] || null;
   }
+  /** @param {string} name */
   namedItem(name) {
     return this[READ]().find((n) => n.id === name || (n.attrs && n.attrs.name === name)) || null;
   }
@@ -66,6 +74,10 @@ class HTMLCollection {
 }
 
 class NodeList {
+  /** @type {() => any[]} */
+  [READ];
+
+  /** @param {() => any[]} read */
   constructor(read) {
     this[READ] = read;
     return live(this);
@@ -73,9 +85,11 @@ class NodeList {
   get length() {
     return this[READ]().length;
   }
+  /** @param {number} index */
   item(index) {
     return this[READ]()[index] || null;
   }
+  /** @param {(node: any, index: number, list: NodeList) => void} callback @param {any} [thisArg] */
   forEach(callback, thisArg) {
     this[READ]().forEach((n, i) => callback.call(thisArg, n, i, this));
   }
@@ -94,6 +108,14 @@ class NodeList {
 }
 
 class Element {
+  /** @type {any[]} */
+  _kids;
+  /** @type {any} */
+  parent;
+  /** @type {Record<string, any> | undefined} */
+  attrs;
+
+  /** @param {string} tag */
   constructor(tag) {
     this.tagName = tag.toUpperCase();
     this._kids = [];
@@ -126,11 +148,11 @@ class Element {
   get classList() {
     const self = this;
     return {
-      contains: (c) => self._cls.split(/\s+/).includes(c),
-      add: (c) => {
+      contains: (/** @type {string} */ c) => self._cls.split(/\s+/).includes(c),
+      add: (/** @type {string} */ c) => {
         if (!self.classList.contains(c)) self._cls = (self._cls + " " + c).trim();
       },
-      remove: (c) => {
+      remove: (/** @type {string} */ c) => {
         self._cls = self._cls
           .split(/\s+/)
           .filter((x) => x !== c)
@@ -138,6 +160,7 @@ class Element {
       },
     };
   }
+  /** @param {string} name @param {unknown} value */
   setAttribute(name, value) {
     (this.attrs ||= {})[name] = value;
   }
@@ -153,6 +176,7 @@ class Element {
       this.parent = null;
     }
   }
+  /** @param {any} node */
   appendChild(node) {
     // Real appendChild *moves* a node. The incremental painter relies on it:
     // `while (chunk.firstChild) stable.appendChild(chunk.firstChild)` never
@@ -165,6 +189,7 @@ class Element {
     this._kids.push(node);
     return node;
   }
+  /** @param {any[]} nodes */
   append(...nodes) {
     for (const n of nodes) this.appendChild(n);
   }
@@ -187,16 +212,17 @@ class Element {
    how many went through the select-and-execute path. The default
    execCommand models the browser's contract: "copy" copies the value of
    the last field that was selected. */
+/** @type {{ writes: string[], viaExecCommand: number }} */
 const clipboard = { writes: [], viaExecCommand: 0 };
 
 global.document = {
-  createElement: (tag) => new Element(tag),
-  createTextNode: (text) => new TextNode(text),
+  createElement: (/** @type {string} */ tag) => new Element(tag),
+  createTextNode: (/** @type {unknown} */ text) => new TextNode(text),
   body: new Element("body"),
   __lastSelected: null,
-  execCommand: (command) => {
+  execCommand: (/** @type {string} */ command) => {
     if (command !== "copy") return false;
-    const sel = document.__lastSelected;
+    const sel = global.document.__lastSelected;
     if (!sel || typeof sel.value !== "string") return false;
     clipboard.writes.push(sel.value);
     clipboard.viaExecCommand += 1;
@@ -208,6 +234,7 @@ global.document = {
    page has navigator.clipboard, a plain-http page (the phone path) has
    none. The test stands in for that by swapping the navigator before a
    click, because the renderer reads it at click time, not load time. */
+/** @param {unknown} value */
 function setNavigator(value) {
   Object.defineProperty(globalThis, "navigator", {
     value,
@@ -219,7 +246,7 @@ function setNavigator(value) {
 function workingNavigator() {
   return {
     clipboard: {
-      writeText: (text) => {
+      writeText: (/** @type {string} */ text) => {
         clipboard.writes.push(text);
         return Promise.resolve();
       },
@@ -232,7 +259,7 @@ setNavigator(workingNavigator());
 function resetClipboard() {
   clipboard.writes.length = 0;
   clipboard.viaExecCommand = 0;
-  document.__lastSelected = null;
+  global.document.__lastSelected = null;
   setNavigator(workingNavigator());
 }
 

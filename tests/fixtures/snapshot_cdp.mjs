@@ -39,9 +39,10 @@ const chrome = spawn(
   ],
   { stdio: "ignore" },
 );
+/** @type {string[]} */
 const pageErrors = [];
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (code) => {
+const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+const finish = async (/** @type {number} */ code) => {
   chrome.kill();
   await sleep(300);
   rmSync(prof, { recursive: true, force: true });
@@ -52,7 +53,7 @@ async function target() {
   for (let i = 0; i < 75; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((t) => t.type === "page");
+      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
     } catch {
       /* chrome is still starting */
@@ -66,6 +67,7 @@ async function target() {
 // picture covers (a CSS selector each); `select` is the list of
 // [name, selector] pairs whose boxes, colours and text the snapshot records.
 // A selector is looked up inside the transcript, first match.
+/** @type {Record<string, { from: string, to: string, closed?: boolean, select: string[][] }>} */
 const VIEWS = {
   chat: {
     from: ".turn:nth-child(1)",
@@ -153,18 +155,18 @@ try {
       pageErrors.push(thrown.exception?.description || thrown.text);
     }
   });
-  const send = (method, params = {}) =>
+  const send = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const js = async (expression) => {
+  const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
-  const until = async (cond, ms = 8000) => {
+  const until = async (/** @type {string} */ cond, ms = 8000) => {
     for (let t = 0; t < ms; t += 100) {
       if (await js(cond).catch(() => false)) return true;
       await sleep(100);
@@ -208,14 +210,17 @@ try {
   })()`);
 
   const doc = await send("DOM.getDocument", { depth: 0 });
-  const fontsOf = async (selector) => {
+  const fontsOf = async (/** @type {string} */ selector) => {
     const found = await send("DOM.querySelector", { nodeId: doc.result.root.nodeId, selector });
     if (!found.result?.nodeId) return [];
     const r = await send("CSS.getPlatformFontsForNode", { nodeId: found.result.nodeId });
     return (r.result?.fonts || []).map(
-      (f) => `${f.familyName}|${f.postScriptName}|${f.isCustomFont ? "web" : "system"}`,
+      (/** @type {{ familyName: string, postScriptName: string, isCustomFont: boolean }} */ f) =>
+        `${f.familyName}|${f.postScriptName}|${f.isCustomFont ? "web" : "system"}`,
     );
   };
+
+  /** @type {Record<string, any>} */
 
   const out = {
     chrome: version.result.product,
@@ -288,7 +293,7 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String((error && error.stack) || error));
+  console.error(String(/** @type {any} */ (error)?.stack || error));
   if (pageErrors.length) console.error(`page errors:\n${pageErrors.join("\n")}`);
   await finish(1);
 }

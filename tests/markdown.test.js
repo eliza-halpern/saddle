@@ -22,12 +22,13 @@ const { el, renderMarkdown, splitStable, paintStream } = md;
 
 /* ---------- helpers ---------- */
 
-const oneShot = (raw) => {
+const oneShot = (/** @type {string} */ raw) => {
   const n = el("div");
   renderMarkdown(n, raw);
   return n.html;
 };
 
+/** @param {string} raw @param {number} [chunk] */
 function streamed(raw, chunk = 7) {
   const node = el("div");
   node.dataset.raw = "";
@@ -82,7 +83,7 @@ test("a settled paragraph is never rebuilt", () => {
   const node = el("div");
   node.dataset.raw = "";
   let firstNode = null;
-  for (const bit of raw.match(/.{1,5}/gs)) {
+  for (const bit of /** @type {RegExpMatchArray} */ (raw.match(/.{1,5}/gs))) {
     node.dataset.raw += bit;
     paintStream(node);
     const settled = node.firstElementChild.firstElementChild;
@@ -216,6 +217,7 @@ test("an empty result says so rather than showing nothing", () => {
 
 const { highlight, grammarFor } = md;
 
+/** @param {string} code @param {string} language */
 function tokens(code, language) {
   const node = el("code");
   highlight(node, code, language);
@@ -350,16 +352,18 @@ test("a turn's blocks are released when a tool starts", () => {
    * stored in order, so only the live stream was ever wrong.
    */
   const transcript = el("div");
+  /** @type {{ turnNode: any, assistantNode: any, reasoningNode: any }} */
+  /** @type {{ turnNode: any, assistantNode: any, reasoningNode: any }} */
   const state = { turnNode: transcript, assistantNode: null, reasoningNode: null };
 
-  const say = (text) => {
+  const say = (/** @type {string} */ text) => {
     if (!state.assistantNode) {
       state.assistantNode = el("div", "assistant");
       transcript.appendChild(state.assistantNode);
     }
     state.assistantNode.appendChild(document.createTextNode(text));
   };
-  const callTool = (name) => {
+  const callTool = (/** @type {string} */ name) => {
     state.assistantNode = null; // the fix
     state.reasoningNode = null;
     transcript.appendChild(el("div", "tool", name));
@@ -386,15 +390,16 @@ test("a turn's blocks are released when a tool starts", () => {
 test("without releasing the cache the text jumps above the tools", () => {
   // The same script with the fix removed, to show the test can see it.
   const transcript = el("div");
+  /** @type {{ assistantNode: any }} */
   const state = { assistantNode: null };
-  const say = (text) => {
+  const say = (/** @type {string} */ text) => {
     if (!state.assistantNode) {
       state.assistantNode = el("div", "assistant");
       transcript.appendChild(state.assistantNode);
     }
     state.assistantNode.appendChild(document.createTextNode(text));
   };
-  const callTool = (name) => transcript.appendChild(el("div", "tool", name));
+  const callTool = (/** @type {string} */ name) => transcript.appendChild(el("div", "tool", name));
 
   say("first");
   callTool("Read a.py");
@@ -502,6 +507,7 @@ test("a created file and a reloaded one render identically", () => {
 
 const { copyButton } = md;
 
+/** @param {any} root @returns {any} */
 const findPre = (root) => {
   for (const child of root.children) {
     if (child.tagName === "PRE") return child;
@@ -629,8 +635,8 @@ test("the fallback copy cleans up its field even when selecting throws", async (
   setNavigator({});
   const kids = document.body.childNodes.length;
   const realCreate = document.createElement;
-  document.createElement = (tag) => {
-    const node = realCreate(tag);
+  global.document.createElement = (/** @type {string} */ tag) => {
+    const node = /** @type {any} */ (realCreate(tag));
     if (tag === "textarea")
       node.select = () => {
         throw new Error("no selection");
@@ -696,8 +702,9 @@ test("when the system clipboard takes nothing, the button says Failed", async ()
 test("the button settles back to Copy after the feedback window", async () => {
   resetClipboard();
   const realSetTimeout = globalThis.setTimeout;
+  /** @type {{ callback: () => void, delay: number }[]} */
   const timers = [];
-  globalThis.setTimeout = (callback, delay) => {
+  /** @type {any} */ (globalThis).setTimeout = (/** @type {any} */ callback, /** @type {any} */ delay) => {
     timers.push({ callback, delay });
     return 0;
   };
@@ -723,7 +730,7 @@ test("a streamed fence settles with its button intact", () => {
   const node = el("div");
   node.dataset.raw = "";
   let settledPre = null;
-  for (const bit of raw.match(/.{1,5}/gs)) {
+  for (const bit of /** @type {RegExpMatchArray} */ (raw.match(/.{1,5}/gs))) {
     node.dataset.raw += bit;
     paintStream(node);
     const pre = node.firstElementChild ? findPre(node.firstElementChild) : null;
@@ -741,7 +748,7 @@ test("a click on a block that is still streaming copies what has arrived", async
   const raw = "```python\ndef f():\n    return 4";
   const node = el("div");
   node.dataset.raw = "";
-  for (const bit of raw.match(/.{1,5}/gs)) {
+  for (const bit of /** @type {RegExpMatchArray} */ (raw.match(/.{1,5}/gs))) {
     node.dataset.raw += bit;
     paintStream(node);
   }
@@ -779,7 +786,7 @@ test("a tool result that is not text says so and offers nothing to copy", () => 
 
 test("a page with no navigator at all still copies through the field", async () => {
   resetClipboard();
-  delete globalThis.navigator; // not undefined-valued: not declared at all
+  delete (/** @type {any} */ (globalThis).navigator); // not undefined-valued: not declared at all
   const ok = await copyButton("no navigator", "code").onclick();
   assert.strictEqual(ok, true);
   assert.deepStrictEqual(clipboard.writes, ["no navigator"]);
@@ -792,8 +799,9 @@ test("the fallback copy gives focus back to what had it", async () => {
   for (const failing of [false, true]) {
     resetClipboard();
     setNavigator({});
+    /** @type {string[]} */
     const focused = [];
-    document.activeElement = { focus: () => focused.push("restored") };
+    global.document.activeElement = { focus: () => focused.push("restored") };
     const realExec = document.execCommand;
     if (failing) document.execCommand = () => false;
     try {
@@ -801,7 +809,7 @@ test("the fallback copy gives focus back to what had it", async () => {
       assert.strictEqual(ok, !failing);
       assert.deepStrictEqual(focused, ["restored"], `failing=${failing}`);
     } finally {
-      document.activeElement = null;
+      global.document.activeElement = null;
       document.execCommand = realExec;
     }
   }
@@ -810,11 +818,11 @@ test("the fallback copy gives focus back to what had it", async () => {
 test("a focused thing that cannot take focus back does not break the copy", async () => {
   resetClipboard();
   setNavigator({});
-  document.activeElement = {};
+  global.document.activeElement = {};
   try {
     assert.strictEqual(await copyButton("plain", "code").onclick(), true);
   } finally {
-    document.activeElement = null;
+    global.document.activeElement = null;
   }
 });
 
@@ -851,8 +859,10 @@ const { atBottom, stickToBottom, followBottom, watchScrolling } = md;
 /* A scroll box that clamps like the browser's: assigning past the end lands
    at the end, and a scroll event is fired by the test when the reader (or
    the code's own assignment) moves it. */
+/** @param {{ scrollHeight: number, clientHeight: number, scrollTop: number }} dims */
 function scrollBox({ scrollHeight, clientHeight, scrollTop }) {
   let top = scrollTop;
+  /** @type {Record<string, { fn: () => void, options: unknown }>} */
   const listeners = {};
   return {
     scrollHeight,
@@ -863,9 +873,11 @@ function scrollBox({ scrollHeight, clientHeight, scrollTop }) {
     set scrollTop(v) {
       top = Math.max(0, Math.min(v, this.scrollHeight - this.clientHeight));
     },
+    /** @param {string} type @param {() => void} fn @param {unknown} options */
     addEventListener(type, fn, options) {
       listeners[type] = { fn, options };
     },
+    /** @param {string} type */
     fire(type) {
       listeners[type].fn();
     },
@@ -873,9 +885,11 @@ function scrollBox({ scrollHeight, clientHeight, scrollTop }) {
   };
 }
 
+/** @param {any} box @param {any} jump @param {() => void} body */
 function withPage(box, jump, body) {
+  /** @type {Record<string, any>} */
   const registry = { "#transcript": box, "#jump": jump };
-  global.$ = (selector) => registry[selector] || null;
+  global.$ = (/** @type {string} */ selector) => registry[selector] || null;
   try {
     followBottom(); // the module's state is global: start from following
     body();

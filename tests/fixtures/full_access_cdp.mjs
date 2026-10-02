@@ -25,8 +25,8 @@ const chrome = spawn(
   ],
   { stdio: "ignore" },
 );
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (code) => {
+const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+const finish = async (/** @type {number} */ code) => {
   chrome.kill();
   await sleep(300);
   rmSync(prof, { recursive: true, force: true });
@@ -37,7 +37,7 @@ async function target() {
   for (let i = 0; i < 75; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((t) => t.type === "page");
+      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
     } catch {
       // Chrome is not listening yet; poll again.
@@ -59,19 +59,19 @@ try {
       pending.delete(msg.id);
     }
   });
-  const send = (method, params = {}) =>
+  const send = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const js = async (expression) => {
+  const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
-  const key = async (k) => {
-    const code = { Enter: 13, Escape: 27 }[k];
+  const key = async (/** @type {string} */ k) => {
+    const code = /** @type {Record<string, number>} */ ({ Enter: 13, Escape: 27 })[k];
     const text = k === "Enter" ? "\r" : undefined;
     await send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -91,7 +91,7 @@ try {
     await sleep(400);
   };
   // A real mouse click at the element's centre, as a person would make it.
-  const click = async (selector) => {
+  const click = async (/** @type {string} */ selector) => {
     const box =
       await js(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
@@ -100,7 +100,7 @@ try {
     }
     await sleep(500);
   };
-  const shot = async (name) => {
+  const shot = async (/** @type {string} */ name) => {
     if (!shots) return;
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, name), Buffer.from(s.result.data, "base64"));
@@ -141,6 +141,7 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await load();
+  /** @type {Record<string, any>} */
   const out = { before: await look() };
   await click("#full-access-open");
   out.opened = await look();
@@ -161,7 +162,7 @@ try {
   await click("#full-access-open");
   await click("#fa-grant");
   out.afterRegrant = await look();
-  const lane = async (name) => {
+  const lane = async (/** @type {string} */ name) => {
     // the lane menu, clicked as a person would
     await click("#lane-chip");
     await click(`#lane-menu li[data-lane="${name}"]`);
@@ -174,6 +175,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String((error && error.stack) || error));
+  console.error(String(/** @type {any} */ (error)?.stack || error));
   await finish(1);
 }

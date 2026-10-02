@@ -30,8 +30,8 @@ const chrome = spawn(
   ],
   { stdio: "ignore" },
 );
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (code) => {
+const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+const finish = async (/** @type {number} */ code) => {
   chrome.kill();
   await sleep(300);
   rmSync(prof, { recursive: true, force: true });
@@ -42,7 +42,7 @@ async function target() {
   for (let i = 0; i < 75; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((t) => t.type === "page");
+      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
     } catch {
       // Chrome is not listening yet; poll again.
@@ -64,25 +64,25 @@ try {
       pending.delete(msg.id);
     }
   });
-  const send = (method, params = {}) =>
+  const send = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const js = async (expression) => {
+  const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
-  const until = async (expression, what, tries = 300) => {
+  const until = async (/** @type {string} */ expression, /** @type {string} */ what, tries = 300) => {
     for (let i = 0; i < tries; i++) {
       if (await js(expression).catch(() => false)) return;
       await sleep(200);
     }
     throw new Error(`timed out waiting for ${what}`);
   };
-  const shot = async (name) => {
+  const shot = async (/** @type {string} */ name) => {
     if (!shots) return;
     await js(
       `(() => { const c = document.querySelector(".task-card"); if (c) c.scrollIntoView({ block: "start" }); })()`,
@@ -143,6 +143,7 @@ try {
   await until(`typeof state !== "undefined" && !!state.sessionId`, "the page");
   await js(`localStorage.setItem("saddle.session", ${JSON.stringify(sid)})`);
   await load();
+  /** @type {Record<string, any>} */
   const out = {};
   // Count every request the page makes from here on: the strip makes none.
   await js(`(() => { window.__posts = 0; const f = window.fetch; window.fetch = (u, o) => {
@@ -207,6 +208,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String((error && error.stack) || error));
+  console.error(String(/** @type {any} */ (error)?.stack || error));
   await finish(1);
 }

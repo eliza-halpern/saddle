@@ -32,9 +32,10 @@ const chrome = spawn(
   ],
   { stdio: "ignore" },
 );
+/** @type {string[]} */
 const pageErrors = [];
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (code) => {
+const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+const finish = async (/** @type {number} */ code) => {
   chrome.kill();
   await sleep(300);
   rmSync(prof, { recursive: true, force: true });
@@ -45,7 +46,7 @@ async function target() {
   for (let i = 0; i < 75; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((t) => t.type === "page");
+      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
     } catch {
       /* chrome is still starting */
@@ -71,18 +72,18 @@ try {
       pageErrors.push(thrown.exception?.description || thrown.text);
     }
   });
-  const send = (method, params = {}) =>
+  const send = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const js = async (expression) => {
+  const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
-  const until = async (cond, ms = 8000) => {
+  const until = async (/** @type {string} */ cond, ms = 8000) => {
     for (let t = 0; t < ms; t += 100) {
       if (await js(cond).catch(() => false)) return true;
       await sleep(100);
@@ -91,7 +92,7 @@ try {
   };
   // A real click: scroll the node to the middle, then press and release the
   // mouse over its centre, so the page sees a user gesture.
-  const click = async (sel) => {
+  const click = async (/** @type {string} */ sel) => {
     const at = await js(`(() => {
       const n = document.querySelector(${JSON.stringify(sel)});
       n.scrollIntoView({ block: "center" });
@@ -148,8 +149,8 @@ try {
     return true;
   })()`);
 
-  const label = (sel) => js(`document.querySelector(${JSON.stringify(sel)}).textContent`);
-  const exercise = async (sel) => {
+  const label = (/** @type {string} */ sel) => js(`document.querySelector(${JSON.stringify(sel)}).textContent`);
+  const exercise = async (/** @type {string} */ sel) => {
     const before = await label(sel);
     const copiesBefore = await js("window.copies.length");
     const fieldsBefore = await js(`document.querySelectorAll("textarea").length`);
@@ -171,6 +172,8 @@ try {
     return { before, shown, after: await label(sel), clipboard, ...state };
   };
 
+  /** @type {Record<string, any>} */
+
   const out = { env, granted: !granted.error };
   out.block = await exercise(".assistant pre .code-copy");
   out.blockTitle = await js(`document.querySelector(".assistant pre .code-copy").title`);
@@ -189,7 +192,7 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String((error && error.stack) || error));
+  console.error(String(/** @type {any} */ (error)?.stack || error));
   if (pageErrors.length) console.error(`page errors:\n${pageErrors.join("\n")}`);
   await finish(1);
 }

@@ -13,7 +13,7 @@ const { pathToFileURL } = require("node:url");
 
 const STATIC = path.join(__dirname, "..", "..", "src", "saddle", "web", "static");
 
-function loadClassic(file, globals = {}) {
+function loadClassic(/** @type {string} */ file, globals = {}) {
   const full = path.join(STATIC, file);
   const sandbox = vm.createContext({ console, Date, Math, ...globals });
   // A file URL, not a bare path, so the coverage collector attributes the
@@ -24,7 +24,7 @@ function loadClassic(file, globals = {}) {
 
 /* A top-level `const` or `let` is not a property of the sandbox, only a name
    in its script scope; evaluate the name there to reach it. */
-function inScope(sandbox, expression) {
+function inScope(/** @type {any} */ sandbox, /** @type {string} */ expression) {
   return vm.runInContext(expression, sandbox);
 }
 

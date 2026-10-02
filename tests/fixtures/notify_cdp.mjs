@@ -25,8 +25,8 @@ const chrome = spawn(
   ],
   { stdio: "ignore" },
 );
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (code) => {
+const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+const finish = async (/** @type {number} */ code) => {
   chrome.kill();
   await sleep(300);
   rmSync(prof, { recursive: true, force: true });
@@ -37,7 +37,7 @@ async function target() {
   for (let i = 0; i < 75; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((t) => t.type === "page");
+      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
     } catch {
       // Chrome is not listening yet; poll again.
@@ -59,18 +59,18 @@ try {
       pending.delete(msg.id);
     }
   });
-  const send = (method, params = {}) =>
+  const send = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const js = async (expression) => {
+  const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
-  const shot = async (name) => {
+  const shot = async (/** @type {string} */ name) => {
     if (!shots) return;
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, name), Buffer.from(s.result.data, "base64"));
@@ -108,22 +108,22 @@ try {
     dots: Object.fromEntries([...document.querySelectorAll(".session")].map((r) => [r.dataset.sid, (r.querySelector(".run-dot") || {dataset: {}}).dataset.state || null])),
     control: document.querySelector("#notify-toggle").textContent,
   }))()`);
-  const until = async (cond, ms = 8000) => {
+  const until = async (/** @type {string} */ cond, ms = 8000) => {
     for (let t = 0; t < ms; t += 100) {
       if (await js(cond)) return true;
       await sleep(100);
     }
     return false;
   };
-  const setVis = async (v) => {
+  const setVis = async (/** @type {unknown} */ v) => {
     await js(`window.__vis = ${JSON.stringify(v)}; document.dispatchEvent(new Event("visibilitychange"))`);
     await sleep(150);
   };
-  const answer = (s) =>
+  const answer = (/** @type {string} */ s) =>
     js(
       `fetch("/api/tasks/" + window.__lastRun["${s}"] + "/answer", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: "yes"})}).then((r) => r.status)`,
     );
-  const start = (s, text) =>
+  const start = (/** @type {string} */ s, /** @type {string} */ text) =>
     js(
       `fetch("/api/sessions/${s}/task", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: ${JSON.stringify(text)}})}).then((r) => r.json()).then((j) => { (window.__lastRun = window.__lastRun || {})["${s}"] = j.run_id; return j.run_id; })`,
     );
@@ -147,6 +147,7 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await load();
+  /** @type {Record<string, any>} */
   const out = {};
   out.idle = await look();
   if (step === "hidden" || step === "visible") {
@@ -200,6 +201,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String((error && error.stack) || error));
+  console.error(String(/** @type {any} */ (error)?.stack || error));
   await finish(1);
 }

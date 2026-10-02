@@ -86,7 +86,7 @@ test("each run state has a look, and an unknown or missing one has none", () => 
 
 test("the tab icon is a coloured dot for a state and a hollow ring when idle", () => {
   const { faviconFor } = notifyScript();
-  const decode = (uri) => decodeURIComponent(uri.slice("data:image/svg+xml,".length));
+  const decode = (/** @type {string} */ uri) => decodeURIComponent(uri.slice("data:image/svg+xml,".length));
   const finished = decode(faviconFor("finished"));
   assert.ok(finished.startsWith("<svg"), finished);
   assert.ok(finished.includes("#5fcf86"), "finished is green");

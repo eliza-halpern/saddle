@@ -24,8 +24,8 @@ const chrome = spawn(
   ],
   { stdio: "ignore" },
 );
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (code) => {
+const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+const finish = async (/** @type {number} */ code) => {
   chrome.kill();
   await sleep(300);
   rmSync(prof, { recursive: true, force: true });
@@ -36,7 +36,7 @@ async function target() {
   for (let i = 0; i < 75; i++) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((t) => t.type === "page");
+      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
       if (page) return page.webSocketDebuggerUrl;
     } catch {
       // Chrome is not listening yet; poll again.
@@ -58,19 +58,19 @@ try {
       pending.delete(msg.id);
     }
   });
-  const send = (method, params = {}) =>
+  const send = (/** @type {string} */ method, params = {}) =>
     new Promise((resolve) => {
       const n = ++id;
       pending.set(n, resolve);
       ws.send(JSON.stringify({ id: n, method, params }));
     });
-  const js = async (expression) => {
+  const js = async (/** @type {string} */ expression) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
     return r.result?.result?.value;
   };
-  const key = async (k, modifiers = 0) => {
-    const code = { Enter: 13, Escape: 27, Tab: 9, ArrowDown: 40 }[k];
+  const key = async (/** @type {string} */ k, modifiers = 0) => {
+    const code = /** @type {Record<string, number>} */ ({ Enter: 13, Escape: 27, Tab: 9, ArrowDown: 40 })[k];
     const text = k === "Enter" ? "\r" : undefined;
     await send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -91,12 +91,12 @@ try {
     });
     await sleep(400);
   };
-  const type = async (text) => {
+  const type = async (/** @type {string} */ text) => {
     await js(`document.querySelector("#input").focus()`);
     await send("Input.insertText", { text });
     await sleep(100);
   };
-  const shot = async (name) => {
+  const shot = async (/** @type {string} */ name) => {
     if (!shots) return;
     const s = await send("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(shots, prefix + name), Buffer.from(s.result.data, "base64"));
@@ -148,6 +148,7 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await load();
+  /** @type {Record<string, any>} */
   const out = {};
   const options = () =>
     js(`[...document.querySelectorAll("#lane-menu li")].map((li) => ({
@@ -230,6 +231,6 @@ try {
   console.log(JSON.stringify(out));
   await finish(0);
 } catch (error) {
-  console.error(String((error && error.stack) || error));
+  console.error(String(/** @type {any} */ (error)?.stack || error));
   await finish(1);
 }
