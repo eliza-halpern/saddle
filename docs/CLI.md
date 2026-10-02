@@ -165,7 +165,6 @@ gate-checks = [
 Saddle's own repository lists every fast stage of `check.sh` except `npm ci`, mypy (its
 `static-check`) and the suite, and a test keeps the list equal to `check.sh`.
 
-
 ### Showing only what the change touches
 
 The audit decides the language of every changed file once (a deleted file counts):
