@@ -655,3 +655,15 @@ def test_files_past_the_backup_cap_are_still_watched_and_say_they_are_not_restor
     # a file past the cap that was not changed shows nothing
     watch = SideEffects(tmp_path / "rec2").watch(f"cat {big}/a", folder)
     assert watch.plan.opaque == []
+
+
+@pytest.mark.parametrize(
+    ("given", "kept"),
+    [
+        ("https://u:p@h.example:8443/a/b?k=v#f", "https://h.example:8443/a/b"),
+        ("http://[::1]:8080/x", "http://[::1]:8080/x"),
+        ("http://h.example:notaport/x", "http://h.example/x"),
+    ],
+)
+def test_a_cleaned_url_keeps_where_it_points_port_included(given: str, kept: str) -> None:
+    assert sideeffects._clean_url(given) == kept

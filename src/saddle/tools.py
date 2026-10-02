@@ -36,12 +36,13 @@ from saddle.sandbox import (
     DEFAULT_TIMEOUT,
     OutsideRootError,
     Sandbox,
+    Terminal,
     desktop_env,
     project_command_env,
     project_env,
     resolve_within,
 )
-from saddle.sideeffects import SideEffects, expand_home
+from saddle.sideeffects import SideEffects, Watch, expand_home
 from saddle.undo import UndoLog
 from saddle.vision import IMAGE_MAX_BYTES, data_url, image_info
 from saddle.vllm import ToolCall, VllmError
@@ -940,11 +941,43 @@ def _marked(ctx: ToolContext, result: str) -> str:
     return f"{UNSANDBOXED}\n{result}" if ctx.full_access else result
 
 
+def _watched(ctx: ToolContext, command: str) -> Watch | None:
+    """Plan and back up what `command` names, before it runs, when this session
+    records its side effects (full access with a record). Never stops the command:
+    a watch that fails records the command as not tracked instead."""
+    if not ctx.outside_files or ctx.effects is None:
+        return None
+    try:
+        return ctx.effects.watch(command, ctx.workdir)
+    except OSError as exc:
+        ctx.effects.note_untracked(command, f"it could not be watched ({type(exc).__name__})")
+        return None
+
+
+def _settled(
+    ctx: ToolContext, watch: Watch | None, terminal: Terminal, *, background: bool
+) -> None:
+    """Record what a watched command did once it has returned or been started."""
+    if watch is None or ctx.effects is None:
+        return
+    running = background or terminal.running
+    try:
+        ctx.effects.settle(
+            watch, exit_code=None if running else terminal.exit_code, background=running
+        )
+    except OSError as exc:
+        ctx.effects.note_untracked(
+            watch.command, f"what it changed could not be read ({type(exc).__name__})"
+        )
+
+
 def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     command = _text(args, "command", "run_command")
     box = ctx.box()
+    watch = _watched(ctx, command)
     if bool(args.get("background")):
         terminal = box.start(command)
+        _settled(ctx, watch, terminal, background=True)
         return _marked(
             ctx,
             f"started terminal {terminal.id} (isolation: {box.isolation}). "
@@ -952,6 +985,7 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         )
     timeout, capped = _bounded(ctx, int(args.get("timeout") or DEFAULT_TIMEOUT))
     terminal = box.run(command, timeout=timeout)
+    _settled(ctx, watch, terminal, background=False)
     if terminal.running:
         return _marked(
             ctx,

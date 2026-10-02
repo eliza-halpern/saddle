@@ -94,7 +94,14 @@ MAX_COMMAND: Final = 400
 def _clean_url(url: str) -> str:
     """The URL without credentials or query: where it points, not how it was let in."""
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.hostname or ''}{parts.path}"
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"  # an IPv6 literal
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return f"{parts.scheme}://{host}{f':{port}' if port else ''}{parts.path}"
 
 
 def _clean_command(command: str) -> str:
@@ -596,6 +603,10 @@ class SideEffects:
                     "exit": exit_code,
                 }
             )
+
+    def note_untracked(self, command: str, reason: str) -> None:
+        """Record a command as not tracked, for a reason found while watching it."""
+        self._append({"kind": "command", "command": command, "reasons": [reason], "exit": None})
 
     def before_file_created(self, path: Path, command: str, known: set[str]) -> None:
         """Record that `path` did not exist before `command` (it does now)."""
