@@ -12,6 +12,7 @@ editing a JSON file rather than a release.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import time
@@ -494,7 +495,12 @@ class SessionStore:
         path = self._dir(session_id) / RUNS_FILE
         if not path.parent.is_dir():
             return  # the session was purged while its run was still going
-        path.write_text(json.dumps(rows, indent=1, ensure_ascii=False), encoding="utf-8")
+        # Written beside the index and then swapped in whole. Rewritten in
+        # place, the file is empty for a moment: a reader then saw no runs,
+        # and a writer reading in that moment wrote back its own row alone.
+        fresh = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        fresh.write_text(json.dumps(rows, indent=1, ensure_ascii=False), encoding="utf-8")
+        os.replace(fresh, path)
 
     # -- messages ----------------------------------------------------------
 

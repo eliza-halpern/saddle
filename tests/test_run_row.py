@@ -16,9 +16,12 @@ worktree's absolute path.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
+import pytest
 from starlette.testclient import TestClient
 from test_ui3_mode import NoModel, _server_of
 from test_web_tasks import FIX, READ, app_for, idle, repo, store, wait_for
@@ -123,3 +126,26 @@ def test_the_packet_does_not_print_the_worktrees_absolute_path(
     shown = json.dumps(packet) + server.tasks[rid].state_event().task
     assert str(store.runs(sid)[0]["worktree"]) not in shown
     assert str(repo) not in shown
+
+
+def test_the_run_index_is_replaced_whole_so_a_reader_never_sees_it_half_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A run's thread and the server both read the index while a row is being
+    # written. Rewritten in place, the file is empty for a moment and a reader
+    # gets no rows at all (and a writer reading then would drop every other run).
+    store = SessionStore(tmp_path / "s")
+    sid = store.create(workdir=str(tmp_path)).id
+    store.record_run(sid, {"run_id": "a", "state": "running"})
+    seen: list[list[dict[str, Any]]] = []
+    real_replace = os.replace
+
+    def watching(src: str | Path, dst: str | Path) -> None:
+        seen.append(store.runs(sid))  # what a reader sees just before the new index lands
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", watching)
+    store.record_run(sid, {"run_id": "b", "state": "running"})
+    assert seen == [[{"run_id": "a", "state": "running"}]]
+    assert [row["run_id"] for row in store.runs(sid)] == ["a", "b"]
+    assert sorted(path.name for path in (tmp_path / "s" / sid).glob("runs.json*")) == ["runs.json"]

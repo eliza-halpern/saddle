@@ -228,7 +228,11 @@ def test_the_cli_attaches_a_real_audit_of_the_commits_after_the_run(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     result = run(repo)
-    commit_on(result, "r1.txt", "review fix one")
+    # A follow-up the audit refuses: a function no test runs. (A text file alone
+    # is not refused: files the checks cannot measure are listed as not proven.)
+    (result.worktree / "review_fix.py").write_text("def unproven():\n    return 1\n")
+    git(result.worktree, "add", "review_fix.py")
+    git(result.worktree, "commit", "-q", "-m", "review fix one")
     head = git(repo, "rev-parse", result.branch).strip()
     out, err = io.StringIO(), io.StringIO()
     code = cli.main(
@@ -236,7 +240,7 @@ def test_the_cli_attaches_a_real_audit_of_the_commits_after_the_run(
         stdout=out,
         stderr=err,
     )
-    assert code == 1, err.getvalue()  # the range changes only tests: nothing proves it
+    assert code == 1, err.getvalue()  # the range adds an untested function: refused
     assert (
         f"attached to {result.journal} as follow-up 1: {short(result.commit)}..{short(head)}"
         in (out.getvalue())
