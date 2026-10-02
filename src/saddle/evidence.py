@@ -509,7 +509,9 @@ def run_capture(
     prefixes, not `preexec_fn`, which is unsafe once threads exist (`slice`
     runs a `ThreadPoolExecutor`). A command the cap killed exits nonzero with
     the reason as the last line of its stderr and the first of its span, so
-    it reads as a failure with a cause, never as a hang or a crash of saddle.
+    it reads as a failure with a cause, never as a hang or a crash of saddle;
+    one that exited 0 after the cap killed a child of it gets
+    `memcap.OOM_KILLED_EXIT` instead.
     The span and the result record `argv` without the prefix, so journals
     and cache keys read as the command that was asked for.
 
@@ -548,6 +550,10 @@ def run_capture(
         return CapturedRun(argv=tuple(argv), exit_code=TOOL_UNAVAILABLE, stdout="", stderr=str(exc))
     if cap is not None and cap.oom_killed():
         reason = cap.reason()
+        if proc.returncode == 0:  # a parent outlived its killed child
+            proc = subprocess.CompletedProcess(
+                proc.args, memcap.OOM_KILLED_EXIT, proc.stdout, proc.stderr
+            )
         _record(recorder, argv, start, replace_stderr(proc, f"{reason}\n{proc.stderr}"))
         proc = replace_stderr(proc, f"{proc.stderr.rstrip()}\n{reason}\n".lstrip("\n"))
     else:

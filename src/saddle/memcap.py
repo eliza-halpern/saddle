@@ -48,6 +48,13 @@ BUS_VARS: Final = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
 it starts must not inherit when its own environment did not have them: the
 bus is how a process asks the user manager to start anything at all."""
 
+OOM_KILLED_EXIT: Final = 128 + 9
+"""The exit a command gets when the cap killed something in its scope and it
+still exited 0: what a shell reports for a SIGKILL. Whether the parent of a
+killed child is stopped too depends on systemd stopping the scope before the
+parent finishes, a race a busy user manager loses, so the failure is set
+here rather than left to that timing."""
+
 MEMORY_MAX_ENV: Final = "SADDLE_MEMORY_MAX"
 _SIZE: Final = re.compile(r"([1-9][0-9]*)([KMGT]?)", re.IGNORECASE)
 

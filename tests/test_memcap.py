@@ -316,14 +316,14 @@ def test_an_oom_kill_of_a_child_is_named_and_its_scope_cleared(
 ) -> None:
     # The hog is the shell's child, not the command itself, and the shell
     # ignores the SIGTERM systemd sends the rest of the scope after the kill:
-    # it outlives the child and exits 0. The exit code stands, the reason is
-    # still recorded, and no failed scope is left behind in the user manager.
+    # it outlives the child and exits 0. The run still fails, with the
+    # reason, and no failed scope is left behind in the user manager.
     # Unconfined (no working bwrap) so the shell is the scope's top process;
     # the confined case is the next test.
     monkeypatch.setattr(sandbox_module, "isolation_problem", lambda: "unconfined in this test")
     shell = f"trap '' TERM; {hog(512)}; echo after-the-child"
     run = evidence.run_capture(["bash", "-c", shell], tmp_path, memory_limit=256 * MIB)
-    assert run.exit_code == 0, run.stderr
+    assert run.exit_code == memcap().OOM_KILLED_EXIT, run.stderr
     assert "after-the-child" in run.stdout
     assert "allocated" not in run.stdout
     assert "memory cap" in run.stderr
@@ -346,6 +346,28 @@ def test_a_confined_command_whose_child_is_oom_killed_fails_with_the_reason(
     assert "allocated" not in run.stdout
     assert "memory cap" in run.stderr
     _no_failed_scope_left()
+
+
+def test_a_detected_oom_kill_fails_the_run_whatever_the_command_exited(
+    tmp_path: Path, capped: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The order a busy user manager produces: the kernel kills inside the
+    # scope, the command finishes with 0 before systemd stops what is left,
+    # and only then does saddle ask the scope why. Forced here, so the
+    # outcome never rests on which side of that race the box lands.
+    from saddle import memcap as live
+
+    monkeypatch.setattr(live.Cap, "oom_killed", lambda self: True)
+    journal = tmp_path / "proofs.jsonl"
+    run = evidence.run_capture(
+        ["true"], tmp_path, memory_limit=256 * MIB, recorder=SpanRecorder(journal, "n1")
+    )
+    assert run.exit_code != 0, run.stderr
+    assert "memory cap" in run.stderr
+    (span,) = read_spans(journal)
+    assert span.exit_code == run.exit_code
+    # a command that already failed keeps its own exit code
+    assert evidence.run_capture(["false"], tmp_path, memory_limit=256 * MIB).exit_code == 1
 
 
 # -- every gate launch that runs the tree's code reads the configured cap -------
