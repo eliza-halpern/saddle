@@ -105,7 +105,7 @@ def _clean_command(command: str) -> str:
     return text if len(text) <= MAX_COMMAND else text[: MAX_COMMAND - 1] + "…"
 
 
-def _expand_home(token: str) -> str:
+def expand_home(token: str) -> str:
     home = str(Path.home())
     if token == "~" or token.startswith("~/"):
         return home + token[1:]
@@ -208,12 +208,12 @@ def _download(program: str, words: list[str], cwd: Path) -> tuple[str, Path | No
             elif word.startswith("--output-document="):
                 out = word.split("=", 1)[1]
             elif word in ("-P", "--directory-prefix") and following:
-                prefix = Path(_expand_home(following))
+                prefix = Path(expand_home(following))
             elif word.startswith("--directory-prefix="):
-                prefix = Path(_expand_home(word.split("=", 1)[1]))
+                prefix = Path(expand_home(word.split("=", 1)[1]))
     name = Path(urlsplit(url).path).name or "index.html"
     if out is not None:
-        return url, (cwd / _expand_home(out))
+        return url, (cwd / expand_home(out))
     if program == "wget" or keep_name:
         return url, prefix / name
     return url, None
@@ -296,11 +296,11 @@ def _read_segment(
     elif program not in KNOWN:
         _opaque(plan, seen_opaque, f"`{program}` runs code whose changes are not visible here")
     if program in ("curl", "wget"):
-        found = _download(program, [_expand_home(w) for w in rest], cwd)
+        found = _download(program, [expand_home(w) for w in rest], cwd)
         if found is not None:
             plan.downloads.append(found)
     if program == "cd" and rest:
-        return (cwd / _expand_home(rest[0])).resolve()
+        return (cwd / expand_home(rest[0])).resolve()
     if program == "sed" and not any(w.startswith("-i") or w == "--in-place" for w in rest):
         return cwd  # sed without -i only reads its files
     if program in _NAMES_PATHS:
@@ -341,7 +341,7 @@ def _add_path(token: str, cwd: Path, workdir: Path, plan: Plan, *, quiet: bool =
     """Name `token` as a path the command touches, when it is outside the folder."""
     if not token or _URL.match(token):
         return
-    expanded = _expand_home(token)
+    expanded = expand_home(token)
     if any(mark in expanded for mark in ("$", "`")):
         if not quiet:
             plan.opaque.append(f"`{token}` names a path through a variable or substitution")

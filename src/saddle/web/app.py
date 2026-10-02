@@ -74,6 +74,7 @@ from saddle.sessions import (
     FullAccessRefusedError,
     SessionStore,
 )
+from saddle.sideeffects import SideEffects
 from saddle.titles import title_for, words_title
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
 from saddle.undo import UndoLog
@@ -509,6 +510,7 @@ class ChatServer:
                     on_output=lambda tid, chunk: live.publish(TerminalOutput(id=tid, chunk=chunk)),
                     undo=UndoLog(self.store.undo_dir(session_id)),
                     full_access=session.full_access,
+                    effects=SideEffects(self.store.outside_dir(session_id)),
                     ask_password=live.ask_password,
                     processes=self.ledger(session_id),
                     images=True,

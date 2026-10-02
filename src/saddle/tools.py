@@ -41,6 +41,7 @@ from saddle.sandbox import (
     project_env,
     resolve_within,
 )
+from saddle.sideeffects import SideEffects, expand_home
 from saddle.undo import UndoLog
 from saddle.vision import IMAGE_MAX_BYTES, data_url, image_info
 from saddle.vllm import ToolCall, VllmError
@@ -212,12 +213,67 @@ ASK_TOOLS: Final[list[dict[str, Any]]] = [
 """The schemas an Ask turn offers the model."""
 
 
-def tools_for_mode(mode: str, *, processes: bool = False) -> list[dict[str, Any]]:
+OUTSIDE_DESCRIPTIONS: Final[dict[str, str]] = {
+    "read_file": (
+        "Read a UTF-8 text file. FULL ACCESS is on, so the path may be absolute or start "
+        "with ~ and may be outside the working directory. A file longer than "
+        f"{READ_LINES} lines comes back {READ_LINES} lines at a time, headed by "
+        "which lines they are; pass offset (the first line, from 1) and limit (how "
+        "many lines) to read another part."
+    ),
+    "write_file": (
+        "Write a UTF-8 text file, creating parent directories. FULL ACCESS is on, so the "
+        "path may be absolute or start with ~ and may be outside the working directory. "
+        "Before the first change to a file outside the working directory its original is "
+        "backed up, and every such change is recorded in the session's side-effect record "
+        "that the person can review and undo."
+    ),
+    "edit_file": (
+        "Replace one exact snippet in a file. FULL ACCESS is on, so the path may be "
+        "absolute or start with ~ and may be outside the working directory; before the "
+        "first change to a file outside it the original is backed up and the change is "
+        "recorded in the session's side-effect record that the person can review and undo. "
+        "`old` must appear exactly once; prefer this over write_file for existing files, "
+        "which must otherwise be rewritten whole."
+    ),
+    "list_dir": (
+        "List entries of a directory. FULL ACCESS is on, so the path may be absolute or "
+        "start with ~ and may be outside the working directory."
+    ),
+    "search": (
+        "Search file contents under the working directory only (not outside it; use "
+        "run_command with grep for that) for a substring; returns path:line: text for "
+        "each match."
+    ),
+}
+"""What the file tools say about themselves while a full-access Edit session records
+its side effects (`ToolContext.outside_files`, #135): the rule is in the tool's own
+description, sent with every request, so it is stated before any call can meet it. A
+task run is never given these."""
+
+
+def tools_for_mode(
+    mode: str, *, processes: bool = False, outside: bool = False
+) -> list[dict[str, Any]]:
     """The tool schemas a chat turn in `mode` offers: read-only unless Edit.
-    Edit adds the process tool when the session keeps a process list."""
+    Edit adds the process tool when the session keeps a process list, and, with
+    `outside` (full access with a side-effect record), the file tools that say
+    they reach outside the folder."""
     if mode != "edit":
         return list(ASK_TOOLS)
-    return [*TOOLS, *([PROCESSES_SCHEMA] if processes else [])]
+    base = [
+        {
+            **tool,
+            "function": {
+                **tool["function"],
+                "description": OUTSIDE_DESCRIPTIONS[tool["function"]["name"]],
+            },
+        }
+        if outside and tool["function"]["name"] in OUTSIDE_DESCRIPTIONS
+        else tool
+        for tool in TOOLS
+    ]
+    return [*base, *([PROCESSES_SCHEMA] if processes else [])]
 
 
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
@@ -229,7 +285,9 @@ def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
     `context.allowed` to exactly those names, so a call to any other tool is
     refused before it runs. Set on every turn, because a context outlives a
     lane change."""
-    tools = tools_for_mode(mode, processes=context.processes is not None)
+    tools = tools_for_mode(
+        mode, processes=context.processes is not None, outside=context.outside_files
+    )
     context.allowed = tuple(t["function"]["name"] for t in tools)
     return tools
 
@@ -414,6 +472,7 @@ class ToolContext:
             self.undo.before_write(path)
 
     call_id: str | None = None
+    call_name: str | None = None
     time_left: Callable[[], float] | None = None
     """Seconds left in an autonomous run's time budget; None in chat. A
     command's timeout and a wait are capped at it (`_bounded`): the budget is
@@ -459,7 +518,47 @@ class ToolContext:
     full_access: bool = False
     """The session's full access (`Session.full_access`): `box` runs commands
     unsandboxed, and every command result says so (`UNSANDBOXED`). The file
-    tools stay inside the folder either way. A task never sets it."""
+    tools stay inside the folder unless `effects` is also set
+    (`outside_files`). A task never sets it."""
+    effects: SideEffects | None = None
+    """The session's side-effect record (#137). With full access it lets the
+    file tools reach outside the folder, each such write backed up and recorded
+    first. None (a task run, a sandboxed session, a direct test) keeps every
+    file tool inside the folder and records nothing."""
+
+    @property
+    def outside_files(self) -> bool:
+        """Whether the file tools may reach outside the folder: only with full
+        access AND a record to put the backups and the entries in."""
+        return self.full_access and self.effects is not None
+
+    def locate(self, name: str) -> Path:
+        """`name` as a path: inside the folder, or, while `outside_files`, anywhere
+        (absolute, `~`, `$HOME`, or relative to the folder)."""
+        if self.outside_files:
+            return (self.workdir.resolve() / expand_home(name)).resolve()
+        return resolve_within(self.workdir, name)
+
+    def is_outside(self, path: Path) -> bool:
+        base = self.workdir.resolve()
+        return path != base and base not in path.parents
+
+    def before_write(self, path: Path) -> None:
+        """Back `path` up before a write: into the folder's undo log, or, outside
+        the folder, into the side-effect record."""
+        if self.effects is not None and self.is_outside(path):
+            self.effects.before_file(path, via=self.call_name or "write_file")
+        else:
+            self.snapshot(path)
+
+    def after_write(self, path: Path, *, wrote: bool = True) -> None:
+        """Settle a write: a version for the transcript inside the folder (only
+        when the write happened); outside it, drop the record again if the file
+        ended as it began, written or not."""
+        if self.effects is not None and self.is_outside(path):
+            self.effects.settle_files({path})
+        elif wrote:
+            self.keep_version(path)
 
     processes: ProcessLedger | None = None
     """The session's process list (`procs`): every command's scope is recorded
@@ -613,7 +712,7 @@ def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     name = _text(args, "path", "read_file")
     offset = _line_number(args, "offset")
     limit = _line_number(args, "limit")
-    path = resolve_within(ctx.workdir, name)
+    path = ctx.locate(name)
     if not path.is_file():
         return f"error: cannot read {name!r}"
     if ctx.images and path.suffix.lower() in IMAGE_SUFFIXES:
@@ -666,19 +765,20 @@ def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
 
 def _write_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     name = _text(args, "path", "write_file")
-    path = resolve_within(ctx.workdir, name)
+    path = ctx.locate(name)
     content = _text(args, "content", "write_file")
     before = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     refused = ctx.guard(path, name, before if path.is_file() else None, content)
     if refused is not None:
         return refused
-    ctx.snapshot(path)
+    ctx.before_write(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     except OSError:
+        ctx.after_write(path, wrote=False)
         return f"error: cannot write {name!r}"
-    ctx.keep_version(path)
+    ctx.after_write(path)
     if not before:
         # The file itself, not just how big it is. A byte count says nothing
         # about what was written, and a new file is exactly when there is no
@@ -727,7 +827,7 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     name = _text(args, "path", "edit_file")
     old_text = _text(args, "old", "edit_file")
     new_text = _text(args, "new", "edit_file")
-    path = resolve_within(ctx.workdir, name)
+    path = ctx.locate(name)
     if not path.is_file():
         return f"error: cannot read {name!r}"
     before = path.read_text(encoding="utf-8", errors="replace")
@@ -762,12 +862,13 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     refused = ctx.guard(path, name, before, after)
     if refused is not None:
         return refused
-    ctx.snapshot(path)
+    ctx.before_write(path)
     try:
         path.write_text(after, encoding="utf-8")
     except OSError:
+        ctx.after_write(path, wrote=False)
         return f"error: cannot write {name!r}"
-    ctx.keep_version(path)
+    ctx.after_write(path)
     return _diff(before, after, name)
 
 
@@ -776,7 +877,7 @@ def _list_dir(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if raw is not None and not isinstance(raw, str):
         msg = "list_dir needs a string path argument"
         raise _BadArgumentError(msg)
-    path = resolve_within(ctx.workdir, raw or ".")
+    path = ctx.locate(raw or ".")
     if not path.is_dir():
         return f"error: not a directory: {args.get('path') or '.'}"
     rows = []
@@ -962,6 +1063,7 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
             f"its arguments are {', '.join(sorted(allowed or ()))}"
         )
     ctx.call_id = call.id
+    ctx.call_name = call.name
     try:
         return handler(ctx, args)
     except (OutsideRootError, _BadArgumentError) as exc:
