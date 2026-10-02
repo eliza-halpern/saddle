@@ -46,6 +46,7 @@ const provides = {
   ],
 };
 
+/** @param {string} file */
 const sharedGlobals = (file) =>
   Object.fromEntries(
     Object.entries(provides)

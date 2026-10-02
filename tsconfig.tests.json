@@ -1,5 +1,15 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "moduleDetection": "force" },
-  "include": ["node-globals.d.ts", "tests/*.js", "tests/fixtures/*.js", "tests/fixtures/*.mjs"]
+  "compilerOptions": {
+    "moduleDetection": "force"
+  },
+  "include": [
+    "node-globals.d.ts",
+    "tests/*.js",
+    "tests/fixtures/*.js",
+    "tests/fixtures/*.mjs",
+    "src/saddle/*.mjs",
+    "tools/*.mjs",
+    "*.config.mjs"
+  ]
 }

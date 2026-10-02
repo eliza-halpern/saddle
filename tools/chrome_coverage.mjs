@@ -23,8 +23,17 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DIR = join(ROOT, "node_modules", ".cache", "chrome-coverage");
 const METRICS = ["lines", "branches", "functions"];
 
-/** Every way a file's measured percentages fall short of its floors, one line each. */
+/** @typedef {Record<string, number>} Floor */
+/** @typedef {Record<string, {pct: number}>} Measured */
+
+/**
+ * Every way a file's measured percentages fall short of its floors, one line each.
+ * @param {Record<string, Floor>} floors
+ * @param {Record<string, Measured>} summary
+ * @returns {string[]}
+ */
 export function shortfalls(floors, summary) {
+  /** @type {string[]} */
   const problems = [];
   for (const [file, want] of Object.entries(floors)) {
     const got = summary[join(ROOT, file)];
@@ -41,6 +50,7 @@ export function shortfalls(floors, summary) {
   return problems;
 }
 
+/** @param {string[]} argv */
 function main(argv) {
   const [command, ...rest] = argv;
   const flag = rest.indexOf("--scope");
@@ -51,7 +61,9 @@ function main(argv) {
     return 2;
   }
   const dir = resolve(dirArg ?? process.env.SADDLE_JS_COVERAGE_DIR ?? DEFAULT_DIR);
-  const collected = existsSync(dir) ? readdirSync(dir).filter((n) => /^coverage-.*\.json$/.test(n)) : [];
+  const collected = existsSync(dir)
+    ? readdirSync(dir).filter((/** @type {string} */ n) => /^coverage-.*\.json$/.test(n))
+    : [];
   if (!collected.length) {
     if (process.env.SADDLE_REQUIRE_BROWSER) {
       console.error(`chrome coverage: no coverage in ${dir}, but SADDLE_REQUIRE_BROWSER is set`);

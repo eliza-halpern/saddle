@@ -415,3 +415,44 @@ def test_tsconfig_tests_lists_every_tracked_test_side_file() -> None:
         if "/node_modules/" not in line and line.startswith(str(REPO))
     }
     assert set(expected) <= listed, sorted(set(expected) - listed)
+
+
+# ----------------------------------------- every tracked script is type-checked
+
+
+def _typed_files() -> set[str]:
+    """Every file `tsc` reads under either repo config, repo-relative."""
+    listed: set[str] = set()
+    for config in ("tsconfig.json", "tsconfig.tests.json"):
+        result = subprocess.run(
+            [_tool("tsc"), "-p", config, "--listFilesOnly"],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stderr
+        listed |= {
+            Path(line).relative_to(REPO).as_posix()
+            for line in result.stdout.splitlines()
+            if "/node_modules/" not in line and line.startswith(str(REPO))
+        }
+    return listed
+
+
+def _untyped(tracked: list[str], typed: set[str]) -> list[str]:
+    return [f for f in tracked if f not in typed]
+
+
+def test_every_tracked_script_is_inside_a_tsconfig_include() -> None:
+    tracked = _tracked_js()
+    typed = _typed_files()
+    assert "src/saddle/jsdead.mjs" in tracked, "the census itself is broken"
+    assert _untyped(tracked, typed) == []
+
+
+def test_a_script_outside_every_tsconfig_include_is_named() -> None:
+    typed = _typed_files()
+    stray = "src/saddle/stray_untyped.mjs"
+    assert stray not in typed
+    assert _untyped([*_tracked_js(), stray], typed) == [stray]

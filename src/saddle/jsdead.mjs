@@ -21,6 +21,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+// The parser's own typings (typescript/unstable/*) type the nodes and the program; the
+// package is loaded by file path at run time, so these imports are for the checker only.
+/** @typedef {import("typescript/unstable/ast").Node} Node */
+/** @typedef {import("typescript/unstable/ast").SourceFile} SourceFile */
+/**
+ * The fields of a node this script reads after checking its `kind` (the parser's typings do
+ * not narrow on `kind` through a variable), so one local view stands in for the union.
+ * @typedef {Node & {
+ *   parent: Syn, text: string, name: Syn, left: Syn, right: Syn, operatorToken: Syn,
+ *   expression: Syn, arguments: Syn[], argumentExpression: Syn, moduleSpecifier?: Syn,
+ *   declarationList: {declarations: Syn[]}
+ * }} Syn
+ */
+/** @typedef {{file: string, name: string, pos: number, test: boolean}} Reference */
+/** @typedef {{file: string, name: string, line: number, start: number, end: number}} Candidate */
+
 const [rootArg, toolsArg, specText] = process.argv.slice(2);
 const root = path.resolve(rootArg);
 const spec = JSON.parse(specText);
@@ -28,10 +44,22 @@ const SKIPPED_DIRS = new Set(["node_modules", ".git", ".saddle", ".stryker-tmp",
 const JS = /\.(js|mjs|cjs)$/;
 const HTML = /\.html?$/;
 
+/** @type {(code: number) => never} */
+const stop = (code) => {
+  process.exit(code);
+  throw new Error("unreachable");
+};
+
+/** @param {unknown} object */
 function say(object) {
   console.log(JSON.stringify(object));
 }
 
+/**
+ * @param {string} dir
+ * @param {string[]} out
+ * @returns {string[]}
+ */
 function walk(dir, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -56,27 +84,30 @@ function toolEntry() {
 const entry = toolEntry();
 if (entry === null) {
   say({ unavailable: "typescript was not found in node_modules" });
-  process.exit(0);
+  stop(0);
 }
 
 let API;
+/** @type {typeof import("typescript/unstable/ast").SyntaxKind} */
 let K;
 try {
   ({ API } = await import(pathToFileURL(fs.realpathSync(entry.api)).href));
   ({ SyntaxKind: K } = await import(pathToFileURL(fs.realpathSync(entry.ast)).href));
 } catch (error) {
-  say({ unavailable: `typescript's parser could not be loaded: ${error.message}` });
-  process.exit(0);
+  say({ unavailable: `typescript's parser could not be loaded: ${error instanceof Error ? error.message : error}` });
+  stop(0);
 }
 
 const files = walk(root, []).sort();
 const jsFiles = files.filter((f) => JS.test(f));
+/** @param {string} abs */
 const rel = (abs) => path.relative(root, abs).split(path.sep).join("/");
 const isTest = new Set(spec.tests);
+/** @type {Map<string, (line: number) => boolean>} */
 const ranges = new Map(
-  Object.entries(spec.added).map(([file, spans]) => [
+  Object.entries(/** @type {Record<string, [number, number][]>} */ (spec.added)).map(([file, spans]) => [
     file,
-    (line) => spans.some(([first, last]) => first <= line && line <= last),
+    (/** @type {number} */ line) => spans.some(([first, last]) => first <= line && line <= last),
   ]),
 );
 
@@ -98,26 +129,47 @@ try {
 } catch (error) {
   if (api) api.close();
   fs.rmSync(configFile, { force: true });
-  say({ unavailable: `typescript's parser could not start: ${String(error.message).split("\n")[0]}` });
-  process.exit(0);
+  say({
+    unavailable: `typescript's parser could not start: ${String(error instanceof Error ? error.message : error).split("\n")[0]}`,
+  });
+  stop(0);
 }
 
+/** @type {Candidate[]} */
 const candidates = [];
+/** @type {Reference[]} */
 const references = [];
 const specifiers = new Set();
 const unparsed = new Map();
+/** @type {string[]} */
 const dynamicGlobals = [];
 const pageNames = new Set();
 const scriptSources = [];
 const texts = new Map();
 
+/**
+ * @param {SourceFile} sf
+ * @param {number} pos
+ */
 const lineOf = (sf, pos) => sf.getLineAndCharacterOfPosition(pos).line + 1;
+/**
+ * @param {Node} node
+ * @param {SourceFile} sf
+ */
 const textOf = (node, sf) => node.getText(sf);
 
+/**
+ * @param {Syn} left
+ * @param {SourceFile} sf
+ */
 function moduleExportsTarget(left, sf) {
   return /^(module\.)?exports(\.[\w$]+)?$/.test(textOf(left, sf));
 }
 
+/**
+ * @param {Syn} literal
+ * @param {SourceFile} sf
+ */
 function isExportsObject(literal, sf) {
   const p = literal.parent;
   return (
@@ -129,6 +181,10 @@ function isExportsObject(literal, sf) {
 }
 
 // An identifier that only exports a name (the use is somebody else's) is not use.
+/**
+ * @param {Syn} node
+ * @param {SourceFile} sf
+ */
 function isExportSite(node, sf) {
   const p = node.parent;
   if (p.kind === K.ExportSpecifier) return p.parent.parent.moduleSpecifier === undefined;
@@ -152,6 +208,10 @@ function isExportSite(node, sf) {
   return false;
 }
 
+/**
+ * @param {Syn} statement
+ * @returns {Syn[]}
+ */
 function declared(statement) {
   if (statement.kind === K.FunctionDeclaration || statement.kind === K.ClassDeclaration) {
     return statement.name ? [statement.name] : [];
@@ -172,11 +232,11 @@ for (const abs of jsFiles) {
   if (text.startsWith("#!") || /require\.main\s*===\s*module/.test(text)) specifiers.add(`<script>${file}`);
   const test = isTest.has(file);
   const own = new Set();
-  if (!test && ranges.has(file)) {
-    for (const statement of sf.statements) {
+  const inside = ranges.get(file);
+  if (!test && inside !== undefined) {
+    for (const statement of /** @type {Syn[]} */ (/** @type {unknown} */ (sf.statements))) {
       const first = lineOf(sf, statement.getStart(sf));
       const last = lineOf(sf, Math.max(statement.getStart(sf), statement.end - 1));
-      const inside = ranges.get(file);
       for (const name of declared(statement)) {
         own.add(name.pos);
         let whole = true;
@@ -193,7 +253,9 @@ for (const abs of jsFiles) {
       }
     }
   }
-  const visit = (node) => {
+  /** @param {Node} visited */
+  const visit = (visited) => {
+    const node = /** @type {Syn} */ (visited);
     if (node.kind === K.Identifier) {
       if (!own.has(node.pos) && !isExportSite(node, sf)) {
         references.push({ file, name: node.text, pos: node.getStart(sf), test });
@@ -218,7 +280,7 @@ for (const abs of jsFiles) {
         dynamicGlobals.push(`${file}:${lineOf(sf, node.getStart(sf))}`);
       }
     }
-    node.forEachChild(visit);
+    visited.forEachChild(visit);
   };
   visit(sf);
 }
@@ -249,10 +311,12 @@ try {
   // no package.json: nothing there names an entry file
 }
 
+/** @param {string} name */
 const stemOf = (name) => path.basename(name).replace(/\.(js|mjs|cjs)$/, "");
 const loadedStems = new Set([...specifiers].filter((s) => !s.startsWith("<script>")).map((s) => stemOf(s)));
 const loadedFiles = new Set(scriptSources.map((s) => path.basename(s)));
 
+/** @param {string} file */
 function reached(file) {
   const base = path.basename(file);
   return (
@@ -263,7 +327,9 @@ function reached(file) {
   );
 }
 
+/** @type {{file: string, why: string}[]} */
 const skipped = [];
+/** @type {Candidate[]} */
 const judged = [];
 for (const c of candidates) {
   if (reached(c.file)) judged.push(c);
