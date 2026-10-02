@@ -239,9 +239,11 @@ def test_a_long_tool_chain_runs_until_the_model_answers(options: TurnOptions) ->
     """Known-good: a turn needing many tool rounds is not cut off; it ends when
     the model answers, sealed, with no error."""
     (options.workdir / "note.txt").write_text("x")
-    client = FakeClient(
-        [[tool("read_file", path="note.txt")]] * LONG_TASK_ROUNDS + [[content("all set up")]]
-    )
+    rounds: list[list[Any] | BaseException] = [
+        [tool("read_file", path="note.txt")] for _ in range(LONG_TASK_ROUNDS)
+    ]
+    rounds.append([content("all set up")])
+    client = FakeClient(rounds)
     events = run(client, options)
     assert those(events, ErrorEvent) == []
     assert len([e for e in events if e.kind == "tool.start"]) == LONG_TASK_ROUNDS

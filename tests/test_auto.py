@@ -614,7 +614,9 @@ def test_a_chat_turn_is_not_offered_finish_and_has_no_round_cap(tmp_path: Path) 
     """A chat turn is not an autonomous run: `finish` is not offered, and it runs
     past the old 24-round cap until the model answers, then seals."""
     options = TurnOptions(workdir=tmp_path, journal=tmp_path / "j.jsonl")
-    client = Scripted([[call("list_dir")]] * 40 + [[StreamToken(stream="content", text="done")]])
+    rounds: list[list[Any] | BaseException] = [[call("list_dir")] for _ in range(40)]
+    rounds.append([StreamToken(stream="content", text="done")])
+    client = Scripted(rounds)
     events = list(run_turn(cast(VllmClient, client), [], "t", options, turn=1))
     assert len(client.asked) == 41
     assert "finish" not in [t["function"]["name"] for t in client.asked[0]["tools"]]
