@@ -433,8 +433,14 @@ def stryker_entry(workdir: Path, tools: Path | None = None) -> Path | None:
 
 
 def _config(mutate: Sequence[str], tests: Sequence[str]) -> dict[str, object]:
-    """StrykerJS's configuration: the command runner over `node --test`, no
-    coverage analysis (the command runner has none), the JSON report."""
+    """StrykerJS's configuration: the command runner over `node --test` of
+    `tests`, no coverage analysis, the JSON report.
+
+    `coverageAnalysis` stays "off" because the command runner reports no
+    per-test coverage: asked for "perTest" it still runs its one synthetic
+    test, the whole command, for every mutant. The scoping is done by `_reach`
+    instead, which chooses `tests` and tells `_outcome` which mutants no test
+    executes."""
     return {
         "testRunner": "command",
         "commandRunner": {"command": shlex.join(["node", "--test", *tests])},
@@ -465,6 +471,109 @@ def _ranges(lines: Collection[int]) -> list[tuple[int, int]]:
     return runs
 
 
+def _line_starts(text: str) -> list[int]:
+    """V8's offset (UTF-16 code units) of each line's first character."""
+    starts, here = [], 0
+    for line in text.split("\n"):
+        starts.append(here)
+        here += len(line.encode("utf-16-le")) // 2 + 1
+    return starts
+
+
+def _covered(ranges: Sequence[tuple[int, int, int]], offset: int) -> bool:
+    """Whether V8's block coverage `ranges` (start, end, count) say `offset`
+    ran: the innermost range holding it decides, as nested ranges override."""
+    inner: tuple[int, int, int] | None = None
+    for start, end, count in ranges:
+        if start <= offset < end and (inner is None or end - start <= inner[1] - inner[0]):
+            inner = (start, end, count)
+    return inner is not None and inner[2] > 0
+
+
+def _v8_ranges(cov_dir: Path, url: str) -> list[tuple[int, int, int]] | None:
+    """Every block range V8 recorded for the script `url` under `cov_dir`, or
+    None when no coverage file could be read at all (a run that did not
+    record is unknown, never "nothing ran")."""
+    found: list[tuple[int, int, int]] = []
+    readable = False
+    for report in sorted(cov_dir.glob("*.json")):
+        try:
+            result = json.loads(report.read_text())["result"]
+        except (ValueError, KeyError, OSError):
+            continue
+        readable = True
+        for script in result:
+            if script.get("url") == url:
+                found.extend(
+                    (r["startOffset"], r["endOffset"], r["count"])
+                    for fn in script["functions"]
+                    for r in fn["ranges"]
+                )
+    return found if readable else None
+
+
+@dataclass(frozen=True)
+class Reach:
+    """Which of a tree's node test files execute which parts of the changed
+    files, from one V8-coverage run per test file: `tests` are the files that
+    execute a changed line, `ranges[test][rel]` is each one's block coverage."""
+
+    tests: tuple[str, ...]
+    ranges: dict[str, dict[str, list[tuple[int, int, int]]]]
+
+    def reached(self, rel: str, offset: int) -> bool:
+        return any(_covered(per.get(rel, ()), offset) for per in self.ranges.values())
+
+
+def _reach(
+    scratch: Path,
+    tests: Sequence[str],
+    by_file: dict[str, set[int]],
+    *,
+    recorder: SpanRecorder | None,
+    timeout_s: int,
+    shown: Sequence[Path],
+) -> Reach | None:
+    """Run each test file alone under V8 coverage and keep the ones that
+    execute a changed line (the JavaScript counterpart of `covering_tests`).
+
+    None when any run recorded nothing readable: the caller then runs every
+    test file and counts every mutant as it was, never a smaller suite chosen
+    from coverage that was not there."""
+    ranges: dict[str, dict[str, list[tuple[int, int, int]]]] = {}
+    chosen: list[str] = []
+    starts = {rel: _line_starts((scratch / rel).read_text()) for rel in by_file}
+    texts = {rel: (scratch / rel).read_text().split("\n") for rel in by_file}
+    for index, test in enumerate(tests):
+        cov_dir = scratch / ".v8-coverage" / str(index)
+        cov_dir.mkdir(parents=True)
+        run_capture(
+            ["node", "--test", test],
+            scratch,
+            recorder=recorder,
+            timeout=timeout_s,
+            memory_limit=tree_memory_limit(),
+            extra_env={"NODE_V8_COVERAGE": str(cov_dir)},
+            shown=shown,
+        )
+        per: dict[str, list[tuple[int, int, int]]] = {}
+        for rel in by_file:
+            found = _v8_ranges(cov_dir, (scratch / rel).as_uri())
+            if found is None:
+                return None
+            per[rel] = found
+        ranges[test] = per
+        if any(
+            _covered(per[rel], starts[rel][line - 1] + column)
+            for rel, lines in by_file.items()
+            for line in lines
+            for column in range(len(texts[rel][line - 1]))
+            if not texts[rel][line - 1][column].isspace()
+        ):
+            chosen.append(test)
+    return Reach(tuple(chosen), ranges)
+
+
 def _shown(rel: str, source: list[str], mutant: dict[str, object]) -> str:
     """The mutant as a `-`/`+` diff of the lines it changes: the line before,
     then the line with the mutant's replacement spliced in."""
@@ -492,7 +601,8 @@ def mutation_sample(
     """Kill rate over every StrykerJS mutant that starts on a changed `.js` line.
 
     Runs in a scratch copy (the tests run there, confined) under `timeout_s`,
-    with `node --test` over every test file as each mutant's command. A mutant
+    with `node --test` over the test files that execute a changed line (all of
+    them when coverage could not be read) as each mutant's command. A mutant
     counts when its first line is a changed line; `Killed` and `Timeout` are
     kills, every other decided status is a survivor (as for mutmut), and
     `CompileError` or `Ignored` mutants are not in the population. Nothing
@@ -534,15 +644,20 @@ def mutation_sample(
             for rel, lines in sorted(by_file.items())
             for first, last in _ranges(lines)
         ]
-        (scratch / "stryker.conf.json").write_text(json.dumps(_config(mutate, tests)))
         modules = entry.parents[3]
+        seen = [] if modules.is_relative_to(workdir) else [modules]
+        reach = _reach(scratch, tests, by_file, recorder=recorder, timeout_s=timeout_s, shown=seen)
+        # No test file executes a changed line: the suite still runs once (the
+        # dry run needs a green command) and every mutant reads "no coverage".
+        chosen = list(reach.tests) if reach and reach.tests else tests
+        (scratch / "stryker.conf.json").write_text(json.dumps(_config(mutate, chosen)))
         ran = run_capture(
             ["node", str(entry), "run", "stryker.conf.json"],
             scratch,
             recorder=recorder,
             timeout=timeout_s,
             memory_limit=tree_memory_limit(),
-            shown=[] if modules.is_relative_to(workdir) else [modules],
+            shown=seen,
         )
         report = scratch / "stryker-report.json"
         if ran.exit_code not in (0, SHELL_TIMEOUT) or not report.is_file():
@@ -553,7 +668,7 @@ def mutation_sample(
                 survivors=(_tool_failure(ran),),
                 budget_spent=ran.exit_code == SHELL_TIMEOUT,
             )
-        return _outcome(json.loads(report.read_text()), scratch, by_file, spelled, ran)
+        return _outcome(json.loads(report.read_text()), scratch, by_file, spelled, ran, reach)
 
 
 def _tool_failure(ran: CapturedRun) -> str:
@@ -568,6 +683,7 @@ def _outcome(
     by_file: dict[str, set[int]],
     spelled: dict[str, str],
     ran: CapturedRun,
+    reach: Reach | None = None,
 ) -> MutationOutcome:
     files = report["files"]
     scored: list[tuple[str, str, str, int, str]] = []  # name, status, rel, line, show
@@ -577,11 +693,15 @@ def _outcome(
         if wanted is None:
             continue
         source = (scratch / rel).read_text().splitlines()
+        starts = _line_starts((scratch / rel).read_text())
         for mutant in entry["mutants"]:
             line = mutant["location"]["start"]["line"]
             if line not in wanted:
                 continue
             status = mutant["status"]
+            offset = starts[line - 1] + mutant["location"]["start"]["column"] - 1
+            if status == "Survived" and reach is not None and not reach.reached(rel, offset):
+                status = "NoCoverage"  # the command runner cannot say so; V8 coverage can
             if status in _UNDECIDED:
                 undecided += 1
                 continue

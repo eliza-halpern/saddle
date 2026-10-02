@@ -352,6 +352,130 @@ def test_a_failed_stryker_with_no_output_names_that(
     assert out.survivors == ("stryker run exited 1: no output",)
 
 
+# -- which tests a mutant is judged by ---------------------------------------------------
+
+SCOPED_A = (
+    "function add(a, b) {\n  return a + b;\n}\n"
+    "function clamp(x, lo, hi) {\n  if (x < lo) return lo;\n  if (x > hi) return hi;\n"
+    "  return x;\n}\n"
+    "function unused(x) {\n  return x + 1;\n}\n"
+    "module.exports = { add, clamp, unused };\n"
+)
+SCOPED_B = "function shout(s) {\n  return s.toUpperCase();\n}\nmodule.exports = { shout };\n"
+HEADER = "const test = require('node:test');\nconst assert = require('node:assert');\n"
+
+
+@pytest.fixture
+def scoped(project: Path) -> Path:
+    """Two source files, each reached by its own test file only; `unused` in
+    `a.js` is reached by none; `clamp`'s upper branch is not pinned."""
+    (project / "static" / "a.js").write_text(SCOPED_A)
+    (project / "static" / "b.js").write_text(SCOPED_B)
+    (project / "tests" / "a.test.js").write_text(
+        HEADER + "const { add, clamp } = require('../static/a.js');\n"
+        "test('add', () => { assert.strictEqual(add(1, 2), 3); });\n"
+        "test('low', () => { assert.strictEqual(clamp(1, 2, 5), 2); });\n"
+        "test('mid', () => { assert.strictEqual(clamp(3, 2, 5), 3); });\n"
+    )
+    (project / "tests" / "b.test.js").write_text(
+        HEADER + "const { shout } = require('../static/b.js');\n"
+        "test('shout', () => { assert.strictEqual(shout('a'), 'A'); });\n"
+    )
+    git(project, "add", "-A")
+    return project
+
+
+def spy_on_the_suite(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """The test files each StrykerJS run was configured to run."""
+    seen: list[list[str]] = []
+    real = js._config
+
+    def record(mutate: list[str], tests: list[str]) -> dict[str, object]:
+        seen.append(list(tests))
+        return real(mutate, tests)
+
+    monkeypatch.setattr(js, "_config", record)
+    return seen
+
+
+@needs_stryker
+def test_a_change_runs_only_the_test_files_that_reach_it_and_unreached_mutants_say_so(
+    scoped: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = spy_on_the_suite(monkeypatch)
+    changed = {(str(scoped / "static" / "a.js"), n) for n in range(1, 12)}
+    out = js.mutation_sample(scoped, changed, tools=REPO)
+    assert seen == [["tests/a.test.js"]]  # b.test.js reaches nothing that changed
+    statuses = {name: status for name, status, _ in out.mutant_detail}
+    by_line: dict[int, set[str]] = {}
+    for name, status, _ in out.mutant_detail:
+        by_line.setdefault(int(name.split(":")[1]), set()).add(status)
+    # known kill: `add`'s `+` is pinned; known survivor: `x > hi` runs, but nothing
+    # pins its boundary (`>=`)
+    assert statuses["static/a.js:2:10 ArithmeticOperator"] == "Killed"
+    assert "Survived" in by_line[6]
+    # no test calls `unused`: not killed, not dropped, not a plain survivor either
+    unreached = [n for n, status, _ in out.mutant_detail if status == "NoCoverage"]
+    assert unreached
+    assert all(int(n.split(":")[1]) in (9, 10) for n in unreached)
+    assert out.untested == len(unreached)
+    assert set(out.survivors) >= set(unreached)  # still counted against the kill rate
+    assert out.total == len(out.mutant_detail)
+
+
+@needs_stryker
+def test_a_change_no_test_reaches_runs_the_whole_suite_and_every_mutant_is_unreached(
+    scoped: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = spy_on_the_suite(monkeypatch)
+    out = js.mutation_sample(scoped, [(str(scoped / "static" / "a.js"), 10)], tools=REPO)
+    assert seen == [["tests/a.test.js", "tests/b.test.js"]]
+    assert out.total > 0
+    assert dict(out.statuses) == {"NoCoverage": out.total}
+
+
+@needs_stryker
+def test_coverage_that_could_not_be_read_runs_every_test_and_relabels_nothing(
+    scoped: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = spy_on_the_suite(monkeypatch)
+    monkeypatch.setattr(js, "_v8_ranges", lambda *_a: None)
+    out = js.mutation_sample(scoped, [(str(scoped / "static" / "a.js"), 10)], tools=REPO)
+    assert seen == [["tests/a.test.js", "tests/b.test.js"]]
+    assert dict(out.statuses) == {"Survived": out.total}
+
+
+def test_the_innermost_block_range_decides_whether_an_offset_ran() -> None:
+    ranges = [(0, 100, 1), (20, 40, 0), (25, 30, 3)]
+    assert [js._covered(ranges, n) for n in (5, 22, 27, 35, 50, 100)] == [
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+    ]
+
+
+def test_line_starts_count_utf16_units_the_way_v8_does() -> None:
+    assert js._line_starts("ab\n\U0001f600x\nz") == [0, 3, 7]
+
+
+def test_v8_ranges_skip_a_corrupt_report_and_say_none_when_nothing_was_readable(
+    tmp_path: Path,
+) -> None:
+    assert js._v8_ranges(tmp_path, "file:///x.js") is None
+    (tmp_path / "a.json").write_text("{")
+    assert js._v8_ranges(tmp_path, "file:///x.js") is None
+    (tmp_path / "b.json").write_text(
+        '{"result": [{"url": "file:///x.js", "functions": [{"ranges": '
+        '[{"startOffset": 1, "endOffset": 4, "count": 2}]}]}, {"url": "file:///y.js", '
+        '"functions": []}]}'
+    )
+    assert js._v8_ranges(tmp_path, "file:///x.js") == [(1, 4, 2)]
+    assert js._v8_ranges(tmp_path, "file:///z.js") == []
+
+
 def _mutant(status: str, line: int, name: str = "BooleanLiteral") -> dict[str, object]:
     where = {"start": {"line": line, "column": 3}, "end": {"line": line, "column": 7}}
     return {
