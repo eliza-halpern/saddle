@@ -13,51 +13,9 @@
 // Then two deltas inside one frame, and a task card's tool line in each state.
 //
 // usage: node paint_cdp.mjs <base-url> <session-id>
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { coverage } from "./cdp_coverage.mjs";
-import { activePort } from "./cdp_port.mjs";
+import { withPage } from "./cdp_page.mjs";
 
 const [base, sid] = process.argv.slice(2);
-const prof = mkdtempSync(join(tmpdir(), "cdp-paint-"));
-const chrome = spawn(
-  "google-chrome",
-  [
-    "--headless=new",
-    "--no-sandbox",
-    "--disable-gpu",
-    "--hide-scrollbars",
-    "--remote-debugging-port=0",
-    `--user-data-dir=${prof}`,
-    "about:blank",
-  ],
-  { stdio: "ignore" },
-);
-const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
-const finish = async (/** @type {number} */ code) => {
-  chrome.kill();
-  await sleep(300);
-  rmSync(prof, { recursive: true, force: true });
-  process.exit(code);
-};
-
-async function target() {
-  for (let i = 0; i < 75; i++) {
-    try {
-      const port = activePort(prof);
-      if (!port) throw new Error("Chrome has not written its DevTools port yet");
-      const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-      const page = list.find((/** @type {{ type: string, webSocketDebuggerUrl: string }} */ t) => t.type === "page");
-      if (page) return page.webSocketDebuggerUrl;
-    } catch {
-      // Chrome is not listening yet; poll again.
-    }
-    await sleep(200);
-  }
-  throw new Error("chrome did not start");
-}
 
 // One round, run in the page. `order` is "frame-first" or "end-first"; `text` is
 // the delta, unique per round so its paints can be counted.
@@ -128,56 +86,26 @@ const TOOL_LINE = `async () => {
 }`;
 
 try {
-  const ws = new WebSocket(await target());
-  await new Promise((r) => ws.addEventListener("open", r));
-  let id = 0;
-  const pending = new Map();
-  ws.addEventListener("message", (m) => {
-    const msg = JSON.parse(m.data);
-    if (msg.id && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
-      pending.delete(msg.id);
+  const out = await withPage(base, async (page) => {
+    // page.chat waits for the session's first render: started any sooner, a
+    // round's turns could be wiped by the session.info that rebuilds the transcript.
+    await page.chat(sid);
+    const rounds = [];
+    for (const [order, text] of [
+      ["frame-first", "first streamed reply"],
+      ["frame-first", "second streamed reply"],
+      ["end-first", "third streamed reply"],
+      ["frame-first", "fourth streamed reply"],
+    ]) {
+      rounds.push(await page.js(`(${ROUND})(${JSON.stringify(order)}, ${JSON.stringify(text)})`));
     }
+    const two = await page.js(`(${TWO_IN_ONE_FRAME})()`);
+    const toolLine = await page.js(`(${TOOL_LINE})()`);
+    return { rounds, two, toolLine };
   });
-  const rawSend = (/** @type {string} */ method, params = {}) =>
-    new Promise((resolve) => {
-      const n = ++id;
-      pending.set(n, resolve);
-      ws.send(JSON.stringify({ id: n, method, params }));
-    });
-  const cov = coverage(rawSend);
-  const send = cov.send;
-  const js = async (/** @type {string} */ expression) => {
-    const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-    if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
-    return r.result?.result?.value;
-  };
-  await send("Page.enable");
-  await send("Runtime.enable");
-  await send("Page.navigate", { url: `${base}/` });
-  let ready = false;
-  for (let i = 0; i < 75 && !ready; i++) {
-    await sleep(200);
-    ready = await js(
-      `typeof state !== "undefined" && state.sessionId === ${JSON.stringify(sid)} && !!document.querySelector("#transcript")`,
-    ).catch(() => false);
-  }
-  if (!ready) throw new Error("the page did not open the session");
-  const rounds = [];
-  for (const [order, text] of [
-    ["frame-first", "first streamed reply"],
-    ["frame-first", "second streamed reply"],
-    ["end-first", "third streamed reply"],
-    ["frame-first", "fourth streamed reply"],
-  ]) {
-    rounds.push(await js(`(${ROUND})(${JSON.stringify(order)}, ${JSON.stringify(text)})`));
-  }
-  const two = await js(`(${TWO_IN_ONE_FRAME})()`);
-  const toolLine = await js(`(${TOOL_LINE})()`);
-  console.log(JSON.stringify({ rounds, two, toolLine }));
-  await cov.save();
-  await finish(0);
+  console.log(JSON.stringify(out));
+  process.exit(0);
 } catch (error) {
-  console.error(String(/** @type {any} */ (error)?.stack || error));
-  await finish(1);
+  console.error(String((error instanceof Error && error.stack) || error));
+  process.exit(1);
 }
