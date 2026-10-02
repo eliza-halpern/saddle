@@ -137,7 +137,8 @@ const pages = async (c) => {
       try {
         const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
         const titles = list.filter((t) => t.type === "page").map((t) => t.title);
-        if (titles.every(Boolean) && titles.length) return { port, titles };
+        // Until the page has parsed its <title>, Chrome titles it with its URL.
+        if (titles.length && !titles.some((t) => t.startsWith("data:"))) return { port, titles };
       } catch {}
     }
     await sleep(100);
