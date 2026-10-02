@@ -155,7 +155,7 @@ function hideToast() {
 
 /** @param {SessionInfo} session */
 async function deleteSession(session) {
-  await api(`/api/sessions/${session.id}`, { method: "DELETE" });
+  const deleted = await api(`/api/sessions/${session.id}`, { method: "DELETE" });
   const wasActive = session.id === state.sessionId;
   if (wasActive) state.sessionId = null;
   const expire = setTimeout(() => {
@@ -168,7 +168,7 @@ async function deleteSession(session) {
   else await loadSessions();
   const toast = /** @type {HTMLElement} */ (document.getElementById("toast"));
   toast.textContent = "";
-  toast.appendChild(el("span", "toast-text", `Deleted “${session.title}”.`));
+  toast.appendChild(el("span", "toast-text", `Deleted “${session.title}”. ${stoppedText(deleted.stopped)}`.trim()));
   const undo = el("button", "toast-undo", "Undo");
   undo.type = "button";
   undo.onclick = () => undoDelete(session.id, wasActive);

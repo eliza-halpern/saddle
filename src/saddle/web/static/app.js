@@ -59,6 +59,10 @@
  *   "#persona-delete": HTMLButtonElement,
  *   "#persona-save": HTMLButtonElement,
  *   "#settings-close": HTMLButtonElement,
+ *   "#procs-chip": HTMLButtonElement,
+ *   "#procs-dialog": HTMLDialogElement,
+ *   "#procs-close": HTMLButtonElement,
+ *   "#procs-stop-all": HTMLButtonElement,
  *   "#full-access-dialog": HTMLDialogElement,
  *   "#fa-keep": HTMLButtonElement,
  *   "#fa-grant": HTMLButtonElement,
@@ -92,6 +96,7 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
 /** @typedef {{details: HTMLDetailsElement, label: HTMLElement, detail: HTMLElement, name: string}} ToolRowParts */
 /** @typedef {HTMLElement & {output?: string}} TerminalBody */
 /** @typedef {{name: string, path: string, isImage: boolean}} Attachment */
+/** @typedef {{id: number, pid: number, command: string, started: number, ran: string, processes: number}} ProcessRow */
 
 /**
  * What the page remembers between events. Fields after `mode` are set the
@@ -116,6 +121,7 @@ const $ = (sel) => /** @type {any} */ (document.querySelector(sel));
  * @property {{index: number, editing: boolean}} [rewind]
  * @property {string | null} [passwordId]
  * @property {boolean} [fullAccess]
+ * @property {ProcessRow[]} [processes]
  * @property {string | null} [suggestion]
  * @property {string[]} [builtinPersonas]
  * @property {string[]} [editablePersonas]
@@ -405,6 +411,7 @@ function handle(event) {
       foldReasoning(); // a turn with no answer text still folds
       setStatus("idle");
       state.busy = false;
+      refreshProcesses();
       break;
     case "idle":
       flushPaint();
@@ -429,6 +436,7 @@ function renderHistory(info) {
   if (info.temperature !== undefined) showTemperature(info.temperature);
   showMode(info.mode);
   showFullAccess(info.full_access);
+  refreshProcesses();
   showWhere(info.workdir, info.branch);
   // Show the meter on load, not only after the next turn ends.
   if (info.context_limit) {
@@ -868,6 +876,7 @@ async function setMode(mode) {
       body: JSON.stringify({ mode: state.mode }),
     });
     showFullAccess(session.full_access); // leaving Edit ends full access
+    reportStopped(session.stopped);
   } catch (error) {
     notice(errorText(error), "error");
   }
@@ -901,10 +910,106 @@ async function setFullAccess(on) {
       body: JSON.stringify(body),
     });
     showFullAccess(session.full_access);
+    reportStopped(session.stopped);
   } catch (error) {
     notice(errorText(error), "error");
   }
 }
+
+/* ---------- processes (#136) ----------
+   What a session's commands started and left running, listed by the server
+   (the session's cgroups, so a program that detached is found too). The chip
+   shows while anything runs; its dialog stops one entry or all of them. Ending
+   access stops everything, and the page says what was stopped. */
+
+/** @param {{command: string}[] | undefined} stopped */
+function stoppedText(stopped) {
+  if (!stopped || !stopped.length) return "";
+  const plural = stopped.length === 1 ? "" : "s";
+  return `Stopped ${stopped.length} program${plural} still running from this session: ${stopped
+    .map((p) => p.command)
+    .join(", ")}.`;
+}
+
+/** @param {{command: string}[] | undefined} stopped */
+function reportStopped(stopped) {
+  const text = stoppedText(stopped);
+  if (text) notice(text);
+  refreshProcesses();
+}
+
+/**
+ * @param {ProcessRow[]} rows
+ * @param {string} tracking
+ */
+function paintProcesses(rows, tracking) {
+  state.processes = rows;
+  $("#procs-chip").hidden = rows.length === 0;
+  $("#procs-count").textContent = String(rows.length);
+  const dialog = $("#procs-dialog");
+  if (!dialog.open) return;
+  const list = $("#procs-list");
+  list.textContent = "";
+  for (const row of rows) {
+    const item = el("li", "proc");
+    const text = el("div", "proc-text");
+    text.appendChild(el("code", "proc-command", row.command));
+    const when = new Date(row.started * 1000).toLocaleTimeString();
+    const more = row.processes > 1 ? ` · ${row.processes} processes` : "";
+    text.appendChild(el("span", "proc-meta", `started ${when} · group ${row.id}${more}`));
+    if (row.ran !== row.command) text.appendChild(el("span", "proc-meta", `from: ${row.ran}`));
+    item.appendChild(text);
+    const stop = el("button", "danger", "Stop");
+    stop.type = "button";
+    stop.setAttribute("aria-label", `Stop ${row.command}`);
+    stop.onclick = () => stopProcesses({ id: row.id });
+    item.appendChild(stop);
+    list.appendChild(item);
+  }
+  $("#procs-empty").hidden = rows.length > 0;
+  $("#procs-stop-all").hidden = rows.length === 0;
+  const note = $("#procs-note");
+  note.hidden = tracking === "cgroup";
+  note.textContent =
+    "No user systemd manager here, so only each command's own process group is tracked: a program that detached itself (setsid) is not listed.";
+}
+
+async function refreshProcesses() {
+  if (!state.sessionId || document.hidden) return;
+  if (state.mode !== "edit") {
+    // Only the Edit lane runs commands, and leaving it stopped them all.
+    paintProcesses([], "cgroup");
+    return;
+  }
+  try {
+    const listed = await api(`/api/sessions/${state.sessionId}/processes`);
+    paintProcesses(listed.processes, listed.tracking);
+  } catch {
+    // The list is a convenience; a failed look leaves the last one showing.
+  }
+}
+
+/** @param {{id: number} | {all: true}} which */
+async function stopProcesses(which) {
+  try {
+    const done = await api(`/api/sessions/${state.sessionId}/processes/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(which),
+    });
+    reportStopped(done.stopped);
+  } catch (error) {
+    notice(errorText(error), "error");
+  }
+}
+
+$("#procs-chip").onclick = async () => {
+  $("#procs-dialog").showModal();
+  await refreshProcesses();
+};
+$("#procs-close").onclick = () => $("#procs-dialog").close();
+$("#procs-stop-all").onclick = () => stopProcesses({ all: true });
+setInterval(refreshProcesses, 3000);
 
 /* The server puts this on the first line of every command result while full
    access is on (`tools.UNSANDBOXED`); the badge sits on the summary, so it

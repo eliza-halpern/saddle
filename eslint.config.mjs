@@ -36,6 +36,7 @@ const provides = {
     "state",
     "api",
     "notice",
+    "stoppedText",
     "setMode",
     "setStatus",
     "newTurn",

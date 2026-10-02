@@ -46,6 +46,8 @@
       <input type="text" id="title" spellcheck="false" aria-label="Session title">
       <span id="where" class="where" title="The session's folder and its git branch"><span id="where-folder"></span><span id="where-branch"></span></span>
       <span id="mode-chip" class="mode-chip" title="This session's lane: what Enter does"></span>
+      <button id="procs-chip" class="procs-chip" type="button" hidden
+              title="Programs this session's commands started and left running"><span class="procs-dot" aria-hidden="true"></span><span id="procs-count">0</span> running</button>
       <span id="full-access-banner" class="full-access-banner" role="status" hidden
             title="Full access is on: this session's Edit commands run as you, outside the sandbox">⚠ Unsandboxed
         <button id="full-access-off" type="button" title="Turn full access off: commands are sandboxed again, and any still running are stopped">Turn off</button></span>
@@ -184,6 +186,18 @@
     <button id="fa-keep" type="button" class="primary" autofocus>Keep sandboxed</button>
     <button id="fa-grant" type="button" class="danger"
             data-confirm="run commands as me, outside the sandbox">Turn on full access</button>
+  </div>
+</dialog>
+<dialog id="procs-dialog" aria-labelledby="procs-title">
+  <h3 id="procs-title">Programs this session started</h3>
+  <p class="hint">Still running from this session's commands. Turning full access off, leaving
+     Edit or deleting the session stops all of them.</p>
+  <ul id="procs-list" class="procs-list"></ul>
+  <p id="procs-empty" class="hint" hidden>Nothing is running from this session.</p>
+  <p id="procs-note" class="hint" hidden></p>
+  <div class="dialog-actions">
+    <button id="procs-close" type="button" class="primary">Close</button>
+    <button id="procs-stop-all" type="button" class="danger">Stop all</button>
   </div>
 </dialog>
 <dialog id="password-dialog" aria-labelledby="pw-title">
