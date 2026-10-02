@@ -959,7 +959,12 @@ def run_auto(
     # sandbox-expose`, read at the run's start) are shown to the model's too: a
     # watched run's commands had no `node`, so its node tests failed and the
     # project's node_modules/.bin tools (`#!/usr/bin/env node`) could not start.
-    with sandbox.also_exposing(sandbox_expose(worktree, "HEAD")):
+    try:
+        named = sandbox_expose(worktree, "HEAD")
+    except (SuiteLimitError, tomllib.TOMLDecodeError):
+        # A setting the audit cannot read either: it names the file when it runs.
+        named = ()
+    with sandbox.also_exposing(named):
         command_sandbox = Sandbox.for_workdir(
             worktree,
             env=run_env,
