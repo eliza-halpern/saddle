@@ -77,6 +77,7 @@ from saddle.sessions import (
 from saddle.titles import title_for, words_title
 from saddle.tools import PREVIEWABLE, ToolContext, preview_for, scope_turn
 from saddle.undo import UndoLog
+from saddle.vision import is_image_followup
 from saddle.vllm import VllmClient
 from saddle.web import branch_actions, tasks
 from saddle.web.tasks import SMALL_LANE_TEST_EDITS, TaskRun
@@ -255,6 +256,8 @@ def history_for_display(
     for index, message in enumerate(messages):
         # The index travels with the message so the page can name one to
         # rewind to; it is re-checked server-side, since compaction moves them.
+        if is_image_followup(message):
+            continue  # what read_file showed the model, not something the person said
         message = {**message, "index": index}
         calls = message.get("tool_calls")
         if not calls:
@@ -508,6 +511,7 @@ class ChatServer:
                     full_access=session.full_access,
                     ask_password=live.ask_password,
                     processes=self.ledger(session_id),
+                    images=True,
                 )
             tools = scope_turn(live.context, session.mode)
             live.turn += 1

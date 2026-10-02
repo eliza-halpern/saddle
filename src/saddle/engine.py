@@ -88,6 +88,7 @@ from saddle.tools import (
     execute_tool,
     preview_for,
 )
+from saddle.vision import images_message, server_accepts_images
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
 
 type TokenCounter = Callable[..., int | None]
@@ -885,6 +886,9 @@ def run_turn(
         messages.insert(0, {"role": "system", "content": options.system_prompt})
     if text is not None:
         messages.append(_user_message(text, images))
+    if ctx.images:
+        # This turn's client: a session's context outlives each turn's client.
+        ctx.accepts_images = lambda: server_accepts_images(client)
     if ctx.undo is not None:
         # Keyed to the question this turn answers, not to len(messages)
         # before it was added -- the system prompt is inserted at 0 on the
@@ -1132,6 +1136,9 @@ def run_turn(
                     seen += yield from _consult(auto, options.journal, node_id, call, seen)
                 tools.append({"name": call.name, "arguments": call.arguments, "result": seen})
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": seen})
+            if ctx.attachments:
+                messages.append(images_message(ctx.attachments))
+                ctx.attachments.clear()
             rounds.append({"reply": reply, "tools": tools})
             if stop() or (auto is not None and auto.outcome):
                 break
