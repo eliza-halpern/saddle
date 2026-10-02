@@ -342,7 +342,7 @@ def test_the_stylesheet_passes_stylelint() -> None:
     ("old", "new", "rule"),
     [
         ("rgb(63 185 80 / 16%)", "rgba(63, 185, 80, .16)", "alpha-value-notation"),
-        ("--bg-raise: #fff;", "--bg-raise: #ffffff;", "color-hex-length"),
+        ("--bg-raise: #ffffff;", "--bg-raise: #fff;", "color-hex-length"),
         (".sr-only {", ".sr-only { colour: red;", "property-no-unknown"),
         ("rs-needs_you", "rsNeedsYou", "selector-class-pattern"),
         # the inline exceptions are exceptions, not a global switch-off
