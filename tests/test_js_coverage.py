@@ -118,16 +118,45 @@ def test_a_measured_file_with_an_untested_branch_fails(tmp_path: Path) -> None:
     assert re.search(r"ERROR: Coverage for (lines|functions|branches|statements)", result.stderr)
 
 
+LIB = (
+    "function a(x) {\n  return x + 1;\n}\n"
+    "function b(x) {\n  return x * 2;\n}\n"
+    "module.exports = { a, b };\n"
+)
+BOTH = (
+    "const test = require('node:test');\nconst assert = require('node:assert');\n"
+    "const { a, b } = require('./lib.js');\n"
+    "test('a', () => assert.strictEqual(a(1), 2));\n"
+    "test('b', () => assert.strictEqual(b(2), 4));\n"
+)
+
+
 def test_a_suite_that_loses_a_behaviours_test_fails(tmp_path: Path) -> None:
-    root = _tree(tmp_path)
-    suite = root / "tests" / "markdown.test.js"
-    text = suite.read_text()
-    start = text.index('test("underscore marks render like asterisk marks"')
-    end = text.index("\ntest(", start)
-    suite.write_text(text[:start] + text[end:])
-    result = _c8(root, tmp_path)
-    assert result.returncode != 0, result.stdout
-    assert "ERROR: Coverage for" in result.stderr
+    """Under the real `.c8rc.json`'s thresholds, a module of two behaviours with a test
+    of each passes, and dropping either test fails c8 naming the coverage.
+
+    Built here, not by deleting one named test from the real suite: there a second test
+    of the same behaviour -- which any fix of that behaviour adds -- kept its lines
+    covered, and this check failed a correct change to markdown.js."""
+    config = json.loads((REPO / ".c8rc.json").read_text())
+    config.update(include=["lib.js"], tempDirectory=str(tmp_path / "c8"))
+    (tmp_path / ".c8rc.json").write_text(json.dumps(config))
+    (tmp_path / "lib.js").write_text(LIB)
+    c8 = [str(REPO / "node_modules" / ".bin" / "c8"), "node", "--test", "lib.test.js"]
+
+    def run(suite: str) -> subprocess.CompletedProcess[str]:
+        (tmp_path / "lib.test.js").write_text(suite)
+        return subprocess.run(
+            c8, cwd=tmp_path, capture_output=True, text=True, timeout=180, check=False
+        )
+
+    whole = run(BOTH)
+    assert whole.returncode == 0, whole.stdout + whole.stderr
+    for name in ("a", "b"):
+        kept = "\n".join(x for x in BOTH.splitlines() if not x.startswith(f"test('{name}'"))
+        lost = run(kept + "\n")
+        assert lost.returncode != 0, lost.stdout
+        assert "ERROR: Coverage for" in lost.stderr
 
 
 def test_the_config_measures_exactly_the_files_listed_as_measured() -> None:
