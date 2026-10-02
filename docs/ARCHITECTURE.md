@@ -298,7 +298,11 @@ planted-bug trees, 49 of 65 for the right reason (measured on `48eb6d6`). The op
    its mutation verdict covers the Python lines only. A changed `.js` code line is judged
    by a `js-coverage` finding: a line of a file the coverage scope lists as measured
    (`tests/fixtures/js_coverage_scope.json`) that no node test runs under c8 fails; a changed
-   line of any other `.js` file, or a run without c8, reads `not-proven: not line-measured`.
+   line of a page script under the scope's `chrome_measured` is judged from the Chrome-driven
+   tests the scope names under `chrome_tests` (run once, confined, only when such a line
+   changed); no Chrome, a skipped, silent or red Chrome run, or a failed report reads
+   `not-proven: not line-measured`, naming why. A changed line of any other `.js` file, or a
+   run without c8, reads `not-proven: not line-measured`.
 3. **Ledger** — the journal of §3 (`journal`, `saddle verify`), with an outcome span per
    run (`auto:finished` / `auto:stopped`), the tool-span list and the audit-span list
    sealed in the outcome's sidecar, `attempts/` sidecars beside it, and a `Saddle-Outcome`
