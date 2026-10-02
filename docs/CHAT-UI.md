@@ -199,3 +199,52 @@ elements, never `innerHTML`, so model output cannot inject markup; a
 `javascript:` link is rewritten to `#`. What the renderer does not know
 stays literal, which is the safe failure — an unrendered asterisk is ugly,
 a swallowed line is a lie about what was said.
+
+## Snapshot tests
+
+`tests/test_ui_snapshots.py` renders the page's key views in a real Chrome,
+in the dark and the light theme, and compares them with references committed
+under `tests/fixtures/ui_snapshots/`: the chat transcript (a user turn,
+markdown, a fenced block with its copy button), a tool row collapsed and
+expanded, and a finished run's packet. Two checks run on each view.
+
+- **Structure**, on every machine. For a fixed list of selectors per view the
+  test compares whether the element exists, its colour, background, display,
+  visibility, opacity and visible text exactly, and its box within a
+  tolerance (none for the packet, whose buttons rewrap with the font); it also
+  checks relations that need no reference (an element has a size, a button
+  sits inside its row's summary, one block lies below another, siblings do not
+  overlap). A vanished, collapsed, recoloured or overlapping element fails
+  naming the view and the selector.
+- **Pixels**, where the machine renders as the references' machine did. The
+  comparison is pixelmatch with its default colour threshold, counting
+  anti-aliased edges, and a small allowed count of differing pixels. Font
+  rasterisation differs between machines, so `environment.json` records the
+  Chrome major version, the platform and the fonts Chrome used. In any other
+  environment the pixel tests skip, naming what differs, so the audit lists
+  them as not proven; `SADDLE_REQUIRE_SNAPSHOTS=1` turns that skip into a
+  failure. A machine with other fonts therefore proves the structure only,
+  until references are generated there.
+
+Everything that varies is fixed by the driver (`tests/fixtures/snapshot_cdp.mjs`):
+viewport and scale factor, colour profile, font hinting, animations, the caret,
+and the run ids and branch name the packet prints. Fonts are the one thing it
+cannot fix, which is why the pixel references carry an environment.
+
+To regenerate the references in the environment you will run the tests in:
+
+```bash
+SADDLE_UPDATE_SNAPSHOTS=1 python -m pytest tests/test_ui_snapshots.py -k "not update_flag"
+python -m pytest tests/test_ui_snapshots.py
+```
+
+The first command rewrites the pictures, `structure.json` and
+`environment.json`; review them and commit. The second confirms the new
+references hold on a clean run. A normal run asserts the variable is unset
+(`test_the_update_flag_is_not_set_in_a_normal_run`), so references cannot be
+rewritten by accident.
+
+The pictures under `docs/screenshots` are hand-captured whole-window views of
+states (a live task card, a run strip, a finding delivered mid-run, an offer
+after an unresolved audit) that these tests do not seed; the snapshot driver
+crops elements and does not regenerate them.
