@@ -874,7 +874,7 @@ def _coverage_issues(path: Path) -> list[JournalIssue]:
                 )
             bound.add(outcome)
             tip = (span.record_hash, _argv_at(span, 1))
-        elif span.name == FOLLOWUP_SPAN:
+        else:  # a follow-up, or a record that is neither kind (which cannot continue a chain)
             if (
                 tip is None
                 or _argv_at(span, 3) != tip[0]

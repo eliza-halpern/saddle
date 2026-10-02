@@ -17,9 +17,9 @@ commit for it.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,9 +31,14 @@ from saddle.journal import (
     AUTO_START,
     FOLLOWUP_SPAN,
     SpanRecord,
+    append_span,
     attempt_sidecar_path,
+    build_span,
     coverage_path,
     read_spans,
+    utc_now,
+    verify_journal,
+    write_attempt_sidecar,
 )
 from saddle.transcript import start_field
 
@@ -87,15 +92,15 @@ class RunCoverage:
 
 
 def _sidecar(journal: Path, span: SpanRecord) -> dict[str, Any]:
-    """The span's sidecar when it hashes to the span's `attempt_hash`, else {}."""
-    try:
-        raw = attempt_sidecar_path(journal, span.span_id).read_bytes()
-        loaded = json.loads(raw)
-    except (OSError, ValueError):
-        return {}
-    if hashlib.sha256(raw).hexdigest() != span.attempt_hash or not isinstance(loaded, dict):
-        return {}
-    return loaded
+    """The span's sidecar as a dict; {} when it is sealed as something else.
+
+    `read_spans` has already checked the sidecar hashes to the span's
+    `attempt_hash`, so it is read here without being hashed again. A sidecar
+    resealed with a list in it is a ledger telling a story it cannot show, and
+    reads as no findings, not as a crash.
+    """
+    loaded = json.loads(attempt_sidecar_path(journal, span.span_id).read_bytes())
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _followup(journal: Path, span: SpanRecord) -> Followup:
@@ -306,3 +311,98 @@ def packet_text(journal: Path, spans: Sequence[SpanRecord], repo: Path | None) -
     cov = found[0]
     later = later_commits(repo, cov.branch, cov.head) if repo is not None and cov.commit else None
     return "".join(f"{line[0].upper()}{line[1:]}. " for line in coverage_lines(cov, later))
+
+
+class AttachError(ValueError):
+    """A follow-up cannot be attached: nothing is written."""
+
+
+@dataclass(frozen=True)
+class FollowupAudit:
+    """What an audit of a follow-up range found: its verdict and each finding."""
+
+    verdict: str
+    findings: tuple[dict[str, str], ...]
+
+
+@dataclass(frozen=True)
+class AttachPlan:
+    """The range a follow-up audit will cover, resolved against the ledger and the repository."""
+
+    cov: RunCoverage
+    covered_from: str
+    """The newest commit the ledger covers now; the audit's baseline."""
+    covered_to: str
+    """The full sha of the new head."""
+    tree: str
+
+
+def plan_attach(journal: Path, repo: Path, *, rev: str | None) -> AttachPlan:
+    """Resolve what a follow-up audit would cover, or say why it cannot be attached.
+
+    The ledger must verify (attaching to a ledger that does not would launder
+    it) and must name a covered commit; the new head defaults to the run
+    branch's tip and must sit on top of what is covered already.
+    """
+    issues = verify_journal(journal)
+    if issues:
+        codes = ", ".join(sorted({issue.code for issue in issues}))
+        msg = f"the ledger does not verify ({codes}); attach nothing to it"
+        raise AttachError(msg)
+    found = read_coverage(journal, read_spans(journal))
+    cov = found[-1] if found else None
+    if cov is None or not cov.commit:
+        msg = "the ledger records no covered commit (it predates that record): no range to extend"
+        raise AttachError(msg)
+    target = rev if rev is not None else f"refs/heads/{cov.branch}"
+    code, out = _git(repo, "rev-parse", "--verify", "-q", f"{target}^{{commit}}")
+    if code != 0:
+        msg = f"cannot resolve {target} in {repo}"
+        raise AttachError(msg)
+    head = out.strip()
+    code, _ = _git(repo, "merge-base", "--is-ancestor", cov.head, head)
+    if code != 0:
+        msg = f"the covered commit {cov.head[:SHORT]} is not an ancestor of {target}"
+        raise AttachError(msg)
+    if head == cov.head:
+        msg = f"nothing to attach: {target} is the commit the ledger already covers"
+        raise AttachError(msg)
+    code, tree = _git(repo, "rev-parse", f"{head}^{{tree}}")
+    if code != 0:
+        msg = f"cannot read the tree of {head[:SHORT]}"
+        raise AttachError(msg)
+    return AttachPlan(cov=cov, covered_from=cov.head, covered_to=head, tree=tree.strip())
+
+
+def attach_followup(journal: Path, plan: AttachPlan, audit: FollowupAudit) -> Followup:
+    """Append a follow-up audit to the ledger's coverage file, chained to the record before it.
+
+    A failing audit is recorded as failing: the record's exit code is 1 and its
+    verdict is the audit's, so a refusal cannot be left out of the ledger by
+    attaching only the passes. The findings live in the record's sealed sidecar;
+    the record's argv holds the range and the record it continues.
+    """
+    cpath = coverage_path(journal)
+    span_id = uuid.uuid4().hex
+    evidence = {
+        "produced_by": "a follow-up audit attached after the run, not the run's own",
+        "covers": f"{plan.covered_from}..{plan.covered_to}",
+        "branch": plan.cov.branch,
+        "tree": plan.tree,
+        "verdict": audit.verdict,
+        "findings": list(audit.findings),
+    }
+    sealed = build_span(
+        node_id="followup",
+        argv=[FOLLOWUP_SPAN, plan.covered_from, plan.covered_to, plan.cov.tip],
+        duration_ms=0,
+        exit_code=1 if audit.verdict == "refuse" else 0,
+        detail=f"verdict {audit.verdict}; {len(audit.findings)} finding(s); tree {plan.tree}",
+        kind="agent",
+        name=FOLLOWUP_SPAN,
+        span_id=span_id,
+        attempt_hash=write_attempt_sidecar(cpath, span_id, evidence),
+        started_at=utc_now().isoformat(),
+    )
+    append_span(cpath, sealed)
+    return _followup(journal, sealed)

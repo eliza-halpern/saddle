@@ -45,7 +45,15 @@ from saddle.auto import (
     run_auto,
 )
 from saddle.chat import ChatOptions, run_chat
-from saddle.covers import verify_lines
+from saddle.covers import (
+    SHORT,
+    AttachError,
+    AttachPlan,
+    FollowupAudit,
+    attach_followup,
+    plan_attach,
+    verify_lines,
+)
 from saddle.dag import REQ_NEAR_MISS_K, Dag, Node, validate_dag
 from saddle.edits import EDIT_GRAMMAR
 from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP
@@ -1448,8 +1456,21 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     """
     cache = None if args.no_cache else Path(args.cache).expanduser()
     rev: str | None = args.rev
+    baseline: str | None = args.baseline
     shortlist = args.tier2 == "shortlist"
     p1 = Path(args.task_requirements).resolve() if args.task_requirements else None
+    attach: AttachPlan | None = None
+    ledger = Path(args.attach_to) if args.attach_to else None
+    if ledger is not None:
+        if baseline is not None:
+            print("error: --attach-to audits from the covered commit; drop --baseline", file=stderr)
+            return AUDIT_COULD_NOT_AUDIT
+        try:
+            attach = plan_attach(ledger, Path(args.repo), rev=rev)
+        except AttachError as exc:
+            print(f"error: {exc}", file=stderr)
+            return AUDIT_COULD_NOT_AUDIT
+        rev, baseline = attach.covered_to, attach.covered_from
     audit_one = (
         functools.partial(
             _tiered_audit,
@@ -1459,14 +1480,14 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
         )
         if shortlist
         else functools.partial(_tiered_audit, task_requirements=p1)
-        if args.tiered or p1 is not None
+        if args.tiered or p1 is not None or attach is not None
         else audit_tree
     )
     try:
         if rev is None:
             result = audit_one(
                 Path(args.repo),
-                args.baseline or "HEAD",
+                baseline or "HEAD",
                 test_command=args.test_command,
                 cache=cache,
             )
@@ -1493,7 +1514,7 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
                 )
                 result = audit_one(
                     clone,
-                    args.baseline or f"{rev}^",
+                    baseline or f"{rev}^",
                     test_command=args.test_command,
                     cache=cache,
                 )
@@ -1501,6 +1522,14 @@ def run_audit(args: argparse.Namespace, *, stdout: IO[str], stderr: IO[str]) -> 
     except AuditError as exc:
         print(f"error: {exc}", file=stderr)
         return AUDIT_COULD_NOT_AUDIT
+    if ledger is not None and attach is not None:
+        followup = attach_followup(ledger, attach, followup_audit(result))
+        note = (
+            f"attached to {ledger} as follow-up {len(attach.cov.followups) + 1}: "
+            f"{followup.covered_from[:SHORT]}..{followup.covered_to[:SHORT]}, "
+            f"{len(followup.findings)} finding(s), verdict {followup.verdict}"
+        )
+        print(note, file=stderr if args.json else stdout)
     if isinstance(result, tuple):
         return _report_tiered(result, args.json, stdout)
     if args.json:
@@ -1614,17 +1643,50 @@ def _tiered_audit(
         return audit_tree(tree, baseline, test_command=test_command, cache=None)
 
 
-def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]) -> int:
-    """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`.
-
-    A refusal outranks a question, and a question outranks an accept."""
-    verdict = (
+def _tiered_verdict(results: tuple[Findings, ...]) -> str:
+    """A refusal outranks a question, and a question outranks an accept."""
+    return (
         "refuse"
         if not all(r.passed for r in results)
         else "question"
         if any(r.needs_you for r in results)
         else "accept"
     )
+
+
+def followup_audit(result: tuple[Findings, ...] | AuditResult) -> FollowupAudit:
+    """An audit's outcome as the record a follow-up section keeps: verdict and findings.
+
+    The findings keep their tier, gate, verdict, reason and detail (the detail
+    as the audit wrote it; the ledger's sidecar caps long text). An untiered
+    result (an unchanged range is `nothing-to-audit`) keeps its checks.
+    """
+    if isinstance(result, tuple):
+        return FollowupAudit(
+            verdict=_tiered_verdict(result),
+            findings=tuple(
+                {
+                    "tier": str(r.tier),
+                    "gate": f.gate,
+                    "verdict": f.verdict,
+                    "reason": f.reason,
+                    "detail": f.detail,
+                }
+                for r in result
+                for f in r.findings
+            ),
+        )
+    return FollowupAudit(
+        verdict=result.verdict,
+        findings=tuple(
+            {"gate": c.name, "verdict": c.status, "detail": c.detail} for c in result.checks
+        ),
+    )
+
+
+def _report_tiered(results: tuple[Findings, ...], as_json: bool, stdout: IO[str]) -> int:
+    """One line per finding, then the verdict; exit as `AUDIT_EXIT_CODES`."""
+    verdict = _tiered_verdict(results)
     if as_json:
         # mutant_detail is the audit span's record, not the CLI's:
         # dropped so `--json` stays byte-identical to what it was before it.
@@ -1854,6 +1916,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="A sealed task-requirements file (`saddle requirements extract`): tier 1 "
         "also runs the task text's examples on the tree. Implies --tiered.",
+    )
+    audit_cmd.add_argument(
+        "--attach-to",
+        default=None,
+        metavar="LEDGER",
+        help="Attach this audit to a finished run's ledger as a follow-up: audit the commits "
+        "after the ones it covers (REV defaults to the run branch's tip; the baseline is the "
+        "newest covered commit) with the tiered battery, and record the verdict and findings "
+        "in the ledger's coverage file, chained to what it already holds. A failing audit is "
+        "recorded as failing. Run it from the checkout the run's branch is in (--repo).",
     )
     _add_tier2(audit_cmd)
     audit_cmd.add_argument(
