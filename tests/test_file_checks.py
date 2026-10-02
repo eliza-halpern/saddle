@@ -65,3 +65,11 @@ def test_extensionless_and_dotfiles_are_keyed_by_path() -> None:
     assert key_for("tools/githooks/pre-push") == "tools/githooks/pre-push"
     assert key_for(".gitignore") == ".gitignore"
     assert key_for("a/b.tar.gz") == ".gz"
+
+
+def test_a_proof_naming_a_file_that_is_gone_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "gate.sh").write_text("run lint\n", encoding="utf-8")
+    registry: dict[str, Entry] = {".sh": Check("lint", (("old-gate.sh", "run lint"),))}
+    assert problems(["gate.sh"], registry, tmp_path) == [
+        ".sh: old-gate.sh does not contain 'run lint'"
+    ]
