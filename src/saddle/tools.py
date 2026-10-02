@@ -35,6 +35,7 @@ from saddle.sandbox import (
     DEFAULT_TIMEOUT,
     OutsideRootError,
     Sandbox,
+    desktop_env,
     project_command_env,
     project_env,
     resolve_within,
@@ -467,6 +468,8 @@ class ToolContext:
         virtualenv first on PATH when it has one (`sandbox.project_env`)."""
         if self.sandbox is None:
             env = project_command_env(project_env(self.workdir))
+            if self.full_access:
+                env.update(desktop_env())
             if self.full_access and self.ask_password is not None:
                 self.askpass = Askpass(self.ask_password)
                 env.update(self.askpass.env(env.get("PATH", os.environ.get("PATH", ""))))

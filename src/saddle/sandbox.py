@@ -85,6 +85,25 @@ ENV_KEEP: Final = (
 named anything, and saddle's process holds the model key when it is exported."""
 
 
+DESKTOP_ENV: Final = (
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "PULSE_SERVER",
+)
+"""The desktop session's variables: where a window opens, the runtime directory,
+the session bus and the audio server. Not in `ENV_KEEP`: a sandboxed command
+has no display or bus to reach. A session's full access (`desktop_env`) is the
+only way they reach a command, so a program it starts can open a window."""
+
+
+def desktop_env() -> dict[str, str]:
+    """The `DESKTOP_ENV` variables saddle's own environment has set."""
+    return {name: os.environ[name] for name in DESKTOP_ENV if name in os.environ}
+
+
 def command_env(extra: Mapping[str, str]) -> dict[str, str]:
     """The environment a command runs with: the allowlist, then `extra`."""
     kept = {
