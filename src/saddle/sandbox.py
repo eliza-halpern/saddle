@@ -954,6 +954,10 @@ class Sandbox:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                # A byte that is not UTF-8 (a cp437 name in `unzip -l`) is
+                # shown as U+FFFD; strict decoding killed the reader, losing
+                # the output and, without `outlive`, the exit too (F38).
+                errors="replace",
                 bufsize=1,
                 env=env,
                 start_new_session=True,

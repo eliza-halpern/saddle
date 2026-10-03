@@ -16,14 +16,16 @@ import http.server
 import json
 import shutil
 import threading
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from saddle.procs import ProcessLedger
 from saddle.sideeffects import SideEffects
-from saddle.tools import ToolContext, execute_tool
+from saddle.tools import UNSANDBOXED, ToolContext, execute_tool
 from saddle.vllm import ToolCall
 
 
@@ -165,3 +167,71 @@ def test_a_settle_that_fails_is_listed_not_tracked_too(
     assert "exit 0" in run(ctx, f"touch {home}/x")
     (row,) = ctx.effects.view()["not_tracked"]
     assert "could not be read" in row["reasons"][0]
+
+
+def _archive(place: Path) -> Path:
+    """A zip like a Windows download's: one member name in cp437 (no UTF-8 flag),
+    so `unzip -l` prints a byte that is not UTF-8 (F38)."""
+    archive = place / "dgVoodoo2.zip"
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr("readme.txt", "hi")
+        zipped.writestr("cafX.txt", "x")
+    archive.write_bytes(archive.read_bytes().replace(b"cafX", b"caf\x82"))
+    return archive
+
+
+def web(folder: Path, tmp_path: Path) -> ToolContext:
+    """The web chat's full-access context: a record and a process list."""
+    return ToolContext(
+        workdir=folder,
+        full_access=True,
+        effects=SideEffects(tmp_path / "rec"),
+        processes=ProcessLedger(),
+    )
+
+
+@pytest.mark.skipif(shutil.which("unzip") is None, reason="needs unzip")
+def test_full_access_returns_the_output_of_a_command_that_removes_a_file_and_lists_an_archive(
+    tmp_path: Path, home: Path, folder: Path
+) -> None:
+    downloads = home / "Downloads"
+    downloads.mkdir()
+    _archive(downloads)
+    (downloads / "dxvk.tar.gz").write_bytes(b"x")
+    ctx = web(folder, tmp_path)
+    try:
+        listed = run(ctx, f"cd {downloads} && rm -f dxvk.tar.gz && unzip -l dgVoodoo2.zip")
+        probed = run(
+            ctx,
+            f'cd {downloads} && unzip -l dgVoodoo2.zip; echo "exit=$?"; '
+            "echo '--- head bytes ---'; od -An -tx1 dgVoodoo2.zip | head -3",
+            timeout=10,
+        )
+    finally:
+        ctx.stop_processes()
+    assert not (downloads / "dxvk.tar.gz").exists()
+    assert listed.startswith(f"{UNSANDBOXED}\nexit 0\n")
+    assert "readme.txt" in listed
+    assert "caf\ufffd.txt" in listed  # the byte that is not UTF-8, shown, not fatal
+    assert "2 files" in listed
+    assert probed.startswith(f"{UNSANDBOXED}\nexit 0\n")
+    assert "2 files" in probed
+    assert "exit=0" in probed
+    assert "--- head bytes ---\n 50 4b 03 04" in probed
+
+
+@pytest.mark.skipif(shutil.which("unzip") is None, reason="needs unzip")
+def test_full_access_output_is_the_sandboxed_output_under_the_banner(
+    tmp_path: Path, folder: Path
+) -> None:
+    _archive(folder)
+    command = "unzip -l dgVoodoo2.zip; echo after"
+    sandboxed = run(ToolContext(workdir=folder), command, timeout=10)
+    ctx = web(folder, tmp_path)
+    try:
+        unsandboxed = run(ctx, command, timeout=10)
+    finally:
+        ctx.stop_processes()
+    assert sandboxed.startswith("exit 0\n")
+    assert sandboxed.endswith("2 files\nafter\n")
+    assert unsandboxed == f"{UNSANDBOXED}\n{sandboxed}"
