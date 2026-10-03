@@ -17,7 +17,7 @@ import io
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -82,8 +82,13 @@ def search_client(answer: Any) -> httpx.Client:
 # -- the switches -------------------------------------------------------------
 
 
+NO_FILE: Final = {"SADDLE_CAPABILITIES_FILE": "/nonexistent/saddle-capabilities.json"}
+"""An environment naming a file that does not exist: `load({})` alone falls back to the
+person's real ~/.config/saddle/capabilities.json, so a machine with a switch on failed."""
+
+
 def test_every_capability_is_off_by_default() -> None:
-    assert load({}) == Switches()
+    assert load(NO_FILE) == Switches()
     assert [Switches().get(name) for name in NAMES] == [False] * 4
     assert states(status(Switches())) == dict.fromkeys(NAMES, "off")
     assert states(status()) == dict.fromkeys(NAMES, "off")  # the suite's file does not exist
@@ -103,7 +108,7 @@ def test_the_environment_overrides_the_file_for_one_process(tmp_path: Path) -> N
         "SADDLE_CAPABILITIES": "search, research=off, browser=1",
     }
     assert load(env) == Switches(mcp=True, search=True, browser=True)
-    assert load({"SADDLE_CAPABILITIES": "mcp=on"}) == Switches(mcp=True)
+    assert load({**NO_FILE, "SADDLE_CAPABILITIES": "mcp=on"}) == Switches(mcp=True)
 
 
 @pytest.mark.parametrize("text", ["mcpp", "research=maybe", "=on", "all", "research=2"])
@@ -113,7 +118,7 @@ def test_a_setting_that_is_not_a_capability_is_an_error_naming_it(text: str) -> 
 
 
 def test_an_empty_value_means_on_like_the_bare_name() -> None:
-    assert load({"SADDLE_CAPABILITIES": "research="}) == Switches(research=True)
+    assert load({**NO_FILE, "SADDLE_CAPABILITIES": "research="}) == Switches(research=True)
 
 
 @pytest.mark.parametrize(
