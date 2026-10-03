@@ -39,6 +39,7 @@ from saddle.research import (
     NEVER,
     REPORT_SCHEMA,
     Brought,
+    CitationRefusal,
     ReaderGate,
     Report,
     Researcher,
@@ -267,8 +268,11 @@ def test_a_cited_summary_in_the_readers_own_words_is_accepted() -> None:
         ({"sources": ["https://elsewhere.example/page"]}, "you did not read"),
         ({"sources": []}, "needs its sources"),
         ({"sources": "https://docs.example/install"}, "needs its sources"),
-        ({"summary": "No citation here."}, "cite each claim"),
-        ({"summary": "Cites a source that is not listed [2]."}, "cite each claim"),
+        ({"summary": "No citation here."}, "the summary has no [n] markers"),
+        (
+            {"summary": "Cites a source that is not listed [2]."},
+            "it cites [2] but `sources` lists 1 page;",
+        ),
         ({"summary": "  "}, "needs a summary"),
         ({"summary": 7}, "needs a summary"),
         ({"summary": "word " * 500 + "[1]"}, "at most 400 tokens"),
@@ -1252,3 +1256,137 @@ def test_a_url_the_reader_reports_is_remembered_as_brought_back(rig: Rig) -> Non
     assert Brought("https://docs.example/downloads", "reported by the web reader") in (
         rig.researcher.brought
     )
+
+
+# -- a citation-format fault alone does not discard a read, safe summary -------
+
+
+def _page_gate() -> ReaderGate:
+    gate = gate_with("https://docs.example/install")
+    gate.note("fetch", {"url": "https://docs.example/install"}, "Install guide: 4.2.0")
+    return gate
+
+
+def test_each_citation_fault_is_named_with_an_example() -> None:
+    gate = _page_gate()
+    sources = ["https://docs.example/install"]
+    none = str(
+        validate_report({"kind": "summary", "summary": "Plain.", "sources": sources}, gate, None)
+    )
+    assert "has no [n] markers" in none
+    assert "e.g. 'Use the No-CD exe [1].' with sources [https://docs.example/install]" in none
+    out = str(
+        validate_report(
+            {"kind": "summary", "summary": "Cites [4].", "sources": sources * 3}, gate, None
+        )
+    )
+    assert "it cites [4] but `sources` lists 3 pages" in out
+    assert "cite each claim as [1]..[3] matching" not in out
+
+
+def test_a_citation_only_failure_carries_a_labelled_fallback() -> None:
+    gate = _page_gate()
+    args = {
+        "kind": "summary",
+        "summary": "No markers.",
+        "sources": ["https://docs.example/install"],
+    }
+    refusal = validate_report(args, gate, None)
+    assert isinstance(refusal, CitationRefusal)
+    assert refusal.fallback == Report(
+        "summary",
+        summary="No markers.",
+        sources=("https://docs.example/install",),
+        citations_matched=False,
+    )
+    ok = validate_report({**args, "summary": "Marked [1]."}, gate, None)
+    assert isinstance(ok, Report)
+    assert ok.citations_matched
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"sources": ["https://elsewhere.example/page"]},
+        {"summary": "word " * 500},
+        {"summary": "It says the latest release ships with a new flag that speeds up every build"},
+    ],
+)
+def test_a_safety_failure_never_carries_a_fallback(change: dict[str, Any]) -> None:
+    gate = _page_gate()
+    gate.note(
+        "fetch",
+        {"url": "https://docs.example/install"},
+        "the latest release ships with a new flag that speeds up every build",
+    )
+    args = {
+        "kind": "summary",
+        "summary": "No markers.",
+        "sources": ["https://docs.example/install"],
+    }
+    refusal = validate_report({**args, **change}, gate, None)
+    assert isinstance(refusal, str)
+    assert not isinstance(refusal, CitationRefusal)
+
+
+def _summary_call(summary: str, source: str = "https://docs.example/install") -> list[ToolCall]:
+    return [tool("report", kind="summary", summary=summary, sources=[source])]
+
+
+@needs_bwrap
+def test_a_summary_that_only_misses_the_citation_format_crosses_labelled(rig: Rig) -> None:
+    fetch = [tool(W + "fetch", url="https://docs.example/install")]
+    bad = _summary_call("Version 4.2.0 is current.")
+    result, _ = rig.run(
+        [fetch, bad, bad, bad], want="summary", person="https://docs.example/install"
+    )
+    assert "summary: [citations not matched to sources] Version 4.2.0 is current." in result
+    assert "[1] https://docs.example/install" in result
+
+
+@needs_bwrap
+def test_a_well_cited_summary_crosses_unlabelled(rig: Rig) -> None:
+    fetch = [tool(W + "fetch", url="https://docs.example/install")]
+    result, _ = rig.run(
+        [fetch, _summary_call("Version 4.2.0 is current [1].")],
+        want="summary",
+        person="https://docs.example/install",
+    )
+    assert "summary: Version 4.2.0 is current [1]." in result
+    assert "citations not matched" not in result
+
+
+@needs_bwrap
+def test_a_summary_citing_an_unread_page_is_refused_even_after_retries(rig: Rig) -> None:
+    fetch = [tool(W + "fetch", url="https://docs.example/install")]
+    bad = _summary_call("Version 4.2.0 is current.", "https://elsewhere.example/page")
+    result, _ = rig.run(
+        [fetch, bad, bad, bad], want="summary", person="https://docs.example/install"
+    )
+    assert result.startswith(
+        "error: the reader's report was refused 3 times; last: refused: you did not read"
+    )
+
+
+@needs_bwrap
+def test_an_oversized_summary_is_refused_even_after_retries(rig: Rig) -> None:
+    fetch = [tool(W + "fetch", url="https://docs.example/install")]
+    bad = _summary_call("word " * 500)
+    result, _ = rig.run(
+        [fetch, bad, bad, bad], want="summary", person="https://docs.example/install"
+    )
+    assert "refused 3 times; last: refused: a summary is at most 400 tokens" in result
+
+
+@needs_bwrap
+def test_a_citation_only_failure_in_the_final_report_round_also_crosses_labelled(
+    rig: Rig,
+) -> None:
+    fetch = [tool(W + "fetch", url="https://docs.example/install")]
+    bad = _summary_call("Version 4.2.0 is current.")
+    result, _ = rig.run(
+        [fetch, fetch, fetch, bad, bad, bad],
+        want="summary",
+        person="https://docs.example/install",
+    )
+    assert "[citations not matched to sources] Version 4.2.0" in result

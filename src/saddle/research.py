@@ -256,6 +256,23 @@ class Report:
     summary: str | None = None
     sources: tuple[str, ...] = ()
     reason: str | None = None
+    citations_matched: bool = True
+
+
+UNMATCHED_LABEL: Final = "[citations not matched to sources]"
+
+
+class CitationRefusal(str):
+    """A refusal whose only fault is the citation format: every safety check
+    passed, so `fallback` (labelled, `citations_matched=False`) may cross once
+    the reader has used up its retries."""
+
+    fallback: Report
+
+    def __new__(cls, text: str, fallback: Report) -> CitationRefusal:
+        self = super().__new__(cls, text)
+        self.fallback = fallback
+        return self
 
 
 def person_texts(messages: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -298,6 +315,26 @@ def _copied(summary: str, corpus: Sequence[str]) -> bool:
     return False
 
 
+def _citation_fault(numbers: set[int], cited: Sequence[str]) -> str | None:
+    """What is wrong with a summary's `[n]` markers against its `sources`, in
+    words the reader can act on; None when every marker names a listed source."""
+    k = len(cited)
+    example = f"e.g. 'Use the No-CD exe [1].' with sources [{cited[0]}]"
+    if not numbers:
+        return (
+            f"refused: the summary has no [n] markers; follow each claim with [1]..[{k}] "
+            f"naming its entry in `sources` ({example})"
+        )
+    outside = sorted(n for n in numbers if n not in range(1, k + 1))
+    if outside:
+        pages = f"{k} page" + ("" if k == 1 else "s")
+        return (
+            f"refused: it cites [{outside[0]}] but `sources` lists {pages}; "
+            f"use only [1]..[{k}] or add that page to `sources` ({example})"
+        )
+    return None
+
+
 def validate_report(
     args: Mapping[str, Any], gate: ReaderGate, count: Callable[[str], int | None] | None
 ) -> Report | str:
@@ -334,9 +371,6 @@ def validate_report(
         unread = [s for s in cited if s not in gate.visited]
         if unread:
             return f"refused: you did not read {unread[0]}; cite only pages you read"
-        numbers = {int(n) for n in re.findall(r"\[(\d+)\]", summary)}
-        if not numbers or not numbers <= set(range(1, len(cited) + 1)):
-            return f"refused: cite each claim as [1]..[{len(cited)}] matching `sources`"
         size = count(summary) if count is not None else None
         if (size if size is not None else 2 * len(summary.split())) > SUMMARY_TOKENS:
             return f"refused: a summary is at most {SUMMARY_TOKENS} tokens; shorten it"
@@ -344,6 +378,18 @@ def validate_report(
             return (
                 f"refused: it repeats {VERBATIM_WORDS} or more words of a page; "
                 "say it in your own words"
+            )
+        numbers = {int(n) for n in re.findall(r"\[(\d+)\]", summary)}
+        fault = _citation_fault(numbers, cited)
+        if fault is not None:
+            return CitationRefusal(
+                fault,
+                Report(
+                    "summary",
+                    summary=summary.strip(),
+                    sources=tuple(cited),
+                    citations_matched=False,
+                ),
             )
         return Report("summary", summary=summary.strip(), sources=tuple(cited))
     return "refused: kind must be value, summary or none"
@@ -644,6 +690,8 @@ class Researcher:
                         return outcome
                     refused += 1
                     if refused > REJECTIONS:
+                        if isinstance(outcome, CitationRefusal):
+                            return outcome.fallback
                         return f"the reader's report was refused {refused} times; last: {outcome}"
                     result = outcome
                 elif final:
@@ -823,7 +871,8 @@ class Researcher:
             if report.value_type == "url" and report.value is not None:
                 self.brought.append(Brought(report.value, "reported by the web reader"))
         elif report.kind == "summary":
-            lines.append(f"summary: {report.summary}")
+            label = "" if report.citations_matched else f"{UNMATCHED_LABEL} "
+            lines.append(f"summary: {label}{report.summary}")
             lines += [f"[{i}] {source}" for i, source in enumerate(report.sources, 1)]
             self.brought += [
                 Brought(source, "cited by the web reader") for source in report.sources
