@@ -275,7 +275,7 @@ def test_a_cited_summary_in_the_readers_own_words_is_accepted() -> None:
         ),
         ({"summary": "  "}, "needs a summary"),
         ({"summary": 7}, "needs a summary"),
-        ({"summary": "word " * 500 + "[1]"}, "at most 400 tokens"),
+        ({"summary": "word " * 500 + "[1]"}, "a summary is at most 800;"),
     ],
 )
 def test_a_summary_without_its_sources_or_over_the_limit_is_refused(
@@ -315,8 +315,26 @@ def test_the_summary_limit_counts_tokens_with_the_models_tokenizer_when_there_is
     gate.note("fetch", {"url": "https://docs.example/install"}, "text")
     args = {"kind": "summary", "summary": SUMMARY, "sources": ["https://docs.example/install"]}
     assert isinstance(validate_report(args, gate, lambda text: 5), Report)
-    assert "at most 400 tokens" in str(validate_report(args, gate, lambda text: 401))
+    assert "at most 800;" in str(validate_report(args, gate, lambda text: 801))
     assert isinstance(validate_report(args, gate, lambda text: None), Report)  # falls back to words
+
+
+def test_a_summary_of_a_few_hundred_tokens_crosses_and_a_refusal_says_how_much_to_cut() -> None:
+    """F26: a 450-token summary that a real run needed was refused three times.
+
+    Known-good: the reader's ~450-token answer from that run crosses. Known-bad:
+    one past the limit is refused, and the refusal names its size and the cut, so
+    the reader can satisfy it on the next try instead of guessing.
+    """
+    gate = gate_with("https://docs.example/install")
+    gate.note("fetch", {"url": "https://docs.example/install"}, "text")
+    args = {"kind": "summary", "summary": SUMMARY, "sources": ["https://docs.example/install"]}
+    assert isinstance(validate_report(args, gate, lambda text: 450), Report)
+    refused = str(validate_report(args, gate, lambda text: 950))
+    assert refused == (
+        "refused: this summary is 950 tokens and a summary is at most 800; "
+        "cut about 150 tokens, keeping what answers the question"
+    )
 
 
 def test_an_unknown_kind_is_refused() -> None:
@@ -1375,7 +1393,7 @@ def test_an_oversized_summary_is_refused_even_after_retries(rig: Rig) -> None:
     result, _ = rig.run(
         [fetch, bad, bad, bad], want="summary", person="https://docs.example/install"
     )
-    assert "refused 3 times; last: refused: a summary is at most 400 tokens" in result
+    assert "refused 3 times; last: refused: this summary is 1000 tokens" in result
 
 
 @needs_bwrap

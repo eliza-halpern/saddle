@@ -90,8 +90,9 @@ MAX_FETCHES: Final = 40
 """Pages the reader may fetch or navigate to in one session."""
 RESULT_TOKENS: Final = 6000
 """Tokens of one tool result the reader is shown."""
-SUMMARY_TOKENS: Final = 400
-"""Tokens a cited summary may take."""
+SUMMARY_TOKENS: Final = 800
+"""Tokens a cited summary may take. A real setup question's answer took about 450
+(F26), so 400 refused the work it was asked for."""
 VERBATIM_WORDS: Final = 12
 """A summary that repeats this many consecutive words of a page is refused."""
 REJECTIONS: Final = 2
@@ -375,8 +376,13 @@ def validate_report(
         if unread:
             return f"refused: you did not read {unread[0]}; cite only pages you read"
         size = count(summary) if count is not None else None
-        if (size if size is not None else 2 * len(summary.split())) > SUMMARY_TOKENS:
-            return f"refused: a summary is at most {SUMMARY_TOKENS} tokens; shorten it"
+        size = size if size is not None else 2 * len(summary.split())
+        if size > SUMMARY_TOKENS:
+            return (
+                f"refused: this summary is {size} tokens and a summary is at most "
+                f"{SUMMARY_TOKENS}; cut about {size - SUMMARY_TOKENS} tokens, "
+                "keeping what answers the question"
+            )
         if _copied(summary, gate.corpus):
             return (
                 f"refused: it repeats {VERBATIM_WORDS} or more words of a page; "
