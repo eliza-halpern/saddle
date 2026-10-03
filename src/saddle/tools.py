@@ -38,10 +38,12 @@ from saddle.gates import is_test_code
 from saddle.mcpclient import Approvals, McpError, McpHost, load_config
 from saddle.procs import Entry, ProcessLedger
 from saddle.research import (
+    NOBODY_WATCHING,
     RESEARCH_SCHEMA,
     RESEARCH_TOOL,
     Researcher,
     domains_from_env,
+    unwatched,
 )
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
@@ -683,6 +685,9 @@ class ToolContext:
     """Asks the person a yes or no (a title and the lines to read): an MCP server
     to allow, a large download, a command that runs what the reader brought back.
     None here (a terminal chat, a test) asks nobody, and nobody is a no."""
+    watched: Callable[[], bool] | None = None
+    """Whether a page has the session open to answer `approve`; a no while none
+    does tells the model so (`NOBODY_WATCHING`, F37). None: not known."""
 
     ask_password: Callable[[str], str | None] | None = None
     """How a full-access command's `sudo` asks the person for a password
@@ -1083,9 +1088,10 @@ def _held(ctx: ToolContext, command: str) -> tuple[str | None, tuple[str, ...]]:
     shown = [f"command: {clean_command(command)}", "held because:", *(f"- {r}" for r in reasons)]
     if ctx.approve is not None and ctx.approve(HELD_TITLE, shown):
         return None, tuple(reasons)
+    why = NOBODY_WATCHING if unwatched(ctx.watched) else "the person did not approve it"
     return (
         "error: this command was not run: it could destroy files saddle cannot back up "
-        "or programs that are not this session's, and the person did not approve it "
+        f"or programs that are not this session's, and {why} "
         "(held because: " + "; ".join(reasons) + "). Nothing was changed. Name the exact "
         "paths, or ask the person.",
         (),
@@ -1262,6 +1268,7 @@ def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = No
                 search_url=search_url_from_env(),
                 domains=domains_from_env(),
                 approve=ask,
+                watched=ctx.watched,
             )
         ctx.research.config = config
         ctx.research.search_enabled = on.search

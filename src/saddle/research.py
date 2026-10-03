@@ -116,6 +116,19 @@ REJECTIONS: Final = 2
 DOWNLOAD_APPROVAL_BYTES: Final = 10 * 1024 * 1024
 """A download over this many bytes needs the person's approval."""
 
+NOBODY_WATCHING: Final = (
+    "nobody had this session's page open to approve it (the person can open it; "
+    "then retry, or ask them)"
+)
+"""Why a question came back no without the person seeing it (F37): the model
+reads it, so it does not mistake an unseen question for a refusal."""
+
+
+def unwatched(watched: Callable[[], bool] | None) -> bool:
+    """Whether a no came from nobody having the session open, not from the person."""
+    return watched is not None and not watched()
+
+
 VALUE_PATTERNS: Final[dict[str, str]] = {
     "version": r"v?\d+(\.\d+){0,3}([-+~.][0-9A-Za-z.+~-]{0,30})?",
     "yes_no": r"yes|no",
@@ -614,6 +627,8 @@ class Researcher:
     approve: Callable[[str, list[str]], bool] | None = None
     """Asks the person: a title and the lines they should read; their yes or no.
     None (a terminal chat, a test) means nobody can be asked, which is a no."""
+    watched: Callable[[], bool] | None = None
+    """Whether a page has the session open to answer `approve` (`NOBODY_WATCHING`)."""
     brought: list[Brought] = field(default_factory=list)
     approved_commands: set[str] = field(default_factory=set)
     fetches: int = 0
@@ -1070,10 +1085,11 @@ class Researcher:
         if self._asked("Run something the web reader brought back?", lines):
             self.approved_commands.add(command)
             return None
+        nobody = f"; {NOBODY_WATCHING}" if unwatched(self.watched) else ""
         return (
             "this command names something the web reader brought back "
             f"({matched[0].what}, from {matched[0].source}); it needs the person's approval "
-            "and was not run"
+            f"and was not run{nobody}"
         )
 
 

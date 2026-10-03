@@ -324,9 +324,12 @@ class Live:
 
     def ask_password(self, prompt: str) -> str | None:
         """Ask the page for a full-access command's `sudo` password; None if
-        the person cancels or nobody answers within `PASSWORD_WAIT_S`. The
+        the person cancels, nobody answers within `PASSWORD_WAIT_S`, or no page
+        has the session open to answer (`watched`; then at once, F37). The
         password only passes through here: it is returned to the helper and
         never published, stored or logged."""
+        if not self.watched():
+            return None
         request_id = uuid.uuid4().hex[:12]
         answer: queue.Queue[str | None] = queue.Queue(maxsize=1)
         self.passwords[request_id] = answer
@@ -342,7 +345,11 @@ class Live:
     def ask_approval(self, title: str, lines: list[str]) -> bool:
         """Ask the page for a yes or no (an MCP server's descriptions, a large
         download, a command running what the web reader brought back); no if the
-        person declines or nobody answers within `PASSWORD_WAIT_S`."""
+        person declines, nobody answers within `PASSWORD_WAIT_S`, or no page has
+        the session open to answer (`watched`; then at once, F37: a held command
+        once waited five minutes for a page nobody had open)."""
+        if not self.watched():
+            return False
         request_id = uuid.uuid4().hex[:12]
         answer: queue.Queue[bool] = queue.Queue(maxsize=1)
         self.approvals[request_id] = answer
@@ -354,6 +361,11 @@ class Live:
         finally:
             self.approvals.pop(request_id, None)
             self.publish(ApprovalSettled(id=request_id))
+
+    def watched(self) -> bool:
+        """Whether a page has this session open now, so a question can be answered."""
+        with self.lock:
+            return bool(self.subscribers)
 
     def subscribe(self) -> queue.Queue[Event | None]:
         channel: queue.Queue[Event | None] = queue.Queue()
@@ -539,6 +551,7 @@ class ChatServer:
                     effects=SideEffects(self.store.outside_dir(session_id)),
                     ask_password=live.ask_password,
                     approve=live.ask_approval,
+                    watched=live.watched,
                     processes=self.ledger(session_id),
                     images=True,
                 )
