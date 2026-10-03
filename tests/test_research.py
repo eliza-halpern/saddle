@@ -1113,6 +1113,39 @@ def test_a_stopped_turn_stops_its_reader_before_the_next_round(rig: Rig) -> None
 
 
 @needs_bwrap
+def test_the_readers_reply_room_is_the_window_less_its_prompt(rig: Rig) -> None:
+    """F33: a fixed 4096-token reply cut a full report off mid-JSON. The reader
+    sizes each reply as the acting turn does: the window less the prompt."""
+    model = Scripted([[GOOD]])
+    model.max_model_len = lambda: 131072  # type: ignore[attr-defined]
+    model.count_tokens = lambda messages, tools=None: 5000  # type: ignore[attr-defined]
+    rig.researcher.client = model
+    rig.researcher.research("what is the latest version?", "value")
+    assert model.asked[0]["max_tokens"] == 131072 - 5000 - research_module.READER_MARGIN
+
+
+@needs_bwrap
+def test_a_reader_whose_server_gives_no_window_gets_the_fallback_room(rig: Rig) -> None:
+    _, model = rig.run([[GOOD]])
+    assert model.asked[0]["max_tokens"] == research_module.READER_REPLY_TOKENS > 4096
+
+
+@needs_bwrap
+def test_a_call_whose_arguments_are_not_json_is_never_resent(rig: Rig) -> None:
+    """F33: a report cut off mid-JSON stayed in the history, and the server
+    refused the next request (HTTP 400) for it, ending the whole research.
+    Known-bad: the cut text reaches the next request. Known-good: the call is
+    resent with empty arguments and the refusal says what happened."""
+    cut = ToolCall(id="r1", name="report", arguments='{"kind": "summary", "summary": "It wor')
+    _, model = rig.run([[cut], [GOOD]])
+    resent = model.asked[1]["messages"]
+    assert '"It wor' not in json.dumps(resent)
+    (call,) = [c for m in resent if m["role"] == "assistant" for c in m["tool_calls"]]
+    assert call["function"]["arguments"] == "{}"
+    assert "arguments are not valid JSON" in resent[-1]["content"]
+
+
+@needs_bwrap
 def test_a_model_failure_in_the_reader_is_named(rig: Rig) -> None:
     result, _ = rig.run([VllmError("server went away")])
     assert result == "error: the reader's model call failed: server went away"

@@ -94,6 +94,11 @@ MAX_FETCHES: Final = 40
 BLOCKED_AFTER: Final = 2
 """Failed fetches of one host before the reader's gate closes it for the session
 (F29: a reader spent fifty rounds on a site that answered 403)."""
+READER_REPLY_TOKENS: Final = 32768
+"""The reader's reply room when the server will not say its window or count the
+prompt. A fixed 4096 cut a full report off mid-JSON (F33)."""
+READER_MARGIN: Final = 2048
+"""Tokens kept free below the window, as the acting turn keeps OUTPUT_MARGIN."""
 READER_TEMPERATURE: Final = 1.0
 """The reader samples as the model card recommends (the server supplies the card's
 top_p and top_k). At 0.0 it repeated one paragraph verbatim until its token
@@ -160,6 +165,17 @@ _URL: Final = re.compile(r"https?://[^\s<>\"'`)\]}]+", re.IGNORECASE)
 _LINK: Final = re.compile(r"\]\(([^)\s]+)\)|- /url: (\S+)")
 _PAGE: Final = re.compile(r"- Page URL: (\S+)")
 _DOWNLOADED: Final = re.compile(r'Downloaded file (.+?) to "([^"]+)"')
+
+
+def _resendable(call: ToolCall) -> str:
+    """A call's arguments as the history may carry them back to the server: "{}"
+    when they are not a JSON object, which the server refuses outright (F33: a
+    report cut off mid-JSON made the reader's next request an HTTP 400)."""
+    try:
+        parsed = json.loads(call.arguments)
+    except ValueError:
+        return "{}"
+    return call.arguments if isinstance(parsed, dict) else "{}"
 
 
 def normalize(url: str) -> str:
@@ -725,7 +741,7 @@ class Researcher:
             try:
                 for event in self.client.stream_chat(
                     messages,
-                    max_tokens=4096,
+                    max_tokens=self._reply_room(messages, [REPORT_SCHEMA] if final else tools),
                     temperature=READER_TEMPERATURE,
                     reasoning_effort="low",
                     tools=[REPORT_SCHEMA] if final else tools,
@@ -744,7 +760,7 @@ class Researcher:
                         {
                             "id": c.id,
                             "type": "function",
-                            "function": {"name": c.name, "arguments": c.arguments},
+                            "function": {"name": c.name, "arguments": _resendable(c)},
                         }
                         for c in calls
                     ],
@@ -812,6 +828,17 @@ class Researcher:
         if not pages:
             return "the reader did not report; it read no pages"
         return f"the reader did not report; it read: {', '.join(pages)} ({len(pages)} pages)"
+
+    def _reply_room(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:
+        """The window less the prompt and a margin, as the acting turn sizes its
+        replies; `READER_REPLY_TOKENS` when the server will not say."""
+        window = getattr(self.client, "max_model_len", None)
+        count = getattr(self.client, "count_tokens", None)
+        size = window() if window is not None else None
+        used = count(messages, tools=tools) if count is not None and size is not None else None
+        if size is None or used is None:
+            return READER_REPLY_TOKENS
+        return max(int(size) - int(used) - READER_MARGIN, 1)
 
     @staticmethod
     def _parsed(call: ToolCall) -> dict[str, Any] | str:
