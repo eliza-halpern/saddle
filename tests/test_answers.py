@@ -507,3 +507,18 @@ def test_the_cli_routes_answers_status(monkeypatch: pytest.MonkeyPatch) -> None:
     out = io.StringIO()
     assert main(["answers", "status"], stdout=out, stderr=io.StringIO()) == 0
     assert "no Answers key" in out.getvalue()
+
+
+def test_odd_tags_and_a_non_text_answer_are_tolerated_without_inventing_a_citation(
+    tmp_path: Path,
+) -> None:
+    fake = Fake()
+    tags = "<citation>{broken</citation><citation>[1]</citation><usage>7</usage>"
+    fake.body = {
+        "choices": [{"message": {"content": "text" + tags}}],
+        "citations": [{"url": CITED}],
+    }
+    found = make(tmp_path, Clock(OCT), fake).ask("q")
+    assert (found.text, found.urls) == ("text", [CITED])
+    fake.body = {"choices": [{"message": {"content": None}}]}
+    assert make(tmp_path, Clock(OCT), fake).ask("q").unavailable
