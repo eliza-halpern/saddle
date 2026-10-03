@@ -84,6 +84,9 @@ def browser_click(element: str) -> str:
     if element == "Download big":
         Path("big.bin").write_bytes(b"x" * 5000)
         return snapshot() + '\n### Events\n- Downloaded file big.bin to "./big.bin"'
+    if element == "Broken button":
+        message = "the element is detached from the page"
+        raise ValueError(message)
     if element == "Download escape":
         return snapshot() + '\n### Events\n- Downloaded file x to "../outside.txt"'
     return snapshot()

@@ -626,6 +626,22 @@ def test_a_site_that_refused_twice_is_not_asked_a_third_time(rig: Rig) -> None:
 
 
 @needs_bwrap
+def test_a_failed_call_without_an_address_is_returned_and_closes_no_site(rig: Rig) -> None:
+    result, model = rig.run(
+        [
+            [tool(W + "browser_click", element="Broken button")],
+            [tool(W + "browser_click", element="Broken button", call_id="again")],
+            [tool(W + "fetch", url=INSTALL)],
+            [GOOD],
+        ],
+        person=INSTALL,
+    )
+    assert "browser_click' reported an error" in json.dumps(model.asked[1]["messages"][-1])
+    assert rig.calls()[-1] == f"fetch {INSTALL}"
+    assert "nothing found: not_found" in result
+
+
+@needs_bwrap
 def test_an_address_in_the_question_the_model_wrote_is_not_one_the_person_gave(rig: Rig) -> None:
     rig.run(
         [
