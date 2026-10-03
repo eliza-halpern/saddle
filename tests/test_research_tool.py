@@ -476,6 +476,7 @@ def test_only_a_boolean_true_approves(tmp_path: Path) -> None:
     with TestClient(app) as client:
         sid = client.post("/api/sessions").json()["id"]
         live = _server_of(app)._live(sid)
+        live.subscribe()  # a page has the session open, so the question waits for it
 
         def answered_with(claimed: Any) -> bool:
             got: list[bool] = []
