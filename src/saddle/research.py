@@ -491,7 +491,8 @@ def validate_report(
         cited = [normalize(str(s)) for s in sources]
         unread = [s for s in cited if s not in gate.visited]
         if unread:
-            return f"refused: you did not read {unread[0]}; cite only pages you read"
+            read = ", ".join(gate.visited) or "you have read none yet"
+            return f"refused: you did not read {unread[0]}; cite only pages you read: {read}"
         size = _measured(summary, count)
         if size > SUMMARY_TOKENS:
             cut = _cut_to_fit(summary, lambda text: _measured(text, count))

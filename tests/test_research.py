@@ -445,6 +445,23 @@ def test_a_cut_summary_that_fails_a_safety_check_has_no_fallback() -> None:
     assert unsplit.fallback is None
 
 
+def test_citing_an_unread_page_is_refused_naming_the_pages_that_were_read() -> None:
+    """Live 9b: a reader cited a page that had answered 403 three times running;
+    the refusal said what was wrong but not what it could cite. Known-good: the
+    pages it read are named. Known-bad: the unread page is still refused."""
+    gate = gate_with("https://docs.example/install https://docs.example/changelog")
+    gate.note("fetch", {"url": "https://docs.example/install"}, "text")
+    gate.note("fetch", {"url": "https://docs.example/changelog"}, "text")
+    args = {"kind": "summary", "summary": SUMMARY, "sources": ["https://blocked.example/x"]}
+    refused = str(validate_report(args, gate, None))
+    assert refused == (
+        "refused: you did not read https://blocked.example/x; cite only pages you read: "
+        "https://docs.example/install, https://docs.example/changelog"
+    )
+    nothing = str(validate_report(args, gate_with(), None))
+    assert nothing.endswith("cite only pages you read: you have read none yet")
+
+
 def test_an_unknown_kind_is_refused() -> None:
     assert "kind must be value, summary or none" in str(report(kind="essay"))
     assert "kind" in REPORT_SCHEMA["function"]["parameters"]["required"]
