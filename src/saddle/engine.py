@@ -116,6 +116,42 @@ EMPTY_REPLY_NUDGE: Final = (
     "If you meant to call a tool, call it now; otherwise answer."
 )
 EMPTY_REPLIES: Final = "the model sent {n} empty replies in a row; the turn ended"
+ANNOUNCED_ACTION: Final = re.compile(
+    r"(?:^|[,;:\u2014\u2013]\s*|\s-\s+)"
+    r"(?:(?:so|and|now|next|then|first|ok|okay)\b,?\s+)*"
+    r"(?:I['\u2019]ll|I\s+will|I['\u2019]m\s+going\s+to|I\s+am\s+going\s+to"
+    r"|let\s+me(?!\s+know\b))\b"
+    r"|(?:^|[,;:\u2014\u2013]\s*)next,?\s+I\s+[a-z]",
+    re.IGNORECASE,
+)
+"""A first-person announcement of the model's own next step ("I'll ...",
+"I will ...", "I'm going to ...", "Let me ...", "Now I'll ...", "Next, I
+...") at the start of a clause. F39: a live chat turn ended on "..., so I'll
+determine it empirically from the DLL imports." with no tool call, and the
+person had to type "continue". "Let me know ..." is excluded by the
+lookahead: it invites the person to act, it does not announce the model's
+action. Read by `announces_action` on the reply's last sentence only."""
+ANNOUNCE_NUDGE: Final = (
+    "You said you would do something next, but you made no tool call, so "
+    "nothing happened. Make the call now; if you need the person first, ask them."
+)
+_SENTENCE_BREAK: Final = re.compile(r"(?<=[.!?])\s+|\n")
+
+
+def announces_action(reply: str) -> bool:
+    """True when the reply's last sentence announces the model's next action
+    (`ANNOUNCED_ACTION`) and asks the person nothing (no "?" in it).
+
+    Only the last sentence counts: an answer that says "Let me explain" early
+    and ends on a statement is finished. A last sentence with a question mark
+    hands the turn to the person, whatever else it says."""
+    sentences = [s.strip() for s in _SENTENCE_BREAK.split(reply) if s.strip()]
+    if not sentences:
+        return False
+    last = sentences[-1]
+    return "?" not in last and ANNOUNCED_ACTION.search(last) is not None
+
+
 EMPTY_ROUND_CAP: Final = 3
 """Consecutive rounds with no tool call before an autonomous run stops.
 
@@ -914,6 +950,7 @@ def run_turn(
     thinking: list[str] = []
     proof = parent
     empty_replies = 0
+    announced = False
     try:
         # A chat turn has no round cap: it runs until the model answers or the
         # person stops it (`cancel`). A cap of 24 cut a real setup task off
@@ -1038,6 +1075,12 @@ def run_turn(
                         messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
                         continue
                     yield ErrorEvent(message=EMPTY_REPLIES.format(n=empty_replies))
+                # F39: "I'll do X." with no call ends nothing; once per turn,
+                # so a model that keeps announcing still hands the turn back.
+                if auto is None and not announced and not stop() and announces_action(reply):
+                    announced = True
+                    messages.append({"role": "user", "content": ANNOUNCE_NUDGE})
+                    continue
                 break
 
             if auto is not None:

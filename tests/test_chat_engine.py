@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -254,6 +255,103 @@ def test_empty_replies_past_the_retries_end_the_turn_saying_so(options: TurnOpti
     assert len(client.asked) == engine.EMPTY_REPLY_RETRIES + 1
     errors = [e.message for e in events if isinstance(e, ErrorEvent)]
     assert errors == [engine.EMPTY_REPLIES.format(n=engine.EMPTY_REPLY_RETRIES + 1)]
+
+
+F39_REPLY = (
+    "Research came back empty on the dgVoodoo-under-Wine question, so I'll "
+    "determine it empirically from the DLL imports."
+)
+ANNOUNCED = [
+    F39_REPLY,
+    "Let me check the log.",
+    "Now I'll write the config.",
+    "The build failed.\n\nNext, I check the import table.",
+    "Found it \u2014 I\u2019m going to patch the loader",
+]
+NOT_ANNOUNCED = [
+    "The game is installed and runs.",
+    "Which renderer do you want: A or B?",
+    "I'll need your answer before continuing — which one?",
+    "Let me explain what changed. I'll keep it short.\n\n"
+    "The config now points at the new renderer.\n\nThe game starts and the menu draws.",
+    "Let me know if you want changes.",
+]
+
+
+def announce_nudges(client: FakeClient) -> int:
+    return sum(
+        m == {"role": "user", "content": engine.ANNOUNCE_NUDGE}
+        for m in client.asked[-1]["messages"]
+    )
+
+
+@pytest.mark.parametrize("reply", ANNOUNCED)
+def test_a_reply_that_announces_an_action_and_stops_is_nudged(
+    options: TurnOptions, reply: str
+) -> None:
+    """F39: a live chat turn ended on "so I'll determine it empirically ..."
+    with no tool call; the person had to type "continue". Known-bad: the turn
+    ends there. Known-good: the model is told, and its next reply follows."""
+    client = FakeClient([[content(reply)], [content("done")]])
+    events = run(client, options)
+    assert len(client.asked) == 2
+    assert client.asked[1]["messages"][-1] == {"role": "user", "content": engine.ANNOUNCE_NUDGE}
+    assert client.asked[1]["messages"][-2] == {"role": "assistant", "content": reply}
+    assert not [e for e in events if isinstance(e, ErrorEvent)]
+
+
+@pytest.mark.parametrize("reply", NOT_ANNOUNCED)
+def test_answers_questions_and_invitations_are_not_nudged(options: TurnOptions, reply: str) -> None:
+    client = FakeClient([[content(reply)], [content("never asked")]])
+    run(client, options)
+    assert len(client.asked) == 1
+
+
+@pytest.mark.parametrize("reply", ANNOUNCED)
+def test_the_detector_reads_announcements(reply: str) -> None:
+    assert engine.announces_action(reply)
+
+
+@pytest.mark.parametrize("reply", [*NOT_ANNOUNCED, "", "   "])
+def test_the_detector_passes_everything_else(reply: str) -> None:
+    assert not engine.announces_action(reply)
+
+
+def test_a_second_announcement_in_one_turn_ends_it(options: TurnOptions) -> None:
+    client = FakeClient(
+        [[content("Let me check the log.")], [content("Let me check it again.")], [content("x")]]
+    )
+    events = run(client, options)
+    assert len(client.asked) == 2
+    assert announce_nudges(client) == 1
+    assert isinstance(events[-1], TurnEnd)
+    assert not [e for e in events if isinstance(e, ErrorEvent)]
+
+
+def test_the_announcement_nudge_comes_once_even_after_tool_rounds(options: TurnOptions) -> None:
+    (options.workdir / "a.txt").write_text("a\n")
+    client = FakeClient(
+        [
+            [content("Let me check the log.")],
+            [tool("read_file", path="a.txt")],
+            [content("Let me check it again.")],
+            [content("never asked")],
+        ]
+    )
+    run(client, options)
+    assert len(client.asked) == 3
+    assert announce_nudges(client) == 1
+
+
+def test_an_autonomous_run_is_not_given_the_announcement_nudge(options: TurnOptions) -> None:
+    run_state = engine.AutoRun(budget=engine.RunBudget(time_s=60, tokens=1000), run_span="s")
+    auto_options = replace(options, auto=run_state)
+    client = FakeClient([[content("Let me check the log.")], [content("ok")], [content("ok")]])
+    run(client, auto_options)
+    assert client.asked[1]["messages"][-1] == {"role": "user", "content": engine.AUTO_NUDGE}
+    assert all(
+        m.get("content") != engine.ANNOUNCE_NUDGE for a in client.asked for m in a["messages"]
+    )
 
 
 def test_a_long_tool_chain_runs_until_the_model_answers(options: TurnOptions) -> None:
