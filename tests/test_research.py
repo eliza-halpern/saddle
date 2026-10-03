@@ -182,6 +182,24 @@ def test_what_a_page_links_is_found_in_text_markdown_and_accessibility_trees() -
     assert urls_in("[m](mailto:x@y.example)", "https://docs.example/") == []
 
 
+def test_a_raw_html_pages_relative_links_are_found_resolved_and_unescaped() -> None:
+    """F32: the reader read a page as raw HTML and every `href="/games/..."` on it
+    was refused as an address it had not seen. Known-good: double- and
+    single-quoted hrefs resolve against the page, `&amp;` unescaped. Known-bad:
+    a mailto link and a bare word "href" are not addresses."""
+    base = "https://lutris.net/games/hp1/"
+    page = (
+        '<a href="/games/install/23975/view">view</a> '
+        "<a href='../api/installers/hp1?format=json&amp;v=2'>json</a> "
+        '<a href="mailto:x@y.example">mail</a> the href attribute'
+    )
+    found = urls_in(page, base)
+    assert "https://lutris.net/games/install/23975/view" in found
+    assert "https://lutris.net/games/api/installers/hp1?format=json&v=2" in found
+    assert not any("mailto" in url for url in found)
+    assert len(found) == 2
+
+
 # -- what crosses back (pure) --------------------------------------------------
 
 

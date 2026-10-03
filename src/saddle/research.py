@@ -35,6 +35,7 @@ What holds, and where:
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -162,7 +163,9 @@ READER_PROMPT: Final = (
 )
 
 _URL: Final = re.compile(r"https?://[^\s<>\"'`)\]}]+", re.IGNORECASE)
-_LINK: Final = re.compile(r"\]\(([^)\s]+)\)|- /url: (\S+)")
+_LINK: Final = re.compile(
+    r"\]\(([^)\s]+)\)|- /url: (\S+)|\bhref=(?:\"([^\"]+)\"|'([^']+)')", re.IGNORECASE
+)
 _PAGE: Final = re.compile(r"- Page URL: (\S+)")
 _DOWNLOADED: Final = re.compile(r'Downloaded file (.+?) to "([^"]+)"')
 
@@ -187,12 +190,13 @@ def normalize(url: str) -> str:
 
 
 def urls_in(text: str, base: str | None = None) -> list[str]:
-    """Every address `text` names: written out, or a link (markdown or an
-    accessibility-tree `/url:`) resolved against `base` when it is relative."""
+    """Every address `text` names: written out, or a link (markdown, an
+    accessibility-tree `/url:`, or an HTML `href`) resolved against `base` when
+    it is relative."""
     found = [normalize(u) for u in _URL.findall(text)]
     if base is not None:
-        for markdown, tree in _LINK.findall(text):
-            link = urljoin(base, markdown or tree)
+        for markdown, tree, double, single in _LINK.findall(text):
+            link = urljoin(base, html.unescape(markdown or tree or double or single))
             if link.startswith(("http://", "https://")):
                 found.append(normalize(link))
     return found
