@@ -340,7 +340,11 @@ class BraveSearch:
             return Outcome(error=self._redact(f"Brave search did not answer ({exc})"))
         state["last_request"] = now
         remaining = _numbers(reply.headers.get("X-RateLimit-Remaining"))
-        if len(remaining) >= 2:
+        # A monthly limit of 0 is a metered plan with no quota: its remaining
+        # count of 0 says nothing, and saddle's own budget governs.
+        limits = _numbers(reply.headers.get("X-RateLimit-Limit"))
+        quota = not (len(limits) >= 2 and limits[-1] == 0)
+        if len(remaining) >= 2 and quota:
             state["header_left"] = remaining[-1]
         if _usage_limited(reply):
             # The account's usage or spend limit: this month is over, not a wait.
@@ -358,7 +362,7 @@ class BraveSearch:
             )
         if reply.status_code == 429:
             resets = _numbers(reply.headers.get("X-RateLimit-Reset"))
-            spent = len(remaining) >= 2 and remaining[-1] <= 0
+            spent = quota and len(remaining) >= 2 and remaining[-1] <= 0
             if resets:
                 seconds = float(resets[-1] if spent else resets[0])
             else:

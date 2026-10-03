@@ -272,6 +272,40 @@ def test_brave_headers_that_report_less_remaining_win_and_a_malformed_one_is_ign
     assert (saved["used"], saved["header_left"]) == (2, 2)  # garbage changed nothing
 
 
+def test_a_metered_plan_with_no_monthly_quota_is_governed_by_saddles_own_budget(
+    tmp_path: Path,
+) -> None:
+    """A live key on a metered plan answered `X-RateLimit-Limit: 50, 0` and
+    `X-RateLimit-Remaining: 49, 0`: no monthly quota, not a spent one. Read as
+    spent, one successful search left saddle believing the month was over.
+    Known-good: such headers leave saddle's own budget in charge, and a 429 under
+    them is the per-second limit. Known-bad stays refused: a real quota of 1000
+    with 0 left (covered above, and here)."""
+    clock, fake = Clock(OCT + 300 * HOUR), Fake()
+    write_state(tmp_path, tokens=400.0, stamp=clock.t)
+    brave = make(tmp_path, clock, fake)
+    fake.headers = {"X-RateLimit-Limit": "50, 0", "X-RateLimit-Remaining": "49, 0"}
+    assert brave.search("first").rows
+    clock.t += 2
+    assert brave.search("second").rows
+    saved = json.loads((tmp_path / "state.json").read_text())
+    assert saved["header_left"] is None
+    fake.status = 429
+    fake.headers = {
+        "X-RateLimit-Limit": "50, 0",
+        "X-RateLimit-Remaining": "0, 0",
+        "X-RateLimit-Reset": "1, 2423154",
+    }
+    clock.t += 2
+    assert brave.search("third").refill == "~1 min"  # the second, not the month
+    fake.status = 200
+    fake.headers = {"X-RateLimit-Limit": "50, 1000", "X-RateLimit-Remaining": "49, 0"}
+    clock.t += 2
+    brave.search("fourth")
+    clock.t += 2
+    assert brave.search("fifth").exhausted  # a real quota, spent
+
+
 # -- failures -----------------------------------------------------------------------
 
 
