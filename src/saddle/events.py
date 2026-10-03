@@ -42,6 +42,25 @@ class TurnStart(Event):
 
 
 @dataclass(frozen=True)
+class MessageQueued(Event):
+    """The person wrote while a turn was running. The message waits for the
+    turn's next request to the model; the page shows it as waiting."""
+
+    text: str
+    kind: str = "message.queued"
+
+
+@dataclass(frozen=True)
+class MessageDelivered(Event):
+    """A message written during a turn went to the model: at the start of the
+    turn's next request, after the tool results it was waiting behind, or as
+    the question of the next turn when the running one ended first."""
+
+    text: str
+    kind: str = "message.delivered"
+
+
+@dataclass(frozen=True)
 class ReasoningDelta(Event):
     """One chunk of reasoning. The UI streams these into a collapsible block.
 

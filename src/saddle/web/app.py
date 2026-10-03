@@ -55,6 +55,8 @@ from saddle.events import (
     ApprovalSettled,
     ErrorEvent,
     Event,
+    MessageDelivered,
+    MessageQueued,
     PasswordRequest,
     PasswordSettled,
     SessionInfo,
@@ -313,8 +315,15 @@ class Live:
     turn: int = 0
     parent: str | None = None
     busy: bool = False
+    chatting: bool = False
+    """Busy with a chat turn, not a Task run: only a chat turn takes messages
+    written while it runs."""
     cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
+    waiting: list[tuple[str, list[str]]] = field(default_factory=list)
+    """Messages written during the running chat turn, oldest first, as (text,
+    image paths): the turn takes them before its next model request, and one
+    it never took starts the next turn."""
     processes: ProcessLedger | None = None
     """The session's process list (`ChatServer.ledger`)."""
     passwords: dict[str, queue.Queue[str | None]] = field(default_factory=dict)
@@ -354,6 +363,29 @@ class Live:
         finally:
             self.approvals.pop(request_id, None)
             self.publish(ApprovalSettled(id=request_id))
+
+    def offer(self, text: str, images: list[str]) -> str:
+        """Take a message: "start" (the session was idle and is now busy with a
+        chat turn), "queued" (a chat turn is running and will take it), or
+        "refused" (a Task run holds the session). Queued under the same lock
+        the turn's end reads, so a message is never left with no turn to take
+        it; the page hears it is waiting before the turn can say it was taken."""
+        with self.lock:
+            if not self.busy:
+                self.busy = self.chatting = True
+                return "start"
+            if not self.chatting:
+                return "refused"
+            self.waiting.append((text, images))
+            for channel in self.subscribers:  # unbounded queues: never blocks
+                channel.put(MessageQueued(text=text))
+            return "queued"
+
+    def take_waiting(self) -> list[tuple[str, list[str]]]:
+        """Every message waiting for the running turn, oldest first."""
+        with self.lock:
+            taken, self.waiting = self.waiting, []
+        return taken
 
     def subscribe(self) -> queue.Queue[Event | None]:
         channel: queue.Queue[Event | None] = queue.Queue()
@@ -511,7 +543,16 @@ class ChatServer:
 
     # -- turn ------------------------------------------------------------
 
-    def _run(self, session_id: str, text: str | None, images: list[str] | None = None) -> None:
+    def _run(
+        self,
+        session_id: str,
+        text: str | None,
+        images: list[str] | None = None,
+        *,
+        queued: bool = False,
+    ) -> None:
+        """One chat turn. `queued`: `text` was written during the turn before
+        this one, which ended without taking it."""
         live = self._live(session_id)
         live.cancelled = False
         messages: list[dict[str, Any]] | None = None
@@ -569,8 +610,13 @@ class ChatServer:
                     context=live.context,
                     images=[Path(raw) for raw in (images or [])],
                     cancel=lambda: live.cancelled,
+                    steer=lambda: [
+                        (said, [Path(raw) for raw in shown]) for said, shown in live.take_waiting()
+                    ],
                 ):
                     live.publish(event)
+                    if queued and text is not None and event.kind == "turn.start":
+                        live.publish(MessageDelivered(text=text))
                     if event.kind == "turn.end":
                         live.parent = getattr(event, "proof", None)
                 self._name_session(session, text, client, live)
@@ -581,8 +627,19 @@ class ChatServer:
             self._keep_dead_turn(session_id, live.turn, text, images, messages, begun, reason)
         finally:
             with live.lock:
-                live.busy = False
+                following = live.waiting.pop(0) if live.waiting else None
+                if following is None:
+                    live.busy = live.chatting = False
             live.publish(None)
+            if following is not None:
+                # Written during this turn and never taken: it is the next
+                # turn's question, still busy, so nothing can start between.
+                threading.Thread(
+                    target=self._run,
+                    args=(session_id, *following),
+                    kwargs={"queued": True},
+                    daemon=True,
+                ).start()
 
     def _keep_dead_turn(
         self,
@@ -1123,11 +1180,14 @@ def build_app(
             for raw in (body.get("images") or [])
             if (candidate := Path(str(raw)).resolve()).is_file() and allowed in candidate.parents
         ]
-        live = server._live(sid)
-        with live.lock:
-            if live.busy:
-                return JSONResponse({"error": "a turn is already running"}, status_code=409)
-            live.busy = True
+        # While a chat turn runs, the message joins it at its next request to
+        # the model rather than being refused (F40): what the person sees on
+        # screen is often what the model needs, and Stop would lose the turn.
+        taken = server._live(sid).offer(text, images)
+        if taken == "refused":
+            return JSONResponse({"error": "a turn is already running"}, status_code=409)
+        if taken == "queued":
+            return JSONResponse({"ok": True, "queued": True})
         threading.Thread(target=server._run, args=(sid, text, images), daemon=True).start()
         return JSONResponse({"ok": True})
 
@@ -1440,6 +1500,8 @@ def build_app(
             with live.lock:
                 live.busy = False  # nothing was started, so nothing holds it
             return JSONResponse({"error": "no question there"}, status_code=404)
+        with live.lock:
+            live.chatting = True  # a turn will run: from here a message joins it
         messages, _asked = target
 
         restored = UndoLog(store.undo_dir(sid)).restore_to(index)

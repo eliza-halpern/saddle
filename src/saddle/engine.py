@@ -35,6 +35,7 @@ from saddle.events import (
     Context,
     ErrorEvent,
     Event,
+    MessageDelivered,
     Question,
     ReasoningDelta,
     RunProgress,
@@ -866,6 +867,7 @@ def run_turn(
     context: ToolContext | None = None,
     images: Sequence[Path] = (),
     cancel: Callable[[], bool] | None = None,
+    steer: Callable[[], Sequence[tuple[str, Sequence[Path]]]] | None = None,
 ) -> Iterator[Event]:
     """Run one user turn, yielding events as they happen.
 
@@ -875,6 +877,12 @@ def run_turn(
     `text` of None means "answer what is already there" -- a retry. Sampling
     at CHAT_TEMPERATURE makes that worth having: the same question asked
     again gives a different answer, which is the point of the button.
+
+    `steer` hands over what the person wrote while the turn was running, as
+    (text, images) in the order written. It is asked before every request to
+    the model, so a message goes in after the tool results it waited behind
+    and the turn carries on with it; a stopped turn asks nothing, and a
+    message still waiting when the turn ends is the caller's to send next.
     """
     ctx = context or ToolContext(workdir=options.workdir)
     counter = getattr(client, "count_tokens", None)
@@ -919,6 +927,10 @@ def run_turn(
         # person stops it (`cancel`). A cap of 24 cut a real setup task off
         # mid-work, where the same ask took another agent about 121 calls.
         while True:
+            for said, shown in steer() if steer is not None and not stop() else ():
+                messages.append(_user_message(said, shown))
+                rounds.append({"person": said})
+                yield MessageDelivered(text=said)
             if auto is not None:
                 spent = auto.budget.exhausted()
                 if spent is not None:

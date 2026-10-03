@@ -352,7 +352,30 @@ function handle(event) {
       break;
     case "turn.start":
       newTurn(null);
+      // A turn can start with nobody pressing Send here: another tab, or a
+      // message written during the last turn that it ended before taking.
+      state.busy = true;
+      setStatus("working");
       break;
+    case "message.queued": {
+      if (!state.turnNode) newTurn(null);
+      const waiting = el("div", "user queued", event.text);
+      waiting.title = "Waiting: the model reads this at its next step";
+      /** @type {HTMLElement} */ (state.turnNode).appendChild(waiting);
+      break;
+    }
+    case "message.delivered": {
+      // The oldest waiting message is the one taken. It moves below what the
+      // model did meanwhile, so the reply that answers it reads after it.
+      if (!state.turnNode) newTurn(null);
+      const said = document.querySelector("#transcript .user.queued") || el("div", "user", event.text);
+      said.classList.remove("queued");
+      said.removeAttribute("title");
+      /** @type {HTMLElement} */ (state.turnNode).appendChild(said);
+      state.assistantNode = null;
+      state.reasoningNode = null;
+      break;
+    }
     case "reasoning.delta": {
       reasoningBlock();
       const thought = /** @type {HTMLElement} */ (state.reasoningBody);
@@ -1398,21 +1421,27 @@ function submitComposer() {
 async function send() {
   const input = $("#input");
   const text = input.value.trim();
-  if (!text || state.busy) return;
+  // A Task run takes answers on its card, never chat messages.
+  if (!text || (state.busy && state.activeTask)) return;
+  // Written while a turn runs: the server holds it for the turn's next step
+  // and says so ("message.queued"), so it is drawn from that, not here.
+  const joining = state.busy;
   // Images ride along as real content parts the model can look at; other
   // files are named so it knows to read them from uploads/.
   const images = state.attachments.filter((a) => a.isImage).map((a) => a.path);
   const others = state.attachments.filter((a) => !a.isImage).map((a) => a.name);
   const body = others.length ? `${text}\n\n[also attached in uploads/: ${others.join(", ")}]` : text;
-  newTurn(input.value.trim());
+  if (!joining) newTurn(input.value.trim());
   followBottom(); // sending is an intent to watch the reply
   input.value = "";
   paintSuggestion();
   input.style.height = "auto";
   state.attachments = [];
   $("#attachments").textContent = "";
-  state.busy = true;
-  setStatus("working");
+  if (!joining) {
+    state.busy = true;
+    setStatus("working");
+  }
   try {
     await api(`/api/sessions/${state.sessionId}/message`, {
       method: "POST",
@@ -1421,6 +1450,7 @@ async function send() {
     });
   } catch (error) {
     notice(errorText(error), "error");
+    if (joining) return; // the running turn goes on; only this message failed
     setStatus("error");
     state.busy = false;
   }
