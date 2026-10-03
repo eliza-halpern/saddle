@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from saddle.answers import BraveAnswers
 from saddle.askpass import Askpass
 from saddle.brave import BraveKeyError, BraveSearch
 from saddle.capabilities import Switches
@@ -1266,6 +1267,7 @@ def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = No
         ctx.research.search_enabled = on.search
         ctx.research.brave, ctx.research.brave_problem = _brave(on.search)
         ctx.research.browser_enabled = on.browser
+        ctx.research.answers = _answers(on.answers)
 
 
 def _brave(search_on: bool) -> tuple[BraveSearch | None, str]:
@@ -1277,6 +1279,17 @@ def _brave(search_on: bool) -> tuple[BraveSearch | None, str]:
         return BraveSearch.from_env(), ""
     except BraveKeyError as exc:
         return None, str(exc)
+
+
+def _answers(answers_on: bool) -> BraveAnswers | None:
+    """The Answers client when `answers` is on and its key is usable (a key file
+    others can read is not). Re-read every turn, like the switches."""
+    if not answers_on:
+        return None
+    try:
+        return BraveAnswers.from_env()
+    except BraveKeyError:
+        return None
 
 
 def _mcp_call(ctx: ToolContext, call: ToolCall) -> str:

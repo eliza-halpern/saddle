@@ -123,6 +123,9 @@ def _no_real_mcp_allowlist(
     monkeypatch.setenv("SADDLE_BRAVE_STATE", str(nowhere / "brave-budget.json"))
     monkeypatch.delenv("SADDLE_BRAVE_API_KEY", raising=False)
     monkeypatch.delenv("SADDLE_BRAVE_MONTHLY_QUOTA", raising=False)
+    monkeypatch.setenv("SADDLE_BRAVE_ANSWERS_STATE", str(nowhere / "brave-answers.json"))
+    monkeypatch.delenv("SADDLE_BRAVE_ANSWERS_API_KEY", raising=False)
+    monkeypatch.delenv("SADDLE_BRAVE_ANSWERS_CAP", raising=False)
 
 
 @pytest.fixture(autouse=True)

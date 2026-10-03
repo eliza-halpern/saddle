@@ -47,6 +47,8 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
+from saddle.answers import LABEL, UNAVAILABLE, BraveAnswers
+from saddle.answers import RULES as ANSWERS_RULES
 from saddle.brave import BraveSearch
 from saddle.journal import append_span, build_span
 from saddle.mcpclient import (
@@ -434,6 +436,15 @@ SEARCH_SCHEMA: Final = _schema(
     ["query"],
 )
 
+ASK_TOOL: Final = "ask_answers"
+ASK_SCHEMA: Final = _schema(
+    ASK_TOOL,
+    "Ask Brave's AI answer service one precise question. Costly. The reply is a lead "
+    "with cited addresses, not a source: open and read those pages before you report.",
+    {"question": {"type": "string"}},
+    ["question"],
+)
+
 RESEARCH_FIRST: Final = (
     "Research first: your training data is out of date and thin on specific programs, "
     "versions, file layouts and error messages. Before you work something out from memory, "
@@ -535,6 +546,9 @@ class Researcher:
     budget, and falls back to SearXNG when the budget is used up."""
     brave_problem: str = ""
     """Why a configured Brave key could not be used (the file's mode, say)."""
+    answers: BraveAnswers | None = None
+    """The `answers` capability: the reader gets `ask_answers` only when set. It is
+    never given to the acting session."""
     browser_enabled: bool = False
     """The `browser` capability: the reader gets `browser_*` tools only when on."""
     domains: tuple[str, ...] = ()
@@ -621,6 +635,8 @@ class Researcher:
                 note = f"search is unavailable ({why}); {SEARCH_START}"
                 if self.brave_problem:
                     note += f"; Brave: {self.brave_problem}"
+        if self.answers is not None:
+            offered.append(ASK_SCHEMA)
         downloads: list[Download] = []
         outcome = self._loop(question, want, offered, gate, downloads)
         self.fetches = gate.fetches
@@ -630,8 +646,11 @@ class Researcher:
 
     def _budget_text(self, tools: list[dict[str, Any]]) -> str:
         """The fixed search guidance (no numbers), when the reader is offered Brave search."""
-        offered = any(t["function"]["name"] == SEARCH_TOOL for t in tools)
-        return self.brave.reader_text() if self.brave is not None and offered else ""
+        names = {t["function"]["name"] for t in tools}
+        text = self.brave.reader_text() if self.brave is not None and SEARCH_TOOL in names else ""
+        if ASK_TOOL in names:
+            text += f"\n\n{ANSWERS_RULES}"
+        return text
 
     def budget_note(self) -> str:
         """One line for the acting session's `research` tool; empty without Brave."""
@@ -776,6 +795,8 @@ class Researcher:
             result = args
         elif call.name == SEARCH_TOOL and self.search_enabled:
             result = self._search(str(args.get("query", "")), gate, count)
+        elif call.name == ASK_TOOL and self.answers is not None:
+            result = self._ask(str(args.get("question", "")), gate, count)
         else:
             result = self._mcp(call.name, args, gate, downloads, count)
         if self.journal is not None:
@@ -848,6 +869,25 @@ class Researcher:
         shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
         gate.corpus.append(shown)
         return f"(cached)\n{shown}" if found.cached else shown
+
+    def _ask(
+        self, question: str, gate: ReaderGate, count: Callable[[str], int | None] | None
+    ) -> str:
+        """Brave's answer as a labelled lead. Only its cited addresses become
+        openable; they are not read, so a report cannot cite them until opened.
+        Unavailable (spent, refused, down) is one count-free sentence."""
+        assert self.answers is not None
+        if not question.strip():
+            return "error: ask_answers needs a question"
+        found = self.answers.ask(question)
+        if found.unavailable:
+            return UNAVAILABLE
+        for url in found.urls:
+            gate.allow(url, "an Answers citation")
+        cited = "\n".join(found.urls) or "(none)"
+        shown = clip_result(f"{LABEL}\n{found.text}\n\nCited pages:\n{cited}", RESULT_TOKENS, count)
+        gate.corpus.append(shown)
+        return shown
 
     def _searx(
         self, query: str, gate: ReaderGate, count: Callable[[str], int | None] | None

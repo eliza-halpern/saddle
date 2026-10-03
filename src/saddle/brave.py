@@ -80,8 +80,17 @@ def load_key(environ: Mapping[str, str] | None = None) -> str | None:
     """The Brave key: `$SADDLE_BRAVE_API_KEY`, else the `BRAVE_API_KEY` line of the
     key file; None when neither is there. A file that group or others can read, or
     that has no such line, is a `BraveKeyError`."""
+    return read_key(environ, KEY_ENV, KEY_VARIABLE, required=True)
+
+
+def read_key(
+    environ: Mapping[str, str] | None, env_name: str, variable: str, *, required: bool
+) -> str | None:
+    """One key of the Brave key file, or of `env_name`. The mode check is the same
+    for every key. A file with no `variable` line is an error when `required`, and
+    None otherwise (the file holds another product's key only)."""
     env = os.environ if environ is None else environ
-    given = env.get(KEY_ENV, "").strip()
+    given = env.get(env_name, "").strip()
     if given:
         return given
     path = key_file(env)
@@ -105,9 +114,11 @@ def load_key(environ: Mapping[str, str] | None = None) -> str | None:
         raise BraveKeyError(msg) from exc
     for line in text.splitlines():
         name, _, value = line.strip().removeprefix("export ").partition("=")
-        if name.strip() == KEY_VARIABLE and value.strip().strip("'\"").strip():
+        if name.strip() == variable and value.strip().strip("'\"").strip():
             return value.strip().strip("'\"").strip()
-    msg = f"the Brave key file {path} has no {KEY_VARIABLE}=... line"
+    if not required:
+        return None
+    msg = f"the Brave key file {path} has no {variable}=... line"
     raise BraveKeyError(msg)
 
 

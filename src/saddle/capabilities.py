@@ -34,12 +34,13 @@ from typing import IO, Final, Literal
 
 import httpx
 
-from saddle.brave import BraveKeyError, BraveSearch
+from saddle.answers import BraveAnswers
+from saddle.brave import BraveKeyError, BraveSearch, key_file
 from saddle.mcpclient import McpConfigError, ServerSpec, load_config, sdk_problem
 from saddle.research import reader_problem
 from saddle.searx import reachable, search_url_from_env
 
-NAMES: Final = ("mcp", "research", "search", "browser")
+NAMES: Final = ("mcp", "research", "search", "browser", "answers")
 FILE_ENV: Final = "SADDLE_CAPABILITIES_FILE"
 OVERRIDE_ENV: Final = "SADDLE_CAPABILITIES"
 DEFAULT_FILE: Final = Path("~/.config/saddle/capabilities.json")
@@ -60,6 +61,7 @@ class Switches:
     research: bool = False
     search: bool = False
     browser: bool = False
+    answers: bool = False
 
     def get(self, name: str) -> bool:
         return bool(getattr(self, name))
@@ -164,7 +166,7 @@ def status(switches: Switches | None = None, http: httpx.Client | None = None) -
         problem = _problem(name, on, http)
         if problem is not None:
             found.append(Status(name, "unavailable", problem))
-        elif name in ("search", "browser") and not on.research:
+        elif name in ("search", "browser", "answers") and not on.research:
             note = "used by research, which is off"
             found.append(Status(name, "on", "; ".join(filter(None, [note, _provider(name)]))))
         else:
@@ -182,6 +184,8 @@ def _brave() -> tuple[BraveSearch | None, str]:
 def _provider(name: str) -> str:
     """What `search` searches with when it is Brave (and its budget) or a Brave key was
     refused; empty for plain SearXNG, as before."""
+    if name == "answers":
+        return "Brave Answers (`saddle answers status` shows the spend)"
     if name != "search":
         return ""
     brave, problem = _brave()
@@ -192,6 +196,13 @@ def _provider(name: str) -> str:
 
 def _problem(name: str, on: Switches, http: httpx.Client | None) -> str | None:
     """Why `name`, which is switched on, cannot work now; None when it can."""
+    if name == "answers":
+        try:
+            if BraveAnswers.from_env() is not None:
+                return None
+        except BraveKeyError as exc:
+            return str(exc)
+        return f"no Answers key: add BRAVE_ANSWERS_API_KEY=... to {key_file()}"
     if name == "search":
         if _brave()[0] is not None:
             return None  # Brave answers; SearXNG is only its labelled fallback

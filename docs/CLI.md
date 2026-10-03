@@ -434,7 +434,7 @@ The terminal chat. Same lanes and tool lists as the web chat's Ask and Edit
 ## Opt-in capabilities: `saddle capabilities`
 
 Nothing that reaches the web or runs a third-party server is part of installing
-or running saddle. Four capabilities are **off until you turn them on**, and the
+or running saddle. Five capabilities are **off until you turn them on**, and the
 model is offered a tool only when its switch is on and what it needs works:
 
 | Capability | What it gives | Needs |
@@ -443,6 +443,7 @@ model is offered a tool only when its switch is on and what it needs works:
 | `research` | the `research` tool (Ask and Edit): a quarantined reader that reads the web | the SDK, an `access: reader` server (a fetch server or a browser), `bwrap` |
 | `search` | the reader's `search` tool, from a local SearXNG | `saddle search setup` running |
 | `browser` | the reader's `browser_*` tools (a Playwright server) | a reader server that offers them |
+| `answers` | the reader's `ask_answers` tool (Brave Answers, a costly lead; see below) | `BRAVE_ANSWERS_API_KEY` |
 
 `saddle capabilities` prints each as `on`, `off`, or `unavailable` with the
 reason; `saddle capabilities enable research` and `disable` write the switch to
@@ -532,6 +533,44 @@ mode 600).
 Privacy: with a key, each query the reader sends goes to Brave (api.search.brave.com),
 under Brave's terms, instead of to your SearXNG. Result snippets stay inside the
 reader as before.
+
+## Brave Answers (optional, budgeted)
+
+The `answers` capability gives the **reader only** a tool, `ask_answers(question)`,
+backed by Brave's Answers API (`/res/v1/chat/completions`). The acting session
+never gets the tool and never sees the answer text. Off by default
+(`saddle capabilities enable answers`; it also needs `research`).
+
+Store its key beside the search key, in the same owner-only file:
+
+```bash
+$EDITOR ~/.config/saddle/brave.env     # add: BRAVE_ANSWERS_API_KEY=...
+```
+
+(`$SADDLE_BRAVE_ANSWERS_API_KEY` supplies it for one process. The file's mode is
+checked as for the search key; the key is never written to a result, error,
+journal or state file.)
+
+- **A lead, not evidence.** The reader receives the answer labelled `[AI answer
+  from Brave — a lead, not a source; open and read the pages it cites before
+  relying on it]` with the pages it cites. Those addresses become openable; other
+  addresses in the answer do not. A report may still cite only pages the reader
+  actually read, so a report that rests on the answer alone is refused.
+- **Dollar budget.** A call costs $0.004 plus $5 per million input and output
+  tokens, from the usage Brave reports (a conservative estimate, recorded as
+  such, when it reports none). The month's cap is $4.50 (`$SADDLE_BRAVE_ANSWERS_CAP`),
+  under the account's own $5 credit; a call is refused up front when what is left
+  would not cover a conservative per-call estimate. Spend resets at the start of
+  each UTC month. Brave's usage- or spend-limit refusals (402, or 403/429 naming
+  a limit) mark the month exhausted. Set the dashboard spend limit too.
+- **The model never sees money.** It gets fixed guidance (costly: only after
+  search and reading have not settled it; one precise question) and, when the tool
+  cannot be used, `Answers is not available now; use search and read pages`.
+- **You see the spend:** `saddle answers status` prints spent, remaining and calls
+  this month. State: `~/.local/state/saddle/brave-answers.json`
+  (`$SADDLE_BRAVE_ANSWERS_STATE`, mode 600).
+
+Privacy: each question the reader asks goes to Brave, under Brave's terms.
 
 ## The research tool
 

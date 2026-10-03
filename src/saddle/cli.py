@@ -25,6 +25,7 @@ from rich.console import Console
 from saddle import __version__, audit
 from saddle.anchor import anchor_issues, default_anchor_repo
 from saddle.answer_book import AnswersError
+from saddle.answers import run_answers
 from saddle.audit import AuditCheck, AuditError, AuditResult, audit_tree
 from saddle.auditor import (
     TEST_CHANGES,
@@ -2126,16 +2127,20 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_cmd.add_argument("server", nargs="?", help="The allowlisted server (approve).")
     caps_cmd = sub.add_parser(
         "capabilities",
-        help="Show which opt-in capabilities (mcp, research, search, browser) are on and working.",
+        help="Show which opt-in capabilities (mcp, research, search, browser, answers) are on.",
     )
     caps_cmd.add_argument(
         "capability_action", nargs="?", choices=["status", "enable", "disable"], default="status"
     )
-    caps_cmd.add_argument("capability", nargs="?", help="mcp, research, search or browser.")
+    caps_cmd.add_argument(
+        "capability", nargs="?", help="mcp, research, search, browser or answers."
+    )
     search_cmd = sub.add_parser(
         "search", help="Set up or check the local SearXNG the web reader searches with."
     )
     search_cmd.add_argument("search_action", choices=["setup", "status", "stop"])
+    answers_cmd = sub.add_parser("answers", help="Show this month's Brave Answers spend.")
+    answers_cmd.add_argument("answers_action", choices=["status"])
     auto = sub.add_parser(
         "auto", help="Run one task autonomously in a worktree; the result is a branch."
     )
@@ -2458,6 +2463,7 @@ def main(
         "requirements",
         "mcp",
         "search",
+        "answers",
         "capabilities",
     ):
         return 0
@@ -2467,6 +2473,10 @@ def main(
             args.capability,
             stdout=stdout or sys.stdout,
             stderr=stderr or sys.stderr,
+        )
+    if args.command == "answers":
+        return run_answers(
+            args.answers_action, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
         )
     if args.command == "search":
         return run_search(
