@@ -122,6 +122,11 @@ body[data-mode="task"] .side-foot label:has(#temp) { opacity: .45; }
 .user { background: linear-gradient(98deg, #3a2e3b, var(--bg-raise));
   border: 1px solid var(--line); border-radius: var(--r) var(--r) var(--r) 6px;
   padding: 11px 15px; white-space: pre-wrap; }
+/* A message written while the turn ran (F40): it sits in the turn, dashed and
+   faded until the model takes it at its next step. */
+.turn > * + .user { margin-top: 12px; }
+.turn > * + .user + * { margin-top: 12px; }
+.user.queued { border-style: dashed; opacity: .62; }
 .assistant { padding: 4px 2px; }
 .assistant p { margin: 0 0 12px; }
 .assistant pre { background: var(--bg-sunk); border: 1px solid var(--line); border-radius: 13px;

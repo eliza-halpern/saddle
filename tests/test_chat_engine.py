@@ -33,6 +33,7 @@ from saddle.events import (
     Context,
     ErrorEvent,
     Event,
+    MessageDelivered,
     ToolEnd,
     ToolStart,
     TurnEnd,
@@ -638,6 +639,104 @@ def test_a_retry_with_no_question_is_sealed_with_an_empty_prompt_not_null(
     events, _ = _retry(FakeClient([[content("ok")]]), options, messages)
     assert _retry_seal(events, options) == _retry_hash("", "ok")
     assert _retry_seal(events, options) != _retry_hash(None, "ok")
+
+
+# -- a message written while the turn runs (F40) -------------------------------
+
+
+def _later(*batches: list[str]) -> Any:
+    """A `steer` that hands over one batch per request: nothing before the
+    first, then each batch in turn, so a message arrives mid-turn."""
+    pending = [[], *batches]
+
+    def steer() -> list[tuple[str, list[Path]]]:
+        batch = pending.pop(0) if pending else []
+        return [(text, []) for text in batch]
+
+    return steer
+
+
+def test_a_message_written_mid_turn_opens_the_next_request_after_the_tool_results(
+    options: TurnOptions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sealed: list[list[dict[str, Any]]] = []
+    real_seal = engine._seal
+
+    def seal(journal: Path, **kw: Any) -> str:
+        sealed.append(kw["rounds"])
+        return real_seal(journal, **kw)
+
+    monkeypatch.setattr(engine, "_seal", seal)
+    (options.workdir / "note.txt").write_text("contents")
+    client = FakeClient(
+        [
+            [tool("read_file", call_id="r1", path="note.txt")],
+            [content("I see the dialog")],
+        ]
+    )
+    messages: list[dict[str, Any]] = []
+    events = run(
+        client,
+        options,
+        messages=messages,
+        steer=_later(["an error dialog is on screen", "it says disk full"]),
+    )
+    second = client.asked[1]["messages"]
+    # After the round's tool result, in the order written, as the person's words.
+    assert [m["role"] for m in second[-3:]] == ["tool", "user", "user"]
+    assert second[-3]["tool_call_id"] == "r1"
+    assert [m["content"] for m in second[-2:]] == [
+        "an error dialog is on screen",
+        "it says disk full",
+    ]
+    # The turn went on: not stopped, and the model answered.
+    assert not any("stopped" in e.message for e in those(events, ErrorEvent))
+    assert messages[-1] == {"role": "assistant", "content": "I see the dialog"}
+    delivered = [e.text for e in those(events, MessageDelivered)]
+    assert delivered == ["an error dialog is on screen", "it says disk full"]
+    # Announced before the request it rides on is answered.
+    assert kinds(events).index("message.delivered") < kinds(events).index("content.delta")
+    # The turn's sealed record holds what the person said, between the rounds.
+    assert [list(r) for r in sealed[0]] == [
+        ["reply", "tools"],
+        ["person"],
+        ["person"],
+        ["reply", "tools"],
+    ]
+    assert sealed[0][2] == {"person": "it says disk full"}
+
+
+def test_a_message_with_a_screenshot_reaches_the_model_as_an_image(options: TurnOptions) -> None:
+    shot = options.workdir / "dialog.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+    client = FakeClient([[tool("read_file", path="dialog.png")], [content("ok")]])
+    calls = iter([[], [("look at this", [shot])]])
+    run(client, options, steer=lambda: next(calls, []))
+    said = client.asked[1]["messages"][-1]
+    assert said["role"] == "user"
+    assert [p["type"] for p in said["content"]] == ["text", "image_url"]
+
+
+def test_without_a_message_the_requests_are_unchanged(options: TurnOptions) -> None:
+    # Known good for the other side: an empty steer adds nothing.
+    (options.workdir / "note.txt").write_text("contents")
+    client = FakeClient([[tool("read_file", path="note.txt")], [content("done")]])
+    events = run(client, options, steer=lambda: [])
+    assert client.asked[1]["messages"][-1]["role"] == "tool"
+    assert not those(events, MessageDelivered)
+
+
+def test_a_stopped_turn_takes_no_message_so_the_next_turn_gets_it(options: TurnOptions) -> None:
+    taken: list[str] = []
+
+    def steer() -> list[tuple[str, list[Path]]]:
+        taken.append("asked")
+        return [("late", [])]
+
+    stopped = {"now": True}
+    events = run(FakeClient([[content("x")]]), options, steer=steer, cancel=lambda: stopped["now"])
+    assert taken == []
+    assert not those(events, MessageDelivered)
 
 
 # -- images -------------------------------------------------------------------

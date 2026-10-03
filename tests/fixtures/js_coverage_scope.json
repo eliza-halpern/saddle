@@ -31,6 +31,7 @@
     "tests/test_process_list_ui.py",
     "tests/test_paint_order.py",
     "tests/test_runs.py",
+    "tests/test_steer_ui.py",
     "tests/test_ui3_mode.py",
     "tests/test_ui_snapshots.py",
     "tests/test_uxfix.py"

@@ -27,6 +27,8 @@ from saddle.events import (
     ContentDelta,
     ErrorEvent,
     Event,
+    MessageDelivered,
+    MessageQueued,
     SessionTitle,
     TerminalOutput,
     TurnEnd,
@@ -328,7 +330,11 @@ def test_an_empty_message_is_refused(store: SessionStore, tmp_path: Path) -> Non
         assert reply.json() == {"error": "empty message"}
 
 
-def test_a_second_turn_is_refused_while_one_is_running(store: SessionStore, tmp_path: Path) -> None:
+def test_a_message_is_refused_while_a_task_run_holds_the_session(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    # Busy with no chat turn running is a Task run (post_task): a message has
+    # no chat turn to join, so it is still refused.
     with app_for(store, tmp_path) as (client, app):
         sid = client.post("/api/sessions").json()["id"]
         live = _server_of(app)._live(sid)
@@ -336,6 +342,128 @@ def test_a_second_turn_is_refused_while_one_is_running(store: SessionStore, tmp_
         reply = client.post(f"/api/sessions/{sid}/message", json={"text": "hi"})
         assert reply.status_code == 409
         assert reply.json() == {"error": "a turn is already running"}
+
+
+class _HeldTurn:
+    """A scripted run_turn that holds each turn open until released, so a
+    test can write to the session while the turn is running."""
+
+    def __init__(self, *, steers: bool) -> None:
+        self.steers = steers
+        self.texts: list[str | None] = []
+        self.steered: list[list[str]] = []
+        self.cancelled: list[bool] = []
+        self.release = threading.Event()
+
+    def __call__(
+        self, _c: Any, messages: list[dict[str, Any]], text: str | None, _o: Any, **kw: Any
+    ) -> Any:
+        from saddle.events import TurnStart
+
+        self.texts.append(text)
+        messages.append({"role": "user", "content": text})
+        yield TurnStart(turn=len(self.texts), prompt=text or "")
+        assert self.release.wait(5)
+        if self.steers:
+            taken = [said for said, _images in kw["steer"]()]
+            self.steered.append(taken)
+            for said in taken:
+                yield MessageDelivered(text=said)
+        self.cancelled.append(kw["cancel"]())
+        yield TurnEnd(turn=len(self.texts), proof="p")
+
+
+def _drain(channel: queue.Queue[Event | None]) -> list[Event | None]:
+    seen: list[Event | None] = []
+    while True:
+        try:
+            seen.append(channel.get_nowait())
+        except queue.Empty:
+            return seen
+
+
+def test_a_message_sent_while_a_turn_runs_reaches_that_turn_in_order(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    import saddle.web.app as module
+
+    held = _HeldTurn(steers=True)
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        live = _server_of(app)._live(sid)
+        channel = live.subscribe()
+        module.run_turn = held  # type: ignore[assignment]
+        assert (
+            client.post(f"/api/sessions/{sid}/message", json={"text": "fix it"}).status_code == 200
+        )
+        _settle(lambda: held.texts == ["fix it"])
+        first = client.post(f"/api/sessions/{sid}/message", json={"text": "a dialog opened"})
+        second = client.post(f"/api/sessions/{sid}/message", json={"text": "it says disk full"})
+        assert (first.status_code, first.json()) == (200, {"ok": True, "queued": True})
+        assert second.status_code == 200
+        held.release.set()
+        _settle(lambda: not live.busy)
+        seen = _drain(channel)
+    # Delivered to the running turn, in the order written, without stopping it.
+    assert held.steered == [["a dialog opened", "it says disk full"]]
+    assert held.cancelled == [False]
+    assert held.texts == ["fix it"]  # no second turn: nothing was left over
+    queued = [e.text for e in seen if isinstance(e, MessageQueued)]
+    assert queued == ["a dialog opened", "it says disk full"]
+    # Shown as waiting before it is shown as delivered.
+    kinds = [e.kind for e in seen if e is not None]
+    assert kinds.index("message.queued") < kinds.index("message.delivered")
+
+
+def test_a_message_the_turn_never_took_starts_the_next_turn(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    import saddle.web.app as module
+
+    held = _HeldTurn(steers=False)  # ends without asking for messages
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        live = _server_of(app)._live(sid)
+        channel = live.subscribe()
+        module.run_turn = held  # type: ignore[assignment]
+        client.post(f"/api/sessions/{sid}/message", json={"text": "fix it"})
+        _settle(lambda: held.texts == ["fix it"])
+        for text in ("one more thing", "and another"):
+            reply = client.post(f"/api/sessions/{sid}/message", json={"text": text})
+            assert reply.status_code == 200
+        held.release.set()
+        _settle(lambda: len(held.cancelled) == 3 and not live.busy)
+        seen = _drain(channel)
+        saved = store.load_messages(sid)
+    # Each left-over message starts its own turn, in order; none is lost.
+    assert held.texts == ["fix it", "one more thing", "and another"]
+    assert [m["content"] for m in saved if m["role"] == "user"] == held.texts
+    # Each is announced as delivered once its turn has started.
+    shown = [(e.kind, getattr(e, "text", "")) for e in seen if e is not None]
+    starts = [i for i, (kind, _) in enumerate(shown) if kind == "turn.start"]
+    assert shown[starts[1] + 1] == ("message.delivered", "one more thing")
+    assert shown[starts[2] + 1] == ("message.delivered", "and another")
+
+
+def test_a_message_to_an_idle_session_starts_a_turn_and_is_not_queued(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    import saddle.web.app as module
+
+    held = _HeldTurn(steers=True)
+    held.release.set()
+    with app_for(store, tmp_path) as (client, app):
+        sid = client.post("/api/sessions").json()["id"]
+        live = _server_of(app)._live(sid)
+        channel = live.subscribe()
+        module.run_turn = held  # type: ignore[assignment]
+        reply = client.post(f"/api/sessions/{sid}/message", json={"text": "hello"})
+        _settle(lambda: len(held.cancelled) == 1 and not live.busy)
+        seen = _drain(channel)
+    assert reply.json() == {"ok": True}
+    assert held.texts == ["hello"]
+    assert held.steered == [[]]
+    assert not [e for e in seen if isinstance(e, (MessageQueued, MessageDelivered))]
 
 
 def test_an_image_this_session_uploaded_is_attached(store: SessionStore, tmp_path: Path) -> None:
