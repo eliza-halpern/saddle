@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -49,7 +49,7 @@ class ScriptedClient(VllmClient):
         super().__init__(api_key="k", transport=httpx.MockTransport(_tokenizer))
         self.rounds = rounds
 
-    def stream_chat(self, messages: Any, **_kw: Any) -> Iterator[Any]:  # type: ignore[override]
+    def stream_chat(self, messages: Any, **_kw: Any) -> Iterator[Any]:
         yield from self.rounds.pop(0) if self.rounds else [StreamToken("content", "done")]
 
     def max_model_len(self) -> int | None:
@@ -77,7 +77,7 @@ def served(tmp_path: Path) -> Iterator[tuple[ChatServer, str, list[list[Any]], P
         store.set_full_access(sid, True, confirm=FULL_ACCESS_CONFIRM)
         server = next(
             cell.cell_contents
-            for route in app.routes
+            for route in cast(Any, app).routes
             for cell in (getattr(getattr(route, "endpoint", None), "__closure__", None) or ())
             if isinstance(cell.cell_contents, ChatServer)
         )
