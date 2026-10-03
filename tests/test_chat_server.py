@@ -648,7 +648,7 @@ def test_a_turn_that_raises_reports_the_error_instead_of_killing_the_server(
 
         first = channel.get_nowait()
         assert isinstance(first, ErrorEvent)
-        assert first.message == "RuntimeError: model went away"
+        assert first.message == "the turn stopped: RuntimeError: model went away"
         assert channel.get_nowait() is None  # and the end is still signalled
         assert server._live(sid).busy is False
 

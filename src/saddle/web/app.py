@@ -48,7 +48,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from saddle import capabilities
 from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET, AutoError, repo_root
-from saddle.engine import TurnOptions
+from saddle.engine import TurnOptions, _user_message
 from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
 from saddle.events import (
     ApprovalRequest,
@@ -65,7 +65,7 @@ from saddle.events import (
 from saddle.feed import Arm, default_auditor
 from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.installs import WheelFolder
-from saddle.journal import ProofRecord, SpanRecord, read_entries
+from saddle.journal import ProofRecord, SpanRecord, append_span, build_span, read_entries
 from saddle.labels import label_for
 from saddle.memory import estimate_tokens
 from saddle.packet import Packet, compile_packet, display_record, render_packet_text
@@ -514,6 +514,8 @@ class ChatServer:
     def _run(self, session_id: str, text: str | None, images: list[str] | None = None) -> None:
         live = self._live(session_id)
         live.cancelled = False
+        messages: list[dict[str, Any]] | None = None
+        begun = False
         try:
             session = self.store.get(session_id)
             messages = self.store.load_messages(session_id)
@@ -547,6 +549,7 @@ class ChatServer:
                 live.publish(ErrorEvent(message=problem))  # allowlisted, but not in use
             live.turn += 1
             with self.client_factory() as client:
+                begun = True
                 options = TurnOptions(
                     workdir=workdir,
                     journal=self.store.journal_path(session_id),
@@ -573,11 +576,61 @@ class ChatServer:
                 self._name_session(session, text, client, live)
             self.store.save_messages(session_id, messages)
         except Exception as exc:  # a dead turn must not take the server with it
-            live.publish(ErrorEvent(message=f"{type(exc).__name__}: {exc}"))
+            reason = f"{type(exc).__name__}: {exc}"
+            live.publish(ErrorEvent(message=f"the turn stopped: {reason}"))
+            self._keep_dead_turn(session_id, live.turn, text, images, messages, begun, reason)
         finally:
             with live.lock:
                 live.busy = False
             live.publish(None)
+
+    def _keep_dead_turn(
+        self,
+        session_id: str,
+        turn: int,
+        text: str | None,
+        images: list[str] | None,
+        messages: list[dict[str, Any]] | None,
+        begun: bool,
+        reason: str,
+    ) -> None:
+        """What a turn did before it died is real work: seal it in the journal
+        and keep its messages, so a reload shows it and the next turn starts
+        from it. Each step guards itself, so none can hide the others or the
+        error already published."""
+        try:
+            append_span(
+                self.store.journal_path(session_id),
+                build_span(
+                    node_id=f"chat#{turn}",
+                    argv=["turn", "failed"],
+                    duration_ms=0,
+                    exit_code=1,
+                    detail=reason,
+                    name="turn_failed",
+                ),
+            )
+        except Exception:  # the journal failing must not hide the rest
+            pass
+        if messages is None:
+            return
+        try:
+            if not begun and text is not None:  # died before the engine took the question
+                messages.append(_user_message(text, [Path(raw) for raw in (images or [])]))
+            answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+            last = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
+            for call in (last or {}).get("tool_calls") or []:
+                if call["id"] not in answered:  # a request with no result is rejected by the server
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": f"error: the turn stopped before this ran ({reason})",
+                        }
+                    )
+            self.store.save_messages(session_id, messages)
+        except Exception:
+            pass
 
     # -- task -----------------------------------------------------------
 

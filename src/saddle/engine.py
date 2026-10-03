@@ -869,7 +869,10 @@ def run_turn(
     ctx = context or ToolContext(workdir=options.workdir)
     counter = getattr(client, "count_tokens", None)
     once = _OnceCounter(counter) if counter is not None else None
-    if ctx.count_tokens is None and counter is not None:
+    if counter is not None:
+        # This turn's client, every turn: a session's context outlives each
+        # turn's client, and a counter bound to an earlier turn's closed client
+        # raised on the next turn's first sized `read_file` (F28).
         ctx.count_tokens = lambda text: counter([{"role": "user", "content": text}])
     stop = cancel or (lambda: False)
     # A retry (text None) still answers a question; the turn's start and its
