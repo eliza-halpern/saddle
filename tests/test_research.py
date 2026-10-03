@@ -1066,6 +1066,14 @@ def test_a_round_that_reads_a_new_page_restarts_the_idle_count(tmp_path: Path) -
 
 
 @needs_bwrap
+def test_the_reader_samples_at_the_model_cards_temperature_never_greedy(rig: Rig) -> None:
+    """F24: at temperature 0.0 the reader repeated one paragraph verbatim until
+    its token limit. Known-good: every reader call samples at 1.0."""
+    _, model = rig.run([[tool(W + "fetch", url=INSTALL)], [GOOD]], person=INSTALL)
+    assert [ask["temperature"] for ask in model.asked] == [1.0, 1.0]
+
+
+@needs_bwrap
 def test_a_model_failure_in_the_reader_is_named(rig: Rig) -> None:
     result, _ = rig.run([VllmError("server went away")])
     assert result == "error: the reader's model call failed: server went away"

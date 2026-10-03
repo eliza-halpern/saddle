@@ -94,6 +94,10 @@ MAX_FETCHES: Final = 40
 BLOCKED_AFTER: Final = 2
 """Failed fetches of one host before the reader's gate closes it for the session
 (F29: a reader spent fifty rounds on a site that answered 403)."""
+READER_TEMPERATURE: Final = 1.0
+"""The reader samples as the model card recommends (the server supplies the card's
+top_p and top_k). At 0.0 it repeated one paragraph verbatim until its token
+limit (F24)."""
 RESULT_TOKENS: Final = 6000
 """Tokens of one tool result the reader is shown."""
 SUMMARY_TOKENS: Final = 800
@@ -710,7 +714,7 @@ class Researcher:
                 for event in self.client.stream_chat(
                     messages,
                     max_tokens=4096,
-                    temperature=0.0,
+                    temperature=READER_TEMPERATURE,
                     reasoning_effort="low",
                     tools=[REPORT_SCHEMA] if final else tools,
                 ):
