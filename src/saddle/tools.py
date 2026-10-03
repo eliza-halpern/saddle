@@ -23,11 +23,13 @@ import functools
 import importlib.metadata
 import json
 import os
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from saddle import screen
 from saddle.answers import BraveAnswers
 from saddle.askpass import Askpass
 from saddle.brave import BraveKeyError, BraveSearch
@@ -204,6 +206,20 @@ PROCESSES_SCHEMA: Final[dict[str, Any]] = _tool(
 """The Edit lane's process tool (#136). It is not in `TOOLS`, which a task run
 is given whole: a task run's tool list, prompt and sandbox are unchanged."""
 
+SCREENSHOT_TOOL: Final = "screenshot"
+SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
+    SCREENSHOT_TOOL,
+    "See the person's screen: a picture of one window, or of the whole screen, is "
+    "shown to you. `window` is a window id or part of its title; `list` lists the "
+    "X11 windows (Wine programs included); omit it for the whole screen. Use it to "
+    "read a dialog, check that a window opened, or see what a program shows, "
+    "instead of asking the person.",
+    {"window": {"type": "string"}},
+    [],
+)
+"""Offered only with full access, a display and a model that reads images
+(`offer_screenshot`), never in a task run."""
+
 
 _ARGUMENTS: Final[dict[str, frozenset[str]]] = {
     tool["function"]["name"]: frozenset(tool["function"]["parameters"]["properties"])
@@ -367,6 +383,29 @@ def state_image_fact(
     except VllmError:
         return tools
     return _appended(tools, "read_file", FACT_IMAGE) if seen else tools
+
+
+def offer_screenshot(
+    tools: list[dict[str, Any]], context: ToolContext, accepts_images: Callable[[], bool]
+) -> list[dict[str, Any]]:
+    """`tools` with `screenshot` added when it can work and is allowed: the Edit
+    lane's run_command is offered, the session has full access (the screen shows
+    every program the person has open, and a sandboxed command has no display),
+    a display and the capture tools are there (`screen.available`), and the
+    served model reads images. A failed image probe offers nothing."""
+    names = {t["function"]["name"] for t in tools}
+    if "run_command" not in names or not context.full_access:
+        return tools
+    if not screen.available(desktop_env()):
+        return tools
+    try:
+        if not accepts_images():
+            return tools
+    except VllmError:
+        return tools
+    if context.allowed is not None:  # None allows every tool already
+        context.allowed = (*context.allowed, SCREENSHOT_TOOL)
+    return [*tools, SCREENSHOT_SCHEMA]
 
 
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
@@ -831,6 +870,27 @@ def _read_image(ctx: ToolContext, call_id: str | None, name: str, path: Path) ->
     return f"{described}. The image follows in the next message."
 
 
+def _screen_env() -> dict[str, str]:
+    """The desktop variables the X tools need to reach the person's display."""
+    kept = {k: os.environ[k] for k in ("PATH", "HOME", "XAUTHORITY") if k in os.environ}
+    return {**kept, **desktop_env()}
+
+
+def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    """Capture a window or the whole screen and show it (`screen.capture`)."""
+    wanted = args.get("window", "")
+    if not isinstance(wanted, str):
+        return "error: window must be a string (an id, part of a title, or list)"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "screen.png"
+        got = screen.capture(wanted, out, _screen_env())
+        if isinstance(got, str):
+            return got
+        name = f"screenshot of {got.describe()}" if got is not None else "screenshot of the screen"
+        shown = _read_image(ctx, ctx.call_id, name, out)
+    return shown if shown is not None else "error: the capture was not an image"
+
+
 def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     """The file, or a window of it by lines. A file of at most `READ_LINES`
     lines and `READ_TOKENS` tokens read without `offset`/`limit` comes back
@@ -1222,6 +1282,7 @@ _HANDLERS: Final[dict[str, _Handler]] = {
     "read_terminal": _read_terminal,
     "wait_for_terminal": _wait_for_terminal,
     PROCESSES_TOOL: _processes,
+    SCREENSHOT_TOOL: _screenshot,
 }
 
 

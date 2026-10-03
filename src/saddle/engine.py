@@ -86,6 +86,7 @@ from saddle.tools import (
     TOOLS,
     ToolContext,
     execute_tool,
+    offer_screenshot,
     preview_for,
     state_image_fact,
 )
@@ -896,7 +897,8 @@ def run_turn(
     if ctx.images:
         # This turn's client: a session's context outlives each turn's client.
         ctx.accepts_images = lambda: server_accepts_images(client)
-        options = replace(options, tools=state_image_fact(options.tools, ctx.accepts_images))
+        seen_tools = state_image_fact(options.tools, ctx.accepts_images)
+        options = replace(options, tools=offer_screenshot(seen_tools, ctx, ctx.accepts_images))
     if ctx.undo is not None:
         # Keyed to the question this turn answers, not to len(messages)
         # before it was added -- the system prompt is inserted at 0 on the
