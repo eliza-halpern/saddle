@@ -140,7 +140,8 @@ def test_a_turn_that_dies_mid_tool_publishes_the_error_and_keeps_its_messages(
     assert [m["content"] for m in saved if m["role"] == "user"] == ["please read"]
     assert any(m.get("tool_calls") for m in saved)  # what it had done so far
     journal = server.store.journal_path(sid).read_text()
-    assert '"name": "turn_failed"' in journal and "injected" in journal
+    assert '"name": "turn_failed"' in journal
+    assert "injected" in journal
 
 
 def test_a_turn_that_dies_before_the_model_is_asked_still_says_so(
