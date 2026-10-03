@@ -80,11 +80,14 @@ DOMAINS_ENV: Final = "SADDLE_RESEARCH_DOMAINS"
 REPEATS: Final = 3
 """The same tool call (name and arguments) this many times moves the reader to its
 final report round."""
-SEARCH_ONLY_ROUNDS: Final = 20
-"""A loop guard, not a budget: consecutive rounds that issue only searches before
+IDLE_ROUNDS: Final = 20
+"""A loop guard, not a budget: consecutive rounds that read no new page before
 the reader is moved to its final report round. The reader has no round cap, so
-this ends a reader that searches forever and never reads. Twenty exceeds the
-dozen or so searches one question needs, so it never cuts a working reader."""
+this ends a reader that searches forever and never reads. A fetch the gate
+refused or the site failed reads nothing, so it does not restart the count
+(F29: a reader alternated searches with refused fetches for fifty rounds).
+Twenty exceeds the dozen or so searches one question needs, so it never cuts a
+working reader."""
 FINAL_PROMPT: Final = "Report now with what you have found so far; cite the pages you read."
 MAX_FETCHES: Final = 40
 """Pages the reader may fetch or navigate to in one session."""
@@ -698,8 +701,9 @@ class Researcher:
         nudged = False
         final = False
         repeats: dict[tuple[str, str], int] = {}
-        searching = 0
+        idle = 0
         while True:
+            read_before = len(gate.visited)
             calls: list[ToolCall] = []
             said: list[str] = []
             try:
@@ -765,11 +769,11 @@ class Researcher:
                 if not reported:
                     return self._unreported(gate)
                 continue
-            searching = searching + 1 if all(c.name == SEARCH_TOOL for c in calls) else 0
+            idle = idle + 1 if len(gate.visited) == read_before else 0
             if (
                 gate.fetches >= gate.fetch_cap
                 or max(repeats.values(), default=0) >= REPEATS
-                or searching >= SEARCH_ONLY_ROUNDS
+                or idle >= IDLE_ROUNDS
             ):
                 final = True
                 messages.append({"role": "user", "content": FINAL_PROMPT})

@@ -994,13 +994,74 @@ def test_a_reader_that_read_nothing_says_so_when_it_does_not_report(rig: Rig) ->
 def test_a_reader_that_only_searches_is_moved_to_the_final_round(tmp_path: Path) -> None:
     made = Rig(tmp_path, search=True)
     try:
-        rounds = [*search_rounds(research_module.SEARCH_ONLY_ROUNDS), [GOOD]]
+        rounds = [*search_rounds(research_module.IDLE_ROUNDS), [GOOD]]
         result, model = made.run(rounds)
     finally:
         made.close()
     assert "nothing found: not_found" in result
-    assert len(model.asked) == research_module.SEARCH_ONLY_ROUNDS + 1
+    assert len(model.asked) == research_module.IDLE_ROUNDS + 1
     assert [t["function"]["name"] for t in model.asked[-1]["tools"]] == ["report"]
+    assert all(len(ask["tools"]) > 1 for ask in model.asked[:-1])
+
+
+def composed(count: int) -> list[Any]:
+    return [[tool(W + "fetch", url=f"https://proxy.example/raw?url={n}")] for n in range(count)]
+
+
+@needs_bwrap
+def test_refused_fetches_between_searches_do_not_reset_the_idle_guard(tmp_path: Path) -> None:
+    """F29: a reader alternated searches with fetches the gate refused (addresses
+    it composed) and the guard, which counted search-only rounds, never fired.
+    Known-bad: such a reader runs past IDLE_ROUNDS. Known-good: one that reads a
+    new page in a round starts the count again (the previous test's reader)."""
+    made = Rig(tmp_path, search=True)
+    try:
+        half = research_module.IDLE_ROUNDS // 2
+        rounds = [
+            *[r for pair in zip(search_rounds(half), composed(half), strict=True) for r in pair],
+            [GOOD],
+        ]
+        result, model = made.run(rounds)
+    finally:
+        made.close()
+    assert "nothing found: not_found" in result
+    assert len(model.asked) == 2 * half + 1
+    assert [t["function"]["name"] for t in model.asked[-1]["tools"]] == ["report"]
+
+
+@needs_bwrap
+def test_a_reader_that_read_a_page_and_then_idles_is_still_moved_to_the_final_round(
+    tmp_path: Path,
+) -> None:
+    """9a's shape: one real page early, then nothing but idle rounds."""
+    made = Rig(tmp_path, search=True)
+    try:
+        rounds = [
+            [tool(W + "fetch", url=INSTALL)],
+            *search_rounds(research_module.IDLE_ROUNDS),
+            [GOOD],
+        ]
+        result, model = made.run(rounds, person=INSTALL)
+    finally:
+        made.close()
+    assert "nothing found: not_found" in result
+    assert [t["function"]["name"] for t in model.asked[-1]["tools"]] == ["report"]
+
+
+@needs_bwrap
+def test_a_round_that_reads_a_new_page_restarts_the_idle_count(tmp_path: Path) -> None:
+    made = Rig(tmp_path, search=True)
+    idle = research_module.IDLE_ROUNDS - 1
+    try:
+        rounds = [
+            *search_rounds(idle),
+            [tool(W + "fetch", url=INSTALL)],
+            *search_rounds(idle),
+            [GOOD],
+        ]
+        _, model = made.run(rounds)
+    finally:
+        made.close()
     assert all(len(ask["tools"]) > 1 for ask in model.asked[:-1])
 
 
