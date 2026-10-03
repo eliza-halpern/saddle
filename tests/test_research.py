@@ -1090,6 +1090,29 @@ def test_the_reader_samples_at_the_model_cards_temperature_never_greedy(rig: Rig
 
 
 @needs_bwrap
+def test_a_stopped_turn_stops_its_reader_before_the_next_round(rig: Rig) -> None:
+    """F30: after the person pressed Stop the reader kept calling the model (and,
+    with Brave configured, would keep spending searches) for minutes. Known-bad:
+    a round after the stop. Known-good: rounds before it run."""
+    stopped: list[bool] = []
+    rig.researcher.cancel = lambda: bool(stopped)
+    fetch = [tool(W + "fetch", url=INSTALL)]
+
+    class StopsAfterOne(Scripted):
+        def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+            stopped.append(True)  # the person presses Stop while round 1 runs
+            return super().stream_chat(messages, **kwargs)
+
+    model = StopsAfterOne([fetch, fetch, [GOOD]])
+    rig.researcher.client = model
+    rig.researcher.person_text = [INSTALL]
+    result = rig.researcher.research("what is the latest version?", "value")
+    assert result == "error: the person stopped the turn"
+    assert len(model.asked) == 1
+    assert rig.calls() == [f"fetch {INSTALL}"]
+
+
+@needs_bwrap
 def test_a_model_failure_in_the_reader_is_named(rig: Rig) -> None:
     result, _ = rig.run([VllmError("server went away")])
     assert result == "error: the reader's model call failed: server went away"

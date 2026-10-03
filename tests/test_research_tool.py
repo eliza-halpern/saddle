@@ -370,6 +370,37 @@ def test_the_readers_model_is_the_turns_client_and_its_journal_the_turns(tmp_pat
         rig.close()
 
 
+@needs_bwrap
+def test_stopping_the_turn_stops_the_reader_it_started(tmp_path: Path) -> None:
+    """F30, through the engine: the turn's own stop flag reaches the reader."""
+    rig = Rig(tmp_path)
+    try:
+        client = FakeClient(
+            [
+                [tool("research", question="q")],
+                [tool("report", kind="value")],  # refused: the reader would go on
+                [tool("report", kind="none", reason="not_found")],
+                [content("done")],
+            ]
+        )
+        ctx = ToolContext(workdir=tmp_path, research=rig.researcher)
+        options = TurnOptions(workdir=tmp_path, tools=scope_turn(ctx, "ask"))
+        list(
+            run_turn(
+                cast(VllmClient, client),
+                [],
+                "q",
+                options,
+                turn=1,
+                context=ctx,
+                cancel=lambda: len(client.asked) >= 2,  # Stop while the reader's first round runs
+            )
+        )
+        assert len(client.asked) == 2
+    finally:
+        rig.close()
+
+
 # -- the page's approval box -----------------------------------------------------------------------
 
 

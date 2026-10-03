@@ -896,7 +896,7 @@ def run_turn(
 
     node_id = f"chat#{turn}"
     if ctx.research is not None:
-        ctx.research.attach_turn(client, options.journal, node_id, messages)
+        ctx.research.attach_turn(client, options.journal, node_id, messages, stop)
     auto = options.auto
     if auto is not None:
         auto.budget.start()

@@ -582,6 +582,9 @@ class Researcher:
     http: httpx.Client | None = None
     client: Any = None
     """The turn's model client; set each turn, like `ToolContext.accepts_images`."""
+    cancel: Callable[[], bool] = lambda: False
+    """Whether the person has stopped this turn; set each turn. The reader checks
+    it before every round (F30: a stopped turn's reader ran on for minutes)."""
     person_text: list[str] = field(default_factory=list)
     """The person's own messages this session: the addresses they typed."""
     journal: Path | None = None
@@ -614,11 +617,18 @@ class Researcher:
         return self._host
 
     def attach_turn(
-        self, client: Any, journal: Path, node_id: str, messages: Sequence[Mapping[str, Any]]
+        self,
+        client: Any,
+        journal: Path,
+        node_id: str,
+        messages: Sequence[Mapping[str, Any]],
+        cancel: Callable[[], bool] = lambda: False,
     ) -> None:
-        """Point the reader at this turn: its model client, its journal, and the
-        addresses the person has typed (their own messages, not the model's)."""
+        """Point the reader at this turn: its model client, its journal, its stop
+        flag, and the addresses the person has typed (their own messages, not the
+        model's)."""
         self.client, self.journal, self.node_id = client, journal, node_id
+        self.cancel = cancel
         self.person_text = person_texts(messages)
 
     def close(self) -> None:
@@ -707,6 +717,8 @@ class Researcher:
         repeats: dict[tuple[str, str], int] = {}
         idle = 0
         while True:
+            if self.cancel():
+                return "the person stopped the turn"
             read_before = len(gate.visited)
             calls: list[ToolCall] = []
             said: list[str] = []
