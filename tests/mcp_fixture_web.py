@@ -6,8 +6,9 @@ the real servers use (`fetch`; `browser_navigate`, `browser_snapshot`,
 `browser_click`, `browser_type`, `browser_evaluate`). A click on "Download tool"
 saves a small file into the server's working directory and, like Playwright's
 server, says `Downloaded file NAME to "./NAME"`; "Download big" saves a larger
-one. Every call is appended to `--log` so a test can tell a call that reached
-the server from one the reader's gate refused.
+one. A fetch of `https://blocked.example/...` fails as a 403 does on the real
+fetch server: the tool reports an error. Every call is appended to `--log` so a
+test can tell a call that reached the server from one the reader's gate refused.
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ def snapshot() -> str:
 @server.tool(name="fetch", description="Fetch a URL and return its text.")
 def fetch(url: str) -> str:
     record(f"fetch {url}")
+    if url.startswith("https://blocked.example/"):
+        message = f"Failed to fetch {url} - status code 403"
+        raise ValueError(message)
     return PAGES.get(url, f"error: could not fetch {url}")
 
 

@@ -88,6 +88,9 @@ dozen or so searches one question needs, so it never cuts a working reader."""
 FINAL_PROMPT: Final = "Report now with what you have found so far; cite the pages you read."
 MAX_FETCHES: Final = 40
 """Pages the reader may fetch or navigate to in one session."""
+BLOCKED_AFTER: Final = 2
+"""Failed fetches of one host before the reader's gate closes it for the session
+(F29: a reader spent fifty rounds on a site that answered 403)."""
 RESULT_TOKENS: Final = 6000
 """Tokens of one tool result the reader is shown."""
 SUMMARY_TOKENS: Final = 800
@@ -187,6 +190,8 @@ class ReaderGate:
     """The page the browser is on, from its last result."""
     corpus: list[str] = field(default_factory=list)
     """Every tool result the reader read, for the verbatim-copy check."""
+    failed: dict[str, int] = field(default_factory=dict)
+    """Host -> fetches of it that failed."""
 
     def allow(self, text: str, origin: str) -> None:
         for url in urls_in(text):
@@ -216,9 +221,18 @@ class ReaderGate:
         host = urlsplit(wanted).hostname or ""
         if self.domains and not any(host == d or host.endswith("." + d) for d in self.domains):
             return f"refused: {host} is not in the allowed domains ({', '.join(self.domains)})"
+        if self.failed.get(host, 0) >= BLOCKED_AFTER:
+            return (
+                f"refused: {host} failed {self.failed[host]} fetches this session, so it is "
+                "closed to the reader; answer from other sources"
+            )
         if self.fetches >= self.fetch_cap:
             return f"refused: this session has used its {self.fetch_cap} page fetches"
         return None
+
+    def failed_fetch(self, url: str) -> None:
+        host = urlsplit(normalize(url)).hostname or ""
+        self.failed[host] = self.failed.get(host, 0) + 1
 
     def note(self, tool: str, args: Mapping[str, Any], result: str) -> None:
         """Record what a call read: its page, its links, its text."""
@@ -838,7 +852,12 @@ class Researcher:
         try:
             result = host.call(name, args, access="reader", limit_tokens=RESULT_TOKENS, count=count)
         except McpError as exc:
-            return f"error: {exc}"
+            result = f"error: {exc}"
+        if result.startswith("error: "):
+            # A page that failed was not read: it is never a citable source.
+            if isinstance(args.get("url"), str):
+                gate.failed_fetch(args["url"])
+            return result
         gate.note(found[1], args, result)
         downloads += self._downloaded(result, gate)
         return result

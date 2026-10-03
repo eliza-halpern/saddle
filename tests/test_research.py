@@ -35,6 +35,7 @@ from saddle import research as research_module
 from saddle.mcpclient import Approvals, load_config
 from saddle.research import (
     BANNER,
+    BLOCKED_AFTER,
     DOWNLOAD_APPROVAL_BYTES,
     NEVER,
     REPORT_SCHEMA,
@@ -337,6 +338,23 @@ def test_a_summary_of_a_few_hundred_tokens_crosses_and_a_refusal_says_how_much_t
     )
 
 
+def test_a_host_that_failed_twice_is_refused_by_name_and_others_stay_open() -> None:
+    """F29: a reader spent fifty rounds on a site that answered 403, via caches,
+    APIs and proxies. Known-bad: a third fetch of that host goes out. Known-good:
+    one failure leaves the host open, and other hosts are untouched."""
+    gate = gate_with(
+        "https://a.example/1 https://a.example/2 https://a.example/3 https://b.example/"
+    )
+    gate.failed_fetch("https://a.example/1")
+    assert gate.check("fetch", {"url": "https://a.example/2"}) is None
+    gate.failed_fetch("https://A.example/2")
+    assert gate.check("fetch", {"url": "https://a.example/3"}) == (
+        f"refused: a.example failed {BLOCKED_AFTER} fetches this session, so it is closed "
+        "to the reader; answer from other sources"
+    )
+    assert gate.check("fetch", {"url": "https://b.example/"}) is None
+
+
 def test_an_unknown_kind_is_refused() -> None:
     assert "kind must be value, summary or none" in str(report(kind="essay"))
     assert "kind" in REPORT_SCHEMA["function"]["parameters"]["required"]
@@ -584,6 +602,27 @@ def test_an_address_the_reader_composed_is_refused_and_never_reaches_the_server(
     refusal = json.dumps(model.asked[1]["messages"])
     assert "did not come from a search result, a page you read or the question" in refusal
     assert "nothing found: blocked" in result
+
+
+@needs_bwrap
+def test_a_site_that_refused_twice_is_not_asked_a_third_time(rig: Rig) -> None:
+    """F29, through the real fetch path: a tool error is a failed fetch."""
+    pages = " ".join(f"https://blocked.example/{n}" for n in range(3))
+    _, model = rig.run(
+        [
+            [tool(W + "fetch", url="https://blocked.example/0")],
+            [tool(W + "fetch", url="https://blocked.example/1")],
+            [tool(W + "fetch", url="https://blocked.example/2")],
+            _summary_call("It works [1].", "https://blocked.example/0"),
+            [tool("report", kind="none", reason="blocked")],
+        ],
+        want="summary",
+        person=pages,
+    )
+    assert rig.calls() == ["fetch https://blocked.example/0", "fetch https://blocked.example/1"]
+    assert "blocked.example failed 2 fetches" in json.dumps(model.asked[3]["messages"][-1])
+    cited = json.dumps(model.asked[4]["messages"][-1])
+    assert "you did not read https://blocked.example/0" in cited
 
 
 @needs_bwrap
