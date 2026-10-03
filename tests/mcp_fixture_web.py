@@ -7,7 +7,9 @@ the real servers use (`fetch`; `browser_navigate`, `browser_snapshot`,
 saves a small file into the server's working directory and, like Playwright's
 server, says `Downloaded file NAME to "./NAME"`; "Download big" saves a larger
 one. A fetch of `https://blocked.example/...` fails as a 403 does on the real
-fetch server: the tool reports an error. Every call is appended to `--log` so a
+fetch server: the tool reports an error. A fetch whose `raw` is not a boolean
+fails as the real fetch server's input validation does, before any site is
+asked, and is logged as `rejected fetch URL`. Every call is appended to `--log` so a
 test can tell a call that reached the server from one the reader's gate refused.
 """
 
@@ -17,6 +19,7 @@ import argparse
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
+from mcp_types import CallToolResult, TextContent
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--log", default="")
@@ -50,13 +53,24 @@ def snapshot() -> str:
     return f"- Page URL: {page}\n### Snapshot\n{PAGES.get(page, '(empty page)')}"
 
 
+def failed(text: str) -> CallToolResult:
+    """A tool error in the server's own words, as the real fetch server sends it
+    (raising would wrap or hide the text)."""
+    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+
+
 @server.tool(name="fetch", description="Fetch a URL and return its text.")
-def fetch(url: str) -> str:
+def fetch(url: str, raw: object = False) -> CallToolResult:
+    if not isinstance(raw, bool):
+        # The real fetch server checks its arguments against the tool's schema
+        # before it runs, and says so in these words.
+        record(f"rejected fetch {url}")
+        return failed(f"Input validation error: {raw!r} is not of type 'boolean'")
     record(f"fetch {url}")
     if url.startswith("https://blocked.example/"):
-        message = f"Failed to fetch {url} - status code 403"
-        raise ValueError(message)
-    return PAGES.get(url, f"error: could not fetch {url}")
+        return failed(f"Failed to fetch {url} - status code 403")
+    text = PAGES.get(url, f"error: could not fetch {url}")
+    return CallToolResult(content=[TextContent(type="text", text=text)])
 
 
 @server.tool(name="browser_navigate", description="Navigate to a URL.")

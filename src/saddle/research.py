@@ -95,6 +95,26 @@ MAX_FETCHES: Final = 40
 BLOCKED_AFTER: Final = 2
 """Failed fetches of one host before the reader's gate closes it for the session
 (F29: a reader spent fifty rounds on a site that answered 403)."""
+_MALFORMED_CALL: Final = re.compile(
+    r"error: MCP tool '[^']*' reported an error: Input validation error: "
+)
+"""The fetch server's own words for a call whose arguments did not fit the
+tool's schema: it refused the call before asking any site (F31)."""
+
+
+def counts_against_host(result: str) -> bool:
+    """Whether a failed fetch's result counts toward closing its host.
+
+    Only a call the server refused for its arguments is excused: an
+    "Input validation error" never reached the site, so it says nothing about
+    the site (F31: two `raw: "True"` calls closed a good site). Every other
+    failure counts, including ones this cannot classify, because a host left
+    open after an unrecognised failure lets the reader hammer it again, while
+    one closed by mistake costs only a source.
+    """
+    return _MALFORMED_CALL.match(result) is None
+
+
 READER_REPLY_TOKENS: Final = 32768
 """The reader's reply room when the server will not say its window or count the
 prompt. A fixed 4096 cut a full report off mid-JSON (F33)."""
@@ -906,7 +926,7 @@ class Researcher:
             result = f"error: {exc}"
         if result.startswith("error: "):
             # A page that failed was not read: it is never a citable source.
-            if isinstance(args.get("url"), str):
+            if isinstance(args.get("url"), str) and counts_against_host(result):
                 gate.failed_fetch(args["url"])
             return result
         gate.note(found[1], args, result)
