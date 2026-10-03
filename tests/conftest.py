@@ -119,6 +119,10 @@ def _no_real_mcp_allowlist(
     monkeypatch.setenv("SADDLE_CAPABILITIES_FILE", str(nowhere / "capabilities.json"))
     monkeypatch.delenv("SADDLE_CAPABILITIES", raising=False)
     monkeypatch.delenv("SADDLE_SEARCH_URL", raising=False)
+    monkeypatch.setenv("SADDLE_BRAVE_ENV_FILE", str(nowhere / "brave.env"))
+    monkeypatch.setenv("SADDLE_BRAVE_STATE", str(nowhere / "brave-budget.json"))
+    monkeypatch.delenv("SADDLE_BRAVE_API_KEY", raising=False)
+    monkeypatch.delenv("SADDLE_BRAVE_MONTHLY_QUOTA", raising=False)
 
 
 @pytest.fixture(autouse=True)

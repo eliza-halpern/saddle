@@ -481,6 +481,58 @@ metasearch query does. Nothing else leaves the machine, and only the reader
 calls it. Result addresses may be opened by the reader; result snippets are page
 text and stay inside the reader.
 
+## Brave search (optional, budgeted)
+
+With a Brave Search API key the reader's `search` uses Brave instead of the
+local SearXNG, whose free engines rate-limit within an evening. Nothing is on
+by default: `search` must be enabled as above, and a key must be present.
+
+Store the key in a file only you can read:
+
+```bash
+install -m 600 /dev/null ~/.config/saddle/brave.env
+$EDITOR ~/.config/saddle/brave.env     # add one line: BRAVE_API_KEY=...
+```
+
+(`$SADDLE_BRAVE_ENV_FILE` names another file; `$SADDLE_BRAVE_API_KEY` supplies
+the key for one process.) A key file that group or others can read is refused
+with a message that names the file and the `chmod 600` fix. The key goes only in
+the request's `X-Subscription-Token` header; it is never written to a result, an
+error, the journal, an event or the state file, and an error that echoes it has
+it replaced.
+
+The budget keeps the free tier (1000 searches a month, `$SADDLE_BRAVE_MONTHLY_QUOTA`)
+from running out early:
+
+- Searches accrue continuously at 1000 / hours-in-the-current-UTC-month per hour:
+  about 1.34 an hour (6.7 per five hours) in a 31-day month such as October
+  2026, 1.39 in a 30-day month, 1.49 in February. A search costs one. Unused
+  searches carry forward, with no cap but the month's remaining quota (1000
+  minus what was used this month, or Brave's own `X-RateLimit-Remaining` count
+  when that says less). Everything resets at the start of each UTC month, so
+  carry-over never crosses a month. A first-time person has one search at once.
+- Requests are at least one second apart.
+- A repeat of a query (case, spacing and punctuation ignored) is answered from a
+  seven-day cache at no cost and labelled `(cached)`.
+- When the balance or the month is used up, or Brave answers 429, `search` does
+  not call Brave. It falls back to the SearXNG, labelled `(budget used up: free
+  search, lower quality; Brave refills in ~X)`, or, with no SearXNG running,
+  fails with a named error and the refill time. A 401 or 403 says the key is
+  invalid.
+- The model is never shown a count: the reader and the `research` tool carry
+  fixed guidance (searches are scarce; one specific query; read result pages
+  before searching again; never repeat a query; prefer fetching a known page).
+  It learns the budget is used up only when a search is refused.
+
+You see the numbers: `saddle search status` and `saddle capabilities` print the
+provider, the searches available now and the monthly count left. The budget and
+cache live in `~/.local/state/saddle/brave-budget.json` (`$SADDLE_BRAVE_STATE`,
+mode 600).
+
+Privacy: with a key, each query the reader sends goes to Brave (api.search.brave.com),
+under Brave's terms, instead of to your SearXNG. Result snippets stay inside the
+reader as before.
+
 ## The research tool
 
 `research(question, want)` hands a question to a separate worker turn, the

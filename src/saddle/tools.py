@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from saddle.askpass import Askpass
+from saddle.brave import BraveKeyError, BraveSearch
 from saddle.capabilities import Switches
 from saddle.capabilities import load as load_switches
 from saddle.edits import first_divergence, loose_spans
@@ -389,7 +390,10 @@ def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
         research=research,
     )
     context.allowed = tuple(t["function"]["name"] for t in tools)
-    return state_session_facts(tools, context, mode)
+    tools = state_session_facts(tools, context, mode)
+    if research and context.research is not None and (note := context.research.budget_note()):
+        tools = _appended(tools, RESEARCH_TOOL, note)
+    return tools
 
 
 FINISH_TOOL: Final = "finish"
@@ -1260,7 +1264,19 @@ def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = No
             )
         ctx.research.config = config
         ctx.research.search_enabled = on.search
+        ctx.research.brave, ctx.research.brave_problem = _brave(on.search)
         ctx.research.browser_enabled = on.browser
+
+
+def _brave(search_on: bool) -> tuple[BraveSearch | None, str]:
+    """The Brave searcher when `search` is on and a key is configured, and why not
+    when the key could not be used. Re-read every turn, like the switches."""
+    if not search_on:
+        return None, ""
+    try:
+        return BraveSearch.from_env(), ""
+    except BraveKeyError as exc:
+        return None, str(exc)
 
 
 def _mcp_call(ctx: ToolContext, call: ToolCall) -> str:
