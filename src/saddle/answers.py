@@ -10,9 +10,10 @@ citations. It is costly and it can be wrong, so here it is a lead:
 - Only the reader has the tool. What it returns is labelled a lead, not a source;
   its cited addresses become openable, and the reader's report may still cite
   only pages it read. The acting session never sees the answer or the tool.
-- Money. A call costs $0.004 plus $5 per million input and output tokens, from
-  the usage the response reports (a conservative estimate when it reports none,
-  recorded as such). A monthly cap (default $4.50, under the account's own $5
+- Money. A call is charged what the reply's own `<usage>` tag says it cost
+  (`X-Request-Total-Cost`), else $0.004 plus $5 per million input and output
+  tokens from the usage it reports, else a conservative estimate, recorded as
+  such. A monthly cap (default $4.50, under the account's own $5
   credit) is checked before every call against a conservative per-call estimate.
   Spend, call count and the exhausted flag reset at the start of each calendar
   month UTC. Brave's usage- or spend-limit refusals mark the month exhausted.
@@ -23,8 +24,10 @@ Doc pages relied on: the Brave API documentation for Answers (endpoint
 `/res/v1/chat/completions`, header `x-subscription-token`, OpenAI-style body with
 `model: "brave"`, `stream`, `enable_citations`; usage in `X-Request-*` response
 headers or a trailing `<usage>` tag; citations as inline `<citation>` tags) and
-its pricing page. The non-streaming citation shape is under-specified there, so
-`parse` accepts tags in the text, a `citations` list, and body or header usage.
+its pricing page. Brave refuses `enable_citations` on a blocking call (HTTP 422,
+"Blocking response doesn't support 'enable_citations' option"), so `ask` streams:
+the reply is server-sent events whose chunks carry the text, the tags inside it,
+and a final chunk with `finish_reason` and an OpenAI-style `usage` object.
 
 Privacy: a question the reader sends goes to Brave.
 """
@@ -86,6 +89,46 @@ def _count(value: Any) -> int | None:
     return number if number >= 0 else None
 
 
+def _dollars(value: Any) -> float | None:
+    try:
+        number = float(str(value).strip())
+    except ValueError:
+        return None
+    return number if 0 <= number < float("inf") else None
+
+
+def _streamed(body: str) -> tuple[str, Any]:
+    """(the text the stream's chunks carry, the last usage object it reports).
+    Raises ValueError for a stream that never says it ended: no `[DONE]` and no
+    chunk with a `finish_reason`."""
+    pieces: list[str] = []
+    usage: Any = None
+    ended = False
+    for line in body.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if data == "[DONE]":
+            ended = True
+            break
+        chunk = json.loads(data)
+        if not isinstance(chunk, dict):
+            msg = "an event that is not a chunk"
+            raise TypeError(msg)
+        usage = chunk.get("usage") or usage
+        for choice in chunk.get("choices") or []:
+            piece = choice["delta"].get("content") or ""
+            if not isinstance(piece, str):
+                msg = "no answer text"
+                raise TypeError(msg)
+            pieces.append(piece)
+            ended = ended or choice.get("finish_reason") is not None
+    if not ended:
+        msg = "the stream did not end"
+        raise ValueError(msg)
+    return "".join(pieces), usage
+
+
 @dataclass
 class Answer:
     """What one question came to: text with its cited addresses, or unavailable."""
@@ -95,16 +138,13 @@ class Answer:
     unavailable: bool = False
 
 
-def parse(reply: httpx.Response) -> tuple[str, list[str], tuple[int, int] | None]:
-    """(answer text, cited addresses, (tokens in, tokens out) or None when the
-    response reports no usage). Raises ValueError for a body with no answer."""
-    body = reply.json()
-    message = body["choices"][0]["message"]
-    content = message["content"]
-    if not isinstance(content, str):
-        msg = "no answer text"
-        raise TypeError(msg)
-    urls: list[str] = []
+def parse(reply: httpx.Response) -> tuple[str, list[str], float | None]:
+    """(answer text with its tags removed, cited addresses in citation-number
+    order and once each, dollars the call cost or None when the reply reports no
+    usage) from a streamed reply. Raises ValueError, TypeError or KeyError for a
+    stream that cannot be read."""
+    content, usage = _streamed(reply.text)
+    cited: list[tuple[float, str]] = []
     reported: dict[str, Any] = {}
     for kind, raw in _TAGGED.findall(content):
         try:
@@ -114,11 +154,9 @@ def parse(reply: httpx.Response) -> tuple[str, list[str], tuple[int, int] | None
         if kind == "usage" and isinstance(data, dict):
             reported.update(data)
         elif isinstance(data, dict):
-            urls.append(str(data.get("url", "")))
-    for listed in (message.get("citations"), body.get("citations")):
-        for item in listed if isinstance(listed, list) else []:
-            urls.append(str(item.get("url", "")) if isinstance(item, dict) else str(item))
-    usage = body.get("usage")
+            number = data.get("number")
+            rank = number if isinstance(number, int) else float("inf")
+            cited.append((rank, str(data.get("url", ""))))
     if isinstance(usage, dict):
         reported.setdefault("X-Request-Tokens-In", usage.get("prompt_tokens"))
         reported.setdefault("X-Request-Tokens-Out", usage.get("completion_tokens"))
@@ -128,9 +166,12 @@ def parse(reply: httpx.Response) -> tuple[str, list[str], tuple[int, int] | None
     tokens_in = _count(reported.get("X-Request-Tokens-In"))
     tokens_out = _count(reported.get("X-Request-Tokens-Out"))
     text = _TAGGED.sub("", content).strip()
+    urls = [url for _, url in sorted(cited, key=lambda pair: pair[0])]
     found = [u for u in dict.fromkeys(urls) if u.startswith(("http://", "https://"))]
-    used = None if tokens_in is None or tokens_out is None else (tokens_in, tokens_out)
-    return text, found, used
+    spend = _dollars(reported.get("X-Request-Total-Cost"))
+    if spend is None and tokens_in is not None and tokens_out is not None:
+        spend = cost(tokens_in, tokens_out)
+    return text, found, spend
 
 
 @dataclass
@@ -242,10 +283,10 @@ class BraveAnswers:
                 json={
                     "model": "brave",
                     "messages": [{"role": "user", "content": question}],
-                    "stream": False,
+                    "stream": True,
                     "enable_citations": True,
                 },
-                headers={"x-subscription-token": self.key, "Accept": "application/json"},
+                headers={"x-subscription-token": self.key, "Accept": "text/event-stream"},
             )
         except httpx.HTTPError as exc:
             state["problem"] = self._redact(f"Answers did not answer ({exc})")
@@ -263,16 +304,16 @@ class BraveAnswers:
             self._save(state)
             return Answer(unavailable=True)
         try:
-            text, urls, used = parse(reply)
+            text, urls, spend = parse(reply)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-            used, text, urls = None, "", []
+            spend, text, urls = None, "", []
             state["problem"] = self._redact(f"Answers answered badly: {type(exc).__name__}")
         # Brave bills a 200 whether or not it can be read.
         state["spent"] = float(state.get("spent", 0.0)) + (
-            ESTIMATE_COST if used is None else cost(*used)
+            ESTIMATE_COST if spend is None else spend
         )
         state["calls"] = int(state.get("calls", 0)) + 1
-        state["estimated"] = int(state.get("estimated", 0)) + (used is None)
+        state["estimated"] = int(state.get("estimated", 0)) + (spend is None)
         if text:
             state.pop("problem", None)
         self._save(state)
