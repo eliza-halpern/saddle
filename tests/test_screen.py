@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from saddle import screen, tools
+from saddle.procs import ProcessLedger
 from saddle.screen import Window, available, capture, choose, parse_windows
 from saddle.tools import (
     SCREENSHOT_TOOL,
@@ -219,6 +220,33 @@ def test_missing_any_condition_offers_nothing(tmp_path: Path) -> None:
         assert SCREENSHOT_TOOL not in _names(offer_screenshot(offered_tools, ctx, sees))
         assert ctx.allowed is not None
         assert SCREENSHOT_TOOL not in ctx.allowed
+
+
+@pytest.mark.usefixtures("display")
+def test_with_screenshot_offered_no_tool_says_to_ask_the_person_what_is_on_screen(
+    tmp_path: Path,
+) -> None:
+    """Live 9b: run_command said "ask them what is on their screen" while
+    screenshot said "instead of asking the person". Known-bad: both texts in
+    one request. Known-good: with screenshot offered, run_command sends only
+    what a picture cannot show to the person; without it, nothing changes."""
+    ctx = _ctx(tmp_path)
+    ctx.processes = ProcessLedger()  # a chat session: its facts are stated
+    stated = tools.state_session_facts(tools_for_mode("edit", processes=True), ctx, "edit")
+
+    def run_text(found: list[dict[str, Any]]) -> str:
+        return str(
+            next(t for t in found if t["function"]["name"] == "run_command")["function"][
+                "description"
+            ]
+        )
+
+    assert tools.FACT_ASK_THEM in run_text(stated)
+    seeing = run_text(offer_screenshot(stated, ctx, lambda: True))
+    assert tools.FACT_ASK_THEM not in seeing
+    assert tools.FACT_ASK_THEM_SEEING in seeing
+    blind = run_text(offer_screenshot(stated, ctx, lambda: False))
+    assert tools.FACT_ASK_THEM in blind
 
 
 def test_no_display_offers_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

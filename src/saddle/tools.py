@@ -337,6 +337,13 @@ FACT_ASK_THEM: Final = (
     "opened, how it looks or sounds), ask them and end your turn instead of guessing "
     "or relaunching."
 )
+FACT_ASK_THEM_SEEING: Final = (
+    "Use `screenshot` to see what is on the person's screen. If only the person can "
+    "check something a picture cannot show (how it sounds, how the controls feel), "
+    "ask them and end your turn instead of guessing or relaunching."
+)
+"""`FACT_ASK_THEM` when `screenshot` is offered: the screen is no longer something
+only the person can check, and two tools must not give opposite instructions."""
 FACT_IMAGE: Final = (
     "An image file (PNG, JPEG, WebP, GIF) is shown to you, screenshots you take included."
 )
@@ -407,7 +414,21 @@ def offer_screenshot(
         return tools
     if context.allowed is not None:  # None allows every tool already
         context.allowed = (*context.allowed, SCREENSHOT_TOOL)
-    return [*tools, SCREENSHOT_SCHEMA]
+    seeing = [
+        {
+            **tool,
+            "function": {
+                **tool["function"],
+                "description": tool["function"]["description"].replace(
+                    FACT_ASK_THEM, FACT_ASK_THEM_SEEING
+                ),
+            },
+        }
+        if tool["function"]["name"] == "run_command"
+        else tool
+        for tool in tools
+    ]
+    return [*seeing, SCREENSHOT_SCHEMA]
 
 
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
