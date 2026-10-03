@@ -126,9 +126,12 @@ top_p and top_k). At 0.0 it repeated one paragraph verbatim until its token
 limit (F24)."""
 RESULT_TOKENS: Final = 6000
 """Tokens of one tool result the reader is shown."""
-SUMMARY_TOKENS: Final = 800
-"""Tokens a cited summary may take. A real setup question's answer took about 450
-(F26), so 400 refused the work it was asked for."""
+SUMMARY_TOKENS: Final = 4000
+"""Tokens a cited summary may take: about a page and a half. A real setup
+answer took 450 tokens and then 1,628 (F26); 400 and then 800 refused the
+work the reader was asked for. The quarantine's protections are the checks
+(pages read, no verbatim runs, citations, the untrusted label), not length;
+a longer summary still crosses cut to fit (`LengthRefusal`)."""
 VERBATIM_WORDS: Final = 12
 """A summary that repeats this many consecutive words of a page is refused."""
 REJECTIONS: Final = 2

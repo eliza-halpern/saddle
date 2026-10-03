@@ -296,7 +296,7 @@ def test_a_cited_summary_in_the_readers_own_words_is_accepted() -> None:
         ),
         ({"summary": "  "}, "needs a summary"),
         ({"summary": 7}, "needs a summary"),
-        ({"summary": "word " * 500 + "[1]"}, "a summary is at most 800;"),
+        ({"summary": "word " * 2500 + "[1]"}, "a summary is at most 4000;"),
     ],
 )
 def test_a_summary_without_its_sources_or_over_the_limit_is_refused(
@@ -336,7 +336,7 @@ def test_the_summary_limit_counts_tokens_with_the_models_tokenizer_when_there_is
     gate.note("fetch", {"url": "https://docs.example/install"}, "text")
     args = {"kind": "summary", "summary": SUMMARY, "sources": ["https://docs.example/install"]}
     assert isinstance(validate_report(args, gate, lambda text: 5), Report)
-    assert "at most 800;" in str(validate_report(args, gate, lambda text: 801))
+    assert "at most 4000;" in str(validate_report(args, gate, lambda text: 4001))
     assert isinstance(validate_report(args, gate, lambda text: None), Report)  # falls back to words
 
 
@@ -351,9 +351,10 @@ def test_a_summary_of_a_few_hundred_tokens_crosses_and_a_refusal_says_how_much_t
     gate.note("fetch", {"url": "https://docs.example/install"}, "text")
     args = {"kind": "summary", "summary": SUMMARY, "sources": ["https://docs.example/install"]}
     assert isinstance(validate_report(args, gate, lambda text: 450), Report)
-    refused = str(validate_report(args, gate, lambda text: 950))
+    assert isinstance(validate_report(args, gate, lambda text: 1628), Report)  # live 9b
+    refused = str(validate_report(args, gate, lambda text: 4150))
     assert refused == (
-        "refused: this summary is 950 tokens and a summary is at most 800; "
+        "refused: this summary is 4150 tokens and a summary is at most 4000; "
         "cut about 150 tokens, keeping what answers the question"
     )
 
@@ -388,7 +389,7 @@ def test_only_a_call_refused_for_its_arguments_is_excused_from_closing_its_host(
     assert counts_against_host("error: Input validation error: 'True' is not of type 'boolean'")
 
 
-LONG = " ".join(f"Point {n} is about the renderer and its settings [1]." for n in range(200))
+LONG = " ".join(f"Point {n} is about the renderer and its settings [1]." for n in range(600))
 
 
 def _words(text: str) -> int:
@@ -404,7 +405,7 @@ def test_an_over_long_summary_carries_its_own_sentences_cut_to_fit_and_rechecked
     args = {"kind": "summary", "summary": LONG, "sources": ["https://docs.example/install"]}
     refused = validate_report(args, gate, _words)
     assert isinstance(refused, LengthRefusal)
-    assert refused.startswith("refused: this summary is 2000 tokens")
+    assert refused.startswith("refused: this summary is 6000 tokens")
     kept = refused.fallback
     assert kept is not None
     assert kept.summary is not None
@@ -416,7 +417,7 @@ def test_an_over_long_summary_carries_its_own_sentences_cut_to_fit_and_rechecked
     assert _words(kept.summary) > research_module.SUMMARY_TOKENS - 10  # as much as fits
     assert LONG.startswith(kept.summary)
     # The cut keeps no [n] marker: it crosses with both labels, as a long report would.
-    unmarked = " ".join(f"Point {n} is about the renderer and its settings." for n in range(200))
+    unmarked = " ".join(f"Point {n} is about the renderer and its settings." for n in range(600))
     plain = validate_report({**args, "summary": unmarked + " Sources [1]."}, gate, _words)
     assert isinstance(plain, LengthRefusal)
     assert plain.fallback is not None
@@ -438,7 +439,7 @@ def test_a_cut_summary_that_fails_a_safety_check_has_no_fallback() -> None:
     assert isinstance(refused, LengthRefusal)
     assert refused.fallback is None
     unsplit = validate_report(
-        {"kind": "summary", "summary": "word " * 900, "sources": sources}, gate, _words
+        {"kind": "summary", "summary": "word " * 4500, "sources": sources}, gate, _words
     )
     assert isinstance(unsplit, LengthRefusal)
     assert unsplit.fallback is None
@@ -1622,7 +1623,7 @@ def test_a_citation_only_failure_carries_a_labelled_fallback() -> None:
     "change",
     [
         {"sources": ["https://elsewhere.example/page"]},
-        {"summary": "word " * 500},
+        {"summary": "word " * 2500},
         {"summary": "It says the latest release ships with a new flag that speeds up every build"},
     ],
 )
@@ -1685,11 +1686,11 @@ def test_a_summary_citing_an_unread_page_is_refused_even_after_retries(rig: Rig)
 @needs_bwrap
 def test_an_oversized_summary_is_refused_even_after_retries(rig: Rig) -> None:
     fetch = [tool(W + "fetch", url="https://docs.example/install")]
-    bad = _summary_call("word " * 500)
+    bad = _summary_call("word " * 2500)
     result, _ = rig.run(
         [fetch, bad, bad, bad], want="summary", person="https://docs.example/install"
     )
-    assert "refused 3 times; last: refused: this summary is 1000 tokens" in result
+    assert "refused 3 times; last: refused: this summary is 5000 tokens" in result
 
 
 @needs_bwrap
@@ -1701,7 +1702,7 @@ def test_an_over_long_summary_crosses_cut_and_labelled_after_its_retries(rig: Ri
     )
     assert "[shortened to fit]" in result
     assert "Point 0 is about" in result
-    assert "Point 199" not in result
+    assert "Point 599" not in result
 
 
 @needs_bwrap
