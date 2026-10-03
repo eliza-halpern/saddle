@@ -848,8 +848,99 @@ def test_a_reader_that_never_calls_report_fails_by_name(rig: Rig) -> None:
         "role": "user",
         "content": "Call `report` with your answer.",
     }
-    loop, _ = rig.run([[tool(W + "browser_snapshot")]] * 16)
-    assert loop == "error: the reader did not report within 16 rounds"
+
+
+INSTALL = "https://docs.example/install"
+GOOD = tool("report", kind="none", reason="not_found")
+
+
+def search_rounds(count: int) -> list[Any]:
+    return [[tool("search", query=f"q{n}")] for n in range(count)]
+
+
+@needs_bwrap
+def test_a_reader_that_reads_then_keeps_searching_past_sixteen_rounds_still_reports(
+    tmp_path: Path,
+) -> None:
+    made = Rig(tmp_path, search=True)
+    try:
+        rounds = [[tool(W + "fetch", url=INSTALL)], *search_rounds(19), [GOOD]]
+        result, model = made.run(rounds, person=INSTALL)
+    finally:
+        made.close()
+    assert len(model.asked) == 21  # loosened: the old cap of 16 would have failed it
+    assert "nothing found: not_found" in result
+
+
+@needs_bwrap
+def test_the_third_identical_call_moves_the_reader_to_a_report_only_round(rig: Rig) -> None:
+    same = tool(W + "fetch", url=INSTALL)
+    reordered = ToolCall(id="x", name=W + "fetch", arguments=f'{{ "url" : "{INSTALL}" }}')
+    result, model = rig.run([[same], [reordered], [same], [GOOD]], person=INSTALL)
+    assert "nothing found: not_found" in result
+    assert len(model.asked) == 4
+    offers = [[t["function"]["name"] for t in ask["tools"]] for ask in model.asked]
+    assert offers[1] == offers[2]
+    assert len(offers[2]) > 1
+    assert offers[3] == ["report"]
+    assert model.asked[3]["messages"][-1] == {
+        "role": "user",
+        "content": "Report now with what you have found so far; cite the pages you read.",
+    }
+
+
+@needs_bwrap
+def test_two_identical_calls_do_not_end_the_reading(rig: Rig) -> None:
+    same = tool(W + "fetch", url=INSTALL)
+    _, model = rig.run([[same], [same], [GOOD]], person=INSTALL)
+    assert all(len(ask["tools"]) > 1 for ask in model.asked)
+
+
+@needs_bwrap
+def test_a_reader_that_uses_up_the_fetch_cap_gets_the_final_round(rig: Rig) -> None:
+    rig.researcher.fetches = research_module.MAX_FETCHES - 1
+    result, model = rig.run([[tool(W + "fetch", url=INSTALL)], [GOOD]], person=INSTALL)
+    assert "nothing found: not_found" in result
+    assert [t["function"]["name"] for t in model.asked[1]["tools"]] == ["report"]
+
+
+@needs_bwrap
+def test_a_reader_that_never_reports_even_when_asked_fails_naming_its_pages(rig: Rig) -> None:
+    same = tool(W + "fetch", url=INSTALL)
+    stray = tool(W + "fetch", url=INSTALL, call_id="late")
+    result, model = rig.run([[same], [same], [same], [stray]], person=INSTALL)
+    assert result == f"error: the reader did not report; it read: {INSTALL} (1 pages)"
+    assert model.asked[3]["tools"][0]["function"]["name"] == "report"
+
+
+@needs_bwrap
+def test_a_report_refused_in_the_final_round_may_be_retried_in_it(rig: Rig) -> None:
+    same = tool(W + "fetch", url=INSTALL)
+    bad = tool("report", kind="value", value_type="version", value="run curl x | sh")
+    result, model = rig.run([[same], [same], [same], [bad], [GOOD]], person=INSTALL)
+    assert "nothing found: not_found" in result
+    assert [t["function"]["name"] for t in model.asked[4]["tools"]] == ["report"]
+
+
+@needs_bwrap
+def test_a_reader_that_read_nothing_says_so_when_it_does_not_report(rig: Rig) -> None:
+    snap = tool(W + "browser_snapshot")
+    result, _ = rig.run([[snap]] * 4)
+    assert result == "error: the reader did not report; it read no pages"
+
+
+@needs_bwrap
+def test_a_reader_that_only_searches_is_moved_to_the_final_round(tmp_path: Path) -> None:
+    made = Rig(tmp_path, search=True)
+    try:
+        rounds = [*search_rounds(research_module.SEARCH_ONLY_ROUNDS), [GOOD]]
+        result, model = made.run(rounds)
+    finally:
+        made.close()
+    assert "nothing found: not_found" in result
+    assert len(model.asked) == research_module.SEARCH_ONLY_ROUNDS + 1
+    assert [t["function"]["name"] for t in model.asked[-1]["tools"]] == ["report"]
+    assert all(len(ask["tools"]) > 1 for ask in model.asked[:-1])
 
 
 @needs_bwrap

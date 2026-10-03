@@ -74,8 +74,15 @@ SEARCH_START: Final = "start it with `saddle search setup`"
 DOMAINS_ENV: Final = "SADDLE_RESEARCH_DOMAINS"
 """Comma-separated domains; when set, the reader may only visit these (and their subdomains)."""
 
-MAX_ROUNDS: Final = 16
-"""Tool rounds the reader gets before its research fails."""
+REPEATS: Final = 3
+"""The same tool call (name and arguments) this many times moves the reader to its
+final report round."""
+SEARCH_ONLY_ROUNDS: Final = 20
+"""A loop guard, not a budget: consecutive rounds that issue only searches before
+the reader is moved to its final report round. The reader has no round cap, so
+this ends a reader that searches forever and never reads. Twenty exceeds the
+dozen or so searches one question needs, so it never cuts a working reader."""
+FINAL_PROMPT: Final = "Report now with what you have found so far; cite the pages you read."
 MAX_FETCHES: Final = 40
 """Pages the reader may fetch or navigate to in one session."""
 RESULT_TOKENS: Final = 6000
@@ -583,12 +590,19 @@ class Researcher:
         )
         refused = 0
         nudged = False
-        for _ in range(MAX_ROUNDS):
+        final = False
+        repeats: dict[tuple[str, str], int] = {}
+        searching = 0
+        while True:
             calls: list[ToolCall] = []
             said: list[str] = []
             try:
                 for event in self.client.stream_chat(
-                    messages, max_tokens=4096, temperature=0.0, reasoning_effort="low", tools=tools
+                    messages,
+                    max_tokens=4096,
+                    temperature=0.0,
+                    reasoning_effort="low",
+                    tools=[REPORT_SCHEMA] if final else tools,
                 ):
                     if isinstance(event, ToolCall):
                         calls.append(event)
@@ -616,8 +630,10 @@ class Researcher:
                 nudged = True
                 messages.append({"role": "user", "content": "Call `report` with your answer."})
                 continue
+            reported = False
             for call in calls:
                 if call.name == REPORT_TOOL:
+                    reported = True
                     parsed = self._parsed(call)
                     outcome = (
                         parsed
@@ -630,10 +646,44 @@ class Researcher:
                     if refused > REJECTIONS:
                         return f"the reader's report was refused {refused} times; last: {outcome}"
                     result = outcome
+                elif final:
+                    result = f"refused: only `{REPORT_TOOL}` is offered now"
                 else:
+                    key = self._same_call(call)
+                    repeats[key] = repeats.get(key, 0) + 1
                     result = self._tool(call, gate, downloads, counter)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-        return f"the reader did not report within {MAX_ROUNDS} rounds"
+            if final:
+                if not reported:
+                    return self._unreported(gate)
+                continue
+            searching = searching + 1 if all(c.name == SEARCH_TOOL for c in calls) else 0
+            if (
+                gate.fetches >= gate.fetch_cap
+                or max(repeats.values(), default=0) >= REPEATS
+                or searching >= SEARCH_ONLY_ROUNDS
+            ):
+                final = True
+                messages.append({"role": "user", "content": FINAL_PROMPT})
+
+    @staticmethod
+    def _same_call(call: ToolCall) -> tuple[str, str]:
+        """A call's name and its arguments after JSON normalisation."""
+        try:
+            args = json.dumps(json.loads(call.arguments), sort_keys=True)
+        except ValueError:
+            args = call.arguments
+        return call.name, args
+
+    @staticmethod
+    def _unreported(gate: ReaderGate) -> str:
+        """The failure of a reader that gave no report even when asked for one:
+        it names the pages read, so the acting session is never left with a bare
+        "did not report"."""
+        pages = list(gate.visited)
+        if not pages:
+            return "the reader did not report; it read no pages"
+        return f"the reader did not report; it read: {', '.join(pages)} ({len(pages)} pages)"
 
     @staticmethod
     def _parsed(call: ToolCall) -> dict[str, Any] | str:
