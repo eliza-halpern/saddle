@@ -213,3 +213,31 @@ def test_a_session_that_cannot_be_loaded_has_nothing_to_keep(
     server, _sid, _rounds, _ini = served
     seen = _drain(server, "nosuchsession", lambda: server._run("nosuchsession", "hi"))
     assert [type(e) for e in seen] == [ErrorEvent]
+
+
+def test_only_the_unanswered_request_gets_a_placeholder(
+    served: tuple[ChatServer, str, list[list[Any]], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import saddle.engine as engine
+    import saddle.tools as tools
+
+    server, sid, rounds, ini = served
+    rounds += [[_read(ini, "r1"), _read(ini, "r2")]]
+    real = tools.execute_tool
+
+    def second_dies(call: ToolCall, **kw: Any) -> str:
+        if call.id == "r2":
+            message = "injected"
+            raise RuntimeError(message)
+        return real(call, **kw)
+
+    monkeypatch.setattr(engine, "execute_tool", second_dies)
+    _drain(server, sid, lambda: server._run(sid, "read twice"))
+    results = {
+        m["tool_call_id"]: m["content"]
+        for m in server.store.load_messages(sid)
+        if m["role"] == "tool"
+    }
+    assert "line 2" in results["r1"]
+    assert results["r2"].startswith("error: the turn stopped before this ran")
