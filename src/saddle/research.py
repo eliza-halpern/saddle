@@ -380,9 +380,21 @@ SEARCH_SCHEMA: Final = _schema(
     ["query"],
 )
 
+RESEARCH_FIRST: Final = (
+    "Research first: your training data is out of date and thin on specific programs, "
+    "versions, file layouts and error messages. Before you work something out from memory, "
+    "and again whenever you hit an error or a step you are unsure of, research it and act on "
+    "what you find; treat what you remember as a guess until a page you read confirms it. "
+)
+"""Leads the research tool's description, so it reaches the model only while research
+is offered (the tool is absent otherwise). Watched setup runs without research spent
+minutes reconstructing an old game engine's config rules from memory and guessed
+wrong; the answer was the kind a search finds."""
+
 RESEARCH_SCHEMA: Final = _schema(
     RESEARCH_TOOL,
-    "Look something up on the web through a separate, sandboxed reader that has no access "
+    RESEARCH_FIRST
+    + "Look something up on the web through a separate, sandboxed reader that has no access "
     "to your files, commands or this conversation. Use it for install guides, error "
     "messages, library or API details, or a file only a download page offers. Ask one "
     "specific question. What comes back is a typed value (a version, yes or no, an "
