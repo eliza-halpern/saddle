@@ -44,6 +44,7 @@ from saddle.research import (
     ReaderGate,
     Report,
     Researcher,
+    counts_against_host,
     domains_from_env,
     normalize,
     person_texts,
@@ -373,6 +374,19 @@ def test_a_host_that_failed_twice_is_refused_by_name_and_others_stay_open() -> N
     assert gate.check("fetch", {"url": "https://b.example/"}) is None
 
 
+def test_only_a_call_refused_for_its_arguments_is_excused_from_closing_its_host() -> None:
+    """F31. Known-bad: the fetch server's input validation error counts against
+    the site it never asked. Known-good: a 403, a connection failure, an
+    McpError and an error this does not recognise all still count."""
+    head = "error: MCP tool 'mcp__fetch__fetch' reported an error: "
+    assert not counts_against_host(head + "Input validation error: 'True' is not of type 'boolean'")
+    assert counts_against_host(head + "Failed to fetch https://a.example/ - status code 403")
+    assert counts_against_host(head + "Failed to fetch https://a.example/: connection refused")
+    assert counts_against_host("error: the MCP server closed the connection")
+    assert counts_against_host(head + "the page said Input validation error: try again")
+    assert counts_against_host("error: Input validation error: 'True' is not of type 'boolean'")
+
+
 def test_an_unknown_kind_is_refused() -> None:
     assert "kind must be value, summary or none" in str(report(kind="essay"))
     assert "kind" in REPORT_SCHEMA["function"]["parameters"]["required"]
@@ -638,9 +652,36 @@ def test_a_site_that_refused_twice_is_not_asked_a_third_time(rig: Rig) -> None:
         person=pages,
     )
     assert rig.calls() == ["fetch https://blocked.example/0", "fetch https://blocked.example/1"]
+    assert "status code 403" in json.dumps(model.asked[1]["messages"][-1])
     assert "blocked.example failed 2 fetches" in json.dumps(model.asked[3]["messages"][-1])
     cited = json.dumps(model.asked[4]["messages"][-1])
     assert "you did not read https://blocked.example/0" in cited
+
+
+@needs_bwrap
+def test_a_fetch_the_server_refused_as_malformed_does_not_close_its_site(rig: Rig) -> None:
+    """F31: a reader sent `raw: "True"` twice and the fetch server's input
+    validation refused both calls before asking the site; each counted as the
+    site's failure and closed a good site. Known-bad: the third, well-formed
+    fetch of that site is refused. The validation error reaches the reader."""
+    result, model = rig.run(
+        [
+            [tool(W + "fetch", url=INSTALL, raw="True")],
+            [tool(W + "fetch", url=INSTALL, raw="True", call_id="again")],
+            [tool(W + "fetch", url=INSTALL, call_id="third")],
+            [GOOD],
+        ],
+        person=INSTALL,
+    )
+    assert rig.calls() == [
+        f"rejected fetch {INSTALL}",
+        f"rejected fetch {INSTALL}",
+        f"fetch {INSTALL}",
+    ]
+    rejected = json.dumps(model.asked[1]["messages"][-1])
+    assert "Input validation error: 'True' is not of type 'boolean'" in rejected
+    assert "The latest release is 4.2.0" in json.dumps(model.asked[3]["messages"][-1])
+    assert "nothing found: not_found" in result
 
 
 @needs_bwrap
