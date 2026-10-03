@@ -41,6 +41,7 @@ from saddle.research import (
     REPORT_SCHEMA,
     Brought,
     CitationRefusal,
+    LengthRefusal,
     ReaderGate,
     Report,
     Researcher,
@@ -385,6 +386,62 @@ def test_only_a_call_refused_for_its_arguments_is_excused_from_closing_its_host(
     assert counts_against_host("error: the MCP server closed the connection")
     assert counts_against_host(head + "the page said Input validation error: try again")
     assert counts_against_host("error: Input validation error: 'True' is not of type 'boolean'")
+
+
+LONG = " ".join(f"Point {n} is about the renderer and its settings [1]." for n in range(200))
+
+
+def _words(text: str) -> int:
+    return len(text.split())
+
+
+def test_an_over_long_summary_carries_its_own_sentences_cut_to_fit_and_rechecked() -> None:
+    """F26, live 9b: a 1,628-token summary was refused three times and every
+    finding was lost. Known-good: the refusal carries the reader's own whole
+    sentences that fit, checked again, labelled shortened."""
+    gate = gate_with("https://docs.example/install")
+    gate.note("fetch", {"url": "https://docs.example/install"}, "unrelated page text")
+    args = {"kind": "summary", "summary": LONG, "sources": ["https://docs.example/install"]}
+    refused = validate_report(args, gate, _words)
+    assert isinstance(refused, LengthRefusal)
+    assert refused.startswith("refused: this summary is 2000 tokens")
+    kept = refused.fallback
+    assert kept is not None
+    assert kept.summary is not None
+    assert kept.shortened
+    assert kept.citations_matched
+    assert kept.summary.startswith("Point 0 is about")
+    assert kept.summary.endswith("[1].")
+    assert _words(kept.summary) <= research_module.SUMMARY_TOKENS
+    assert _words(kept.summary) > research_module.SUMMARY_TOKENS - 10  # as much as fits
+    assert LONG.startswith(kept.summary)
+    # The cut keeps no [n] marker: it crosses with both labels, as a long report would.
+    unmarked = " ".join(f"Point {n} is about the renderer and its settings." for n in range(200))
+    plain = validate_report({**args, "summary": unmarked + " Sources [1]."}, gate, _words)
+    assert isinstance(plain, LengthRefusal)
+    assert plain.fallback is not None
+    assert plain.fallback.shortened
+    assert not plain.fallback.citations_matched
+
+
+def test_a_cut_summary_that_fails_a_safety_check_has_no_fallback() -> None:
+    """Known-bad: cutting never excuses a copied run of page text, and a summary
+    with no sentence that fits has nothing to offer."""
+    page = "the renderer must be set to software mode before the first launch of the game"
+    gate = gate_with("https://docs.example/install")
+    gate.note("fetch", {"url": "https://docs.example/install"}, page)
+    copied = f"It says {page} [1]. " + LONG
+    sources = ["https://docs.example/install"]
+    refused = validate_report(
+        {"kind": "summary", "summary": copied, "sources": sources}, gate, _words
+    )
+    assert isinstance(refused, LengthRefusal)
+    assert refused.fallback is None
+    unsplit = validate_report(
+        {"kind": "summary", "summary": "word " * 900, "sources": sources}, gate, _words
+    )
+    assert isinstance(unsplit, LengthRefusal)
+    assert unsplit.fallback is None
 
 
 def test_an_unknown_kind_is_refused() -> None:
@@ -1633,6 +1690,18 @@ def test_an_oversized_summary_is_refused_even_after_retries(rig: Rig) -> None:
         [fetch, bad, bad, bad], want="summary", person="https://docs.example/install"
     )
     assert "refused 3 times; last: refused: this summary is 1000 tokens" in result
+
+
+@needs_bwrap
+def test_an_over_long_summary_crosses_cut_and_labelled_after_its_retries(rig: Rig) -> None:
+    fetch = [tool(W + "fetch", url="https://docs.example/install")]
+    long = _summary_call(LONG)
+    result, _ = rig.run(
+        [fetch, long, long, long], want="summary", person="https://docs.example/install"
+    )
+    assert "[shortened to fit]" in result
+    assert "Point 0 is about" in result
+    assert "Point 199" not in result
 
 
 @needs_bwrap

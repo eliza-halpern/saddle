@@ -41,7 +41,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -335,9 +335,11 @@ class Report:
     sources: tuple[str, ...] = ()
     reason: str | None = None
     citations_matched: bool = True
+    shortened: bool = False
 
 
 UNMATCHED_LABEL: Final = "[citations not matched to sources]"
+SHORTENED_LABEL: Final = "[shortened to fit]"
 
 
 class CitationRefusal(str):
@@ -351,6 +353,37 @@ class CitationRefusal(str):
         self = super().__new__(cls, text)
         self.fallback = fallback
         return self
+
+
+class LengthRefusal(str):
+    """A refusal for length only. `fallback` is the reader's own summary cut to
+    the whole sentences that fit `SUMMARY_TOKENS`, validated again like any
+    report (so it never excuses a safety failure), or None when nothing fits
+    or the cut text fails a check. It crosses, labelled, once the reader has
+    used up its retries (F26: a 1,628-token summary was refused three times
+    and its findings were lost)."""
+
+    fallback: Report | None
+
+    def __new__(cls, text: str, fallback: Report | None) -> LengthRefusal:
+        self = super().__new__(cls, text)
+        self.fallback = fallback
+        return self
+
+
+_SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+")
+
+
+def _cut_to_fit(summary: str, size: Callable[[str], int]) -> str | None:
+    """The longest run of `summary`'s leading whole sentences within
+    `SUMMARY_TOKENS`, or None when even the first does not fit."""
+    kept: list[str] = []
+    for sentence in _SENTENCE_END.split(summary.strip()):
+        trial = " ".join([*kept, sentence])
+        if size(trial) > SUMMARY_TOKENS:
+            break
+        kept.append(sentence)
+    return " ".join(kept) if kept else None
 
 
 def person_texts(messages: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -413,6 +446,13 @@ def _citation_fault(numbers: set[int], cited: Sequence[str]) -> str | None:
     return None
 
 
+def _measured(text: str, count: Callable[[str], int | None] | None) -> int:
+    """`text`'s size in tokens: the model's tokenizer when it answers, else
+    two tokens a word."""
+    size = count(text) if count is not None else None
+    return size if size is not None else 2 * len(text.split())
+
+
 def validate_report(
     args: Mapping[str, Any], gate: ReaderGate, count: Callable[[str], int | None] | None
 ) -> Report | str:
@@ -449,13 +489,19 @@ def validate_report(
         unread = [s for s in cited if s not in gate.visited]
         if unread:
             return f"refused: you did not read {unread[0]}; cite only pages you read"
-        size = count(summary) if count is not None else None
-        size = size if size is not None else 2 * len(summary.split())
+        size = _measured(summary, count)
         if size > SUMMARY_TOKENS:
-            return (
+            cut = _cut_to_fit(summary, lambda text: _measured(text, count))
+            checked = (
+                validate_report({**args, "summary": cut}, gate, count) if cut is not None else None
+            )
+            if isinstance(checked, CitationRefusal):
+                checked = checked.fallback
+            return LengthRefusal(
                 f"refused: this summary is {size} tokens and a summary is at most "
                 f"{SUMMARY_TOKENS}; cut about {size - SUMMARY_TOKENS} tokens, "
-                "keeping what answers the question"
+                "keeping what answers the question",
+                replace(checked, shortened=True) if isinstance(checked, Report) else None,
             )
         if _copied(summary, gate.corpus):
             return (
@@ -827,6 +873,8 @@ class Researcher:
                     if refused > REJECTIONS:
                         if isinstance(outcome, CitationRefusal):
                             return outcome.fallback
+                        if isinstance(outcome, LengthRefusal) and outcome.fallback is not None:
+                            return outcome.fallback
                         return f"the reader's report was refused {refused} times; last: {outcome}"
                     result = outcome
                 elif final:
@@ -1077,6 +1125,8 @@ class Researcher:
                 self.brought.append(Brought(report.value, "reported by the web reader"))
         elif report.kind == "summary":
             label = "" if report.citations_matched else f"{UNMATCHED_LABEL} "
+            if report.shortened:
+                label = f"{SHORTENED_LABEL} {label}"
             lines.append(f"summary: {label}{report.summary}")
             lines += [f"[{i}] {source}" for i, source in enumerate(report.sources, 1)]
             self.brought += [
