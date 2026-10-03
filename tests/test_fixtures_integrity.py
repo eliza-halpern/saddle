@@ -93,7 +93,18 @@ def test_the_fixture_set_is_not_empty() -> None:
 
 # Types with a rule here. `.mjs`, `.js` and `.py` fixtures are covered by the
 # JavaScript and Python linters, and run by the tests that use them.
-HANDLED_SUFFIXES = {".json", ".jsonl", ".diff", ".txt", ".jinja", ".mjs", ".js", ".py", ".png"}
+HANDLED_SUFFIXES = {
+    ".json",
+    ".jsonl",
+    ".sse",
+    ".diff",
+    ".txt",
+    ".jinja",
+    ".mjs",
+    ".js",
+    ".py",
+    ".png",
+}
 
 
 def json_problem(text: str) -> str | None:
@@ -201,6 +212,34 @@ def test_json_checker_accepts_json_and_refuses_each_defect() -> None:
     assert json_problem("  \n") == "empty"
 
 
+def sse_problem(text: str) -> str | None:
+    """A recorded server-sent event stream: each non-blank line is `data: ` and
+    one JSON value, and the stream ends with `data: [DONE]`, as the replies
+    `answers.parse` reads do. A truncated recording reads as a stream that never
+    finished, which the parser treats as a failure."""
+    lines = [line for line in text.split("\n") if line.strip()]
+    if not lines:
+        return "empty"
+    if lines[-1] != "data: [DONE]":
+        return "it does not end with data: [DONE]"
+    for number, line in enumerate(lines[:-1], 1):
+        if not line.startswith("data: "):
+            return f"event {number} is not a data line"
+        try:
+            json.loads(line.removeprefix("data: "))
+        except ValueError as exc:
+            return f"event {number} is not JSON: {exc}"
+    return None
+
+
+def test_sse_checker_accepts_a_finished_stream_and_refuses_each_defect() -> None:
+    assert sse_problem('data: {"a": 1}\n\ndata: [DONE]\n') is None
+    assert sse_problem("") == "empty"
+    assert sse_problem('data: {"a": 1}\n') == "it does not end with data: [DONE]"
+    assert sse_problem("event: x\ndata: [DONE]\n") == "event 1 is not a data line"
+    assert "event 1 is not JSON" in (sse_problem("data: {oops\ndata: [DONE]\n") or "")
+
+
 def test_jsonl_checker_accepts_records_and_refuses_each_defect() -> None:
     assert jsonl_problem('{"a": 1}\n{"b": 2}\n') is None
     assert jsonl_problem('{"a": 1}\n{"b": 2}') is None  # no final newline
@@ -248,6 +287,11 @@ def test_json_fixture_parses(name: str) -> None:
 @pytest.mark.parametrize("name", [n for n in FIXTURE_PATHS if n.endswith(".jsonl")])
 def test_jsonl_fixture_parses_line_by_line(name: str) -> None:
     assert jsonl_problem((ROOT / FIXTURES_REL / name).read_text(encoding="utf-8")) is None
+
+
+@pytest.mark.parametrize("name", [n for n in FIXTURE_PATHS if n.endswith(".sse")])
+def test_sse_fixture_is_a_finished_event_stream(name: str) -> None:
+    assert sse_problem((ROOT / FIXTURES_REL / name).read_text(encoding="utf-8")) is None
 
 
 @pytest.mark.parametrize("name", [n for n in FIXTURE_PATHS if n.endswith(".txt")])

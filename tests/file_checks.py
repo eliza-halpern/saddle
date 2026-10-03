@@ -75,6 +75,7 @@ REGISTRY: dict[str, Entry] = {
         (FIXTURES, (CHECK_SH, "prettier --check .")),
     ),
     ".jsonl": Check("the fixture integrity rule (fixtures only)", (FIXTURES,)),
+    ".sse": Check("the fixture integrity rule (fixtures only)", (FIXTURES,)),
     ".diff": Check("the fixture integrity rule (git apply --check expectations)", (FIXTURES,)),
     ".jinja": Check("the fixture integrity rule (loads and renders)", (FIXTURES,)),
     ".txt": Check("the fixture integrity rule (UTF-8)", (FIXTURES,)),
