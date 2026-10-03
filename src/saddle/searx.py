@@ -38,6 +38,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from saddle.brave import BraveKeyError, BraveSearch
+
 SEARCH_URL_ENV: Final = "SADDLE_SEARCH_URL"
 """The base URL of the SearXNG the reader searches with, when not the default."""
 DEFAULT_SEARCH_URL: Final = "http://127.0.0.1:8888"
@@ -291,6 +293,19 @@ def run_search(
     """`saddle search setup|status|stop`, against `$SADDLE_SEARCH_URL` (default
     `http://127.0.0.1:8888`)."""
     url = search_url_from_env()
+    if action == "status":
+        try:
+            brave = BraveSearch.from_env()
+        except BraveKeyError as exc:
+            print(f"provider: SearXNG (Brave key refused: {exc})", file=stdout)
+        else:
+            if brave is not None:
+                print(f"provider: Brave, budget {brave.budget_line()}", file=stdout)
+                print("fallback when the budget is used up: SearXNG", file=stdout)
+                code, text = status(docker, url, http)
+                print(text, file=stdout)
+                return 0
+            print("provider: SearXNG (no Brave key configured)", file=stdout)
     if action == "setup":
         code, text = setup(docker, config_dir(), url, http=http)
     elif action == "status":

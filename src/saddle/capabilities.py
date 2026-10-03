@@ -34,6 +34,7 @@ from typing import IO, Final, Literal
 
 import httpx
 
+from saddle.brave import BraveKeyError, BraveSearch
 from saddle.mcpclient import McpConfigError, ServerSpec, load_config, sdk_problem
 from saddle.research import reader_problem
 from saddle.searx import reachable, search_url_from_env
@@ -164,15 +165,36 @@ def status(switches: Switches | None = None, http: httpx.Client | None = None) -
         if problem is not None:
             found.append(Status(name, "unavailable", problem))
         elif name in ("search", "browser") and not on.research:
-            found.append(Status(name, "on", "used by research, which is off"))
+            note = "used by research, which is off"
+            found.append(Status(name, "on", "; ".join(filter(None, [note, _provider(name)]))))
         else:
-            found.append(Status(name, "on"))
+            found.append(Status(name, "on", _provider(name)))
     return found
+
+
+def _brave() -> tuple[BraveSearch | None, str]:
+    try:
+        return BraveSearch.from_env(), ""
+    except BraveKeyError as exc:
+        return None, str(exc)
+
+
+def _provider(name: str) -> str:
+    """What `search` searches with when it is Brave (and its budget) or a Brave key was
+    refused; empty for plain SearXNG, as before."""
+    if name != "search":
+        return ""
+    brave, problem = _brave()
+    if brave is not None:
+        return f"Brave: {brave.budget_line()}"
+    return f"SearXNG; Brave key refused: {problem}" if problem else ""
 
 
 def _problem(name: str, on: Switches, http: httpx.Client | None) -> str | None:
     """Why `name`, which is switched on, cannot work now; None when it can."""
     if name == "search":
+        if _brave()[0] is not None:
+            return None  # Brave answers; SearXNG is only its labelled fallback
         found = reachable(search_url_from_env(), http)
         return None if found is None else f"{found}; start it with `saddle search setup`"
     problem = sdk_problem()

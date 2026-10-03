@@ -47,6 +47,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
+from saddle.brave import BraveSearch
 from saddle.journal import append_span, build_span
 from saddle.mcpclient import (
     Approvals,
@@ -529,6 +530,11 @@ class Researcher:
     search_enabled: bool = False
     """The `search` capability: the reader gets `search` only when this is on and
     the backend answers."""
+    brave: BraveSearch | None = None
+    """The Brave searcher, when a key is configured: `search` uses it, under its
+    budget, and falls back to SearXNG when the budget is used up."""
+    brave_problem: str = ""
+    """Why a configured Brave key could not be used (the file's mode, say)."""
     browser_enabled: bool = False
     """The `browser` capability: the reader gets `browser_*` tools only when on."""
     domains: tuple[str, ...] = ()
@@ -605,18 +611,33 @@ class Researcher:
             gate.allow(text, "the person's message")
         offered = [*tools, REPORT_SCHEMA]
         note = ""
-        if self.search_enabled:
+        if self.search_enabled and self.brave is not None:
+            offered.append(SEARCH_SCHEMA)  # Brave, or the labelled fallback, answers
+        elif self.search_enabled:
             why = reachable(self.search_url, self.http)
             if why is None:
                 offered.append(SEARCH_SCHEMA)
             else:
                 note = f"search is unavailable ({why}); {SEARCH_START}"
+                if self.brave_problem:
+                    note += f"; Brave: {self.brave_problem}"
         downloads: list[Download] = []
         outcome = self._loop(question, want, offered, gate, downloads)
         self.fetches = gate.fetches
         if isinstance(outcome, str):
             return f"error: {outcome}"
         return self._render(question, outcome, downloads, note)
+
+    def _budget_text(self, tools: list[dict[str, Any]]) -> str:
+        """The fixed search guidance (no numbers), when the reader is offered Brave search."""
+        offered = any(t["function"]["name"] == SEARCH_TOOL for t in tools)
+        return self.brave.reader_text() if self.brave is not None and offered else ""
+
+    def budget_note(self) -> str:
+        """One line for the acting session's `research` tool; empty without Brave."""
+        if self.brave is None or not self.search_enabled:
+            return ""
+        return self.brave.acting_text()
 
     def _loop(
         self,
@@ -627,7 +648,7 @@ class Researcher:
         downloads: list[Download],
     ) -> Report | str:
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": READER_PROMPT},
+            {"role": "system", "content": READER_PROMPT + self._budget_text(tools)},
             {"role": "user", "content": f"Question: {question}\nWanted: {want}"},
         ]
         count = getattr(self.client, "count_tokens", None)
@@ -796,6 +817,39 @@ class Researcher:
         return result
 
     def _search(
+        self, query: str, gate: ReaderGate, count: Callable[[str], int | None] | None
+    ) -> str:
+        """Brave's results under its budget when a key is configured, else (or when
+        the budget is used up) the SearXNG's. The fallback is labelled; when it is
+        not there either, the failure is named with the refill time, never an empty
+        list."""
+        if self.brave is None:
+            return self._searx(query, gate, count)
+        found = self.brave.search(query)
+        if found.error:
+            return f"error: {found.error}"
+        if found.exhausted:
+            free = self._searx(query, gate, count)
+            if free.startswith("error: "):
+                return (
+                    f"error: the Brave search budget is used up (refills in {found.refill}) "
+                    f"and the free search is not available: {free.removeprefix('error: ')}"
+                )
+            return (
+                f"(budget used up: free search, lower quality; Brave refills in "
+                f"{found.refill})\n{free}"
+            )
+        lines = []
+        for row in found.rows:
+            gate.allow(row["url"], "a search result")
+            lines.append(f"{row['title']}\n{row['url']}\n{row['description']}")
+        if not lines:
+            return "(the search returned no results)"
+        shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
+        gate.corpus.append(shown)
+        return f"(cached)\n{shown}" if found.cached else shown
+
+    def _searx(
         self, query: str, gate: ReaderGate, count: Callable[[str], int | None] | None
     ) -> str:
         """The search backend's results (SearXNG's JSON API: title, address,
