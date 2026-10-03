@@ -30,7 +30,7 @@ from saddle.journal import read_spans
 from saddle.sessions import SessionStore
 from saddle.timeline import Timeline
 from saddle.tools import PROCESSES_TOOL, READ_ONLY_TOOLS, REFUSED, TOOLS
-from saddle.vllm import ToolCall
+from saddle.vllm import StreamToken, ToolCall
 from saddle.web.app import ChatServer, build_app
 
 ORIGINAL = "def add(a, b):\n    return a - b\n"
@@ -43,8 +43,8 @@ SHELL = ToolCall(id="s1", name="run_command", arguments=json.dumps({"command": "
 
 
 class Scripted:
-    """A client that emits `first` on its first round and nothing after it,
-    recording the full tool schemas each round was offered."""
+    """A client that emits `first` on its first round and a text answer after
+    it, recording the full tool schemas each round was offered."""
 
     def __init__(self, first: list[Any], seen: list[list[dict[str, Any]]]) -> None:
         self.first = list(first)
@@ -61,7 +61,7 @@ class Scripted:
 
     def stream_chat(self, messages: Any, **kwargs: Any) -> Iterator[Any]:
         self.seen.append(list(kwargs["tools"]))
-        first, self.first = self.first, []
+        first, self.first = self.first, [StreamToken(stream="content", text="done")]
         return iter(first)
 
 
@@ -129,11 +129,12 @@ def _tool_results(messages: list[dict[str, Any]]) -> list[str]:
 def test_the_terminal_model_is_offered_exactly_what_the_web_model_is(
     tmp_path: Path, mode: str
 ) -> None:
-    web = _web_turn(tmp_path / "web", mode, [])
+    answer = [StreamToken(stream="content", text="ok")]
+    web = _web_turn(tmp_path / "web", mode, answer)
     terminal, _ = _terminal_turn(
         tmp_path,
         ChatOptions(workdir=_workdir(tmp_path), journal=tmp_path / "j.jsonl", mode=mode),
-        [],
+        answer,
     )
     assert web
     assert terminal

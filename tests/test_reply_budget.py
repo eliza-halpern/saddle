@@ -255,6 +255,8 @@ class Trickle:
             yield StreamToken(stream="reasoning", text="abcd")
         if self.ends:
             yield call("finish", "f", summary="done")
+        else:
+            yield StreamToken(stream="content", text="done")  # a chat turn's answer
 
 
 @pytest.fixture

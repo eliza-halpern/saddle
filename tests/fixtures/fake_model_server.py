@@ -1,4 +1,4 @@
-# Copied from the internal benchmark's M3 dry-run fake model server for the chat UI's end-to-end test; ruff-formatted and type-annotated, logic unchanged.
+# Copied from the internal benchmark's M3 dry-run fake model server for the chat UI's end-to-end test; ruff-formatted and type-annotated, logic unchanged except text replies.
 # ruff: noqa: E401, E501, I001
 """Fake OpenAI-compatible model server for M3's dry run. NO model, NO GPU.
 
@@ -6,8 +6,9 @@ Serves the three endpoints `saddle auto` and the runner touch:
   POST /<key>/v1/chat/completions  (stream) -> the scripted tool calls for draw <key>
   POST /<key>/tokenize                     -> 404, so saddle falls back to its estimate
   GET  /metrics                            -> vllm-shaped counters (generation_tokens_total)
-A script is a list of turns; each turn is a list of tool calls [name, {args}] or the
-string "HTTP500" (a model error, which saddle must record as a stop). Turn i answers the
+A script is a list of turns; each turn is a list of tool calls [name, {args}], a
+text reply {"content": "..."}, or the string "HTTP500" (a model error, which saddle
+must record as a stop). Turn i answers the
 i-th request for that key. Every request's temperature and reasoning_effort are logged
 to --log, so the dry run can show the frozen sampling values reach the wire.
 Usage: fake_server.py --port P --scripts scripts.json --log requests.jsonl
@@ -82,6 +83,10 @@ class H(BaseHTTPRequestHandler):
         turn = script[i] if i < len(script) else [["finish", {"summary": "script exhausted"}]]
         if turn == "HTTP500":
             return self._send(500, '{"error": "fake model error"}')
+        if isinstance(turn, dict):  # {"content": "..."}: a text reply, no tool call
+            say = {"choices": [{"index": 0, "delta": {"content": turn["content"]}}]}
+            body = f"data: {json.dumps(say)}\n\ndata: [DONE]\n\n"
+            return self._send(200, body, "text/event-stream")
         chunks = []
         for idx, (name, args) in enumerate(turn):
             a = json.dumps(args)

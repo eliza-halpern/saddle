@@ -106,6 +106,16 @@ chat that ends the turn; here it would end the run with nothing recorded
 as its outcome, so the run goes on until `finish`, a budget, or
 `EMPTY_ROUND_CAP` such rounds in a row."""
 
+EMPTY_REPLY_RETRIES: Final = 2
+"""Empty chat replies (no text, no tool call) the model is told about in one
+turn before the turn ends, saying so. F35: a model wrote its next tool call
+inside its reasoning, the reply came back empty, and the turn ended silently
+mid-work."""
+EMPTY_REPLY_NUDGE: Final = (
+    "Your last reply was empty: no text and no tool call reached the person. "
+    "If you meant to call a tool, call it now; otherwise answer."
+)
+EMPTY_REPLIES: Final = "the model sent {n} empty replies in a row; the turn ended"
 EMPTY_ROUND_CAP: Final = 3
 """Consecutive rounds with no tool call before an autonomous run stops.
 
@@ -903,6 +913,7 @@ def run_turn(
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     proof = parent
+    empty_replies = 0
     try:
         # A chat turn has no round cap: it runs until the model answers or the
         # person stops it (`cancel`). A cap of 24 cut a real setup task off
@@ -1021,6 +1032,12 @@ def run_turn(
                         auto.delivered_audit = heard
                     messages.append({"role": "user", "content": nudge})
                     continue
+                if auto is None and not reply.strip() and not stop():
+                    empty_replies += 1
+                    if empty_replies <= EMPTY_REPLY_RETRIES:
+                        messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
+                        continue
+                    yield ErrorEvent(message=EMPTY_REPLIES.format(n=empty_replies))
                 break
 
             if auto is not None:

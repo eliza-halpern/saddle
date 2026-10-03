@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 
+from saddle import engine
 from saddle.engine import (
     INPUT_SAFETY,
     MIN_OUTPUT,
@@ -233,6 +234,26 @@ LONG_TASK_ROUNDS = 60
 """More tool rounds than the old caps (10, then 24) allowed: a setup task's
 turn in a watched trial needed far more than 24 (the same ask took another
 agent about 121 calls)."""
+
+
+def test_an_empty_reply_is_named_to_the_model_and_the_turn_goes_on(options: TurnOptions) -> None:
+    """F35: a reply with reasoning but no text and no tool call (the model wrote
+    its call inside its reasoning) ended a live setup turn silently. Known-bad:
+    the turn ends there. Known-good: the model is told, and its next reply is
+    the turn's answer."""
+    client = FakeClient([[reasoning("next I will run objdump")], [content("done")]])
+    events = run(client, options)
+    assert len(client.asked) == 2
+    assert client.asked[1]["messages"][-1] == {"role": "user", "content": engine.EMPTY_REPLY_NUDGE}
+    assert "".join(e.text for e in events if isinstance(e, ContentDelta)) == "done"
+
+
+def test_empty_replies_past_the_retries_end_the_turn_saying_so(options: TurnOptions) -> None:
+    client = FakeClient([[], [], [], [content("never asked")]])
+    events = run(client, options)
+    assert len(client.asked) == engine.EMPTY_REPLY_RETRIES + 1
+    errors = [e.message for e in events if isinstance(e, ErrorEvent)]
+    assert errors == [engine.EMPTY_REPLIES.format(n=engine.EMPTY_REPLY_RETRIES + 1)]
 
 
 def test_a_long_tool_chain_runs_until_the_model_answers(options: TurnOptions) -> None:

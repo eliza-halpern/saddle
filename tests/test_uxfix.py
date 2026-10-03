@@ -329,16 +329,16 @@ def test_the_ask_lane_reads_the_report_the_prefill_names_and_nothing_outside(
     report = ledger_path(calc, rid).parent / "packet.md"
     outside = tmp_path / "outside.txt"  # beside the repo, not inside it
     outside.write_text("SECRET-OUTSIDE-THE-FOLDER\n")
-    # One key, scripted in order: the good session's read, reply and the
-    # title request app._name_session makes after turn 1 (an empty turn);
+    # One key, scripted in order: the good session's read, its text reply and
+    # the title request app._name_session makes after turn 1 (an empty turn);
     # then the same three for the bad session.
     scripts = {
         "ux": [
             [["read_file", {"path": str(report)}]],
-            [],
+            {"content": "read it"},
             [],
             [["read_file", {"path": str(outside)}]],
-            [],
+            {"content": "read it"},
             [],
         ]
     }
