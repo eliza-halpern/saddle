@@ -117,6 +117,15 @@ EMPTY_REPLY_NUDGE: Final = (
     "If you meant to call a tool, call it now; otherwise answer."
 )
 EMPTY_REPLIES: Final = "the model sent {n} empty replies in a row; the turn ended"
+
+
+def empty_reply_nudge(empty_replies: int) -> str | None:
+    """What the model is told after a turn's `empty_replies`-th empty reply:
+    EMPTY_REPLY_NUDGE within EMPTY_REPLY_RETRIES, else None, and the caller
+    ends the turn showing EMPTY_REPLIES. Shared by the web and terminal chats."""
+    return EMPTY_REPLY_NUDGE if empty_replies <= EMPTY_REPLY_RETRIES else None
+
+
 EMPTY_ROUND_CAP: Final = 3
 """Consecutive rounds with no tool call before an autonomous run stops.
 
@@ -1036,8 +1045,9 @@ def run_turn(
                     continue
                 if auto is None and not reply.strip() and not stop():
                     empty_replies += 1
-                    if empty_replies <= EMPTY_REPLY_RETRIES:
-                        messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
+                    told = empty_reply_nudge(empty_replies)
+                    if told is not None:
+                        messages.append({"role": "user", "content": told})
                         continue
                     yield ErrorEvent(message=EMPTY_REPLIES.format(n=empty_replies))
                 break
