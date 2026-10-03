@@ -11,6 +11,7 @@ from typing import IO, Any, Final
 from rich.console import Console
 
 from saddle.capabilities import CapabilityError
+from saddle.engine import EMPTY_REPLIES, empty_reply_nudge
 from saddle.journal import append_record, append_span, build_record, build_span
 from saddle.mcpclient import McpConfigError
 from saddle.procs import ProcessLedger
@@ -128,6 +129,7 @@ def _run_turn(
         ctx.research.attach_turn(client, options.journal, node_id, messages)
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
+    empty_replies = 0
     for _ in range(MAX_TOOL_ROUNDS):
         reply, reasoning, calls = _stream_response(
             client, messages, options, display=display, tools=offered
@@ -136,6 +138,13 @@ def _run_turn(
         if not calls:
             messages.append({"role": "assistant", "content": reply})
             rounds.append({"reply": reply, "tools": []})
+            if not reply.strip():  # F35, as in the web chat's `run_turn`
+                empty_replies += 1
+                nudge = empty_reply_nudge(empty_replies)
+                if nudge is not None:
+                    messages.append({"role": "user", "content": nudge})
+                    continue
+                display.show_error(EMPTY_REPLIES.format(n=empty_replies))
             return _seal_turn(
                 options.journal,
                 turn=turn,

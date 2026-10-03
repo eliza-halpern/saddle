@@ -14,7 +14,7 @@ import httpx
 import pytest
 from rich.console import Console
 
-from saddle import cli
+from saddle import cli, engine
 from saddle.chat import ChatOptions, _run_turn, _seal_turn, _stream_response, run_chat
 from saddle.journal import read_records, read_spans, verify_journal
 from saddle.timeline import Timeline
@@ -901,3 +901,57 @@ def test_live_chat_session_streams_reasoning_and_tool_calls(tmp_path: Path) -> N
     assert "7-7-0" in captured
     assert verify_journal(journal) == []
     assert len(read_records(journal)) == 1
+
+
+def test_an_empty_terminal_reply_is_named_to_the_model_and_the_turn_goes_on(
+    tmp_path: Path,
+) -> None:
+    """F35 parity with the web chat: a reply with no text and no tool call (the
+    model wrote its call inside its reasoning) ended the terminal turn silently.
+    Known-bad: the turn ends there. Known-good: the model gets the web chat's
+    nudge, and its next reply is the turn's answer, with no error shown."""
+    seen: list[httpx.Request] = []
+    messages: list[dict[str, Any]] = []
+    out = io.StringIO()
+    display = _display(out)
+    bodies = [
+        _chunk({"reasoning_content": "next I will run objdump"}) + "data: [DONE]\n\n",
+        _chunk({"content": "done"}) + "data: [DONE]\n\n",
+    ]
+    with display.live_turn():
+        _run_turn(
+            _scripted_client(bodies, seen),
+            messages,
+            "go",
+            ChatOptions(journal=tmp_path / "chat.jsonl"),
+            turn=1,
+            parent=None,
+            display=display,
+        )
+    assert len(seen) == 2
+    asked = json.loads(seen[1].content)["messages"]
+    assert asked[-1] == {"role": "user", "content": engine.EMPTY_REPLY_NUDGE}
+    assert messages[-1] == {"role": "assistant", "content": "done"}
+    assert "error:" not in out.getvalue()
+
+
+def test_empty_terminal_replies_past_the_retries_end_the_turn_saying_so(
+    tmp_path: Path,
+) -> None:
+    seen: list[httpx.Request] = []
+    out = io.StringIO()
+    display = _display(out)
+    with display.live_turn():
+        _run_turn(
+            _sse_client("data: [DONE]\n\n", seen),
+            [],
+            "go",
+            ChatOptions(journal=tmp_path / "chat.jsonl"),
+            turn=1,
+            parent=None,
+            display=display,
+        )
+    assert len(seen) == engine.EMPTY_REPLY_RETRIES + 1
+    message = engine.EMPTY_REPLIES.format(n=engine.EMPTY_REPLY_RETRIES + 1)
+    assert out.getvalue().endswith(f"error: {message}\n")
+    assert out.getvalue().count("error:") == 1
