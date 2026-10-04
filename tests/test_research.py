@@ -425,6 +425,14 @@ def test_an_over_long_summary_carries_its_own_sentences_cut_to_fit_and_rechecked
     assert not plain.fallback.citations_matched
 
 
+def test_a_summary_whose_sentences_all_fit_once_rejoined_is_kept_whole() -> None:
+    """Rejoining collapses the newlines between sentences, so a summary measured
+    as over the limit can fit sentence by sentence: then none is dropped."""
+    text = "First point [1].\n\n\nSecond point [1]."
+    assert research_module._cut_to_fit(text, len) == "First point [1]. Second point [1]."
+    assert research_module._cut_to_fit("x" * 5000 + ".", len) is None
+
+
 def test_a_cut_summary_that_fails_a_safety_check_has_no_fallback() -> None:
     """Known-bad: cutting never excuses a copied run of page text, and a summary
     with no sentence that fits has nothing to offer."""
