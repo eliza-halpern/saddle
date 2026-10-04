@@ -65,6 +65,49 @@ def _clip(text: str) -> str:
     return text if len(text) <= MAX_OBJECT else text[: MAX_OBJECT - 1] + "…"
 
 
+_SCREEN_ACTS: Final[dict[str, tuple[str, str, str]]] = {
+    "focus": ("Focusing", "Focused", "focus"),
+    "click": ("Clicking", "Clicked", "click"),
+    "key": ("Pressing", "Pressed", "press"),
+    "type": ("Typing", "Typed", "type"),
+    "scroll": ("Scrolling", "Scrolled", "scroll"),
+}
+"""(present, past, failed stem) per `computer` action: what it does on screen."""
+
+
+def _screen_labels(name: str, args: dict[str, Any]) -> tuple[str, str, str]:
+    """Labels for `screenshot` and `computer`, which act on the person's screen:
+    the action and the window, never the typed text (it is in the details)."""
+    window = args.get("window")
+    target = f'"{_clip(window)}"' if isinstance(window, str) and window.strip() else ""
+    if name == "screenshot":
+        if isinstance(window, str) and window.strip().lower() == "list":
+            return "Listing open windows", "Listed open windows", "Failed to list open windows"
+        shot = target or "the screen"
+        return (
+            f"Taking a screenshot of {shot}",
+            f"Took a screenshot of {shot}",
+            f"Failed to take a screenshot of {shot}",
+        )
+    act = _SCREEN_ACTS.get(str(args.get("action")))
+    if act is None or not target:
+        return "Acting on the screen", "Acted on the screen", "Failed to act on the screen"
+    kind = str(args.get("action"))
+    if kind == "focus":
+        what = target
+    elif kind == "click":
+        what = f"({args.get('x')}, {args.get('y')}) in {target}"
+    elif kind == "key":
+        what = f"{args.get('keys')} in {target}"
+    elif kind == "type":
+        text = args.get("text")
+        what = f"{len(text) if isinstance(text, str) else 0} characters in {target}"
+    else:
+        what = f"{args.get('direction') or 'down'} {args.get('amount') or 3} in {target}"
+    present, past, stem = act
+    return f"{present} {what}", f"{past} {what}", f"Failed to {stem} {what}"
+
+
 def describe(name: str, arguments: str) -> tuple[str, str, str]:
     """(present, past, failed) labels for one call.
 
@@ -78,6 +121,8 @@ def describe(name: str, arguments: str) -> tuple[str, str, str]:
             parsed = {}
     except ValueError:
         parsed = {}
+    if name in ("screenshot", "computer"):
+        return _screen_labels(name, parsed)
     present_verb, past_verb = _TENSES.get(name, (f"Calling {name}", f"Called {name}"))
     obj = _clip(_object_of(name, parsed))
     if not obj:

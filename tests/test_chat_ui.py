@@ -857,3 +857,94 @@ def test_the_invariant_can_see_a_violation() -> None:
     }
     assert base_positions["#thing"] is None
     assert base_positions["#thing::before"] == "absolute"
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "labels"),
+    [
+        (
+            "screenshot",
+            "{}",
+            (
+                "Taking a screenshot of the screen",
+                "Took a screenshot of the screen",
+                "Failed to take a screenshot of the screen",
+            ),
+        ),
+        (
+            "screenshot",
+            '{"window": "Video Configuration"}',
+            (
+                'Taking a screenshot of "Video Configuration"',
+                'Took a screenshot of "Video Configuration"',
+                'Failed to take a screenshot of "Video Configuration"',
+            ),
+        ),
+        (
+            "screenshot",
+            '{"window": "list"}',
+            ("Listing open windows", "Listed open windows", "Failed to list open windows"),
+        ),
+        (
+            "computer",
+            '{"action": "click", "window": "Video Configuration", "x": 210, "y": 270}',
+            (
+                'Clicking (210, 270) in "Video Configuration"',
+                'Clicked (210, 270) in "Video Configuration"',
+                'Failed to click (210, 270) in "Video Configuration"',
+            ),
+        ),
+        (
+            "computer",
+            '{"action": "key", "window": "Harry Potter", "keys": "alt+Return"}',
+            (
+                'Pressing alt+Return in "Harry Potter"',
+                'Pressed alt+Return in "Harry Potter"',
+                'Failed to press alt+Return in "Harry Potter"',
+            ),
+        ),
+        (
+            "computer",
+            '{"action": "type", "window": "Notes", "text": "say hi"}',
+            (
+                'Typing 6 characters in "Notes"',
+                'Typed 6 characters in "Notes"',
+                'Failed to type 6 characters in "Notes"',
+            ),
+        ),
+        (
+            "computer",
+            '{"action": "focus", "window": "Harry Potter"}',
+            ('Focusing "Harry Potter"', 'Focused "Harry Potter"', 'Failed to focus "Harry Potter"'),
+        ),
+        (
+            "computer",
+            '{"action": "scroll", "window": "Game", "direction": "up", "amount": 2}',
+            (
+                'Scrolling up 2 in "Game"',
+                'Scrolled up 2 in "Game"',
+                'Failed to scroll up 2 in "Game"',
+            ),
+        ),
+        (
+            "computer",
+            '{"action": "scroll", "window": "Game"}',
+            (
+                'Scrolling down 3 in "Game"',
+                'Scrolled down 3 in "Game"',
+                'Failed to scroll down 3 in "Game"',
+            ),
+        ),
+    ],
+)
+def test_screen_actions_are_labelled_by_what_they_do_to_which_window(
+    name: str, arguments: str, labels: tuple[str, str, str]
+) -> None:
+    """A live run's page showed only "Called computer": the person could not see
+    what was clicked or typed where. Typed text stays out of the headline."""
+    assert describe(name, arguments) == labels
+
+
+def test_a_malformed_screen_action_still_reads_as_english() -> None:
+    assert describe("computer", "{not json")[1] == "Acted on the screen"
+    assert describe("computer", '{"action": "dance", "window": "x"}')[1] == "Acted on the screen"
