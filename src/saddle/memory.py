@@ -43,6 +43,8 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any, Final, Literal
 
+from saddle.vision import is_image_followup
+
 CHARS_PER_TOKEN: Final = 4
 """Deliberately crude. An exact tokeniser would tie compaction to one model,
 and the decision this feeds is "is there room", not "how many exactly"."""
@@ -56,6 +58,10 @@ KEEP_RECENT: Final = 6
 RESULT_HEAD: Final = 1200
 RESULT_TAIL: Final = 400
 ELIDED: Final = "characters elided by compaction"
+IMAGE_ELIDED: Final = "[image elided by compaction; take the screenshot or read the file again]"
+"""What an old tool image becomes (stage 1): a picture of the screen is stale
+once a newer one exists, and costs IMAGE_TOKENS for as long as it stays. An
+image the person attached is never elided: it cannot be taken again."""
 COMPACTION_ROLE: Final = "user"
 """Not "system": the served Qwen3.8 template raises on a system message after
 index 0, and in an autonomous run a user-role note also keeps a user query in
@@ -164,8 +170,14 @@ def is_note(message: dict[str, Any]) -> bool:
 
 
 def pinned_index(messages: list[dict[str, Any]], pin: Pin) -> int:
-    """The user message `pin` names, never a note; -1 if there is none."""
-    users = [i for i, m in enumerate(messages) if m.get("role") == "user" and not is_note(m)]
+    """The user message `pin` names, never a note and never the user-role message
+    that carries a tool's image (a screen-acting chat has one per action, and
+    pinning one dropped the person's task); -1 if there is none."""
+    users = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "user" and not is_note(m) and not is_image_followup(m)
+    ]
     if not users:
         return -1
     return users[0] if pin == "first" else users[-1]
@@ -284,13 +296,21 @@ def compact(
             return True
         return index >= len(messages) - KEEP_RECENT
 
-    # Stage 1: shrink old tool results.
+    # Stage 1: shrink old tool results, and turn old images into a line.
+    pictures = False
     for index, message in enumerate(messages):
-        if protected(index) or message.get("role") != "tool":
+        if protected(index):
             continue
         content = message.get("content") or ""
-        if len(content) > RESULT_HEAD + RESULT_TAIL:
+        if is_image_followup(message) and isinstance(content, list):
+            message["content"] = [
+                p if p.get("type") == "text" else {"type": "text", "text": IMAGE_ELIDED}
+                for p in content
+            ]
+            pictures = True
+        elif message.get("role") == "tool" and len(content) > RESULT_HEAD + RESULT_TAIL:
             message["content"] = _truncate_result(content)
+    elided = "older screenshots elided" if pictures else "large tool results elided"
 
     old = next((i for i, m in enumerate(messages) if is_note(m)), None)
     block = state() if state is not None else ""
@@ -298,7 +318,7 @@ def compact(
         if old is not None and state is not None:
             count, topics = _previous(messages[old])
             messages[old] = _note(count, topics, [], block, hint)
-        return 0, "large tool results elided"
+        return 0, elided
 
     # Stage 2: drop the oldest exchanges, a tool call always with its results.
     count, topics = 0, []
@@ -345,7 +365,7 @@ def compact(
                 message["content"] = _truncate_result(content)
 
     if not dropped and old is None:
-        return 0, "large tool results elided"
+        return 0, elided
 
     summary = f"{dropped} earlier message(s) compacted"
     if fresh:
