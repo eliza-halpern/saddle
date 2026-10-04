@@ -76,6 +76,7 @@ from saddle.memory import (
     run_state,
     trim_screenshots,
 )
+from saddle.sandbox import Terminal
 from saddle.tools import (
     BLOCKED_TOOL,
     CHECK_TOOL,
@@ -156,6 +157,37 @@ ANNOUNCE_NUDGE: Final = (
     "You said you would do something next, but you made no tool call, so "
     "nothing happened. Make the call now; if you need the person first, ask them."
 )
+WAITING_NUDGE_HEAD: Final = "Your background command is still running"
+WAITING_NUDGE: Final = (
+    WAITING_NUDGE_HEAD + " (terminal {id}: {command}) and you made no tool call, "
+    "so nothing is waiting for it. If you need its result, call wait_for_terminal "
+    "with id {id}; if you meant to leave it running, say so."
+)
+"""B8 (2026-10-04): the model started a render with `background`, ended its
+reply on "Waiting for completion." and made no call, so the turn ended with no
+report while the render ran on. `ANNOUNCED_ACTION` needs a first-person "I'll"
+or "Let me" and missed it; the sandbox knows the command is still running, so
+the harness says so instead of guessing from the wording."""
+
+
+def _clip_command(command: str, limit: int = 120) -> str:
+    """A command as one short line for a nudge: its first line, cut at `limit`."""
+    first = command.strip().splitlines()[0] if command.strip() else command
+    return first if len(first) <= limit else first[: limit - 3] + "..."
+
+
+def running_since(ctx: ToolContext, since: float) -> Terminal | None:
+    """The first background command started at or after `since` (this turn)
+    that is still running, or None. A command left running by an earlier turn
+    (a server started on purpose) is not this turn's unfinished work."""
+    if ctx.sandbox is None:
+        return None
+    for terminal in ctx.sandbox.terminals.values():
+        if terminal.running and terminal.started >= since:
+            return terminal
+    return None
+
+
 _SENTENCE_BREAK: Final = re.compile(r"(?<=[.!?])\s+|\n")
 
 
@@ -984,6 +1016,8 @@ def run_turn(
     proof = parent
     empty_replies = 0
     announced = False
+    waited = False
+    turn_started = monotonic()
     try:
         # A chat turn has no round cap: it runs until the model answers or the
         # person stops it (`cancel`). A cap of 24 cut a real setup task off
@@ -1125,6 +1159,18 @@ def run_turn(
                 if auto is None and not announced and not stop() and announces_action(reply):
                     announced = True
                     messages.append({"role": "user", "content": ANNOUNCE_NUDGE})
+                    continue
+                running = running_since(ctx, turn_started) if auto is None and not waited else None
+                if running is not None and not stop():
+                    waited = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": WAITING_NUDGE.format(
+                                id=running.id, command=_clip_command(running.command)
+                            ),
+                        }
+                    )
                     continue
                 break
 

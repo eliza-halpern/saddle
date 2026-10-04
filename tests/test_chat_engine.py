@@ -356,6 +356,112 @@ def test_an_autonomous_run_is_not_given_the_announcement_nudge(options: TurnOpti
     )
 
 
+def waiting_nudges(client: FakeClient) -> list[str]:
+    return [
+        m["content"]
+        for m in client.asked[-1]["messages"]
+        if m.get("role") == "user"
+        and str(m.get("content", "")).startswith(engine.WAITING_NUDGE_HEAD)
+    ]
+
+
+def _stop_terminals(ctx: ToolContext) -> None:
+    for terminal in ctx.sandbox.terminals.values() if ctx.sandbox is not None else ():
+        if terminal.process is not None and terminal.running:
+            terminal.process.kill()
+
+
+B8_REPLY = "Rendering (larger plane and denser leaves). Waiting for completion."
+
+
+def test_a_turn_that_ends_while_its_own_background_command_runs_is_nudged(
+    options: TurnOptions,
+) -> None:
+    """B8 (2026-10-04): the model started a render in the background, said
+    "Waiting for completion." and made no call; the turn ended with no report
+    and nothing waited for the render. The announcement guard needs "I'll" or
+    "Let me", so it let this through. Known-bad: the turn ends there.
+    Known-good: the model is told the command is still running, by id."""
+    ctx = ToolContext(workdir=options.workdir)
+    client = FakeClient(
+        [
+            [tool("run_command", command="sleep 30", background=True)],
+            [content(B8_REPLY)],
+            [content("done")],
+        ]
+    )
+    try:
+        events = run(client, options, context=ctx)
+    finally:
+        _stop_terminals(ctx)
+    assert len(client.asked) == 3
+    told = waiting_nudges(client)
+    assert len(told) == 1
+    (terminal_id,) = ctx.sandbox.terminals if ctx.sandbox is not None else [""]
+    assert terminal_id in told[0]
+    assert "sleep 30" in told[0]
+    assert client.asked[2]["messages"][-2] == {"role": "assistant", "content": B8_REPLY}
+    assert not [e for e in events if isinstance(e, ErrorEvent)]
+
+
+def test_a_finished_background_command_does_not_nudge(options: TurnOptions) -> None:
+    """Known-good: a background command that has exited is nothing to wait for."""
+    ctx = ToolContext(workdir=options.workdir)
+    client = FakeClient(
+        [
+            [tool("run_command", command="true", background=True)],
+            [tool("run_command", call_id="c2", command="sleep 0.5")],
+            [content("All done.")],
+            [content("never asked")],
+        ]
+    )
+    try:
+        run(client, options, context=ctx)
+    finally:
+        _stop_terminals(ctx)
+    assert len(client.asked) == 3
+    assert waiting_nudges(client) == []
+
+
+def test_the_waiting_nudge_comes_once_per_turn(options: TurnOptions) -> None:
+    ctx = ToolContext(workdir=options.workdir)
+    client = FakeClient(
+        [
+            [tool("run_command", command="sleep 30", background=True)],
+            [content(B8_REPLY)],
+            [content("Still waiting.")],
+            [content("never asked")],
+        ]
+    )
+    try:
+        run(client, options, context=ctx)
+    finally:
+        _stop_terminals(ctx)
+    assert len(client.asked) == 3
+    assert len(waiting_nudges(client)) == 1
+
+
+def test_a_command_left_running_by_an_earlier_turn_does_not_nudge(options: TurnOptions) -> None:
+    """A server started on purpose last turn is not this turn's unfinished work."""
+    ctx = ToolContext(workdir=options.workdir)
+    first = FakeClient(
+        [
+            [tool("run_command", command="sleep 30", background=True)],
+            [content(B8_REPLY)],
+            [content("It is serving.")],
+        ]
+    )
+    second = FakeClient(
+        [[content("The server from before is still up.")], [content("never asked")]]
+    )
+    try:
+        run(first, options, context=ctx)
+        run(second, options, context=ctx)
+    finally:
+        _stop_terminals(ctx)
+    assert len(second.asked) == 1
+
+
 def test_a_long_tool_chain_runs_until_the_model_answers(options: TurnOptions) -> None:
     """Known-good: a turn needing many tool rounds is not cut off; it ends when
     the model answers, sealed, with no error."""
@@ -1044,3 +1150,9 @@ def test_the_system_prompt_names_the_working_folder(options: TurnOptions) -> Non
     assert system["role"] == "system"
     assert system["content"].startswith("You are careful.")
     assert f"Your working folder is {options.workdir}" in system["content"]
+
+
+def test_the_waiting_nudge_names_a_command_as_one_short_line() -> None:
+    assert engine._clip_command("blender -b --python x.py\necho done") == "blender -b --python x.py"
+    assert engine._clip_command("x" * 200) == "x" * 117 + "..."
+    assert engine._clip_command("   ") == "   "
