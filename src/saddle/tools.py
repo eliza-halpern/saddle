@@ -1022,6 +1022,8 @@ def _region(args: Mapping[str, Any]) -> tuple[int, int, int, int] | str | None:
 def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     """Capture a window or the whole screen and show it (`screen.capture`)."""
     wanted = args.get("window", "")
+    if str(args.get("list", "")).strip().lower() == "true":  # live, {"list": "True"}
+        wanted = screen.LIST
     if not isinstance(wanted, str):
         return "error: window must be a string (an id, part of a title, or list)"
     region = _region(args)

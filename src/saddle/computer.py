@@ -40,8 +40,10 @@ DEFAULT_SCROLL: Final = 3
 
 _KEY: Final = re.compile(r"[A-Za-z0-9_]+(\+[A-Za-z0-9_]+)*")
 """One key or combination in xdotool's keysym syntax ("Return", "alt+Return",
-"ctrl+s"); matched whole, so nothing that reads as an option or a second key
-gets through."""
+"ctrl+s"); matched whole, so nothing that reads as an option gets through."""
+MAX_KEYS: Final = 8
+"""Keys one `key` action may press in order, space-separated. Live, four
+shift+Right in one call were refused and cost the model a round."""
 
 
 @dataclass(frozen=True)
@@ -128,11 +130,14 @@ def _parse(args: Mapping[str, Any]) -> Action | str:
         return Action("focus")
     if kind == "key":
         keys = args.get("keys")
-        if not isinstance(keys, str) or _KEY.fullmatch(keys) is None:
+        parts = keys.split() if isinstance(keys, str) else []
+        if not 1 <= len(parts) <= MAX_KEYS or any(_KEY.fullmatch(p) is None for p in parts):
             return (
                 "error: keys must be one key or combination in xdotool syntax, such as "
-                "Return, alt+Return or ctrl+s; for several keys, call computer once per key"
+                f"Return, alt+Return or ctrl+s, or up to {MAX_KEYS} of them separated by "
+                "spaces, pressed in order"
             )
+        keys = " ".join(parts)
         return Action("key", keys=keys)
     if kind == "type":
         text = args.get("text")
@@ -212,7 +217,7 @@ def steps(action: Action) -> list[str]:
     scrolls at the pointer. `key --window` (XSendEvent) is not used: programs,
     Wine among them, often ignore synthetic events."""
     if action.kind == "key":
-        return ["xdotool", "key", "--clearmodifiers", action.keys]
+        return ["xdotool", "key", "--clearmodifiers", *action.keys.split()]
     if action.kind == "type":
         return ["xdotool", "type", "--clearmodifiers", "--", action.text]
     settle = ["xdotool", "sleep", SETTLE_S]

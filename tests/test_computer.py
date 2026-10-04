@@ -466,7 +466,7 @@ def test_an_unknown_or_ambiguous_window_is_refused_naming_the_windows(
         ({"action": "focus"}, "error: computer needs a window"),
         ({"window": " ", "action": "focus"}, "error: computer needs a window"),
         ({"window": 3, "action": "focus"}, "error: computer needs a window"),
-        ({"window": "video", "action": "key", "keys": "a b"}, "error: keys must be one key"),
+        ({"window": "video", "action": "key", "keys": "a -b"}, "error: keys must be one key"),
         ({"window": "video", "action": "key", "keys": "-window"}, "error: keys must be one key"),
         ({"window": "video", "action": "key"}, "error: keys must be one key"),
         ({"window": "video", "action": "type", "text": ""}, "error: type needs a non-empty"),
@@ -1249,3 +1249,31 @@ def test_the_pointer_glides_to_a_click_from_where_it_is() -> None:
     assert moves[0] == (715 + (110 - 715) // 8, 438 + (120 - 438) // 8)  # near the start
     assert moves[-1] == (110, 120)
     assert (110, 120) not in moves[:-1]
+
+
+def test_a_short_key_sequence_is_pressed_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 1, try 9): keys "shift+Right shift+Right shift+Right
+    shift+Right" was refused (one key per call). Known-good: up to MAX_KEYS
+    keys, each in key syntax, go to xdotool in order. Known-bad: a key that
+    reads as an option, or too many keys, is still refused."""
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="key", keys="shift+Right Tab")
+    assert said.startswith("done: press shift+Right Tab on 0x1200005")
+    assert desktop.actions[-1] == ["xdotool", "key", "--clearmodifiers", "shift+Right", "Tab"]
+    assert str(computer.parse({"action": "key", "keys": "Tab --window 1"})).startswith(
+        "error: keys"
+    )
+    many = " ".join(["Right"] * (computer.MAX_KEYS + 1))
+    assert str(computer.parse({"action": "key", "keys": many})).startswith("error: keys")
+
+
+def test_a_list_flag_lists_the_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 1, try 9): screenshot {"list": "True"} was taken as a
+    whole-screen picture, three times, when the window list was asked for."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    for flag in (True, "True", "true"):
+        assert tools._screenshot(ctx, {"list": flag}).startswith("windows on the screen:")
+    assert "windows on the screen" not in tools._screenshot(ctx, {"list": "false"})
