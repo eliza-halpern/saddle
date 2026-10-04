@@ -154,20 +154,42 @@ def placed(action: Action, window: Window) -> Action | str:
     return action
 
 
-def argv(action: Action, window: Window) -> list[list[str]]:
-    """The xdotool commands that perform `action` on `window` (point placed)."""
-    xid = str(int(window.id, 16))
-    if action.kind == "focus":
-        return [["xdotool", "windowactivate", xid], ["xdotool", "windowfocus", xid]]
+def steps(action: Action) -> list[str]:
+    """The xdotool command that performs `action` once its target is verified:
+    keys and text go to the focused window as real (XTest) input, clicks and
+    scrolls at the pointer. `key --window` (XSendEvent) is not used: programs,
+    Wine among them, often ignore synthetic events."""
     if action.kind == "key":
-        return [["xdotool", "key", "--window", xid, action.keys]]
+        return ["xdotool", "key", "--clearmodifiers", action.keys]
     if action.kind == "type":
-        return [["xdotool", "type", "--window", xid, "--", action.text]]
-    move = ["xdotool", "mousemove", "--window", xid, str(action.x), str(action.y), "click"]
+        return ["xdotool", "type", "--clearmodifiers", "--", action.text]
     if action.kind == "scroll":
-        return [[*move, "--repeat", str(action.amount), WHEEL[action.direction]]]
+        return ["xdotool", "click", "--repeat", str(action.amount), WHEEL[action.direction]]
     twice = ["--repeat", "2"] if action.double else []
-    return [[*move, *twice, BUTTONS[action.button]]]
+    return ["xdotool", "click", *twice, BUTTONS[action.button]]
+
+
+NOT_FOCUSED: Final = (
+    "error: nothing was sent: {window} could not be given the keyboard (another window "
+    "kept the focus), and keys sent now would reach that window instead"
+)
+NO_POINTER: Final = (
+    "error: nothing was clicked: this desktop did not let saddle move the pointer onto "
+    "{window} (it stayed at {where}), and a click now would land wherever the pointer is. "
+    "Use the keyboard instead: action=key with Tab, space, Return or the arrow keys"
+)
+POINTER_SLACK: Final = 2
+"""Pixels the pointer may be off the aimed point and still count as on it."""
+
+
+def _shell(text: str) -> dict[str, int]:
+    """`xdotool ... --shell` output (`X=12` lines) as numbers."""
+    found: dict[str, int] = {}
+    for line in text.splitlines():
+        name, _, value = line.partition("=")
+        if value.strip().lstrip("-").isdigit():
+            found[name.strip()] = int(value)
+    return found
 
 
 def find(wanted: str, env: Mapping[str, str], run: Run | None = None) -> Window | str:
@@ -192,12 +214,37 @@ def perform(
 ) -> str | None:
     """Run `action` on `window`; None when it was done, else an "error: ...".
 
+    No Wayland or X method aims input at a window: input goes where the focus
+    or the pointer is. So keys go only after the window is verified to have the
+    focus, and a click only after the pointer is read back on the aimed point;
+    otherwise nothing is sent (F43: live, a pointer move sent while the window
+    was not active was silently ignored, and the click would have gone astray).
     Focus is done when either step works: a compositor that refuses to
     activate a window can still give it the keyboard."""
     run = run or screen.run_x
-    codes = [run(step, env)[0] for step in argv(action, window)]
-    if action.kind == "focus" and 0 in codes:
+    xid = str(int(window.id, 16))
+    if action.kind == "focus":
+        codes = [run(["xdotool", verb, xid], env)[0] for verb in ("windowactivate", "windowfocus")]
+        if 0 in codes:
+            return None
+        failed = max(codes)
+        return f"error: {action.describe()} on {window.describe()} failed (xdotool exited {failed})"
+    run(["xdotool", "windowactivate", xid], env)
+    if action.kind in ("key", "type"):
+        code, active = run(["xdotool", "getactivewindow"], env)
+        if code != 0 or active.strip() != xid:
+            return NOT_FOCUSED.format(window=window.describe())
+    else:
+        _, geometry = run(["xdotool", "getwindowgeometry", "--shell", xid], env)
+        run(["xdotool", "mousemove", "--window", xid, str(action.x), str(action.y)], env)
+        _, location = run(["xdotool", "getmouselocation", "--shell"], env)
+        frame, pointer = _shell(geometry), _shell(location)
+        aimed = (frame.get("X", 0) + (action.x or 0), frame.get("Y", 0) + (action.y or 0))
+        here = (pointer.get("X", -1), pointer.get("Y", -1))
+        if any(abs(a - b) > POINTER_SLACK for a, b in zip(aimed, here, strict=True)):
+            where = f"({here[0]}, {here[1]})" if "X" in pointer else "an unknown place"
+            return NO_POINTER.format(window=window.describe(), where=where)
+    code = run(steps(action), env)[0]
+    if code == 0:
         return None
-    if all(code == 0 for code in codes):
-        return None
-    return f"error: {action.describe()} on {window.describe()} failed (xdotool exited {max(codes)})"
+    return f"error: {action.describe()} on {window.describe()} failed (xdotool exited {code})"

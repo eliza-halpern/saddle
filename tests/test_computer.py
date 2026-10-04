@@ -16,9 +16,10 @@ No test here reaches the real display: every X program runs through a fake
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import pytest
 from test_screen import _png
@@ -58,14 +59,35 @@ OWNERS = {"18874373": OWN, "18874377": OWN, "20971522": 777}
 window has none."""
 
 
+QUERIES: Final = ("getwindowpid", "getactivewindow", "getwindowgeometry", "getmouselocation")
+
+
 class FakeDesktop:
     """xwininfo lists `TREE`; getwindowpid answers from `OWNERS`; import writes
-    a PNG; every other xdotool call exits `act_code` (or per subcommand)."""
+    a PNG; windowactivate moves the focus (unless `focus_sticks` is False, a
+    compositor that keeps it), mousemove the pointer (unless `pointer_moves` is
+    False, as Xwayland ignored a move for a window that was not active); every
+    other xdotool call exits `act_code` (or per subcommand)."""
 
-    def __init__(self, act_codes: Mapping[str, int] | None = None, *, tree_code: int = 0) -> None:
+    def __init__(
+        self,
+        act_codes: Mapping[str, int] | None = None,
+        *,
+        tree_code: int = 0,
+        focus_sticks: bool = True,
+        pointer_moves: bool = True,
+    ) -> None:
         self.act_codes = dict(act_codes or {})
         self.tree_code = tree_code
+        self.focus_sticks, self.pointer_moves = focus_sticks, pointer_moves
+        self.active, self.pointer = "1", (715, 438)
         self.calls: list[list[str]] = []
+
+    def _origin(self, xid: str) -> tuple[int, int]:
+        for window in re.finditer(r"(0x[0-9a-f]+) .*?\d+x\d+\+(-?\d+)\+(-?\d+)", TREE):
+            if str(int(window[1], 16)) == xid:
+                return int(window[2]), int(window[3])
+        return 0, 0
 
     def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
         self.calls.append(list(argv))
@@ -74,15 +96,29 @@ class FakeDesktop:
         if argv[0] == "import":
             Path(argv[-1].removeprefix("png:")).write_bytes(_png())
             return 0, ""
-        if argv[1] == "getwindowpid":
+        verb = argv[1]
+        if verb == "getwindowpid":
             pid = OWNERS.get(argv[2])
             return (0, f"{pid}\n") if pid is not None else (1, "")
-        return self.act_codes.get(argv[1], 0), ""
+        if verb == "getactivewindow":
+            return 0, f"{self.active}\n"
+        if verb == "getwindowgeometry":
+            x, y = self._origin(argv[3])
+            return 0, f"WINDOW={argv[3]}\nX={x}\nY={y}\nWIDTH=1\nHEIGHT=1\nSCREEN=0\n"
+        if verb == "getmouselocation":
+            return 0, f"X={self.pointer[0]}\nY={self.pointer[1]}\nSCREEN=0\nWINDOW=1\n"
+        code = self.act_codes.get(verb, 0)
+        if verb == "windowactivate" and code == 0 and self.focus_sticks:
+            self.active = argv[2]
+        if verb == "mousemove" and code == 0 and self.pointer_moves:
+            x, y = self._origin(argv[3])
+            self.pointer = (x + int(argv[4]), y + int(argv[5]))
+        return code, ""
 
     @property
     def actions(self) -> list[list[str]]:
-        """The xdotool calls that change something (not the owner lookups)."""
-        return [c for c in self.calls if c[0] == "xdotool" and c[1] != "getwindowpid"]
+        """The xdotool calls that change something (not the lookups)."""
+        return [c for c in self.calls if c[0] == "xdotool" and c[1] not in QUERIES]
 
 
 class Asker:
@@ -236,75 +272,43 @@ def test_a_chat_turn_offers_it_and_a_task_runs_tool_list_is_unchanged(
 # -- the session's own windows -------------------------------------------------------
 
 
+ACTIVATE = ["xdotool", "windowactivate", "18874373"]
+
+
+def _move(x: int, y: int) -> list[str]:
+    return ["xdotool", "mousemove", "--window", "18874373", str(x), str(y)]
+
+
 @pytest.mark.parametrize(
     ("arguments", "argv"),
     [
         (
             {"action": "focus"},
-            [["xdotool", "windowactivate", "18874373"], ["xdotool", "windowfocus", "18874373"]],
+            [ACTIVATE, ["xdotool", "windowfocus", "18874373"]],
         ),
         (
             {"action": "click", "x": 210, "y": 270},
-            [["xdotool", "mousemove", "--window", "18874373", "210", "270", "click", "1"]],
+            [ACTIVATE, _move(210, 270), ["xdotool", "click", "1"]],
         ),
         (
             {"action": "click", "x": "5", "y": 6, "button": "right", "double": True},
-            [
-                [
-                    "xdotool",
-                    "mousemove",
-                    "--window",
-                    "18874373",
-                    "5",
-                    "6",
-                    "click",
-                    "--repeat",
-                    "2",
-                    "3",
-                ]
-            ],
+            [ACTIVATE, _move(5, 6), ["xdotool", "click", "--repeat", "2", "3"]],
         ),
         (
             {"action": "key", "keys": "alt+Return"},
-            [["xdotool", "key", "--window", "18874373", "alt+Return"]],
+            [ACTIVATE, ["xdotool", "key", "--clearmodifiers", "alt+Return"]],
         ),
         (
             {"action": "type", "text": "-n ok"},
-            [["xdotool", "type", "--window", "18874373", "--", "-n ok"]],
+            [ACTIVATE, ["xdotool", "type", "--clearmodifiers", "--", "-n ok"]],
         ),
         (
             {"action": "scroll"},
-            [
-                [
-                    "xdotool",
-                    "mousemove",
-                    "--window",
-                    "18874373",
-                    "200",
-                    "150",
-                    "click",
-                    "--repeat",
-                    "3",
-                    "5",
-                ]
-            ],
+            [ACTIVATE, _move(200, 150), ["xdotool", "click", "--repeat", "3", "5"]],
         ),
         (
             {"action": "scroll", "direction": "up", "amount": 2, "x": 1, "y": 2},
-            [
-                [
-                    "xdotool",
-                    "mousemove",
-                    "--window",
-                    "18874373",
-                    "1",
-                    "2",
-                    "click",
-                    "--repeat",
-                    "2",
-                    "4",
-                ]
-            ],
+            [ACTIVATE, _move(1, 2), ["xdotool", "click", "--repeat", "2", "4"]],
         ),
     ],
 )
@@ -381,7 +385,8 @@ def test_another_window_is_asked_about_and_acted_on_only_when_approved(
         'text: "say \\"hi\\"\\nnow"',  # the exact text, newline and quotes visible
     ]
     assert desktop.actions == [
-        ["xdotool", "type", "--window", "20971522", "--", 'say "hi"\nnow'],
+        ["xdotool", "windowactivate", "20971522"],
+        ["xdotool", "type", "--clearmodifiers", "--", 'say "hi"\nnow'],
     ]
 
 
@@ -511,7 +516,7 @@ def test_an_action_xdotool_fails_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = _ctx(tmp_path, monkeypatch)
-    monkeypatch.setattr(screen, "run_x", FakeDesktop({"mousemove": 1}))
+    monkeypatch.setattr(screen, "run_x", FakeDesktop({"click": 1}))
     assert act(ctx, window="video", action="click", x=1, y=1) == (
         'error: left click at (1, 1) on 0x1200005 "Video Configuration" 400x300 failed '
         "(xdotool exited 1)"
@@ -537,4 +542,63 @@ def test_the_pure_parts_without_a_runner_use_the_real_one(
     assert computer.owner(window, {}) == OWN
     assert computer.owner(Window("0x1400003", "Mail - Editor", 900, 700), {}) is None
     assert computer.perform(Action("key", keys="Return"), window, {}) is None
-    assert fake.actions == [["xdotool", "key", "--window", "18874377", "Return"]]
+    assert fake.actions == [
+        ["xdotool", "windowactivate", "18874377"],
+        ["xdotool", "key", "--clearmodifiers", "Return"],
+    ]
+
+
+# -- input goes where the focus and the pointer are (F43) ---------------------------
+
+
+def test_a_click_the_desktop_will_not_aim_is_not_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (labwc, Xwayland), a pointer move sent before the window was active was
+    ignored, and a click would have landed
+    wherever the person's pointer was. Known-bad: the click is sent anyway.
+    Known-good: nothing is clicked, the pointer's place is named, keys are offered."""
+    blocked = FakeDesktop(pointer_moves=False)
+    monkeypatch.setattr(screen, "run_x", blocked)
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=10, y=20)
+    assert said == computer.NO_POINTER.format(
+        window='0x1200005 "Video Configuration" 400x300', where="(715, 438)"
+    )
+    assert ["xdotool", "click", "1"] not in blocked.actions
+    moved = FakeDesktop()
+    monkeypatch.setattr(screen, "run_x", moved)
+    assert act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=10, y=20).startswith(
+        "done: left click at (10, 20)"
+    )
+    assert moved.pointer == (110, 120)  # the window's origin (100, 100) plus the point
+
+
+def test_keys_are_not_sent_unless_the_window_has_the_focus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad: keys sent while another window (the person's mail) has the focus."""
+    stuck = FakeDesktop(focus_sticks=False)
+    monkeypatch.setattr(screen, "run_x", stuck)
+    for arguments in ({"action": "key", "keys": "Return"}, {"action": "type", "text": "hi"}):
+        said = act(_ctx(tmp_path, monkeypatch), window="video", **arguments)
+        assert said == computer.NOT_FOCUSED.format(window='0x1200005 "Video Configuration" 400x300')
+    assert [c for c in stuck.actions if c[1] in ("key", "type")] == []
+
+
+def test_an_unreadable_pointer_place_is_not_a_click(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Silent(FakeDesktop):
+        def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+            if argv[:2] == ["xdotool", "getmouselocation"]:
+                self.calls.append(list(argv))
+                return 1, ""
+            return super().__call__(argv, env)
+
+    silent = Silent()
+    window = Window("0x1200005", "Video Configuration", 400, 300)
+    said = computer.perform(Action("click", x=1, y=1), window, {}, silent)
+    assert said is not None
+    assert "it stayed at an unknown place" in said
+
+
+def test_shell_output_keeps_the_numbers_negative_ones_included() -> None:
+    assert computer._shell("X=12\nNAME=game\nY=-3\n") == {"X": 12, "Y": -3}
