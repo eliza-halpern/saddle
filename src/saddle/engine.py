@@ -954,7 +954,9 @@ def run_turn(
     asked = text if text is not None else _last_asked(messages)
     yield TurnStart(turn=turn, prompt=asked)
     if options.system_prompt and not any(m.get("role") == "system" for m in messages):
-        prompt = f"{options.system_prompt}\n\n{WORKDIR_LINE.format(workdir=options.workdir)}"
+        prompt = options.system_prompt
+        if options.auto is None:  # a task run's prompt already names its worktree
+            prompt += f"\n\n{WORKDIR_LINE.format(workdir=options.workdir)}"
         messages.insert(0, {"role": "system", "content": prompt})
     if text is not None:
         messages.append(_user_message(text, images))
