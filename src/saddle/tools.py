@@ -237,7 +237,9 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "Act on a window on the person's screen. action=focus raises and focuses it; "
     "click presses a mouse button at x, y (pixels from the window's top-left corner, "
     "as its screenshot shows them; button left or right, double for a double-click, "
-    "triple for a triple-click that selects a whole field or line); "
+    "triple for a triple-click that selects a whole field or line; hold names "
+    "modifier keys held through it, ctrl, shift, alt or super joined by +, as in "
+    "hold=ctrl to constrain a drawn shape or hold=shift to add to a selection); "
     "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
     "type types text; scroll turns the wheel up or down by amount, at x, y or the "
     "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
@@ -262,6 +264,7 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
         "button": {"type": "string", "enum": list(computer.BUTTONS)},
         "double": {"type": "boolean"},
         "triple": {"type": "boolean"},
+        "hold": {"type": "string"},
         "keys": {"type": "string"},
         "text": {"type": "string"},
         "direction": {"type": "string", "enum": list(computer.WHEEL)},

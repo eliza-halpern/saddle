@@ -1429,3 +1429,39 @@ def test_a_triple_click_selects_a_whole_field(
     said = act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=5, y=6, triple="true")
     assert said.startswith("done: left triple-click at (5, 6)")
     assert desktop.actions[-1][-4:] == ["click", "--repeat", "3", "1"]
+
+
+def test_modifier_keys_are_held_through_a_click_or_drag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 4, Inkscape): "the drag action can't hold Ctrl", so a circle
+    was drawn freehand and fixed afterwards; drawing and 3D tools constrain or
+    add to a selection with Ctrl or Shift held. Known-good: hold keys go down
+    after the settle and up after the press, in one xdotool call. Known-bad:
+    a key that is not a modifier, and a hold on a title-bar drag, are refused."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = act(ctx, window="video", action="drag", x=10, y=10, to_x=60, to_y=60, hold="ctrl")
+    assert said.startswith("done: drag from (10, 10) to (60, 60) holding ctrl")
+    chain = desktop.actions[-1]
+    assert chain[chain.index("keydown") : chain.index("keydown") + 2] == ["keydown", "ctrl"]
+    assert chain.index("keydown") < chain.index("mousedown") < chain.index("mouseup")
+    assert chain[-2:] == ["keyup", "ctrl"]
+    said = act(ctx, window="video", action="click", x=5, y=5, hold="shift+ctrl")
+    assert said.startswith("done: left click at (5, 5) holding shift+ctrl")
+    assert desktop.actions[-1][-3:] == ["keyup", "shift", "ctrl"]
+    assert str(computer.parse({"action": "click", "x": 1, "y": 1, "hold": "a"})).startswith(
+        "error: hold"
+    )
+    assert str(computer.parse({"action": "click", "x": 1, "y": 1, "hold": 5})).startswith(
+        "error: hold"
+    )
+    real = FakePointer(desktop)
+    refused = computer.perform(
+        Action("drag", x=10, y=-10, to_x=50, to_y=40, hold="ctrl"),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda s: None,
+    )
+    assert str(refused).startswith("error: a key can be held only")

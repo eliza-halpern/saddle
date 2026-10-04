@@ -56,6 +56,8 @@ class Action:
     button: str = "left"
     double: bool = False
     triple: bool = False
+    hold: str = ""
+    """Modifier keys held through a click, scroll or drag ("ctrl", "shift+ctrl")."""
     keys: str = ""
     text: str = ""
     direction: str = "down"
@@ -64,17 +66,18 @@ class Action:
     to_y: int | None = None
 
     def describe(self) -> str:
+        held = f" holding {self.hold}" if self.hold else ""
         if self.kind == "click":
             twice = "triple-" if self.triple else "double-" if self.double else ""
-            return f"{self.button} {twice}click at ({self.x}, {self.y})"
+            return f"{self.button} {twice}click at ({self.x}, {self.y}){held}"
         if self.kind == "key":
             return f"press {self.keys}"
         if self.kind == "type":
             return f"type {len(self.text)} characters"
         if self.kind == "scroll":
-            return f"scroll {self.direction} {self.amount}"
+            return f"scroll {self.direction} {self.amount}{held}"
         if self.kind == "drag":
-            return f"drag from ({self.x}, {self.y}) to ({self.to_x}, {self.to_y})"
+            return f"drag from ({self.x}, {self.y}) to ({self.to_x}, {self.to_y}){held}"
         return "raise and focus it"
 
 
@@ -122,7 +125,32 @@ def _flag(value: Any) -> Any:
     return value
 
 
+MODIFIERS: Final = ("ctrl", "shift", "alt", "super")
+"""Keys `hold` may name: live, a drawing tool's constrained drag needed Ctrl
+held, and the computer tool could not hold it."""
+
+
+def _hold(args: Mapping[str, Any]) -> str | None:
+    """The modifiers `args` asks to hold, "+"-joined, or None when they are not
+    modifiers."""
+    raw = args.get("hold", "")
+    if not isinstance(raw, str):
+        return None
+    parts = [p.strip().lower() for p in raw.replace(" ", "+").split("+") if p.strip()]
+    return "+".join(parts) if all(p in MODIFIERS for p in parts) else None
+
+
 def _parse(args: Mapping[str, Any]) -> Action | str:
+    parsed = _parse_kind(args)
+    if isinstance(parsed, str) or parsed.kind not in ("click", "scroll", "drag"):
+        return parsed
+    hold = _hold(args)
+    if hold is None:
+        return f"error: hold takes modifier keys joined by +, from {', '.join(MODIFIERS)}"
+    return replace(parsed, hold=hold)
+
+
+def _parse_kind(args: Mapping[str, Any]) -> Action | str:
     kind = args.get("action")
     if isinstance(kind, str) and kind in ALIASES:
         args = {**args, **ALIASES[kind]}
@@ -225,6 +253,14 @@ def steps(action: Action) -> list[str]:
     if action.kind == "type":
         return ["xdotool", "type", "--clearmodifiers", "--", action.text]
     settle = ["xdotool", "sleep", SETTLE_S]
+    mods = action.hold.split("+") if action.hold else []
+    if mods:  # pressed after the settle, let go after the press, in one call
+        settle = [*settle, "keydown", *mods]
+    release = ["keyup", *mods] if mods else []
+    return [*_press_steps(action, settle), *release]
+
+
+def _press_steps(action: Action, settle: list[str]) -> list[str]:
     if action.kind == "drag":
         return [
             *settle,
@@ -361,6 +397,11 @@ def perform(
     # included); through the compositor's pointer 0 of 9 on "Insert Table...".
     inside = 0 <= (action.x or 0) < window.width and 0 <= (action.y or 0) < window.height
     by_compositor = action.kind == "drag" and not inside
+    if by_compositor and action.hold:
+        return (
+            "error: a key can be held only through a drag that starts inside the window; "
+            "a title-bar drag goes through the compositor. Nothing was done."
+        )
     real = (pointer or session_pointer)(env) if by_compositor else None
     extent = _display(run, env) if real is not None else None
     if real is not None and extent is not None:
