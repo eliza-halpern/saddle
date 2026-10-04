@@ -456,7 +456,7 @@ def test_an_unknown_or_ambiguous_window_is_refused_naming_the_windows(
     ("arguments", "start"),
     [
         ({"window": "video"}, "error: action must be one of focus, click, key, type, scroll"),
-        ({"window": "video", "action": "drag"}, "error: action must be one of"),
+        ({"window": "video", "action": "dance"}, "error: action must be one of"),
         ({"action": "focus"}, "error: computer needs a window"),
         ({"window": " ", "action": "focus"}, "error: computer needs a window"),
         ({"window": 3, "action": "focus"}, "error: computer needs a window"),
@@ -674,3 +674,56 @@ def test_a_whole_screen_screenshot_is_remembered_for_screen_points(
     assert ctx.screen_capture is None  # a window's picture is not the screen
     tools._screenshot(ctx, {})
     assert ctx.screen_capture == (4, 3)  # the fake capture's size
+
+
+# -- drag -------------------------------------------------------------------------
+
+
+def test_a_drag_presses_inside_the_window_moves_and_lets_go(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """The person asked for a model to move a window with the mouse. Known-good:
+    the press point is verified inside the window, the end may be anywhere."""
+    said = act(
+        _ctx(tmp_path, monkeypatch), window="video", action="drag", x=50, y=10, to_x=650, to_y=210
+    )
+    assert said.startswith("done: drag from (50, 10) to (650, 210) on 0x1200005")
+    assert desktop.actions[-1] == [
+        "xdotool",
+        "sleep",
+        "0.5",
+        "mousedown",
+        "1",
+        "mousemove_relative",
+        "--",
+        "600",
+        "200",
+        "sleep",
+        "0.5",
+        "mouseup",
+        "1",
+    ]
+
+
+def test_a_drag_needs_both_points_and_a_start_inside_the_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    assert act(ctx, window="video", action="drag", x=5, y=5).startswith(
+        "error: drag needs x, y (where to press, inside the window) and to_x, to_y"
+    )
+    assert act(ctx, window="video", action="drag", x=900, y=5, to_x=0, to_y=0).startswith(
+        "error: (900, 5) is outside"
+    )
+    assert desktop.actions == []
+
+
+def test_a_drag_measured_on_the_whole_screen_converts_both_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    ctx.screen_capture = (1600, 900)
+    said = act(ctx, window="video", action="drag", x=300, y=250, to_x=500, to_y=500, space="screen")
+    # (300, 250) -> (240, 200) on the 1280x720 display -> (140, 100) in the window;
+    # (500, 500) -> (400, 400) -> (300, 300).
+    assert said.startswith("done: drag from (140, 100) to (300, 300)")

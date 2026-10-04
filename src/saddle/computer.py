@@ -28,7 +28,7 @@ from saddle.screen import Run, Window
 NEEDED: Final = ("xdotool",)
 """The X tool the actions run; without it the tool is not offered."""
 
-ACTIONS: Final = ("focus", "click", "key", "type", "scroll")
+ACTIONS: Final = ("focus", "click", "key", "type", "scroll", "drag")
 BUTTONS: Final = {"left": "1", "right": "3"}
 WHEEL: Final = {"up": "4", "down": "5"}
 MAX_SCROLL: Final = 20
@@ -55,6 +55,8 @@ class Action:
     text: str = ""
     direction: str = "down"
     amount: int = DEFAULT_SCROLL
+    to_x: int | None = None
+    to_y: int | None = None
 
     def describe(self) -> str:
         if self.kind == "click":
@@ -66,6 +68,8 @@ class Action:
             return f"type {len(self.text)} characters"
         if self.kind == "scroll":
             return f"scroll {self.direction} {self.amount}"
+        if self.kind == "drag":
+            return f"drag from ({self.x}, {self.y}) to ({self.to_x}, {self.to_y})"
         return "raise and focus it"
 
 
@@ -124,6 +128,14 @@ def _parse(args: Mapping[str, Any]) -> Action | str:
         if (x is None) != (y is None):
             return "error: scroll takes both x and y, or neither (the window's middle)"
         return Action("scroll", x=x, y=y, direction=direction, amount=amount)
+    if kind == "drag":
+        to_x, to_y = _whole(args, "to_x"), _whole(args, "to_y")
+        if x is None or y is None or to_x is None or to_y is None:
+            return (
+                "error: drag needs x, y (where to press, inside the window) and to_x, to_y "
+                "(where to let go), in the window's pixels"
+            )
+        return Action("drag", x=x, y=y, to_x=to_x, to_y=to_y)
     button = args.get("button", "left")
     double = args.get("double", False)
     if x is None or y is None:
@@ -136,7 +148,7 @@ def _parse(args: Mapping[str, Any]) -> Action | str:
 def placed(action: Action, window: Window) -> Action | str:
     """`action` with its point inside `window` (a scroll without one aims at
     the middle), or an "error: ..." when the point is outside it."""
-    if action.kind not in ("click", "scroll"):
+    if action.kind not in ("click", "scroll", "drag"):
         return action
     if action.x is None or action.y is None:
         return Action(
@@ -165,6 +177,20 @@ def steps(action: Action) -> list[str]:
     if action.kind == "type":
         return ["xdotool", "type", "--clearmodifiers", "--", action.text]
     settle = ["xdotool", "sleep", SETTLE_S]
+    if action.kind == "drag":
+        return [
+            *settle,
+            "mousedown",
+            "1",
+            "mousemove_relative",
+            "--",
+            str((action.to_x or 0) - (action.x or 0)),
+            str((action.to_y or 0) - (action.y or 0)),
+            "sleep",
+            SETTLE_S,
+            "mouseup",
+            "1",
+        ]
     if action.kind == "scroll":
         return [*settle, "click", "--repeat", str(action.amount), WHEEL[action.direction]]
     twice = ["--repeat", "2"] if action.double else []
@@ -297,4 +323,8 @@ def to_window(
     width, height = int(parts[0]), int(parts[1])
     x = round(action.x * width / capture[0]) - frame["X"]
     y = round(action.y * height / capture[1]) - frame["Y"]
+    if action.to_x is not None and action.to_y is not None:
+        to_x = round(action.to_x * width / capture[0]) - frame["X"]
+        to_y = round(action.to_y * height / capture[1]) - frame["Y"]
+        return replace(action, x=x, y=y, to_x=to_x, to_y=to_y)
     return replace(action, x=x, y=y)

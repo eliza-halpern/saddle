@@ -928,6 +928,15 @@ def test_the_invariant_can_see_a_violation() -> None:
         ),
         (
             "computer",
+            '{"action": "drag", "window": "Notes", "x": 5, "y": 6, "to_x": 300, "to_y": 40}',
+            (
+                'Dragging from (5, 6) to (300, 40) in "Notes"',
+                'Dragged from (5, 6) to (300, 40) in "Notes"',
+                'Failed to drag from (5, 6) to (300, 40) in "Notes"',
+            ),
+        ),
+        (
+            "computer",
             '{"action": "scroll", "window": "Game"}',
             (
                 'Scrolling down 3 in "Game"',

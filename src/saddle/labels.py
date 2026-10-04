@@ -71,6 +71,7 @@ _SCREEN_ACTS: Final[dict[str, tuple[str, str, str]]] = {
     "key": ("Pressing", "Pressed", "press"),
     "type": ("Typing", "Typed", "type"),
     "scroll": ("Scrolling", "Scrolled", "scroll"),
+    "drag": ("Dragging", "Dragged", "drag"),
 }
 """(present, past, failed stem) per `computer` action: what it does on screen."""
 
@@ -102,6 +103,11 @@ def _screen_labels(name: str, args: dict[str, Any]) -> tuple[str, str, str]:
     elif kind == "type":
         text = args.get("text")
         what = f"{len(text) if isinstance(text, str) else 0} characters in {target}"
+    elif kind == "drag":
+        what = (
+            f"from ({args.get('x')}, {args.get('y')}) to "
+            f"({args.get('to_x')}, {args.get('to_y')}) in {target}"
+        )
     else:
         what = f"{args.get('direction') or 'down'} {args.get('amount') or 3} in {target}"
     present, past, stem = act

@@ -230,8 +230,10 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "as its screenshot shows them; button left or right, double for a double-click); "
     "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
     "type types text; scroll turns the wheel up or down by amount, at x, y or the "
-    "window's middle; space=screen when you measured x, y on a whole-screen screenshot "
-    "(saddle converts them). `window` is a window id or part of its title, as screenshot "
+    "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
+    "a window, drag its title bar); space=screen when you measured x, y on a "
+    "whole-screen screenshot (saddle converts them). `window` is a window id or part of "
+    "its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. A fresh "
     "picture of the window comes back after each action. A window that none of this "
     "session's commands opened is acted on only if the person approves. X11 windows "
@@ -247,6 +249,8 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
         "text": {"type": "string"},
         "direction": {"type": "string", "enum": list(computer.WHEEL)},
         "amount": {"type": "integer"},
+        "to_x": {"type": "integer"},
+        "to_y": {"type": "integer"},
         "space": {"type": "string", "enum": list(computer.SPACES)},
     },
     ["action", "window"],
