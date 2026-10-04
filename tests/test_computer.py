@@ -1297,6 +1297,19 @@ def test_a_short_key_sequence_is_pressed_in_order(
     assert str(computer.parse({"action": "key", "keys": many})).startswith("error: keys")
 
 
+def test_a_key_repeated_inside_one_combination_is_refused_with_the_sequence_syntax() -> None:
+    """Live (rung 9a): keys "Down+Down+Down" meant three presses; + holds keys
+    together, so it was one Down, reported as done. Known-bad: accepted silently.
+    Known-good: refused, naming the spaced form; real combinations still pass."""
+    said = str(computer.parse({"action": "key", "keys": "Down+Down+Down"}))
+    assert said.startswith("error: Down+Down+Down holds Down together with itself")
+    assert "Down Down Down" in said
+    said = str(computer.parse({"action": "key", "keys": "ctrl+Down+Down"}))
+    assert said.startswith("error: ctrl+Down+Down holds Down together with itself")
+    assert isinstance(computer.parse({"action": "key", "keys": "ctrl+shift+e"}), computer.Action)
+    assert isinstance(computer.parse({"action": "key", "keys": "Down Down Down"}), computer.Action)
+
+
 def test_a_list_flag_lists_the_windows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
 ) -> None:

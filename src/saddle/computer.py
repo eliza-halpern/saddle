@@ -168,6 +168,16 @@ def _parse_kind(args: Mapping[str, Any]) -> Action | str:
                 f"Return, alt+Return or ctrl+s, or up to {MAX_KEYS} of them separated by "
                 "spaces, pressed in order"
             )
+        for part in parts:
+            held = part.split("+")
+            twice = [k for i, k in enumerate(held) if k in held[:i]]
+            if twice:
+                spaced = " ".join(held)
+                return (
+                    f"error: {part} holds {twice[0]} together with itself (+ joins keys "
+                    f"held at once); to press keys one after another, separate them with "
+                    f"spaces, as in {spaced}. Nothing was pressed."
+                )
         keys = " ".join(parts)
         return Action("key", keys=keys)
     if kind == "type":
