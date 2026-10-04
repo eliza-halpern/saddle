@@ -74,6 +74,7 @@ from saddle.memory import (
     estimate_tokens,
     is_test_command,
     run_state,
+    trim_screenshots,
 )
 from saddle.tools import (
     BLOCKED_TOOL,
@@ -993,6 +994,13 @@ def run_turn(
             # one turn, so a compaction before the loop only ever saw
             # [system, task] (pi-blackhole's CHANGELOG #38
             # fixed the same defect, OpenHands condenses at every step).
+            trimmed = trim_screenshots(messages)
+            if trimmed:
+                yield Compaction(
+                    dropped_messages=0,
+                    kept_messages=len(messages),
+                    summary=f"{trimmed} older screenshots elided",
+                )
             yield from _compact(messages, options, node_id, once)
             parts: list[str] = []
             thoughts: list[str] = []

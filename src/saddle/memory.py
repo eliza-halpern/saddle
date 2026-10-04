@@ -62,6 +62,11 @@ IMAGE_ELIDED: Final = "[image elided by compaction; take the screenshot or read 
 """What an old tool image becomes (stage 1): a picture of the screen is stale
 once a newer one exists, and costs IMAGE_TOKENS for as long as it stays. An
 image the person attached is never elided: it cannot be taken again."""
+SCREENSHOTS_KEPT: Final = 3
+SCREENSHOTS_SLACK: Final = 3
+"""Tool images kept and let pile up before `trim_screenshots` runs: the newest
+KEPT stay, and the older ones go once there are more than KEPT + SLACK."""
+
 COMPACTION_ROLE: Final = "user"
 """Not "system": the served Qwen3.8 template raises on a system message after
 index 0, and in an autonomous run a user-role note also keeps a user query in
@@ -167,6 +172,36 @@ def is_note(message: dict[str, Any]) -> bool:
         and isinstance(content, str)
         and content.startswith(NOTE_HEAD)
     )
+
+
+def trim_screenshots(messages: list[dict[str, Any]]) -> int:
+    """Turn all but the newest SCREENSHOTS_KEPT tool images into IMAGE_ELIDED
+    once more than SCREENSHOTS_KEPT + SCREENSHOTS_SLACK are in `messages`, in
+    place; the number elided. A picture of the screen is stale once newer ones
+    exist (live, 38 of them were ~46k of a ~52k-token context). They go in a
+    batch, not one per action: each trim rewrites the prompt from the oldest
+    picture on, which the server must then read again instead of reusing its
+    cache. Images the person attached stay."""
+    shown = [
+        m
+        for m in messages
+        if is_image_followup(m)
+        and isinstance(m.get("content"), list)
+        and any(p.get("type") != "text" for p in m["content"])
+    ]
+    if len(shown) <= SCREENSHOTS_KEPT + SCREENSHOTS_SLACK:
+        return 0
+    elided = 0
+    for message in shown[:-SCREENSHOTS_KEPT]:
+        elided += sum(p.get("type") != "text" for p in message["content"])
+        message["content"] = _elide_images(message["content"])
+    return elided
+
+
+def _elide_images(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        p if p.get("type") == "text" else {"type": "text", "text": IMAGE_ELIDED} for p in content
+    ]
 
 
 def pinned_index(messages: list[dict[str, Any]], pin: Pin) -> int:
@@ -303,10 +338,7 @@ def compact(
             continue
         content = message.get("content") or ""
         if is_image_followup(message) and isinstance(content, list):
-            message["content"] = [
-                p if p.get("type") == "text" else {"type": "text", "text": IMAGE_ELIDED}
-                for p in content
-            ]
+            message["content"] = _elide_images(content)
             pictures = True
         elif message.get("role") == "tool" and len(content) > RESULT_HEAD + RESULT_TAIL:
             message["content"] = _truncate_result(content)

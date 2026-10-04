@@ -42,6 +42,7 @@ from saddle.events import (
 from saddle.memory import estimate_tokens
 from saddle.tools import ToolContext
 from saddle.undo import UndoLog
+from saddle.vision import images_message
 from saddle.vllm import StreamToken, ToolCall, VllmClient, VllmRequestError
 
 
@@ -1010,3 +1011,22 @@ def test_over_the_real_limit_compaction_brings_the_real_count_under_it(
     real = (compaction.kept_messages - 1) * 8_000 + NOTE_TOKENS  # one of them is the note
     assert real <= options.compaction_limit_exact()
     assert options.compaction_limit_exact() == 175_000 - 32_768 - 2048
+
+
+def test_old_screenshots_are_trimmed_before_a_request_and_said_so(options: TurnOptions) -> None:
+    """Live: 38 screenshots were ~46k of a ~52k-token context six minutes into a
+    LibreOffice run. Known-good: the request carries only the newest three, and
+    the trim is announced like any compaction."""
+    messages: list[dict[str, Any]] = []
+    for n in range(7):
+        messages.append(
+            images_message([(f"c{n}", f"screenshot {n}", "data:image/png;base64,AA==")])
+        )
+    client = FakeClient([[content("ok")]])
+    events = run(client, options, messages=messages)
+    sent = client.asked[0]["messages"]
+    pictures = [p for m in sent if isinstance(m.get("content"), list) for p in m["content"]]
+    assert sum(p["type"] == "image_url" for p in pictures) == 3
+    (trim,) = those(events, Compaction)
+    assert trim.dropped_messages == 0
+    assert trim.summary == "4 older screenshots elided"

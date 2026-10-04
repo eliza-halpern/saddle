@@ -16,7 +16,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from saddle.memory import IMAGE_ELIDED, IMAGE_TOKENS, KEEP_RECENT, compact, pinned_index
+from saddle.memory import (
+    IMAGE_ELIDED,
+    IMAGE_TOKENS,
+    KEEP_RECENT,
+    SCREENSHOTS_KEPT,
+    SCREENSHOTS_SLACK,
+    compact,
+    pinned_index,
+    trim_screenshots,
+)
 from saddle.vision import images_message
 
 TASK = "TASK-7c2: type a title in the Writer window and save it as owls.odt in this folder"
@@ -101,4 +110,39 @@ def test_a_picture_the_person_attached_is_never_elided() -> None:
     messages += _chat(12)[2:]
     compact(messages, limit_tokens=5000)
     assert attached in messages
+    assert attached["content"][1]["type"] == "image_url"
+
+
+# -- old screenshots go every few actions, not only under pressure --------------------
+
+
+def test_screenshots_build_up_to_the_slack_then_drop_to_the_kept_few() -> None:
+    """The person: a picture from three actions ago shows a screen that is gone.
+    Known-good: once more than KEPT + SLACK pile up, all but the newest KEPT
+    become a line. Known-bad for the server's prompt cache: trimming at every
+    action rewrites the prompt each time, so up to KEPT + SLACK are let stand."""
+    assert (SCREENSHOTS_KEPT, SCREENSHOTS_SLACK) == (3, 3)
+    messages = _chat(6)
+    assert trim_screenshots(messages) == 0
+    assert _images(messages) == 6
+    messages = _chat(7)
+    assert trim_screenshots(messages) == 4
+    assert _images(messages) == 3
+    newest = [m for m in messages if isinstance(m.get("content"), list)][-3:]
+    assert all(m["content"][1]["type"] == "image_url" for m in newest)
+    assert trim_screenshots(messages) == 0  # an elided picture is not counted again
+
+
+def test_trimming_leaves_the_person_s_pictures() -> None:
+    attached: dict[str, Any] = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "this is the error I see"},
+            {"type": "image_url", "image_url": {"url": PNG}},
+        ],
+    }
+    messages = _chat(0)
+    messages.insert(1, attached)
+    messages += _chat(7)[2:]
+    assert trim_screenshots(messages) == 4
     assert attached["content"][1]["type"] == "image_url"
