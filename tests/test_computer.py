@@ -94,7 +94,7 @@ class FakeDesktop:
         self.calls.append(list(argv))
         if argv[0] == "xwininfo":
             return self.tree_code, TREE
-        if argv[0] == "import":
+        if argv[0] in ("import", "grim", "convert"):
             Path(argv[-1].removeprefix("png:")).write_bytes(_png())
             return 0, ""
         verb = argv[1]
@@ -350,7 +350,7 @@ def test_a_picture_that_cannot_be_taken_afterwards_is_said_and_the_action_still_
 ) -> None:
     ctx = _ctx(tmp_path, monkeypatch)
 
-    def closed(wanted: str, out: Path, env: Mapping[str, str], region: object = None) -> str:
+    def closed(wanted: str, out: Path, env: Mapping[str, str], **_: object) -> str:
         return "error: no window matches '0x1200005'"
 
     monkeypatch.setattr(screen, "capture", closed)
@@ -360,7 +360,7 @@ def test_a_picture_that_cannot_be_taken_afterwards_is_said_and_the_action_still_
     assert result.endswith("The action was done.")
     assert ctx.attachments == []
 
-    def junk(wanted: str, out: Path, env: Mapping[str, str], region: object = None) -> Window:
+    def junk(wanted: str, out: Path, env: Mapping[str, str], **_: object) -> Window:
         out.write_text("not a picture")
         return Window("0x1200005", "Video Configuration", 400, 300)
 
@@ -974,3 +974,39 @@ def test_a_failed_line_stops_the_typing(
     said = act(_ctx(tmp_path, monkeypatch), window="video", action="type", text="A\nB")
     assert said.startswith("error: type 3 characters on 0x1200005")
     assert [c[1] for c in desktop.actions[1:]] == ["type", "key"]  # B was never typed
+
+
+# -- the picture after an action shows what is on top of the window -------------------
+
+
+@pytest.mark.parametrize(("focus_sticks", "taken_with"), [(True, "grim"), (False, "import")])
+def test_the_picture_after_an_action_shows_the_menu_it_opened(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    focus_sticks: bool,
+    taken_with: str,
+) -> None:
+    """Live: a click on "Format" opened its menu as a window of its own, and the
+    picture that came back (the Writer window alone) showed no menu. Known-good:
+    the window has the focus, so its place on the screen is captured. Known-bad
+    stays read from X: a window that did not get the focus may be covered."""
+    fake = FakeDesktop(focus_sticks=focus_sticks)
+    monkeypatch.setattr(screen, "run_x", fake)
+    monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1", "WAYLAND_DISPLAY": "w-0"})
+    monkeypatch.setattr("saddle.screen.shutil.which", lambda name: f"/usr/bin/{name}")
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=30, y=40)
+    assert said.startswith("done: left click at (30, 40)")
+    pictures = [c for c in fake.calls if c[0] in ("grim", "import")]
+    assert [c[0] for c in pictures] == [taken_with]
+    if taken_with == "grim":
+        assert pictures[0][4] == "100,100 400x300"
+
+
+def test_a_scroll_with_no_point_after_a_zoom_aims_at_the_middle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
+    said = act(ctx, window="video", action="scroll", direction="down")
+    assert said.startswith("done: scroll down 3 on 0x1200005")
+    assert ["xdotool", "mousemove", "--window", "18874373", "200", "150"] in desktop.actions

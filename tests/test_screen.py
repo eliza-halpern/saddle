@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import struct
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -83,7 +83,7 @@ class FakeX:
 def test_the_window_list_keeps_named_windows_a_person_could_see() -> None:
     found = parse_windows(TREE)
     assert [w.title for w in found] == ["Critical Error", "Harry Potter", "Harry Potter (Running)"]
-    assert found[1] == Window("0xc00004", "Harry Potter", 640, 480)
+    assert found[1] == Window("0xc00004", "Harry Potter", 640, 480, 4, 30)
 
 
 def test_a_window_is_chosen_by_id_or_by_the_one_title_that_contains_the_words() -> None:
@@ -116,7 +116,7 @@ def test_a_named_window_is_captured_scaled_to_fit(tmp_path: Path) -> None:
     x = FakeX()
     out = tmp_path / "s.png"
     got = capture("critical", out, {"DISPLAY": ":1"}, x)
-    assert got == Window("0xc0000a", "Critical Error", 277, 141)
+    assert got == Window("0xc0000a", "Critical Error", 277, 141, 501, 302)
     assert x.calls[-1] == ["import", "-window", "0xc0000a", "-resize", "1600x1600>", f"png:{out}"]
     assert out.read_bytes().startswith(b"\x89PNG")
 
@@ -288,7 +288,7 @@ def test_a_screenshot_call_that_cannot_be_shown_says_why(
     monkeypatch.setattr(screen, "run_x", FakeX(tree_code=1))
     assert tools._screenshot(ctx, {}).startswith("error: the window list could not be read")
 
-    def junk(wanted: str, out: Path, env: Mapping[str, str], region: object = None) -> None:
+    def junk(wanted: str, out: Path, env: Mapping[str, str], **_: object) -> None:
         out.write_text("not a picture")  # what a broken import could leave
 
     monkeypatch.setattr(screen, "capture", junk)
@@ -358,3 +358,85 @@ def test_a_zoom_outside_its_window_is_refused(
     assert said.startswith(refusal)
     inside = screen.capture("critical", tmp_path / "z.png", {}, run, region=(267, 131, 10, 10))
     assert inside == "error: the window could not be captured (import exited 0)"  # it got as far
+
+
+# -- a window on top is taken from the screen, menus included --------------------------
+
+
+def _recorder(calls: list[list[str]]) -> screen.Run:
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[0] in ("grim", "import", "convert"):
+            Path(argv[-1].removeprefix("png:")).write_bytes(b"png")
+        return 0, TREE
+
+    return run
+
+
+WAYLAND: Final = {"WAYLAND_DISPLAY": "wayland-0"}
+
+
+def _grim(name: str) -> str | None:
+    return f"/usr/bin/{name}"
+
+
+def test_a_window_on_top_is_taken_from_the_screen_at_its_own_size(tmp_path: Path) -> None:
+    """Live: a menu is a window of its own, so the Writer window's picture showed
+    "Format" highlighted and no menu. Known-good: the window's place on the
+    screen is captured (what the person sees there), scaled to its own pixels."""
+    calls: list[list[str]] = []
+    out = tmp_path / "w.png"
+    got = capture("critical", out, WAYLAND, _recorder(calls), on_top=lambda w: True, which=_grim)
+    assert isinstance(got, Window)
+    assert calls[1:] == [
+        ["grim", "-t", "png", "-g", "501,302 277x141", str(out)],
+        ["convert", str(out), "-resize", "277x141!", str(out)],
+        ["convert", str(out), "-resize", "1600x1600>", str(out)],
+    ]
+
+
+def test_a_zoom_on_top_is_cut_from_the_screen(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    out = tmp_path / "z.png"
+    region = (100, 50, 80, 40)
+    capture("critical", out, WAYLAND, _recorder(calls), region, lambda w: True, _grim)
+    assert calls[1:] == [
+        ["grim", "-t", "png", "-g", "601,352 80x40", str(out)],
+        ["convert", str(out), "-resize", "320x160!", str(out)],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("env", "on_top", "which"),
+    [
+        (WAYLAND, False, _grim),  # covered: the screen there shows the cover
+        ({}, True, _grim),  # plain X11: no compositor capture
+        (WAYLAND, True, lambda name: None),  # grim not installed
+    ],
+)
+def test_otherwise_the_window_is_read_from_x(
+    tmp_path: Path,
+    env: dict[str, str],
+    on_top: bool,
+    which: Callable[[str], str | None],
+) -> None:
+    calls: list[list[str]] = []
+    out = tmp_path / "w.png"
+    capture("critical", out, env, _recorder(calls), on_top=lambda w: on_top, which=which)
+    assert [c[0] for c in calls[1:]] == ["import"]
+
+
+def test_without_xdotool_no_window_counts_as_on_top(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        raise FileNotFoundError(argv[0])
+
+    monkeypatch.setattr(screen, "run_x", missing)
+    assert tools._on_top({})(Window("0x10", "x", 20, 20)) is False
+
+
+def test_a_framed_window_s_place_is_where_it_is_on_the_screen() -> None:
+    """A window manager that frames windows puts the program's window inside its
+    frame: xwininfo's first place is within the frame, the second on the screen,
+    and a capture of the window's place on the screen needs the second."""
+    tree = '     0x1e00007 "Notes": ("notes" "Notes")  800x600+0+24  +300+224\n'
+    assert parse_windows(tree) == [Window("0x1e00007", "Notes", 800, 600, 300, 224)]

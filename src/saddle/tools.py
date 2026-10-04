@@ -1021,7 +1021,8 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return region
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "screen.png"
-        got = screen.capture(wanted, out, _screen_env(), region=region)
+        env = _screen_env()
+        got = screen.capture(wanted, out, env, region=region, on_top=_on_top(env))
         if isinstance(got, str):
             return got
         name = f"screenshot of {got.describe()}" if got is not None else "screenshot of the screen"
@@ -1111,11 +1112,25 @@ def _stranger(ctx: ToolContext, window: screen.Window, action: computer.Action) 
     )
 
 
+def _on_top(env: Mapping[str, str]) -> Callable[[screen.Window], bool]:
+    """Whether a window has the focus, so nothing covers it and a picture of its
+    place on the screen shows it, with any menu it has open."""
+
+    def check(window: screen.Window) -> bool:
+        try:
+            code, active = screen.run_x(["xdotool", "getactivewindow"], env)
+        except OSError:  # no xdotool: the window is read from X as before
+            return False
+        return code == 0 and active.strip() == str(int(window.id, 16))
+
+    return check
+
+
 def _afterwards(ctx: ToolContext, window: screen.Window, env: Mapping[str, str]) -> str:
     """A fresh picture of `window` after an action, or why there is none."""
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "after.png"
-        got = screen.capture(window.id, out, env)
+        got = screen.capture(window.id, out, env, on_top=_on_top(env))
         if isinstance(got, str) or got is None:
             return (
                 f"The window could not be shown afterwards ({got}); it may have closed. "

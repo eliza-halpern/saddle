@@ -40,7 +40,10 @@ limit the model is shown."""
 
 LIST: Final = "list"
 
-_LINE: Final = re.compile(r'^\s*(0x[0-9a-fA-F]+) "(.*)": \(.*?\)\s+(\d+)x(\d+)\+(-?\d+)\+(-?\d+)')
+_LINE: Final = re.compile(
+    r'^\s*(0x[0-9a-fA-F]+) "(.*)": \(.*?\)\s+(\d+)x(\d+)\+(-?\d+)\+(-?\d+)'
+    r"(?:\s+\+(-?\d+)\+(-?\d+))?"
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,9 @@ class Window:
     title: str
     width: int
     height: int
+    x: int = 0
+    y: int = 0
+    """Where the window sits on the screen (xwininfo's absolute place)."""
 
     def describe(self) -> str:
         return f'{self.id} "{self.title}" {self.width}x{self.height}'
@@ -70,8 +76,9 @@ def parse_windows(tree: str) -> list[Window]:
         if match is None:
             continue
         wid, title, width, height = match[1], match[2], int(match[3]), int(match[4])
+        x, y = int(match[7] or match[5]), int(match[8] or match[6])
         if title and width >= MIN_SIDE and height >= MIN_SIDE and wid not in found:
-            found[wid] = Window(wid, title, width, height)
+            found[wid] = Window(wid, title, width, height, x, y)
     return list(found.values())
 
 
@@ -126,11 +133,19 @@ def capture(
     env: Mapping[str, str],
     run: Run | None = None,
     region: tuple[int, int, int, int] | None = None,
+    on_top: Callable[[Window], bool] | None = None,
+    which: Callable[[str], str | None] | None = None,
 ) -> Window | str | None:
     """Capture what `wanted` names into `out` (PNG). An empty `wanted` is the
     whole screen (None); `list` returns the window list as text; `region`
     (x, y, width, height in the window's pixels) captures that part of the
-    window, enlarged (`zoom_size`); a failure is an "error: ..." string."""
+    window, enlarged (`zoom_size`); a failure is an "error: ..." string.
+
+    A window `on_top` says is uncovered is taken from the screen itself under
+    Wayland (`grim`), scaled to the window's own pixels: a menu or dropdown is a
+    window of its own, so a picture of the window alone left it out (live, the
+    model saw "Format" highlighted and no menu). A covered window is read from X,
+    which shows the window and not what covers it."""
     run = run or run_x
     code, tree = run(["xwininfo", "-root", "-tree"], env)
     if code != 0:
@@ -147,6 +162,13 @@ def capture(
         if isinstance(chosen, str):
             return chosen
         target = chosen
+    seen = (
+        target is not None
+        and on_top is not None
+        and bool(env.get("WAYLAND_DISPLAY"))
+        and (which or shutil.which)("grim") is not None
+        and on_top(target)
+    )
     if region is not None:
         if target is None:
             return "error: a region is part of a window: name the window too"
@@ -159,20 +181,27 @@ def capture(
                 f"{target.describe()}; keep it inside the window"
             )
         wide, high, _ = zoom_size(width, height)
-        crop = f"{width}x{height}+{x}+{y}"
-        steps = [
-            [
-                "import",
-                "-window",
-                target.id,
-                "-crop",
-                crop,
-                "+repage",
-                "-resize",
-                f"{wide}x{high}!",
-                f"png:{out}",
+        if seen:
+            steps = _from_screen(target.x + x, target.y + y, width, height, out, f"{wide}x{high}!")
+        else:
+            crop = f"{width}x{height}+{x}+{y}"
+            steps = [
+                [
+                    "import",
+                    "-window",
+                    target.id,
+                    "-crop",
+                    crop,
+                    "+repage",
+                    "-resize",
+                    f"{wide}x{high}!",
+                    f"png:{out}",
+                ]
             ]
-        ]
+    elif target is not None and seen:
+        exact = f"{target.width}x{target.height}!"
+        steps = _from_screen(target.x, target.y, target.width, target.height, out, exact)
+        steps.append(["convert", str(out), "-resize", f"{MAX_SIDE}x{MAX_SIDE}>", str(out)])
     else:
         steps = [_window_argv(target.id, out)] if target is not None else screen_argv(out, env)
     for argv in steps:
@@ -181,6 +210,13 @@ def capture(
             what = "the window" if target is not None else "the screen"
             return f"error: {what} could not be captured ({argv[0]} exited {code})"
     return target
+
+
+def _from_screen(x: int, y: int, width: int, height: int, out: Path, size: str) -> list[list[str]]:
+    """Capture a part of the screen through the compositor, then scale it to
+    `size` (the compositor captures at the output's scale, 2x on a HiDPI one)."""
+    grab = ["grim", "-t", "png", "-g", f"{x},{y} {width}x{height}", str(out)]
+    return [grab, ["convert", str(out), "-resize", size, str(out)]]
 
 
 def _window_argv(window_id: str, out: Path) -> list[str]:
