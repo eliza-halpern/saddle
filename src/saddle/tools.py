@@ -240,10 +240,10 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
     "type types text; scroll turns the wheel up or down by amount, at x, y or the "
     "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
-    "a window, drag its title bar). Give x, y as your latest screenshot shows them: on a "
-    "whole-screen screenshot saddle converts them, on a window's they are its own "
-    "pixels, on a zoomed one saddle converts them too; space (screen, window or zoom) "
-    "says which when it differs. `window` is a "
+    "a window, drag its title bar). Give x, y as your latest picture of the window "
+    "shows them (saddle converts them when a menu widened that picture); after a "
+    "whole-screen screenshot, as that shows them. To aim with a zoomed screenshot, pass "
+    "space=zoom; space=window or space=screen says which picture otherwise. `window` is a "
     "window id or part of its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. A fresh "
     "picture of the window comes back after each action, and it is then your latest "
@@ -758,7 +758,10 @@ class ToolContext:
     computer call that names none."""
     zoom: screen.Zoom | None = None
     """The latest zoomed screenshot's region and scale, for `computer` points
-    measured on it."""
+    given with space=zoom."""
+    view: screen.Zoom | None = None
+    """Where the window's latest picture starts when a menu over it widened it,
+    for `computer` points read on it (space=window)."""
     last_look: str | None = None
     """What the latest screenshot showed: "screen" or "window". A `computer`
     point given without `space` is read on it."""
@@ -1046,7 +1049,6 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             if got is not None and region is None:
                 _looked_at(ctx, got, area)
             if got is not None and region is not None:
-                ctx.last_look = "zoom"
                 ctx.zoom = screen.Zoom(
                     got.id, region[0], region[1], screen.zoom_size(*region[2:])[2]
                 )
@@ -1086,24 +1088,27 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if isinstance(window, str):
         return window
     ctx.last_window = window.id
-    space = args.get("space") or (
-        ctx.last_look if ctx.last_look in ("screen", "zoom") else "window"
-    )
+    # A zoom is for reading: its points need space=zoom (live, a click meant
+    # for the window was read on a zoom of the title and landed in the page).
+    space = args.get("space") or ("screen" if ctx.last_look == "screen" else "window")
+    view = ctx.view if ctx.view is not None and ctx.view.window == window.id else None
     if space not in computer.SPACES:
         return "error: space must be window (the window's own pixels) or screen"
     if space == "screen":
         action = computer.to_window(action, window, ctx.screen_capture, env)
     elif space == "zoom":
         action = computer.from_zoom(action, ctx.zoom, window)
+    elif view is not None:  # the window's latest picture, widened by a menu
+        action = computer.from_zoom(action, view, window)
     if isinstance(action, str):
         return action
     bounds = None
-    if space == "zoom" and ctx.zoom is not None and ctx.zoom.width and ctx.zoom.height:
+    if space == "window" and view is not None and view.width and view.height:
         bounds = (
-            min(0, ctx.zoom.x),
-            min(0, ctx.zoom.y),
-            max(window.width, ctx.zoom.x + ctx.zoom.width),
-            max(window.height, ctx.zoom.y + ctx.zoom.height),
+            min(0, view.x),
+            min(0, view.y),
+            max(window.width, view.x + view.width),
+            max(window.height, view.y + view.height),
         )
     action = computer.placed(action, window, bounds)
     if isinstance(action, str):
@@ -1116,8 +1121,9 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     failed = computer.perform(action, window, env)
     if failed is not None:
         return failed
-    zoomed = ctx.zoom.label if ctx.zoom is not None else "zoomed"
-    on = {"screen": "whole-screen", "zoom": zoomed}.get(str(space))
+    on = {"screen": "whole-screen", "zoom": "zoomed"}.get(str(space))
+    if space == "window" and view is not None:
+        on = "latest"  # the widened picture
     read = f" (x, y read on your {on} screenshot)" if on and action.x is not None else ""
     read += unnamed
     return (
@@ -1200,12 +1206,12 @@ def _looked_at(
 ) -> None:
     """Record a window's picture as the latest look: its own pixels, or, when it
     was widened by a menu over it, a picture that starts elsewhere."""
+    ctx.last_look = "window"
     if not area or area[0] == (0, 0, window.width, window.height):
-        ctx.last_look = "window"
+        ctx.view = None
         return
     left, top, width, height = area[0]
-    ctx.last_look = "zoom"
-    ctx.zoom = screen.Zoom(window.id, left, top, 1.0, width, height, "latest")
+    ctx.view = screen.Zoom(window.id, left, top, 1.0, width, height, "latest")
 
 
 def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
