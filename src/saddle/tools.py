@@ -218,7 +218,10 @@ SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     "see computer); omit it for the whole screen. Use it to "
     "read a dialog, check that a window opened, or see what a program shows, "
     "instead of asking the person. To read small text, zoom: with a window, x, y, "
-    "width and height (its own pixels) capture just that part, enlarged.",
+    "width and height (its own pixels) capture just that part, enlarged. Every "
+    "picture has rulers along its top and left edges: the numbers are the x, y to "
+    "give for that picture, the window's own pixels (on a zoom too, so a point "
+    "read off a zoom's ruler needs no space).",
     {
         "window": {"type": "string"},
         "x": {"type": "integer"},
@@ -1024,6 +1027,10 @@ def _region(args: Mapping[str, Any]) -> tuple[int, int, int, int] | str | None:
     return x, y, width, height
 
 
+Area = list[tuple[int, int, int, int]]
+"""What `screen.capture` reports a picture covers (left, top, width, height in
+window pixels): a menu widening, or a zoom's region."""
+
 SCREENSHOT_ARGS: Final = frozenset(
     {"window", "x", "y", "width", "height", "list", "action", "space"}
 )
@@ -1070,6 +1077,7 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             if got is not None
             else "screenshot of the screen"
         )
+        _rule(out, got, area, cut, env)
         shown = _read_image(ctx, ctx.call_id, name, out)
         info = image_info(out.read_bytes()) if got is None else None
         if info is not None:
@@ -1173,7 +1181,13 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     read = f" (x, y read on your {on} screenshot)" if on and action.x is not None else ""
     read += unnamed
     after = _afterwards(ctx, window, env)  # waits AFTER_SETTLE_S first
-    opened = [w for w in _shown_windows(env) if w.id not in before and w.id != window.id]
+    opened = [
+        w
+        for w in _shown_windows(env)
+        if w.id not in before
+        and w.id != window.id
+        and not screen.transient(w, env, screen.run_x)  # a tooltip, live, closed at once
+    ]
     if opened:
         named = "; ".join(w.describe() for w in opened)
         after += (
@@ -1243,11 +1257,42 @@ def _afterwards(ctx: ToolContext, window: screen.Window, env: Mapping[str, str])
                 "The action was done."
             )
         name = f"screenshot of {got.describe()} afterwards{_over(got, area)}"
+        _rule(out, got, area, [], env)
         shown = _read_image(ctx, ctx.call_id, name, out)
     if shown is None:
         return "The window could not be shown afterwards (the capture was not an image)."
     _looked_at(ctx, got, area)  # the newest picture the model has is this window's
     return shown
+
+
+def _ruler_frame(
+    window: screen.Window | None, area: Area, cut: Area, size: tuple[int, int]
+) -> tuple[tuple[int, int], float]:
+    """Where a picture's rulers start and how many picture pixels one unit is:
+    a zoom's region at its factor, a widened picture from where it starts, a
+    window in its own pixels (shrunk to fit, by the shrink), the whole screen
+    in the picture's own pixels."""
+    if cut:
+        x, y, width, _ = cut[0]
+    elif area:
+        x, y, width, _ = area[0]
+    elif window is not None:
+        x, y, width = 0, 0, window.width
+    else:
+        return (0, 0), 1.0
+    return (x, y), size[0] / width
+
+
+def _rule(
+    out: Path, window: screen.Window | None, area: Area, cut: Area, env: Mapping[str, str]
+) -> None:
+    """Draw rulers on the picture at `out` (`screen.ruler_argv`); a picture
+    whose size cannot be read, or a failed drawing, is left as it was."""
+    info = image_info(out.read_bytes())
+    if info is None:
+        return
+    origin, scale = _ruler_frame(window, area, cut, (info.width, info.height))
+    screen.run_x(screen.ruler_argv(out, origin, scale, (info.width, info.height)), env)
 
 
 def _over(window: screen.Window, area: list[tuple[int, int, int, int]]) -> str:

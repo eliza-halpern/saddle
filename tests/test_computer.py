@@ -1477,3 +1477,49 @@ def test_a_zoom_is_not_called_a_menu_widening(
     said = tools._screenshot(ctx, {"window": "video", "x": 10, "y": 10, "width": 80, "height": 40})
     assert "widened" not in said
     assert "menu" not in said
+
+
+def test_each_picture_is_ruled_in_the_coordinates_given_for_it() -> None:
+    """The ruler's frame (origin, scale) per picture: a window's own pixels; a
+    picture widened 34 px above the window from -34; a zoom from its region at
+    its factor (window pixels, read with no space); a whole-screen picture in
+    its own pixels; a window shrunk to fit by its shrink."""
+    w = Window("0x1", "w", 400, 300)
+    assert tools._ruler_frame(w, [], [], (400, 300)) == ((0, 0), 1.0)
+    assert tools._ruler_frame(w, [(0, -34, 400, 334)], [], (400, 334)) == ((0, -34), 1.0)
+    assert tools._ruler_frame(w, [], [(100, 50, 80, 40)], (320, 160)) == ((100, 50), 4.0)
+    assert tools._ruler_frame(None, [], [], (1600, 900)) == ((0, 0), 1.0)
+    wide = Window("0x2", "wide", 3200, 1000)
+    assert tools._ruler_frame(wide, [], [], (1600, 500)) == ((0, 0), 0.5)
+
+
+def test_pictures_carry_rulers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video"})
+    act(ctx, window="video", action="click", x=5, y=5)
+    rulers = [c for c in desktop.calls if c[0] == "convert" and "-annotate" in c]
+    assert len(rulers) == 2  # the screenshot's and the picture after the click
+
+
+def test_a_tooltip_that_appears_is_not_named_as_a_new_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (rung 4, try 6): the new-window note named a tooltip that closed a
+    moment later, and the model spent a call trying to look at it. Known-good:
+    a window X marks override-redirect (tooltips, menus) is not named; a
+    dialog still is (test_a_window_an_action_opens_is_named_in_its_result)."""
+
+    class TooltipDesktop(DialogDesktop):
+        def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+            if list(argv[:3]) == ["xwininfo", "-id", "0x1500009"]:
+                return 0, "  Map State: IsViewable\n  Override Redirect State: yes\n"
+            return super().__call__(argv, env)
+
+    fake = TooltipDesktop()
+    monkeypatch.setattr(screen, "run_x", fake)
+    monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1"})
+    monkeypatch.setattr("saddle.tools.time.sleep", lambda s: None)
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="key", keys="ctrl+shift+s")
+    assert "A new window opened" not in said

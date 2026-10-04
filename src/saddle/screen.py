@@ -93,6 +93,13 @@ def hidden(window: Window, env: Mapping[str, str], run: Run) -> bool:
     return code == 0 and ("IsUnMapped" in info or "IsUnviewable" in info)
 
 
+def transient(window: Window, env: Mapping[str, str], run: Run) -> bool:
+    """Whether X marks `window` override-redirect: a tooltip or a menu, which
+    comes and goes on its own, not a dialog the program opened."""
+    code, info = run(["xwininfo", "-id", window.id], env)
+    return code == 0 and "Override Redirect State: yes" in info
+
+
 def shown_windows(tree: str, env: Mapping[str, str], run: Run) -> list[Window]:
     """The named windows in `tree` that are on the screen (`hidden`)."""
     return [w for w in parse_windows(tree) if not hidden(w, env, run)]
@@ -297,3 +304,44 @@ def screen_argv(
     if env.get("WAYLAND_DISPLAY") and which("grim"):
         return [["grim", "-t", "png", str(out)], ["convert", str(out), "-resize", fit, str(out)]]
     return [_window_argv("root", out)]
+
+
+RULER_STEPS: Final = (10, 20, 25, 50, 100, 200, 250, 500, 1000)
+RULER_GAP: Final = 60
+"""Picture pixels at least between two ruler labels, so they stay readable."""
+
+
+def ruler_argv(
+    out: Path, origin: tuple[int, int], scale: float, size: tuple[int, int]
+) -> list[str]:
+    """The command that draws rulers on the picture `out`: ticks and numbers
+    along its top and left edges, in the coordinates the model gives for it.
+    `origin` is the coordinate at the picture's top-left corner and `scale`
+    how many picture pixels one coordinate unit is (a zoom's factor, else 1).
+
+    Live (rung 4, Inkscape), the model aimed at a field with a position it
+    remembered from an earlier layout, 19 px off, three runs in a row, and
+    misconverted points between a window picture and its zooms. Ruled in the
+    window's own pixels, a zoom can be read without conversion."""
+    step = next((s for s in RULER_STEPS if s * scale >= RULER_GAP), RULER_STEPS[-1])
+    lines: list[str] = []
+    labels: list[tuple[int, int, str]] = []
+    for axis, start, length in ((0, origin[0], size[0]), (1, origin[1], size[1])):
+        first = -(-start // step) * step  # the first multiple of step at or past start
+        for value in range(first, start + int(length / scale) + 1, step):
+            at = round((value - start) * scale)
+            if not 0 <= at < length:
+                continue
+            if axis == 0:
+                lines.append(f"line {at},0 {at},6")
+                labels.append((at + 2, 16, str(value)))
+            else:
+                lines.append(f"line 0,{at} 6,{at}")
+                labels.append((8, at + 4, str(value)))
+    argv = ["convert", str(out), "-stroke", "#d0006f", "-strokewidth", "1"]
+    for line in lines:
+        argv += ["-draw", line]
+    argv += ["-stroke", "none", "-fill", "black", "-undercolor", "#ffffffd8", "-pointsize", "11"]
+    for x, y, text in labels:
+        argv += ["-annotate", f"+{x}+{y}", text]
+    return [*argv, str(out)]

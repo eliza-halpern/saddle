@@ -278,7 +278,7 @@ def test_a_screenshot_is_shown_to_the_model_like_an_image_file(
     assert (call_id, url[:22]) == ("c1", "data:image/png;base64,")
     whole = tools._screenshot(ctx, {})
     assert whole.startswith("screenshot of the screen: PNG image")
-    assert x.calls[-1][2] == "root"
+    assert [c for c in x.calls if c[0] == "import"][-1][2] == "root"
 
 
 def test_a_screenshot_call_that_cannot_be_shown_says_why(
@@ -611,3 +611,44 @@ def test_screenshot_takes_space_and_ignores_it(
     ctx = ToolContext(workdir=tmp_path, full_access=True, processes=ProcessLedger())
     said = tools._screenshot(ctx, {"window": "list", "space": "zoom"})
     assert said.startswith("windows on the screen:")
+
+
+# -- rulers: the coordinates to give, drawn on the picture -------------------------------
+
+
+def _labels(argv: list[str]) -> list[tuple[str, int, int]]:
+    """The ruler's labels and where they are drawn: (text, x, y)."""
+    found = []
+    for i, arg in enumerate(argv):
+        if arg == "-annotate":
+            x, y = argv[i + 1].lstrip("+").split("+")
+            found.append((argv[i + 2], int(x), int(y)))
+    return found
+
+
+def test_a_window_picture_is_ruled_in_window_pixels(tmp_path: Path) -> None:
+    """Live (rung 4, Inkscape, tries 3-6): the model aimed at a field with a
+    remembered position 19 px off and its typing went nowhere, three runs in a
+    row. Known-good: the picture carries ticks and numbers along its top and
+    left edges in the coordinates to give, a label every 100 window pixels at
+    that place on the picture."""
+    out = tmp_path / "p.png"
+    argv = screen.ruler_argv(out, (0, 0), 1.0, (1280, 686))
+    assert argv[0] == "convert"
+    assert argv[1] == str(out)
+    assert argv[-1] == str(out)
+    labels = _labels(argv)
+    assert ("100", 100 + 2, 16) in labels  # along the top, just right of the tick
+    assert ("600", 600 + 2, 16) in labels
+    assert ("100", 8, 100 + 4) in labels  # down the left side
+    assert not any(text == "1300" for text, _, _ in labels)  # nothing past the picture
+
+
+def test_a_zoom_is_ruled_in_the_window_s_pixels(tmp_path: Path) -> None:
+    """A zoom of (380, 50) at 4x: the label "400" sits 80 picture pixels in,
+    so the model reads window coordinates off the zoom and gives them with no
+    space. A widened picture starting 34 px above the window is ruled from -34."""
+    zoom = _labels(screen.ruler_argv(tmp_path / "z.png", (380, 50), 4.0, (480, 160)))
+    assert ("400", (400 - 380) * 4 + 2, 16) in zoom
+    widened = _labels(screen.ruler_argv(tmp_path / "w.png", (0, -34), 1.0, (1280, 720)))
+    assert ("100", 8, 100 + 34 + 4) in widened  # window y 100 is 134 down the picture
