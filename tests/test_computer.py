@@ -692,27 +692,28 @@ def test_a_whole_screen_screenshot_is_remembered_for_screen_points(
 def test_a_drag_presses_inside_the_window_moves_and_lets_go(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
 ) -> None:
-    """The person asked for a model to move a window with the mouse. Known-good:
-    the press point is verified inside the window, the end may be anywhere."""
+    """The press point is verified inside the window, the end may be anywhere.
+    Measured in GIMP (rectangle select, then a fill with black): a drag that
+    jumped to its end in one move made no selection, 3 of 3 (the fill covered
+    99.9% of the canvas); one that moved in 20 steps selected the rectangle,
+    3 of 3 (14.6%, the dragged 200x150). Known-good: press, DRAG_STEPS
+    relative moves that add up to the whole distance, each followed by a
+    short pause, then let go."""
     said = act(
         _ctx(tmp_path, monkeypatch), window="video", action="drag", x=50, y=10, to_x=650, to_y=210
     )
     assert said.startswith("done: drag from (50, 10) to (650, 210) on 0x1200005")
-    assert desktop.actions[-1] == [
-        "xdotool",
-        "sleep",
-        "0.5",
-        "mousedown",
-        "1",
-        "mousemove_relative",
-        "--",
-        "600",
-        "200",
-        "sleep",
-        "0.5",
-        "mouseup",
-        "1",
+    chain = desktop.actions[-1]
+    assert chain[:5] == ["xdotool", "sleep", "0.5", "mousedown", "1"]
+    assert chain[-4:] == ["sleep", "0.5", "mouseup", "1"]
+    moves = [
+        (int(chain[i + 2]), int(chain[i + 3]))
+        for i, a in enumerate(chain)
+        if a == "mousemove_relative"
     ]
+    assert len(moves) == computer.DRAG_STEPS
+    assert (sum(m[0] for m in moves), sum(m[1] for m in moves)) == (600, 200)
+    assert chain.count("sleep") == computer.DRAG_STEPS + 2
 
 
 def test_a_drag_needs_both_points_and_a_start_inside_the_window(

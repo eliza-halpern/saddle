@@ -262,25 +262,26 @@ def steps(action: Action) -> list[str]:
 
 def _press_steps(action: Action, settle: list[str]) -> list[str]:
     if action.kind == "drag":
-        return [
-            *settle,
-            "mousedown",
-            "1",
-            "mousemove_relative",
-            "--",
-            str((action.to_x or 0) - (action.x or 0)),
-            str((action.to_y or 0) - (action.y or 0)),
-            "sleep",
-            SETTLE_S,
-            "mouseup",
-            "1",
-        ]
+        # In steps, not one jump: measured in GIMP, a rectangle select dragged
+        # in one move selected nothing (3 of 3), in 20 steps it selected the
+        # rectangle (3 of 3). Each step is the share of the distance still due,
+        # so the steps add up to it exactly.
+        dx = (action.to_x or 0) - (action.x or 0)
+        dy = (action.to_y or 0) - (action.y or 0)
+        moves: list[str] = []
+        for step in range(1, DRAG_STEPS + 1):
+            sx = dx * step // DRAG_STEPS - dx * (step - 1) // DRAG_STEPS
+            sy = dy * step // DRAG_STEPS - dy * (step - 1) // DRAG_STEPS
+            moves += ["mousemove_relative", "--", str(sx), str(sy), "sleep", DRAG_STEP_S]
+        return [*settle, "mousedown", "1", *moves, "sleep", SETTLE_S, "mouseup", "1"]
     if action.kind == "scroll":
         return [*settle, "click", "--repeat", str(action.amount), WHEEL[action.direction]]
     twice = ["--repeat", "3" if action.triple else "2"] if action.double or action.triple else []
     return [*settle, "click", *twice, BUTTONS[action.button]]
 
 
+DRAG_STEP_S: Final = "0.02"
+"""The pause after each step of a drag, so the program sees separate moves."""
 SETTLE_S: Final = "0.5"
 """Seconds between the pointer arriving and the press: live (labwc, Xwayland, a
 GTK dialog), a press 0.2 s after the move was not taken; 0.5 s and 1.0 s were."""
