@@ -1411,6 +1411,11 @@ def _list_dir(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return f"error: not a directory: {args.get('path') or '.'}"
     rows = []
     for entry in sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name)):
+        if entry.is_symlink() and not entry.exists():
+            # A link to something removed: listed, not a crash of the whole
+            # listing (live, a stale ~/.steampath failed `list_dir ~`).
+            rows.append(f"{entry.name} -> (missing)")
+            continue
         mark = "/" if entry.is_dir() else ""
         size = "" if entry.is_dir() else f"  {entry.stat().st_size}"
         rows.append(f"{entry.name}{mark}{size}")

@@ -508,3 +508,14 @@ def test_a_background_command_s_huge_output_is_cut_too(tmp_path: Path) -> None:
     waited = call("wait_for_terminal", id=terminal, timeout=30)
     assert "19600 lines elided" in waited
     assert "19600 lines elided" in call("read_terminal", id=terminal)
+
+
+def test_a_dangling_link_is_listed_not_a_crash(tmp_path: Path) -> None:
+    """Live (rung 2): list_dir of a home folder holding a link to a removed
+    Steam path failed whole with FileNotFoundError. Known-good: the other
+    entries are listed and the link is shown as broken."""
+    (tmp_path / "real.txt").write_text("hi")
+    (tmp_path / "gone").symlink_to(tmp_path / "missing" / "steam")
+    listed = run("list_dir", tmp_path, path=".")
+    assert "real.txt  2" in listed
+    assert "gone -> (missing)" in listed
