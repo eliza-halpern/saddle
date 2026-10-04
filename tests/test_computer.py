@@ -1489,6 +1489,11 @@ def test_a_zoom_names_its_region_and_scale(
     ctx = _ctx(tmp_path, monkeypatch)
     said = tools._screenshot(ctx, {"window": "video", "x": 10, "y": 20, "width": 80, "height": 40})
     assert "zoomed: the window's region from (10, 20), 80x40, enlarged 4x" in said
+    # Live (rung 9a): told "its rulers are in window pixels, and x, y read on it need
+    # space=zoom", the model read (460, 400) off the rulers and passed space=zoom,
+    # and the point was converted twice and landed on another menu item.
+    assert "x, y read off its rulers are window pixels: give them with no space" in said
+    assert "need space=zoom" not in said
     whole = tools._screenshot(ctx, {"window": "video"})
     assert "zoomed" not in whole
 

@@ -251,8 +251,10 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
     "a window, drag its title bar). Give x, y as your latest picture of the window "
     "shows them (saddle converts them when a menu widened that picture); after a "
-    "whole-screen screenshot, as that shows them. To aim with a zoomed screenshot, pass "
-    "space=zoom right after it; a picture widened to show a menu is not a zoom, give its "
+    "whole-screen screenshot, as that shows them. Every picture carries magenta rulers "
+    "in the pixels to give, so x, y read off the rulers need no space, a zoom's "
+    "included (space=zoom is only for x, y counted in a zoom's own pixels); a picture "
+    "widened to show a menu is not a zoom, give its "
     "x, y with no space. `window` is a "
     "window id or part of its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. Aim at "
@@ -1133,8 +1135,8 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if isinstance(window, str):
         return window
     ctx.last_window = window.id
-    # A zoom is for reading: its points need space=zoom (live, a click meant
-    # for the window was read on a zoom of the title and landed in the page).
+    # After a zoom, x, y with no space are the window's own pixels, as the zoom's
+    # rulers show them; space=zoom is for points counted in the zoom's own pixels.
     space = args.get("space") or ("screen" if ctx.last_look == "screen" else "window")
     view = ctx.view if ctx.view is not None and ctx.view.window == window.id else None
     if space not in computer.SPACES:
@@ -1321,7 +1323,8 @@ def _zoomed(region: tuple[int, int, int, int] | None, cut: list[tuple[int, int, 
     scale = screen.zoom_size(width, height)[2]
     return (
         f", zoomed: the window's region from ({x}, {y}), {width}x{height}, enlarged "
-        f"{scale:g}x; its rulers are in window pixels, and x, y read on it need space=zoom"
+        f"{scale:g}x; x, y read off its rulers are window pixels: give them with no space "
+        "(space=zoom only for x, y counted in this picture's own pixels)"
     )
 
 
