@@ -1026,6 +1026,8 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     region = _region(args)
     if isinstance(region, str):
         return region
+    if region is not None and not wanted.strip() and ctx.last_window is not None:
+        wanted = ctx.last_window  # a zoom is of the window last looked at or acted on
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "screen.png"
         env = _screen_env()
@@ -1094,6 +1096,12 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     view = ctx.view if ctx.view is not None and ctx.view.window == window.id else None
     if space not in computer.SPACES:
         return "error: space must be window (the window's own pixels) or screen"
+    if space == "screen" and ctx.last_look == "window" and action.x is not None:
+        return (
+            "error: space=screen reads x, y on a whole-screen screenshot, but your latest "
+            f"picture is of {window.describe()}; give x, y as that picture shows them "
+            "(space=window), or take a whole-screen screenshot first. Nothing was done."
+        )
     if space == "screen":
         action = computer.to_window(action, window, ctx.screen_capture, env)
     elif space == "zoom":

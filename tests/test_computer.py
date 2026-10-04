@@ -1168,3 +1168,39 @@ def test_a_widened_picture_of_one_window_does_not_move_points_on_another(
     act(ctx, window="video", action="click", x=60, y=10)  # video's picture widened
     said = act(ctx, window="notes", action="click", x=5, y=5)
     assert said.startswith('done: left click at (5, 5) on 0x1400002 "Notes - Editor"')
+
+
+def test_screen_points_are_read_only_right_after_a_whole_screen_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 1, try 4): the model read a point off the window's picture
+    (widened by a menu, so it looked like the whole screen) and passed
+    space=screen; saddle scaled it with an older whole-screen picture's size,
+    the click landed at (169, 0) and changed the document. Known-good: right
+    after a whole-screen screenshot, space=screen converts. Known-bad: once
+    a window's picture is newer, space=screen is refused with what to do."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {})
+    ctx.screen_capture = (1600, 900)
+    said = act(ctx, window="video", action="click", x=300, y=250, space="screen")
+    assert said.startswith("done: left click at (140, 100)")  # its picture is the window's now
+    said = act(ctx, window="video", action="click", x=300, y=250, space="screen")
+    assert said.startswith(
+        "error: space=screen reads x, y on a whole-screen screenshot, but your latest "
+        'picture is of 0x1200005 "Video Configuration" 400x300'
+    )
+
+
+def test_a_zoom_with_no_window_named_is_of_the_last_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 1, try 4): a zoom without a window was refused right after a
+    look at Writer. Known-good: the window last looked at or acted on is
+    zoomed. Known-bad: with none, the refusal stands."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    region = {"x": 10, "y": 10, "width": 40, "height": 20}
+    assert tools._screenshot(ctx, region).startswith("error: a region is part of a window")
+    tools._screenshot(ctx, {"window": "video"})
+    said = tools._screenshot(ctx, region)
+    assert "screenshot of 0x1200005" in said
+    assert ctx.zoom == screen.Zoom("0x1200005", 10, 10, 4.0)
