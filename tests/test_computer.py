@@ -1480,6 +1480,19 @@ def test_a_zoom_is_not_called_a_menu_widening(
     assert "menu" not in said
 
 
+def test_a_zoom_names_its_region_and_scale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 6, try 7): a zoom of GIMP's canvas came back as "screenshot
+    of ... 1280x686: PNG image, 1600x880", and the model read the picture's
+    pixels as window pixels ("white to 820" in a 686-tall window)."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = tools._screenshot(ctx, {"window": "video", "x": 10, "y": 20, "width": 80, "height": 40})
+    assert "zoomed: the window's region from (10, 20), 80x40, enlarged 4x" in said
+    whole = tools._screenshot(ctx, {"window": "video"})
+    assert "zoomed" not in whole
+
+
 def test_each_picture_is_ruled_in_the_coordinates_given_for_it() -> None:
     """The ruler's frame (origin, scale) per picture: a window's own pixels; a
     picture widened 34 px above the window from -34; a zoom from its region at

@@ -1078,7 +1078,7 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         if isinstance(got, str):
             return got
         name = (
-            f"screenshot of {got.describe()}{_over(got, area)}"
+            f"screenshot of {got.describe()}{_over(got, area)}{_zoomed(region, cut)}"
             if got is not None
             else "screenshot of the screen"
         )
@@ -1309,6 +1309,19 @@ def _over(window: screen.Window, area: list[tuple[int, int, int, int]]) -> str:
     return (
         f", widened to {width}x{height} to show what is open over it (a menu); the picture "
         f"starts at ({left}, {top}) of the window, and x, y read on it are converted"
+    )
+
+
+def _zoomed(region: tuple[int, int, int, int] | None, cut: list[tuple[int, int, int, int]]) -> str:
+    """What a zoom shows: which region of the window, and how much enlarged, so
+    its pixels are not read as the window's own."""
+    if region is None:
+        return ""
+    x, y, width, height = cut[0] if cut else region
+    scale = screen.zoom_size(width, height)[2]
+    return (
+        f", zoomed: the window's region from ({x}, {y}), {width}x{height}, enlarged "
+        f"{scale:g}x; its rulers are in window pixels, and x, y read on it need space=zoom"
     )
 
 
