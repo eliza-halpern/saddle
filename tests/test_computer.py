@@ -110,7 +110,7 @@ class FakeDesktop:
             return self.display_code, "1280 720\n"
         if verb == "getmouselocation":
             return 0, f"X={self.pointer[0]}\nY={self.pointer[1]}\nSCREEN=0\nWINDOW=1\n"
-        code = self.act_codes.get(verb, 0)
+        code = max(self.act_codes.get(part, 0) for part in argv[1:])  # a chain fails as a whole
         if verb == "windowactivate" and code == 0 and self.focus_sticks:
             self.active = argv[2]
         if verb == "mousemove" and code == 0 and self.pointer_moves:
@@ -291,11 +291,11 @@ def _move(x: int, y: int) -> list[str]:
         ),
         (
             {"action": "click", "x": 210, "y": 270},
-            [ACTIVATE, _move(210, 270), ["xdotool", "click", "1"]],
+            [ACTIVATE, _move(210, 270), ["xdotool", "sleep", "0.5", "click", "1"]],
         ),
         (
             {"action": "click", "x": "5", "y": 6, "button": "right", "double": True},
-            [ACTIVATE, _move(5, 6), ["xdotool", "click", "--repeat", "2", "3"]],
+            [ACTIVATE, _move(5, 6), ["xdotool", "sleep", "0.5", "click", "--repeat", "2", "3"]],
         ),
         (
             {"action": "key", "keys": "alt+Return"},
@@ -307,11 +307,11 @@ def _move(x: int, y: int) -> list[str]:
         ),
         (
             {"action": "scroll"},
-            [ACTIVATE, _move(200, 150), ["xdotool", "click", "--repeat", "3", "5"]],
+            [ACTIVATE, _move(200, 150), ["xdotool", "sleep", "0.5", "click", "--repeat", "3", "5"]],
         ),
         (
             {"action": "scroll", "direction": "up", "amount": 2, "x": 1, "y": 2},
-            [ACTIVATE, _move(1, 2), ["xdotool", "click", "--repeat", "2", "4"]],
+            [ACTIVATE, _move(1, 2), ["xdotool", "sleep", "0.5", "click", "--repeat", "2", "4"]],
         ),
     ],
 )
@@ -567,7 +567,7 @@ def test_a_click_the_desktop_will_not_aim_is_not_sent(
     assert said == computer.NO_POINTER.format(
         window='0x1200005 "Video Configuration" 400x300', where="(715, 438)"
     )
-    assert ["xdotool", "click", "1"] not in blocked.actions
+    assert not any("click" in c for c in blocked.actions)
     moved = FakeDesktop()
     monkeypatch.setattr(screen, "run_x", moved)
     assert act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=10, y=20).startswith(

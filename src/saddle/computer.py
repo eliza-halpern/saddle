@@ -164,12 +164,16 @@ def steps(action: Action) -> list[str]:
         return ["xdotool", "key", "--clearmodifiers", action.keys]
     if action.kind == "type":
         return ["xdotool", "type", "--clearmodifiers", "--", action.text]
+    settle = ["xdotool", "sleep", SETTLE_S]
     if action.kind == "scroll":
-        return ["xdotool", "click", "--repeat", str(action.amount), WHEEL[action.direction]]
+        return [*settle, "click", "--repeat", str(action.amount), WHEEL[action.direction]]
     twice = ["--repeat", "2"] if action.double else []
-    return ["xdotool", "click", *twice, BUTTONS[action.button]]
+    return [*settle, "click", *twice, BUTTONS[action.button]]
 
 
+SETTLE_S: Final = "0.5"
+"""Seconds between the pointer arriving and the press: live (labwc, Xwayland, a
+GTK dialog), a press 0.2 s after the move was not taken; 0.5 s and 1.0 s were."""
 NOT_FOCUSED: Final = (
     "error: nothing was sent: {window} could not be given the keyboard (another window "
     "kept the focus), and keys sent now would reach that window instead"
