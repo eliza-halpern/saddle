@@ -470,6 +470,7 @@ class McpHost:
                             command=f"MCP server {spec.name}: {shlex.join(spec.command)}",
                             started=time.time(),
                             pgid=pid,
+                            saddle=True,  # saddle's own: never the model's to stop (F41)
                         )
                     )
                 return

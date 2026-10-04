@@ -1241,18 +1241,19 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
 
 
 def _processes(ctx: ToolContext, args: Mapping[str, Any]) -> str:
-    """The `processes` tool: this session's own process list, never anyone else's."""
+    """The `processes` tool: this session's own process list, never anyone else's,
+    and never what saddle started for itself (`Tracked.saddle`, F41)."""
     ledger = ctx.processes
     if ledger is None:
         return f"error: unknown tool {PROCESSES_TOOL!r}"
     action = _text(args, "action", PROCESSES_TOOL)
     if action == "list":
-        entries = ledger.entries()
+        entries = ledger.entries(include_saddles=False)
         if not entries:
             return "no processes are running from this session"
         return "\n".join(entry.describe() for entry in entries)
     if action == "stop_all":
-        stopped = ledger.stop_all()
+        stopped = ledger.stop_all(include_saddles=False)
         return (
             "stopped:\n" + "\n".join(e.describe() for e in stopped)
             if stopped
@@ -1262,7 +1263,7 @@ def _processes(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         target = args.get("id")
         if isinstance(target, bool) or not isinstance(target, int):
             return "error: action=stop needs an integer id (from action=list)"
-        entry = ledger.stop(target)
+        entry = ledger.stop(target, include_saddles=False)
         if entry is None:
             return (
                 f"error: {target} is not one of this session's processes; nothing was "

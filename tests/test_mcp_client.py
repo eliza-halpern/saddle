@@ -342,6 +342,19 @@ def test_a_server_is_in_the_session_process_list_and_ending_access_stops_it(
 
 
 @needs_cgroup
+def test_the_models_processes_tool_neither_lists_nor_stops_the_server(full: Session) -> None:
+    """F41: the model's `stop_all` (closing a game it launched) stopped the
+    session's own web-reader server, breaking its next research call."""
+    assert full.call("mcp__fx__echo", text="up") == "up"
+    (server,) = [e for e in full.ledger.entries() if "MCP server fx" in e.describe()]
+    assert "MCP server fx" not in full.call("processes", action="list")
+    assert "not one of this session's" in full.call("processes", action="stop", id=server.id)
+    assert full.call("processes", action="stop_all") == "nothing was running"
+    assert [e.id for e in full.ledger.entries()] == [server.id]
+    assert full.call("mcp__fx__echo", text="still") == "still"
+
+
+@needs_cgroup
 def test_stopping_the_servers_process_behind_the_clients_back_is_a_named_failure(
     full: Session,
 ) -> None:

@@ -21,6 +21,14 @@ ledger falls back to each command's process group, and says so
 
 Only a process the ledger recorded can be listed or stopped, so a process of
 the same name that something else started is never touched.
+
+A process saddle starts for its own machinery (an MCP server the web reader or
+the Edit lane's client starts) is recorded too, so the session's cleanup stops
+it, but marked `Tracked.saddle` by the caller that starts it. The model's
+`processes` tool asks with `include_saddles=False`: it neither lists nor stops
+such a process, so closing what it launched cannot take the session's reader
+down with it (F41). The person's list, ending access and closing the session
+still see and stop everything.
 """
 
 from __future__ import annotations
@@ -65,6 +73,9 @@ class Tracked:
     process: subprocess.Popen[str] | None = field(default=None, compare=False)
     """The command's own process while this saddle holds it; None once the
     ledger was read back from disk (a restart), when only the scope remains."""
+    saddle: bool = False
+    """Saddle started it for its own machinery (an MCP server), set by the
+    caller that starts it: never the model's to list or stop."""
 
 
 @dataclass(frozen=True)
@@ -170,6 +181,7 @@ class ProcessLedger:
                         command=row["command"],
                         started=float(row["started"]),
                         pgid=int(row["pgid"]),
+                        saddle=row.get("saddle") is True,
                     )
                     for row in rows
                 ]
@@ -196,6 +208,7 @@ class ProcessLedger:
                 "command": t.command,
                 "started": t.started,
                 "pgid": t.pgid,
+                "saddle": t.saddle,
             }
             for t in self._tracked
         ]
@@ -237,9 +250,10 @@ class ProcessLedger:
             return []
         return [pid for pid in map(int, raw.split()) if _alive(pid)]
 
-    def _live(self) -> list[tuple[Tracked, list[int]]]:
+    def _live(self, *, include_saddles: bool = True) -> list[tuple[Tracked, list[int]]]:
         """Each tracked command with its live PIDs; a finished command whose
-        scope is empty is forgotten."""
+        scope is empty is forgotten. Without `include_saddles`, what saddle
+        started for itself is left out."""
         with self._lock:
             live = []
             kept = []
@@ -248,7 +262,8 @@ class ProcessLedger:
                 running = tracked.process is not None and tracked.process.poll() is None
                 if pids or running:
                     kept.append(tracked)
-                    live.append((tracked, pids))
+                    if include_saddles or not tracked.saddle:
+                        live.append((tracked, pids))
                 else:
                     self._cgroups.pop(tracked.unit or "", None)
             if len(kept) != len(self._tracked):
@@ -256,12 +271,13 @@ class ProcessLedger:
                 self._save()
             return live
 
-    def entries(self) -> list[Entry]:
-        """One entry per process group still running, oldest first."""
+    def entries(self, *, include_saddles: bool = True) -> list[Entry]:
+        """One entry per process group still running, oldest first. The model's
+        view passes `include_saddles=False` (`Tracked.saddle`)."""
         boot = _boot_time()
         ticks = os.sysconf("SC_CLK_TCK")
         found: dict[int, Entry] = {}
-        for tracked, pids in self._live():
+        for tracked, pids in self._live(include_saddles=include_saddles):
             groups: dict[int, list[tuple[int, int]]] = {}
             for pid in pids:
                 stat = _stat(pid)
@@ -289,22 +305,32 @@ class ProcessLedger:
                 )
         return sorted(found.values(), key=lambda entry: entry.started)
 
-    def stop(self, entry_id: int) -> Entry | None:
-        """Stop one of this session's process groups; None when it is not one."""
+    def stop(self, entry_id: int, *, include_saddles: bool = True) -> Entry | None:
+        """Stop one of this session's process groups; None when it is not one
+        (without `include_saddles`, saddle's own are not)."""
         with self._lock:
-            entry = next((e for e in self.entries() if e.id == entry_id), None)
+            entries = self.entries(include_saddles=include_saddles)
+            entry = next((e for e in entries if e.id == entry_id), None)
             if entry is None:
                 return None
             self._terminate(
-                lambda: [p for _, pids in self._live() for p in pids if _group(p) == entry_id]
+                lambda: [
+                    p
+                    for _, pids in self._live(include_saddles=include_saddles)
+                    for p in pids
+                    if _group(p) == entry_id
+                ]
             )
             return entry
 
-    def stop_all(self) -> list[Entry]:
-        """Stop everything still running from this session; what it stopped."""
+    def stop_all(self, *, include_saddles: bool = True) -> list[Entry]:
+        """Stop everything still running from this session; what it stopped.
+        Without `include_saddles`, what saddle started for itself keeps running."""
         with self._lock:
-            entries = self.entries()
-            self._terminate(lambda: [p for _, pids in self._live() for p in pids])
+            entries = self.entries(include_saddles=include_saddles)
+            self._terminate(
+                lambda: [p for _, pids in self._live(include_saddles=include_saddles) for p in pids]
+            )
             return entries
 
     @staticmethod

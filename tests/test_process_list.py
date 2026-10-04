@@ -11,6 +11,12 @@ Known-bad: an unrelated process with the very same command line, started
 outside the session, is never listed and never touched, by `stop`, `stop_all`
 or the web API; a process group id the session did not start is refused.
 
+Saddle's own servers (F41): a process saddle starts for its own machinery (an
+MCP server, marked where it is recorded) is not the model's. The model's tool
+neither lists it nor stops it, by id or by `stop_all`, while the model's own
+command beside it is stopped; the person's list, ending access and the
+session's cleanup still stop it.
+
 Tracking: found by cgroup where a user systemd manager is reachable; without
 one it falls back to the command's process group, says so, and does not see a
 program that called `setsid`.
@@ -35,7 +41,7 @@ from test_full_access import call, run
 from test_memcap import needs_cgroup
 
 from saddle import memcap
-from saddle.procs import GRACE_S, ProcessLedger
+from saddle.procs import GRACE_S, ProcessLedger, Tracked
 from saddle.sessions import FULL_ACCESS_CONFIRM, SessionStore
 from saddle.tools import (
     PROCESSES_SCHEMA,
@@ -267,6 +273,103 @@ def test_stop_all_through_the_tool_names_what_it_stopped(full: ToolContext) -> N
     assert all(f"group {pid}" in said for pid in pids)
     for pid in pids:
         wait_gone(pid)
+
+
+# -- saddle's own servers: never the model's (F41) ---------------------------------------
+
+
+@pytest.fixture
+def server() -> Iterator[Stranger]:
+    """A process saddle started for its own machinery, recorded the way `McpHost`
+    records an MCP server: by its process group, marked as saddle's."""
+    sleep = marker()
+    process = subprocess.Popen(["sleep", sleep], start_new_session=True)
+    yield Stranger(process, sleep)
+    process.kill()
+    process.wait()
+
+
+def record_server(ledger: ProcessLedger, server: Stranger) -> None:
+    ledger.record(
+        Tracked(
+            unit=None,
+            terminal="mcp:fetch",
+            command="MCP server fetch: uvx mcp-server-fetch --ignore-robots-txt",
+            started=time.time(),
+            pgid=server.pid,
+            saddle=True,
+        )
+    )
+
+
+def test_the_models_tool_neither_lists_nor_stops_saddles_own_server(
+    full: ToolContext, server: Stranger
+) -> None:
+    record_server(processes_of(full), server)
+    sleep = marker()
+    game = subprocess.Popen(["sleep", sleep], start_new_session=True)  # the model's own
+    processes_of(full).record(
+        Tracked(
+            unit=None, terminal="t1", command=f"sleep {sleep}", started=time.time(), pgid=game.pid
+        )
+    )
+    try:
+        listed = run(full, "processes", action="list")
+        assert f"group {game.pid}" in listed
+        assert f"group {server.pid}" not in listed
+        assert "MCP server" not in listed
+        refused = run(full, "processes", action="stop", id=server.pid)
+        assert "not one of this session's" in refused
+        time.sleep(GRACE_S / 4)
+        assert server.poll() is None
+        said = run(full, "processes", action="stop_all")
+        assert said.startswith("stopped:")
+        assert f"group {game.pid}" in said
+        assert "MCP server" not in said
+        game.wait(timeout=10)  # the model's own group is stopped
+        assert server.poll() is None  # saddle's server is not
+        assert [e.id for e in processes_of(full).entries()] == [server.pid]  # the person's view
+    finally:
+        game.kill()
+        game.wait()
+
+
+def test_the_person_and_ending_access_still_stop_saddles_own_server(
+    full: ToolContext, server: Stranger
+) -> None:
+    record_server(processes_of(full), server)
+    assert [e.id for e in processes_of(full).entries()] == [server.pid]
+    assert run(full, "processes", action="stop_all") == "nothing was running"
+    assert server.poll() is None
+    stopped = full.revoke_full_access()
+    assert [e.id for e in stopped] == [server.pid]
+    assert server.process.wait(timeout=10) is not None
+
+
+def test_the_person_can_stop_saddles_own_server_by_its_id(tmp_path: Path, server: Stranger) -> None:
+    ledger = ProcessLedger()
+    record_server(ledger, server)
+    assert ledger.stop(server.pid, include_saddles=False) is None
+    assert server.poll() is None
+    entry = ledger.stop(server.pid)
+    assert entry is not None
+    assert entry.id == server.pid
+    assert server.process.wait(timeout=10) is not None
+
+
+def test_saddles_mark_survives_a_restart_and_an_old_file_is_the_models(
+    tmp_path: Path, server: Stranger
+) -> None:
+    path = tmp_path / "processes.json"
+    record_server(ProcessLedger(path), server)
+    again = ProcessLedger(path)
+    assert again.entries(include_saddles=False) == []
+    assert [e.id for e in again.entries()] == [server.pid]
+    rows = json.loads(path.read_text())
+    for row in rows:
+        del row["saddle"]  # a list written before saddle marked its own
+    path.write_text(json.dumps(rows))
+    assert [e.id for e in ProcessLedger(path).entries(include_saddles=False)] == [server.pid]
 
 
 @pytest.mark.parametrize(
