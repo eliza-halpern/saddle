@@ -781,14 +781,16 @@ def test_a_click_uses_the_compositors_pointer_when_it_offers_one() -> None:
 def test_a_drag_moves_with_the_button_held_to_its_end() -> None:
     desktop = FakeDesktop()
     real = FakePointer(desktop)
+    waits: list[float] = []
     computer.perform(
         Action("drag", x=10, y=5, to_x=310, to_y=105),
         VIDEO,
         {},
         desktop,
         lambda env: real,
-        lambda seconds: None,
+        waits.append,
     )
+    assert waits[:2] == [0.5, computer.HOLD_S]  # settle, then hold before moving
     assert real.calls[0] == ("move", "110", "105", "1280x720")
     assert real.calls[1] == ("down", "left")
     assert real.calls[-2] == ("move", "410", "205", "1280x720")  # the end: (100+310, 100+105)

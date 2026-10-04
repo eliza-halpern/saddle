@@ -260,6 +260,9 @@ def session_pointer(env: Mapping[str, str]) -> Pointer | None:
         return None
 
 
+HOLD_S: Final = 0.2
+"""Seconds the button is held before a drag moves: live, a drag that moved at
+once after the press left the window where it was; one that waited moved it."""
 DRAG_STEPS: Final = 10
 """Moves between a drag's press and release: a compositor starts moving a window
 only once the pointer has travelled a little with the button down."""
@@ -359,6 +362,7 @@ def _press(
         return
     end = (frame.get("X", 0) + (action.to_x or 0), frame.get("Y", 0) + (action.to_y or 0))
     real.button("left", pressed=True)
+    sleep(HOLD_S)
     for step in range(1, DRAG_STEPS + 1):
         x = aimed[0] + (end[0] - aimed[0]) * step // DRAG_STEPS
         y = aimed[1] + (end[1] - aimed[1]) * step // DRAG_STEPS
