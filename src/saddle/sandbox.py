@@ -797,6 +797,7 @@ class Terminal:
     chunks: list[str] = field(default_factory=list)
     exit_code: int | None = None
     truncated: int = 0
+    _size: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -806,20 +807,28 @@ class Terminal:
     def output(self) -> str:
         with self._lock:
             text = "".join(self.chunks)
-        if self.truncated:
+            truncated = self.truncated
+        over = max(len(text) - MAX_CAPTURE, 0)
+        if truncated or over:
             head = text[: MAX_CAPTURE // 2]
             tail = text[-MAX_CAPTURE // 2 :]
-            return f"{head}\n[... {self.truncated} characters elided ...]\n{tail}"
+            return f"{head}\n[... {truncated + over} characters elided ...]\n{tail}"
         return text
 
     def _append(self, chunk: str) -> None:
+        """Keep `chunk`, in time that does not grow with what is kept: the size
+        is a running total, and the middle is cut only once the output is half
+        again past MAX_CAPTURE (`output` makes the exact cut). Re-summing every
+        line on each append once made 200,000 lines take 53 s, and the reader
+        fell so far behind a command that its output came back cut short."""
         with self._lock:
             self.chunks.append(chunk)
-            size = sum(len(c) for c in self.chunks)
-            if size > MAX_CAPTURE:
+            self._size += len(chunk)
+            if self._size > MAX_CAPTURE + MAX_CAPTURE // 2:
                 joined = "".join(self.chunks)
                 self.truncated += len(joined) - MAX_CAPTURE
                 self.chunks = [joined[: MAX_CAPTURE // 2], joined[-MAX_CAPTURE // 2 :]]
+                self._size = MAX_CAPTURE
 
 
 @dataclass
