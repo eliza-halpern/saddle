@@ -1511,6 +1511,57 @@ def test_a_zoom_names_its_region_and_scale(
     assert "zoomed" not in whole
 
 
+class Reading(FakeDesktop):
+    """A desktop whose captures are `size` and whose text recognition reads
+    `words` ((left, top, width, height, text) in picture pixels), or is absent."""
+
+    def __init__(self, words: list[tuple[int, int, int, int, str]], *, ocr: bool = True) -> None:
+        super().__init__()
+        self.size, self.words, self.ocr = (400, 300), words, ocr
+
+    def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if argv[0] == "tesseract":
+            if not self.ocr:
+                raise FileNotFoundError(argv[0])
+            s = screen.OCR_SCALE
+            rows = [
+                f"5\t1\t1\t1\t{i}\t1\t{x * s}\t{y * s}\t{w * s}\t{h * s}\t90\t{t}"
+                for i, (x, y, w, h, t) in enumerate(self.words)
+            ]
+            return 0, "level\n" + "\n".join(rows) + "\n"
+        if argv[0] in ("import", "grim", "convert"):
+            self.calls.append(list(argv))
+            Path(argv[-1].removeprefix("png:")).write_bytes(_png(*self.size))
+            return 0, ""
+        return super().__call__(argv, env)
+
+
+def test_find_says_where_text_is_in_the_coordinates_to_give(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (rung 9a): the model misread menu items by up to 150 px. Known-good:
+    found text is given as its middle in the x, y to give for that picture (a
+    window's own pixels; on a zoom, the window pixels its rulers show).
+    Known-bad: picture pixels on a zoom; an absent recognizer read as "not there"."""
+    reading = Reading([(100, 50, 40, 10, "Export")])
+    monkeypatch.setattr(screen, "run_x", reading)
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = tools._screenshot(ctx, {"window": "video", "find": "export"})
+    assert "'export' is at (120, 55), its middle, as x, y to give with no space" in said
+    reading.size, reading.words = (320, 160), [(40, 20, 8, 4, "Y")]
+    said = tools._screenshot(
+        ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40, "find": "Y"}
+    )
+    assert "'Y' is at (111, 56)" in said
+    assert "'Rotate' was not found by text recognition" in tools._screenshot(
+        ctx, {"window": "video", "find": "Rotate"}
+    )
+    monkeypatch.setattr(screen, "run_x", Reading([], ocr=False))
+    said = tools._screenshot(ctx, {"window": "video", "find": "Y"})
+    assert "text recognition is not available here" in said
+    assert "was not found" not in said
+
+
 def test_each_picture_is_ruled_in_the_coordinates_given_for_it() -> None:
     """The ruler's frame (origin, scale) per picture: a window's own pixels; a
     picture widened 34 px above the window from -34; a zoom from its region at

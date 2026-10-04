@@ -652,3 +652,100 @@ def test_a_zoom_is_ruled_in_the_window_s_pixels(tmp_path: Path) -> None:
     assert ("400", (400 - 380) * 4 + 2, 16) in zoom
     widened = _labels(screen.ruler_argv(tmp_path / "w.png", (0, -34), 1.0, (1280, 720)))
     assert ("100", 8, 100 + 34 + 4) in widened  # window y 100 is 134 down the picture
+
+
+# -- text recognition: where a label is on a picture ---------------------------------
+
+_TSV_HEAD = (
+    "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight"
+    "\tconf\ttext\n"
+)
+
+
+def _tsv(*words: tuple[int, int, int, int, int, str]) -> str:
+    """Tesseract TSV rows: (line, left, top, width, height, text), at OCR scale."""
+    rows = [
+        f"5\t1\t1\t1\t{line}\t{i}\t{x}\t{y}\t{w}\t{h}\t90\t{t}"
+        for i, (line, x, y, w, h, t) in enumerate(words)
+    ]
+    return _TSV_HEAD + "\n".join(rows) + "\n"
+
+
+def _ocr(
+    tsv: str, *, missing: bool = False
+) -> Callable[[Sequence[str], Mapping[str, str]], tuple[int, str]]:
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if argv[0] == "tesseract":
+            if missing:
+                raise FileNotFoundError(argv[0])
+            return 0, tsv
+        return 0, ""
+
+    return run
+
+
+def test_text_is_found_where_recognition_puts_it(tmp_path: Path) -> None:
+    """Live (rung 9a): the model misread Wings' axis menu item "Y" by 150 px.
+    Known-good: a word, a phrase across words on one line, and a label with
+    trailing dots are found, case aside, at their box scaled back from the
+    enlarged picture. Known-bad: a word that only starts with the text ("Yes"
+    for "Y") and a phrase split across lines are not matches."""
+    png = tmp_path / "p.png"
+    png.write_bytes(_png(10, 10))
+    s = screen.OCR_SCALE
+    tsv = _tsv(
+        (1, 30 * s, 60 * s, 6 * s, 9 * s, "Y"),
+        (2, 30 * s, 80 * s, 20 * s, 9 * s, "Yes"),
+        (3, 10 * s, 100 * s, 30 * s, 9 * s, "Scale"),
+        (3, 45 * s, 100 * s, 20 * s, 9 * s, "Axis"),
+        (4, 10 * s, 120 * s, 40 * s, 9 * s, "Export..."),
+        (5, 10 * s, 140 * s, 30 * s, 9 * s, "Scale"),
+        (6, 10 * s, 160 * s, 20 * s, 9 * s, "Axis"),
+        (7, 10 * s, 180 * s, 30 * s, 9 * s, "Uniform"),
+        (7, 45 * s, 180 * s, 20 * s, 9 * s, "Axts"),
+        (8, 10 * s, 200 * s, 6 * s, 9 * s, "V"),
+    )
+    run = _ocr(tsv)
+    assert screen.find_text(png, "y", {}, run) == [(30, 60, 6, 9)]
+    assert screen.find_text(png, "Scale Axis", {}, run) == [(10, 100, 55, 9)]
+    assert screen.find_text(png, "export", {}, run) == [(10, 120, 40, 9)]
+    assert screen.find_text(png, "Rotate", {}, run) == []
+    # one misread letter is forgiven in a long word ("Axts"), never in a short one
+    assert screen.find_text(png, "Uniform Axis", {}, run) == [(10, 180, 55, 9)]
+    assert screen.find_text(png, "Y", {}, run) == [(30, 60, 6, 9)]  # not the "V"
+
+
+def test_text_recognition_that_is_missing_is_said_not_read_as_absent(tmp_path: Path) -> None:
+    png = tmp_path / "p.png"
+    png.write_bytes(_png(10, 10))
+    said = screen.find_text(png, "Y", {}, _ocr("", missing=True))
+    assert isinstance(said, str)
+    assert said.startswith("error: text recognition is not available")
+
+
+def test_text_recognition_failures_are_errors_not_empty_answers(tmp_path: Path) -> None:
+    """Known-bad: a failed step read as "not on the picture". Known-good: each
+    failure is an error naming it; rows that are not words are skipped."""
+    png = tmp_path / "p.png"
+    png.write_bytes(_png(10, 10))
+
+    def failing(
+        step: str, code: int = 1
+    ) -> Callable[[Sequence[str], Mapping[str, str]], tuple[int, str]]:
+        def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+            return (code, "") if argv[0] == step else (0, "")
+
+        return run
+
+    assert (
+        screen.find_text(png, "  ", {}, failing("none")) == "error: find needs the text to look for"
+    )
+    assert str(screen.find_text(png, "Y", {}, failing("convert"))).startswith(
+        "error: text recognition could not prepare"
+    )
+    assert screen.find_text(png, "Y", {}, failing("tesseract")) == screen.NO_OCR
+    rows = (
+        _TSV_HEAD
+        + "4\t1\t1\t1\t1\t0\t0\t0\t9\t9\t-1\t\n5\t1\t1\t1\t1\t1\t0\t0\t9\t9\t90\t \nshort\n"
+    )
+    assert screen.find_text(png, "Y", {}, _ocr(rows)) == []

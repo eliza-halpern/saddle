@@ -128,6 +128,75 @@ def run_x(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
     return done.returncode, done.stdout
 
 
+OCR_SCALE: Final = 3
+"""How much a picture is enlarged before text recognition: window pictures
+carry menu text about 12 px tall, small for tesseract."""
+NO_OCR: Final = (
+    "error: text recognition is not available here (tesseract is not installed); "
+    "read the position off the picture's rulers instead"
+)
+_EDGE: Final = ".,:;!?()[]\"'\u2026"
+
+
+def _same(read: str, wanted: str) -> bool:
+    """A recognised word matches: exactly, or for words of four letters or more
+    with one letter misread (live: "Axis" was read "Axts")."""
+    if read == wanted:
+        return True
+    return (
+        len(wanted) >= 4
+        and len(read) == len(wanted)
+        and sum(a != b for a, b in zip(read, wanted, strict=True)) == 1
+    )
+
+
+def find_text(
+    png: Path, wanted: str, env: Mapping[str, str], run: Run | None = None
+) -> list[tuple[int, int, int, int]] | str:
+    """Where `wanted` (one word or several, on one line, case aside) appears in
+    the picture at `png`, as (left, top, width, height) boxes in its pixels; a
+    word matches whole, trailing dots aside. "error: ..." when recognition
+    cannot run, never an empty answer."""
+    run = run or run_x
+    words = [w.lower() for w in wanted.split()]
+    if not words:
+        return "error: find needs the text to look for"
+    big = png.with_name(png.stem + "-ocr.png")
+    # Greyscale and a threshold first: measured on Wings' light menus, plain
+    # pictures gave 2 of 11 known labels, thresholded ones 10 of 11.
+    prep = ["-colorspace", "Gray", "-threshold", "60%", "-resize", f"{OCR_SCALE * 100}%"]
+    if run(["convert", str(png), *prep, str(big)], env)[0] != 0:
+        return "error: text recognition could not prepare the picture"
+    try:
+        code, out = run(["tesseract", str(big), "-", "--psm", "11", "tsv"], env)
+    except FileNotFoundError:
+        return NO_OCR
+    if code != 0:
+        return NO_OCR
+    lines: dict[tuple[str, ...], list[tuple[str, int, int, int, int]]] = {}
+    for row in out.splitlines()[1:]:
+        cells = row.split("\t")
+        if len(cells) < 12 or cells[0] != "5" or not cells[11].strip():
+            continue
+        text = cells[11].strip().strip(_EDGE).lower()
+        left, top, width, height = (int(c) for c in cells[6:10])
+        lines.setdefault(tuple(cells[1:5]), []).append((text, left, top, width, height))
+    found = []
+    for line in lines.values():
+        for i in range(len(line) - len(words) + 1):
+            run_ = line[i : i + len(words)]
+            if not all(_same(w[0], want) for w, want in zip(run_, words, strict=True)):
+                continue
+            x0 = min(w[1] for w in run_)
+            y0 = min(w[2] for w in run_)
+            x1 = max(w[1] + w[3] for w in run_)
+            y1 = max(w[2] + w[4] for w in run_)
+            found.append(
+                (x0 // OCR_SCALE, y0 // OCR_SCALE, (x1 - x0) // OCR_SCALE, (y1 - y0) // OCR_SCALE)
+            )
+    return found
+
+
 ZOOM_MAX: Final = 4
 """How much a zoomed region is enlarged at most: live, text in a 1600x900
 whole-screen picture was too small for the model to tell "O" from "o"."""

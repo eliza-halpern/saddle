@@ -222,13 +222,17 @@ SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     "picture has saddle's rulers along its top and left edges (magenta ticks, numbers "
     "on white): the numbers are the x, y to give for that picture, the window's own "
     "pixels (on a zoom too, so a point read off a zoom's ruler needs no space). A "
-    "program's own rulers (an image editor's, in image units) are a different scale.",
+    "program's own rulers (an image editor's, in image units) are a different scale. "
+    "find names text to locate on the picture (a menu item, a button label): the "
+    "result says where its middle is, as x, y to give; recognition can miss single "
+    "letters and small labels.",
     {
         "window": {"type": "string"},
         "x": {"type": "integer"},
         "y": {"type": "integer"},
         "width": {"type": "integer"},
         "height": {"type": "integer"},
+        "find": {"type": "string"},
     },
     [],
 )
@@ -1039,7 +1043,7 @@ Area = list[tuple[int, int, int, int]]
 window pixels): a menu widening, or a zoom's region."""
 
 SCREENSHOT_ARGS: Final = frozenset(
-    {"window", "x", "y", "width", "height", "list", "action", "space"}
+    {"window", "x", "y", "width", "height", "list", "action", "space", "find"}
 )
 """What screenshot takes; anything else is refused, never silently dropped
 ("list" and "action" are the spellings models reached for, live). "space",
@@ -1084,6 +1088,9 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             if got is not None
             else "screenshot of the screen"
         )
+        wanted_text = args.get("find")
+        if isinstance(wanted_text, str) and wanted_text.strip():
+            name += _found(out, wanted_text.strip(), got, area, cut, env)
         _rule(out, got, area, cut, env)
         shown = _read_image(ctx, ctx.call_id, name, out)
         info = image_info(out.read_bytes()) if got is None else None
@@ -1288,6 +1295,35 @@ def _ruler_frame(
     else:
         return (0, 0), 1.0
     return (x, y), size[0] / width
+
+
+def _found(
+    out: Path,
+    wanted: str,
+    window: screen.Window | None,
+    area: Area,
+    cut: Area,
+    env: Mapping[str, str],
+) -> str:
+    """Where text recognition puts `wanted` on the picture at `out` (read
+    before the rulers are drawn), in the x, y to give for that picture."""
+    info = image_info(out.read_bytes())
+    boxes = screen.find_text(out, wanted, env) if info is not None else "error: unreadable"
+    if isinstance(boxes, str):
+        return "; " + boxes.removeprefix("error: ")
+    if not boxes:
+        return (
+            f"; {wanted!r} was not found by text recognition (it misses some small or "
+            "single-letter labels): read its place off the rulers"
+        )
+    assert info is not None
+    origin, scale = _ruler_frame(window, area, cut, (info.width, info.height))
+    points = [
+        f"({origin[0] + round((x + w / 2) / scale)}, {origin[1] + round((y + h / 2) / scale)})"
+        for x, y, w, h in boxes
+    ]
+    where = points[0] if len(points) == 1 else f"{len(points)} places: {', '.join(points)}"
+    return f"; {wanted!r} is at {where}, its middle, as x, y to give with no space"
 
 
 def _rule(
