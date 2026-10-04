@@ -163,6 +163,9 @@ def test_an_unrelated_process_with_the_same_command_is_not_listed_or_touched(
     assert len(ours) == 1
     (entry,) = processes_of(full).entries()
     assert entry.pid == ours[0]
+    own = processes_of(full).pids()  # whose windows `computer` acts on without asking
+    assert ours[0] in own
+    assert stranger.pid not in own
     full.stop_processes()
     wait_gone(ours[0])
     assert stranger.poll() is None  # untouched
@@ -220,6 +223,7 @@ def test_the_list_is_found_again_from_disk_after_a_restart(
         assert [e.pid for e in again.stop_all()] == [pid]
     wait_gone(pid)
     assert ProcessLedger(path).entries() == []  # and forgets what has ended
+    assert ProcessLedger(path).pids() == frozenset()
 
 
 def test_a_damaged_list_file_is_an_empty_list(tmp_path: Path) -> None:

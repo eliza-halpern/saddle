@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from saddle import screen
+from saddle import computer, screen
 from saddle.answers import BraveAnswers
 from saddle.askpass import Askpass
 from saddle.brave import BraveKeyError, BraveSearch
@@ -222,10 +222,40 @@ SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
 """Offered only with full access, a display and a model that reads images
 (`offer_screenshot`), never in a task run."""
 
+COMPUTER_TOOL: Final = "computer"
+COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
+    COMPUTER_TOOL,
+    "Act on a window on the person's screen. action=focus raises and focuses it; "
+    "click presses a mouse button at x, y (pixels from the window's top-left corner, "
+    "as its screenshot shows them; button left or right, double for a double-click); "
+    "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
+    "type types text; scroll turns the wheel up or down by amount, at x, y or the "
+    "window's middle. `window` is a window id or part of its title, as screenshot "
+    "names them. Look with screenshot first: act only on what you have seen. A fresh "
+    "picture of the window comes back after each action. A window that none of this "
+    "session's commands opened is acted on only if the person approves. X11 windows "
+    "only (Wine programs included).",
+    {
+        "action": {"type": "string", "enum": list(computer.ACTIONS)},
+        "window": {"type": "string"},
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+        "button": {"type": "string", "enum": list(computer.BUTTONS)},
+        "double": {"type": "boolean"},
+        "keys": {"type": "string"},
+        "text": {"type": "string"},
+        "direction": {"type": "string", "enum": list(computer.WHEEL)},
+        "amount": {"type": "integer"},
+    },
+    ["action", "window"],
+)
+"""Offered only where `screenshot` is and xdotool can reach the display
+(`offer_computer`), never in a task run."""
+
 
 _ARGUMENTS: Final[dict[str, frozenset[str]]] = {
     tool["function"]["name"]: frozenset(tool["function"]["parameters"]["properties"])
-    for tool in [*TOOLS, PROCESSES_SCHEMA]
+    for tool in [*TOOLS, PROCESSES_SCHEMA, COMPUTER_SCHEMA]
 }
 """Each tool's declared arguments. Anything else is refused by name, not
 dropped: `read_file` once ignored an `offset` and `limit` its schema did not
@@ -344,6 +374,14 @@ FACT_ASK_THEM_SEEING: Final = (
 )
 """`FACT_ASK_THEM` when `screenshot` is offered: the screen is no longer something
 only the person can check, and two tools must not give opposite instructions."""
+FACT_ASK_THEM_ACTING: Final = (
+    "Use `screenshot` to see what is on the person's screen and `computer` to focus, "
+    "click, press keys or type in a window you see there. Ask the person only for what "
+    "you cannot see or do that way (how it sounds, physical controls), and end your "
+    "turn instead of guessing or relaunching."
+)
+"""`FACT_ASK_THEM_SEEING` when `computer` is offered too: pressing a button in a
+window is no longer something only the person can do."""
 FACT_IMAGE: Final = (
     "An image file (PNG, JPEG, WebP, GIF) is shown to you, screenshots you take included."
 )
@@ -429,6 +467,35 @@ def offer_screenshot(
         for tool in tools
     ]
     return [*seeing, SCREENSHOT_SCHEMA]
+
+
+def offer_computer(tools: list[dict[str, Any]], context: ToolContext) -> list[dict[str, Any]]:
+    """`tools` with `computer` added when it can work and is allowed: the Edit
+    lane's run_command and `screenshot` are offered (the model can see what it
+    acts on), the session has full access, and an X display and xdotool are
+    there (`computer.available`)."""
+    names = {t["function"]["name"] for t in tools}
+    if not {"run_command", SCREENSHOT_TOOL} <= names or not context.full_access:
+        return tools
+    if not computer.available(desktop_env()):
+        return tools
+    if context.allowed is not None:  # None allows every tool already
+        context.allowed = (*context.allowed, COMPUTER_TOOL)
+    acting = [
+        {
+            **tool,
+            "function": {
+                **tool["function"],
+                "description": tool["function"]["description"].replace(
+                    FACT_ASK_THEM_SEEING, FACT_ASK_THEM_ACTING
+                ),
+            },
+        }
+        if tool["function"]["name"] == "run_command"
+        else tool
+        for tool in tools
+    ]
+    return [*acting, COMPUTER_SCHEMA]
 
 
 def scope_turn(context: ToolContext, mode: str) -> list[dict[str, Any]]:
@@ -917,6 +984,79 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     return shown if shown is not None else "error: the capture was not an image"
 
 
+COMPUTER_TITLE: Final = "Let saddle act on a window it did not open?"
+
+
+def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    """Act on a window (`computer`), then show it. A window none of this
+    session's commands owns is put to the person first, and left alone unless
+    they approve."""
+    if not ctx.full_access:
+        return (
+            "error: computer acts on the person's screen only in a full-access Edit "
+            "session. Nothing was done."
+        )
+    action = computer.parse(args)
+    if isinstance(action, str):
+        return action
+    wanted = args.get("window")
+    if not isinstance(wanted, str) or not wanted.strip():
+        return (
+            "error: computer needs a window: its id or part of its title "
+            "(screenshot with window=list lists them)"
+        )
+    env = _screen_env()
+    window = computer.find(wanted.strip(), env)
+    if isinstance(window, str):
+        return window
+    action = computer.placed(action, window)
+    if isinstance(action, str):
+        return action
+    own = ctx.processes.pids() if ctx.processes is not None else frozenset()
+    if computer.owner(window, env) not in own:
+        refusal = _stranger(ctx, window, action)
+        if refusal is not None:
+            return refusal
+    failed = computer.perform(action, window, env)
+    if failed is not None:
+        return failed
+    return f"done: {action.describe()} on {window.describe()}. {_afterwards(ctx, window, env)}"
+
+
+def _stranger(ctx: ToolContext, window: screen.Window, action: computer.Action) -> str | None:
+    """Put an action on a window this session did not open to the person; a
+    refusal when they decline or nobody can answer, None when approved."""
+    shown = [
+        f'window: "{window.title}" ({window.id}), not opened by this session\'s commands',
+        f"action: {action.describe()}",
+    ]
+    if action.kind == "type":
+        shown.append("text: " + json.dumps(action.text, ensure_ascii=False))
+    if ctx.approve is not None and ctx.approve(COMPUTER_TITLE, shown):
+        return None
+    why = NOBODY_WATCHING if unwatched(ctx.watched) else "the person did not approve it"
+    return (
+        f"error: nothing was done: {window.describe()} is not a window this session's "
+        f"commands opened, and {why}. Act on a window your commands opened, or ask the person."
+    )
+
+
+def _afterwards(ctx: ToolContext, window: screen.Window, env: Mapping[str, str]) -> str:
+    """A fresh picture of `window` after an action, or why there is none."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "after.png"
+        got = screen.capture(window.id, out, env)
+        if isinstance(got, str) or got is None:
+            return (
+                f"The window could not be shown afterwards ({got}); it may have closed. "
+                "The action was done."
+            )
+        shown = _read_image(ctx, ctx.call_id, f"screenshot of {got.describe()} afterwards", out)
+    if shown is None:
+        return "The window could not be shown afterwards (the capture was not an image)."
+    return shown
+
+
 def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     """The file, or a window of it by lines. A file of at most `READ_LINES`
     lines and `READ_TOKENS` tokens read without `offset`/`limit` comes back
@@ -1310,6 +1450,7 @@ _HANDLERS: Final[dict[str, _Handler]] = {
     "wait_for_terminal": _wait_for_terminal,
     PROCESSES_TOOL: _processes,
     SCREENSHOT_TOOL: _screenshot,
+    COMPUTER_TOOL: _computer,
 }
 
 

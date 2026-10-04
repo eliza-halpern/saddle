@@ -256,6 +256,11 @@ class ProcessLedger:
                 self._save()
             return live
 
+    def pids(self) -> frozenset[int]:
+        """Every live PID of this session's commands, detached ones included:
+        whose windows the session may act on without asking (`computer`)."""
+        return frozenset(pid for _, pids in self._live() for pid in pids)
+
     def entries(self) -> list[Entry]:
         """One entry per process group still running, oldest first."""
         boot = _boot_time()
