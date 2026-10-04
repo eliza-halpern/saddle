@@ -110,6 +110,14 @@ chat that ends the turn; here it would end the run with nothing recorded
 as its outcome, so the run goes on until `finish`, a budget, or
 `EMPTY_ROUND_CAP` such rounds in a row."""
 
+WORKDIR_LINE: Final = (
+    'Your working folder is {workdir}: files asked for "here" or "in this folder" '
+    "go there, and your commands start there."
+)
+"""Said in every chat's system message. Live (rung 5), asked to export a file
+"in this folder", the model did not know which folder that was and searched
+another checkout; the prompt never said."""
+
 EMPTY_REPLY_RETRIES: Final = 2
 """Empty chat replies (no text, no tool call) the model is told about in one
 turn before the turn ends, saying so. F35: a model wrote its next tool call
@@ -946,7 +954,8 @@ def run_turn(
     asked = text if text is not None else _last_asked(messages)
     yield TurnStart(turn=turn, prompt=asked)
     if options.system_prompt and not any(m.get("role") == "system" for m in messages):
-        messages.insert(0, {"role": "system", "content": options.system_prompt})
+        prompt = f"{options.system_prompt}\n\n{WORKDIR_LINE.format(workdir=options.workdir)}"
+        messages.insert(0, {"role": "system", "content": prompt})
     if text is not None:
         messages.append(_user_message(text, images))
     if ctx.images:

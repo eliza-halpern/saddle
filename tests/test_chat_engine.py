@@ -190,7 +190,7 @@ def test_a_system_prompt_is_inserted_once_not_once_per_turn(options: TurnOptions
     run(FakeClient([[content("a")]]), options, messages=messages)
     run(FakeClient([[content("b")]]), options, messages=messages)
     assert [m["role"] for m in messages].count("system") == 1
-    assert messages[0]["content"] == "be terse"
+    assert messages[0]["content"].startswith("be terse")
 
 
 def test_a_tool_result_is_appended_as_a_tool_message_the_model_can_read(
@@ -1030,3 +1030,17 @@ def test_old_screenshots_are_trimmed_before_a_request_and_said_so(options: TurnO
     (trim,) = those(events, Compaction)
     assert trim.dropped_messages == 0
     assert trim.summary == "4 older screenshots elided"
+
+
+def test_the_system_prompt_names_the_working_folder(options: TurnOptions) -> None:
+    """Live (rung 5): asked to export art.png "in this folder", the model did
+    not know which folder that was; the prompt never said, and called it "the
+    user's repository", so it searched another checkout and read files there.
+    Known-good: the system message names the working folder."""
+    options.system_prompt = "You are careful."
+    client = FakeClient([[content("ok")]])
+    run(client, options)
+    system = client.asked[0]["messages"][0]
+    assert system["role"] == "system"
+    assert system["content"].startswith("You are careful.")
+    assert f"Your working folder is {options.workdir}" in system["content"]
