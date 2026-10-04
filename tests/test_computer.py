@@ -1354,3 +1354,27 @@ def test_the_drawn_cursor_is_moved_to_where_x_presses() -> None:
     )
     assert quiet.calls == []
     assert quiet.closed
+
+
+def test_screenshot_refuses_what_it_does_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 2): {"action": "list"} was silently a whole-screen picture,
+    three times. Known-good: action list lists; an argument screenshot does not
+    read is refused by name, nothing captured."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    assert tools._screenshot(ctx, {"action": "list"}).startswith("windows on the screen:")
+    said = tools._screenshot(ctx, {"windw": "video"})
+    assert said.startswith("error: screenshot does not take windw")
+    assert tools._screenshot(ctx, {"action": "click"}).startswith("error: screenshot's action")
+
+
+def test_a_cut_zoom_converts_points_with_its_real_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """A zoom cut at the window's edge is scaled by what was captured: a
+    1000x40 region from x=380 of the 400-wide dialog is 20x40, shown x4 (the
+    uncut request would have been x1.6)."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video", "x": 380, "y": 50, "width": 1000, "height": 40})
+    assert ctx.zoom == screen.Zoom("0x1200005", 380, 50, 4.0)

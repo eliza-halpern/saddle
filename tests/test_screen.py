@@ -345,8 +345,8 @@ def test_a_zoom_crops_the_window_and_enlarges_it(tmp_path: Path) -> None:
         ("critical", (0, 0, 0, 10), "error: a region needs x, y of 0 or more"),
         ("critical", (0, 0, 10, 0), "error: a region needs x, y of 0 or more"),
         ("critical", (0, -1, 10, 10), "error: a region needs x, y of 0 or more"),
-        ("critical", (267, 0, 11, 10), "error: the region (267, 0, 11x10) goes past"),
-        ("critical", (0, 136, 10, 6), "error: the region (0, 136, 10x6) goes past"),
+        ("critical", (277, 0, 5, 5), "error: the region (277, 0, 5x5) starts past"),
+        ("critical", (0, 141, 5, 5), "error: the region (0, 141, 5x5) starts past"),
     ],
 )
 def test_a_zoom_outside_its_window_is_refused(
@@ -584,3 +584,14 @@ def test_hidden_windows_are_neither_listed_nor_chosen(
     assert "0x400024" in listed
     hidden = capture("0x401ba0", tmp_path / "h.png", {}, run)
     assert str(hidden).startswith("error: no window matches '0x401ba0'")
+
+
+def test_a_zoom_reaching_past_the_window_is_cut_at_its_edge(tmp_path: Path) -> None:
+    """Live (rung 2): a zoom 2 px past a 548-wide dialog was refused and cost a
+    round. Known-good: it is cut at the window's edge and says what it took."""
+    calls: list[list[str]] = []
+    area: list[tuple[int, int, int, int]] = []
+    out = tmp_path / "z.png"
+    capture("critical", out, {}, _recorder(calls), region=(267, 131, 20, 20), area=area)
+    assert area == [(267, 131, 10, 10)]
+    assert "10x10+267+131" in calls[-1]

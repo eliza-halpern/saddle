@@ -198,11 +198,16 @@ def capture(
         x, y, width, height = region
         if width < 1 or height < 1 or x < 0 or y < 0:
             return "error: a region needs x, y of 0 or more and a width and height of 1 or more"
-        if x + width > target.width or y + height > target.height:
+        if x >= target.width or y >= target.height:
             return (
-                f"error: the region ({x}, {y}, {width}x{height}) goes past "
-                f"{target.describe()}; keep it inside the window"
+                f"error: the region ({x}, {y}, {width}x{height}) starts past "
+                f"{target.describe()}; give a point inside the window"
             )
+        # A region reaching past the window is cut at its edge (live, one 2 px
+        # over was refused and cost a round); `area` says what was captured.
+        width, height = min(width, target.width - x), min(height, target.height - y)
+        if area is not None:
+            area.append((x, y, width, height))
         wide, high, _ = zoom_size(width, height)
         if seen:
             steps = _from_screen(target.x + x, target.y + y, width, height, out, f"{wide}x{high}!")
