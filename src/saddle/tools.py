@@ -219,9 +219,10 @@ SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     "read a dialog, check that a window opened, or see what a program shows, "
     "instead of asking the person. To read small text, zoom: with a window, x, y, "
     "width and height (its own pixels) capture just that part, enlarged. Every "
-    "picture has rulers along its top and left edges: the numbers are the x, y to "
-    "give for that picture, the window's own pixels (on a zoom too, so a point "
-    "read off a zoom's ruler needs no space).",
+    "picture has saddle's rulers along its top and left edges (magenta ticks, numbers "
+    "on white): the numbers are the x, y to give for that picture, the window's own "
+    "pixels (on a zoom too, so a point read off a zoom's ruler needs no space). A "
+    "program's own rulers (an image editor's, in image units) are a different scale.",
     {
         "window": {"type": "string"},
         "x": {"type": "integer"},
@@ -252,7 +253,9 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "space=zoom right after it; a picture widened to show a menu is not a zoom, give its "
     "x, y with no space. `window` is a "
     "window id or part of its title, as screenshot "
-    "names them. Look with screenshot first: act only on what you have seen. A fresh "
+    "names them. Look with screenshot first: act only on what you have seen. Aim at "
+    "what the picture shows, act, then check the picture that comes back and "
+    "correct; work out an exact mapping only when the task asks for exact sizes. A fresh "
     "picture of the window comes back after each action, and it is then your latest "
     "screenshot. A window that none of this session's commands opened is acted on only "
     "if the person approves. X11 windows only (Wine programs included): a program "
