@@ -114,8 +114,11 @@ class FakeDesktop:
         if verb == "windowactivate" and code == 0 and self.focus_sticks:
             self.active = argv[2]
         if verb == "mousemove" and code == 0 and self.pointer_moves:
-            x, y = self._origin(argv[3])
-            self.pointer = (x + int(argv[4]), y + int(argv[5]))
+            if argv[2] == "--":  # the screen's own place
+                self.pointer = (int(argv[3]), int(argv[4]))
+            else:
+                x, y = self._origin(argv[3])
+                self.pointer = (x + int(argv[4]), y + int(argv[5]))
         return code, ""
 
     @property
@@ -1036,3 +1039,43 @@ def test_the_picture_after_an_action_waits_for_the_screen_to_settle(
     act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=30, y=40)
     assert order[-3:] == ["click", f"sleep {tools.AFTER_SETTLE_S}", "capture"]
     assert tools.AFTER_SETTLE_S >= 0.1
+
+
+class MenuDesktop(FakeDesktop):
+    """The video dialog with an open menu (unnamed, stacked over it) that
+    starts 40 px above the dialog's top edge."""
+
+    def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if argv[0] == "xwininfo":
+            menu = "     0x1300001 (has no name): ()  150x300+150+60  +150+60\n"
+            return 0, TREE.replace('     0x1200005 "Video', menu + '     0x1200005 "Video', 1)
+        return super().__call__(argv, env)
+
+
+def test_a_menu_reaching_past_the_window_is_seen_and_clicked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (rung 1): Writer's tall Format menu opened from 34 px above the
+    window, its first rows were cut from the picture, and the model concluded
+    "Bold" was off screen. Known-good: the picture widens to the menu, says
+    where it starts, and a point read on it lands on the menu (above the
+    window, at its place on the screen). Known-bad: a point past the widened
+    picture is still refused."""
+    fake = MenuDesktop()
+    monkeypatch.setattr(screen, "run_x", fake)
+    monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1", "WAYLAND_DISPLAY": "w-0"})
+    monkeypatch.setattr("saddle.screen.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("saddle.tools.time.sleep", lambda s: None)
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = act(ctx, window="video", action="click", x=60, y=10)
+    assert "widened to 400x340" in said
+    assert "starts at (0, -40) of the window" in said
+    assert ["grim", "-t", "png", "-g", "100,60 400x340"] == [
+        c for c in fake.calls if c[0] == "grim"
+    ][-1][:5]
+    said = act(ctx, window="video", action="click", x=200, y=10)  # on the menu, above the window
+    assert said.startswith("done: left click at (200, -30) on 0x1200005")
+    assert "(x, y read on your latest screenshot)" in said
+    assert ["xdotool", "mousemove", "--", "300", "70"] in fake.actions
+    refused = act(ctx, window="video", action="click", x=200, y=345)
+    assert refused.startswith("error: (200, 305) is outside")

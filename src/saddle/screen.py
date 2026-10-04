@@ -16,6 +16,7 @@ live here; running the X tools is injected (`Run`) so tests need no display.
 
 from __future__ import annotations
 
+import itertools
 import re
 import shutil
 import subprocess
@@ -41,7 +42,7 @@ limit the model is shown."""
 LIST: Final = "list"
 
 _LINE: Final = re.compile(
-    r'^\s*(0x[0-9a-fA-F]+) "(.*)": \(.*?\)\s+(\d+)x(\d+)\+(-?\d+)\+(-?\d+)'
+    r'^\s*(0x[0-9a-fA-F]+) (?:"(.*)"|\(has no name\)): \(.*?\)\s+(\d+)x(\d+)\+(-?\d+)\+(-?\d+)'
     r"(?:\s+\+(-?\d+)\+(-?\d+))?"
 )
 
@@ -67,17 +68,18 @@ def available(env: Mapping[str, str], which: Callable[[str], str | None] = shuti
     return bool(env.get("DISPLAY")) and all(which(tool) for tool in NEEDED)
 
 
-def parse_windows(tree: str) -> list[Window]:
-    """The named, visible-sized windows in `xwininfo -root -tree` output, in
-    its order (top-level stacking order), each id once."""
+def parse_windows(tree: str, *, named: bool = True) -> list[Window]:
+    """The named (or, with `named=False`, also unnamed) visible-sized windows
+    in `xwininfo -root -tree` output, in its order (stacking order, the top
+    window first), each id once."""
     found: dict[str, Window] = {}
     for line in tree.splitlines():
         match = _LINE.match(line)
         if match is None:
             continue
-        wid, title, width, height = match[1], match[2], int(match[3]), int(match[4])
+        wid, title, width, height = match[1], match[2] or "", int(match[3]), int(match[4])
         x, y = int(match[7] or match[5]), int(match[8] or match[6])
-        if title and width >= MIN_SIDE and height >= MIN_SIDE and wid not in found:
+        if (title or not named) and width >= MIN_SIDE and height >= MIN_SIDE and wid not in found:
             found[wid] = Window(wid, title, width, height, x, y)
     return list(found.values())
 
@@ -119,6 +121,12 @@ class Zoom:
     x: int
     y: int
     scale: float
+    width: int | None = None
+    height: int | None = None
+    """The picture's extent in window pixels when it reaches past the window
+    (a menu over it): points anywhere on it may be acted on."""
+    label: str = "zoomed"
+    """How the result names the picture the point was read on."""
 
 
 def zoom_size(width: int, height: int) -> tuple[int, int, float]:
@@ -135,6 +143,7 @@ def capture(
     region: tuple[int, int, int, int] | None = None,
     on_top: Callable[[Window], bool] | None = None,
     which: Callable[[str], str | None] | None = None,
+    area: list[tuple[int, int, int, int]] | None = None,
 ) -> Window | str | None:
     """Capture what `wanted` names into `out` (PNG). An empty `wanted` is the
     whole screen (None); `list` returns the window list as text; `region`
@@ -199,9 +208,12 @@ def capture(
                 ]
             ]
     elif target is not None and seen:
-        exact = f"{target.width}x{target.height}!"
-        steps = _from_screen(target.x, target.y, target.width, target.height, out, exact)
+        left, top, right, bottom = _with_what_is_over(target, parse_windows(tree, named=False))
+        wide, high = right - left, bottom - top
+        steps = _from_screen(left, top, wide, high, out, f"{wide}x{high}!")
         steps.append(["convert", str(out), "-resize", f"{MAX_SIDE}x{MAX_SIDE}>", str(out)])
+        if area is not None:
+            area.append((left - target.x, top - target.y, wide, high))
     else:
         steps = [_window_argv(target.id, out)] if target is not None else screen_argv(out, env)
     for argv in steps:
@@ -210,6 +222,26 @@ def capture(
             what = "the window" if target is not None else "the screen"
             return f"error: {what} could not be captured ({argv[0]} exited {code})"
     return target
+
+
+def _with_what_is_over(target: Window, windows: Sequence[Window]) -> tuple[int, int, int, int]:
+    """The screen area (left, top, right, bottom) of `target` and every window
+    stacked over it (listed before it) that touches it: an open menu is a window
+    of its own, and a tall one starts above the window it belongs to."""
+    left, top = target.x, target.y
+    right, bottom = target.x + target.width, target.y + target.height
+    for window in itertools.takewhile(lambda w: w.id != target.id, windows):
+        touches = (
+            window.x < target.x + target.width
+            and target.x < window.x + window.width
+            and window.y < target.y + target.height
+            and target.y < window.y + window.height
+        )
+        if touches:
+            left, top = min(left, window.x), min(top, window.y)
+            right = max(right, window.x + window.width)
+            bottom = max(bottom, window.y + window.height)
+    return max(left, 0), max(top, 0), right, bottom
 
 
 def _from_screen(x: int, y: int, width: int, height: int, out: Path, size: str) -> list[list[str]]:

@@ -147,9 +147,13 @@ def _parse(args: Mapping[str, Any]) -> Action | str:
     return Action("click", x=x, y=y, button=button, double=double)
 
 
-def placed(action: Action, window: Window) -> Action | str:
-    """`action` with its point inside `window` (a scroll without one aims at
-    the middle), or an "error: ..." when the point is outside it."""
+def placed(
+    action: Action, window: Window, bounds: tuple[int, int, int, int] | None = None
+) -> Action | str:
+    """`action` with its point inside `window`, or inside `bounds` (left, top,
+    right, bottom in window pixels: a picture that also showed a menu over the
+    window); a scroll without one aims at the middle; an "error: ..." when the
+    point is outside."""
     if action.kind not in ("click", "scroll", "drag"):
         return action
     if action.x is None or action.y is None:
@@ -160,7 +164,8 @@ def placed(action: Action, window: Window) -> Action | str:
             direction=action.direction,
             amount=action.amount,
         )
-    if not (0 <= action.x < window.width and 0 <= action.y < window.height):
+    left, top, right, bottom = bounds or (0, 0, window.width, window.height)
+    if not (left <= action.x < right and top <= action.y < bottom):
         return (
             f"error: ({action.x}, {action.y}) is outside {window.describe()}; x and y count "
             "pixels from the window's top-left corner, as its screenshot shows them. If you "
@@ -329,7 +334,11 @@ def perform(
         if real is not None:
             real.close()
             real = None
-        run(["xdotool", "mousemove", "--window", xid, str(action.x), str(action.y)], env)
+        x, y = action.x or 0, action.y or 0
+        if 0 <= x < window.width and 0 <= y < window.height:
+            run(["xdotool", "mousemove", "--window", xid, str(x), str(y)], env)
+        else:  # on a menu over the window, past its edge: the screen's own place
+            run(["xdotool", "mousemove", "--", str(aimed[0]), str(aimed[1])], env)
     _, location = run(["xdotool", "getmouselocation", "--shell"], env)
     seen = _shell(location)
     here = (seen.get("X", -1), seen.get("Y", -1))

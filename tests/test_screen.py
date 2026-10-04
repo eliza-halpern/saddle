@@ -440,3 +440,81 @@ def test_a_framed_window_s_place_is_where_it_is_on_the_screen() -> None:
     and a capture of the window's place on the screen needs the second."""
     tree = '     0x1e00007 "Notes": ("notes" "Notes")  800x600+0+24  +300+224\n'
     assert parse_windows(tree) == [Window("0x1e00007", "Notes", 800, 600, 300, 224)]
+
+
+# -- a menu that reaches past the window is in its picture ------------------------------
+
+MENU_TREE: Final = """
+  Root window id: 0x5c5 (the root window) (has no name)
+     5 children:
+     0x700001 "Far Away": ("x" "X")  100x100+2000+2000  +2000+2000
+     0x401bc6 (has no name): ()  232x218+458+0  +458+0
+     0x401ba0 "LibreOffice 24.2": ("soffice" "Soffice")  284x720+174+0  +174+0
+     0x400024 "Untitled 1 - LibreOffice Writer": ("lo" "lo-writer")  1280x686+0+34  +0+34
+     0x400016 "LibreOffice 24.2": ("soffice" "Soffice")  200x200+0+0  +0+0
+"""
+"""Stacking order, top first, as xwininfo prints it: a window over Writer that
+does not touch it, two menu levels over Writer (one unnamed), then Writer,
+then a window under it that does touch it."""
+
+
+def test_unnamed_windows_can_be_listed_in_stacking_order() -> None:
+    every = parse_windows(MENU_TREE, named=False)
+    assert [w.id for w in every] == ["0x700001", "0x401bc6", "0x401ba0", "0x400024", "0x400016"]
+    assert "0x401bc6" not in [w.id for w in parse_windows(MENU_TREE)]
+
+
+def test_a_menu_over_the_window_widens_its_picture(tmp_path: Path) -> None:
+    """Live (rung 1): Writer's Format menu is taller than the room below the
+    menu bar and opens from the screen's top, 34 px above the window; the
+    window's picture cut its first rows off and the model decided "Bold" was
+    off screen. Known-good: the windows stacked over the window that touch it
+    widen the captured area; one under it, or apart from it, does not."""
+    calls: list[list[str]] = []
+
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[0] in ("grim", "convert"):
+            Path(argv[-1]).write_bytes(b"png")
+        return 0, MENU_TREE
+
+    out = tmp_path / "w.png"
+    area: list[tuple[int, int, int, int]] = []
+    capture("writer", out, WAYLAND, run, on_top=lambda w: True, which=_grim, area=area)
+    assert calls[1] == ["grim", "-t", "png", "-g", "0,0 1280x720", str(out)]
+    assert calls[2] == ["convert", str(out), "-resize", "1280x720!", str(out)]
+    assert area == [(0, -34, 1280, 720)]  # the picture starts 34 px above the window
+
+
+def test_a_window_with_nothing_over_it_keeps_its_own_area(tmp_path: Path) -> None:
+    area: list[tuple[int, int, int, int]] = []
+    capture(
+        "critical",
+        tmp_path / "w.png",
+        WAYLAND,
+        _recorder([]),
+        on_top=lambda w: True,
+        which=_grim,
+        area=area,
+    )
+    assert area == [(0, 0, 277, 141)]
+
+
+def test_a_window_partly_off_screen_is_captured_from_the_screen_s_edge(tmp_path: Path) -> None:
+    """A window dragged partly past the screen's left edge: the screen holds
+    nothing to the left of 0, so the capture starts there, and the picture's
+    start in the window says how much of the window is missing."""
+    tree = '     0x900001 "Sketch": ("s" "S")  400x300+-50+20  +-50+20\n'
+    calls: list[list[str]] = []
+
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[0] in ("grim", "convert"):
+            Path(argv[-1]).write_bytes(b"png")
+        return 0, tree
+
+    area: list[tuple[int, int, int, int]] = []
+    out = tmp_path / "w.png"
+    capture("sketch", out, WAYLAND, run, on_top=lambda w: True, which=_grim, area=area)
+    assert calls[1][:5] == ["grim", "-t", "png", "-g", "0,20 350x300"]
+    assert area == [(50, 0, 350, 300)]

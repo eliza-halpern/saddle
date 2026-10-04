@@ -1023,16 +1023,23 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "screen.png"
         env = _screen_env()
-        got = screen.capture(wanted, out, env, region=region, on_top=_on_top(env))
+        area: list[tuple[int, int, int, int]] = []
+        got = screen.capture(wanted, out, env, region=region, on_top=_on_top(env), area=area)
         if isinstance(got, str):
             return got
-        name = f"screenshot of {got.describe()}" if got is not None else "screenshot of the screen"
+        name = (
+            f"screenshot of {got.describe()}{_over(got, area)}"
+            if got is not None
+            else "screenshot of the screen"
+        )
         shown = _read_image(ctx, ctx.call_id, name, out)
         info = image_info(out.read_bytes()) if got is None else None
         if info is not None:
             ctx.screen_capture = (info.width, info.height)
         if shown is not None:
             ctx.last_look = "window" if got is not None else "screen"
+            if got is not None and region is None:
+                _looked_at(ctx, got, area)
             if got is not None and region is not None:
                 ctx.last_look = "zoom"
                 ctx.zoom = screen.Zoom(
@@ -1077,7 +1084,15 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         action = computer.from_zoom(action, ctx.zoom, window)
     if isinstance(action, str):
         return action
-    action = computer.placed(action, window)
+    bounds = None
+    if space == "zoom" and ctx.zoom is not None and ctx.zoom.width and ctx.zoom.height:
+        bounds = (
+            min(0, ctx.zoom.x),
+            min(0, ctx.zoom.y),
+            max(window.width, ctx.zoom.x + ctx.zoom.width),
+            max(window.height, ctx.zoom.y + ctx.zoom.height),
+        )
+    action = computer.placed(action, window, bounds)
     if isinstance(action, str):
         return action
     own = ctx.processes.pids() if ctx.processes is not None else frozenset()
@@ -1088,7 +1103,8 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     failed = computer.perform(action, window, env)
     if failed is not None:
         return failed
-    on = {"screen": "whole-screen", "zoom": "zoomed"}.get(str(space))
+    zoomed = ctx.zoom.label if ctx.zoom is not None else "zoomed"
+    on = {"screen": "whole-screen", "zoom": zoomed}.get(str(space))
     read = f" (x, y read on your {on} screenshot)" if on and action.x is not None else ""
     return (
         f"done: {action.describe()} on {window.describe()}{read}. {_afterwards(ctx, window, env)}"
@@ -1138,17 +1154,44 @@ def _afterwards(ctx: ToolContext, window: screen.Window, env: Mapping[str, str])
     time.sleep(AFTER_SETTLE_S)
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "after.png"
-        got = screen.capture(window.id, out, env, on_top=_on_top(env))
+        area: list[tuple[int, int, int, int]] = []
+        got = screen.capture(window.id, out, env, on_top=_on_top(env), area=area)
         if isinstance(got, str) or got is None:
             return (
                 f"The window could not be shown afterwards ({got}); it may have closed. "
                 "The action was done."
             )
-        shown = _read_image(ctx, ctx.call_id, f"screenshot of {got.describe()} afterwards", out)
+        name = f"screenshot of {got.describe()} afterwards{_over(got, area)}"
+        shown = _read_image(ctx, ctx.call_id, name, out)
     if shown is None:
         return "The window could not be shown afterwards (the capture was not an image)."
-    ctx.last_look = "window"  # the newest picture the model has is this window's
+    _looked_at(ctx, got, area)  # the newest picture the model has is this window's
     return shown
+
+
+def _over(window: screen.Window, area: list[tuple[int, int, int, int]]) -> str:
+    """What a window's picture shows besides the window: a menu over it that
+    reaches past its edges, and where the picture starts."""
+    if not area or area[0] == (0, 0, window.width, window.height):
+        return ""
+    left, top, width, height = area[0]
+    return (
+        f", widened to {width}x{height} to show what is open over it (a menu); the picture "
+        f"starts at ({left}, {top}) of the window, and x, y read on it are converted"
+    )
+
+
+def _looked_at(
+    ctx: ToolContext, window: screen.Window, area: list[tuple[int, int, int, int]]
+) -> None:
+    """Record a window's picture as the latest look: its own pixels, or, when it
+    was widened by a menu over it, a picture that starts elsewhere."""
+    if not area or area[0] == (0, 0, window.width, window.height):
+        ctx.last_look = "window"
+        return
+    left, top, width, height = area[0]
+    ctx.last_look = "zoom"
+    ctx.zoom = screen.Zoom(window.id, left, top, 1.0, width, height, "latest")
 
 
 def _read_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
