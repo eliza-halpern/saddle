@@ -230,7 +230,8 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "as its screenshot shows them; button left or right, double for a double-click); "
     "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
     "type types text; scroll turns the wheel up or down by amount, at x, y or the "
-    "window's middle. `window` is a window id or part of its title, as screenshot "
+    "window's middle; space=screen when you measured x, y on a whole-screen screenshot "
+    "(saddle converts them). `window` is a window id or part of its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. A fresh "
     "picture of the window comes back after each action. A window that none of this "
     "session's commands opened is acted on only if the person approves. X11 windows "
@@ -246,6 +247,7 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
         "text": {"type": "string"},
         "direction": {"type": "string", "enum": list(computer.WHEEL)},
         "amount": {"type": "integer"},
+        "space": {"type": "string", "enum": list(computer.SPACES)},
     },
     ["action", "window"],
 )
@@ -733,6 +735,9 @@ class ToolContext:
     """Whether `read_file` on an image sends the image to the model (the Ask
     and Edit lanes). Off by default, so a Task run's `read_file` is exactly
     what it was."""
+    screen_capture: tuple[int, int] | None = None
+    """The width and height of the last whole-screen screenshot shown to the
+    model: what `computer` space=screen measures x, y on."""
     accepts_images: Callable[[], bool] | None = None
     """Asks whether the served model reads images (`vision.server_accepts_images`,
     cached per server). None, with `images` on, reads as "not known to":
@@ -981,6 +986,9 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             return got
         name = f"screenshot of {got.describe()}" if got is not None else "screenshot of the screen"
         shown = _read_image(ctx, ctx.call_id, name, out)
+        info = image_info(out.read_bytes()) if got is None else None
+        if info is not None:
+            ctx.screen_capture = (info.width, info.height)
     return shown if shown is not None else "error: the capture was not an image"
 
 
@@ -1009,6 +1017,13 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     window = computer.find(wanted.strip(), env)
     if isinstance(window, str):
         return window
+    space = args.get("space", "window")
+    if space not in computer.SPACES:
+        return "error: space must be window (the window's own pixels) or screen"
+    if space == "screen":
+        action = computer.to_window(action, window, ctx.screen_capture, env)
+        if isinstance(action, str):
+            return action
     action = computer.placed(action, window)
     if isinstance(action, str):
         return action

@@ -80,6 +80,7 @@ class FakeDesktop:
         self.act_codes = dict(act_codes or {})
         self.tree_code = tree_code
         self.focus_sticks, self.pointer_moves = focus_sticks, pointer_moves
+        self.display_code = 0
         self.active, self.pointer = "1", (715, 438)
         self.calls: list[list[str]] = []
 
@@ -105,6 +106,8 @@ class FakeDesktop:
         if verb == "getwindowgeometry":
             x, y = self._origin(argv[3])
             return 0, f"WINDOW={argv[3]}\nX={x}\nY={y}\nWIDTH=1\nHEIGHT=1\nSCREEN=0\n"
+        if verb == "getdisplaygeometry":
+            return self.display_code, "1280 720\n"
         if verb == "getmouselocation":
             return 0, f"X={self.pointer[0]}\nY={self.pointer[1]}\nSCREEN=0\nWINDOW=1\n"
         code = self.act_codes.get(verb, 0)
@@ -602,3 +605,72 @@ def test_an_unreadable_pointer_place_is_not_a_click(monkeypatch: pytest.MonkeyPa
 
 def test_shell_output_keeps_the_numbers_negative_ones_included() -> None:
     assert computer._shell("X=12\nNAME=game\nY=-3\n") == {"X": 12, "Y": -3}
+
+
+# -- clicks measured on a whole-screen screenshot -----------------------------------
+
+
+def test_a_point_measured_on_the_whole_screen_is_placed_in_the_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live: the model aimed with whole-screen pixels (a 1600x900 picture) at a
+    524x411 dialog and was refused. Known-good: space=screen scales the point to
+    the display (1280x720 here) and subtracts the window's place (100, 100)."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    ctx.screen_capture = (1600, 900)
+    said = act(ctx, window="video", action="click", x=300, y=250, space="screen")
+    assert said.startswith('done: left click at (140, 100) on 0x1200005 "Video Configuration"')
+    assert ["xdotool", "mousemove", "--window", "18874373", "140", "100"] in desktop.actions
+
+
+def test_screen_points_need_a_whole_screen_screenshot_and_a_readable_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    assert act(ctx, window="video", action="click", x=300, y=250, space="screen") == (
+        "error: space=screen needs a whole-screen screenshot to measure on; take one "
+        "(screenshot with no window), then give x, y as it shows them"
+    )
+    ctx.screen_capture = (1600, 900)
+    assert act(ctx, window="video", action="click", x=1, y=1, space="edge").startswith(
+        "error: space must be window"
+    )
+    desktop.display_code = 1
+    assert act(ctx, window="video", action="click", x=1, y=1, space="screen").startswith(
+        "error: the screen's size could not be read"
+    )
+    assert [c for c in desktop.actions if c[1] in ("mousemove", "click")] == []
+
+
+def test_a_window_whose_place_is_unknown_is_not_clicked_from_screen_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Placeless(FakeDesktop):
+        def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+            if argv[:2] == ["xdotool", "getwindowgeometry"]:
+                return 1, ""
+            return super().__call__(argv, env)
+
+    window = Window("0x1200005", "Video Configuration", 400, 300)
+    said = computer.to_window(Action("click", x=5, y=5), window, (1600, 900), {}, Placeless())
+    assert isinstance(said, str)
+    assert said.startswith('error: where 0x1200005 "Video Configuration" 400x300 sits')
+    scroll = Action("scroll")  # no point: it aims at the middle, nothing to convert
+    assert computer.to_window(scroll, window, None, {}, Placeless()) == scroll
+
+
+def test_a_point_outside_the_window_suggests_screen_space(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=579, y=698)
+    assert said.endswith("If you measured them on a whole-screen screenshot, pass space=screen")
+
+
+def test_a_whole_screen_screenshot_is_remembered_for_screen_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video"})
+    assert ctx.screen_capture is None  # a window's picture is not the screen
+    tools._screenshot(ctx, {})
+    assert ctx.screen_capture == (4, 3)  # the fake capture's size

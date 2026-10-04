@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import shutil
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from saddle import screen
@@ -149,7 +149,8 @@ def placed(action: Action, window: Window) -> Action | str:
     if not (0 <= action.x < window.width and 0 <= action.y < window.height):
         return (
             f"error: ({action.x}, {action.y}) is outside {window.describe()}; x and y count "
-            "pixels from the window's top-left corner, as its screenshot shows them"
+            "pixels from the window's top-left corner, as its screenshot shows them. If you "
+            "measured them on a whole-screen screenshot, pass space=screen"
         )
     return action
 
@@ -248,3 +249,48 @@ def perform(
     if code == 0:
         return None
     return f"error: {action.describe()} on {window.describe()} failed (xdotool exited {code})"
+
+
+SPACES: Final = ("window", "screen")
+"""Where x, y were measured: on a screenshot of the window (its own pixels), or
+on the last whole-screen screenshot (scaled, from the screen's corner)."""
+
+
+def to_window(
+    action: Action,
+    window: Window,
+    capture: tuple[int, int] | None,
+    env: Mapping[str, str],
+    run: Run | None = None,
+) -> Action | str:
+    """`action` with x, y measured on the last whole-screen screenshot (`capture`,
+    its width and height in pixels) turned into the window's own pixels: scaled
+    to the display's real size, less the window's position. Live, a model aimed
+    a click with whole-screen pixels (1600x900, scaled) at a 524x411 dialog and
+    was refused as outside it."""
+    if action.x is None or action.y is None:
+        return action
+    if capture is None:
+        return (
+            "error: space=screen needs a whole-screen screenshot to measure on; take one "
+            "(screenshot with no window), then give x, y as it shows them"
+        )
+    run = run or screen.run_x
+    code, size = run(["xdotool", "getdisplaygeometry"], env)
+    parts = size.split()
+    if code != 0 or len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return (
+            "error: the screen's size could not be read, so the point cannot be placed; "
+            "take a screenshot of the window and use its pixels"
+        )
+    _, geometry = run(["xdotool", "getwindowgeometry", "--shell", str(int(window.id, 16))], env)
+    frame = _shell(geometry)
+    if "X" not in frame or "Y" not in frame:
+        return (
+            f"error: where {window.describe()} sits on the screen could not be read; take a "
+            "screenshot of the window and use its pixels"
+        )
+    width, height = int(parts[0]), int(parts[1])
+    x = round(action.x * width / capture[0]) - frame["X"]
+    y = round(action.y * height / capture[1]) - frame["Y"]
+    return replace(action, x=x, y=y)
