@@ -1079,3 +1079,57 @@ def test_a_menu_reaching_past_the_window_is_seen_and_clicked(
     assert ["xdotool", "mousemove", "--", "300", "70"] in fake.actions
     refused = act(ctx, window="video", action="click", x=200, y=345)
     assert refused.startswith("error: (200, 305) is outside")
+
+
+# -- the shapes a model reaches for ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("arguments", "meant"),
+    [
+        ({"action": "double_click", "x": 1, "y": 2}, Action("click", x=1, y=2, double=True)),
+        ({"action": "double", "x": 1, "y": 2}, Action("click", x=1, y=2, double=True)),
+        ({"action": "right_click", "x": 1, "y": 2}, Action("click", x=1, y=2, button="right")),
+        (
+            {"action": "click", "x": 1, "y": 2, "double": "True"},
+            Action("click", x=1, y=2, double=True),
+        ),
+        ({"action": "click", "x": 1, "y": 2, "double": "false"}, Action("click", x=1, y=2)),
+    ],
+)
+def test_the_shapes_a_model_reaches_for_mean_what_they_say(
+    arguments: dict[str, Any], meant: Action
+) -> None:
+    """Live (rungs 1 and 3): action "double" and "double_click", and double
+    "True" as a string, were refused, four calls in one minute. Known-good:
+    each is read as the click it names. Known-bad stays refused."""
+    assert computer.parse(arguments) == meant
+    assert computer.parse({"action": "click", "x": 1, "y": 2, "double": "twice"}) == (
+        "error: click takes button left or right and double true or false"
+    )
+    unknown = computer.parse({"action": "triple_click", "x": 1, "y": 2})
+    assert str(unknown).startswith("error: action")
+
+
+def test_with_no_window_named_the_last_one_looked_at_is_meant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 1): two type calls without a window were refused while the
+    model had just looked at Writer. Known-good: the window last looked at or
+    acted on is used, and the result names it. Known-bad: with no such window
+    the call is still refused."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    assert act(ctx, action="type", text="hi").startswith("error: computer needs a window")
+    tools._screenshot(ctx, {"window": "video"})
+    said = act(ctx, action="type", text="hi")
+    assert said.startswith('done: type 2 characters on 0x1200005 "Video Configuration" 400x300')
+    assert "(no window named: the one you last looked at or acted on)" in said
+
+
+def test_a_window_acted_on_is_the_one_meant_next(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    act(ctx, window="video", action="key", keys="Return")  # named, no screenshot before
+    said = act(ctx, action="key", keys="Tab")
+    assert said.startswith('done: press Tab on 0x1200005 "Video Configuration" 400x300')

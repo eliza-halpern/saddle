@@ -101,8 +101,27 @@ def parse(args: Mapping[str, Any]) -> Action | str:
         return f"error: {exc} must be a whole number"
 
 
+ALIASES: Final[Mapping[str, Mapping[str, Any]]] = {
+    "double_click": {"action": "click", "double": True},
+    "double": {"action": "click", "double": True},
+    "right_click": {"action": "click", "button": "right"},
+}
+"""Action names a model reaches for, read as the click they name. Live, action
+"double" and "double_click" were refused again and again in one run."""
+
+
+def _flag(value: Any) -> Any:
+    """A true/false flag, also when it came as the string "true" or "false"."""
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return value
+
+
 def _parse(args: Mapping[str, Any]) -> Action | str:
     kind = args.get("action")
+    if isinstance(kind, str) and kind in ALIASES:
+        args = {**args, **ALIASES[kind]}
+        kind = args["action"]
     if kind not in ACTIONS:
         return f"error: action must be one of {', '.join(ACTIONS)}"
     if kind == "focus":
@@ -139,7 +158,7 @@ def _parse(args: Mapping[str, Any]) -> Action | str:
             )
         return Action("drag", x=x, y=y, to_x=to_x, to_y=to_y)
     button = args.get("button", "left")
-    double = args.get("double", False)
+    double = _flag(args.get("double", False))
     if x is None or y is None:
         return "error: click needs x and y, in pixels from the window's top-left corner"
     if button not in BUTTONS or not isinstance(double, bool):

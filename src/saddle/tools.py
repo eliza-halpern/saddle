@@ -753,6 +753,9 @@ class ToolContext:
     """Whether `read_file` on an image sends the image to the model (the Ask
     and Edit lanes). Off by default, so a Task run's `read_file` is exactly
     what it was."""
+    last_window: str | None = None
+    """The window the latest screenshot or computer action named, for a
+    computer call that names none."""
     zoom: screen.Zoom | None = None
     """The latest zoomed screenshot's region and scale, for `computer` points
     measured on it."""
@@ -1038,6 +1041,8 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             ctx.screen_capture = (info.width, info.height)
         if shown is not None:
             ctx.last_look = "window" if got is not None else "screen"
+            if got is not None:
+                ctx.last_window = got.id
             if got is not None and region is None:
                 _looked_at(ctx, got, area)
             if got is not None and region is not None:
@@ -1049,6 +1054,7 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
 
 
 COMPUTER_TITLE: Final = "Let saddle act on a window it did not open?"
+UNNAMED_WINDOW: Final = " (no window named: the one you last looked at or acted on)"
 
 
 def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -1064,6 +1070,12 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if isinstance(action, str):
         return action
     wanted = args.get("window")
+    unnamed = ""
+    if (not isinstance(wanted, str) or not wanted.strip()) and ctx.last_window is not None:
+        wanted, unnamed = (
+            ctx.last_window,
+            " (no window named: the one you last looked at or acted on)",
+        )
     if not isinstance(wanted, str) or not wanted.strip():
         return (
             "error: computer needs a window: its id or part of its title "
@@ -1073,6 +1085,7 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     window = computer.find(wanted.strip(), env)
     if isinstance(window, str):
         return window
+    ctx.last_window = window.id
     space = args.get("space") or (
         ctx.last_look if ctx.last_look in ("screen", "zoom") else "window"
     )
@@ -1106,6 +1119,7 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     zoomed = ctx.zoom.label if ctx.zoom is not None else "zoomed"
     on = {"screen": "whole-screen", "zoom": zoomed}.get(str(space))
     read = f" (x, y read on your {on} screenshot)" if on and action.x is not None else ""
+    read += unnamed
     return (
         f"done: {action.describe()} on {window.describe()}{read}. {_afterwards(ctx, window, env)}"
     )
