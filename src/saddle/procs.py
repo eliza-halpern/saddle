@@ -271,6 +271,12 @@ class ProcessLedger:
                 self._save()
             return live
 
+    def pids(self) -> frozenset[int]:
+        """Every live PID of this session's commands, detached ones included:
+        whose windows the session may act on without asking (`computer`).
+        Saddle's own servers (`Tracked.saddle`) are not the model's, so not here."""
+        return frozenset(pid for _, pids in self._live(include_saddles=False) for pid in pids)
+
     def entries(self, *, include_saddles: bool = True) -> list[Entry]:
         """One entry per process group still running, oldest first. The model's
         view passes `include_saddles=False` (`Tracked.saddle`)."""

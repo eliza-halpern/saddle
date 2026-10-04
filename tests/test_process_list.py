@@ -169,6 +169,9 @@ def test_an_unrelated_process_with_the_same_command_is_not_listed_or_touched(
     assert len(ours) == 1
     (entry,) = processes_of(full).entries()
     assert entry.pid == ours[0]
+    own = processes_of(full).pids()  # whose windows `computer` acts on without asking
+    assert ours[0] in own
+    assert stranger.pid not in own
     full.stop_processes()
     wait_gone(ours[0])
     assert stranger.poll() is None  # untouched
@@ -226,6 +229,7 @@ def test_the_list_is_found_again_from_disk_after_a_restart(
         assert [e.pid for e in again.stop_all()] == [pid]
     wait_gone(pid)
     assert ProcessLedger(path).entries() == []  # and forgets what has ended
+    assert ProcessLedger(path).pids() == frozenset()
 
 
 def test_a_damaged_list_file_is_an_empty_list(tmp_path: Path) -> None:
@@ -332,6 +336,15 @@ def test_the_models_tool_neither_lists_nor_stops_saddles_own_server(
     finally:
         game.kill()
         game.wait()
+
+
+def test_saddles_own_server_is_not_a_window_the_model_may_act_on_unasked(
+    full: ToolContext, server: Stranger
+) -> None:
+    """`pids()` decides whose windows `computer` touches without asking; a server
+    saddle started (a browser, say) is not the model's, so it is not in it."""
+    record_server(processes_of(full), server)
+    assert server.pid not in processes_of(full).pids()
 
 
 def test_the_person_and_ending_access_still_stop_saddles_own_server(
