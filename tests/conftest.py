@@ -243,3 +243,13 @@ def _no_image_probe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPa
     if request.module.__name__ == "test_read_image":
         return
     monkeypatch.setattr("saddle.engine.server_accepts_images", lambda _client: False)
+
+
+@pytest.fixture(autouse=True)
+def no_real_compositor_pointer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test drives the person's real pointer: the suite runs inside a desktop
+    session, and `computer.session_pointer` would otherwise connect to its
+    compositor (it did, once, before this guard). Every connection starts by
+    finding the compositor's socket, so that is what is closed off; a test that
+    wants the compositor path serves a fake one or injects a fake pointer."""
+    monkeypatch.setattr("saddle.wlpointer.socket_path", lambda env: None)

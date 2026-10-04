@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from saddle import screen
 from saddle.screen import Run, Window
+from saddle.wlpointer import WaylandError, WaylandPointer
 
 NEEDED: Final = ("xdotool",)
 """The X tool the actions run; without it the tool is not offered."""
@@ -240,8 +242,36 @@ def owner(window: Window, env: Mapping[str, str], run: Run | None = None) -> int
     return int(text) if code == 0 and text.isdigit() else None
 
 
+class Pointer(Protocol):
+    """What a click or drag needs from a pointer the compositor drives
+    (`wlpointer.WaylandPointer`)."""
+
+    def move(self, x: int, y: int, extent: tuple[int, int]) -> None: ...
+    def button(self, button: str, *, pressed: bool) -> None: ...
+    def close(self) -> None: ...
+
+
+def session_pointer(env: Mapping[str, str]) -> Pointer | None:
+    """The compositor's own pointer when it offers one (a wlroots compositor:
+    labwc, sway, a headless one), else None and clicks go through X."""
+    try:
+        return WaylandPointer.connect(env)
+    except (OSError, WaylandError):
+        return None
+
+
+DRAG_STEPS: Final = 10
+"""Moves between a drag's press and release: a compositor starts moving a window
+only once the pointer has travelled a little with the button down."""
+
+
 def perform(
-    action: Action, window: Window, env: Mapping[str, str], run: Run | None = None
+    action: Action,
+    window: Window,
+    env: Mapping[str, str],
+    run: Run | None = None,
+    pointer: Callable[[Mapping[str, str]], Pointer | None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> str | None:
     """Run `action` on `window`; None when it was done, else an "error: ...".
 
@@ -250,8 +280,10 @@ def perform(
     focus, and a click only after the pointer is read back on the aimed point;
     otherwise nothing is sent (F43: live, a pointer move sent while the window
     was not active was silently ignored, and the click would have gone astray).
-    Focus is done when either step works: a compositor that refuses to
-    activate a window can still give it the keyboard."""
+    Clicks and drags use the compositor's own pointer when it offers one
+    (`session_pointer`): only that can move a window. Focus is done when either
+    step works: a compositor that refuses to activate a window can still give
+    it the keyboard."""
     run = run or screen.run_x
     xid = str(int(window.id, 16))
     if action.kind == "focus":
@@ -265,20 +297,75 @@ def perform(
         code, active = run(["xdotool", "getactivewindow"], env)
         if code != 0 or active.strip() != xid:
             return NOT_FOCUSED.format(window=window.describe())
+        return _ran(run(steps(action), env)[0], action, window)
+    _, geometry = run(["xdotool", "getwindowgeometry", "--shell", xid], env)
+    frame = _shell(geometry)
+    aimed = (frame.get("X", 0) + (action.x or 0), frame.get("Y", 0) + (action.y or 0))
+    real = (pointer or session_pointer)(env) if action.kind in ("click", "drag") else None
+    extent = _display(run, env) if real is not None else None
+    if real is not None and extent is not None:
+        real.move(*aimed, extent)
     else:
-        _, geometry = run(["xdotool", "getwindowgeometry", "--shell", xid], env)
+        if real is not None:
+            real.close()
+            real = None
         run(["xdotool", "mousemove", "--window", xid, str(action.x), str(action.y)], env)
-        _, location = run(["xdotool", "getmouselocation", "--shell"], env)
-        frame, pointer = _shell(geometry), _shell(location)
-        aimed = (frame.get("X", 0) + (action.x or 0), frame.get("Y", 0) + (action.y or 0))
-        here = (pointer.get("X", -1), pointer.get("Y", -1))
-        if any(abs(a - b) > POINTER_SLACK for a, b in zip(aimed, here, strict=True)):
-            where = f"({here[0]}, {here[1]})" if "X" in pointer else "an unknown place"
-            return NO_POINTER.format(window=window.describe(), where=where)
-    code = run(steps(action), env)[0]
+    _, location = run(["xdotool", "getmouselocation", "--shell"], env)
+    seen = _shell(location)
+    here = (seen.get("X", -1), seen.get("Y", -1))
+    if any(abs(a - b) > POINTER_SLACK for a, b in zip(aimed, here, strict=True)):
+        if real is not None:
+            real.close()
+        where = f"({here[0]}, {here[1]})" if "X" in seen else "an unknown place"
+        return NO_POINTER.format(window=window.describe(), where=where)
+    if real is None or extent is None:
+        return _ran(run(steps(action), env)[0], action, window)
+    try:
+        _press(real, action, aimed, extent, frame, sleep)
+    finally:
+        real.close()
+    return None
+
+
+def _ran(code: int, action: Action, window: Window) -> str | None:
     if code == 0:
         return None
     return f"error: {action.describe()} on {window.describe()} failed (xdotool exited {code})"
+
+
+def _display(run: Run, env: Mapping[str, str]) -> tuple[int, int] | None:
+    """The screen's size in the coordinates windows are placed in, or None."""
+    code, size = run(["xdotool", "getdisplaygeometry"], env)
+    parts = size.split()
+    if code != 0 or len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def _press(
+    real: Pointer,
+    action: Action,
+    aimed: tuple[int, int],
+    extent: tuple[int, int],
+    frame: Mapping[str, int],
+    sleep: Callable[[float], None],
+) -> None:
+    """The click or drag itself, on the compositor's pointer already at `aimed`."""
+    sleep(float(SETTLE_S))
+    if action.kind == "click":
+        for _ in range(2 if action.double else 1):
+            real.button(action.button, pressed=True)
+            real.button(action.button, pressed=False)
+        return
+    end = (frame.get("X", 0) + (action.to_x or 0), frame.get("Y", 0) + (action.to_y or 0))
+    real.button("left", pressed=True)
+    for step in range(1, DRAG_STEPS + 1):
+        x = aimed[0] + (end[0] - aimed[0]) * step // DRAG_STEPS
+        y = aimed[1] + (end[1] - aimed[1]) * step // DRAG_STEPS
+        real.move(x, y, extent)
+        sleep(0.03)
+    sleep(float(SETTLE_S))
+    real.button("left", pressed=False)
 
 
 SPACES: Final = ("window", "screen")

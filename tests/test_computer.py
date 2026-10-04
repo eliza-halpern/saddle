@@ -727,3 +727,110 @@ def test_a_drag_measured_on_the_whole_screen_converts_both_points(
     # (300, 250) -> (240, 200) on the 1280x720 display -> (140, 100) in the window;
     # (500, 500) -> (400, 400) -> (300, 300).
     assert said.startswith("done: drag from (140, 100) to (300, 300)")
+
+
+# -- the compositor's own pointer ---------------------------------------------------
+
+
+class FakePointer:
+    """A compositor pointer that moves the fake desktop's pointer (unless
+    `lands` is False) and records presses."""
+
+    def __init__(self, desktop: FakeDesktop, *, lands: bool = True) -> None:
+        self.desktop, self.lands = desktop, lands
+        self.calls: list[tuple[str, ...]] = []
+        self.closed = False
+
+    def move(self, x: int, y: int, extent: tuple[int, int]) -> None:
+        self.calls.append(("move", str(x), str(y), f"{extent[0]}x{extent[1]}"))
+        if self.lands:
+            self.desktop.pointer = (x, y)
+
+    def button(self, button: str, *, pressed: bool) -> None:
+        self.calls.append(("down" if pressed else "up", button))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+VIDEO = Window("0x1200005", "Video Configuration", 400, 300)
+
+
+def test_a_click_uses_the_compositors_pointer_when_it_offers_one() -> None:
+    """Only the compositor's pointer is the session's real pointer. Known-good:
+    it goes to the window's place plus the point, is read back there, presses."""
+    desktop = FakeDesktop()
+    real = FakePointer(desktop)
+    waits: list[float] = []
+    said = computer.perform(
+        Action("click", x=10, y=20, double=True), VIDEO, {}, desktop, lambda env: real, waits.append
+    )
+    assert said is None
+    assert real.calls == [
+        ("move", "110", "120", "1280x720"),
+        ("down", "left"),
+        ("up", "left"),
+        ("down", "left"),
+        ("up", "left"),
+    ]
+    assert waits == [0.5]
+    assert real.closed
+    assert not any(c[1] in ("mousemove", "click") or "click" in c for c in desktop.actions)
+
+
+def test_a_drag_moves_with_the_button_held_to_its_end() -> None:
+    desktop = FakeDesktop()
+    real = FakePointer(desktop)
+    computer.perform(
+        Action("drag", x=10, y=5, to_x=310, to_y=105),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda seconds: None,
+    )
+    assert real.calls[0] == ("move", "110", "105", "1280x720")
+    assert real.calls[1] == ("down", "left")
+    assert real.calls[-2] == ("move", "410", "205", "1280x720")  # the end: (100+310, 100+105)
+    assert real.calls[-1] == ("up", "left")
+    assert len([c for c in real.calls if c[0] == "move"]) == 1 + computer.DRAG_STEPS
+    assert real.closed
+
+
+def test_a_compositor_pointer_that_does_not_land_presses_nothing() -> None:
+    desktop = FakeDesktop()
+    real = FakePointer(desktop, lands=False)
+    said = computer.perform(Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real)
+    assert said is not None
+    assert said.startswith("error: nothing was clicked")
+    assert [c[0] for c in real.calls] == ["move"]
+    assert real.closed
+
+
+def test_without_the_screens_size_the_click_goes_through_x() -> None:
+    desktop = FakeDesktop()
+    desktop.display_code = 1
+    real = FakePointer(desktop)
+    said = computer.perform(Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real)
+    assert said is None
+    assert real.calls == []
+    assert real.closed
+    assert ["xdotool", "mousemove", "--window", "18874373", "10", "20"] in desktop.actions
+
+
+def test_keys_and_scrolls_never_take_the_compositors_pointer() -> None:
+    desktop = FakeDesktop()
+    asked: list[str] = []
+
+    def offer(env: object) -> FakePointer:
+        asked.append("asked")
+        return FakePointer(desktop)
+
+    computer.perform(Action("key", keys="Return"), VIDEO, {}, desktop, offer)
+    computer.perform(Action("scroll", x=1, y=1), VIDEO, {}, desktop, offer, lambda s: None)
+    assert asked == []
+
+
+def test_no_compositor_pointer_in_the_suite_means_x(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real `session_pointer`, under the suite's guard (no session socket)."""
+    assert computer.session_pointer({}) is None
