@@ -367,6 +367,7 @@ def perform(
         if real is not None:
             real.close()
             real = None
+        _show_cursor_at(aimed, env, run, pointer)
         x, y = action.x or 0, action.y or 0
         if 0 <= x < window.width and 0 <= y < window.height:
             run(["xdotool", "mousemove", "--window", xid, str(x), str(y)], env)
@@ -411,6 +412,27 @@ def _glide(
         y = start[1] + (end[1] - start[1]) * step // GLIDE_STEPS
         real.move(x, y, extent)
         sleep(GLIDE_S)
+
+
+def _show_cursor_at(
+    aimed: tuple[int, int],
+    env: Mapping[str, str],
+    run: Run,
+    pointer: Callable[[Mapping[str, str]], Pointer | None] | None,
+) -> None:
+    """Move the compositor's pointer (no press) to where X is about to press.
+    The cursor drawn in a picture is the compositor's, and X moves do not move
+    it: live, pictures showed the arrow where an earlier action left it, and
+    the model reasoned from that arrow about where its click had landed."""
+    shown = (pointer or session_pointer)(env)
+    if shown is None:
+        return
+    try:
+        extent = _display(run, env)
+        if extent is not None:
+            shown.move(*aimed, extent)
+    finally:
+        shown.close()
 
 
 def _ran(code: int, action: Action, window: Window) -> str | None:

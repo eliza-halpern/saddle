@@ -780,7 +780,7 @@ def test_a_click_inside_the_window_goes_through_x_even_with_a_compositor_pointer
         lambda s: None,
     )
     assert said is None
-    assert real.calls == []
+    assert real.calls == [("move", "110", "120", "1280x720")]  # the cursor shown, not pressed
     assert ["xdotool", "mousemove", "--window", "18874373", "10", "20"] in desktop.actions
     assert desktop.actions[-1][-4:] == ["click", "--repeat", "2", "1"]
 
@@ -854,8 +854,12 @@ def test_keys_and_scrolls_never_take_the_compositors_pointer() -> None:
         return FakePointer(desktop)
 
     computer.perform(Action("key", keys="Return"), VIDEO, {}, desktop, offer)
-    computer.perform(Action("scroll", x=1, y=1), VIDEO, {}, desktop, offer, lambda s: None)
-    assert asked == []
+    assert asked == []  # a key has no point: the pointer is not even asked for
+    real = FakePointer(desktop)
+    computer.perform(
+        Action("scroll", x=1, y=1), VIDEO, {}, desktop, lambda env: real, lambda s: None
+    )
+    assert [c[0] for c in real.calls] == ["move"]  # shown where the wheel turns, never pressed
 
 
 def test_no_compositor_pointer_in_the_suite_means_x(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1324,5 +1328,29 @@ def test_a_drag_inside_the_window_goes_through_x() -> None:
         lambda s: None,
     )
     assert said is None
-    assert real.calls == []
+    assert [c[0] for c in real.calls] == ["move"]
     assert "mousedown" in desktop.actions[-1]
+
+
+def test_the_drawn_cursor_is_moved_to_where_x_presses() -> None:
+    """Checked on labwc: with X's pointer moved to (300, 300) and the
+    compositor's left at (900, 500), the picture drew the arrow at
+    (900, 500). Live (rung 2), pictures showed the arrow where an earlier
+    action left it and the model reasoned from it about where it had
+    clicked. Known-good: before X presses, the compositor's pointer is moved
+    (no press) to the same screen point, and closed."""
+    desktop = FakeDesktop()
+    real = FakePointer(desktop)
+    computer.perform(
+        Action("click", x=30, y=40), VIDEO, {}, desktop, lambda env: real, lambda s: None
+    )
+    assert real.calls == [("move", "130", "140", "1280x720")]
+    assert real.closed
+    unknown = FakeDesktop()
+    unknown.display_code = 1  # no screen size: nothing to move it by
+    quiet = FakePointer(unknown)
+    computer.perform(
+        Action("click", x=30, y=40), VIDEO, {}, unknown, lambda env: quiet, lambda s: None
+    )
+    assert quiet.calls == []
+    assert quiet.closed
