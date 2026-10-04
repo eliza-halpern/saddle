@@ -90,6 +90,16 @@ refused or the site failed reads nothing, so it does not restart the count
 Twenty exceeds the dozen or so searches one question needs, so it never cuts a
 working reader."""
 FINAL_PROMPT: Final = "Report now with what you have found so far; cite the pages you read."
+READ_CHECK: Final = 8
+"""Pages read before the reader is asked, once, whether it can already answer.
+Live (GUI ladder, 2026-10-04), readers of two-part questions read 20 to 40
+pages chasing the last detail after the main part was answered; answered
+single-fact questions there needed four to six."""
+READ_CHECK_PROMPT: Final = (
+    "You have read several pages. If you can answer the main part of the question "
+    "now, call `report`, and say plainly which parts you could not confirm; keep "
+    "reading only for what the question cannot do without."
+)
 MAX_FETCHES: Final = 40
 """Pages the reader may fetch or navigate to in one session."""
 BLOCKED_AFTER: Final = 2
@@ -829,6 +839,7 @@ class Researcher:
             (lambda text: count([{"role": "user", "content": text}])) if count is not None else None
         )
         refused = 0
+        checked = False
         nudged = False
         final = False
         repeats: dict[tuple[str, str], int] = {}
@@ -905,6 +916,9 @@ class Researcher:
                     return self._unreported(gate)
                 continue
             idle = idle + 1 if len(gate.visited) == read_before else 0
+            if not checked and len(gate.visited) >= READ_CHECK:
+                checked = True
+                messages.append({"role": "user", "content": READ_CHECK_PROMPT})
             if (
                 gate.fetches >= gate.fetch_cap
                 or max(repeats.values(), default=0) >= REPEATS

@@ -69,7 +69,10 @@ def fetch(url: str, raw: object = False) -> CallToolResult:
     record(f"fetch {url}")
     if url.startswith("https://blocked.example/"):
         return failed(f"Failed to fetch {url} - status code 403")
-    text = PAGES.get(url, f"error: could not fetch {url}")
+    if url.startswith("https://docs.example/page/"):  # as many plain pages as a test reads
+        text = f"Page {url.rsplit('/', 1)[-1]} of the docs."
+    else:
+        text = PAGES.get(url, f"error: could not fetch {url}")
     return CallToolResult(content=[TextContent(type="text", text=text)])
 
 

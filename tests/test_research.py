@@ -1742,3 +1742,29 @@ def test_a_citation_only_failure_in_the_final_report_round_also_crosses_labelled
         person="https://docs.example/install",
     )
     assert "[citations not matched to sources] Version 4.2.0" in result
+
+
+@needs_bwrap
+def test_after_enough_pages_the_reader_is_asked_once_whether_it_can_answer(rig: Rig) -> None:
+    """Live (GUI ladder, 2026-10-04): readers spent 20 to 40 fetches on two-part
+    questions after the main part was answered, chasing the last detail through
+    source files. Known-good: once READ_CHECK pages are read, one note asks it to
+    report what it can answer and name what it could not confirm; the tools stay
+    offered (a note, not a cap). Known-bad: the note before then, or every round."""
+    pages = [f"https://docs.example/page/{n}" for n in range(research_module.READ_CHECK + 2)]
+    rounds = [[tool(W + "fetch", url=p)] for p in pages] + [[GOOD]]
+    _, model = rig.run(rounds, person=" ".join(pages))
+    notes = [
+        i
+        for i, ask in enumerate(model.asked)
+        if any(m.get("content") == research_module.READ_CHECK_PROMPT for m in ask["messages"])
+    ]
+    assert notes
+    assert notes[0] == research_module.READ_CHECK
+    said = [
+        m
+        for m in model.asked[-1]["messages"]
+        if m.get("content") == research_module.READ_CHECK_PROMPT
+    ]
+    assert len(said) == 1
+    assert all(len(ask["tools"]) > 1 for ask in model.asked)
