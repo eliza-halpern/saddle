@@ -886,6 +886,7 @@ def test_after_a_zoom_a_point_is_read_on_the_enlarged_picture(
         'done: left click at (110, 55) on 0x1200005 "Video Configuration" 400x300 '
         "(x, y read on your zoomed screenshot)"
     )
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
     said = act(ctx, window="video", action="drag", x=40, y=20, to_x=80, to_y=40)
     assert said.startswith("done: drag from (110, 55) to (120, 60) on 0x1200005")
     said = act(ctx, window="video", action="key", keys="ctrl+b")
@@ -927,3 +928,22 @@ def test_a_whole_window_look_after_a_zoom_reads_window_pixels_again(
     tools._screenshot(ctx, {"window": "video"})
     said = act(ctx, window="video", action="click", x=40, y=20)
     assert said.startswith('done: left click at (40, 20) on 0x1200005 "Video Configuration"')
+
+
+def test_the_picture_after_an_action_is_the_latest_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """The tool says to give x, y as the latest screenshot shows them, and the
+    window's picture comes back after every action. Known-bad: after a zoom and
+    a click, the next point was still read on the zoom although the model's
+    newest picture was the whole window."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
+    act(ctx, window="video", action="click", x=40, y=20)  # read on the zoom: (110, 55)
+    said = act(ctx, window="video", action="click", x=40, y=20)
+    assert said.startswith('done: left click at (40, 20) on 0x1200005 "Video Configuration"')
+    tools._screenshot(ctx, {})
+    ctx.screen_capture = (1600, 900)
+    act(ctx, window="video", action="key", keys="Return")  # its picture is the window's too
+    said = act(ctx, window="video", action="click", x=30, y=40)
+    assert said.startswith('done: left click at (30, 40) on 0x1200005 "Video Configuration"')

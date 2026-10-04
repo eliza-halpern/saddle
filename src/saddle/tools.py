@@ -213,7 +213,8 @@ SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     SCREENSHOT_TOOL,
     "See the person's screen: a picture of one window, or of the whole screen, is "
     "shown to you. `window` is a window id or part of its title; `list` lists the "
-    "X11 windows (Wine programs included); omit it for the whole screen. Use it to "
+    "X11 windows (Wine programs included; a native Wayland window is not among them, "
+    "see computer); omit it for the whole screen. Use it to "
     "read a dialog, check that a window opened, or see what a program shows, "
     "instead of asking the person. To read small text, zoom: with a window, x, y, "
     "width and height (its own pixels) capture just that part, enlarged.",
@@ -244,9 +245,12 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "says which when it differs. `window` is a "
     "window id or part of its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. A fresh "
-    "picture of the window comes back after each action. A window that none of this "
-    "session's commands opened is acted on only if the person approves. X11 windows "
-    "only (Wine programs included).",
+    "picture of the window comes back after each action, and it is then your latest "
+    "screenshot. A window that none of this session's commands opened is acted on only "
+    "if the person approves. X11 windows only (Wine programs included): a program "
+    "drawn as a native Wayland window is not listed, so start it with GDK_BACKEND=x11 "
+    "(GTK programs, LibreOffice) or QT_QPA_PLATFORM=xcb (Qt programs) in its "
+    "environment.",
     {
         "action": {"type": "string", "enum": list(computer.ACTIONS)},
         "window": {"type": "string"},
@@ -1120,6 +1124,7 @@ def _afterwards(ctx: ToolContext, window: screen.Window, env: Mapping[str, str])
         shown = _read_image(ctx, ctx.call_id, f"screenshot of {got.describe()} afterwards", out)
     if shown is None:
         return "The window could not be shown afterwards (the capture was not an image)."
+    ctx.last_look = "window"  # the newest picture the model has is this window's
     return shown
 
 
