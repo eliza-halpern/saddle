@@ -580,15 +580,20 @@ ASK_SCHEMA: Final = _schema(
 )
 
 RESEARCH_FIRST: Final = (
-    "Research first: your training data is out of date and thin on specific programs, "
-    "versions, file layouts and error messages. Before you work something out from memory, "
-    "and again whenever you hit an error or a step you are unsure of, research it and act on "
-    "what you find; treat what you remember as a guess until a page you read confirms it. "
+    "Try, then research: when you have a likely answer and trying it is quick and easy to "
+    "undo, try it once and check the result. If it fails, or you have no likely answer, "
+    "research before you try anything else; do not keep guessing from memory. Your "
+    "training data is out of date and thin on specific programs, versions, file layouts "
+    "and error messages, so a remembered detail is a guess until it works or a page you "
+    "read confirms it. "
 )
 """Leads the research tool's description, so it reaches the model only while research
 is offered (the tool is absent otherwise). Watched setup runs without research spent
 minutes reconstructing an old game engine's config rules from memory and guessed
-wrong; the answer was the kind a search finds."""
+wrong, again after each failure; the answer was the kind a search finds. The first
+wording ("research first", before working anything out from memory) overcorrected:
+a LibreOffice run researched GTK backends for two minutes instead of trying
+GDK_BACKEND=x11, which works here in seconds."""
 
 RESEARCH_SCHEMA: Final = _schema(
     RESEARCH_TOOL,
