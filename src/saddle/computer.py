@@ -273,7 +273,7 @@ def find(wanted: str, env: Mapping[str, str], run: Run | None = None) -> Window 
     code, tree = run(["xwininfo", "-root", "-tree"], env)
     if code != 0:
         return "error: the window list could not be read (xwininfo failed)"
-    return screen.choose(screen.parse_windows(tree), wanted)
+    return screen.choose(screen.shown_windows(tree, env, run), wanted)
 
 
 def owner(window: Window, env: Mapping[str, str], run: Run | None = None) -> int | None:

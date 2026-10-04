@@ -84,6 +84,20 @@ def parse_windows(tree: str, *, named: bool = True) -> list[Window]:
     return list(found.values())
 
 
+def hidden(window: Window, env: Mapping[str, str], run: Run) -> bool:
+    """Whether X reports `window` as not shown (unmapped or unviewable).
+    LibreOffice keeps a closed menu as such a window, still in the tree; live,
+    the model tried to focus one. A window whose state cannot be read counts
+    as shown, so nothing is left out on a failed query."""
+    code, info = run(["xwininfo", "-id", window.id], env)
+    return code == 0 and ("IsUnMapped" in info or "IsUnviewable" in info)
+
+
+def shown_windows(tree: str, env: Mapping[str, str], run: Run) -> list[Window]:
+    """The named windows in `tree` that are on the screen (`hidden`)."""
+    return [w for w in parse_windows(tree) if not hidden(w, env, run)]
+
+
 def choose(windows: Sequence[Window], wanted: str) -> Window | str:
     """The window `wanted` names: its id exactly, else the one window whose
     title contains it (ignoring case). A refusal naming the windows otherwise."""
@@ -159,7 +173,7 @@ def capture(
     code, tree = run(["xwininfo", "-root", "-tree"], env)
     if code != 0:
         return "error: the window list could not be read (xwininfo failed)"
-    windows = parse_windows(tree)
+    windows = shown_windows(tree, env, run)
     if wanted.strip().lower() == LIST:
         listed = "\n".join(w.describe() for w in windows)
         if not listed:

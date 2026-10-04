@@ -1277,3 +1277,14 @@ def test_a_list_flag_lists_the_windows(
     for flag in (True, "True", "true"):
         assert tools._screenshot(ctx, {"list": flag}).startswith("windows on the screen:")
     assert "windows on the screen" not in tools._screenshot(ctx, {"list": "false"})
+
+
+def test_a_hidden_window_is_not_found_to_act_on(desktop: FakeDesktop) -> None:
+    class Hiding(FakeDesktop):
+        def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+            if list(argv[:3]) == ["xwininfo", "-id", "0x1200005"]:
+                return 0, "  Map State: IsUnMapped\n"
+            return super().__call__(argv, env)
+
+    said = computer.find("video", {}, Hiding())
+    assert str(said).startswith("error: no window matches 'video'")

@@ -139,7 +139,7 @@ def test_the_whole_screen_uses_the_compositors_capture_under_wayland(
     env = {"WAYLAND_DISPLAY": "wayland-0"}
     monkeypatch.setattr("saddle.screen.shutil.which", lambda name: f"/usr/bin/{name}")
     assert capture("", out, env, x) is None
-    assert [c[0] for c in x.calls] == ["xwininfo", "grim", "convert"]
+    assert [c[0] for c in x.calls if c[1:2] != ["-id"]] == ["xwininfo", "grim", "convert"]
 
 
 def test_no_window_is_the_whole_screen_and_list_is_the_window_list(tmp_path: Path) -> None:
@@ -321,7 +321,8 @@ def test_a_zoom_crops_the_window_and_enlarges_it(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
-        calls.append(list(argv))
+        if list(argv[:2]) != ["xwininfo", "-id"]:  # a lookup, not a step
+            calls.append(list(argv))
         if argv[0] == "import":
             Path(argv[-1].removeprefix("png:")).write_bytes(b"png")
         return 0, TREE
@@ -366,7 +367,8 @@ def test_a_zoom_outside_its_window_is_refused(
 
 def _recorder(calls: list[list[str]]) -> screen.Run:
     def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
-        calls.append(list(argv))
+        if list(argv[:2]) != ["xwininfo", "-id"]:  # a lookup, not a step
+            calls.append(list(argv))
         if argv[0] in ("grim", "import", "convert"):
             Path(argv[-1].removeprefix("png:")).write_bytes(b"png")
         return 0, TREE
@@ -485,7 +487,8 @@ def test_a_menu_over_the_window_widens_its_picture(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
-        calls.append(list(argv))
+        if list(argv[:2]) != ["xwininfo", "-id"]:  # a lookup, not a step
+            calls.append(list(argv))
         if argv[0] in ("grim", "convert"):
             Path(argv[-1]).write_bytes(b"png")
         return 0, _map_state(argv) or MENU_TREE
@@ -521,7 +524,8 @@ def test_a_window_partly_off_screen_is_captured_from_the_screen_s_edge(tmp_path:
     calls: list[list[str]] = []
 
     def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
-        calls.append(list(argv))
+        if list(argv[:2]) != ["xwininfo", "-id"]:  # a lookup, not a step
+            calls.append(list(argv))
         if argv[0] in ("grim", "convert"):
             Path(argv[-1]).write_bytes(b"png")
         return 0, tree
@@ -545,7 +549,8 @@ def test_a_closed_menu_does_not_widen_the_picture(
     calls: list[list[str]] = []
 
     def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
-        calls.append(list(argv))
+        if list(argv[:2]) != ["xwininfo", "-id"]:  # a lookup, not a step
+            calls.append(list(argv))
         if argv[0] in ("grim", "convert"):
             Path(argv[-1]).write_bytes(b"png")
         return 0, _map_state(argv) or MENU_TREE
@@ -555,3 +560,27 @@ def test_a_closed_menu_does_not_widen_the_picture(
     capture("writer", out, WAYLAND, run, on_top=lambda w: True, which=_grim, area=area)
     assert area == [(0, 0, 1280, 686)]
     assert next(c for c in calls if c[0] == "grim")[4] == "0,34 1280x686"
+
+
+def test_hidden_windows_are_neither_listed_nor_chosen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (rung 2): the window list showed two "LibreOffice 24.2" windows
+    that were closed menus LibreOffice keeps unmapped; the model tried to focus
+    one, then spent a round inspecting them with xwininfo. Known-good: an
+    unmapped window is left out of the list and cannot be chosen. Known-bad
+    guard: a window whose state cannot be read is still listed."""
+    monkeypatch.setattr(sys.modules[__name__], "HIDDEN", {"0x401ba0"})
+
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if list(argv[:2]) == ["xwininfo", "-id"] and argv[2] == "0x400016":
+            return 1, ""  # unreadable: kept
+        return 0, _map_state(argv) or MENU_TREE
+
+    listed = capture("list", tmp_path / "l.png", {}, run)
+    assert isinstance(listed, str)
+    assert "0x401ba0" not in listed
+    assert "0x400016" in listed
+    assert "0x400024" in listed
+    hidden = capture("0x401ba0", tmp_path / "h.png", {}, run)
+    assert str(hidden).startswith("error: no window matches '0x401ba0'")
