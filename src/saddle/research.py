@@ -255,6 +255,9 @@ class ReaderGate:
     """Every tool result the reader read, for the verbatim-copy check."""
     failed: dict[str, int] = field(default_factory=dict)
     """Host -> fetches of it that failed."""
+    searched: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    """SearXNG query (case and whitespace ignored) -> the rows it answered, this
+    session: a repeated query is answered from here without a request."""
 
     def allow(self, text: str, origin: str) -> None:
         for url in urls_in(text):
@@ -1065,7 +1068,31 @@ class Researcher:
         snippet). Only each result's own address joins the reader's allowed set;
         a snippet is page text and stays with the reader. A backend that is not
         running, refuses JSON or answers badly is a named failure, never an
-        empty result. Every request keeps the SearXNG pace (`SearxLimiter`)."""
+        empty result. Every request keeps the SearXNG pace (`SearxLimiter`), and a
+        query repeated in one reader session (case and whitespace ignored) is
+        answered from `gate.searched`, labelled `(cached)`, without a request."""
+        key = " ".join(query.casefold().split())
+        rows = gate.searched.get(key)
+        cached = rows is not None
+        if rows is None:
+            fetched = self._searx_rows(query)
+            if isinstance(fetched, str):
+                return fetched
+            rows = gate.searched[key] = fetched
+        lines = []
+        for row in rows[:SEARCH_RESULTS]:
+            address = str(row.get("url", ""))
+            gate.allow(address, "a search result")
+            lines.append(f"{row.get('title', '')}\n{address}\n{row.get('content', '')}")
+        if lines:
+            shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
+            gate.corpus.append(shown)
+        else:
+            shown = "(the search returned no results)"
+        return f"(cached)\n{shown}" if cached else shown
+
+    def _searx_rows(self, query: str) -> list[dict[str, Any]] | str:
+        """SearXNG's result rows for `query`, at the pace, or the named failure."""
         http = self.http or httpx.Client(timeout=20)
         where = self.search_url.rstrip("/") + "/search"
         self._limiter().wait()
@@ -1086,16 +1113,7 @@ class Researcher:
             return f"error: the search backend at {self.search_url} answered badly: {exc!r}"
         if not isinstance(rows, list):
             return f"error: the search backend at {self.search_url} answered badly: no results list"
-        lines = []
-        for row in [r for r in rows if isinstance(r, dict)][:SEARCH_RESULTS]:
-            address = str(row.get("url", ""))
-            gate.allow(address, "a search result")
-            lines.append(f"{row.get('title', '')}\n{address}\n{row.get('content', '')}")
-        if not lines:
-            return "(the search returned no results)"
-        shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
-        gate.corpus.append(shown)
-        return shown
+        return [r for r in rows if isinstance(r, dict)]
 
     def _downloaded(self, result: str, gate: ReaderGate) -> list[Download]:
         """The files `result` says the browser saved, each held or withheld as the
