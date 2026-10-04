@@ -929,7 +929,7 @@ def test_a_search_backend_that_is_down_or_odd_is_a_named_result_never_an_empty_o
     rig = Rig(tmp_path, search=True)
     rig.search_body = body
     try:
-        shown = rig.researcher._search("anything", ReaderGate(), None)
+        shown = rig.researcher._search("a title", ReaderGate(), None)  # on topic for the titled row
         assert fault in shown
         if isinstance(body, httpx.ConnectError):
             assert "start it with `saddle search setup`" in shown

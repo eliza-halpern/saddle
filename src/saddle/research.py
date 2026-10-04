@@ -64,7 +64,7 @@ from saddle.mcpclient import (
 from saddle.memory import is_note
 from saddle.procs import ProcessLedger
 from saddle.sandbox import Sandbox, isolation_problem
-from saddle.searx import DEFAULT_SEARCH_URL, SearxLimiter, reachable, shared_limiter
+from saddle.searx import DEFAULT_SEARCH_URL, SearxLimiter, on_topic, reachable, shared_limiter
 from saddle.vision import is_image_followup
 from saddle.vllm import StreamToken, ToolCall, VllmError
 
@@ -564,7 +564,8 @@ REPORT_SCHEMA: Final = _schema(
 SEARCH_SCHEMA: Final = _schema(
     SEARCH_TOOL,
     "Search the web. Returns result titles, addresses and snippets; the addresses can "
-    "then be opened.",
+    "then be opened. Write a short keyword query, 3 to 6 plain words with no quotation "
+    "marks: a long or quoted query brings back pages about other things.",
     {"query": {"type": "string"}},
     ["query"],
 )
@@ -1070,7 +1071,9 @@ class Researcher:
         running, refuses JSON or answers badly is a named failure, never an
         empty result. Every request keeps the SearXNG pace (`SearxLimiter`), and a
         query repeated in one reader session (case and whitespace ignored) is
-        answered from `gate.searched`, labelled `(cached)`, without a request."""
+        answered from `gate.searched`, labelled `(cached)`, without a request.
+        Rows `searx.on_topic` drops are counted, never shown, and their addresses
+        never join the allowed set."""
         key = " ".join(query.casefold().split())
         rows = gate.searched.get(key)
         cached = rows is not None
@@ -1079,14 +1082,27 @@ class Researcher:
             if isinstance(fetched, str):
                 return fetched
             rows = gate.searched[key] = fetched
+        kept, dropped = on_topic(query, rows)
         lines = []
-        for row in rows[:SEARCH_RESULTS]:
+        for row in kept[:SEARCH_RESULTS]:
             address = str(row.get("url", ""))
             gate.allow(address, "a search result")
             lines.append(f"{row.get('title', '')}\n{address}\n{row.get('content', '')}")
+        hidden = (
+            f"({len(dropped)} off-topic result{'' if len(dropped) == 1 else 's'} hidden: "
+            "too few words in common with the query)"
+        )
         if lines:
             shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
             gate.corpus.append(shown)
+            if dropped:
+                shown = f"{hidden}\n{shown}"
+        elif dropped:
+            shown = (
+                f"(the search found nothing relevant; {hidden.strip('()')}. That does not "
+                "mean nothing exists: search again with fewer, plainer keywords, 3 to 6 "
+                "words and no quotation marks.)"
+            )
         else:
             shown = "(the search returned no results)"
         return f"(cached)\n{shown}" if cached else shown

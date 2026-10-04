@@ -25,6 +25,11 @@ What this module does, and refuses to:
   over the pace waits; it is never refused. The upstream engines answer bursts
   of 20 and more a minute with CAPTCHAs and suspensions, and the bursts keep
   them blocked.
+- Relevance. A SearXNG row that shares too few meaningful words with the query
+  (`on_topic`) never reaches the reader, and its address is never one it may
+  open. Live, only about half of the rows mentioned the topic at all: a long
+  query was read as other entities (a query about a game on PCGamingWiki came
+  back with a royal's Wikipedia page and WhatsApp Web).
 - Privacy: a query the reader sends goes from your SearXNG to the search engines
   its settings enable (by default several public ones), as any metasearch query
   does; nothing else leaves the machine, and the reader is the only thing that
@@ -35,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import threading
@@ -43,7 +49,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Final
+from typing import IO, Any, Final
 from urllib.parse import urlsplit
 
 import httpx
@@ -114,6 +120,63 @@ _SHARED = SearxLimiter()
 def shared_limiter() -> SearxLimiter:
     """The one limiter every SearXNG request of this process passes."""
     return _SHARED
+
+
+STOPWORDS: Final = frozenset(
+    """
+    the and for with from into onto about how what why when where which who whom
+    this that these those are was were been being has have had does did not can
+    could should would will you your its our their there here than then also any
+    all some use using used get via per out www http https com org net html htm php
+    """.split()
+)
+"""Words of three or more letters that say nothing about a topic, including the
+fixed parts of an address."""
+_LETTERS: Final = re.compile(r"[^\W\d_]+")
+PREFIX_LETTERS: Final = 4
+"""A query word this long also matches a word that starts with it (`wine` in
+`winehq`, `install` in `installing`); a shorter one must match whole."""
+MANY_WORDS: Final = 4
+"""A query with this many meaningful words needs two of them in a row: one
+shared word (a name, say) is how the off-topic rows got in."""
+
+
+def meaningful_words(text: str) -> set[str]:
+    """The lowercase runs of letters in `text` (so an address splits on everything
+    else) of three or more letters, less `STOPWORDS`."""
+    return {
+        word
+        for word in _LETTERS.findall(text.casefold())
+        if len(word) >= 3 and word not in STOPWORDS
+    }
+
+
+def on_topic(
+    query: str, rows: Sequence[Mapping[str, Any]]
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """(kept, dropped) rows of a search for `query`, each in order.
+
+    A query word is shared with a row when the row's title, snippet (`content`)
+    or address holds it as a word, or, for a query word of `PREFIX_LETTERS` or
+    more, holds a word that starts with it. A row is kept when it shares one
+    word, or two when the query has `MANY_WORDS` or more meaningful words. A
+    query with no meaningful word keeps every row: there is nothing to judge by."""
+    wanted = meaningful_words(query)
+    needed = 2 if len(wanted) >= MANY_WORDS else 1
+    kept: list[Mapping[str, Any]] = []
+    dropped: list[Mapping[str, Any]] = []
+    for row in rows:
+        words = meaningful_words(
+            " ".join(str(row.get(name, "")) for name in ("title", "content", "url"))
+        )
+        shared = sum(
+            1
+            for want in wanted
+            if want in words
+            or (len(want) >= PREFIX_LETTERS and any(w.startswith(want) for w in words))
+        )
+        (kept if not wanted or shared >= needed else dropped).append(row)
+    return kept, dropped
 
 
 type Docker = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
