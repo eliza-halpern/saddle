@@ -111,6 +111,7 @@ ALIASES: Final[Mapping[str, Mapping[str, Any]]] = {
     "double_click": {"action": "click", "double": True},
     "double": {"action": "click", "double": True},
     "right_click": {"action": "click", "button": "right"},
+    "left_click": {"action": "click", "button": "left"},
     "triple_click": {"action": "click", "triple": True},
     "triple": {"action": "click", "triple": True},
 }

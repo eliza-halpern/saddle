@@ -1126,6 +1126,8 @@ def test_a_menu_reaching_past_the_window_is_seen_and_clicked(
         ({"action": "double_click", "x": 1, "y": 2}, Action("click", x=1, y=2, double=True)),
         ({"action": "double", "x": 1, "y": 2}, Action("click", x=1, y=2, double=True)),
         ({"action": "right_click", "x": 1, "y": 2}, Action("click", x=1, y=2, button="right")),
+        # live (rung 6 try 7, plain rung 8): "left_click" refused three times in one run
+        ({"action": "left_click", "x": 1, "y": 2}, Action("click", x=1, y=2)),
         (
             {"action": "click", "x": 1, "y": 2, "double": "True"},
             Action("click", x=1, y=2, double=True),
