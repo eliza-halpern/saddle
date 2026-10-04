@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from saddle import tools
 from saddle.tools import ToolContext, execute_tool
 from saddle.vllm import ToolCall
 
@@ -458,3 +459,52 @@ def test_a_window_is_the_largest_that_fits_even_with_a_fixed_overhead(tmp_path: 
     assert out.splitlines()[0] == "[o.txt: lines 1-10 of 300]"
     assert len(calls) <= 12  # a halving search, not one count per shrink
     assert out.endswith("[290 more lines: read_file with offset=11 to read on]")
+
+
+# -- a command's output fits the context ---------------------------------------------
+
+
+def test_a_huge_command_output_reaches_the_model_as_its_head_and_tail(tmp_path: Path) -> None:
+    """Live (rung 1, try 6): `ls -la /tmp` returned 404 KB, about 100,000
+    tokens, whole; the next request overflowed the window, the server sent
+    nothing and the turn ended. Known-good: with no tokenizer at hand, at most
+    READ_LINES lines reach the model, the first and the last, with a line
+    saying how many went and how to get them. Known-bad: short output is
+    unchanged."""
+    result = run("run_command", tmp_path, command="seq 1 20000")
+    body = result.splitlines()
+    assert "1" in body[:3]
+    assert body[-1] == "20000"
+    assert sum(line.isdigit() for line in body) == tools.READ_LINES
+    assert "19600 lines elided" in result
+    assert "write the output to a file" in result
+    assert run("run_command", tmp_path, command="seq 1 5").endswith("1\n2\n3\n4\n5\n")
+
+
+def test_with_a_tokenizer_the_output_is_cut_to_the_token_limit() -> None:
+    """Counted in tokens when the server's counter answers (here, one per word)."""
+    ctx = ToolContext(workdir=Path("."))
+    ctx.count_tokens = lambda text: len(text.split())
+    text = "".join(f"w{i} x x x x x x x x x\n" for i in range(5000))  # 50,000 tokens
+    fitted = tools._fit_output(ctx, text)
+    assert len(fitted.split()) <= tools.READ_TOKENS + 40  # the note's own words
+    assert fitted.startswith("w0 ")
+    assert "w4999 " in fitted
+    assert "tokens" in fitted.split("lines elided")[1].split("\n")[0]
+
+
+def test_a_background_command_s_huge_output_is_cut_too(tmp_path: Path) -> None:
+    ctx = ToolContext(workdir=tmp_path)
+
+    def call(name: str, **kwargs: object) -> str:
+        return execute_tool(
+            ToolCall(id="t1", name=name, arguments=json.dumps(kwargs)),
+            workdir=tmp_path,
+            context=ctx,
+        )
+
+    started = call("run_command", command="seq 1 20000", background=True)
+    terminal = started.split("terminal ")[1].split(" ")[0]
+    waited = call("wait_for_terminal", id=terminal, timeout=30)
+    assert "19600 lines elided" in waited
+    assert "19600 lines elided" in call("read_terminal", id=terminal)

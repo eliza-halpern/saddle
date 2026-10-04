@@ -1454,6 +1454,43 @@ UNSANDBOXED: Final = (
 command, and the journal keeps it in the call's span."""
 
 
+def _fit_output(ctx: ToolContext, text: str) -> str:
+    """A command's output as the model gets it: whole when it fits READ_TOKENS
+    (the server's count) or, with no count at hand, READ_LINES; else its first
+    and last lines, as many as fit, around a line saying what went and how to
+    get it. Live, `ls -la /tmp` (404 KB, about 100,000 tokens) went whole into
+    the context, the next request overflowed it and the turn ended."""
+    lines = text.splitlines(keepends=True)
+    count = ctx.count_tokens
+    total = count(text) if count is not None else None
+
+    def fits(kept: int) -> bool:
+        if total is None or count is None:
+            return kept <= READ_LINES
+        size = count("".join(lines[: kept - kept // 2] + lines[len(lines) - kept // 2 :]))
+        return size is not None and size <= READ_TOKENS
+
+    whole = len(lines) <= READ_LINES if total is None else total <= READ_TOKENS
+    if whole:
+        return text
+    low, high = 0, len(lines)  # the most lines kept, by halving
+    while high - low > 1:
+        mid = (low + high) // 2
+        low, high = (mid, high) if fits(mid) else (low, mid)
+    head, tail = lines[: low - low // 2], lines[len(lines) - low // 2 :]
+    size = (
+        f"{total} tokens, over the {READ_TOKENS}-token limit"
+        if total is not None
+        else (f"{len(lines)} lines, over the {READ_LINES}-line limit")
+    )
+    note = (
+        f"[... {len(lines) - low} lines elided: the output was {size} for one result; "
+        "write the output to a file and read it in parts, or narrow the command "
+        "(grep, head, tail) ...]\n"
+    )
+    return "".join(head) + note + "".join(tail)
+
+
 def _marked(ctx: ToolContext, result: str) -> str:
     return f"{UNSANDBOXED}\n{result}" if ctx.full_access else result
 
@@ -1540,9 +1577,9 @@ def _run_command(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return _marked(
             ctx,
             f"still running after {timeout}s{capped} as terminal {terminal.id}; "
-            f"output so far:\n{terminal.output()}",
+            f"output so far:\n{_fit_output(ctx, terminal.output())}",
         )
-    return _marked(ctx, f"exit {terminal.exit_code}\n{terminal.output()}")
+    return _marked(ctx, f"exit {terminal.exit_code}\n{_fit_output(ctx, terminal.output())}")
 
 
 def _processes(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -1583,7 +1620,7 @@ def _read_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     if terminal is None:
         return f"error: no terminal {args['id']!r}"
     state = "running" if terminal.running else f"exited {terminal.exit_code}"
-    return _marked(ctx, f"[{state}]\n{terminal.output()}")
+    return _marked(ctx, f"[{state}]\n{_fit_output(ctx, terminal.output())}")
 
 
 def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -1596,9 +1633,9 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return _marked(
             ctx,
             f"terminal {terminal.id} still running after {timeout}s{capped} "
-            f"(not killed; wait again if you want)\n{terminal.output()}",
+            f"(not killed; wait again if you want)\n{_fit_output(ctx, terminal.output())}",
         )
-    return _marked(ctx, f"exit {terminal.exit_code}\n{terminal.output()}")
+    return _marked(ctx, f"exit {terminal.exit_code}\n{_fit_output(ctx, terminal.output())}")
 
 
 # Naming the handler signature is what makes `handler(ctx, args)` a str
