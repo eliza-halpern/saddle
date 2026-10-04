@@ -231,9 +231,10 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
     "type types text; scroll turns the wheel up or down by amount, at x, y or the "
     "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
-    "a window, drag its title bar); space=screen when you measured x, y on a "
-    "whole-screen screenshot (saddle converts them). `window` is a window id or part of "
-    "its title, as screenshot "
+    "a window, drag its title bar). Give x, y as your latest screenshot shows them: on a "
+    "whole-screen screenshot saddle converts them, on a window's they are its own "
+    "pixels; space (screen or window) says which when it differs. `window` is a "
+    "window id or part of its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. A fresh "
     "picture of the window comes back after each action. A window that none of this "
     "session's commands opened is acted on only if the person approves. X11 windows "
@@ -739,6 +740,9 @@ class ToolContext:
     """Whether `read_file` on an image sends the image to the model (the Ask
     and Edit lanes). Off by default, so a Task run's `read_file` is exactly
     what it was."""
+    last_look: str | None = None
+    """What the latest screenshot showed: "screen" or "window". A `computer`
+    point given without `space` is read on it."""
     screen_capture: tuple[int, int] | None = None
     """The width and height of the last whole-screen screenshot shown to the
     model: what `computer` space=screen measures x, y on."""
@@ -993,6 +997,8 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         info = image_info(out.read_bytes()) if got is None else None
         if info is not None:
             ctx.screen_capture = (info.width, info.height)
+        if shown is not None:
+            ctx.last_look = "window" if got is not None else "screen"
     return shown if shown is not None else "error: the capture was not an image"
 
 
@@ -1021,7 +1027,7 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     window = computer.find(wanted.strip(), env)
     if isinstance(window, str):
         return window
-    space = args.get("space", "window")
+    space = args.get("space") or ("screen" if ctx.last_look == "screen" else "window")
     if space not in computer.SPACES:
         return "error: space must be window (the window's own pixels) or screen"
     if space == "screen":
@@ -1039,7 +1045,10 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     failed = computer.perform(action, window, env)
     if failed is not None:
         return failed
-    return f"done: {action.describe()} on {window.describe()}. {_afterwards(ctx, window, env)}"
+    read = " (x, y read on your whole-screen screenshot)" if space == "screen" else ""
+    return (
+        f"done: {action.describe()} on {window.describe()}{read}. {_afterwards(ctx, window, env)}"
+    )
 
 
 def _stranger(ctx: ToolContext, window: screen.Window, action: computer.Action) -> str | None:

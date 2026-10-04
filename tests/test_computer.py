@@ -836,3 +836,36 @@ def test_keys_and_scrolls_never_take_the_compositors_pointer() -> None:
 def test_no_compositor_pointer_in_the_suite_means_x(monkeypatch: pytest.MonkeyPatch) -> None:
     """The real `session_pointer`, under the suite's guard (no session socket)."""
     assert computer.session_pointer({}) is None
+
+
+# -- the latest look decides where a point was measured ------------------------------
+
+
+def test_after_a_whole_screen_look_a_point_is_read_on_it_unasked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live: the model looked at the whole screen and dragged with its pixels,
+    without space=screen, and was refused; it then spent minutes working the
+    mapping out. Known-good: with no space given, the latest screenshot decides,
+    and the result says how the point was read."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {})  # the whole screen (a 4x3 fake picture)
+    ctx.screen_capture = (1600, 900)  # as a real 1600x900 capture would record
+    said = act(ctx, window="video", action="click", x=300, y=250)
+    assert said.startswith(
+        'done: left click at (140, 100) on 0x1200005 "Video Configuration" 400x300 '
+        "(x, y read on your whole-screen screenshot)"
+    )
+    tools._screenshot(ctx, {"window": "video"})  # now the window
+    said = act(ctx, window="video", action="click", x=30, y=40)
+    assert said.startswith('done: left click at (30, 40) on 0x1200005 "Video Configuration"')
+    assert "whole-screen" not in said.split(".")[0]
+
+
+def test_an_explicit_space_overrides_the_latest_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {})
+    said = act(ctx, window="video", action="click", x=30, y=40, space="window")
+    assert said.startswith("done: left click at (30, 40) on 0x1200005")
