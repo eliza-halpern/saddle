@@ -1140,9 +1140,9 @@ def test_the_shapes_a_model_reaches_for_mean_what_they_say(
     each is read as the click it names. Known-bad stays refused."""
     assert computer.parse(arguments) == meant
     assert computer.parse({"action": "click", "x": 1, "y": 2, "double": "twice"}) == (
-        "error: click takes button left or right and double true or false"
+        "error: click takes button left or right and double or triple true or false"
     )
-    unknown = computer.parse({"action": "triple_click", "x": 1, "y": 2})
+    unknown = computer.parse({"action": "quadruple_click", "x": 1, "y": 2})
     assert str(unknown).startswith("error: action")
 
 
@@ -1414,3 +1414,18 @@ def test_a_window_an_action_opens_is_named_in_its_result(
     assert "opened" not in quiet
     said = act(ctx, window="video", action="key", keys="ctrl+shift+s")
     assert 'A new window opened: 0x1500009 "Save As" 600x400' in said
+
+
+def test_a_triple_click_selects_a_whole_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 4, Inkscape): the model reached for a triple-click three
+    times to select a field's text, was refused each time, and Ctrl+A selected
+    the drawing instead. Known-good: action triple_click (or triple true) is
+    three clicks in one."""
+    assert computer.parse({"action": "triple_click", "x": 1, "y": 2}) == Action(
+        "click", x=1, y=2, triple=True
+    )
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=5, y=6, triple="true")
+    assert said.startswith("done: left triple-click at (5, 6)")
+    assert desktop.actions[-1][-4:] == ["click", "--repeat", "3", "1"]

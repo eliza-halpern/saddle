@@ -55,6 +55,7 @@ class Action:
     y: int | None = None
     button: str = "left"
     double: bool = False
+    triple: bool = False
     keys: str = ""
     text: str = ""
     direction: str = "down"
@@ -64,7 +65,7 @@ class Action:
 
     def describe(self) -> str:
         if self.kind == "click":
-            twice = "double-" if self.double else ""
+            twice = "triple-" if self.triple else "double-" if self.double else ""
             return f"{self.button} {twice}click at ({self.x}, {self.y})"
         if self.kind == "key":
             return f"press {self.keys}"
@@ -107,6 +108,8 @@ ALIASES: Final[Mapping[str, Mapping[str, Any]]] = {
     "double_click": {"action": "click", "double": True},
     "double": {"action": "click", "double": True},
     "right_click": {"action": "click", "button": "right"},
+    "triple_click": {"action": "click", "triple": True},
+    "triple": {"action": "click", "triple": True},
 }
 """Action names a model reaches for, read as the click they name. Live, action
 "double" and "double_click" were refused again and again in one run."""
@@ -164,11 +167,12 @@ def _parse(args: Mapping[str, Any]) -> Action | str:
         return Action("drag", x=x, y=y, to_x=to_x, to_y=to_y)
     button = args.get("button", "left")
     double = _flag(args.get("double", False))
+    triple = _flag(args.get("triple", False))
     if x is None or y is None:
         return "error: click needs x and y, in pixels from the window's top-left corner"
-    if button not in BUTTONS or not isinstance(double, bool):
-        return "error: click takes button left or right and double true or false"
-    return Action("click", x=x, y=y, button=button, double=double)
+    if button not in BUTTONS or not isinstance(double, bool) or not isinstance(triple, bool):
+        return "error: click takes button left or right and double or triple true or false"
+    return Action("click", x=x, y=y, button=button, double=double, triple=triple)
 
 
 def placed(
@@ -237,7 +241,7 @@ def steps(action: Action) -> list[str]:
         ]
     if action.kind == "scroll":
         return [*settle, "click", "--repeat", str(action.amount), WHEEL[action.direction]]
-    twice = ["--repeat", "2"] if action.double else []
+    twice = ["--repeat", "3" if action.triple else "2"] if action.double or action.triple else []
     return [*settle, "click", *twice, BUTTONS[action.button]]
 
 
