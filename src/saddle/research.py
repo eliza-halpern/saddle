@@ -64,7 +64,7 @@ from saddle.mcpclient import (
 from saddle.memory import is_note
 from saddle.procs import ProcessLedger
 from saddle.sandbox import Sandbox, isolation_problem
-from saddle.searx import DEFAULT_SEARCH_URL, reachable
+from saddle.searx import DEFAULT_SEARCH_URL, SearxLimiter, reachable, shared_limiter
 from saddle.vision import is_image_followup
 from saddle.vllm import StreamToken, ToolCall, VllmError
 
@@ -676,6 +676,9 @@ class Researcher:
     budget, and falls back to SearXNG when the budget is used up."""
     brave_problem: str = ""
     """Why a configured Brave key could not be used (the file's mode, say)."""
+    searx_limiter: SearxLimiter | None = None
+    """The pace of SearXNG requests; None is the process's `shared_limiter`, so
+    parallel sessions keep one pace between them."""
     answers: BraveAnswers | None = None
     """The `answers` capability: the reader gets `ask_answers` only when set. It is
     never given to the acting session."""
@@ -770,7 +773,7 @@ class Researcher:
         if self.search_enabled and self.brave is not None:
             offered.append(SEARCH_SCHEMA)  # Brave, or the labelled fallback, answers
         elif self.search_enabled:
-            why = reachable(self.search_url, self.http)
+            why = reachable(self.search_url, self.http, self._limiter())
             if why is None:
                 offered.append(SEARCH_SCHEMA)
             else:
@@ -1052,6 +1055,9 @@ class Researcher:
         gate.corpus.append(shown)
         return shown
 
+    def _limiter(self) -> SearxLimiter:
+        return self.searx_limiter or shared_limiter()
+
     def _searx(
         self, query: str, gate: ReaderGate, count: Callable[[str], int | None] | None
     ) -> str:
@@ -1059,9 +1065,10 @@ class Researcher:
         snippet). Only each result's own address joins the reader's allowed set;
         a snippet is page text and stays with the reader. A backend that is not
         running, refuses JSON or answers badly is a named failure, never an
-        empty result."""
+        empty result. Every request keeps the SearXNG pace (`SearxLimiter`)."""
         http = self.http or httpx.Client(timeout=20)
         where = self.search_url.rstrip("/") + "/search"
+        self._limiter().wait()
         try:
             reply = http.get(where, params={"q": query, "format": "json"})
         except httpx.HTTPError as exc:

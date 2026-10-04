@@ -18,6 +18,13 @@ What this module does, and refuses to:
 - It touches only a container that carries saddle's label. A container of the
   same name that is not saddle's, and every other container on the machine, is
   left alone: it is not stopped, restarted, removed or reconfigured.
+- Pace. Every request saddle sends a SearXNG (the reader's searches, the Brave
+  fallback's, and the readiness probe) passes one limiter shared by the whole
+  process (`shared_limiter`): two requests are at least `SEARX_MIN_INTERVAL_S`
+  apart and no 60-second window holds more than `SEARX_PER_MINUTE`. A request
+  over the pace waits; it is never refused. The upstream engines answer bursts
+  of 20 and more a minute with CAPTCHAs and suspensions, and the bursts keep
+  them blocked.
 - Privacy: a query the reader sends goes from your SearXNG to the search engines
   its settings enable (by default several public ones), as any metasearch query
   does; nothing else leaves the machine, and the reader is the only thing that
@@ -30,8 +37,11 @@ import json
 import os
 import secrets
 import subprocess
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Final
 from urllib.parse import urlsplit
@@ -58,6 +68,53 @@ DEFAULT_PORT: Final = 8888
 DIR_ENV: Final = "SADDLE_SEARXNG_DIR"
 DEFAULT_DIR: Final = Path("~/.config/saddle/searxng")
 READY_TIMEOUT_S: Final = 90.0
+
+SEARX_MIN_INTERVAL_S: Final = 2.0
+"""The least time between two requests to a SearXNG, in seconds."""
+SEARX_PER_MINUTE: Final = 20
+"""The most requests to a SearXNG in any 60-second window."""
+WINDOW_S: Final = 60.0
+
+
+@dataclass
+class SearxLimiter:
+    """The pace of requests to a SearXNG. `wait` blocks until one may be sent and
+    records it; the clock and sleep are injectable, as in `brave.BraveSearch`. A
+    lock makes concurrent sessions take turns, so they cannot burst it together."""
+
+    clock: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
+    sent: deque[float] = field(default_factory=deque)
+    """When each request of the last `WINDOW_S` seconds was sent, oldest first."""
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def wait(self) -> float:
+        """Wait until a request is within the pace, record it as sent now, and
+        return the seconds waited."""
+        with self._lock:
+            now = self.clock()
+            while self.sent and now - self.sent[0] >= WINDOW_S:
+                self.sent.popleft()
+            delay = 0.0
+            if self.sent:
+                delay = self.sent[-1] + SEARX_MIN_INTERVAL_S - now
+            if len(self.sent) >= SEARX_PER_MINUTE:
+                delay = max(delay, self.sent[0] + WINDOW_S - now)
+            if delay > 0:
+                self.sleep(delay)
+                # Never earlier than the pace allowed, even if the sleep was short.
+                now = max(self.clock(), now + delay)
+            self.sent.append(now)
+        return max(delay, 0.0)
+
+
+_SHARED = SearxLimiter()
+
+
+def shared_limiter() -> SearxLimiter:
+    """The one limiter every SearXNG request of this process passes."""
+    return _SHARED
+
 
 type Docker = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
@@ -186,9 +243,13 @@ def _ours(docker: Docker) -> tuple[bool, bool, bool]:
     return True, mine, running == "true"
 
 
-def reachable(url: str, http: httpx.Client | None = None) -> str | None:
-    """None when a JSON search at `url` answers, else why not."""
+def reachable(
+    url: str, http: httpx.Client | None = None, limiter: SearxLimiter | None = None
+) -> str | None:
+    """None when a JSON search at `url` answers, else why not. The probe is a
+    search, so it keeps the pace (`shared_limiter` unless one is given)."""
     client = http or httpx.Client(timeout=5)
+    (limiter or shared_limiter()).wait()
     try:
         reply = client.get(url.rstrip("/") + "/search", params={"q": "saddle", "format": "json"})
     except httpx.HTTPError as exc:
