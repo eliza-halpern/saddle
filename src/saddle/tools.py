@@ -1019,9 +1019,13 @@ def _region(args: Mapping[str, Any]) -> tuple[int, int, int, int] | str | None:
     return x, y, width, height
 
 
-SCREENSHOT_ARGS: Final = frozenset({"window", "x", "y", "width", "height", "list", "action"})
-"""What screenshot reads; anything else is refused, never silently dropped
-("list" and "action" are the spellings models reached for, live)."""
+SCREENSHOT_ARGS: Final = frozenset(
+    {"window", "x", "y", "width", "height", "list", "action", "space"}
+)
+"""What screenshot takes; anything else is refused, never silently dropped
+("list" and "action" are the spellings models reached for, live). "space",
+the computer tool's argument, is taken and has no effect: refusing it cost a
+round, live."""
 
 
 def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -1151,6 +1155,7 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         refusal = _stranger(ctx, window, action)
         if refusal is not None:
             return refusal
+    before = {w.id for w in _shown_windows(env)}
     failed = computer.perform(action, window, env)
     if failed is not None:
         return failed
@@ -1159,9 +1164,24 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         on = "latest"  # the widened picture
     read = f" (x, y read on your {on} screenshot)" if on and action.x is not None else ""
     read += unnamed
-    return (
-        f"done: {action.describe()} on {window.describe()}{read}. {_afterwards(ctx, window, env)}"
-    )
+    after = _afterwards(ctx, window, env)  # waits AFTER_SETTLE_S first
+    opened = [w for w in _shown_windows(env) if w.id not in before and w.id != window.id]
+    if opened:
+        named = "; ".join(w.describe() for w in opened)
+        after += (
+            f" A new window opened: {named}. The picture above is of {window.id} only; "
+            "take a screenshot with that window to see it."
+        )
+    return f"done: {action.describe()} on {window.describe()}{read}. {after}"
+
+
+def _shown_windows(env: Mapping[str, str]) -> list[screen.Window]:
+    """The windows on the screen now (none when the list cannot be read).
+    Live, a dialog an action opened was a window of its own, the picture after
+    the action showed only the window acted on, and the model concluded the
+    action had failed."""
+    code, tree = screen.run_x(["xwininfo", "-root", "-tree"], env)
+    return screen.shown_windows(tree, env, screen.run_x) if code == 0 else []
 
 
 def _stranger(ctx: ToolContext, window: screen.Window, action: computer.Action) -> str | None:

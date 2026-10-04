@@ -343,7 +343,11 @@ def test_the_result_carries_a_fresh_picture_of_the_window(
     assert result.startswith('done: left click at (10, 20) on 0x1200005 "Video Configuration"')
     assert 'screenshot of 0x1200005 "Video Configuration" 400x300 afterwards: PNG' in result
     assert result.endswith("The image follows in the next message.")
-    assert desktop.calls[-1][:3] == ["import", "-window", "0x1200005"]
+    assert [c for c in desktop.calls if c[0] == "import"][-1][:3] == [
+        "import",
+        "-window",
+        "0x1200005",
+    ]
     assert desktop.calls.index(desktop.actions[0]) < len(desktop.calls) - 1  # after the click
     ((call_id, _name, url),) = ctx.attachments
     assert (call_id, url[:22]) == ("c1", "data:image/png;base64,")
@@ -1378,3 +1382,35 @@ def test_a_cut_zoom_converts_points_with_its_real_size(
     ctx = _ctx(tmp_path, monkeypatch)
     tools._screenshot(ctx, {"window": "video", "x": 380, "y": 50, "width": 1000, "height": 40})
     assert ctx.zoom == screen.Zoom("0x1200005", 380, 50, 4.0)
+
+
+class DialogDesktop(FakeDesktop):
+    """A key press that opens a dialog: its window is in the tree from then on."""
+
+    opened = False
+
+    def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if argv[:2] == ["xdotool", "key"]:
+            self.opened = True
+        if argv[0] == "xwininfo" and argv[1] == "-root" and self.opened:
+            dialog = '     0x1500009 "Save As": ("app" "App")  600x400+200+150  +200+150\n'
+            return 0, TREE.replace('     0x1200005 "Video', dialog + '     0x1200005 "Video', 1)
+        return super().__call__(argv, env)
+
+
+def test_a_window_an_action_opens_is_named_in_its_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (rung 4): ctrl+shift+s opened Inkscape's save dialog as a window of
+    its own; the picture after the action showed only Inkscape, and the model
+    concluded the shortcut had failed. Known-good: the result names the window
+    that appeared. Known-bad: an action that opens nothing says nothing."""
+    fake = DialogDesktop()
+    monkeypatch.setattr(screen, "run_x", fake)
+    monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1"})
+    monkeypatch.setattr("saddle.tools.time.sleep", lambda s: None)
+    ctx = _ctx(tmp_path, monkeypatch)
+    quiet = act(ctx, window="video", action="click", x=5, y=5)
+    assert "opened" not in quiet
+    said = act(ctx, window="video", action="key", keys="ctrl+shift+s")
+    assert 'A new window opened: 0x1500009 "Save As" 600x400' in said

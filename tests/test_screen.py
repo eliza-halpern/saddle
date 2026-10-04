@@ -595,3 +595,19 @@ def test_a_zoom_reaching_past_the_window_is_cut_at_its_edge(tmp_path: Path) -> N
     capture("critical", out, {}, _recorder(calls), region=(267, 131, 20, 20), area=area)
     assert area == [(267, 131, 10, 10)]
     assert "10x10+267+131" in calls[-1]
+
+
+def test_screenshot_takes_space_and_ignores_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live (rung 4): a zoom with space="zoom" (the computer tool's argument)
+    was refused and cost a round; it changes nothing for a screenshot."""
+    monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1"})
+
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        return 0, TREE
+
+    monkeypatch.setattr(screen, "run_x", run)
+    ctx = ToolContext(workdir=tmp_path, full_access=True, processes=ProcessLedger())
+    said = tools._screenshot(ctx, {"window": "list", "space": "zoom"})
+    assert said.startswith("windows on the screen:")
