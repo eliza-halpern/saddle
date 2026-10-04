@@ -1709,8 +1709,21 @@ def _processes(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         )
     if action == "stop":
         target = args.get("id")
+        if isinstance(target, str) and not target.strip().isdigit():
+            # A terminal id, as run_command gave it: live, the model passed one
+            # and was refused, since the list numbers process groups.
+            mine = [e for e in ledger.entries(include_saddles=False) if e.terminal == target]
+            stopped = [s for e in mine if (s := ledger.stop(e.id, include_saddles=False))]
+            if not stopped:
+                return (
+                    f"error: {target} is not one of this session's terminals or processes; "
+                    "nothing was stopped (action=list shows them)"
+                )
+            return "stopped:\n" + "\n".join(e.describe() for e in stopped)
+        if isinstance(target, str):
+            target = int(target)
         if isinstance(target, bool) or not isinstance(target, int):
-            return "error: action=stop needs an integer id (from action=list)"
+            return "error: action=stop needs an id (a terminal's, or a group's from action=list)"
         entry = ledger.stop(target, include_saddles=False)
         if entry is None:
             return (

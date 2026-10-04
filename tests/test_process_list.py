@@ -388,9 +388,9 @@ def test_saddles_mark_survives_a_restart_and_an_old_file_is_the_models(
 @pytest.mark.parametrize(
     ("arguments", "needle"),
     [
-        ({"action": "stop"}, "needs an integer id"),
-        ({"action": "stop", "id": True}, "needs an integer id"),
-        ({"action": "stop", "id": "7"}, "needs an integer id"),
+        ({"action": "stop"}, "needs an id"),
+        ({"action": "stop", "id": True}, "needs an id"),
+        ({"action": "stop", "id": "7"}, "not one of this session's"),  # read as group 7
         ({"action": "restart"}, "action must be"),
     ],
 )
@@ -690,3 +690,23 @@ def test_a_box_without_a_process_list_never_lets_a_program_outlive_its_command(
         box.run(f"sleep {sleep} >/dev/null 2>&1 & sleep 0.5")
         time.sleep(0.3)
         assert pids_running(sleep) == [], unsandboxed
+
+
+@needs_cgroup
+def test_a_command_is_stopped_by_its_terminal_id_too(full: ToolContext) -> None:
+    """Live (rung 6): the model passed processes stop the terminal id
+    run_command had given it ("2cb8e194") and was refused, since the list
+    numbers process groups; one command, two id schemes. Known-good: a
+    terminal id stops what that command started. Known-bad: an unknown
+    terminal id is refused, nothing stopped."""
+    started = run(full, "run_command", command=detach("300"), background=True)
+    terminal = started.split("terminal ")[1].split(" ")[0]
+    for _ in range(50):
+        if "sleep 300" in run(full, "processes", action="list"):
+            break
+        time.sleep(0.1)
+    refused = run(full, "processes", action="stop", id="ffffffff")
+    assert refused.startswith("error: ffffffff is not one of this session's")
+    stopped = run(full, "processes", action="stop", id=terminal)
+    assert stopped.startswith("stopped:")
+    assert "sleep 300" in stopped
