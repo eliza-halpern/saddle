@@ -1049,6 +1049,8 @@ class MenuDesktop(FakeDesktop):
     starts 40 px above the dialog's top edge."""
 
     def __call__(self, argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if list(argv[:2]) == ["xwininfo", "-id"]:
+            return 0, "  Map State: IsViewable\n"
         if argv[0] == "xwininfo":
             menu = "     0x1300001 (has no name): ()  150x300+150+60  +150+60\n"
             return 0, TREE.replace('     0x1200005 "Video', menu + '     0x1200005 "Video', 1)

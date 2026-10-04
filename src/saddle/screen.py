@@ -208,7 +208,13 @@ def capture(
                 ]
             ]
     elif target is not None and seen:
-        left, top, right, bottom = _with_what_is_over(target, parse_windows(tree, named=False))
+
+        def shown(window: Window) -> bool:
+            return "IsViewable" in run(["xwininfo", "-id", window.id], env)[1]
+
+        left, top, right, bottom = _with_what_is_over(
+            target, parse_windows(tree, named=False), shown
+        )
         wide, high = right - left, bottom - top
         steps = _from_screen(left, top, wide, high, out, f"{wide}x{high}!")
         steps.append(["convert", str(out), "-resize", f"{MAX_SIDE}x{MAX_SIDE}>", str(out)])
@@ -224,10 +230,13 @@ def capture(
     return target
 
 
-def _with_what_is_over(target: Window, windows: Sequence[Window]) -> tuple[int, int, int, int]:
+def _with_what_is_over(
+    target: Window, windows: Sequence[Window], shown: Callable[[Window], bool]
+) -> tuple[int, int, int, int]:
     """The screen area (left, top, right, bottom) of `target` and every window
-    stacked over it (listed before it) that touches it: an open menu is a window
-    of its own, and a tall one starts above the window it belongs to."""
+    stacked over it (listed before it) that touches it and is `shown`: an open
+    menu is a window of its own, and a tall one starts above the window it
+    belongs to. A closed menu is often kept, unmapped, and still listed."""
     left, top = target.x, target.y
     right, bottom = target.x + target.width, target.y + target.height
     for window in itertools.takewhile(lambda w: w.id != target.id, windows):
@@ -237,7 +246,7 @@ def _with_what_is_over(target: Window, windows: Sequence[Window]) -> tuple[int, 
             and window.y < target.y + target.height
             and target.y < window.y + window.height
         )
-        if touches:
+        if touches and shown(window):
             left, top = min(left, window.x), min(top, window.y)
             right = max(right, window.x + window.width)
             bottom = max(bottom, window.y + window.height)
