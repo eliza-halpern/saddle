@@ -772,14 +772,14 @@ def test_a_click_uses_the_compositors_pointer_when_it_offers_one() -> None:
         Action("click", x=10, y=20, double=True), VIDEO, {}, desktop, lambda env: real, waits.append
     )
     assert said is None
-    assert real.calls == [
+    assert real.calls[computer.GLIDE_STEPS - 1 :] == [
         ("move", "110", "120", "1280x720"),
         ("down", "left"),
         ("up", "left"),
         ("down", "left"),
         ("up", "left"),
     ]
-    assert waits == [0.5]
+    assert waits == [computer.GLIDE_S] * computer.GLIDE_STEPS + [0.5]
     assert real.closed
     assert not any(c[1] in ("mousemove", "click") or "click" in c for c in desktop.actions)
 
@@ -796,22 +796,25 @@ def test_a_drag_moves_with_the_button_held_to_its_end() -> None:
         lambda env: real,
         waits.append,
     )
-    assert waits[:2] == [0.5, computer.HOLD_S]  # settle, then hold before moving
-    assert real.calls[0] == ("move", "110", "105", "1280x720")
-    assert real.calls[1] == ("down", "left")
+    glide = computer.GLIDE_STEPS
+    assert waits[: glide + 2] == [computer.GLIDE_S] * glide + [0.5, computer.HOLD_S]
+    assert real.calls[glide - 1] == ("move", "110", "105", "1280x720")
+    assert real.calls[glide] == ("down", "left")
     assert real.calls[-2] == ("move", "410", "205", "1280x720")  # the end: (100+310, 100+105)
     assert real.calls[-1] == ("up", "left")
-    assert len([c for c in real.calls if c[0] == "move"]) == 1 + computer.DRAG_STEPS
+    assert len([c for c in real.calls if c[0] == "move"]) == glide + computer.DRAG_STEPS
     assert real.closed
 
 
 def test_a_compositor_pointer_that_does_not_land_presses_nothing() -> None:
     desktop = FakeDesktop()
     real = FakePointer(desktop, lands=False)
-    said = computer.perform(Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real)
+    said = computer.perform(
+        Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real, lambda s: None
+    )
     assert said is not None
     assert said.startswith("error: nothing was clicked")
-    assert [c[0] for c in real.calls] == ["move"]
+    assert [c[0] for c in real.calls] == ["move"] * computer.GLIDE_STEPS
     assert real.closed
 
 
@@ -1228,3 +1231,21 @@ def test_a_zoom_is_aimed_on_only_while_it_is_the_latest_picture(
         "error: space=zoom reads x, y on a zoomed screenshot, but your latest picture "
         'is of 0x1200005 "Video Configuration" 400x300 as a whole'
     )
+
+
+def test_the_pointer_glides_to_a_click_from_where_it_is() -> None:
+    """Measured on labwc with Writer: "Bold" in an open submenu, clicked after
+    one jump onto it, applied bold 0 times of 6; after a glide from where the
+    pointer was, 6 of 6 (and "Strikethrough", five rows lower, 3 of 3).
+    Known-good: the moves start next to the pointer's place and end on the
+    target, which only a later move reaches."""
+    desktop = FakeDesktop()  # the pointer rests at (715, 438)
+    real = FakePointer(desktop)
+    computer.perform(
+        Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real, lambda s: None
+    )
+    moves = [(int(c[1]), int(c[2])) for c in real.calls if c[0] == "move"]
+    assert len(moves) == computer.GLIDE_STEPS
+    assert moves[0] == (715 + (110 - 715) // 8, 438 + (120 - 438) // 8)  # near the start
+    assert moves[-1] == (110, 120)
+    assert (110, 120) not in moves[:-1]

@@ -348,7 +348,9 @@ def perform(
     real = (pointer or session_pointer)(env) if action.kind in ("click", "drag") else None
     extent = _display(run, env) if real is not None else None
     if real is not None and extent is not None:
-        real.move(*aimed, extent)
+        _, before = run(["xdotool", "getmouselocation", "--shell"], env)
+        start = _shell(before)
+        _glide(real, (start.get("X", aimed[0]), start.get("Y", aimed[1])), aimed, extent, sleep)
     else:
         if real is not None:
             real.close()
@@ -373,6 +375,30 @@ def perform(
     finally:
         real.close()
     return None
+
+
+GLIDE_STEPS: Final = 8
+GLIDE_S: Final = 0.02
+"""How the compositor pointer travels to a click: from where it is, in this
+many moves this far apart. Measured on labwc with Writer: a click on "Bold"
+in an open submenu after a single jump onto it applied bold 0 times of 6
+(and 0 of 3 holding the button, 0 of 6 with a wiggle on the item); after the
+pointer left the submenu and came back in, 9 of 9. A fresh virtual pointer's
+first move is not seen as the pointer arriving; a glide arrives on a later one."""
+
+
+def _glide(
+    real: Pointer,
+    start: tuple[int, int],
+    end: tuple[int, int],
+    extent: tuple[int, int],
+    sleep: Callable[[float], None],
+) -> None:
+    for step in range(1, GLIDE_STEPS + 1):
+        x = start[0] + (end[0] - start[0]) * step // GLIDE_STEPS
+        y = start[1] + (end[1] - start[1]) * step // GLIDE_STEPS
+        real.move(x, y, extent)
+        sleep(GLIDE_S)
 
 
 def _ran(code: int, action: Action, window: Window) -> str | None:
