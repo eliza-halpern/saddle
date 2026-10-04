@@ -592,7 +592,7 @@ def test_a_zoom_reaching_past_the_window_is_cut_at_its_edge(tmp_path: Path) -> N
     calls: list[list[str]] = []
     area: list[tuple[int, int, int, int]] = []
     out = tmp_path / "z.png"
-    capture("critical", out, {}, _recorder(calls), region=(267, 131, 20, 20), area=area)
+    capture("critical", out, {}, _recorder(calls), region=(267, 131, 20, 20), cut=area)
     assert area == [(267, 131, 10, 10)]
     assert "10x10+267+131" in calls[-1]
 

@@ -1465,3 +1465,15 @@ def test_modifier_keys_are_held_through_a_click_or_drag(
         lambda s: None,
     )
     assert str(refused).startswith("error: a key can be held only")
+
+
+def test_a_zoom_is_not_called_a_menu_widening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 4, try 4): a zoom of Inkscape's welcome dialog came back
+    named "widened to 330x80 to show what is open over it (a menu)": the zoom's
+    region and the menu widening were reported the same way."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = tools._screenshot(ctx, {"window": "video", "x": 10, "y": 10, "width": 80, "height": 40})
+    assert "widened" not in said
+    assert "menu" not in said

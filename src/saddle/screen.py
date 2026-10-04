@@ -158,6 +158,7 @@ def capture(
     on_top: Callable[[Window], bool] | None = None,
     which: Callable[[str], str | None] | None = None,
     area: list[tuple[int, int, int, int]] | None = None,
+    cut: list[tuple[int, int, int, int]] | None = None,
 ) -> Window | str | None:
     """Capture what `wanted` names into `out` (PNG). An empty `wanted` is the
     whole screen (None); `list` returns the window list as text; `region`
@@ -206,8 +207,8 @@ def capture(
         # A region reaching past the window is cut at its edge (live, one 2 px
         # over was refused and cost a round); `area` says what was captured.
         width, height = min(width, target.width - x), min(height, target.height - y)
-        if area is not None:
-            area.append((x, y, width, height))
+        if cut is not None:  # apart from `area`, which is a menu widening
+            cut.append((x, y, width, height))
         wide, high, _ = zoom_size(width, height)
         if seen:
             steps = _from_screen(target.x + x, target.y + y, width, height, out, f"{wide}x{high}!")

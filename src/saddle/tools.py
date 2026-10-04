@@ -1059,7 +1059,10 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         out = Path(tmp) / "screen.png"
         env = _screen_env()
         area: list[tuple[int, int, int, int]] = []
-        got = screen.capture(wanted, out, env, region=region, on_top=_on_top(env), area=area)
+        cut: list[tuple[int, int, int, int]] = []
+        got = screen.capture(
+            wanted, out, env, region=region, on_top=_on_top(env), area=area, cut=cut
+        )
         if isinstance(got, str):
             return got
         name = (
@@ -1078,7 +1081,7 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             if got is not None and region is None:
                 _looked_at(ctx, got, area)
             if got is not None and region is not None:
-                x, y, width, height = area[0] if area else region  # as captured
+                x, y, width, height = cut[0] if cut else region  # as captured
                 ctx.last_look = "zoom"
                 ctx.zoom = screen.Zoom(got.id, x, y, screen.zoom_size(width, height)[2])
     return shown if shown is not None else "error: the capture was not an image"
