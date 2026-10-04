@@ -140,6 +140,7 @@ class Asker:
 def desktop(monkeypatch: pytest.MonkeyPatch) -> FakeDesktop:
     fake = FakeDesktop()
     monkeypatch.setattr(screen, "run_x", fake)
+    monkeypatch.setattr("saddle.tools.time.sleep", lambda s: None)  # AFTER_SETTLE_S
     monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1"})
     return fake
 
@@ -1010,3 +1011,28 @@ def test_a_scroll_with_no_point_after_a_zoom_aims_at_the_middle(
     said = act(ctx, window="video", action="scroll", direction="down")
     assert said.startswith("done: scroll down 3 on 0x1200005")
     assert ["xdotool", "mousemove", "--window", "18874373", "200", "150"] in desktop.actions
+
+
+def test_the_picture_after_an_action_waits_for_the_screen_to_settle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Measured on labwc with Writer: a picture taken straight after a click on
+    "Format" showed the menu 1 time of 4 (the menu not drawn yet), after 0.1 s
+    4 of 4. Live, the stale picture read as a missed click, and the model's
+    next click closed the menu it had opened. Known-good: the wait comes after
+    the action and before the capture."""
+    order: list[str] = []
+    monkeypatch.setattr("saddle.tools.time.sleep", lambda s: order.append(f"sleep {s}"))
+    original = desktop.__call__
+
+    def spy(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        if argv[0] == "import":
+            order.append("capture")
+        elif argv[0] == "xdotool" and "click" in argv:
+            order.append("click")
+        return original(argv, env)
+
+    monkeypatch.setattr(screen, "run_x", spy)
+    act(_ctx(tmp_path, monkeypatch), window="video", action="click", x=30, y=40)
+    assert order[-3:] == ["click", f"sleep {tools.AFTER_SETTLE_S}", "capture"]
+    assert tools.AFTER_SETTLE_S >= 0.1

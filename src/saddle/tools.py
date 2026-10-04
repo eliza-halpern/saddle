@@ -24,6 +24,7 @@ import importlib.metadata
 import json
 import os
 import tempfile
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1126,8 +1127,15 @@ def _on_top(env: Mapping[str, str]) -> Callable[[screen.Window], bool]:
     return check
 
 
+AFTER_SETTLE_S: Final = 0.3
+"""How long the screen gets to show an action's effect before its picture is
+taken. Measured on labwc with Writer: a menu opened by a click was in the
+picture 1 time of 4 with no wait, 4 of 4 from 0.1 s on; this is three times that."""
+
+
 def _afterwards(ctx: ToolContext, window: screen.Window, env: Mapping[str, str]) -> str:
     """A fresh picture of `window` after an action, or why there is none."""
+    time.sleep(AFTER_SETTLE_S)
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "after.png"
         got = screen.capture(window.id, out, env, on_top=_on_top(env))
