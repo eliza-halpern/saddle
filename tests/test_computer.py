@@ -389,7 +389,9 @@ def test_another_window_is_asked_about_and_acted_on_only_when_approved(
     ]
     assert desktop.actions == [
         ["xdotool", "windowactivate", "20971522"],
-        ["xdotool", "type", "--clearmodifiers", "--", 'say "hi"\nnow'],
+        ["xdotool", "type", "--clearmodifiers", "--", 'say "hi"'],
+        ["xdotool", "key", "--clearmodifiers", "Return"],
+        ["xdotool", "type", "--clearmodifiers", "--", "now"],
     ]
 
 
@@ -947,3 +949,28 @@ def test_the_picture_after_an_action_is_the_latest_look(
     act(ctx, window="video", action="key", keys="Return")  # its picture is the window's too
     said = act(ctx, window="video", action="click", x=30, y=40)
     assert said.startswith('done: left click at (30, 40) on 0x1200005 "Video Configuration"')
+
+
+def test_typed_lines_are_parted_by_a_real_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live: "Owls\nOwls are ..." typed into Writer as "OwlsOwls are ...", the
+    newline lost. Known-good: each line is typed, and Return is pressed as a
+    key between lines, an empty line included."""
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="type", text="A\r\n\nB")
+    assert said.startswith("done: type 5 characters")
+    assert [c[1:] for c in desktop.actions[1:]] == [
+        ["type", "--clearmodifiers", "--", "A"],
+        ["key", "--clearmodifiers", "Return"],
+        ["key", "--clearmodifiers", "Return"],
+        ["type", "--clearmodifiers", "--", "B"],
+    ]
+
+
+def test_a_failed_line_stops_the_typing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    desktop.act_codes["key"] = 1
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="type", text="A\nB")
+    assert said.startswith("error: type 3 characters on 0x1200005")
+    assert [c[1] for c in desktop.actions[1:]] == ["type", "key"]  # B was never typed

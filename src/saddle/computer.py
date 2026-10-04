@@ -169,6 +169,19 @@ def placed(action: Action, window: Window) -> Action | str:
     return action
 
 
+def typing(action: Action) -> list[list[str]]:
+    """The commands that type `action.text`: each line typed, and Return pressed
+    as a key between lines. Live, a newline inside `xdotool type` reached Writer
+    as nothing ("Owls\\nOwls are" became "OwlsOwls are")."""
+    argvs: list[list[str]] = []
+    for number, line in enumerate(action.text.replace("\r\n", "\n").split("\n")):
+        if number:
+            argvs.append(["xdotool", "key", "--clearmodifiers", "Return"])
+        if line:
+            argvs.append(steps(replace(action, text=line)))
+    return argvs
+
+
 def steps(action: Action) -> list[str]:
     """The xdotool command that performs `action` once its target is verified:
     keys and text go to the focused window as real (XTest) input, clicks and
@@ -300,7 +313,11 @@ def perform(
         code, active = run(["xdotool", "getactivewindow"], env)
         if code != 0 or active.strip() != xid:
             return NOT_FOCUSED.format(window=window.describe())
-        return _ran(run(steps(action), env)[0], action, window)
+        for argv in typing(action) if action.kind == "type" else [steps(action)]:
+            code = run(argv, env)[0]
+            if code != 0:
+                return _ran(code, action, window)
+        return None
     _, geometry = run(["xdotool", "getwindowgeometry", "--shell", xid], env)
     frame = _shell(geometry)
     aimed = (frame.get("X", 0) + (action.x or 0), frame.get("Y", 0) + (action.y or 0))
