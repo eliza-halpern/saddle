@@ -372,7 +372,7 @@ def _press(
     real.button("left", pressed=False)
 
 
-SPACES: Final = ("window", "screen")
+SPACES: Final = ("window", "screen", "zoom")
 """Where x, y were measured: on a screenshot of the window (its own pixels), or
 on the last whole-screen screenshot (scaled, from the screen's corner)."""
 
@@ -417,5 +417,23 @@ def to_window(
     if action.to_x is not None and action.to_y is not None:
         to_x = round(action.to_x * width / capture[0]) - frame["X"]
         to_y = round(action.to_y * height / capture[1]) - frame["Y"]
+        return replace(action, x=x, y=y, to_x=to_x, to_y=to_y)
+    return replace(action, x=x, y=y)
+
+
+def from_zoom(action: Action, zoom: screen.Zoom | None, window: Window) -> Action | str:
+    """`action` with x, y measured on the latest zoomed screenshot turned into
+    the window's own pixels: the zoom's origin plus the point over its scale."""
+    if zoom is None or zoom.window != window.id:
+        return (
+            f"error: your latest zoomed screenshot was not of {window.describe()}; zoom into "
+            "that window first, or give x, y in its own pixels with space=window"
+        )
+    if action.x is None or action.y is None:
+        return action
+    x, y = zoom.x + round(action.x / zoom.scale), zoom.y + round(action.y / zoom.scale)
+    if action.to_x is not None and action.to_y is not None:
+        to_x = zoom.x + round(action.to_x / zoom.scale)
+        to_y = zoom.y + round(action.to_y / zoom.scale)
         return replace(action, x=x, y=y, to_x=to_x, to_y=to_y)
     return replace(action, x=x, y=y)

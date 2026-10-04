@@ -350,7 +350,7 @@ def test_a_picture_that_cannot_be_taken_afterwards_is_said_and_the_action_still_
 ) -> None:
     ctx = _ctx(tmp_path, monkeypatch)
 
-    def closed(wanted: str, out: Path, env: Mapping[str, str]) -> str:
+    def closed(wanted: str, out: Path, env: Mapping[str, str], region: object = None) -> str:
         return "error: no window matches '0x1200005'"
 
     monkeypatch.setattr(screen, "capture", closed)
@@ -360,7 +360,7 @@ def test_a_picture_that_cannot_be_taken_afterwards_is_said_and_the_action_still_
     assert result.endswith("The action was done.")
     assert ctx.attachments == []
 
-    def junk(wanted: str, out: Path, env: Mapping[str, str]) -> Window:
+    def junk(wanted: str, out: Path, env: Mapping[str, str], region: object = None) -> Window:
         out.write_text("not a picture")
         return Window("0x1200005", "Video Configuration", 400, 300)
 
@@ -869,3 +869,61 @@ def test_an_explicit_space_overrides_the_latest_look(
     tools._screenshot(ctx, {})
     said = act(ctx, window="video", action="click", x=30, y=40, space="window")
     assert said.startswith("done: left click at (30, 40) on 0x1200005")
+
+
+# -- points measured on a zoomed screenshot -----------------------------------------
+
+
+def test_after_a_zoom_a_point_is_read_on_the_enlarged_picture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Known-good: a region at (100, 50), 80x40, is shown four times larger; the
+    model's (40, 20) on it is the window's (110, 55), and a drag's end converts too."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
+    said = act(ctx, window="video", action="click", x=40, y=20)
+    assert said.startswith(
+        'done: left click at (110, 55) on 0x1200005 "Video Configuration" 400x300 '
+        "(x, y read on your zoomed screenshot)"
+    )
+    said = act(ctx, window="video", action="drag", x=40, y=20, to_x=80, to_y=40)
+    assert said.startswith("done: drag from (110, 55) to (120, 60) on 0x1200005")
+    said = act(ctx, window="video", action="key", keys="ctrl+b")
+    assert "zoomed screenshot" not in said  # a key has no point to read
+
+
+def test_a_zoom_of_another_window_does_not_place_a_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    assert act(ctx, window="video", action="click", x=4, y=4, space="zoom").startswith(
+        "error: your latest zoomed screenshot was not of 0x1200005"
+    )
+    ctx.zoom = screen.Zoom("0x99", 0, 0, 4.0)
+    ctx.last_look = "zoom"
+    assert act(ctx, window="video", action="click", x=4, y=4).startswith(
+        "error: your latest zoomed screenshot was not of 0x1200005"
+    )
+    assert [c for c in desktop.actions if c[1] in ("mousemove", "click")] == []
+
+
+def test_a_zoom_needs_all_four_numbers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    half = {"window": "video", "x": 1, "y": 1, "width": 10}
+    assert tools._screenshot(ctx, half).startswith("error: a zoom needs all of x, y, width")
+    flag = {"window": "video", "x": 1, "y": 1, "width": 10, "height": True}
+    assert tools._screenshot(ctx, flag).startswith("error: a zoom needs all of x, y, width")
+    assert ctx.last_look is None
+    assert ctx.zoom is None
+
+
+def test_a_whole_window_look_after_a_zoom_reads_window_pixels_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
+    tools._screenshot(ctx, {"window": "video"})
+    said = act(ctx, window="video", action="click", x=40, y=20)
+    assert said.startswith('done: left click at (40, 20) on 0x1200005 "Video Configuration"')

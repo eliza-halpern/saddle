@@ -98,12 +98,39 @@ def run_x(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
     return done.returncode, done.stdout
 
 
+ZOOM_MAX: Final = 4
+"""How much a zoomed region is enlarged at most: live, text in a 1600x900
+whole-screen picture was too small for the model to tell "O" from "o"."""
+
+
+@dataclass(frozen=True)
+class Zoom:
+    """A region of a window, as `capture` enlarged it: where it starts in the
+    window and how many picture pixels one window pixel became."""
+
+    window: str
+    x: int
+    y: int
+    scale: float
+
+
+def zoom_size(width: int, height: int) -> tuple[int, int, float]:
+    """The enlarged picture's size and its scale: up to ZOOM_MAX, within MAX_SIDE."""
+    scale = min(float(ZOOM_MAX), MAX_SIDE / max(width, height))
+    return round(width * scale), round(height * scale), scale
+
+
 def capture(
-    wanted: str, out: Path, env: Mapping[str, str], run: Run | None = None
+    wanted: str,
+    out: Path,
+    env: Mapping[str, str],
+    run: Run | None = None,
+    region: tuple[int, int, int, int] | None = None,
 ) -> Window | str | None:
     """Capture what `wanted` names into `out` (PNG). An empty `wanted` is the
-    whole screen (None); `list` returns the window list as text; a failure is
-    an "error: ..." string."""
+    whole screen (None); `list` returns the window list as text; `region`
+    (x, y, width, height in the window's pixels) captures that part of the
+    window, enlarged (`zoom_size`); a failure is an "error: ..." string."""
     run = run or run_x
     code, tree = run(["xwininfo", "-root", "-tree"], env)
     if code != 0:
@@ -120,7 +147,34 @@ def capture(
         if isinstance(chosen, str):
             return chosen
         target = chosen
-    steps = [_window_argv(target.id, out)] if target is not None else screen_argv(out, env)
+    if region is not None:
+        if target is None:
+            return "error: a region is part of a window: name the window too"
+        x, y, width, height = region
+        if width < 1 or height < 1 or x < 0 or y < 0:
+            return "error: a region needs x, y of 0 or more and a width and height of 1 or more"
+        if x + width > target.width or y + height > target.height:
+            return (
+                f"error: the region ({x}, {y}, {width}x{height}) goes past "
+                f"{target.describe()}; keep it inside the window"
+            )
+        wide, high, _ = zoom_size(width, height)
+        crop = f"{width}x{height}+{x}+{y}"
+        steps = [
+            [
+                "import",
+                "-window",
+                target.id,
+                "-crop",
+                crop,
+                "+repage",
+                "-resize",
+                f"{wide}x{high}!",
+                f"png:{out}",
+            ]
+        ]
+    else:
+        steps = [_window_argv(target.id, out)] if target is not None else screen_argv(out, env)
     for argv in steps:
         code, _ = run(argv, env)
         if code != 0 or not out.is_file():

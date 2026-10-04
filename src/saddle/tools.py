@@ -215,8 +215,15 @@ SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     "shown to you. `window` is a window id or part of its title; `list` lists the "
     "X11 windows (Wine programs included); omit it for the whole screen. Use it to "
     "read a dialog, check that a window opened, or see what a program shows, "
-    "instead of asking the person.",
-    {"window": {"type": "string"}},
+    "instead of asking the person. To read small text, zoom: with a window, x, y, "
+    "width and height (its own pixels) capture just that part, enlarged.",
+    {
+        "window": {"type": "string"},
+        "x": {"type": "integer"},
+        "y": {"type": "integer"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+    },
     [],
 )
 """Offered only with full access, a display and a model that reads images
@@ -233,7 +240,8 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
     "a window, drag its title bar). Give x, y as your latest screenshot shows them: on a "
     "whole-screen screenshot saddle converts them, on a window's they are its own "
-    "pixels; space (screen or window) says which when it differs. `window` is a "
+    "pixels, on a zoomed one saddle converts them too; space (screen, window or zoom) "
+    "says which when it differs. `window` is a "
     "window id or part of its title, as screenshot "
     "names them. Look with screenshot first: act only on what you have seen. A fresh "
     "picture of the window comes back after each action. A window that none of this "
@@ -740,6 +748,9 @@ class ToolContext:
     """Whether `read_file` on an image sends the image to the model (the Ask
     and Edit lanes). Off by default, so a Task run's `read_file` is exactly
     what it was."""
+    zoom: screen.Zoom | None = None
+    """The latest zoomed screenshot's region and scale, for `computer` points
+    measured on it."""
     last_look: str | None = None
     """What the latest screenshot showed: "screen" or "window". A `computer`
     point given without `space` is read on it."""
@@ -979,7 +990,21 @@ def _read_image(ctx: ToolContext, call_id: str | None, name: str, path: Path) ->
 def _screen_env() -> dict[str, str]:
     """The desktop variables the X tools need to reach the person's display."""
     kept = {k: os.environ[k] for k in ("PATH", "HOME", "XAUTHORITY") if k in os.environ}
-    return {**kept, **desktop_env()}
+    # A UTF-8 locale: live, without one, a title holding an em dash read as
+    # "(failure in conversion from UTF8_STRING to ANSI_X3.4-1968)" (F47).
+    return {**kept, **desktop_env(), "LC_ALL": "C.UTF-8"}
+
+
+def _region(args: Mapping[str, Any]) -> tuple[int, int, int, int] | str | None:
+    """The zoom region x, y, width, height: all four whole numbers, or none."""
+    keys = ("x", "y", "width", "height")
+    given = [args.get(key) for key in keys]
+    if all(value is None for value in given):
+        return None
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in given):
+        return "error: a zoom needs all of x, y, width and height, as whole numbers"
+    x, y, width, height = (int(value) for value in given)  # type: ignore[arg-type]
+    return x, y, width, height
 
 
 def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
@@ -987,9 +1012,12 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     wanted = args.get("window", "")
     if not isinstance(wanted, str):
         return "error: window must be a string (an id, part of a title, or list)"
+    region = _region(args)
+    if isinstance(region, str):
+        return region
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "screen.png"
-        got = screen.capture(wanted, out, _screen_env())
+        got = screen.capture(wanted, out, _screen_env(), region=region)
         if isinstance(got, str):
             return got
         name = f"screenshot of {got.describe()}" if got is not None else "screenshot of the screen"
@@ -999,6 +1027,11 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             ctx.screen_capture = (info.width, info.height)
         if shown is not None:
             ctx.last_look = "window" if got is not None else "screen"
+            if got is not None and region is not None:
+                ctx.last_look = "zoom"
+                ctx.zoom = screen.Zoom(
+                    got.id, region[0], region[1], screen.zoom_size(*region[2:])[2]
+                )
     return shown if shown is not None else "error: the capture was not an image"
 
 
@@ -1027,13 +1060,17 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     window = computer.find(wanted.strip(), env)
     if isinstance(window, str):
         return window
-    space = args.get("space") or ("screen" if ctx.last_look == "screen" else "window")
+    space = args.get("space") or (
+        ctx.last_look if ctx.last_look in ("screen", "zoom") else "window"
+    )
     if space not in computer.SPACES:
         return "error: space must be window (the window's own pixels) or screen"
     if space == "screen":
         action = computer.to_window(action, window, ctx.screen_capture, env)
-        if isinstance(action, str):
-            return action
+    elif space == "zoom":
+        action = computer.from_zoom(action, ctx.zoom, window)
+    if isinstance(action, str):
+        return action
     action = computer.placed(action, window)
     if isinstance(action, str):
         return action
@@ -1045,7 +1082,8 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     failed = computer.perform(action, window, env)
     if failed is not None:
         return failed
-    read = " (x, y read on your whole-screen screenshot)" if space == "screen" else ""
+    on = {"screen": "whole-screen", "zoom": "zoomed"}.get(str(space))
+    read = f" (x, y read on your {on} screenshot)" if on and action.x is not None else ""
     return (
         f"done: {action.describe()} on {window.describe()}{read}. {_afterwards(ctx, window, env)}"
     )

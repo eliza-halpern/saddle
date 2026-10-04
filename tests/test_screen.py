@@ -288,7 +288,7 @@ def test_a_screenshot_call_that_cannot_be_shown_says_why(
     monkeypatch.setattr(screen, "run_x", FakeX(tree_code=1))
     assert tools._screenshot(ctx, {}).startswith("error: the window list could not be read")
 
-    def junk(wanted: str, out: Path, env: Mapping[str, str]) -> None:
+    def junk(wanted: str, out: Path, env: Mapping[str, str], region: object = None) -> None:
         out.write_text("not a picture")  # what a broken import could leave
 
     monkeypatch.setattr(screen, "capture", junk)
@@ -301,3 +301,60 @@ def test_the_x_tools_get_the_desktop_variables(monkeypatch: pytest.MonkeyPatch) 
     env = tools._screen_env()
     assert env["DISPLAY"] == ":1"
     assert env["XAUTHORITY"] == "/run/user/1000/xauth"
+
+
+def test_the_x_tools_read_titles_as_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live: without a locale, a title holding an em dash came back as
+    "(failure in conversion from UTF8_STRING to ANSI_X3.4-1968)"."""
+    monkeypatch.setattr(tools, "desktop_env", lambda: {"DISPLAY": ":1"})
+    monkeypatch.delenv("LC_ALL", raising=False)
+    assert tools._screen_env()["LC_ALL"] == "C.UTF-8"
+
+
+# -- zoom: part of a window, enlarged ------------------------------------------------
+
+
+def test_a_zoom_crops_the_window_and_enlarges_it(tmp_path: Path) -> None:
+    """Live: a 1600x900 picture left "O" and "o" indistinguishable. Known-good:
+    the region is cut from the window at full size and scaled up to ZOOM_MAX."""
+    calls: list[list[str]] = []
+
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[0] == "import":
+            Path(argv[-1].removeprefix("png:")).write_bytes(b"png")
+        return 0, TREE
+
+    out = tmp_path / "z.png"
+    got = screen.capture("critical", out, {}, run, region=(100, 50, 80, 40))
+    assert isinstance(got, Window)
+    assert calls[-1] == [
+        "import", "-window", got.id, "-crop", "80x40+100+50", "+repage",
+        "-resize", "320x160!", f"png:{out}",
+    ]  # fmt: skip
+    assert screen.zoom_size(1000, 10) == (1600, 16, 1.6)  # a wide strip stays within MAX_SIDE
+
+
+@pytest.mark.parametrize(
+    ("wanted", "region", "refusal"),
+    [
+        ("", (0, 0, 10, 10), "error: a region is part of a window"),
+        ("critical", (-1, 0, 10, 10), "error: a region needs x, y of 0 or more"),
+        ("critical", (0, 0, 0, 10), "error: a region needs x, y of 0 or more"),
+        ("critical", (0, 0, 10, 0), "error: a region needs x, y of 0 or more"),
+        ("critical", (0, -1, 10, 10), "error: a region needs x, y of 0 or more"),
+        ("critical", (267, 0, 11, 10), "error: the region (267, 0, 11x10) goes past"),
+        ("critical", (0, 136, 10, 6), "error: the region (0, 136, 10x6) goes past"),
+    ],
+)
+def test_a_zoom_outside_its_window_is_refused(
+    tmp_path: Path, wanted: str, region: tuple[int, int, int, int], refusal: str
+) -> None:
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        return 0, TREE
+
+    said = screen.capture(wanted, tmp_path / "z.png", {}, run, region=region)
+    assert isinstance(said, str)
+    assert said.startswith(refusal)
+    inside = screen.capture("critical", tmp_path / "z.png", {}, run, region=(267, 131, 10, 10))
+    assert inside == "error: the window could not be captured (import exited 0)"  # it got as far
