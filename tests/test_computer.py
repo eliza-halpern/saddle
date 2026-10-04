@@ -892,11 +892,13 @@ def test_after_a_zoom_a_point_is_read_on_the_enlarged_picture(
     tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
     said = act(ctx, window="video", action="click", x=40, y=20)
     assert said.startswith('done: left click at (40, 20) on 0x1200005 "Video Configuration"')
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
     said = act(ctx, window="video", action="click", x=40, y=20, space="zoom")
     assert said.startswith(
         'done: left click at (110, 55) on 0x1200005 "Video Configuration" 400x300 '
         "(x, y read on your zoomed screenshot)"
     )
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
     said = act(ctx, window="video", action="drag", x=40, y=20, to_x=80, to_y=40, space="zoom")
     assert said.startswith("done: drag from (110, 55) to (120, 60) on 0x1200005")
     said = act(ctx, window="video", action="key", keys="ctrl+b")
@@ -911,6 +913,7 @@ def test_a_zoom_of_another_window_does_not_place_a_point(
         "error: your latest zoomed screenshot was not of 0x1200005"
     )
     ctx.zoom = screen.Zoom("0x99", 0, 0, 4.0)
+    ctx.last_look = "zoom"  # a fresh zoom, of another window
     assert act(ctx, window="video", action="click", x=4, y=4, space="zoom").startswith(
         "error: your latest zoomed screenshot was not of 0x1200005"
     )
@@ -1206,3 +1209,22 @@ def test_a_zoom_with_no_window_named_is_of_the_last_one(
     said = tools._screenshot(ctx, region)
     assert "screenshot of 0x1200005" in said
     assert ctx.zoom == screen.Zoom("0x1200005", 10, 10, 4.0)
+
+
+def test_a_zoom_is_aimed_on_only_while_it_is_the_latest_picture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop: FakeDesktop
+) -> None:
+    """Live (rung 1, try 7): the model zoomed on the title, opened the Format
+    menu (the click's picture, widened, became the latest), then passed
+    space=zoom for "Text"; the title's zoom was applied and the click landed
+    in the page at (307, 228). Known-good: right after the zoom, space=zoom
+    converts. Known-bad: once a newer picture came back, it is refused."""
+    ctx = _ctx(tmp_path, monkeypatch)
+    tools._screenshot(ctx, {"window": "video", "x": 100, "y": 50, "width": 80, "height": 40})
+    said = act(ctx, window="video", action="click", x=40, y=20, space="zoom")
+    assert said.startswith("done: left click at (110, 55)")
+    said = act(ctx, window="video", action="click", x=40, y=20, space="zoom")
+    assert said.startswith(
+        "error: space=zoom reads x, y on a zoomed screenshot, but your latest picture "
+        'is of 0x1200005 "Video Configuration" 400x300 as a whole'
+    )

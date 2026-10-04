@@ -1051,6 +1051,7 @@ def _screenshot(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             if got is not None and region is None:
                 _looked_at(ctx, got, area)
             if got is not None and region is not None:
+                ctx.last_look = "zoom"
                 ctx.zoom = screen.Zoom(
                     got.id, region[0], region[1], screen.zoom_size(*region[2:])[2]
                 )
@@ -1101,6 +1102,13 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             "error: space=screen reads x, y on a whole-screen screenshot, but your latest "
             f"picture is of {window.describe()}; give x, y as that picture shows them "
             "(space=window), or take a whole-screen screenshot first. Nothing was done."
+        )
+    stale = ctx.zoom is not None and ctx.last_look != "zoom"
+    if space == "zoom" and stale and action.x is not None:
+        return (
+            "error: space=zoom reads x, y on a zoomed screenshot, but your latest picture "
+            f"is of {window.describe()} as a whole; give x, y as that picture shows them "
+            "(no space), or zoom again first. Nothing was done."
         )
     if space == "screen":
         action = computer.to_window(action, window, ctx.screen_capture, env)
