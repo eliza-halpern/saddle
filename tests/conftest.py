@@ -129,6 +129,21 @@ def _no_real_mcp_allowlist(
 
 
 @pytest.fixture(autouse=True)
+def _no_real_searx_pace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test its own process-wide SearXNG limiter on a clock its sleeps
+    advance. The real one would make every search test sleep two real seconds,
+    and would carry one test's requests into the next test's pace."""
+    from saddle import searx
+
+    now = [0.0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    monkeypatch.setattr(searx, "_SHARED", searx.SearxLimiter(clock=lambda: now[0], sleep=sleep))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite away from the operator's actual key.
 

@@ -64,7 +64,7 @@ from saddle.mcpclient import (
 from saddle.memory import is_note
 from saddle.procs import ProcessLedger
 from saddle.sandbox import Sandbox, isolation_problem
-from saddle.searx import DEFAULT_SEARCH_URL, reachable
+from saddle.searx import DEFAULT_SEARCH_URL, SearxLimiter, on_topic, reachable, shared_limiter
 from saddle.vision import is_image_followup
 from saddle.vllm import StreamToken, ToolCall, VllmError
 
@@ -255,6 +255,9 @@ class ReaderGate:
     """Every tool result the reader read, for the verbatim-copy check."""
     failed: dict[str, int] = field(default_factory=dict)
     """Host -> fetches of it that failed."""
+    searched: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    """SearXNG query (case and whitespace ignored) -> the rows it answered, this
+    session: a repeated query is answered from here without a request."""
 
     def allow(self, text: str, origin: str) -> None:
         for url in urls_in(text):
@@ -561,7 +564,8 @@ REPORT_SCHEMA: Final = _schema(
 SEARCH_SCHEMA: Final = _schema(
     SEARCH_TOOL,
     "Search the web. Returns result titles, addresses and snippets; the addresses can "
-    "then be opened.",
+    "then be opened. Write a short keyword query, 3 to 6 plain words with no quotation "
+    "marks: a long or quoted query brings back pages about other things.",
     {"query": {"type": "string"}},
     ["query"],
 )
@@ -676,6 +680,9 @@ class Researcher:
     budget, and falls back to SearXNG when the budget is used up."""
     brave_problem: str = ""
     """Why a configured Brave key could not be used (the file's mode, say)."""
+    searx_limiter: SearxLimiter | None = None
+    """The pace of SearXNG requests; None is the process's `shared_limiter`, so
+    parallel sessions keep one pace between them."""
     answers: BraveAnswers | None = None
     """The `answers` capability: the reader gets `ask_answers` only when set. It is
     never given to the acting session."""
@@ -770,7 +777,7 @@ class Researcher:
         if self.search_enabled and self.brave is not None:
             offered.append(SEARCH_SCHEMA)  # Brave, or the labelled fallback, answers
         elif self.search_enabled:
-            why = reachable(self.search_url, self.http)
+            why = reachable(self.search_url, self.http, self._limiter())
             if why is None:
                 offered.append(SEARCH_SCHEMA)
             else:
@@ -1052,6 +1059,9 @@ class Researcher:
         gate.corpus.append(shown)
         return shown
 
+    def _limiter(self) -> SearxLimiter:
+        return self.searx_limiter or shared_limiter()
+
     def _searx(
         self, query: str, gate: ReaderGate, count: Callable[[str], int | None] | None
     ) -> str:
@@ -1059,9 +1069,49 @@ class Researcher:
         snippet). Only each result's own address joins the reader's allowed set;
         a snippet is page text and stays with the reader. A backend that is not
         running, refuses JSON or answers badly is a named failure, never an
-        empty result."""
+        empty result. Every request keeps the SearXNG pace (`SearxLimiter`), and a
+        query repeated in one reader session (case and whitespace ignored) is
+        answered from `gate.searched`, labelled `(cached)`, without a request.
+        Rows `searx.on_topic` drops are counted, never shown, and their addresses
+        never join the allowed set."""
+        key = " ".join(query.casefold().split())
+        rows = gate.searched.get(key)
+        cached = rows is not None
+        if rows is None:
+            fetched = self._searx_rows(query)
+            if isinstance(fetched, str):
+                return fetched
+            rows = gate.searched[key] = fetched
+        kept, dropped = on_topic(query, rows)
+        lines = []
+        for row in kept[:SEARCH_RESULTS]:
+            address = str(row.get("url", ""))
+            gate.allow(address, "a search result")
+            lines.append(f"{row.get('title', '')}\n{address}\n{row.get('content', '')}")
+        hidden = (
+            f"({len(dropped)} off-topic result{'' if len(dropped) == 1 else 's'} hidden: "
+            "too few words in common with the query)"
+        )
+        if lines:
+            shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
+            gate.corpus.append(shown)
+            if dropped:
+                shown = f"{hidden}\n{shown}"
+        elif dropped:
+            shown = (
+                f"(the search found nothing relevant; {hidden.strip('()')}. That does not "
+                "mean nothing exists: search again with fewer, plainer keywords, 3 to 6 "
+                "words and no quotation marks.)"
+            )
+        else:
+            shown = "(the search returned no results)"
+        return f"(cached)\n{shown}" if cached else shown
+
+    def _searx_rows(self, query: str) -> list[dict[str, Any]] | str:
+        """SearXNG's result rows for `query`, at the pace, or the named failure."""
         http = self.http or httpx.Client(timeout=20)
         where = self.search_url.rstrip("/") + "/search"
+        self._limiter().wait()
         try:
             reply = http.get(where, params={"q": query, "format": "json"})
         except httpx.HTTPError as exc:
@@ -1079,16 +1129,7 @@ class Researcher:
             return f"error: the search backend at {self.search_url} answered badly: {exc!r}"
         if not isinstance(rows, list):
             return f"error: the search backend at {self.search_url} answered badly: no results list"
-        lines = []
-        for row in [r for r in rows if isinstance(r, dict)][:SEARCH_RESULTS]:
-            address = str(row.get("url", ""))
-            gate.allow(address, "a search result")
-            lines.append(f"{row.get('title', '')}\n{address}\n{row.get('content', '')}")
-        if not lines:
-            return "(the search returned no results)"
-        shown = clip_result("\n\n".join(lines), RESULT_TOKENS, count)
-        gate.corpus.append(shown)
-        return shown
+        return [r for r in rows if isinstance(r, dict)]
 
     def _downloaded(self, result: str, gate: ReaderGate) -> list[Download]:
         """The files `result` says the browser saved, each held or withheld as the
