@@ -350,7 +350,14 @@ def perform(
     _, geometry = run(["xdotool", "getwindowgeometry", "--shell", xid], env)
     frame = _shell(geometry)
     aimed = (frame.get("X", 0) + (action.x or 0), frame.get("Y", 0) + (action.y or 0))
-    real = (pointer or session_pointer)(env) if action.kind in ("click", "drag") else None
+    # X input for everything inside the window; the compositor's pointer only
+    # for a drag that starts outside it (a title bar), which X cannot do.
+    # Measured on labwc with Writer: clicks on menu items through X 11 of 11
+    # (first-level and submenu, a first click arriving from a native window
+    # included); through the compositor's pointer 0 of 9 on "Insert Table...".
+    inside = 0 <= (action.x or 0) < window.width and 0 <= (action.y or 0) < window.height
+    by_compositor = action.kind == "drag" and not inside
+    real = (pointer or session_pointer)(env) if by_compositor else None
     extent = _display(run, env) if real is not None else None
     if real is not None and extent is not None:
         _, before = run(["xdotool", "getmouselocation", "--shell"], env)
@@ -429,13 +436,9 @@ def _press(
     frame: Mapping[str, int],
     sleep: Callable[[float], None],
 ) -> None:
-    """The click or drag itself, on the compositor's pointer already at `aimed`."""
+    """The drag itself (the one action the compositor's pointer serves: from a
+    title bar), on the pointer already at `aimed`."""
     sleep(float(SETTLE_S))
-    if action.kind == "click":
-        for _ in range(2 if action.double else 1):
-            real.button(action.button, pressed=True)
-            real.button(action.button, pressed=False)
-        return
     end = (frame.get("X", 0) + (action.to_x or 0), frame.get("Y", 0) + (action.to_y or 0))
     real.button("left", pressed=True)
     sleep(HOLD_S)

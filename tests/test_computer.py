@@ -762,34 +762,38 @@ class FakePointer:
 VIDEO = Window("0x1200005", "Video Configuration", 400, 300)
 
 
-def test_a_click_uses_the_compositors_pointer_when_it_offers_one() -> None:
-    """Only the compositor's pointer is the session's real pointer. Known-good:
-    it goes to the window's place plus the point, is read back there, presses."""
+def test_a_click_inside_the_window_goes_through_x_even_with_a_compositor_pointer() -> None:
+    """Measured on labwc with Writer: "Insert Table..." in the Table menu,
+    clicked through the compositor's pointer, 0 of 9 (a glide, a slower
+    glide, a re-entry, one device for both clicks); through X 3 of 3, and
+    through X also 4 of 4 with the first click arriving from a native
+    window and 4 of 4 on "Bold" in a submenu. Known-good: a click inside the
+    window is moved and pressed by X; the compositor's pointer is not used."""
     desktop = FakeDesktop()
     real = FakePointer(desktop)
-    waits: list[float] = []
     said = computer.perform(
-        Action("click", x=10, y=20, double=True), VIDEO, {}, desktop, lambda env: real, waits.append
+        Action("click", x=10, y=20, double=True),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda s: None,
     )
     assert said is None
-    assert real.calls[computer.GLIDE_STEPS - 1 :] == [
-        ("move", "110", "120", "1280x720"),
-        ("down", "left"),
-        ("up", "left"),
-        ("down", "left"),
-        ("up", "left"),
-    ]
-    assert waits == [computer.GLIDE_S] * computer.GLIDE_STEPS + [0.5]
-    assert real.closed
-    assert not any(c[1] in ("mousemove", "click") or "click" in c for c in desktop.actions)
+    assert real.calls == []
+    assert ["xdotool", "mousemove", "--window", "18874373", "10", "20"] in desktop.actions
+    assert desktop.actions[-1][-4:] == ["click", "--repeat", "2", "1"]
 
 
-def test_a_drag_moves_with_the_button_held_to_its_end() -> None:
+def test_a_drag_from_the_title_bar_moves_with_the_button_held_to_its_end() -> None:
+    """A drag that starts outside the window's own area (its title bar, drawn
+    by the compositor) is the one thing X cannot do: it goes through the
+    compositor's pointer."""
     desktop = FakeDesktop()
     real = FakePointer(desktop)
     waits: list[float] = []
     computer.perform(
-        Action("drag", x=10, y=5, to_x=310, to_y=105),
+        Action("drag", x=10, y=-10, to_x=310, to_y=90),
         VIDEO,
         {},
         desktop,
@@ -798,9 +802,9 @@ def test_a_drag_moves_with_the_button_held_to_its_end() -> None:
     )
     glide = computer.GLIDE_STEPS
     assert waits[: glide + 2] == [computer.GLIDE_S] * glide + [0.5, computer.HOLD_S]
-    assert real.calls[glide - 1] == ("move", "110", "105", "1280x720")
+    assert real.calls[glide - 1] == ("move", "110", "90", "1280x720")
     assert real.calls[glide] == ("down", "left")
-    assert real.calls[-2] == ("move", "410", "205", "1280x720")  # the end: (100+310, 100+105)
+    assert real.calls[-2] == ("move", "410", "190", "1280x720")  # the end: (100+310, 100+90)
     assert real.calls[-1] == ("up", "left")
     assert len([c for c in real.calls if c[0] == "move"]) == glide + computer.DRAG_STEPS
     assert real.closed
@@ -810,7 +814,12 @@ def test_a_compositor_pointer_that_does_not_land_presses_nothing() -> None:
     desktop = FakeDesktop()
     real = FakePointer(desktop, lands=False)
     said = computer.perform(
-        Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real, lambda s: None
+        Action("drag", x=10, y=-10, to_x=50, to_y=40),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda s: None,
     )
     assert said is not None
     assert said.startswith("error: nothing was clicked")
@@ -818,15 +827,22 @@ def test_a_compositor_pointer_that_does_not_land_presses_nothing() -> None:
     assert real.closed
 
 
-def test_without_the_screens_size_the_click_goes_through_x() -> None:
+def test_without_the_screens_size_a_title_bar_drag_goes_through_x() -> None:
     desktop = FakeDesktop()
     desktop.display_code = 1
     real = FakePointer(desktop)
-    said = computer.perform(Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real)
+    said = computer.perform(
+        Action("drag", x=10, y=-10, to_x=50, to_y=40),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda s: None,
+    )
     assert said is None
     assert real.calls == []
     assert real.closed
-    assert ["xdotool", "mousemove", "--window", "18874373", "10", "20"] in desktop.actions
+    assert ["xdotool", "mousemove", "--", "110", "90"] in desktop.actions
 
 
 def test_keys_and_scrolls_never_take_the_compositors_pointer() -> None:
@@ -1233,22 +1249,26 @@ def test_a_zoom_is_aimed_on_only_while_it_is_the_latest_picture(
     )
 
 
-def test_the_pointer_glides_to_a_click_from_where_it_is() -> None:
-    """Measured on labwc with Writer: "Bold" in an open submenu, clicked after
-    one jump onto it, applied bold 0 times of 6; after a glide from where the
-    pointer was, 6 of 6 (and "Strikethrough", five rows lower, 3 of 3).
+def test_the_compositor_pointer_glides_from_where_it_is() -> None:
+    """A fresh virtual pointer's single jump was not seen as the pointer
+    arriving (measured on a submenu item, 0 of 6, 6 of 6 with a glide). The
+    compositor's pointer now serves title-bar drags; it still glides there.
     Known-good: the moves start next to the pointer's place and end on the
-    target, which only a later move reaches."""
+    press point, which only a later move reaches."""
     desktop = FakeDesktop()  # the pointer rests at (715, 438)
     real = FakePointer(desktop)
     computer.perform(
-        Action("click", x=10, y=20), VIDEO, {}, desktop, lambda env: real, lambda s: None
+        Action("drag", x=10, y=-10, to_x=50, to_y=40),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda s: None,
     )
-    moves = [(int(c[1]), int(c[2])) for c in real.calls if c[0] == "move"]
-    assert len(moves) == computer.GLIDE_STEPS
-    assert moves[0] == (715 + (110 - 715) // 8, 438 + (120 - 438) // 8)  # near the start
-    assert moves[-1] == (110, 120)
-    assert (110, 120) not in moves[:-1]
+    moves = [(int(c[1]), int(c[2])) for c in real.calls if c[0] == "move"][: computer.GLIDE_STEPS]
+    assert moves[0] == (715 + (110 - 715) // 8, 438 + (90 - 438) // 8)  # near the start
+    assert moves[-1] == (110, 90)
+    assert (110, 90) not in moves[:-1]
 
 
 def test_a_short_key_sequence_is_pressed_in_order(
@@ -1288,3 +1308,21 @@ def test_a_hidden_window_is_not_found_to_act_on(desktop: FakeDesktop) -> None:
 
     said = computer.find("video", {}, Hiding())
     assert str(said).startswith("error: no window matches 'video'")
+
+
+def test_a_drag_inside_the_window_goes_through_x() -> None:
+    """Drawing and selecting are drags inside the window: X input, like clicks
+    there. Checked live: an X drag across "Owls " in Writer selected exactly it."""
+    desktop = FakeDesktop()
+    real = FakePointer(desktop)
+    said = computer.perform(
+        Action("drag", x=10, y=5, to_x=60, to_y=5),
+        VIDEO,
+        {},
+        desktop,
+        lambda env: real,
+        lambda s: None,
+    )
+    assert said is None
+    assert real.calls == []
+    assert "mousedown" in desktop.actions[-1]
