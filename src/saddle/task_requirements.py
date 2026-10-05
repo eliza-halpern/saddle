@@ -69,6 +69,7 @@ from saddle.task_examples import (
     TreeOutcome,
     decode_value,
     literal_text,
+    raise_names,
     snippet_problem,
 )
 from saddle.task_units import Units
@@ -221,7 +222,7 @@ def _with_sources(example: Mapping[str, Any], sources: Mapping[str, str]) -> dic
 
 
 DRIVER_BODY: Final = r"""
-import ast, inspect, json, os, signal, sys
+import ast, builtins, inspect, json, os, signal, sys
 job_path, out_path = sys.argv[1], sys.argv[2]
 with open(job_path, encoding="utf-8") as fh:
     job = json.load(fh)
@@ -278,8 +279,10 @@ class _NoCall(BaseException):
 
 
 # The tree's own outcomes: every exception that left a call into the tree
-# after its arguments bound, by id, kept alive so that no id is reused.
+# after its arguments bound, by id, with the callee it left (both kept alive,
+# so that no id is reused); and every callee of the tree the call entered.
 from_tree = {}
+entered = []
 
 
 def _in_tree(fn):
@@ -307,10 +310,11 @@ def __p1_call__(fn, /, *args, **kwargs):
         signature.bind(*args, **kwargs)
     except TypeError as exc:
         raise _NoCall(f"TypeError: {exc} (the call does not bind to the callee's signature)")
+    entered.append(fn)
     try:
         return fn(*args, **kwargs)
     except BaseException as exc:
-        from_tree[id(exc)] = exc
+        from_tree.setdefault(id(exc), (exc, fn))
         raise
 
 
@@ -346,6 +350,84 @@ def _interface(exc):
     )
 
 
+_classes = None
+
+
+def _tree_classes():
+    # Top-level class names -> the tree files defining one of that name.
+    global _classes
+    if _classes is None:
+        _classes = {}
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".") and d not in ("__pycache__", "site-packages", "venv")
+            )
+            for name in sorted(n for n in filenames if n.endswith(".py")):
+                path = os.path.realpath(os.path.join(dirpath, name))
+                if _rel(path) is None:
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        body = ast.parse(fh.read()).body
+                except (OSError, SyntaxError, ValueError, UnicodeDecodeError):
+                    continue
+                for node in body:
+                    if isinstance(node, ast.ClassDef):
+                        _classes.setdefault(node.name, set()).add(path)
+    return _classes
+
+
+def _exception_class(found):
+    return isinstance(found, type) and issubclass(found, BaseException)
+
+
+def _resolve(name, exc, callee):
+    # A raise outcome's type name, resolved on this tree (K2 R-2): a builtin
+    # of that name; else the name in the module that defines the callee
+    # (after `inspect.unwrap`); else a top-level class of that name defined
+    # in exactly one module of the tree. "match" or "differ" once it resolves
+    # to an exception class (`isinstance`); else why it does not resolve.
+    missing = object()
+    found = getattr(builtins, name, missing)
+    if found is missing and callee is not None:
+        try:
+            module = sys.modules.get(inspect.unwrap(callee).__module__)
+            found = vars(module).get(name, missing) if module is not None else missing
+        except Exception:
+            found = missing
+    if found is missing:
+        files = _tree_classes().get(name, set())
+        if not files:
+            return "not found in the tree"
+        if len(files) > 1:
+            return f"ambiguous: defined in {len(files)} modules of the tree"
+        (path,) = files
+        # Only a loaded module can hold the class of an exception raised here.
+        loaded = [
+            vars(m)[name]
+            for m in list(sys.modules.values())
+            if isinstance(getattr(m, "__file__", None), str)
+            and os.path.realpath(m.__file__) == path
+            and name in vars(m)
+        ]
+        if any(not _exception_class(c) for c in loaded):
+            return "not an exception class"
+        return "match" if exc is not None and isinstance(exc, tuple(loaded)) else "differ"
+    if not _exception_class(found):
+        return "not an exception class"
+    return "match" if exc is not None and isinstance(exc, found) else "differ"
+
+
+def _typed(got, example, exc):
+    if got["kind"] in ("value", "raises", "opaque") and example.get("names"):
+        callee = from_tree[id(exc)][1] if exc is not None and id(exc) in from_tree else (
+            entered[-1] if entered else None
+        )
+        got["types"] = {n: _resolve(n, exc, callee) for n in example["names"]}
+    return got
+
+
 def run(example):
     namespace = {"__name__": "__p1_example__", "__p1_call__": __p1_call__}
     stage = "setup"
@@ -371,11 +453,12 @@ def run(example):
         if stage == "setup" or _interface(exc):
             return {"kind": "could-not-call", "detail": f"{stage}: {said}"}
         names = [c.__name__ for c in type(exc).__mro__]
-        return {"kind": "raises", "raises": names, "detail": said}
+        return _typed({"kind": "raises", "raises": names, "detail": said}, example, exc)
     try:
-        return {"kind": "value", "value": encode_value(value)}
+        got = {"kind": "value", "value": encode_value(value)}
     except BaseException as exc:
-        return {"kind": "opaque", "detail": f"{type(value).__name__} ({type(exc).__name__})"}
+        got = {"kind": "opaque", "detail": f"{type(value).__name__} ({type(exc).__name__})"}
+    return _typed(got, example, None)
 
 
 results = {}
@@ -383,6 +466,7 @@ for example in job["examples"]:
     del ran[:]
     seen.clear()
     from_tree.clear()
+    del entered[:]
     got = run(example)
     got["ran"] = list(ran)
     results[example["id"]] = got
@@ -413,7 +497,9 @@ def run_examples(
     for e in examples:
         problem = snippet_problem(e.setup, e.call, stdlib)
         if problem is None:
-            send.append({"id": e.id, "setup": list(e.setup), "call": e.call})
+            send.append(
+                {"id": e.id, "setup": list(e.setup), "call": e.call, "names": raise_names(e)}
+            )
         else:
             results[e.id] = TreeOutcome("could-not-call", detail=f"snippet refused: {problem}")
     if not send:

@@ -3390,6 +3390,10 @@ class TaskRequirementsCheck(GateCheck):
     `question` example; unjudged = the rest. Each unit is counted once."""
     examples: tuple[int, int, int, int] = (0, 0, 0, 0)
     """Examples as (total, pass, code-wrong, question)."""
+    by_type: int = 0
+    """How many of the code-wrong examples raised another resolvable exception
+    type than the one named (`Row.by_type`): a named type's admitted cost,
+    reported on its own so a known-good measurement can list it."""
 
 
 def _p1_example(row: Row) -> str:
@@ -3476,11 +3480,17 @@ def check_task_requirements(
             if r.status in ("not-proven", "unknown", "not-judged")
         ),
     )
+    by_type = sum(r.by_type for r in rows)
     basis = [
         strength,
         f"{len(judged_units)} of {len(units.units)} candidate unit(s) judged; "
         f"{len(judged)} of {len(rows)} example(s) judged: {counts['pass']} pass, "
         f"{counts['code-wrong']} code-wrong, {counts['question']} question",
+        *(
+            [f"{by_type} code-wrong by exception type: the tree raised another type than named"]
+            if by_type
+            else []
+        ),
         *unjudged,
     ]
     failing = [r for r in rows if r.status == "code-wrong"]
@@ -3528,4 +3538,5 @@ def check_task_requirements(
             len(ids) - len(settled_units) - len(asked_units),
         ),
         examples=(len(rows), counts["pass"], counts["code-wrong"], counts["question"]),
+        by_type=by_type,
     )

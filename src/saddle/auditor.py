@@ -338,6 +338,7 @@ def p1_tally(check: TaskRequirementsCheck) -> dict[str, Any]:
         "unjudged": list(check.unjudged),
         "units": {"total": total, "judged": judged, "asked": asked, "unjudged": unjudged},
         "examples": {"total": examples, "pass": passed, "code-wrong": wrong, "question": questions},
+        "code-wrong-by-type": check.by_type,
         "strength": "full" if (check.basis or "").startswith("full strength") else "question",
     }
 

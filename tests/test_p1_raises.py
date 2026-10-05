@@ -218,3 +218,182 @@ def test_a_bound_callee_compiled_from_a_string_raises_the_trees_outcome(tmp_path
     got = on_tree(module(tmp_path / "t", GENERATED), e)["E-001"]
     assert (got.kind, got.raises[0]) == ("raises", "AttributeError")
     assert gate(tmp_path / "t", e).rows[0].status == "code-wrong"
+
+
+# -- R-2: which type names refuse, and how a name resolves --------------------
+
+TAKE_TEXT = """# Take
+
+- `take(d)` raises an exception if `d` is empty.
+- You may reject `d` with an error if it holds `None`.
+"""
+TAKE_UNITS = task_units(TAKE_TEXT)
+TAKE_GOOD = """\
+def take(d):
+    if not d:
+        raise ValueError("empty")
+    return d[next(iter(d))]
+"""
+# the emptiness check replaced by `pass`: the lookup crashes on `None`
+TAKE_BROKEN = TAKE_GOOD.replace('raise ValueError("empty")', "pass").replace(
+    "next(iter(d))", "next(iter(d), None)"
+)
+EXCEPTION = Outcome.of("raises", "Exception")
+
+
+def probe_raising(*names: str) -> Probe:
+    """A known-correct user probe that raised `names[0]` (its classes, most derived first)."""
+    return Probe("p" * 64, "ran", Outcome.of("raises", names[0]), source="user", raises=names)
+
+
+def test_k2_2b_exception_types_nothing_so_a_fallthrough_crash_is_a_question(
+    tmp_path: Path,
+) -> None:
+    probes = (probe_raising("ValueError", "Exception", "BaseException", "object"),)
+    e = example("take({})", EXCEPTION, setup=("from ports import take",), probes=probes)
+    klass = classify(e, TAKE_UNITS)
+    assert (klass.eligible, klass.note) == (False, "no named type")
+    broken = gate(module(tmp_path / "b", TAKE_BROKEN), e, units=TAKE_UNITS)
+    assert (broken.rows[0].status, broken.rows[0].got) == ("question", "raises KeyError")
+    assert broken.detail.endswith("[no named type]")
+    # the parent raises the very type the known-correct probe raised
+    parent = gate(module(tmp_path / "g", TAKE_GOOD), e, units=TAKE_UNITS)
+    assert parent.rows[0].status == "pass"
+    # with no probe there is no type to hold it to: never a pass by any crash
+    bare = example("take({})", EXCEPTION, setup=("from ports import take",), probes=())
+    assert gate(tmp_path / "g", bare, units=TAKE_UNITS).rows[0].status == "question"
+    # nor a refusal of a tree that returns
+    returns = TAKE_GOOD.replace('raise ValueError("empty")', "return None")
+    assert gate(module(tmp_path / "r", returns), e, units=TAKE_UNITS).rows[0].status == "question"
+
+
+def test_an_untyped_raise_on_a_delegating_unit_is_only_recorded(tmp_path: Path) -> None:
+    e = example("take({None: 1})", EXCEPTION, setup=("from ports import take",), units=("S-002",))
+    row = gate(module(tmp_path / "t", TAKE_GOOD), e, units=TAKE_UNITS).rows[0]
+    assert (row.status, row.why) == (
+        "not-judged",
+        "recorded: the task leaves this to the implementer",
+    )
+
+
+SUBCLASS = """\
+class PortError(ValueError):
+    pass
+
+
+def parse_port(s):
+    if not s.isdigit():
+        raise PortError(s)
+    return int(s)
+"""
+
+
+def test_k2_4_a_subclass_of_the_named_type_passes(tmp_path: Path) -> None:
+    e = example('parse_port("abc")', VALUE_ERROR)
+    got = on_tree(module(tmp_path / "t", SUBCLASS), e)["E-001"]
+    assert got.type_status("ValueError") == "match"
+    assert gate(tmp_path / "t", e).rows[0].status == "pass"
+
+
+def test_k2_5_another_resolvable_type_refuses_and_is_counted_by_type(tmp_path: Path) -> None:
+    """The admitted cost of a named type (pin: fa33e45 refused it too): the
+    text says ValueError, the tree raises KeyError. Reported on its own."""
+    other = PORT_GOOD.replace("raise ValueError(s)", "raise KeyError(s)")
+    e = example('parse_port("abc")', VALUE_ERROR)
+    check = gate(module(tmp_path / "t", other), e)
+    assert (check.rows[0].status, check.rows[0].by_type, check.by_type) == ("code-wrong", True, 1)
+    assert "1 code-wrong by exception type" in (check.basis or "")
+    # a tree that returns where the raise is due is code-wrong, but not by type
+    returns = gate(module(tmp_path / "r", PORT_FALLTHROUGH.replace("s + 1", "0")), e)
+    assert (returns.rows[0].status, returns.by_type) == ("code-wrong", 0)
+    assert "by exception type" not in (returns.basis or "")
+
+
+PARSE_TEXT = """# Records
+
+- `read(line)` raises `ParseError` if `line` has no `=`.
+"""
+PARSE_UNITS = task_units(PARSE_TEXT)
+PARSE_ERROR = Outcome.of("raises", "ParseError")
+READ_GOOD = """\
+class ParseError(ValueError):
+    pass
+
+
+def read(line):
+    if "=" not in line:
+        raise ParseError(line)
+    key, value = line.split("=", 1)
+    return {key: value}
+"""
+READ_BROKEN = READ_GOOD.replace("raise ParseError(line)", "pass").replace(
+    'key, value = line.split("=", 1)\n    return {key: value}', "return {None: {}[line]}"
+)
+
+
+def read_example(probes: tuple[Probe, ...] | None = None) -> Example:
+    return example('read("x")', PARSE_ERROR, setup=("from records import read",), probes=probes)
+
+
+def test_k2_9_a_name_the_tree_does_not_define_is_a_question(tmp_path: Path) -> None:
+    no_class = READ_GOOD.replace("class ParseError(ValueError):\n    pass\n\n\n", "").replace(
+        "raise ParseError(line)", "raise ValueError(line)"
+    )
+    root = module(tmp_path / "t", no_class, "records")
+    row = gate(root, read_example(), units=PARSE_UNITS).rows[0]
+    assert (row.status, row.why) == ("question", "named type ParseError not found in the tree")
+
+
+def test_k2_9b_a_name_in_the_callees_module_resolves_and_refuses_a_fallthrough(
+    tmp_path: Path,
+) -> None:
+    broken = module(tmp_path / "b", READ_BROKEN, "records")
+    got = on_tree(broken, read_example())["E-001"]
+    assert (got.raises[0], got.type_status("ParseError")) == ("KeyError", "differ")
+    assert gate(broken, read_example(), units=PARSE_UNITS).rows[0].status == "code-wrong"
+    good = module(tmp_path / "g", READ_GOOD, "records")
+    assert gate(good, read_example(), units=PARSE_UNITS).rows[0].status == "pass"
+
+
+ERRORS = "class ParseError(ValueError):\n    pass\n"
+READ_ELSEWHERE = READ_GOOD.replace(
+    "class ParseError(ValueError):\n    pass\n\n\n", "import errors\n\n\n"
+).replace("raise ParseError(line)", "raise errors.ParseError(line)")
+
+
+def test_a_name_defined_in_exactly_one_other_module_of_the_tree_resolves(tmp_path: Path) -> None:
+    root = module(tmp_path / "t", READ_ELSEWHERE, "records")
+    module(root, ERRORS, "errors")
+    assert gate(root, read_example(), units=PARSE_UNITS).rows[0].status == "pass"
+    # the same class raised from a module the run never loaded cannot be it
+    (root / "records.py").write_text(
+        READ_ELSEWHERE.replace("raise errors.ParseError", "raise KeyError")
+    )
+    assert gate(root, read_example(), units=PARSE_UNITS).rows[0].status == "code-wrong"
+    # two modules defining it: ambiguous, a question
+    module(root, ERRORS, "more_errors")
+    row = gate(root, read_example(), units=PARSE_UNITS).rows[0]
+    assert (row.status, row.why) == (
+        "question",
+        "named type ParseError ambiguous: defined in 2 modules of the tree",
+    )
+
+
+def test_a_name_that_is_no_exception_class_is_a_question(tmp_path: Path) -> None:
+    rebound = READ_ELSEWHERE.replace("import errors\n", "import errors\n\nParseError = 3\n")
+    root = module(tmp_path / "t", rebound, "records")
+    module(root, ERRORS, "errors")
+    row = gate(root, read_example(), units=PARSE_UNITS).rows[0]
+    assert (row.status, row.why) == ("question", "named type ParseError not an exception class")
+    builtin = example('parse_port("abc")', Outcome.of("raises", "len"))
+    row = gate(module(tmp_path / "p", PORT_GOOD), builtin).rows[0]
+    assert (row.status, row.why) == ("question", "named type len not an exception class")
+
+
+def test_a_reading_the_driver_did_not_resolve_falls_back_to_class_names() -> None:
+    """Only a recorded reading can reach `matches` unresolved, and there the
+    fallback can only turn a refusal into a question."""
+    got = TreeOutcome("raises", raises=("ParseError", "ValueError"), types=(("Other", "differ"),))
+    assert got.matches(PARSE_ERROR, 0.0) == "equal"
+    assert got.matches(Outcome.of("raises", "Other"), 0.0) == "differ"
+    assert TreeOutcome("value").matches(PARSE_ERROR, 0.0) == "differ"

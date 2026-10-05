@@ -23,6 +23,13 @@ readings and known-correct probe outcomes sealed beside it at extraction
 - `judge` turns one tree outcome into one row: pass, code-wrong, question,
   not-proven (could not call, or a value it cannot compare), unknown (HANG)
   or not-judged.
+- A `raises` outcome names a type (K2 R-2). `Exception` and
+  `BaseException` (`UNTYPED`) type nothing: they match almost any crash, so
+  such an example is at most a question. Any other name is resolved on the
+  tree by the driver (`task_requirements.DRIVER`: a builtin, else the
+  callee's module, else a class defined in exactly one module of the tree)
+  and matched by `isinstance`; a name that does not resolve is a question,
+  never `code-wrong`.
 
 Layering: pure, beside `gates`; imports only `task_units`.
 """
@@ -77,6 +84,10 @@ NOT_EXECUTABLE: Final[tuple[str, ...]] = (
     "needs-external-resource",
 )
 """The closed reasons a unit may be marked not executable; each is a named row."""
+
+UNTYPED: Final[tuple[str, ...]] = ("Exception", "BaseException")
+"""Raise type names that type nothing: under the subclass rule they match
+almost any crash, a fall-through after a deleted validation included."""
 
 RAISE_TOKENS: Final[tuple[str, ...]] = ("raise", "error", "exception")
 """A `raises` example may refuse only if a cited unit contains one of these,
@@ -808,6 +819,17 @@ def raise_named(cited: Sequence[Unit]) -> bool:
     return any(t in u.text.lower() for u in cited for t in RAISE_TOKENS)
 
 
+def raise_names(example: Example) -> list[str]:
+    """Every raise type name the example's predictions and alternative
+    readings write, once each, in order: what the driver resolves on a tree."""
+    outcomes = [
+        *(p.outcome for p in example.predictions),
+        *(a.outcome for a in example.alternatives),
+    ]
+    names = [o.text for o in outcomes if o is not None and o.kind == "raises"]
+    return list(dict.fromkeys(names))
+
+
 def effective_k(predictions: Sequence[Prediction]) -> int:
     """How many distinct samples the predictions are: byte-identical raw outputs count once."""
     return len({p.raw_sha256 for p in predictions})
@@ -882,6 +904,8 @@ def classify(example: Example, units: Units) -> Class:
         return _with(base, route="question-only", note=why)
     if expected.kind == "raises" and not raise_named(cited):
         return _with(base, note=NO_RAISE_NOTE)
+    if expected.kind == "raises" and expected.text in UNTYPED:
+        return _with(base, note=NO_TYPE_NOTE)
     if base.route == "literal":
         return _with(base, eligible=True)
     if base.route == "decided-unverified":
@@ -921,6 +945,8 @@ LITERAL_DISAGREES: Final = "literal (the predictors disagree with the text; the 
 UNCERTAIN_NOTE: Final = "the rule could not tell who the permission is for"
 DELEGATED_NOTE: Final = "the task leaves this to the implementer"
 NO_RAISE_NOTE: Final = "the task does not say this raises"
+NO_TYPE_NOTE: Final = "no named type"
+"""An example expecting `Exception` or `BaseException` (`UNTYPED`)."""
 
 
 def _with(base: Class, **changes: Any) -> Class:
@@ -972,6 +998,14 @@ class TreeOutcome:
     detail: str = ""
     ran: tuple[str, ...] = ()
     """`path:line (qualname)` for every tree line the example executed."""
+    types: tuple[tuple[str, str], ...] = ()
+    """Each raise type name the example writes, resolved on the tree by the
+    driver: `match` (the outcome is an instance of it), `differ` (it is not,
+    or no exception was raised), or why the name did not resolve."""
+
+    def type_status(self, name: str) -> str:
+        """`match`, `differ`, or why `name` did not resolve on the tree."""
+        return dict(self.types).get(name, "not resolved by the driver")
 
     def show(self) -> str:
         if self.kind == "value":
@@ -984,7 +1018,14 @@ class TreeOutcome:
         return f"{self.kind}: {self.detail}"
 
     def matches(self, outcome: Outcome, abs_tol: float) -> Closeness:
+        """`equal`, `near-miss` or `differ`. A raise matches by `isinstance`
+        against its resolved type; a name that did not resolve (only a
+        recorded reading can reach here with one) falls back to the class
+        names of the raised exception, which can only add a question."""
         if outcome.kind == "raises":
+            status = self.type_status(outcome.text)
+            if status in ("match", "differ"):
+                return "equal" if status == "match" else "differ"
             return "equal" if self.kind == "raises" and outcome.text in self.raises else "differ"
         if self.kind != "value":
             return "differ"
@@ -1002,6 +1043,7 @@ class TreeOutcome:
             raises=tuple(str(r) for r in data.get("raises", ())),
             detail=str(data.get("detail", "")),
             ran=tuple(str(r) for r in data.get("ran", ())),
+            types=tuple((str(k), str(v)) for k, v in dict(data.get("types", {})).items()),
         )
 
 
@@ -1015,6 +1057,10 @@ class Row:
     klass: Class
     got: str = ""
     ran_changed: tuple[str, ...] = field(default=())
+    by_type: bool = False
+    """`code-wrong` because the tree raised another resolvable exception type
+    than the one named: the admitted cost of a named type (K2-5), reported on
+    its own."""
 
 
 def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: bool) -> Row:
@@ -1052,7 +1098,13 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
         # A split input: the readings are recorded, and a person decides.
         why = f"{klass.note}: {_readings(klass.readings)}" if klass.readings else klass.note
         return Row(example, "question", why, klass, shown)
-    closeness = got.matches(klass.expected, klass.abs_tol)
+    expected = klass.expected
+    if expected.kind == "raises" and expected.text in UNTYPED:
+        return _untyped(example, klass, got, shown)
+    status = got.type_status(expected.text) if expected.kind == "raises" else "match"
+    if status not in ("match", "differ"):
+        return Row(example, "question", f"named type {expected.text} {status}", klass, shown)
+    closeness = got.matches(expected, klass.abs_tol)
     if closeness == "equal":
         return Row(example, "pass", "matches", klass, shown)
     if klass.route == "question-only":
@@ -1073,7 +1125,27 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
         return Row(example, "question", klass.note, klass, shown)
     if not licensed:
         return Row(example, "question", WOULD_REFUSE, klass, shown)
-    return Row(example, "code-wrong", "differs from the expected outcome", klass, shown)
+    by_type = expected.kind == "raises" and got.kind == "raises"
+    return Row(
+        example, "code-wrong", "differs from the expected outcome", klass, shown, by_type=by_type
+    )
+
+
+def _untyped(example: Example, klass: Class, got: TreeOutcome, shown: str) -> Row:
+    """An `Exception`/`BaseException` example: never a refusal. A raise passes
+    only when it is the very type every known-correct probe raised; anything
+    else, a fall-through crash included, is a question."""
+    probe_types = {p.outcome.text for p in example.probes if p.outcome is not None}
+    if (
+        got.kind == "raises"
+        and got.raises
+        and probe_types == {got.raises[0]}
+        and all(p.outcome is not None and p.outcome.kind == "raises" for p in example.probes)
+    ):
+        return Row(example, "pass", "the type every known-correct probe raised", klass, shown)
+    if klass.route == "question-only" and klass.note == DELEGATED_NOTE:
+        return Row(example, "not-judged", f"recorded: {klass.note}", klass, shown)
+    return Row(example, "question", NO_TYPE_NOTE, klass, shown)
 
 
 def _readings(readings: Sequence[Outcome]) -> str:

@@ -8,6 +8,7 @@ probes accept the example, and refusal is licensed for the test (spec §5.1).
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from decimal import Decimal
 from fractions import Fraction
@@ -111,6 +112,11 @@ def ex(
 
 def val(v: object, *ran: str) -> TreeOutcome:
     return TreeOutcome("value", encode_value(v), ran=ran or ("m.py:3 (f)",))
+
+
+def typed(got: TreeOutcome, **types: str) -> TreeOutcome:
+    """`got` with the raise type names resolved, as the driver resolves them."""
+    return dataclasses.replace(got, types=tuple(types.items()))
 
 
 def gate(
@@ -487,19 +493,23 @@ def test_r13_route_b_floats(written: str, got: object, verdict: str) -> None:
 
 def test_r16_i_a_unit_that_names_the_raise_may_refuse() -> None:
     e = ex("make(-1)", out("raises", "ValueError"), units=("S-007",))
-    assert gate(e, val([])).verdict == "fail"
+    assert gate(e, typed(val([]), ValueError="differ")).verdict == "fail"
     # a subclass of the expected exception matches
-    sub = TreeOutcome("raises", raises=("SizeError", "ValueError", "Exception"))
+    sub = typed(
+        TreeOutcome("raises", raises=("SizeError", "ValueError", "Exception")), ValueError="match"
+    )
     assert gate(e, sub).verdict == "pass"
     assert sub.show() == "raises SizeError"
 
 
 def test_a_tree_that_returns_where_every_reading_raises_differs() -> None:
     e = ex("make(-1)", out("raises", "ValueError"), units=("S-007",))
-    opaque = TreeOutcome("opaque", detail="Line (TypeError)")
+    opaque = typed(TreeOutcome("opaque", detail="Line (TypeError)"), ValueError="differ")
     row = gate(e, opaque).rows[0]
     assert (row.status, row.got) == ("code-wrong", "opaque: Line (TypeError)")
-    assert gate(e, TreeOutcome("value", {"t": "nope"})).verdict == "fail"
+    assert gate(e, typed(TreeOutcome("value", {"t": "nope"}), ValueError="differ")).verdict == (
+        "fail"
+    )
     assert gate(e, opaque, licensed=False).rows[0].why == WOULD_REFUSE
     # a value reading needs the value itself: an opaque one stays not proven
     either = ex(
@@ -511,10 +521,11 @@ def test_a_tree_that_returns_where_every_reading_raises_differs() -> None:
 
 def test_r16_ii_a_raise_the_task_never_names_is_a_question() -> None:
     e = ex("grow(-1)", out("raises", "ValueError"), units=("S-008",))
-    check = gate(e, val([]))
+    check = gate(e, typed(val([]), ValueError="differ"))
     assert check.verdict == "question"
     assert check.detail.endswith(f"[{NO_RAISE_NOTE}]")
-    assert gate(e, TreeOutcome("raises", raises=("ValueError",))).verdict == "pass"
+    raised = typed(TreeOutcome("raises", raises=("ValueError",)), ValueError="match")
+    assert gate(e, raised).verdict == "pass"
 
 
 def test_a_value_expected_where_the_tree_raises_differs() -> None:
