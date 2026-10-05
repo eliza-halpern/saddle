@@ -15,6 +15,16 @@ run: ..."), never a pass, never `not-proven`, never a refusal.
 namespace, under a per-example timer (`EXAMPLE_TIMEOUT_S`), with the lines
 of the tree it ran traced. `check_tree` is the gate on one tree.
 
+"Could not call" is decided before the call (K2 R-3): every call in an
+example's expression that reaches a callee defined in the tree (after
+`inspect.unwrap`) first binds its arguments to `inspect.signature(callee)`.
+A signature that cannot be read or cannot bind means the example could not
+call the tree; once it binds, every exception the call raises, a
+`TypeError` or `AttributeError` from inside the callee included, is the
+tree's outcome. A wrapper written with `functools.wraps` is bound against
+the inner function; one without it hides the inner signature, and only a
+known-correct probe guards that case.
+
 The known-correct probes (D-9) run through the same driver, once, at
 extraction (`run_probes`): each probe tree is an implementation whose
 correctness comes from outside the model (`task_examples.PROBE_SOURCES`),
@@ -211,7 +221,7 @@ def _with_sources(example: Mapping[str, Any], sources: Mapping[str, str]) -> dic
 
 
 DRIVER_BODY: Final = r"""
-import json, os, signal, sys
+import ast, inspect, json, os, signal, sys
 job_path, out_path = sys.argv[1], sys.argv[2]
 with open(job_path, encoding="utf-8") as fh:
     job = json.load(fh)
@@ -263,6 +273,57 @@ def _alarm(signum, frame):
 signal.signal(signal.SIGALRM, _alarm)
 
 
+class _NoCall(BaseException):
+    pass
+
+
+# The tree's own outcomes: every exception that left a call into the tree
+# after its arguments bound, by id, kept alive so that no id is reused.
+from_tree = {}
+
+
+def _in_tree(fn):
+    # `fn`, after `inspect.unwrap`, is defined in a module of the tree.
+    try:
+        target = inspect.unwrap(fn)
+        name = getattr(target, "__module__", None)
+        path = getattr(sys.modules.get(name), "__file__", None) if isinstance(name, str) else None
+    except Exception:
+        return False
+    return isinstance(path, str) and _rel(path) is not None
+
+
+def __p1_call__(fn, /, *args, **kwargs):
+    # "Could not call" is decided here, before the call: a callee of the tree
+    # whose signature cannot be read, or cannot bind these arguments, never
+    # ran. Once bound, whatever the call raises is the tree's outcome.
+    if not _in_tree(fn):
+        return fn(*args, **kwargs)
+    try:
+        signature = inspect.signature(fn)
+    except Exception as exc:
+        raise _NoCall(f"{type(exc).__name__}: no signature to bind the call to ({exc})")
+    try:
+        signature.bind(*args, **kwargs)
+    except TypeError as exc:
+        raise _NoCall(f"TypeError: {exc} (the call does not bind to the callee's signature)")
+    try:
+        return fn(*args, **kwargs)
+    except BaseException as exc:
+        from_tree[id(exc)] = exc
+        raise
+
+
+DRIVER_FILE = __p1_call__.__code__.co_filename
+
+
+class _Calls(ast.NodeTransformer):
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        hook = ast.Name("__p1_call__", ast.Load())
+        return ast.copy_location(ast.Call(hook, [node.func, *node.args], node.keywords), node)
+
+
 def _innermost(exc):
     tb = exc.__traceback__
     last = None
@@ -272,17 +333,26 @@ def _innermost(exc):
 
 
 def _interface(exc):
-    if isinstance(exc, ImportError):
+    # An exception the example's own expression raised (a name or attribute
+    # that does not resolve, an operation on what the tree returned) outside
+    # any bound call into the tree.
+    if id(exc) in from_tree:
+        return False
+    if isinstance(exc, (ImportError, _NoCall)):
         return True
-    return isinstance(exc, (NameError, AttributeError, TypeError)) and _innermost(exc) == HERE
+    return isinstance(exc, (NameError, AttributeError, TypeError)) and _innermost(exc) in (
+        HERE,
+        DRIVER_FILE,
+    )
 
 
 def run(example):
-    namespace = {"__name__": "__p1_example__"}
+    namespace = {"__name__": "__p1_example__", "__p1_call__": __p1_call__}
     stage = "setup"
     try:
         setup = compile("\n".join(example["setup"]), HERE, "exec")
-        call = compile(example["call"], HERE, "eval")
+        hooked = _Calls().visit(ast.parse(example["call"], mode="eval"))
+        call = compile(ast.fix_missing_locations(hooked), HERE, "eval")
         signal.setitimer(signal.ITIMER_REAL, job["timeout"])
         sys.settrace(_global)
         try:
@@ -295,7 +365,9 @@ def run(example):
     except _Hang:
         return {"kind": "hang", "detail": f"no outcome within {job['timeout']} s"}
     except BaseException as exc:
-        said = f"{type(exc).__name__}: {str(exc)[:200]}"
+        said = str(exc)[:300] if isinstance(exc, _NoCall) else (
+            f"{type(exc).__name__}: {str(exc)[:200]}"
+        )
         if stage == "setup" or _interface(exc):
             return {"kind": "could-not-call", "detail": f"{stage}: {said}"}
         names = [c.__name__ for c in type(exc).__mro__]
@@ -310,6 +382,7 @@ results = {}
 for example in job["examples"]:
     del ran[:]
     seen.clear()
+    from_tree.clear()
     got = run(example)
     got["ran"] = list(ran)
     results[example["id"]] = got
