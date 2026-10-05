@@ -16,7 +16,8 @@ readings and known-correct probe outcomes sealed beside it at extraction
 - `classify` decides, mechanically, what an example may do: refuse by
   route (a) (`literal`: the input and the outcome appear in a cited binding
   unit, with no negation between them) or route (b) (`executed-reference`:
-  k of k predictions and their executed references agree, k is effectively
+  k of k predictions and their executed references agree (a reference whose
+  args were at fault abstains, if two others ran), k is effectively
   more than one, and every known-correct probe returns the outcome, from
   at least `PROBES_NEEDED` probes of one source), or only ask. The model
   can mark nothing eligible.
@@ -52,6 +53,19 @@ from saddle.task_units import Unit, Units
 
 K_PREDICTORS: Final = 3
 """Blind predictors in P-b; route (b) needs all of them to agree."""
+
+REFERENCES_NEEDED: Final = 2
+"""How many of the k executed references route (b) needs to have run, all
+agreeing, when the others abstained (`Reference.abstains`): saddle's, never
+the model's."""
+
+ARGS_REFUSED: Final = "refused: its args: "
+"""A reference's status when its predictor's args hold a value the input does
+not (`args_problem`, `task_passes.run_references`)."""
+NOT_BOUND: Final = "could not call: "
+"""A reference's status when the args do not bind to its own signature. The
+driver checks `inspect.signature(ref).bind(*args)` before the call, so a
+TypeError the body raises at run time is an outcome (`ran`), never this."""
 
 MAX_INPUTS_PER_UNIT: Final = 3
 MAX_EXAMPLES: Final = 150
@@ -627,6 +641,14 @@ class Reference:
     accepts: bool = False
     """`ok` form: it returned True on the prediction and False on another outcome."""
 
+    def abstains(self) -> bool:
+        """It never ran only because the args it was handed are not the input's
+        (`ARGS_REFUSED`) or do not bind to its signature (`NOT_BOUND`): a fault
+        of the args, so it says nothing about the behaviour either way. Every
+        other reason it did not run (refused source, timeout, crash, missing)
+        still blocks route (b)."""
+        return self.status.startswith((ARGS_REFUSED, NOT_BOUND))
+
     def agrees(self, prediction: Outcome) -> bool:
         if self.status != "ran":
             return False
@@ -895,7 +917,8 @@ def classify(example: Example, units: Units) -> Class:
 
     Route (a) first: a literal the text states wins over the predictors. Else
     the k predictions must agree (a split input only asks); then route (b)
-    needs effective k > 1, all k executed references agreeing, and every
+    needs effective k > 1, the k executed references agreeing (one whose args
+    were at fault abstains, if `REFERENCES_NEEDED` others ran), and every
     known-correct probe returning the outcome. A unit that is not `binding`,
     or a `raises` outcome no cited unit names, can only ask.
     """
@@ -930,27 +953,12 @@ def classify(example: Example, units: Units) -> Class:
         return Class("split", None, tuple(readings), undecided(example.predictions), effective_k=k)
     else:
         expected = written[0]
-        agree = len(example.references) == K_PREDICTORS and all(
-            r.agrees(expected) for r in example.references
-        )
-        # A reference that never ran said nothing: the note names why rather
-        # than reading it as a disagreement.
-        unrun = [r.status for r in example.references if r.status != "ran"]
-        unrun += ["not recorded"] * (K_PREDICTORS - len(example.references))
-        note = (
-            f"effective k = {k}: the {K_PREDICTORS} predictions are one sample"
-            if k < 2
-            else ""
-            if agree
-            else f"not every predictor's reference ran ({unrun[0]})"
-            if unrun
-            else "the predictors' executed references do not all agree with them"
-        )
+        note, verified = _references_note(example, expected, k)
         base = Class(
             "decided-unverified" if note else "executed-reference",
             expected,
             tuple(r for r in readings if not r.same(expected)),
-            note or f"executed-reference ({K_PREDICTORS}/{K_PREDICTORS})",
+            note or verified,
             effective_k=k,
         )
     modes = {u.modality for u in cited}
@@ -966,6 +974,43 @@ def classify(example: Example, units: Units) -> Class:
     if base.route == "decided-unverified":
         return base
     return _probed(base, expected, example.probes)
+
+
+def _references_note(example: Example, expected: Outcome, k: int) -> tuple[str, str]:
+    """Why a decided example's executed references do not verify `expected`
+    ("" when they do), and the route note when they do.
+
+    Every reference that did not abstain (`Reference.abstains`) must have
+    run and agree; at least `REFERENCES_NEEDED` must have run, and those must
+    be more than one sample (their predictors' raw outputs differ: reference
+    i is predictor i's). A reference that abstained is named in the note, so
+    a reader sees the example was decided on fewer than k."""
+    refs = example.references
+    counted = [(i, r) for i, r in enumerate(refs) if not r.abstains()]
+    abstained = [r.status for r in refs if r.abstains()]
+    # A reference that never ran said nothing: the note names why rather
+    # than reading it as a disagreement.
+    unrun = [r.status for _, r in counted if r.status != "ran"]
+    unrun += ["not recorded"] * (K_PREDICTORS - len(refs))
+    if len(refs) > K_PREDICTORS:
+        unrun.append(f"{len(refs)} references recorded where {K_PREDICTORS} are expected")
+    if k < 2:
+        return f"effective k = {k}: the {K_PREDICTORS} predictions are one sample", ""
+    if unrun:
+        return f"not every predictor's reference ran ({unrun[0]})", ""
+    ran_k = len({example.predictions[i].raw_sha256 for i, _ in counted})
+    if not all(r.agrees(expected) for _, r in counted):
+        return "the predictors' executed references do not all agree with them", ""
+    if len(counted) < REFERENCES_NEEDED:
+        return (
+            f"only {len(counted)} of {K_PREDICTORS} references ran, "
+            f"{REFERENCES_NEEDED} are needed (abstained: {'; '.join(abstained)})",
+            "",
+        )
+    if ran_k < 2:
+        return "effective k = 1 among the references that ran: they are one sample", ""
+    why = f"; {len(abstained)} abstained: {'; '.join(abstained)}" if abstained else ""
+    return "", f"executed-reference ({len(counted)}/{K_PREDICTORS}{why})"
 
 
 SPLIT_NOTE: Final = "the predictors read the cited words differently"

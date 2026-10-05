@@ -16,7 +16,7 @@ import pytest
 
 from saddle import task_passes
 from saddle.evidence import CapturedRun
-from saddle.task_examples import Outcome, classify
+from saddle.task_examples import Example, Outcome, Prediction, Probe, Reference, classify
 from saddle.task_passes import (
     EMPTY_BASELINE,
     HIDDEN,
@@ -529,6 +529,67 @@ def test_r12_p_an_ok_predicate_must_discriminate() -> None:
         "form": "ok",
     }
     assert refs(always, None)["status"] == "not-discriminating"
+
+
+def test_the_statuses_the_driver_seals_abstain_only_for_an_args_fault() -> None:
+    """Each status `run_references` really produces, read back as a `Reference`:
+    only a refused-args or a bind failure abstains; a TypeError the body
+    raises at run time ran (an outcome), and a refused source does not abstain."""
+
+    def status(source: str, chosen: list[str] | None = None) -> Reference:
+        mine = {"E-001": chosen} if chosen is not None else None
+        stateful = {**STATEFUL, "args": ["3", "-4"]}
+        got = run_references({"S-002": source}, [stateful], {"E-001": None}, chosen=mine)
+        return Reference.from_dict(got["E-001"])
+
+    unbound = status(LEVEL, ["-4"])
+    assert unbound.status == "could not call: missing a required argument: 'step'"
+    args_bad = status(LEVEL, ["3", "-1"])
+    assert args_bad.status.startswith("refused: its args: ")
+    body_type_error = status("def ref(level, step):\n    return len(step)\n")
+    refused_source = status("import os\n\ndef ref(level, step):\n    return level\n")
+    ran = status(LEVEL)
+    assert (body_type_error.status, ran.status) == ("ran", "ran")
+    assert refused_source.status.startswith("refused: import of os")
+    assert [r.abstains() for r in (unbound, args_bad, body_type_error, refused_source, ran)] == [
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+
+
+def test_exhibit_two_references_decide_where_the_third_would_have_disagreed() -> None:
+    """What the abstain rule admits (loosened). Predictor 2's reference is
+    wrong: called with args that bind, it returns [2, 1], not [1, 1, 2, 2].
+    Its predictor named args that do not bind, so it never ran and abstained,
+    and the example is decided, refusal-eligible, on predictors 1 and 3's
+    references alone. Before, it was a question."""
+    wrong = "def ref(xs):\n    return list(xs)\n"
+    predicted = Outcome.of("value", "[1, 1, 2, 2]")
+    imul = {"id": "E-001", **IMUL}
+    sealed_wrong = run_references(
+        {"S-002": wrong}, [imul], {"E-001": predicted}, chosen={"E-001": ["[2, 1]", "2"]}
+    )["E-001"]
+    assert sealed_wrong["status"] == "could not call: too many positional arguments"
+    would_be = run_references(
+        {"S-002": wrong}, [imul], {"E-001": predicted}, chosen={"E-001": ["[2, 1]"]}
+    )["E-001"]
+    assert would_be["outcome"] == {"kind": "value", "text": "[2, 1]"}  # it would disagree
+    good = run_references({"S-002": REF}, [imul], {"E-001": predicted})["E-001"]
+    example = Example(
+        id="E-001",
+        units=("S-002",),
+        setup=tuple(IMUL["setup"]),
+        call=str(IMUL["call"]),
+        predictions=tuple(Prediction(predicted, "", f"h{i}") for i in range(3)),
+        references=tuple(Reference.from_dict(r) for r in (good, sealed_wrong, good)),
+        probes=tuple(Probe(f"{i}" * 64, "ran", predicted) for i in range(3)),
+    )
+    klass = classify(example, task_units(TASK))
+    assert (klass.route, klass.eligible) == ("executed-reference", True)
+    assert "2/3; 1 abstained: could not call: too many positional arguments" in klass.note
 
 
 def test_a_reference_driver_that_dies_is_sealed_as_such() -> None:

@@ -50,6 +50,7 @@ from typing import Any, Final, Protocol
 
 from saddle.evidence import run_capture, tree_memory_limit
 from saddle.task_examples import (
+    ARGS_REFUSED,
     K_PREDICTORS,
     MAX_EXAMPLES,
     MAX_INPUTS_PER_UNIT,
@@ -517,7 +518,7 @@ def run_references(
         if own is not None:
             problem = args_problem(own, e["setup"], e["call"])
             if problem is not None:
-                out[e["id"]] = {"status": f"refused: its args: {problem}"}
+                out[e["id"]] = {"status": f"{ARGS_REFUSED}{problem}"}
                 continue
         item = {
             "id": e["id"],

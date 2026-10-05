@@ -414,10 +414,14 @@ DISAGREE: Final = "the predictors' executed references do not all agree with the
             Reference("refused: import of os is not allowed"),
             "not every predictor's reference ran (refused: import of os is not allowed)",
         ),
+        # a run-time crash of the driver is not an args fault: it still blocks
         (
-            Reference("could not call: missing a required argument: 'qty'"),
-            "not every predictor's reference ran "
-            "(could not call: missing a required argument: 'qty')",
+            Reference("crashed (exit 1)"),
+            "not every predictor's reference ran (crashed (exit 1))",
+        ),
+        (
+            Reference("raised NameError while defining it"),
+            "not every predictor's reference ran (raised NameError while defining it)",
         ),
     ],
 )
@@ -440,6 +444,124 @@ def test_a_discriminating_ok_predicate_counts_as_agreement() -> None:
         "decided-unverified",
         "not every predictor's reference ran (not recorded)",
     )
+
+
+# -- an args-faulted reference abstains (route (b) on two of three) ------------
+
+UNBOUND: Final = "could not call: missing a required argument: 'delta'"
+ARGS_BAD: Final = "refused: its args: -1 holds -1, which the input does not"
+GOOD_REF: Final = Reference("ran", out("value", "[1, 1]"))
+WRONG_REF: Final = Reference("ran", out("value", "[1]"))
+
+
+@pytest.mark.parametrize("why", [UNBOUND, ARGS_BAD])
+def test_a_reference_whose_args_were_at_fault_abstains(why: str) -> None:
+    """Known-good: two references ran and agree, the third never ran only
+    because its predictor's args were refused or did not bind; the example
+    is decided on two, says so, and refuses a tree that differs."""
+    e = ex(**_dedup_kwargs(), refs=(GOOD_REF, Reference(why), GOOD_REF))
+    klass = classify(e, UNITS)
+    assert (klass.route, klass.eligible) == ("executed-reference", True)
+    assert klass.note == f"executed-reference (2/3; 1 abstained: {why}), probe (3/3)"
+    check = gate(e, val([1]))
+    assert check.verdict == "fail"
+    assert f"via executed-reference (2/3; 1 abstained: {why})" in check.detail
+    assert gate(e, val([1, 1])).verdict == "pass"
+
+
+@pytest.mark.parametrize(
+    ("refs", "note"),
+    [
+        # two ran but disagree with each other (one disagrees with its prediction)
+        ((GOOD_REF, Reference(UNBOUND), WRONG_REF), DISAGREE),
+        # two ran and agree, the third ran and disagrees
+        ((GOOD_REF, GOOD_REF, WRONG_REF), DISAGREE),
+        # one ran, two abstained: one reference is not enough
+        (
+            (GOOD_REF, Reference(UNBOUND), Reference(ARGS_BAD)),
+            f"only 1 of 3 references ran, 2 are needed (abstained: {UNBOUND}; {ARGS_BAD})",
+        ),
+        # the source was refused (whitelist / restates): not an args fault
+        (
+            (GOOD_REF, GOOD_REF, Reference("refused: import of os is not allowed")),
+            "not every predictor's reference ran (refused: import of os is not allowed)",
+        ),
+        (
+            (
+                GOOD_REF,
+                GOOD_REF,
+                Reference("refused: returns its input unchanged, so it derives nothing"),
+            ),
+            "not every predictor's reference ran "
+            "(refused: returns its input unchanged, so it derives nothing)",
+        ),
+        # a run-time failure: not an args fault
+        (
+            (GOOD_REF, GOOD_REF, Reference("timeout")),
+            "not every predictor's reference ran (timeout)",
+        ),
+        (
+            (GOOD_REF, GOOD_REF, Reference("crashed (exit 1)")),
+            "not every predictor's reference ran (crashed (exit 1))",
+        ),
+        # no reference for the unit at all
+        (
+            (GOOD_REF, GOOD_REF, Reference("missing")),
+            "not every predictor's reference ran (missing)",
+        ),
+        # one abstained and one was never recorded
+        ((GOOD_REF, Reference(UNBOUND)), "not every predictor's reference ran (not recorded)"),
+        # more references than predictors: a malformed record never verifies
+        (
+            (GOOD_REF, GOOD_REF, Reference(UNBOUND), GOOD_REF),
+            "not every predictor's reference ran (4 references recorded where 3 are expected)",
+        ),
+    ],
+)
+def test_every_other_reason_a_reference_did_not_agree_still_blocks(
+    refs: tuple[Reference, ...], note: str
+) -> None:
+    """Known-bad: each stays a question, whatever the tree does."""
+    e = ex(**_dedup_kwargs(), refs=refs)
+    klass = classify(e, UNITS)
+    assert (klass.route, klass.eligible, klass.note) == ("decided-unverified", False, note)
+    assert gate(e, val([1])).verdict == "question"
+
+
+def test_a_reference_that_did_not_run_never_agrees() -> None:
+    expected = out("value", "[1, 1]")
+    assert Reference("ran", expected).agrees(expected)
+    assert not Reference("timeout", expected).agrees(expected)
+    assert not Reference(UNBOUND, form="ok", accepts=True).agrees(expected)
+
+
+def test_the_two_references_that_ran_must_be_two_samples() -> None:
+    """Predictors 1 and 2 wrote byte-identical replies, so their references are
+    one computation; predictor 3's abstained. Effective k over all three is 2,
+    yet the example rests on one sample: it asks."""
+    e = ex(**_dedup_kwargs(), raws=("h", "h", "h3"), refs=(GOOD_REF, GOOD_REF, Reference(UNBOUND)))
+    klass = classify(e, UNITS)
+    assert klass.effective_k == 2
+    assert (klass.route, klass.eligible) == ("decided-unverified", False)
+    assert klass.note == "effective k = 1 among the references that ran: they are one sample"
+    # the same draw with the abstaining slot elsewhere decides on two samples
+    other = ex(
+        **_dedup_kwargs(), raws=("h", "h", "h3"), refs=(GOOD_REF, Reference(UNBOUND), GOOD_REF)
+    )
+    assert classify(other, UNITS).eligible is True
+
+
+def test_a_split_prediction_still_splits_when_its_reference_abstains() -> None:
+    """The abstaining predictor's own written prediction disagreeing with the
+    other two is a split, as before: abstaining drops a reference, never a
+    prediction."""
+    e = ex(
+        **_dedup_kwargs(),
+        predicted=(out("value", "[1, 1]"), out("value", "[1]"), out("value", "[1, 1]")),
+        refs=(GOOD_REF, Reference(UNBOUND), GOOD_REF),
+    )
+    assert classify(e, UNITS).route == "split"
+    assert gate(e, val([1])).verdict == "question"
 
 
 # -- R13: floats, each row naming its route -----------------------------------
