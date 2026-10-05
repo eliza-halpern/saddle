@@ -3794,3 +3794,34 @@ def check_documented_raises(
         detail="; ".join(asks) if asks else DOCUMENTED_RAISES_HELD,
         basis=f"documented-types={documented} asked={len(asks)}",
     )
+
+
+UNTYPED_ASSERT_TYPES: Final = frozenset({"Exception", "BaseException"})
+
+
+def untyped_raise_asserts(tests: Mapping[str, str]) -> list[tuple[str, int, str]]:
+    """(file, line, spelling) for each test assertion that a call raises
+    `Exception` or `BaseException` (flake8-bugbear B017's shape).
+
+    Such a test passes on any exception, a crash before the check included,
+    so it stays green when the raise it was written for is deleted. A tuple
+    of types, or a narrower type, is not named. A file that does not parse
+    names nothing.
+    """
+    out: list[tuple[str, int, str]] = []
+    for rel in sorted(tests):
+        try:
+            tree = ast.parse(tests[rel])
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and _tail(node.func) in _RAISES_ASSERTS
+                and node.args
+                and isinstance(node.args[0], ast.Name | ast.Attribute)
+                and _type_names(node.args[0]) & UNTYPED_ASSERT_TYPES
+            ):
+                spelled = f"{ast.unparse(node.func)}({ast.unparse(node.args[0])})"
+                out.append((rel, node.lineno, spelled))
+    return sorted(out)

@@ -411,6 +411,10 @@ class AutoOptions:
     premise_check: bool = False
     """`--premise-check`: edits are refused until the model has shown the problem
     with `premise_check` (engine), which puts the real output in front of it."""
+    raise_obligation: bool = False
+    """`--raise-obligation` (needs `--allow-test-edits`): each checkpoint audit
+    also names the changed raises no test enters and the type-free raise
+    assertions (`feed.raise_obligation`). Feedback only; never refuses finish."""
     stall_check: bool = False
     """`--stall-check`: after ~10 min, a run that has never edited, run
     premise_check or disputed and is still hedging is returned to the user
@@ -841,6 +845,7 @@ def run_auto(
             task=options.task,
             tier2=options.tier2,
             mutant_shortlist=options.mutant_shortlist,
+            raise_obligation=options.raise_obligation,
             p1=p1,
             p1_wait=lambda: auto.budget.time_left(),
             impact_cache=root / ".saddle" / "impact",

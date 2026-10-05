@@ -2180,6 +2180,13 @@ def build_parser() -> argparse.ArgumentParser:
         "premise_check or disputed and is still hedging in its reasoning.",
     )
     auto.add_argument(
+        "--raise-obligation",
+        action="store_true",
+        help="At each checkpoint, name each changed raise no test enters and each "
+        "pytest.raises(Exception) test, and ask for a test that asserts the type. "
+        "Feedback only; needs --allow-test-edits.",
+    )
+    auto.add_argument(
         "--format-at-finish",
         action="store_true",
         help="Run ruff format on the run's changed Python files before each finish audit.",
@@ -2271,6 +2278,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+RAISE_OBLIGATION_NEEDS_TESTS: Final = (
+    "--raise-obligation needs --allow-test-edits: it asks for tests the run may not otherwise write"
+)
+
 AUTO_STOPPED: Final = 3
 """Exit status of an autonomous run that ended on a budget or an error:
 distinct from 0 so a script cannot read a stop as done."""
@@ -2278,6 +2289,11 @@ distinct from 0 so a script cannot read a stop as done."""
 
 def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO[str]) -> int:
     """`saddle auto`: run, print where the branch and ledger are, exit on the outcome."""
+    if args.raise_obligation and not args.allow_test_edits:
+        # The obligation asks for tests; a run that may not write them could not
+        # act on it, and a check the worker cannot satisfy is a spiral, not feedback.
+        stdout.write(f"error: {RAISE_OBLIGATION_NEEDS_TESTS}\n")
+        return 2
     options = AutoOptions(
         task=args.task,
         repo=Path(args.repo),
@@ -2288,6 +2304,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         format_at_finish=args.format_at_finish,
         premise_check=args.premise_check,
         stall_check=args.stall_check,
+        raise_obligation=args.raise_obligation,
         temperature=args.temperature,
         reasoning_effort=args.reasoning_effort,
         arm="E" if args.no_audit else "E+A" if args.no_feedback else "E+A+F",
