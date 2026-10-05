@@ -64,6 +64,7 @@ from saddle.task_examples import (
     encode_value,
     literal_text,
     parse_value,
+    reference_def,
     reference_problem,
 )
 from saddle.task_prompts import ALTERNATIVES, PREDICT, PROPOSE, SNIPPET_RULES
@@ -436,11 +437,11 @@ def run(item):
     try:
         # A call that cannot bind the input's args never ran: its TypeError is
         # about the signature, not the behaviour, so it is no outcome.
-        inspect.signature(namespace["ref"]).bind(*args)
+        inspect.signature(namespace[item["name"]]).bind(*args)
     except TypeError as exc:
         return {"status": f"could not call: {exc}"}
     try:
-        value = timed(namespace["ref"], *args)
+        value = timed(namespace[item["name"]], *args)
     except _Hang:
         return {"status": "timeout"}
     except BaseException as exc:
@@ -480,11 +481,6 @@ def perturbed(outcome: Outcome) -> str | None:
     return None
 
 
-def _reference_form(source: str) -> str:
-    tree = ast.parse(source)
-    return next(n.name for n in tree.body if isinstance(n, ast.FunctionDef))
-
-
 def run_references(
     sources: Mapping[str, str],
     examples: Sequence[Mapping[str, Any]],
@@ -516,7 +512,7 @@ def run_references(
         if problem is not None:
             out[e["id"]] = {"status": f"refused: {problem}"}
             continue
-        form = _reference_form(source)
+        form, name = reference_def(source)
         own = (chosen or {}).get(e["id"])
         if own is not None:
             problem = args_problem(own, e["setup"], e["call"])
@@ -527,6 +523,7 @@ def run_references(
             "id": e["id"],
             "source": source,
             "form": form,
+            "name": name,
             "args": e["args"] if own is None else own,
             "chosen": own is not None,
         }

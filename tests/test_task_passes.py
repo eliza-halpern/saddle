@@ -454,6 +454,38 @@ def test_references_that_raise_or_return_oddities_are_sealed_as_what_they_did(
 
 
 @pytest.mark.parametrize(
+    ("source", "outcome"),
+    [
+        # A census exhibit's shape: a lone `ref_balance` def, run as `ref`.
+        ("def ref_balance(xs, n):\n    return sum(xs) + n\n", {"kind": "value", "text": "5"}),
+        # Called by its own name, so a recursive call inside it still resolves.
+        (
+            "def ref_count(xs, n):\n    if not xs:\n        return n\n"
+            "    return ref_count(xs[1:], n + 1)\n",
+            {"kind": "value", "text": "4"},
+        ),
+        ("def ref_kind(xs, n):\n    return type(n).__name__\n", {"kind": "value", "text": "'int'"}),
+        (
+            "def ref(xs, n):\n    raise TypeError(f'no {type(n).__name__}')\n",
+            {"kind": "raises", "text": "TypeError"},
+        ),
+    ],
+)
+def test_a_ref_something_reference_runs_and_its_result_is_sealed(
+    source: str, outcome: dict[str, str]
+) -> None:
+    assert refs(source) == {"status": "ran", "outcome": outcome}
+    # the one that ran is the result route (b) reads, beside a plain `ref`
+    both = run_references(
+        {"S-002": source, "S-003": REF},
+        [EXAMPLE, {"id": "E-002", "units": ["S-003"], "args": ["[2, 1]", "2"]}],
+        {},
+    )
+    assert both["E-001"] == {"status": "ran", "outcome": outcome}
+    assert both["E-002"]["status"] == "ran"
+
+
+@pytest.mark.parametrize(
     ("source", "sealed_as"),
     [
         # The input gives two args. A signature that cannot take them never ran:

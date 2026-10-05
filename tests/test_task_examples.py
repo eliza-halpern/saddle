@@ -42,6 +42,7 @@ from saddle.task_examples import (
     literal_route,
     literal_text,
     parse_value,
+    reference_def,
     reference_problem,
     snippet_problem,
 )
@@ -682,15 +683,15 @@ def test_r6_ref_good_references_are_admitted(source: str) -> None:
         ("def ref():\n    global y\n    return 1\n", "Global is not allowed"),
         (
             "def ref():\n    return 1\n\ndef ok():\n    return 1\n",
-            "must be imports and exactly one top-level def named ref or ok",
+            "must be imports and exactly one top-level def named ref, ref_*, or ok",
         ),
         (
             "x = 1\n\ndef ref():\n    return x\n",
-            "must be imports and exactly one top-level def named ref or ok",
+            "must be imports and exactly one top-level def named ref, ref_*, or ok",
         ),
         (
             "def other():\n    return 1\n",
-            "must be imports and exactly one top-level def named ref or ok",
+            "must be imports and exactly one top-level def named ref, ref_*, or ok",
         ),
         ("@cache\ndef ref():\n    return 1\n", "decorators are not allowed"),
         ("def ref(:\n", "does not parse: invalid syntax"),
@@ -698,6 +699,120 @@ def test_r6_ref_good_references_are_admitted(source: str) -> None:
 )
 def test_r6_ref_bad_references_are_refused_before_any_run(source: str, why: str) -> None:
     assert reference_problem(source, STDLIB) == why
+
+
+# The census exhibits (150 references from six sealed extractions on the served
+# model): each was a legitimate reference the old rule refused.
+NAME_EXHIBIT: Final = (
+    "import decimal\n\n"
+    "def ref(amount):\n"
+    "    if isinstance(amount, decimal.Decimal):\n"
+    "        return amount\n"
+    '    raise TypeError(f"Cannot convert {type(amount).__name__} to Decimal")\n'
+)
+BALANCE_EXHIBIT: Final = (
+    "import decimal\n\n"
+    "def ref_balance(constructor_balance, deposits):\n"
+    "    return decimal.Decimal(constructor_balance) + sum(deposits)\n"
+)
+SUMMARY_EXHIBIT: Final = (
+    "import decimal\n\n"
+    "def ref_summary(txns, target='USD'):\n"
+    "    def total(xs):\n"
+    "        return sum(decimal.Decimal(x['amount']) for x in xs)\n"
+    "    return {'currency': target, 'total': total(txns)}\n"
+)
+VERSION_EXHIBIT: Final = (
+    "import json\n\ndef ref_load_version(data):\n    return json.loads(data)['version']\n"
+)
+SHAPE: Final = "must be imports and exactly one top-level def named ref, ref_*, or ok"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        NAME_EXHIBIT,
+        BALANCE_EXHIBIT,
+        SUMMARY_EXHIBIT,
+        # What the loosenings now also let through, on the record: reading any
+        # value's `__name__` (a function argument's, here), and the bare prefix.
+        "def ref(f):\n    return f.__name__\n",
+        "def ref_(x):\n    return x + 1\n",
+    ],
+)
+def test_a_reference_may_read_name_and_be_named_ref_something(source: str) -> None:
+    assert reference_problem(source, STDLIB) is None
+
+
+@pytest.mark.parametrize(
+    ("source", "why"),
+    [
+        ("def ref(x):\n    return x.__class__\n", "attribute '__class__' is not allowed"),
+        ("def ref(x):\n    return x.__dict__\n", "attribute '__dict__' is not allowed"),
+        (
+            "def ref(x):\n    return type(x).__qualname__\n",
+            "attribute '__qualname__' is not allowed",
+        ),
+        ("def ref(x):\n    return __name__ + x\n", "name '__name__' is not allowed"),
+        ("def ref(x):\n    x.__name__ = 1\n    return x\n", "attribute '__name__' is not allowed"),
+        (
+            "def ref(x):\n    x.__name__ += 'a'\n    return x\n",
+            "attribute '__name__' is not allowed",
+        ),
+        ("def ref(x):\n    del x.__name__\n    return x\n", "Delete is not allowed"),
+        ("def ref_a(x):\n    return x + 1\n\ndef ref_b(x):\n    return x\n", SHAPE),
+        ("def ref_a(x):\n    return x + 1\n\ndef ref(x):\n    return x + 2\n", SHAPE),
+        (
+            "FEES = {'a': 1}\n\n"
+            "def ref_apply_fee(x):\n    return x + ref_fee_for(x)\n\n"
+            "def ref_fee_for(x):\n    return FEES[x]\n",
+            SHAPE,
+        ),
+        ("FEES = {'a': 1}\n\ndef ref_fee(x):\n    return FEES[x]\n", SHAPE),
+        ("def helper(x):\n    return x + 1\n", SHAPE),
+        ("def reference(x):\n    return x + 1\n", SHAPE),
+        ("def refx(x):\n    return x + 1\n", SHAPE),
+        ("def ok_x(inp, out):\n    return out == 1\n", SHAPE),
+        # the `_restates` guards apply to a `ref_*` def as to `ref`
+        (
+            "def ref_balance(constructor_balance, deposits):\n    return deposits\n",
+            "returns its input unchanged, so it derives nothing",
+        ),
+        (
+            "def ref_balance(constructor_balance, deposits):\n    return 5\n",
+            "never reads its input, so it only restates the prediction",
+        ),
+    ],
+)
+def test_other_dunders_and_other_shapes_stay_refused(source: str, why: str) -> None:
+    assert reference_problem(source, STDLIB) == why
+
+
+def test_the_json_exhibit_is_refused_for_its_import_not_its_shape() -> None:
+    # `json` is not a reference module: this exhibit's shape is admitted now,
+    # and it stays refused for the import (out of this change's scope).
+    assert reference_problem(VERSION_EXHIBIT, STDLIB) == "import of json is not allowed"
+
+
+def test_a_snippet_still_may_not_read_name() -> None:
+    assert snippet_problem((), "type(x).__name__", STDLIB) == "attribute '__name__' is not allowed"
+    assert (
+        snippet_problem(("y = x.__name__",), "y", STDLIB) == "attribute '__name__' is not allowed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (BALANCE_EXHIBIT, ("ref", "ref_balance")),
+        ("def ref(x):\n    return x + 1\n", ("ref", "ref")),
+        ("import math\n\ndef ok(inp, out):\n    return math.isclose(out, 1.0)\n", ("ok", "ok")),
+    ],
+)
+def test_reference_def_names_the_form_and_the_def_the_driver_calls(
+    source: str, expected: tuple[str, str]
+) -> None:
+    assert reference_def(source) == expected
 
 
 RESTATES: Final = "never reads its input, so it only restates the prediction"

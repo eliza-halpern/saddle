@@ -451,15 +451,27 @@ def _dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
 
+READABLE_DUNDERS: Final = frozenset({"__name__"})
+"""The dunder attributes a reference may read (never assign): `type(x).__name__`
+yields a str for an error message and opens no way out of the whitelist."""
+
+
 def _common_problem(
-    tree: ast.AST, allowed: tuple[type[ast.AST], ...], stdlib: frozenset[str]
+    tree: ast.AST,
+    allowed: tuple[type[ast.AST], ...],
+    stdlib: frozenset[str],
+    readable: frozenset[str] = frozenset(),
 ) -> str | None:
     for node in ast.walk(tree):
         if not isinstance(node, allowed):
             return f"{type(node).__name__} is not allowed"
         if isinstance(node, ast.Name) and (node.id in FORBIDDEN_NAMES or _dunder(node.id)):
             return f"name {node.id!r} is not allowed"
-        if isinstance(node, ast.Attribute) and _dunder(node.attr):
+        if (
+            isinstance(node, ast.Attribute)
+            and _dunder(node.attr)
+            and not (node.attr in readable and isinstance(node.ctx, ast.Load))
+        ):
             return f"attribute {node.attr!r} is not allowed"
         if isinstance(node, ast.Import):
             bad = [a.name for a in node.names if a.name not in REFERENCE_MODULES]
@@ -502,11 +514,13 @@ def snippet_problem(setup: Sequence[str], call: str, stdlib: frozenset[str]) -> 
 def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
     """Why a mini-reference may not run, or None: the reference whitelist.
 
-    One top-level `def ref(...)` (or `def ok(inp, out)`), optionally after
-    imports from `REFERENCE_MODULES`; inside, the snippet language plus
-    control flow, comprehensions, lambdas and `raise`. Never `open`, `exec`,
-    `eval`, `compile`, `__import__`, `global`, `nonlocal`, a dunder, or an
-    import from the repo or any other module.
+    One top-level `def ref(...)` (or `def ref_<anything>(...)`, run as `ref`;
+    see `reference_def`) or `def ok(inp, out)`, optionally after imports from
+    `REFERENCE_MODULES`; inside, the snippet language plus control flow,
+    comprehensions, lambdas and `raise`. Never `open`, `exec`, `eval`,
+    `compile`, `__import__`, `global`, `nonlocal`, a dunder (reading
+    `x.__name__` aside: `READABLE_DUNDERS`), or an import from the repo or
+    any other module.
     """
     try:
         tree = ast.parse(source)
@@ -516,8 +530,8 @@ def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
     rest = [
         n for n in tree.body if not isinstance(n, ast.FunctionDef | ast.Import | ast.ImportFrom)
     ]
-    if rest or len(defs) != 1 or defs[0].name not in ("ref", "ok"):
-        return "must be imports and exactly one top-level def named ref or ok"
+    if rest or len(defs) != 1 or _form(defs[0].name) is None:
+        return "must be imports and exactly one top-level def named ref, ref_*, or ok"
     if defs[0].decorator_list:
         return "decorators are not allowed"
     for node in ast.walk(tree):
@@ -525,9 +539,24 @@ def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
             REFERENCE_MODULES
         ):
             return f"import from {node.module} is not allowed"
-    return _common_problem(tree, (*_SNIPPET_NODES, *_REFERENCE_EXTRA), stdlib) or (
-        _restates(defs[0]) if defs[0].name == "ref" else None
-    )
+    return _common_problem(
+        tree, (*_SNIPPET_NODES, *_REFERENCE_EXTRA), stdlib, READABLE_DUNDERS
+    ) or (_restates(defs[0]) if _form(defs[0].name) == "ref" else None)
+
+
+def _form(name: str) -> Literal["ref", "ok"] | None:
+    if name == "ok":
+        return "ok"
+    return "ref" if name == "ref" or name.startswith("ref_") else None
+
+
+def reference_def(source: str) -> tuple[Literal["ref", "ok"], str]:
+    """An admitted reference's form and the name of the def the driver calls:
+    `ref_balance` is called by its own name (so a recursive call inside it
+    still resolves) in the `ref` form. Only for a source `reference_problem`
+    admitted."""
+    name = next(n.name for n in ast.parse(source).body if isinstance(n, ast.FunctionDef))
+    return ("ok" if name == "ok" else "ref"), name
 
 
 def _restates(ref: ast.FunctionDef) -> str | None:
