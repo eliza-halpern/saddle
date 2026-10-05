@@ -1485,6 +1485,40 @@ def coverage_evidence(
     }
 
 
+def raise_gaps(
+    copy: Path,
+    baseline: str,
+    detail: str,
+    basis: str,
+    entered: Sequence[tuple[str, int]] | None = None,
+) -> list[dict[str, Any]]:
+    """Each changed `raise` the coverage record says no test enters (K2 §3.3).
+
+    Read from the finding the gate already made: the lines its detail names
+    and the definitions its `basis` spared, placed in the audited tree by
+    `coverage_text.unreached_raises`. No test is run and no verdict changes;
+    the rows are sealed beside the coverage finding for the packet's Not
+    proven section. `entered` is what a P1 raise example ran, if any.
+    """
+    uncovered = coverage_text.uncovered_lines(detail)
+    spared = spared_definitions(basis)
+    files = {f for f, _ in uncovered} | {n.rpartition(":")[0] for n in spared}
+    if not files:
+        return []
+    sources: dict[str, str] = {}
+    for rel in sorted(files):
+        try:
+            sources[rel] = (copy / rel).read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+    changed = {
+        (str(Path(path).relative_to(copy)), line)
+        for path, line in changed_statements(copy, git_diff(copy, baseline))
+    }
+    gaps = coverage_text.unreached_raises(sources, changed, uncovered, spared, entered)
+    return [dataclasses.asdict(g) for g in gaps]
+
+
 def _finding(gate: str, tier: int, verdict: Verdict, detail: str, basis: str | None) -> Finding:
     cites = (REUSES[gate],) if basis is None else (REUSES[gate], basis)
     return Finding(gate, tier, verdict, _reason(gate, verdict, detail), detail, cites)
@@ -2225,6 +2259,7 @@ class Auditor:
                     f"{rewrote[1]}{REWRITE_QUESTION}",
                     rewrote[2],
                 )
+        checked = p1.result() if p1 is not None else None
         if tier == 1:
             status, detail, basis = statuses["coverage"]
             # A not-proven coverage finding names the same lines;
@@ -2239,12 +2274,17 @@ class Auditor:
             spared = spared_definitions(basis or "")
             if spared:
                 sealed = {**(sealed or {}), "spared": spared}
+            # Each changed raise no test enters, read from the same record
+            # whatever the verdict: a report beside the finding, never a verdict.
+            entered = checked.raise_ran if checked is not None else None
+            raises = raise_gaps(copy, resolved, detail, basis or "", entered)
+            if raises:
+                sealed = {**(sealed or {}), "raises": raises}
             if sealed is not None:
                 sidecars["coverage"] = sealed
-        if p1 is not None:
-            check = p1.result()
-            statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
-            sidecars[TASK_REQUIREMENTS] = p1_tally(check)
+        if checked is not None:
+            statuses[TASK_REQUIREMENTS] = (checked.verdict, checked.detail, checked.basis)
+            sidecars[TASK_REQUIREMENTS] = p1_tally(checked)
         if static is not None:
             ran = static.result()
             statuses[STATIC_CHECK] = ("pass" if ran.passed else "fail", ran.detail, None)

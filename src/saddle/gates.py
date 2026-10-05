@@ -29,6 +29,7 @@ from saddle.task_examples import (
     Row,
     TreeOutcome,
     judge,
+    raise_names,
     raise_obligation,
 )
 from saddle.task_examples import classify as classify_example
@@ -3402,6 +3403,10 @@ class TaskRequirementsCheck(GateCheck):
     """How many of the code-wrong examples raised another resolvable exception
     type than the one named (`Row.by_type`): a named type's admitted cost,
     reported on its own so a known-good measurement can list it."""
+    raise_ran: tuple[tuple[str, int], ...] | None = None
+    """Every tree line (`file`, `line`) an example expecting a raise ran, so the
+    packet's unreached-raise row can say whether one entered the function
+    (K2 §3.3); None when no example expects a raise."""
 
 
 def _raise_count(obligation: Sequence[tuple[str, int]], conditions: Mapping[str, int]) -> list[str]:
@@ -3508,6 +3513,21 @@ def check_task_requirements(
         ),
     )
     by_type = sum(r.by_type for r in rows)
+    raising = [results.get(e.id) for e in examples if raise_names(e)]
+    raise_ran = (
+        tuple(
+            sorted(
+                {
+                    (path, int(line))
+                    for got in raising
+                    if got is not None
+                    for path, _, line in (r.rpartition(" (")[0].rpartition(":") for r in got.ran)
+                }
+            )
+        )
+        if raising
+        else None
+    )
     basis = [
         strength,
         f"{len(judged_units)} of {len(units.units)} candidate unit(s) judged; "
@@ -3567,4 +3587,5 @@ def check_task_requirements(
         ),
         examples=(len(rows), counts["pass"], counts["code-wrong"], counts["question"]),
         by_type=by_type,
+        raise_ran=raise_ran,
     )
