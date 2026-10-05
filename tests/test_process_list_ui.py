@@ -155,8 +155,9 @@ def test_on_a_phone_the_chip_next_to_the_unsandboxed_banner_causes_no_sideways_s
     tmp_path: Path,
 ) -> None:
     """With the chip, the full-access banner, the lane chip and the folder name
-    all in the topbar at 420px the page must not scroll sideways (main, without
-    the chip, does not). The chip shrinks to its dot and count."""
+    all in the topbar of a 360px phone the page must not scroll sideways (main,
+    without the chip, does not). The chip shrinks to its dot and count, and the
+    banner takes a row of its own so the title keeps some width."""
     shots = os.environ.get("SADDLE_PROCESS_SHOTS", "")
     store = SessionStore(tmp_path / "s")
     app = build_app(store, NoModel, default_workdir=tmp_path)
@@ -172,7 +173,7 @@ def test_on_a_phone_the_chip_next_to_the_unsandboxed_banner_causes_no_sideways_s
             got = drive_page(
                 base,
                 """
-                await page.width(420);
+                await page.width(360);
                 await page.chat(args.sid);
                 await page.until(() => !document.querySelector("#procs-chip").hidden);
                 await page.shot("phone-chip.png");
@@ -182,6 +183,7 @@ def test_on_a_phone_the_chip_next_to_the_unsandboxed_banner_causes_no_sideways_s
                     - document.querySelector("#topbar").clientWidth,
                   banner: !document.querySelector("#full-access-banner").hidden,
                   count: document.querySelector("#procs-count").textContent,
+                  titled: document.querySelector("#title").clientWidth > 0,
                 }));
                 """,
                 sid=sid,
@@ -189,7 +191,7 @@ def test_on_a_phone_the_chip_next_to_the_unsandboxed_banner_causes_no_sideways_s
             )
         finally:
             ctx.stop_processes()
-    assert got == {"wide": 0, "topbar": 0, "banner": True, "count": "1"}
+    assert got == {"wide": 0, "topbar": 0, "banner": True, "count": "1", "titled": True}
 
 
 @needs_cgroup
@@ -197,8 +199,11 @@ def test_on_a_phone_both_chips_and_the_banner_cause_no_sideways_scroll(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The two lanes' chips met in one topbar: running programs and outside
-    changes, beside the full-access banner, at 420px. Each keeps only its
-    count, the folder name gives way, and the page does not scroll sideways."""
+    changes, beside the full-access banner, on a 360px phone. Each keeps only
+    its count, the folder name gives way, the banner takes a row of its own,
+    and nothing scrolls sideways. Known-bad: in one row the topbar overflowed
+    (42px at 375 here, and at 420 on a runner whose font is wider) and the
+    title was squeezed to no width."""
     from saddle.sideeffects import SideEffects
 
     home = tmp_path / "home"
@@ -227,7 +232,7 @@ def test_on_a_phone_both_chips_and_the_banner_cause_no_sideways_scroll(
             got = drive_page(
                 base,
                 """
-                await page.width(420);
+                await page.width(360);
                 await page.chat(args.sid);
                 await page.until(() => !document.querySelector("#procs-chip").hidden
                   && !document.querySelector("#outside-chip").hidden);
@@ -237,10 +242,11 @@ def test_on_a_phone_both_chips_and_the_banner_cause_no_sideways_scroll(
                     - document.querySelector("#topbar").clientWidth,
                   procs: document.querySelector("#procs-count").textContent,
                   outside: document.querySelector("#outside-count").textContent,
+                  titled: document.querySelector("#title").clientWidth > 0,
                 }));
                 """,
                 sid=sid,
             )
         finally:
             ctx.stop_processes()
-    assert got == {"wide": 0, "topbar": 0, "procs": "1", "outside": "1"}
+    assert got == {"wide": 0, "topbar": 0, "procs": "1", "outside": "1", "titled": True}
