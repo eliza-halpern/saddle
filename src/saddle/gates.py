@@ -22,7 +22,15 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from saddle.dag import Node
 from saddle.mutant_text import PHRASES, classify, function_of, parse_show
-from saddle.task_examples import Example, Row, TreeOutcome, judge
+from saddle.task_examples import (
+    RAISE_NOISE,
+    RAISE_ROW,
+    Example,
+    Row,
+    TreeOutcome,
+    judge,
+    raise_obligation,
+)
 from saddle.task_examples import classify as classify_example
 from saddle.task_units import Units
 
@@ -3396,6 +3404,18 @@ class TaskRequirementsCheck(GateCheck):
     reported on its own so a known-good measurement can list it."""
 
 
+def _raise_count(obligation: Sequence[tuple[str, int]], conditions: Mapping[str, int]) -> list[str]:
+    """The raise obligation's two lines: how many raise-named units have a
+    raising example, and per unit the conditions P-a listed beside the
+    raising examples decided (the check can count examples, not conditions)."""
+    have = sum(n > 0 for _, n in obligation)
+    per_unit = ", ".join(f"{u} {conditions.get(u, 0)}/{n}" for u, n in obligation)
+    return [
+        f"{have} of {len(obligation)} raise-named unit(s) have a raising example; {RAISE_NOISE}",
+        f"raise conditions listed / raising examples decided: {per_unit}",
+    ]
+
+
 def _p1_example(row: Row) -> str:
     setup = "; ".join(row.example.setup)
     return f"{setup}; {row.example.call}" if setup else row.example.call
@@ -3429,6 +3449,7 @@ def check_task_requirements(
     unanswered: Sequence[str] = (),
     cannot_run: str | None = None,
     licensed: bool | None = None,
+    raise_conditions: Mapping[str, int] | None = None,
 ) -> TaskRequirementsCheck:
     """The `task-requirements` gate over one tree's example outcomes.
 
@@ -3444,7 +3465,11 @@ def check_task_requirements(
       value the gate cannot compare;
     - `pass`: every judged example matched.
 
-    Every example, unit and cut is accounted for in `basis`.
+    Every example, unit and cut is accounted for in `basis`. Every binding
+    unit that names a raise is counted with its raising examples
+    (`task_examples.raise_obligation`, K2 R-1); one with none is a named
+    `RAISE_ROW` among the unjudged, never a refusal. `raise_conditions` is
+    how many conditions for raising P-a listed per unit, printed beside it.
     """
     allowed = P1_REFUSAL_LICENSED if licensed is None else licensed
     strength = "full strength" if allowed else "question strength: dev-probe floor unmet"
@@ -3467,6 +3492,7 @@ def check_task_requirements(
         got = results.get(example.id)
         hits = [r for r in (got.ran if got else ()) if r.split(" ")[0] in changed]
         rows.append(dataclasses.replace(row, ran_changed=tuple(hits[:P1_NAMED_LINES])))
+    obligation = raise_obligation(units, examples)
     judged = [r for r in rows if r.status in ("pass", "code-wrong", "question")]
     judged_units = {u for r in judged for u in r.example.units}
     counts = {s: sum(r.status == s for r in rows) for s in ("pass", "code-wrong", "question")}
@@ -3474,6 +3500,7 @@ def check_task_requirements(
         *(f"not executable {u}: {why}" for u, why in not_executable),
         *(f"cut by the example cap: {u}" for u in cut),
         *(f"no example and no reason given: {u}" for u in unanswered),
+        *(f"{RAISE_ROW}: {u}" for u, n in obligation if n == 0),
         *(
             f"{r.status} {r.example.id} ({', '.join(r.example.units)}): {r.why}"
             for r in rows
@@ -3491,6 +3518,7 @@ def check_task_requirements(
             if by_type
             else []
         ),
+        *(_raise_count(obligation, raise_conditions or {}) if obligation else []),
         *unjudged,
     ]
     failing = [r for r in rows if r.status == "code-wrong"]

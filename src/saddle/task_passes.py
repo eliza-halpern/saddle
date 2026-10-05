@@ -44,7 +44,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Protocol
 
@@ -291,6 +291,10 @@ class Proposed:
     not_executable: list[dict[str, str]]
     cut: list[str]
     unanswered: list[str]
+    raise_conditions: dict[str, list[str]] = field(default_factory=dict)
+    """Unit id -> the conditions for raising P-a listed for it (K2 R-1): what
+    the report sets beside the raising examples decided. A count only; it
+    decides nothing."""
 
 
 def proposed(reply: dict[str, Any] | None, units: Units) -> Proposed:
@@ -335,7 +339,12 @@ def proposed(reply: dict[str, Any] | None, units: Units) -> Proposed:
     marked = {m["unit"] for m in marks}
     covered = {u for i in inputs for u in i["units"]} | marked | set(cut)
     unanswered = [u.id for u in units.units if u.id not in covered]
-    return Proposed(inputs, marks, sorted(set(cut)), unanswered)
+    conditions: dict[str, list[str]] = {}
+    for raw in reply.get("raise_conditions", []) if reply else []:
+        if isinstance(raw, dict) and raw.get("unit") in known:
+            listed = [str(c) for c in raw.get("conditions", []) if isinstance(c, str)]
+            conditions.setdefault(str(raw["unit"]), []).extend(listed)
+    return Proposed(inputs, marks, sorted(set(cut)), unanswered, conditions)
 
 
 def _literal(text: str) -> bool:
@@ -714,6 +723,7 @@ def extract(
             "not_executable": plan.not_executable,
             "cut": plan.cut,
             "unanswered": plan.unanswered,
+            "raise_conditions": plan.raise_conditions,
             "model": model,
             "calls": [c.to_dict() for c in calls],
             "hidden_docstrings": hidden,

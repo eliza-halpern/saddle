@@ -136,6 +136,8 @@ class Requirements:
     """Units P-a gave neither an input nor a reason for: named, never dropped."""
     probes: tuple[tuple[str, str], ...] = ()
     """The sealed known-correct probes, as (sha256, source)."""
+    raise_conditions: tuple[tuple[str, int], ...] = ()
+    """Unit id -> how many conditions for raising P-a listed for it (K2 R-1)."""
 
 
 MISMATCH: Final = "requirements file does not match the task"
@@ -181,6 +183,9 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
         marks = tuple((str(m["unit"]), str(m["reason"])) for m in data.get("not_executable", ()))
         cut = tuple(str(u) for u in data.get("cut", ()))
         unanswered = tuple(str(u) for u in data.get("unanswered", ()))
+        conditions = tuple(
+            (str(u), len(list(c))) for u, c in dict(data.get("raise_conditions", {})).items()
+        )
     except (KeyError, TypeError, ValueError) as exc:
         msg = f"requirements file is malformed: {exc!r}"
         raise RequirementsError(msg) from exc
@@ -189,7 +194,7 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
         msg = f"requirements file is malformed: not-executable reason {bad[0]!r} is not allowed"
         raise RequirementsError(msg)
     return Requirements(
-        text, units, examples, marks, cut, str(data["file_sha256"]), unanswered, probes
+        text, units, examples, marks, cut, str(data["file_sha256"]), unanswered, probes, conditions
     )
 
 
@@ -659,4 +664,5 @@ def check_tree(
         not_executable=req.not_executable,
         cut=req.cut,
         unanswered=req.unanswered,
+        raise_conditions=dict(req.raise_conditions),
     )

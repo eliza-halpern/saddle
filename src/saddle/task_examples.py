@@ -830,6 +830,32 @@ def raise_names(example: Example) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+RAISE_ROW: Final = "not-judged: raise-named, no raising example"
+"""The named row of a binding raise-named unit no decided example raises for."""
+RAISE_NOISE: Final = "token matches include non-raise uses of `error`/`exception`"
+
+
+def raise_obligation(units: Units, examples: Sequence[Example]) -> list[tuple[str, int]]:
+    """Every binding unit that names a raise (`raise_named`, P1's own token
+    guard), with how many decided examples citing it expect a raise (K2 R-1).
+
+    A count the model cannot lower: zero is a named row (`RAISE_ROW`), never a
+    pass by silence and never a refusal; the extractor's gap, not the tree's.
+    The guard matches tokens, so a unit that says "error" without describing
+    a raise is counted too (`RAISE_NOISE`)."""
+    raising: dict[str, int] = {}
+    for e in examples:
+        expected = classify(e, units).expected
+        if expected is not None and expected.kind == "raises":
+            for u in e.units:
+                raising[u] = raising.get(u, 0) + 1
+    return [
+        (u.id, raising.get(u.id, 0))
+        for u in units.units
+        if u.modality == "binding" and raise_named([u])
+    ]
+
+
 def effective_k(predictions: Sequence[Prediction]) -> int:
     """How many distinct samples the predictions are: byte-identical raw outputs count once."""
     return len({p.raw_sha256 for p in predictions})
