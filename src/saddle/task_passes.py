@@ -59,6 +59,7 @@ from saddle.task_examples import (
     REFERENCE_TOTAL_TIMEOUT_S,
     Example,
     Outcome,
+    args_problem,
     decode_value,
     encode_value,
     literal_text,
@@ -79,6 +80,9 @@ PROPOSE_SEED: Final = 5
 ALTERNATIVES_SEED: Final = 7
 PASS_MAX_TOKENS: Final = 16384
 PASS_EFFORT: Final = "low"
+RETRY_SEED_OFFSET: Final = 1000
+"""A whole reply holding no JSON object is asked again once, at its seed plus this:
+the same seed would reproduce the same bytes."""
 
 HIDDEN: Final = "(docstring hidden: the task text refers to this name)"
 """What replaces the docstring of a baseline name the task text mentions (D-2)."""
@@ -250,6 +254,18 @@ def _call(client: Completer, name: str, prompt: str, seed: int, temperature: flo
         error = f"{type(exc).__name__}: {exc}"
         return Call(name, seed, temperature, "", error, PASS_MAX_TOKENS if cut else None)
     return Call(name, seed, temperature, raw)
+
+
+def _call_parsed(
+    client: Completer, name: str, prompt: str, seed: int, temperature: float
+) -> list[Call]:
+    """`_call`, asked once more on a fresh seed when a whole reply holds no
+    JSON object; every call made, in order. The last one is the pass's reply.
+    A failed or cut call is sealed as what it was, not asked again."""
+    first = _call(client, name, prompt, seed, temperature)
+    if first.error or reply_json(first.raw) is not None:
+        return [first]
+    return [first, _call(client, name, prompt, seed + RETRY_SEED_OFFSET, temperature)]
 
 
 def cut_calls(record: Mapping[str, Any]) -> str:
@@ -441,12 +457,16 @@ def run_references(
     examples: Sequence[Mapping[str, Any]],
     predictions: Mapping[str, Outcome | None],
     *,
+    chosen: Mapping[str, list[str]] | None = None,
     runner: Runner = run_capture,
 ) -> dict[str, dict[str, Any]]:
     """One predictor's executed references: example id -> sealed `Reference` record.
 
     `sources` maps a unit id to that predictor's reference; an example uses
-    the first of its units that has one. Every call runs in one subprocess
+    the first of its units that has one. An example whose proposal gave no
+    `args` is called with the args the predictor `chosen` for it, when every
+    value in them is written in the input (`args_problem`); those are sealed
+    with the result. Every call runs in one subprocess
     in an empty directory (`python -I -S`: no repo, no site-packages),
     whitelisted first. What cannot run is recorded as why, never as a result.
     """
@@ -464,7 +484,19 @@ def run_references(
             out[e["id"]] = {"status": f"refused: {problem}"}
             continue
         form = _reference_form(source)
-        item = {"id": e["id"], "source": source, "form": form, "args": e["args"]}
+        own = (chosen or {}).get(e["id"]) if not e["args"] else None
+        if own is not None:
+            problem = args_problem(own, e["setup"], e["call"])
+            if problem is not None:
+                out[e["id"]] = {"status": f"refused: its args: {problem}"}
+                continue
+        item = {
+            "id": e["id"],
+            "source": source,
+            "form": form,
+            "args": e["args"] if own is None else own,
+            "chosen": own is not None,
+        }
         if form == "ok":
             other = perturbed(predicted) if predicted is not None else None
             if predicted is None or other is None:
@@ -489,7 +521,8 @@ def run_references(
             why = "timeout" if run.timed_out else f"crashed (exit {run.exit_code})"
             return out | {i["id"]: {"status": why} for i in items}
     for item in items:
-        out[item["id"]] = _sealed_reference(got.get(item["id"]), item["form"])
+        sealed = _sealed_reference(got.get(item["id"]), item["form"])
+        out[item["id"]] = sealed | ({"args": item["args"]} if item["chosen"] else {})
     return out
 
 
@@ -527,6 +560,8 @@ class Predictor:
     call: Call
     predictions: dict[str, dict[str, Any]]
     references: dict[str, str]
+    args: dict[str, list[str]]
+    """Input id -> the args it named for its reference (`run_references`)."""
 
 
 def _missing(p: Predictor, listed: bool) -> str:
@@ -556,7 +591,12 @@ def predictor(call: Call) -> Predictor:
         for r in reply.get("references", [])
         if isinstance(r, dict) and isinstance(r.get("source"), str)
     }
-    return Predictor(call, predictions, references)
+    args = {
+        i: [str(a) for a in p["args"]]
+        for i, p in predictions.items()
+        if isinstance(p.get("args"), list) and all(isinstance(a, str) for a in p["args"])
+    }
+    return Predictor(call, predictions, references, args)
 
 
 # -- the whole extraction ---------------------------------------------------------
@@ -582,7 +622,7 @@ def extract(
     units = task_units(task_text)
     listing, hidden = baseline_listing(sources or {}, task_text)
     shown = {"task": task_text, "units": _units_text(units), "baseline": listing}
-    propose = _call(
+    *tried, propose = _call_parsed(
         client,
         "P-a",
         PROPOSE.format(
@@ -595,7 +635,7 @@ def extract(
         PROPOSE_TEMPERATURE,
     )
     plan = proposed(reply_json(propose.raw), units)
-    calls = [propose]
+    calls = [*tried, propose]
     predictors: list[Predictor] = []
     if plan.inputs:
         prompt = PREDICT.format(
@@ -606,12 +646,12 @@ def extract(
         with ThreadPoolExecutor(max_workers=K_PREDICTORS) as pool:
             done = list(
                 pool.map(
-                    lambda seed: _call(client, "P-b", prompt, seed, PREDICT_TEMPERATURE),
+                    lambda seed: _call_parsed(client, "P-b", prompt, seed, PREDICT_TEMPERATURE),
                     PREDICT_SEEDS,
                 )
             )
-        predictors = [predictor(c) for c in done]
-        calls += done
+        predictors = [predictor(c[-1]) for c in done]
+        calls += [c for made in done for c in made]
     examples = []
     for inp in plan.inputs:
         preds = []
@@ -635,7 +675,7 @@ def extract(
         predicted = {
             e["id"]: _outcome(p.predictions.get(e["id"], {}).get("outcome")) for e in examples
         }
-        return run_references(p.references, plan.inputs, predicted, runner=runner)
+        return run_references(p.references, plan.inputs, predicted, chosen=p.args, runner=runner)
 
     if predictors:
         with ThreadPoolExecutor(max_workers=K_PREDICTORS) as pool:
@@ -653,14 +693,14 @@ def extract(
             )
             for e in decided
         )
-        alt = _call(
+        *tried, alt = _call_parsed(
             client,
             "P-c",
             ALTERNATIVES.format(task=task_text, units=_units_text(units), decided=text),
             ALTERNATIVES_SEED,
             ALTERNATIVES_TEMPERATURE,
         )
-        calls.append(alt)
+        calls += [*tried, alt]
         for a in (reply_json(alt.raw) or {}).get("alternatives", []):
             _add_alternative(a, by_id, units)
     outcomes = run_probes(probes, listed, [Example.from_dict(e) for e in examples], runner=runner)

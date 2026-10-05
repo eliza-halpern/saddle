@@ -514,7 +514,32 @@ def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
             REFERENCE_MODULES
         ):
             return f"import from {node.module} is not allowed"
-    return _common_problem(tree, (*_SNIPPET_NODES, *_REFERENCE_EXTRA), stdlib)
+    return _common_problem(tree, (*_SNIPPET_NODES, *_REFERENCE_EXTRA), stdlib) or (
+        _restates(defs[0]) if defs[0].name == "ref" else None
+    )
+
+
+def _restates(ref: ast.FunctionDef) -> str | None:
+    """Why `ref` cannot check a prediction, or None: one that never reads its
+    input, or hands an argument back unchanged, returns what it was given and
+    derives nothing."""
+    a = ref.args
+    params = {p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if p}
+    body = [
+        n
+        for n in ref.body
+        if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))  # a docstring
+    ]
+    if (
+        len(body) == 1
+        and isinstance(body[0], ast.Return)
+        and isinstance(body[0].value, ast.Name)
+        and body[0].value.id in params
+    ):
+        return "returns its input unchanged, so it derives nothing"
+    if not any(isinstance(n, ast.Name) and n.id in params for b in body for n in ast.walk(b)):
+        return "never reads its input, so it only restates the prediction"
+    return None
 
 
 # -- the sealed example -------------------------------------------------------
@@ -697,6 +722,45 @@ def input_literals(setup: Sequence[str], call: str) -> list[str]:
             continue
         found.extend(_literal_segments(tree, source))
     return found
+
+
+def args_problem(args: Sequence[str], setup: Sequence[str], call: str) -> str | None:
+    """Why `args` a predictor chose for its reference are not the input's, or
+    None. Every number, string and constant inside them must be written in
+    the input: they may regroup the input's values, never add one (such as
+    the expected outcome) that the input does not hold."""
+    held: dict[tuple[str, object], object] = {}
+    for text in input_literals(setup, call):
+        try:
+            held |= _leaves(parse_value(text))
+        except ValueError:
+            continue
+    for arg in args:
+        try:
+            leaves = _leaves(parse_value(arg))
+        except ValueError:
+            return f"{arg} is not a literal"
+        extra = sorted(repr(v) for k, v in leaves.items() if k not in held)
+        if extra:
+            return f"{arg} holds {', '.join(extra)}, which the input does not"
+    return None
+
+
+def _leaves(value: object) -> dict[tuple[str, object], object]:
+    """The scalars inside `value`, keyed so that numbers compare by value
+    (`1 == 1.0`) and a bool is never a number."""
+    if isinstance(value, dict):
+        return {k: v for kv in value.items() for x in kv for k, v in _leaves(x).items()}
+    if isinstance(value, list | tuple | set | frozenset):
+        return {k: v for x in value for k, v in _leaves(x).items()}
+    if isinstance(value, bool) or value is None:
+        return {("const", value): value}
+    if isinstance(value, int | float | Decimal | Fraction):
+        try:
+            return {("num", Fraction(value)): value}
+        except (ValueError, OverflowError):  # nan and infinity compare by spelling
+            return {("num", repr(value)): value}
+    return {(type(value).__name__, value): value}
 
 
 def _literal_segments(node: ast.AST, source: str) -> list[str]:
@@ -966,7 +1030,12 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
         )
     if klass.probe_rejected:
         return Row(example, "not-judged", f"probe-rejected: {klass.probe_rejected}", klass, shown)
-    if got.kind == "opaque":
+    # A tree that returned where every reading raises has differed, whatever it
+    # returned: only a value reading needs the value itself to compare.
+    returned_where_raise = klass.expected is not None and all(
+        o.kind == "raises" for o in (klass.expected, *klass.readings)
+    )
+    if got.kind == "opaque" and not returned_where_raise:
         return Row(
             example,
             "not-proven",
@@ -974,7 +1043,7 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
             klass,
             shown,
         )
-    if got.kind == "value":
+    if got.kind == "value" and not returned_where_raise:
         try:
             decode_value(got.value)
         except (ValueError, KeyError, TypeError) as exc:

@@ -22,6 +22,7 @@ from saddle.task_examples import (
     LITERAL_DISAGREES,
     NO_RAISE_NOTE,
     UNCERTAIN_NOTE,
+    WOULD_REFUSE,
     Alternative,
     Example,
     Outcome,
@@ -29,6 +30,7 @@ from saddle.task_examples import (
     Probe,
     Reference,
     TreeOutcome,
+    args_problem,
     classify,
     compare,
     decode_value,
@@ -492,6 +494,21 @@ def test_r16_i_a_unit_that_names_the_raise_may_refuse() -> None:
     assert sub.show() == "raises SizeError"
 
 
+def test_a_tree_that_returns_where_every_reading_raises_differs() -> None:
+    e = ex("make(-1)", out("raises", "ValueError"), units=("S-007",))
+    opaque = TreeOutcome("opaque", detail="Line (TypeError)")
+    row = gate(e, opaque).rows[0]
+    assert (row.status, row.got) == ("code-wrong", "opaque: Line (TypeError)")
+    assert gate(e, TreeOutcome("value", {"t": "nope"})).verdict == "fail"
+    assert gate(e, opaque, licensed=False).rows[0].why == WOULD_REFUSE
+    # a value reading needs the value itself: an opaque one stays not proven
+    either = ex(
+        "make(-1)", out("raises", "ValueError"), units=("S-007",), alts=(out("value", "[]"),)
+    )
+    assert gate(either, opaque).rows[0].status == "not-proven"
+    assert gate(DEDUP, opaque).rows[0].status == "not-proven"
+
+
 def test_r16_ii_a_raise_the_task_never_names_is_a_question() -> None:
     e = ex("grow(-1)", out("raises", "ValueError"), units=("S-008",))
     check = gate(e, val([]))
@@ -670,6 +687,70 @@ def test_r6_ref_good_references_are_admitted(source: str) -> None:
 )
 def test_r6_ref_bad_references_are_refused_before_any_run(source: str, why: str) -> None:
     assert reference_problem(source, STDLIB) == why
+
+
+RESTATES: Final = "never reads its input, so it only restates the prediction"
+UNCHANGED: Final = "returns its input unchanged, so it derives nothing"
+
+
+@pytest.mark.parametrize(
+    ("source", "why"),
+    [
+        ("def ref():\n    return 3\n", RESTATES),
+        ("def ref(xs, n):\n    return [2, 2, 1, 1]\n", RESTATES),
+        ("def ref(level, step):\n    raise ValueError('below zero')\n", RESTATES),
+        ("def ref(result):\n    return result\n", UNCHANGED),
+        ("def ref(*got):\n    'The answer.'\n    return got\n", UNCHANGED),
+        ("def ref(xs, n):\n    return xs\n", UNCHANGED),
+        # one that derives from its input is admitted
+        ("def ref(xs, n):\n    return xs[:n]\n", None),
+        ("def ref(*, n):\n    return n + 1\n", None),
+        ("def ref(level, step):\n    if level + step < 0:\n        raise ValueError(step)\n", None),
+        # an `ok` that ignores its input is caught by its discrimination check instead
+        ("def ok(inp, out):\n    return True\n", None),
+    ],
+)
+def test_a_reference_that_derives_nothing_is_refused(source: str, why: str | None) -> None:
+    assert reference_problem(source, STDLIB) == why
+
+
+GAUGE_SETUP: Final = ("from m import Gauge", "g = Gauge([2, 1], 3)")
+GAUGE_CALL: Final = "g.move(-4, label='a')"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["[2, 1]", "3", "-4"],
+        ["{'a': 3}", "(1, 2)"],  # regrouped, never added to
+        ["3.0"],  # a number is its value, not its spelling
+        ["[]"],
+        [],
+    ],
+)
+def test_args_drawn_from_the_input_are_admitted(args: list[str]) -> None:
+    assert args_problem(args, GAUGE_SETUP, GAUGE_CALL) is None
+
+
+def test_an_input_literal_outside_the_value_language_holds_nothing() -> None:
+    assert args_problem(["3"], ("z = 1+2j", "g = Gauge(3)"), "g.f()") is None
+    assert args_problem(["1"], ("z = 1+2j",), "g.f()") == "1 holds 1, which the input does not"
+
+
+@pytest.mark.parametrize(
+    ("args", "why"),
+    [
+        (["3", "-1"], "-1 holds -1, which the input does not"),  # the outcome of 3 + -4
+        (["[2, 1, 99]"], "[2, 1, 99] holds 99, which the input does not"),
+        (["4"], "4 holds 4, which the input does not"),  # the sign is part of the value
+        (["True"], "True holds True, which the input does not"),
+        (["'b'"], "'b' holds 'b', which the input does not"),
+        (["f(x)"], "f(x) is not a literal"),
+        (['float("nan")'], 'float("nan") holds nan, which the input does not'),
+    ],
+)
+def test_args_holding_a_value_the_input_does_not_are_refused(args: list[str], why: str) -> None:
+    assert args_problem(args, GAUGE_SETUP, GAUGE_CALL) == why
 
 
 # -- values and comparison -----------------------------------------------------

@@ -56,13 +56,16 @@ PREDICT: Final = (
     "Give a one-line derivation, and `decides`: the exact words, copied from one of the "
     "input's units, that decide the outcome.\n\n"
     "Then, for every unit that has inputs, write one small Python function from the "
-    "unit's words only: `def ref(...)` taking the input's `args` in order and returning "
-    "the expected value (or raising the expected exception). It may import only "
+    "unit's words only: `def ref(...)` that computes the outcome from its arguments and "
+    "returns the expected value (or raises the expected exception). It may import only "
     "{modules}; nothing else, and no files, no eval, no dunders. If you cannot write "
-    "one, omit it.\n\n"
+    "one, omit it. With each prediction give `args`: the Python literals your `ref` for "
+    "that input's unit takes, in order, built only from values written in the input's "
+    "`setup` and `call` (for `c = Gauge(3)` then `c.move(-4)`, a `ref(level, step)` "
+    'takes `["3", "-4"]`). Never put the outcome in `args`.\n\n'
     "Reply with JSON only, in this shape:\n"
     '{{"predictions": [{{"input": "I-001", "outcome": {{"kind": "value", '
-    '"text": "[2, 4]"}}, "derivation": "...", "decides": "..."}}], '
+    '"text": "[2, 4]"}}, "args": ["[1, 2]", "2"], "derivation": "...", "decides": "..."}}], '
     '"references": [{{"unit": "S-001", '
     '"source": "def ref(xs, n):\\n    return [x * n for x in xs]\\n"}}]}}\n'
 )

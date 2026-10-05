@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -21,6 +21,8 @@ from saddle.task_passes import (
     EMPTY_BASELINE,
     HIDDEN,
     PREDICT_SEEDS,
+    PROPOSE_SEED,
+    RETRY_SEED_OFFSET,
     baseline_listing,
     baseline_sources,
     extract,
@@ -70,12 +72,13 @@ def predict_reply(seed: int, *, ref: str = REF, same: bool = False) -> str:
                 {
                     "input": "E-002",
                     "outcome": {"kind": "raises", "text": "IndexError"},
+                    "args": ["[]"],
                     "decides": "raises `IndexError` when it is empty",
                 },
             ],
             "references": [
                 {"unit": "S-002", "source": ref},
-                {"unit": "S-003", "source": "def ref():\n    raise IndexError(0)\n"},
+                {"unit": "S-003", "source": "def ref(xs):\n    return xs[0]\n"},
             ],
         }
     )
@@ -184,6 +187,58 @@ def test_extraction_seals_every_pass_and_a_file_that_loads(tmp_path: Path) -> No
     assert klass.note == "no known-correct probe"  # step 1 seals no probes
     first = req.examples[1]
     assert [r.outcome for r in first.references] == [Outcome("raises", "IndexError")] * 3
+    # E-002 proposed no args: each reference ran on the args its predictor named,
+    # sealed with it; E-001's own args left nothing to name
+    sealed_refs = record["examples"]
+    assert [r.get("args") for r in sealed_refs[1]["references"]] == [["[]"]] * 3
+    assert [r.get("args") for r in sealed_refs[0]["references"]] == [None] * 3
+
+
+def test_an_unparseable_prediction_reply_is_asked_again_on_a_fresh_seed(tmp_path: Path) -> None:
+    def garbled(seed: int) -> str:
+        return "the answer is [1, 1, 2, 2]" if seed == PREDICT_SEEDS[0] else predict_reply(seed)
+
+    client = Scripted({"inputs": [IMUL]}, predict=garbled)
+    path = sealed(tmp_path, client)
+    record = json.loads(path.read_text())
+    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b", "P-b", "P-c"]
+    assert record["calls"][1]["raw"] == "the answer is [1, 1, 2, 2]"  # sealed, not dropped
+    seeds = sorted(s[2] or 0 for s in client.sent if s[0] == "P-b")
+    assert seeds == sorted([*PREDICT_SEEDS, PREDICT_SEEDS[0] + RETRY_SEED_OFFSET])
+    req = load(path, TASK)
+    assert all(p.outcome is not None for p in req.examples[0].predictions)
+
+
+STATEFUL: Final = {
+    "id": "E-001",
+    "units": ["S-002"],
+    "setup": ["g = Gauge(3)"],
+    "call": "g.move(-4)",
+    "args": [],
+}
+LEVEL: Final = (
+    "def ref(level, step):\n    if level + step < 0:\n        raise ValueError(step)\n"
+    "    return level + step\n"
+)
+
+
+def test_an_input_with_no_args_runs_on_the_args_its_predictor_names() -> None:
+    def run(chosen: dict[str, list[str]]) -> dict[str, Any]:
+        return run_references({"S-002": LEVEL}, [STATEFUL], {"E-001": None}, chosen=chosen)["E-001"]
+
+    assert run({"E-001": ["3", "-4"]}) == {
+        "status": "ran",
+        "outcome": {"kind": "raises", "text": "ValueError"},
+        "args": ["3", "-4"],
+    }
+    # args holding a value the input does not, such as an outcome, never reach it
+    assert run({"E-001": ["3", "-1"]}) == {
+        "status": "refused: its args: -1 holds -1, which the input does not"
+    }
+    assert run({})["status"].startswith("could not call: ")  # none named: as before
+    # the proposal's args, when it gave some, are the ones used
+    got = run_references({"S-002": REF}, [EXAMPLE], {"E-001": None}, chosen={"E-001": ["9"]})
+    assert got["E-001"] == {"status": "ran", "outcome": {"kind": "value", "text": "[1, 1, 2, 2]"}}
 
 
 def test_r8_identical_draws_are_one_sample(tmp_path: Path) -> None:
@@ -208,7 +263,9 @@ def test_a_failed_pass_decides_nothing_and_is_sealed(tmp_path: Path) -> None:
     empty = Scripted("not json at all")
     nothing = load(sealed(tmp_path, empty))
     assert nothing.examples == ()
-    assert [s[0] for s in empty.sent] == ["P-a"]
+    # A whole reply with no JSON is asked once more, on a fresh seed.
+    assert [s[0] for s in empty.sent] == ["P-a", "P-a"]
+    assert [s[2] for s in empty.sent] == [PROPOSE_SEED, PROPOSE_SEED + RETRY_SEED_OFFSET]
 
 
 def test_the_caps_cut_and_name_what_they_cut() -> None:
@@ -313,10 +370,13 @@ def test_r6_ref_a_good_reference_runs_and_a_bad_one_never_does() -> None:
     ("source", "sealed_as"),
     [
         ("def ref(xs, n):\n    raise KeyError(n)\n", {"kind": "raises", "text": "KeyError"}),
-        ("import itertools\n\ndef ref(xs, n):\n    return itertools.count()\n", "not-canonical"),
+        ("import itertools\n\ndef ref(xs, n):\n    return itertools.count(n)\n", "not-canonical"),
         ("def ref(xs, n):\n    return 1\n\nref = ref(1)\n", "must be imports"),
-        ("def ref(xs, n, extra=[][0]):\n    return 1\n", "raised IndexError while defining it"),
-        ("def ref(xs, n):\n    return float('nan')\n", {"kind": "value", "text": 'float("nan")'}),
+        ("def ref(xs, n, extra=[][0]):\n    return n + 1\n", "raised IndexError while defining it"),
+        (
+            "def ref(xs, n):\n    return n * float('nan')\n",
+            {"kind": "value", "text": 'float("nan")'},
+        ),
     ],
 )
 def test_references_that_raise_or_return_oddities_are_sealed_as_what_they_did(
@@ -334,9 +394,8 @@ def test_references_that_raise_or_return_oddities_are_sealed_as_what_they_did(
     [
         # The input gives two args. A signature that cannot take them never ran:
         # the shape a stateful example produced, `args: []` against `ref(qty, delta)`.
-        ("def ref():\n    return 1\n", "could not call"),
-        ("def ref(qty, delta, extra):\n    return 1\n", "could not call"),
-        ("def ref(xs, *, n):\n    return 1\n", "could not call"),
+        ("def ref(qty, delta, extra):\n    return qty + delta + extra\n", "could not call"),
+        ("def ref(xs, *, n):\n    return len(xs) + n\n", "could not call"),
         # A TypeError the body raises on args it did take is behaviour, as before.
         ("def ref(xs, n):\n    return len(n)\n", {"kind": "raises", "text": "TypeError"}),
         ("def ref(xs, n):\n    raise TypeError(n)\n", {"kind": "raises", "text": "TypeError"}),
@@ -354,8 +413,8 @@ def test_a_reference_that_cannot_take_the_args_is_no_outcome(source: str, sealed
 
 def test_r12_t_a_reference_that_hangs_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(task_passes, "REFERENCE_CALL_TIMEOUT_S", 0.3)
-    assert refs("def ref(xs, n):\n    while True:\n        pass\n")["status"] == "timeout"
-    at_definition = "def ref(xs, n, _=max(x for x in iter(int, 1))):\n    return 1\n"
+    assert refs("def ref(xs, n):\n    while xs:\n        pass\n")["status"] == "timeout"
+    at_definition = "def ref(xs, n, _=max(x for x in iter(int, 1))):\n    return n + 1\n"
     assert refs(at_definition)["status"] == "timeout"
     ok = "def ok(inp, out):\n    while True:\n        pass\n"
     assert refs(ok, Outcome.of("value", "[1]"))["status"] == "timeout"
