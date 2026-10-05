@@ -1,8 +1,7 @@
 name: ci
-# Private repo: Actions minutes are metered (2,000/month free). Branch pushes
-# are verified locally before they land, so CI runs only on main and on PRs
-# into main; the mutation job is manual (workflow_dispatch) because it bills
-# up to 15 minutes per run.
+# Branch pushes are verified locally before they land, so CI runs only on
+# main and on PRs into main; the mutation job is manual (workflow_dispatch)
+# because it takes up to 15 minutes per run.
 on:
   push:
     branches: [main]
@@ -27,6 +26,11 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: package-lock.json
+      # The Edit lane runs commands under bubblewrap (README, Requirements),
+      # which the runner image lacks, and Ubuntu 24.04's AppArmor denies it
+      # the unprivileged user namespaces it needs.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: ./check.sh
   mutation:
     if: github.event_name == 'workflow_dispatch'
