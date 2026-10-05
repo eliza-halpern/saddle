@@ -79,6 +79,14 @@ PREDICT_SEEDS: Final[tuple[int, ...]] = (11, 23, 37)
 PROPOSE_SEED: Final = 5
 ALTERNATIVES_SEED: Final = 7
 PASS_MAX_TOKENS: Final = 16384
+PASS_REASONING_BUDGET: Final = 12288
+"""The thinking each pass call asks the server to close at, leaving
+`PASS_MAX_TOKENS - PASS_REASONING_BUDGET` (4096) for the answer. Prediction
+replies that finished on the served model used about 8k tokens of reasoning
+and 3k of answer at most; one that ran on to the cap twice spent the whole
+cap, both times, without an answer. Strata honours the field
+(`reasoning_budget_tokens`) and the model goes on to answer; vLLM ignores it,
+so there the cap alone still bounds the call."""
 PASS_EFFORT: Final = "low"
 RETRY_SEED_OFFSET: Final = 1000
 """A reply holding no JSON object, whole or cut, is asked again once, at its seed plus this:
@@ -104,6 +112,7 @@ class Completer(Protocol):
         temperature: float = ...,
         reasoning_effort: str = ...,
         seed: int | None = ...,
+        reasoning_budget_tokens: int | None = ...,
     ) -> str: ...
 
 
@@ -227,6 +236,14 @@ class Call:
     """The token cap the reply was cut at (`finish_reason=length`): the
     `max_tokens` the call was sent. None when it ended by itself, or failed
     some other way."""
+    reasoning: str = ""
+    """The reasoning that arrived before a failed call ended (a cut one: up
+    to the cap), sealed whole so a runaway can be read afterwards. `raw`
+    stays "": a failed call returned no reply."""
+    content: str = ""
+    """The content that arrived before a failed call ended."""
+    usage: Mapping[str, int] = field(default_factory=dict, hash=False)
+    """The usage the server reported for a failed call, as it sent it."""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -237,6 +254,9 @@ class Call:
             "raw": self.raw,
             **({"error": self.error} if self.error else {}),
             **({"cut_at": self.cut_at} if self.cut_at is not None else {}),
+            **({"reasoning": self.reasoning} if self.reasoning else {}),
+            **({"content": self.content} if self.content else {}),
+            **({"usage": dict(self.usage)} if self.usage else {}),
         }
 
 
@@ -248,11 +268,14 @@ def _call(client: Completer, name: str, prompt: str, seed: int, temperature: flo
             temperature=temperature,
             reasoning_effort=PASS_EFFORT,
             seed=seed,
+            reasoning_budget_tokens=PASS_REASONING_BUDGET,
         )
-    except Exception as exc:  # a failed call decides nothing; it is sealed as such
-        cut = isinstance(exc, VllmResponseError) and exc.finish_reason == "length"
+    except VllmResponseError as exc:  # what arrived is sealed with the failure
+        cut = PASS_MAX_TOKENS if exc.finish_reason == "length" else None
         error = f"{type(exc).__name__}: {exc}"
-        return Call(name, seed, temperature, "", error, PASS_MAX_TOKENS if cut else None)
+        return Call(name, seed, temperature, "", error, cut, exc.reasoning, exc.content, exc.usage)
+    except Exception as exc:  # a failed call decides nothing; it is sealed as such
+        return Call(name, seed, temperature, "", f"{type(exc).__name__}: {exc}")
     return Call(name, seed, temperature, raw)
 
 

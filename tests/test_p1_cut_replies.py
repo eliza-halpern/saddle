@@ -28,6 +28,7 @@ from saddle.gates import check_task_requirements
 from saddle.task_examples import EMPTY_SHA256, SPLIT_NOTE, Prediction, undecided
 from saddle.task_passes import (
     PASS_MAX_TOKENS,
+    PASS_REASONING_BUDGET,
     PREDICT_SEEDS,
     RETRY_SEED_OFFSET,
     cut_calls,
@@ -55,12 +56,14 @@ class CapServer:
         self.scripted = scripted
         self.cut = cut
         self.caps: list[int] = []
+        self.budgets: list[object] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         prompt = str(payload["messages"][-1]["content"])
         seed = payload.get("seed")
         self.caps.append(int(payload["max_tokens"]))
+        self.budgets.append(payload.get("reasoning_budget_tokens"))
         if prompt.startswith("You predict") and seed in self.cut:
             message = {"role": "assistant", "content": CUT_REPLY, "reasoning": "r" * 90}
             usage = {"prompt_tokens": 900, "completion_tokens": payload["max_tokens"]}
@@ -105,6 +108,30 @@ def test_every_prediction_reply_cut_is_sealed_as_cut_with_its_cap() -> None:
         "(P-b seed 11, P-b seed 1011, P-b seed 23, P-b seed 1023, P-b seed 37, P-b seed 1037)"
     )
     assert extraction_counts(record).endswith(f", {cut_calls(record)}")
+
+
+def test_a_cut_reply_is_sealed_with_the_text_and_usage_that_came() -> None:
+    """Through a real client: the cut call's sealed record holds the
+    reasoning and content the server sent before the cap, and its usage;
+    `raw` stays "", so the prediction's sha is still the empty one."""
+    server = CapServer(Scripted(PROPOSAL), cut=always(PREDICT_SEEDS[2]))
+    record = extract(TASK, server.client())
+    cut = [c for c in record["calls"] if c.get("cut_at") is not None]
+    assert [(c["reasoning"], c["content"], c["raw"]) for c in cut] == [
+        ("r" * 90, CUT_REPLY, "")
+    ] * 2
+    assert [c["usage"] for c in cut] == [
+        {"prompt_tokens": 900, "completion_tokens": PASS_MAX_TOKENS}
+    ] * 2
+    third = [e["predictions"][2]["raw_sha256"] for e in record["examples"]]
+    assert set(third) == {EMPTY_SHA256}
+
+
+def test_every_request_a_pass_sends_carries_the_reasoning_budget() -> None:
+    server = CapServer(Scripted(PROPOSAL), cut=())
+    record = extract(TASK, server.client())
+    assert server.budgets == [PASS_REASONING_BUDGET] * len(record["calls"])
+    assert server.caps == [PASS_MAX_TOKENS] * len(record["calls"])
 
 
 def test_one_prediction_reply_cut_leaves_the_other_two_whole() -> None:

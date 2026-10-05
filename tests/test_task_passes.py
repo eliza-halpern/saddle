@@ -20,6 +20,8 @@ from saddle.task_examples import Outcome, classify
 from saddle.task_passes import (
     EMPTY_BASELINE,
     HIDDEN,
+    PASS_MAX_TOKENS,
+    PASS_REASONING_BUDGET,
     PREDICT_SEEDS,
     PROPOSE_SEED,
     RETRY_SEED_OFFSET,
@@ -33,6 +35,7 @@ from saddle.task_passes import (
 )
 from saddle.task_requirements import load
 from saddle.task_units import task_units
+from saddle.vllm import VllmResponseError
 
 TASK = """# Box
 
@@ -97,6 +100,7 @@ class Scripted:
         self.predict = predict
         self.alternatives = json.dumps(alternatives or {"alternatives": []})
         self.sent: list[tuple[str, str, int | None, float]] = []
+        self.budgets: list[int | None] = []
         self.lock = threading.Lock()
 
     def complete(
@@ -107,6 +111,7 @@ class Scripted:
         temperature: float = 0.0,
         reasoning_effort: str = "",
         seed: int | None = None,
+        reasoning_budget_tokens: int | None = None,
     ) -> str:
         name = (
             "P-a"
@@ -117,6 +122,7 @@ class Scripted:
         )
         with self.lock:
             self.sent.append((name, prompt, seed, temperature))
+            self.budgets.append(reasoning_budget_tokens)
         if name == "P-a":
             return self.propose
         if name == "P-b":
@@ -272,6 +278,58 @@ def test_a_failed_pass_decides_nothing_and_is_sealed(tmp_path: Path) -> None:
     # A whole reply with no JSON is asked once more, on a fresh seed.
     assert [s[0] for s in empty.sent] == ["P-a", "P-a"]
     assert [s[2] for s in empty.sent] == [PROPOSE_SEED, PROPOSE_SEED + RETRY_SEED_OFFSET]
+
+
+def test_a_cut_call_is_sealed_with_what_arrived(tmp_path: Path) -> None:
+    """Known-good: a P-b call cut at its cap carries its partial reasoning,
+    content and usage out of the client; the sealed call holds them whole,
+    and `raw` stays "" (no reply returned). Known-bad: the same call sealed
+    with the error string alone, as every cut call was before."""
+    reasoning = "the thinking ran on " * 400
+    usage = {"prompt_tokens": 900, "completion_tokens": PASS_MAX_TOKENS}
+
+    def cut(seed: int) -> Any:
+        if seed != PREDICT_SEEDS[1]:
+            return predict_reply(seed)
+        return VllmResponseError(
+            "completion truncated (finish_reason=length)",
+            reasoning=reasoning,
+            content='{"predictions": [{"inp',
+            usage=usage,
+            finish_reason="length",
+        )
+
+    record = json.loads(sealed(tmp_path, Scripted({"inputs": [IMUL]}, predict=cut)).read_text())
+    calls = [c for c in record["calls"] if c["seed"] in (PREDICT_SEEDS[1], PREDICT_SEEDS[0])]
+    whole, cut_call = calls[0], calls[1]
+    assert (cut_call["cut_at"], cut_call["raw"]) == (PASS_MAX_TOKENS, "")
+    assert cut_call["reasoning"] == reasoning
+    assert cut_call["content"] == '{"predictions": [{"inp'
+    assert cut_call["usage"] == usage
+    assert not {"reasoning", "content", "usage"} & set(whole)  # a whole reply: shape unchanged
+
+
+def test_a_failed_call_seals_only_the_text_that_arrived(tmp_path: Path) -> None:
+    """A blank-content reply (finish `stop`) keeps its reasoning but is not
+    cut; a failure carrying nothing seals no empty text fields."""
+    blank = VllmResponseError("message has no text content", reasoning="r", finish_reason="stop")
+
+    def failing(seed: int) -> Any:
+        return blank if seed == PREDICT_SEEDS[0] else RuntimeError("server down")
+
+    record = json.loads(sealed(tmp_path, Scripted({"inputs": [IMUL]}, predict=failing)).read_text())
+    by_seed = {c["seed"]: c for c in record["calls"] if c["pass"] == "P-b"}
+    assert by_seed[PREDICT_SEEDS[0]]["reasoning"] == "r"
+    assert not {"cut_at", "content", "usage"} & set(by_seed[PREDICT_SEEDS[0]])
+    assert not {"cut_at", "reasoning", "content", "usage"} & set(by_seed[PREDICT_SEEDS[1]])
+
+
+def test_every_pass_call_asks_for_the_reasoning_budget() -> None:
+    client = Scripted(PROPOSAL)
+    record = extract(TASK, client)
+    assert len(client.budgets) == len(record["calls"]) > 1
+    assert set(client.budgets) == {PASS_REASONING_BUDGET}
+    assert PASS_MAX_TOKENS - PASS_REASONING_BUDGET == 4096  # room left for the answer
 
 
 def test_the_caps_cut_and_name_what_they_cut() -> None:
