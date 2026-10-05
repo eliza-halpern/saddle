@@ -81,7 +81,7 @@ ALTERNATIVES_SEED: Final = 7
 PASS_MAX_TOKENS: Final = 16384
 PASS_EFFORT: Final = "low"
 RETRY_SEED_OFFSET: Final = 1000
-"""A whole reply holding no JSON object is asked again once, at its seed plus this:
+"""A reply holding no JSON object, whole or cut, is asked again once, at its seed plus this:
 the same seed would reproduce the same bytes."""
 
 HIDDEN: Final = "(docstring hidden: the task text refers to this name)"
@@ -259,11 +259,12 @@ def _call(client: Completer, name: str, prompt: str, seed: int, temperature: flo
 def _call_parsed(
     client: Completer, name: str, prompt: str, seed: int, temperature: float
 ) -> list[Call]:
-    """`_call`, asked once more on a fresh seed when a whole reply holds no
-    JSON object; every call made, in order. The last one is the pass's reply.
-    A failed or cut call is sealed as what it was, not asked again."""
+    """`_call`, asked once more on a fresh seed when its reply holds no JSON
+    object, whole or cut at the token cap; every call made, in order. The
+    last one is the pass's reply. A call that failed otherwise (the server)
+    is sealed as what it was, not asked again."""
     first = _call(client, name, prompt, seed, temperature)
-    if first.error or reply_json(first.raw) is not None:
+    if (first.error and first.cut_at is None) or reply_json(first.raw) is not None:
         return [first]
     return [first, _call(client, name, prompt, seed + RETRY_SEED_OFFSET, temperature)]
 
@@ -463,10 +464,10 @@ def run_references(
     """One predictor's executed references: example id -> sealed `Reference` record.
 
     `sources` maps a unit id to that predictor's reference; an example uses
-    the first of its units that has one. An example whose proposal gave no
-    `args` is called with the args the predictor `chosen` for it, when every
-    value in them is written in the input (`args_problem`); those are sealed
-    with the result. Every call runs in one subprocess
+    the first of its units that has one. It is called with the args the
+    predictor `chosen` for it, which bind to its own `ref`, when every value
+    in them is written in the input (`args_problem`); those are sealed with
+    the result. Without them, the proposal's `args` are used. Every call runs in one subprocess
     in an empty directory (`python -I -S`: no repo, no site-packages),
     whitelisted first. What cannot run is recorded as why, never as a result.
     """
@@ -484,7 +485,7 @@ def run_references(
             out[e["id"]] = {"status": f"refused: {problem}"}
             continue
         form = _reference_form(source)
-        own = (chosen or {}).get(e["id"]) if not e["args"] else None
+        own = (chosen or {}).get(e["id"])
         if own is not None:
             problem = args_problem(own, e["setup"], e["call"])
             if problem is not None:

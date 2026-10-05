@@ -26,11 +26,23 @@ from saddle import cli
 from saddle.auto import extraction_counts
 from saddle.gates import check_task_requirements
 from saddle.task_examples import EMPTY_SHA256, SPLIT_NOTE, Prediction, undecided
-from saddle.task_passes import PASS_MAX_TOKENS, PREDICT_SEEDS, cut_calls, extract
+from saddle.task_passes import (
+    PASS_MAX_TOKENS,
+    PREDICT_SEEDS,
+    RETRY_SEED_OFFSET,
+    cut_calls,
+    extract,
+)
 from saddle.task_requirements import load
 from saddle.vllm import VllmClient, VllmResponseError
 
 __all__ = ["good"]
+
+
+def always(*seeds: int) -> tuple[int, ...]:
+    """`seeds` and their retries: a reply cut on its seed and on the retry's."""
+    return tuple(x for s in seeds for x in (s, s + RETRY_SEED_OFFSET))
+
 
 CUT_REPLY = '{"predictions": [{"input": "E-001", "outcome": {"kind": "value", "te'
 
@@ -75,35 +87,54 @@ def test_the_client_names_the_cap_a_completion_was_cut_at() -> None:
 def test_every_prediction_reply_cut_is_sealed_as_cut_with_its_cap() -> None:
     """Every P-b reply cut: each call says so and names the cap, and each
     example's three missing predictions say why."""
-    server = CapServer(Scripted(PROPOSAL), cut=PREDICT_SEEDS)
+    server = CapServer(Scripted(PROPOSAL), cut=always(*PREDICT_SEEDS))
     record = extract(TASK, server.client())
     predicting = [c for c in record["calls"] if c["pass"] == "P-b"]
-    assert [c["cut_at"] for c in predicting] == [PASS_MAX_TOKENS] * 3
+    assert [c["cut_at"] for c in predicting] == [PASS_MAX_TOKENS] * 6
     assert {c["error"] for c in predicting} == {
         f"VllmResponseError: completion truncated at {PASS_MAX_TOKENS} output tokens "
         "(finish_reason=length)"
     }
-    assert server.caps == [PASS_MAX_TOKENS] * 4
+    assert server.caps == [PASS_MAX_TOKENS] * 7
     said = f"a prediction reply was cut at the {PASS_MAX_TOKENS}-token cap"
     assert [[p["missing"] for p in e["predictions"]] for e in record["examples"]] == [
         [said] * 3
     ] * len(record["examples"])
     assert cut_calls(record) == (
-        f"3 of 4 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
-        "(P-b seed 11, P-b seed 23, P-b seed 37)"
+        f"6 of 7 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
+        "(P-b seed 11, P-b seed 1011, P-b seed 23, P-b seed 1023, P-b seed 37, P-b seed 1037)"
     )
     assert extraction_counts(record).endswith(f", {cut_calls(record)}")
 
 
 def test_one_prediction_reply_cut_leaves_the_other_two_whole() -> None:
-    server = CapServer(Scripted(PROPOSAL), cut=(PREDICT_SEEDS[2],))
+    server = CapServer(Scripted(PROPOSAL), cut=always(PREDICT_SEEDS[2]))
     record = extract(TASK, server.client())
     # No example has three agreeing predictions, so no P-c call is made.
-    assert [c.get("cut_at") for c in record["calls"]] == [None, None, None, PASS_MAX_TOKENS]
+    cuts = [c.get("cut_at") for c in record["calls"]]
+    assert cuts == [None, None, None, PASS_MAX_TOKENS, PASS_MAX_TOKENS]
     first = record["examples"][0]["predictions"]
     assert [p["outcome"] is not None for p in first] == [True, True, False]
     assert ["missing" in p for p in first] == [False, False, True]
-    assert cut_calls(record).startswith(f"1 of 4 model call(s) cut at the {PASS_MAX_TOKENS}")
+    assert cut_calls(record).startswith(f"2 of 5 model call(s) cut at the {PASS_MAX_TOKENS}")
+
+
+def test_a_reply_cut_once_is_asked_again_and_the_retry_decides() -> None:
+    """A cut reply is asked once more on a fresh seed; the cut call stays
+    sealed as cut, and the retry's whole reply is the predictor's."""
+    server = CapServer(Scripted(PROPOSAL), cut=(PREDICT_SEEDS[2],))
+    record = extract(TASK, server.client())
+    predicting = [(c["seed"], c.get("cut_at")) for c in record["calls"] if c["pass"] == "P-b"]
+    assert predicting == [
+        (PREDICT_SEEDS[0], None),
+        (PREDICT_SEEDS[1], None),
+        (PREDICT_SEEDS[2], PASS_MAX_TOKENS),
+        (PREDICT_SEEDS[2] + RETRY_SEED_OFFSET, None),
+    ]
+    assert all(p["outcome"] is not None for p in record["examples"][0]["predictions"])
+    assert cut_calls(record) == (
+        f"1 of 6 model call(s) cut at the {PASS_MAX_TOKENS}-token cap (P-b seed 37)"
+    )
 
 
 def test_a_run_with_no_cut_reply_says_nothing_of_one() -> None:
@@ -136,7 +167,7 @@ def test_the_extract_command_names_the_cut_calls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    server = CapServer(Scripted(PROPOSAL), cut=PREDICT_SEEDS)
+    server = CapServer(Scripted(PROPOSAL), cut=always(*PREDICT_SEEDS))
     monkeypatch.setattr(cli, "_api_key", lambda: "test-key")
     monkeypatch.setattr(cli, "VllmClient", server.client)
     task = tmp_path / "task.md"
@@ -148,8 +179,9 @@ def test_the_extract_command_names_the_cut_calls(
         out.getvalue()
         .rstrip()
         .endswith(
-            f"; 3 of 4 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
-            "(P-b seed 11, P-b seed 23, P-b seed 37)"
+            f"; 6 of 7 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
+            "(P-b seed 11, P-b seed 1011, P-b seed 23, P-b seed 1023, P-b seed 37, "
+            "P-b seed 1037)"
         )
     )
 
@@ -174,7 +206,7 @@ def questions(record: dict[str, Any], tmp_path: Path) -> list[str]:
 
 
 def test_every_reply_cut_asks_why_not_a_disagreement(tmp_path: Path) -> None:
-    server = CapServer(Scripted(PROPOSAL), cut=PREDICT_SEEDS)
+    server = CapServer(Scripted(PROPOSAL), cut=always(*PREDICT_SEEDS))
     asked = questions(extract(TASK, server.client()), tmp_path)
     assert asked == [
         f"3 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
@@ -184,7 +216,7 @@ def test_every_reply_cut_asks_why_not_a_disagreement(tmp_path: Path) -> None:
 
 
 def test_one_reply_cut_asks_with_the_two_readings_that_came(tmp_path: Path) -> None:
-    server = CapServer(Scripted(PROPOSAL), cut=(PREDICT_SEEDS[2],))
+    server = CapServer(Scripted(PROPOSAL), cut=always(PREDICT_SEEDS[2]))
     asked = questions(extract(TASK, server.client()), tmp_path)
     assert asked[0] == (
         f"1 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
@@ -200,7 +232,7 @@ def test_a_cut_reply_and_two_that_differ_say_both(tmp_path: Path) -> None:
             reply["predictions"][0]["outcome"]["text"] = "[1, 2, 1, 2]"
         return json.dumps(reply)
 
-    server = CapServer(Scripted(PROPOSAL, predict=differing), cut=(PREDICT_SEEDS[2],))
+    server = CapServer(Scripted(PROPOSAL, predict=differing), cut=always(PREDICT_SEEDS[2]))
     asked = questions(extract(TASK, server.client()), tmp_path)
     assert asked[0] == (
         f"1 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "

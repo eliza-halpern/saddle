@@ -236,9 +236,15 @@ def test_an_input_with_no_args_runs_on_the_args_its_predictor_names() -> None:
         "status": "refused: its args: -1 holds -1, which the input does not"
     }
     assert run({})["status"].startswith("could not call: ")  # none named: as before
-    # the proposal's args, when it gave some, are the ones used
-    got = run_references({"S-002": REF}, [EXAMPLE], {"E-001": None}, chosen={"E-001": ["9"]})
-    assert got["E-001"] == {"status": "ran", "outcome": {"kind": "value", "text": "[1, 1, 2, 2]"}}
+    # a proposal that gave only the call's args (the T8 shape) does not override
+    # the predictor's, which bind to its own `ref`; without them, it is used
+    partial = {**STATEFUL, "args": ["-4"]}
+    got = run_references(
+        {"S-002": LEVEL}, [partial], {"E-001": None}, chosen={"E-001": ["3", "-4"]}
+    )
+    assert got["E-001"]["outcome"] == {"kind": "raises", "text": "ValueError"}
+    alone = run_references({"S-002": LEVEL}, [partial], {"E-001": None})["E-001"]
+    assert alone["status"] == "could not call: missing a required argument: 'step'"
 
 
 def test_r8_identical_draws_are_one_sample(tmp_path: Path) -> None:
