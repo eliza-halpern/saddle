@@ -58,6 +58,7 @@ from saddle.task_examples import (
     REFERENCE_CALL_TIMEOUT_S,
     REFERENCE_MODULES,
     REFERENCE_TOTAL_TIMEOUT_S,
+    REFERENCES_NEEDED,
     Example,
     Outcome,
     args_problem,
@@ -65,6 +66,7 @@ from saddle.task_examples import (
     encode_value,
     literal_text,
     parse_value,
+    raises_explicitly,
     reference_def,
     reference_problem,
 )
@@ -499,6 +501,8 @@ def run_references(
     the result. Without them, the proposal's `args` are used. Every call runs in one subprocess
     in an empty directory (`python -I -S`: no repo, no site-packages),
     whitelisted first. What cannot run is recorded as why, never as a result.
+    A raise no `raise` in the reference's own source names is sealed
+    `crashed` (`task_examples.raises_explicitly`).
     """
     stdlib = frozenset(sys.stdlib_module_names)
     out: dict[str, dict[str, Any]] = {}
@@ -553,6 +557,9 @@ def run_references(
             return out | {i["id"]: {"status": why} for i in items}
     for item in items:
         sealed = _sealed_reference(got.get(item["id"]), item["form"])
+        raised = sealed.get("outcome", {})
+        if raised.get("kind") == "raises" and not raises_explicitly(item["source"], raised["text"]):
+            sealed["crashed"] = True
         out[item["id"]] = sealed | ({"args": item["args"]} if item["chosen"] else {})
     return out
 
@@ -713,16 +720,16 @@ def extract(
             for refs in pool.map(run_one, predictors):
                 for eid, ref in refs.items():
                     by_id[eid]["references"].append(ref)
-    decided = [e for e in examples if _agreed(e)]
+    decided = [(e, agreed) for e in examples if (agreed := _agreed(e)) is not None]
     if decided:
         text = "\n".join(
             json.dumps(
                 {
                     **{k: e[k] for k in ("id", "units", "setup", "call")},
-                    "outcome": e["predictions"][0]["outcome"],
+                    "outcome": agreed.to_dict(),
                 }
             )
-            for e in decided
+            for e, agreed in decided
         )
         *tried, alt = _call_parsed(
             client,
@@ -753,14 +760,16 @@ def extract(
     )
 
 
-def _agreed(example: Mapping[str, Any]) -> bool:
+def _agreed(example: Mapping[str, Any]) -> Outcome | None:
+    """The outcome an example's written predictions agree on, when k were
+    recorded and at least `REFERENCES_NEEDED` written (route (b) may decide
+    on that many, `task_examples.classify`), so P-c is asked for its other
+    readings; None when they are split or too few came."""
     outs = [_outcome(p["outcome"]) for p in example["predictions"]]
-    first = outs[0] if outs else None
-    return (
-        len(outs) == K_PREDICTORS
-        and first is not None
-        and all(o is not None and o.same(first) for o in outs)
-    )
+    written = [o for o in outs if o is not None]
+    if len(outs) != K_PREDICTORS or len(written) < REFERENCES_NEEDED:
+        return None
+    return written[0] if all(o.same(written[0]) for o in written) else None
 
 
 def _add_alternative(raw: Any, by_id: Mapping[str, dict[str, Any]], units: Units) -> None:
@@ -770,7 +779,7 @@ def _add_alternative(raw: Any, by_id: Mapping[str, dict[str, Any]], units: Units
         return
     example = by_id[str(raw["input"])]
     outcome = _outcome(raw.get("outcome"))
-    decided = _outcome(example["predictions"][0]["outcome"])
+    decided = _agreed(example)
     words = str(raw.get("words", ""))
     texts = [u.text for u in units.units if u.id in example["units"]]
     if outcome is None or decided is None or outcome.same(decided):

@@ -16,8 +16,9 @@ readings and known-correct probe outcomes sealed beside it at extraction
 - `classify` decides, mechanically, what an example may do: refuse by
   route (a) (`literal`: the input and the outcome appear in a cited binding
   unit, with no negation between them) or route (b) (`executed-reference`:
-  k of k predictions and their executed references agree (a reference whose
-  args were at fault abstains, if two others ran), k is effectively
+  the predictions and their executed references agree, at least two
+  predictors giving usable evidence and one that gave none abstaining (no
+  prediction, its args at fault, or a reference that crashed), k is effectively
   more than one, and every known-correct probe returns the outcome, from
   at least `PROBES_NEEDED` probes of one source), or only ask. The model
   can mark nothing eligible.
@@ -52,12 +53,13 @@ from saddle.task_units import Unit, Units
 # -- constants: saddle's, never the model's -----------------------------------
 
 K_PREDICTORS: Final = 3
-"""Blind predictors in P-b; route (b) needs all of them to agree."""
+"""Blind predictors in P-b; route (b) needs none of them contrary and at least
+`REFERENCES_NEEDED` of them giving usable evidence."""
 
 REFERENCES_NEEDED: Final = 2
-"""How many of the k executed references route (b) needs to have run, all
-agreeing, when the others abstained (`Reference.abstains`): saddle's, never
-the model's."""
+"""How many of the k predictors route (b) needs to have given usable evidence
+(a prediction and an executed reference that agrees with it), all agreeing,
+when the others abstained (`_evidence`): saddle's, never the model's."""
 
 ARGS_REFUSED: Final = "refused: its args: "
 """A reference's status when its predictor's args hold a value the input does
@@ -596,6 +598,27 @@ def _restates(ref: ast.FunctionDef) -> str | None:
     return None
 
 
+def raises_explicitly(source: str, name: str) -> bool:
+    """A `raise` statement in `source` names the exception type `name` (as
+    `raise name`, `raise name(...)` or `raise mod.name(...)`), or a bare
+    `raise` re-raises something (it could be anything, so it counts for every
+    type). False for a source that does not parse."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise):
+            continue
+        exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+        if exc is None:
+            return True
+        named = exc.id if isinstance(exc, ast.Name) else getattr(exc, "attr", None)
+        if named == name:
+            return True
+    return False
+
+
 # -- the sealed example -------------------------------------------------------
 
 
@@ -640,6 +663,10 @@ class Reference:
     form: Literal["ref", "ok"] = "ref"
     accepts: bool = False
     """`ok` form: it returned True on the prediction and False on another outcome."""
+    crashed: bool = False
+    """`ref` form, a raise outcome: no `raise` in its own source names the type
+    it raised (`raises_explicitly`), so the raise is a bug in the reference
+    (a NameError, a TypeError from args it misread), not its answer."""
 
     def abstains(self) -> bool:
         """It never ran only because the args it was handed are not the input's
@@ -664,6 +691,7 @@ class Reference:
             outcome=Outcome.from_dict(raw) if isinstance(raw, Mapping) else None,
             form="ok" if data.get("form") == "ok" else "ref",
             accepts=data.get("accepts") is True,
+            crashed=data.get("crashed") is True,
         )
 
 
@@ -916,10 +944,10 @@ def classify(example: Example, units: Units) -> Class:
     """What `example` may do, from the sealed record alone (spec §2.2, §2.3, §4.5).
 
     Route (a) first: a literal the text states wins over the predictors. Else
-    the k predictions must agree (a split input only asks); then route (b)
-    needs effective k > 1, the k executed references agreeing (one whose args
-    were at fault abstains, if `REFERENCES_NEEDED` others ran), and every
-    known-correct probe returning the outcome. A unit that is not `binding`,
+    the written predictions must agree (a split input only asks); then route
+    (b) needs effective k > 1, no predictor contrary or blocked, at least
+    `REFERENCES_NEEDED` giving usable evidence (one that gave none abstains:
+    `_evidence`), and every known-correct probe returning the outcome. A unit that is not `binding`,
     or a `raises` outcome no cited unit names, can only ask.
     """
     cited = [u for u in (units.by_id(i) for i in example.units) if u is not None]
@@ -949,11 +977,16 @@ def classify(example: Example, units: Units) -> Class:
             effective_k=k,
             disagree_with_text=not (decided and written[0].same(expected)),
         )
-    elif not decided:
+    elif not _written_agree(example.predictions, written):
         return Class("split", None, tuple(readings), undecided(example.predictions), effective_k=k)
     else:
         expected = written[0]
         note, verified = _references_note(example, expected, k)
+        if note and not decided:
+            # Fewer than k predictions, not verified: a split, exactly as before.
+            return Class(
+                "split", None, tuple(readings), undecided(example.predictions), effective_k=k
+            )
         base = Class(
             "decided-unverified" if note else "executed-reference",
             expected,
@@ -976,41 +1009,89 @@ def classify(example: Example, units: Units) -> Class:
     return _probed(base, expected, example.probes)
 
 
-def _references_note(example: Example, expected: Outcome, k: int) -> tuple[str, str]:
-    """Why a decided example's executed references do not verify `expected`
-    ("" when they do), and the route note when they do.
+def _written_agree(predictions: Sequence[Prediction], written: Sequence[Outcome]) -> bool:
+    """k predictions recorded, at least `REFERENCES_NEEDED` written, and every
+    written one the same: a written contrary prediction always vetoes."""
+    return (
+        len(predictions) == K_PREDICTORS
+        and len(written) >= REFERENCES_NEEDED
+        and all(o.same(written[0]) for o in written)
+    )
 
-    Every reference that did not abstain (`Reference.abstains`) must have
-    run and agree; at least `REFERENCES_NEEDED` must have run, and those must
-    be more than one sample (their predictors' raw outputs differ: reference
-    i is predictor i's). A reference that abstained is named in the note, so
-    a reader sees the example was decided on fewer than k."""
+
+Evidence = Literal["usable", "abstains", "contrary", "blocked"]
+
+
+def _evidence(p: Prediction, r: Reference, expected: Outcome) -> tuple[Evidence, str]:
+    """What predictor i (its prediction `p`, its reference `r`) gives for one
+    input, with why it abstains.
+
+    `usable`: a prediction and a reference that ran and agrees. `contrary`
+    (vetoes): a reference that ran and gave another well-formed answer, a
+    value or a raise its own source names. `abstains` (no usable evidence):
+    no prediction (and its reference agreed, or never came for that reason:
+    `missing`, `not-discriminating`); its args refused or unbound
+    (`Reference.abstains`); or a reference that crashed, raising a type no
+    `raise` in its source names. `blocked`: every other reason a reference
+    did not run (refused source, timeout, driver crash, raised while being
+    defined, not canonical), as before."""
+    if r.agrees(expected):
+        return ("usable", "") if p.outcome is not None else ("abstains", _no_prediction(p))
+    if r.status == "ran":
+        if r.form == "ref" and r.crashed and r.outcome is not None:
+            return "abstains", f"its reference crashed (raised {r.outcome.text})"
+        return "contrary", ""
+    if r.abstains():
+        return "abstains", r.status
+    if p.outcome is None and r.status in ("missing", "not-discriminating"):
+        return "abstains", _no_prediction(p)
+    return "blocked", r.status
+
+
+def _no_prediction(p: Prediction) -> str:
+    return f"no prediction ({p.missing or NO_OUTCOME})"
+
+
+def _references_note(example: Example, expected: Outcome, k: int) -> tuple[str, str]:
+    """Why an example whose written predictions agree on `expected` is not
+    verified by its predictors ("" when it is), and the route note when it is.
+
+    Predictor i's evidence is its prediction and its reference
+    (`_evidence`; reference i is predictor i's). No predictor may be blocked
+    or contrary; at least `REFERENCES_NEEDED` must give usable evidence, and
+    those must be more than one sample (their raw outputs differ). Every
+    predictor that abstained is named in the note, so a reader sees the
+    example was decided on fewer than k."""
     refs = example.references
-    counted = [(i, r) for i, r in enumerate(refs) if not r.abstains()]
-    abstained = [r.status for r in refs if r.abstains()]
-    # A reference that never ran said nothing: the note names why rather
-    # than reading it as a disagreement.
-    unrun = [r.status for _, r in counted if r.status != "ran"]
-    unrun += ["not recorded"] * (K_PREDICTORS - len(refs))
-    if len(refs) > K_PREDICTORS:
-        unrun.append(f"{len(refs)} references recorded where {K_PREDICTORS} are expected")
     if k < 2:
         return f"effective k = {k}: the {K_PREDICTORS} predictions are one sample", ""
-    if unrun:
-        return f"not every predictor's reference ran ({unrun[0]})", ""
-    ran_k = len({example.predictions[i].raw_sha256 for i, _ in counted})
-    if not all(r.agrees(expected) for _, r in counted):
+    if len(refs) != K_PREDICTORS:
+        why = (
+            "not recorded"
+            if len(refs) < K_PREDICTORS
+            else f"{len(refs)} references recorded where {K_PREDICTORS} are expected"
+        )
+        return f"not every predictor's reference ran ({why})", ""
+    judged = [
+        (p, *_evidence(p, r, expected)) for p, r in zip(example.predictions, refs, strict=True)
+    ]
+    blocked = [why for _, kind, why in judged if kind == "blocked"]
+    if blocked:
+        return f"not every predictor's reference ran ({blocked[0]})", ""
+    if any(kind == "contrary" for _, kind, _ in judged):
         return "the predictors' executed references do not all agree with them", ""
-    if len(counted) < REFERENCES_NEEDED:
+    usable = [p for p, kind, _ in judged if kind == "usable"]
+    abstained = [why for _, kind, why in judged if kind == "abstains"]
+    if len(usable) < REFERENCES_NEEDED:
         return (
-            f"only {len(counted)} of {K_PREDICTORS} references ran, "
+            f"only {len(usable)} of {K_PREDICTORS} predictors gave usable evidence, "
             f"{REFERENCES_NEEDED} are needed (abstained: {'; '.join(abstained)})",
             "",
         )
-    if ran_k < 2:
-        return "effective k = 1 among the references that ran: they are one sample", ""
+    if len({p.raw_sha256 for p in usable}) < 2:
+        return "effective k = 1 among the predictors that gave evidence: they are one sample", ""
     why = f"; {len(abstained)} abstained: {'; '.join(abstained)}" if abstained else ""
-    return "", f"executed-reference ({len(counted)}/{K_PREDICTORS}{why})"
+    return "", f"executed-reference ({len(usable)}/{K_PREDICTORS}{why})"
 
 
 SPLIT_NOTE: Final = "the predictors read the cited words differently"

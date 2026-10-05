@@ -25,7 +25,7 @@ from test_task_passes import PROPOSAL, TASK, Scripted, predict_reply
 from saddle import cli
 from saddle.auto import extraction_counts
 from saddle.gates import check_task_requirements
-from saddle.task_examples import EMPTY_SHA256, SPLIT_NOTE, Prediction, undecided
+from saddle.task_examples import EMPTY_SHA256, SPLIT_NOTE, Prediction, classify, undecided
 from saddle.task_passes import (
     PASS_MAX_TOKENS,
     PASS_REASONING_BUDGET,
@@ -137,13 +137,13 @@ def test_every_request_a_pass_sends_carries_the_reasoning_budget() -> None:
 def test_one_prediction_reply_cut_leaves_the_other_two_whole() -> None:
     server = CapServer(Scripted(PROPOSAL), cut=always(PREDICT_SEEDS[2]))
     record = extract(TASK, server.client())
-    # No example has three agreeing predictions, so no P-c call is made.
+    # The two whole replies agree, so P-c is asked for other readings.
     cuts = [c.get("cut_at") for c in record["calls"]]
-    assert cuts == [None, None, None, PASS_MAX_TOKENS, PASS_MAX_TOKENS]
+    assert cuts == [None, None, None, PASS_MAX_TOKENS, PASS_MAX_TOKENS, None]
     first = record["examples"][0]["predictions"]
     assert [p["outcome"] is not None for p in first] == [True, True, False]
     assert ["missing" in p for p in first] == [False, False, True]
-    assert cut_calls(record).startswith(f"2 of 5 model call(s) cut at the {PASS_MAX_TOKENS}")
+    assert cut_calls(record).startswith(f"2 of 6 model call(s) cut at the {PASS_MAX_TOKENS}")
 
 
 def test_a_reply_cut_once_is_asked_again_and_the_retry_decides() -> None:
@@ -242,14 +242,18 @@ def test_every_reply_cut_asks_why_not_a_disagreement(tmp_path: Path) -> None:
     assert asked
 
 
-def test_one_reply_cut_asks_with_the_two_readings_that_came(tmp_path: Path) -> None:
+def test_one_reply_cut_abstains_and_the_two_that_came_decide(tmp_path: Path) -> None:
+    """flip: one reply cut, two that came agree and their references ran and
+    agree: the cut predictor abstains, named, and the example is decided on
+    two (it was a split asking with the two readings)."""
     server = CapServer(Scripted(PROPOSAL), cut=always(PREDICT_SEEDS[2]))
-    asked = questions(extract(TASK, server.client()), tmp_path)
-    assert asked[0] == (
-        f"1 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
-        "cap): [1, 1, 2, 2]"
-    )
-    assert not any(SPLIT_NOTE in a for a in asked)
+    path = tmp_path / "task-requirements.json"
+    path.write_text(json.dumps(extract(TASK, server.client())))
+    req = load(path, TASK)
+    klass = classify(req.examples[0], req.units)
+    assert (klass.route, klass.note) == ("executed-reference", "no known-correct probe")
+    assert klass.expected is not None
+    assert klass.expected.text == "[1, 1, 2, 2]"
 
 
 def test_a_cut_reply_and_two_that_differ_say_both(tmp_path: Path) -> None:

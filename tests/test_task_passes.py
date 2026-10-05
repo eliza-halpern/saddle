@@ -270,8 +270,21 @@ def test_a_failed_pass_decides_nothing_and_is_sealed(tmp_path: Path) -> None:
     record = json.loads(path.read_text())
     assert record["calls"][2]["error"] == "RuntimeError: server down"
     req = load(path)
+    # flip: the failed predictor decides nothing and abstains; the two that
+    # answered, with references that ran and agree, decide (and P-c is asked
+    # for other readings of what they decided)
+    klass = classify(req.examples[0], req.units)
+    assert (klass.route, klass.note) == ("executed-reference", "no known-correct probe")
+    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b", "P-c"]
+
+    # both other predictors failing: one left, a split, and no P-c
+    def flakier(seed: int) -> Any:
+        return predict_reply(seed) if seed == PREDICT_SEEDS[0] else RuntimeError("server down")
+
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    req = load(sealed(lone, Scripted({"inputs": [IMUL]}, predict=flakier)))
     assert classify(req.examples[0], req.units).route == "split"
-    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b"]  # no P-c
     empty = Scripted("not json at all")
     nothing = load(sealed(tmp_path, empty))
     assert nothing.examples == ()
@@ -492,7 +505,9 @@ def test_a_ref_something_reference_runs_and_its_result_is_sealed(
         # the shape a stateful example produced, `args: []` against `ref(qty, delta)`.
         ("def ref(qty, delta, extra):\n    return qty + delta + extra\n", "could not call"),
         ("def ref(xs, *, n):\n    return len(xs) + n\n", "could not call"),
-        # A TypeError the body raises on args it did take is behaviour, as before.
+        # A TypeError the body raises on args it did take ran: an outcome. One
+        # no `raise` of its source names is sealed `crashed` (route (b) reads
+        # it as no evidence); one it raises itself is its answer.
         ("def ref(xs, n):\n    return len(n)\n", {"kind": "raises", "text": "TypeError"}),
         ("def ref(xs, n):\n    raise TypeError(n)\n", {"kind": "raises", "text": "TypeError"}),
         ("def ref(*args):\n    return len(args)\n", {"kind": "value", "text": "2"}),
@@ -501,7 +516,8 @@ def test_a_ref_something_reference_runs_and_its_result_is_sealed(
 def test_a_reference_that_cannot_take_the_args_is_no_outcome(source: str, sealed_as: Any) -> None:
     got = refs(source)
     if isinstance(sealed_as, dict):
-        assert got == {"status": "ran", "outcome": sealed_as}
+        crashed = {"crashed": True} if "len(n)" in source else {}
+        assert got == {"status": "ran", "outcome": sealed_as, **crashed}
     else:
         assert got["status"].startswith(f"{sealed_as}: ")
         assert "outcome" not in got
@@ -590,6 +606,59 @@ def test_exhibit_two_references_decide_where_the_third_would_have_disagreed() ->
     klass = classify(example, task_units(TASK))
     assert (klass.route, klass.eligible) == ("executed-reference", True)
     assert "2/3; 1 abstained: could not call: too many positional arguments" in klass.note
+
+
+def test_exhibit_a_reference_that_crashed_on_misread_args_no_longer_vetoes() -> None:
+    """What the crash rule admits (loosened): predictor 2 named the args in
+    the call's order, `["'A'", "-5"]`, for its own `def ref(delta, qty)`. They
+    bind, and the body raises TypeError (`-5 + 'A'`) that no `raise` in its
+    source names: sealed `crashed`, no evidence. The example is decided on
+    predictors 1 and 3, whose references raise ValueError. Before, the
+    TypeError read as a contrary answer and the example asked. A reference
+    that raises TypeError itself still vetoes."""
+    text = "# Stock\n\n- `take(sku, n)` raises `ValueError` when it would leave less than zero.\n"
+    units = task_units(text)
+    inp = {
+        "id": "E-001",
+        "units": ["S-001"],
+        "setup": ["s = Stock({'A': 5})"],
+        "call": "s.take('A', -6)",
+        "args": [],
+    }
+    body = "    if qty + delta < 0:\n        raise ValueError(delta)\n    return qty + delta\n"
+    good = "def ref(qty, delta):\n" + body
+    misread = "def ref(delta, qty):\n" + body
+    itself = "def ref(qty, delta):\n    raise TypeError(delta)\n"
+    expected = Outcome.of("raises", "ValueError")
+
+    def sealed_ref(source: str, args: list[str]) -> Reference:
+        got = run_references({"S-001": source}, [inp], {"E-001": expected}, chosen={"E-001": args})
+        return Reference.from_dict(got["E-001"])
+
+    ok = sealed_ref(good, ["5", "-6"])
+    crashed = sealed_ref(misread, ["'A'", "-6"])
+    contrary = sealed_ref(itself, ["5", "-6"])
+    assert (crashed.outcome, crashed.crashed) == (Outcome.of("raises", "TypeError"), True)
+    assert (contrary.outcome, contrary.crashed) == (Outcome.of("raises", "TypeError"), False)
+    assert (ok.outcome, ok.crashed) == (expected, False)
+
+    def klass(third: Reference) -> Any:
+        example = Example(
+            id="E-001",
+            units=("S-001",),
+            setup=tuple(inp["setup"]),
+            call=str(inp["call"]),
+            predictions=tuple(Prediction(expected, "", f"h{i}") for i in range(3)),
+            references=(ok, third, ok),
+            probes=(Probe("a" * 64, "ran", expected, source="user"),),
+        )
+        return classify(example, units)
+
+    admitted = klass(crashed)
+    assert (admitted.route, admitted.eligible) == ("executed-reference", True)
+    assert "2/3; 1 abstained: its reference crashed (raised TypeError)" in admitted.note
+    vetoed = klass(contrary)
+    assert (vetoed.route, vetoed.eligible) == ("decided-unverified", False)
 
 
 def test_a_reference_driver_that_dies_is_sealed_as_such() -> None:

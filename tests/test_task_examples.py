@@ -21,6 +21,7 @@ from saddle.gates import check_task_requirements
 from saddle.task_examples import (
     DELEGATED_NOTE,
     LITERAL_DISAGREES,
+    NO_OUTCOME,
     NO_RAISE_NOTE,
     UNCERTAIN_NOTE,
     WOULD_REFUSE,
@@ -42,6 +43,7 @@ from saddle.task_examples import (
     literal_route,
     literal_text,
     parse_value,
+    raises_explicitly,
     reference_def,
     reference_problem,
     snippet_problem,
@@ -324,12 +326,30 @@ def test_m3_a_two_to_one_split_asks_whatever_the_tree_does() -> None:
     assert "expected (split)" in check.detail
 
 
-def test_an_unparsed_prediction_or_a_missing_one_is_a_split() -> None:
+def test_a_missing_prediction_abstains_only_when_two_others_verify() -> None:
+    """flip: (a, a, None) with two agreeing references was a split; the
+    missing predictor now abstains and two verified predictors decide. Not
+    verified (the third reference blocks, or one predictor is left), it is a
+    split exactly as before; two predictions recorded where three are
+    needed are a split whatever the references say."""
     a = out("value", "[1, 1]")
-    assert classify(ex("g()", a, predicted=(a, a, None)), UNITS).route == "split"
-    assert classify(ex("g()", a, predicted=(a, a), raws=("h0", "h1", "h2")), UNITS).route == (
-        "split"
+    missing = Reference("missing")
+    two = classify(ex("g()", a, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, missing)), UNITS)
+    assert (two.route, two.eligible) == ("executed-reference", True)
+    assert two.note == (
+        f"executed-reference (2/3; 1 abstained: no prediction ({NO_OUTCOME})), probe (3/3)"
     )
+    blocked = ex("g()", a, predicted=(a, a, None), refs=(GOOD_REF, Reference("timeout"), missing))
+    assert classify(blocked, UNITS).route == "split"
+    alone = ex("g()", a, predicted=(a, None, None), refs=(GOOD_REF, missing, missing))
+    assert classify(alone, UNITS).route == "split"
+    # a reference that agrees is not evidence without its predictor's prediction
+    unpredicted = ex("g()", a, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
+    assert classify(unpredicted, UNITS).note.startswith("executed-reference (2/3; 1 abstained")
+    lone = ex("g()", a, predicted=(a, None, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
+    assert classify(lone, UNITS).route == "split"
+    short = ex("g()", a, predicted=(a, a), raws=("h0", "h1", "h2"))
+    assert classify(short, UNITS).route == "split"
 
 
 # -- R4 / R5: could not call, HANG -------------------------------------------
@@ -479,7 +499,8 @@ def test_a_reference_whose_args_were_at_fault_abstains(why: str) -> None:
         # one ran, two abstained: one reference is not enough
         (
             (GOOD_REF, Reference(UNBOUND), Reference(ARGS_BAD)),
-            f"only 1 of 3 references ran, 2 are needed (abstained: {UNBOUND}; {ARGS_BAD})",
+            "only 1 of 3 predictors gave usable evidence, 2 are needed "
+            f"(abstained: {UNBOUND}; {ARGS_BAD})",
         ),
         # the source was refused (whitelist / restates): not an args fault
         (
@@ -528,6 +549,100 @@ def test_every_other_reason_a_reference_did_not_agree_still_blocks(
     assert gate(e, val([1])).verdict == "question"
 
 
+VALUE_ERROR: Final = out("raises", "ValueError")
+RAISES_OK: Final = Reference("ran", VALUE_ERROR)
+
+
+def _raising(refs: tuple[Reference, ...], **kw: Any) -> Example:
+    """An example S-007 decides: `make(-1)` raises ValueError (a binding unit
+    that names the raise), three probes agreeing."""
+    return ex("make(-1)", VALUE_ERROR, units=("S-007",), refs=refs, **kw)
+
+
+def test_a_reference_that_crashed_abstains() -> None:
+    """Known-good: a reference that raised a type no `raise` of its source
+    names (sealed `crashed`) gave no evidence; two others verify."""
+    crashed = Reference("ran", out("raises", "NameError"), crashed=True)
+    klass = classify(_raising((RAISES_OK, crashed, RAISES_OK)), UNITS)
+    assert (klass.route, klass.eligible) == ("executed-reference", True)
+    assert klass.note == (
+        "executed-reference (2/3; 1 abstained: its reference crashed (raised NameError)), "
+        "probe (3/3)"
+    )
+    returned = TreeOutcome("value", encode_value(None), types=(("ValueError", "differ"),))
+    assert gate(_raising((RAISES_OK, crashed, RAISES_OK)), returned).verdict == "fail"
+
+
+def test_an_explicit_contrary_raise_still_vetoes() -> None:
+    """Known-bad: the third reference raises TypeError itself (`raise
+    TypeError` in its source: not crashed), where the others predict
+    ValueError. A well-formed contrary answer: a question."""
+    contrary = Reference("ran", out("raises", "TypeError"))
+    klass = classify(_raising((RAISES_OK, RAISES_OK, contrary)), UNITS)
+    assert (klass.route, klass.eligible, klass.note) == ("decided-unverified", False, DISAGREE)
+
+
+def test_a_crash_that_happens_to_agree_still_counts() -> None:
+    """A crashed raise of the expected type agrees, as before: it is counted,
+    not dropped (abstaining it would block examples that verified before)."""
+    lucky = Reference("ran", VALUE_ERROR, crashed=True)
+    klass = classify(_raising((lucky, lucky, lucky), raws=("h0", "h1", "h2")), UNITS)
+    assert klass.note == "executed-reference (3/3), probe (3/3)"
+
+
+def test_a_crashed_reference_with_a_contrary_prediction_is_a_split() -> None:
+    """Abstaining drops a predictor's reference, never its written prediction:
+    a contrary prediction splits the example."""
+    crashed = Reference("ran", out("raises", "NameError"), crashed=True)
+    e = _raising(
+        (RAISES_OK, crashed, RAISES_OK),
+        predicted=(VALUE_ERROR, out("value", "None"), VALUE_ERROR),
+    )
+    assert classify(e, UNITS).route == "split"
+
+
+def test_two_crashed_leave_one_and_one_is_not_enough() -> None:
+    crashed = Reference("ran", out("raises", "TypeError"), crashed=True)
+    klass = classify(_raising((RAISES_OK, crashed, crashed)), UNITS)
+    assert (klass.route, klass.eligible) == ("decided-unverified", False)
+    assert klass.note.startswith("only 1 of 3 predictors gave usable evidence")
+
+
+@pytest.mark.parametrize(
+    ("source", "name", "explicit"),
+    [
+        ("def ref(x):\n    raise ValueError\n", "ValueError", True),
+        (
+            "def ref(x):\n    if x < 0:\n        raise ValueError(x)\n    return x\n",
+            "ValueError",
+            True,
+        ),
+        (
+            "import decimal\n\ndef ref(x):\n    raise decimal.InvalidOperation(x)\n",
+            "InvalidOperation",
+            True,
+        ),
+        (
+            "def ref(x):\n    try:\n        return int(x)\n"
+            "    except KeyError as e:\n        raise ValueError(x) from e\n",
+            "ValueError",
+            True,
+        ),
+        (
+            "def ref(x):\n    try:\n        return x[0]\n    except IndexError:\n        raise\n",
+            "TypeError",
+            True,
+        ),
+        ("def ref(x):\n    raise ValueError(x)\n", "TypeError", False),
+        ("def ref(x):\n    return x + 1\n", "TypeError", False),
+        ("def ref(x):\n    err = ValueError\n    raise err(x)\n", "ValueError", False),
+        ("def ref(x:\n", "ValueError", False),
+    ],
+)
+def test_raises_explicitly_instances(source: str, name: str, explicit: bool) -> None:
+    assert raises_explicitly(source, name) is explicit
+
+
 def test_a_reference_that_did_not_run_never_agrees() -> None:
     expected = out("value", "[1, 1]")
     assert Reference("ran", expected).agrees(expected)
@@ -543,7 +658,9 @@ def test_the_two_references_that_ran_must_be_two_samples() -> None:
     klass = classify(e, UNITS)
     assert klass.effective_k == 2
     assert (klass.route, klass.eligible) == ("decided-unverified", False)
-    assert klass.note == "effective k = 1 among the references that ran: they are one sample"
+    assert klass.note == (
+        "effective k = 1 among the predictors that gave evidence: they are one sample"
+    )
     # the same draw with the abstaining slot elsewhere decides on two samples
     other = ex(
         **_dedup_kwargs(), raws=("h", "h", "h3"), refs=(GOOD_REF, Reference(UNBOUND), GOOD_REF)
