@@ -161,8 +161,10 @@ def _repo_grammar() -> str:
 def build_cases(commits: int = 40, *, max_bytes: int = 1_500_000) -> dict[str, Any]:
     """The corpus plus the grammar it is checked against.
 
-    The admit half is every distinct blob this repo wrote in its last
+    The admit half is every distinct text blob this repo wrote in its last
     *commits* commits, rendered as a search block naming the whole file.
+    Binary blobs are skipped: a shallow checkout's one commit lists every
+    file, images too.
     Any file with a blank first or last line is skipped, and how many were
     skipped is reported by `--emit` on stderr so the number is never zero
     by accident.
@@ -182,16 +184,22 @@ def build_cases(commits: int = 40, *, max_bytes: int = 1_500_000) -> dict[str, A
             if blob.returncode != 0 or blob.stdout.strip() in seen:
                 continue
             seen.add(blob.stdout.strip())
-            shown = git(["git", "show", f"{sha}:{name}"])
-            if shown.returncode != 0 or not shown.stdout:
+            shown = subprocess.run(
+                ["git", "show", f"{sha}:{name}"], cwd=REPO, capture_output=True, check=False
+            )
+            try:
+                text = shown.stdout.decode()
+            except UnicodeDecodeError:  # an image: a worker never writes one as text
                 continue
-            if total + len(shown.stdout) > max_bytes:
+            if shown.returncode != 0 or not text:
                 continue
-            section = edit_section(name, shown.stdout)
+            if total + len(text) > max_bytes:
+                continue
+            section = edit_section(name, text)
             if not section:
                 skipped += 1
                 continue
-            total += len(shown.stdout)
+            total += len(text)
             cases[f"{sha[:8]}:{name}"] = section
     note = f"{len(cases)} admit cases, {skipped} files skipped (blank first/last line)"
     print(note, file=sys.stderr)
