@@ -23,6 +23,7 @@ from saddle.engine import (
     INPUT_SAFETY,
     MIN_OUTPUT,
     OUTPUT_MARGIN,
+    REPLY_ROOM,
     TurnOptions,
     _user_message,
     run_turn,
@@ -1223,3 +1224,33 @@ def test_a_cut_off_call_already_in_the_history_is_made_sendable(options: TurnOpt
     sent = client.asked[0]["messages"]
     call = next(m for m in sent if m.get("tool_calls"))["tool_calls"][0]
     json.loads(call["function"]["arguments"])
+
+
+def test_without_a_token_count_compaction_still_leaves_a_working_reply_room(
+    options: TurnOptions,
+) -> None:
+    """B9 (2026-10-04): Strata serves no /tokenize, so the estimate path ran,
+    and its ceiling kept only MIN_OUTPUT for the reply. At 120 messages the
+    prompt filled a 131,072 window to ~120k real tokens, the reply was capped
+    at 8,774 tokens, and a 25 KB write_file was cut off mid-string. The
+    estimate path keeps the same room as the exact one (`REPLY_ROOM`), or a
+    quarter of a small window, never less than MIN_OUTPUT."""
+    for window in (32_000, 131_072, 175_000, 1_000_000):
+        options.context_tokens = window
+        worst_case_prompt = int((options.compaction_limit() + options.tool_tokens()) * INPUT_SAFETY)
+        room = max(MIN_OUTPUT, min(REPLY_ROOM, window // 4))
+        assert worst_case_prompt + room + OUTPUT_MARGIN <= window, f"window {window}"
+
+
+def test_without_a_token_count_a_small_window_keeps_no_more_than_a_quarter_for_the_reply(
+    options: TurnOptions,
+) -> None:
+    """The other half of the reply room: a small window keeps a quarter of
+    itself for the reply, not all of REPLY_ROOM, so its history is not
+    compacted harder than the reply needs (64,000: 16,000 kept, not 32,768)."""
+    for window in (40_000, 64_000, 100_000):
+        options.context_tokens = window
+        kept = window // 4
+        assert kept < REPLY_ROOM
+        expected = int((window - kept - OUTPUT_MARGIN) / INPUT_SAFETY) - options.tool_tokens()
+        assert options.compaction_limit() == expected, f"window {window}"

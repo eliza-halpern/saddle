@@ -779,9 +779,13 @@ class TurnOptions:
         Compaction used to be told the whole window, so it was content to
         let the conversation fill every token of it and leave the reply the
         `MIN_OUTPUT` floor -- which `budget` would then request on top of a
-        full prompt.
+        full prompt. The reply keeps `REPLY_ROOM` here too (a quarter of a
+        small window, never under `MIN_OUTPUT`): with only MIN_OUTPUT kept, a
+        server without /tokenize (Strata) filled a 131,072 window to ~120k
+        and cut a 25 KB write_file off mid-string at 8,774 tokens (B9).
         """
-        room = self.context_tokens - MIN_OUTPUT - OUTPUT_MARGIN
+        reply = max(MIN_OUTPUT, min(REPLY_ROOM, self.context_tokens // 4))
+        room = self.context_tokens - reply - OUTPUT_MARGIN
         return max(int(room / INPUT_SAFETY) - self.tool_tokens(), MIN_OUTPUT)
 
 
