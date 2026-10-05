@@ -1245,10 +1245,7 @@ def run_turn(
                 start = perf_counter()
                 if auto is not None and auto.feed is not None:
                     auto.feed.before_tool(call.name)
-                broken = _cut_arguments(call.arguments)
-                if broken is not None:
-                    result = CUT_CALL.format(name=call.name, why=broken)
-                elif auto is not None and call.name == FINISH_TOOL:
+                if auto is not None and call.name == FINISH_TOOL:
                     result = _finish(auto, call.arguments)
                     if result.startswith(FINISH_REFUSED):
                         result += yield from _offer_test_edits(auto, options.journal, node_id, ctx)
@@ -1277,6 +1274,10 @@ def run_turn(
                     result = PREMISE_FIRST
                 elif auto is not None and auto.installs is not None and call.name == INSTALL_TOOL:
                     result = yield from _install(auto, options.journal, node_id, call.arguments)
+                elif (broken := _cut_arguments(call.arguments)) is not None:
+                    # Only ordinary tools: finish, dispute and the rest above
+                    # answer arguments they cannot parse in their own words.
+                    result = CUT_CALL.format(name=call.name, why=broken)
                 else:
                     result = execute_tool(call, workdir=options.workdir, context=ctx)
                 duration_ms = int((perf_counter() - start) * 1000)
