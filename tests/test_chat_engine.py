@@ -1156,3 +1156,70 @@ def test_the_waiting_nudge_names_a_command_as_one_short_line() -> None:
     assert engine._clip_command("blender -b --python x.py\necho done") == "blender -b --python x.py"
     assert engine._clip_command("x" * 200) == "x" * 117 + "..."
     assert engine._clip_command("   ") == "   "
+
+
+B9_CUT = '{"path": "build_forest.py", "content": "import bpy\\nfor x in range('
+
+
+def test_a_cut_off_tool_call_is_kept_sendable_and_explained(options: TurnOptions) -> None:
+    """B9 (2026-10-04): a write_file reply hit the output token limit, so its
+    arguments ended mid-string. The engine kept that broken JSON in the
+    assistant message; the server parses tool-call arguments and refused every
+    later request (HTTP 400, "Unterminated string ..."), so the session died
+    silently. Known-bad: the history carries the broken arguments. Known-good:
+    the history carries valid JSON, the tool result says the call was cut off
+    and nothing ran, and the model's next reply follows."""
+    client = FakeClient(
+        [
+            [ToolCall(id="c1", name="write_file", arguments=B9_CUT)],
+            [content("Writing it in parts.")],
+        ]
+    )
+    events = run(client, options)
+    assert len(client.asked) == 2
+    sent = client.asked[1]["messages"]
+    call = next(m for m in sent if m.get("tool_calls"))["tool_calls"][0]
+    json.loads(call["function"]["arguments"])  # the server parses this; it must be valid
+    result = next(m for m in sent if m.get("role") == "tool")["content"]
+    assert result.startswith("error: ")
+    assert "cut off" in result
+    assert "nothing ran" in result
+    assert not (options.workdir / "build_forest.py").exists()
+    assert not [e for e in events if isinstance(e, ErrorEvent)]
+
+
+def test_a_complete_tool_call_is_sent_back_as_it_came(options: TurnOptions) -> None:
+    (options.workdir / "a.txt").write_text("a\n")
+    arguments = json.dumps({"path": "a.txt"})
+    client = FakeClient(
+        [[ToolCall(id="c1", name="read_file", arguments=arguments)], [content("ok")]]
+    )
+    run(client, options)
+    call = next(m for m in client.asked[1]["messages"] if m.get("tool_calls"))["tool_calls"][0]
+    assert call["function"]["arguments"] == arguments
+
+
+def test_a_cut_off_call_already_in_the_history_is_made_sendable(options: TurnOptions) -> None:
+    """B9: the session that died kept the broken call in its saved history, so
+    any later turn was refused too. A turn sends earlier tool calls with valid
+    JSON, so such a session continues."""
+    history: list[dict[str, Any]] = [
+        {"role": "user", "content": "make a forest"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": B9_CUT},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "error: arguments are not valid JSON"},
+    ]
+    client = FakeClient([[content("Continuing.")]])
+    run(client, options, text="continue", messages=history)
+    sent = client.asked[0]["messages"]
+    call = next(m for m in sent if m.get("tool_calls"))["tool_calls"][0]
+    json.loads(call["function"]["arguments"])

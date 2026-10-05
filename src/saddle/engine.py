@@ -170,6 +170,32 @@ or "Let me" and missed it; the sandbox knows the command is still running, so
 the harness says so instead of guessing from the wording."""
 
 
+CUT_CALL: Final = (
+    "error: your {name} call was cut off before it was complete (its arguments are "
+    "not valid JSON: {why}), most likely because your reply reached its output token "
+    "limit; nothing ran. Make the call again with less in it: split a large file into "
+    "several smaller files, or write it in parts."
+)
+"""B9 (2026-10-04): a write_file reply reached its output limit mid-string. The
+call is answered with this instead of being run."""
+
+
+def _cut_arguments(arguments: str) -> str | None:
+    """Why `arguments` is not a complete JSON value, or None when it is."""
+    try:
+        json.loads(arguments)
+    except json.JSONDecodeError as exc:
+        return str(exc)
+    return None
+
+
+def _sendable_arguments(arguments: str) -> str:
+    """The arguments as kept in the history. The server parses every earlier
+    tool call's arguments, so a cut-off one kept as it came made it refuse each
+    later request (HTTP 400) and ended the session (B9); it is kept as `{}`."""
+    return arguments if _cut_arguments(arguments) is None else "{}"
+
+
 def _clip_command(command: str, limit: int = 120) -> str:
     """A command as one short line for a nudge: its first line, cut at `limit`."""
     first = command.strip().splitlines()[0] if command.strip() else command
@@ -1014,6 +1040,11 @@ def run_turn(
     rounds: list[dict[str, Any]] = []
     thinking: list[str] = []
     proof = parent
+    for (
+        earlier
+    ) in messages:  # a cut-off call saved by an earlier turn would get every request refused (B9)
+        for tc in earlier.get("tool_calls") or ():
+            tc["function"]["arguments"] = _sendable_arguments(tc["function"]["arguments"])
     empty_replies = 0
     announced = False
     waited = False
@@ -1185,7 +1216,10 @@ def run_turn(
                             {
                                 "id": c.id,
                                 "type": "function",
-                                "function": {"name": c.name, "arguments": c.arguments},
+                                "function": {
+                                    "name": c.name,
+                                    "arguments": _sendable_arguments(c.arguments),
+                                },
                             }
                             for c in calls
                         ],
@@ -1207,7 +1241,10 @@ def run_turn(
                 start = perf_counter()
                 if auto is not None and auto.feed is not None:
                     auto.feed.before_tool(call.name)
-                if auto is not None and call.name == FINISH_TOOL:
+                broken = _cut_arguments(call.arguments)
+                if broken is not None:
+                    result = CUT_CALL.format(name=call.name, why=broken)
+                elif auto is not None and call.name == FINISH_TOOL:
                     result = _finish(auto, call.arguments)
                     if result.startswith(FINISH_REFUSED):
                         result += yield from _offer_test_edits(auto, options.journal, node_id, ctx)
