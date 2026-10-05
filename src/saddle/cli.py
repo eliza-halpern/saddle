@@ -1010,6 +1010,20 @@ def check_server(client: VllmClient, *, base_url: str, model: str) -> list[str]:
     return ids
 
 
+def check_constrained(client: VllmClient, *, base_url: str) -> None:
+    """Preflight for `run` and `dag`: the server must enforce the constraints.
+
+    Both plan, and `run` also writes, only through schema- and
+    grammar-constrained calls, so a server that would drop the
+    constraint is refused here, before any work, not at the first call.
+    """
+    try:
+        client.require_constrained_decoding()
+    except VllmError as exc:
+        msg = f"preflight failed at {base_url}: {exc}"
+        raise RunError(msg) from exc
+
+
 def run_task(options: RunOptions, client: VllmClient, *, stdin: IO[str], stdout: IO[str]) -> int:
     """Drive one task: emit, confirm, schedule, gate, seal, transcribe."""
     rule_d_check = None
@@ -1219,6 +1233,7 @@ def run_dag(options: DagOptions, client: VllmClient, *, stdout: IO[str]) -> int:
     """Emit the plan and print it; execute nothing."""
     try:
         check_server(client, base_url=options.base_url, model=options.model)
+        check_constrained(client, base_url=options.base_url)
         files = _listable_files(options.repo)
         dag = _emit_valid_dag(
             client,
@@ -2631,6 +2646,7 @@ def main(
     with VllmClient(api_key=key, base_url=args.base_url, model=args.model) as client:
         try:
             check_server(client, base_url=args.base_url, model=args.model)
+            check_constrained(client, base_url=args.base_url)
         except RunError as exc:
             print(f"error: {exc}", file=stderr or sys.stderr)
             return 1

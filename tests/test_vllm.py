@@ -24,6 +24,7 @@ from saddle.vllm import (
     VllmClient,
     VllmRequestError,
     VllmResponseError,
+    VllmUnconstrainedError,
 )
 
 PLAN_PROMPT = "Plan a two-node DAG that adds input validation to the login form."
@@ -48,8 +49,18 @@ def _client_for(response: httpx.Response) -> tuple[VllmClient, list[httpx.Reques
         seen.append(request)
         return response
 
-    client = VllmClient(api_key="test-key", transport=httpx.MockTransport(handler))
-    return client, seen
+    return _vetted(VllmClient(api_key="test-key", transport=httpx.MockTransport(handler))), seen
+
+
+def _vetted(client: VllmClient) -> VllmClient:
+    """A client whose server already passed `require_constrained_decoding`.
+
+    These helpers answer every request with one canned response, so they
+    cannot also play the /models preflight; the guard itself is tested
+    against both servers' real envelopes below.
+    """
+    client._constrains = True
+    return client
 
 
 def _json_client(payload: Any, *, status: int = 200) -> tuple[VllmClient, list[httpx.Request]]:
@@ -60,7 +71,7 @@ def _failing_client(exc: httpx.HTTPError) -> VllmClient:
     def handler(request: httpx.Request) -> httpx.Response:
         raise exc
 
-    return VllmClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    return _vetted(VllmClient(api_key="test-key", transport=httpx.MockTransport(handler)))
 
 
 def test_emit_posts_guided_payload() -> None:
@@ -114,10 +125,12 @@ def test_base_url_trailing_slash_normalized() -> None:
         seen.append(request)
         return httpx.Response(200, json=_ok_body(content=json.dumps({"nodes": []})))
 
-    client = VllmClient(
-        api_key="test-key",
-        base_url="http://127.0.0.1:18020/v1/",
-        transport=httpx.MockTransport(handler),
+    client = _vetted(
+        VllmClient(
+            api_key="test-key",
+            base_url="http://127.0.0.1:18020/v1/",
+            transport=httpx.MockTransport(handler),
+        )
     )
     client.emit_dag(PLAN_PROMPT)
     assert seen[0].url.path == "/v1/chat/completions"
@@ -1159,3 +1172,157 @@ def test_a_server_that_will_not_count_returns_none_rather_than_raising(
 def test_a_transport_failure_while_counting_returns_none() -> None:
     client = _failing_client(httpx.ConnectError("refused"))
     assert client.count_tokens([{"role": "user", "content": "hi"}]) is None
+
+
+# -- a constrained call goes only to a server that enforces it -----------------
+
+# Both envelopes as Strata 0.1.39 served them on 2026-10-05. That server
+# answered a `structured_outputs` request whose schema admitted only
+# {"code": "ZEBRA"} with the plain text 'hello world', HTTP 200.
+STRATA_MODELS: dict[str, Any] = {
+    "object": "list",
+    "data": [
+        {
+            "id": DEFAULT_MODEL,
+            "object": "model",
+            "status": {"value": "loaded"},
+            "meta": {"n_ctx": 131072},
+        }
+    ],
+}
+STRATA_STATUS: dict[str, Any] = {
+    "service": "strata",
+    "model": DEFAULT_MODEL,
+    "structured_output": {
+        "formats": ["json_object", "json_schema"],
+        "method": "prompt_and_validate",
+        "constrained_decoding": False,
+        "stream_buffered": True,
+    },
+}
+# vLLM's ModelCard defaults `owned_by` to "vllm" and it serves no /v1/status.
+VLLM_MODELS: dict[str, Any] = {
+    "object": "list",
+    "data": [{"id": DEFAULT_MODEL, "object": "model", "owned_by": "vllm"}],
+}
+
+
+def _server(
+    models: httpx.Response, status: httpx.Response
+) -> tuple[VllmClient, list[httpx.Request]]:
+    """A server that answers the preflight as given and any POST with a DAG."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.method == "POST":
+            return httpx.Response(200, json=_ok_body(content=json.dumps({"nodes": []})))
+        if request.url.path == "/v1/models":
+            return models
+        if request.url.path == "/v1/status":
+            return status
+        return httpx.Response(404)  # pragma: no cover -- the guard asks nothing else
+
+    return VllmClient(api_key="k", transport=httpx.MockTransport(handler)), seen
+
+
+def _posts(seen: list[httpx.Request]) -> list[httpx.Request]:
+    return [request for request in seen if request.method == "POST"]
+
+
+NOT_FOUND = httpx.Response(404, json={"detail": "Not Found"})
+
+
+def test_vllm_server_gets_the_constrained_call() -> None:
+    client, seen = _server(httpx.Response(200, json=VLLM_MODELS), NOT_FOUND)
+    client.emit_dag(PLAN_PROMPT)
+    client.propose_diff("Do x.")
+    posts = _posts(seen)
+    assert [json.loads(p.content)["structured_outputs"] for p in posts] == [
+        {"json": dag_json_schema()},
+        {"grammar": DIFF_GRAMMAR},
+    ]
+    # One preflight per client: a pass is remembered.
+    assert [r.url.path for r in seen if r.url.path == "/v1/models"] == ["/v1/models"]
+
+
+@pytest.mark.parametrize("call", ["emit_dag", "propose_diff"])
+def test_strata_is_refused_before_any_chat_request(call: str) -> None:
+    client, seen = _server(
+        httpx.Response(200, json=STRATA_MODELS), httpx.Response(200, json=STRATA_STATUS)
+    )
+    with pytest.raises(VllmUnconstrainedError) as excinfo:
+        getattr(client, call)("Do x.")
+    assert str(excinfo.value) == (
+        "refusing a constrained call to http://127.0.0.1:18020/v1/: strata reports "
+        "constrained_decoding: false (method prompt_and_validate), so the schema or "
+        "grammar this call carries would not be enforced"
+    )
+    assert _posts(seen) == []
+    # The refusal is not remembered as a pass: asking again refuses again.
+    with pytest.raises(VllmUnconstrainedError):
+        getattr(client, call)("Do x.")
+    assert _posts(seen) == []
+
+
+def test_the_refusal_is_no_per_draw_failure() -> None:
+    # slice absorbs VllmRequestError/VllmResponseError per draw; this must escape.
+    assert not issubclass(VllmUnconstrainedError, (VllmRequestError, VllmResponseError))
+
+
+@pytest.mark.parametrize(
+    ("models", "status"),
+    [
+        ({"data": [{"id": DEFAULT_MODEL, "owned_by": "llamacpp"}]}, NOT_FOUND),
+        ({"data": [{"id": DEFAULT_MODEL}]}, httpx.Response(200, json={"service": "x"})),
+        ({"data": [{"id": DEFAULT_MODEL}]}, httpx.Response(200, text="not json")),
+        ({"data": [{"id": DEFAULT_MODEL}]}, httpx.Response(200, json=["a list"])),
+        (
+            {"data": [{"id": DEFAULT_MODEL}]},
+            httpx.Response(200, json={"structured_output": {"constrained_decoding": True}}),
+        ),
+        ({"data": [{"id": "other", "owned_by": "vllm"}, {"id": DEFAULT_MODEL}]}, NOT_FOUND),
+    ],
+    ids=[
+        "other owner",
+        "status silent",
+        "status not json",
+        "status not an object",
+        "status claims it but no vllm card",
+        "vllm card for another model",
+    ],
+)
+def test_a_server_that_does_not_name_itself_vllm_is_refused(
+    models: dict[str, Any], status: httpx.Response
+) -> None:
+    client, seen = _server(httpx.Response(200, json=models), status)
+    with pytest.raises(VllmUnconstrainedError, match="does not identify as vLLM"):
+        client.emit_dag(PLAN_PROMPT)
+    assert _posts(seen) == []
+
+
+def test_a_model_the_server_does_not_serve_is_refused() -> None:
+    models = {"data": [{"id": "other", "owned_by": "vllm"}]}
+    client, seen = _server(httpx.Response(200, json=models), NOT_FOUND)
+    with pytest.raises(VllmUnconstrainedError, match=f"model '{DEFAULT_MODEL}' is not served"):
+        client.emit_dag(PLAN_PROMPT)
+    assert _posts(seen) == []
+
+
+def test_a_failed_lookup_is_never_a_pass() -> None:
+    client, seen = _server(httpx.Response(503, text="down"), NOT_FOUND)
+    with pytest.raises(VllmRequestError, match="HTTP 503"):
+        client.emit_dag(PLAN_PROMPT)
+    assert _posts(seen) == []
+
+
+def test_a_status_transport_failure_still_refuses_a_non_vllm_server() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json=STRATA_MODELS)
+        msg = "refused"
+        raise httpx.ConnectError(msg)
+
+    client = VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+    with pytest.raises(VllmUnconstrainedError, match="does not identify as vLLM"):
+        client.emit_dag(PLAN_PROMPT)

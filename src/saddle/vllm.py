@@ -8,6 +8,13 @@ requested via first-class ``reasoning_effort`` (none/low/medium/xhigh — the
 model's template rejects anything else), never template backdoors, so the
 effort level stays explicit and server defaults can't silently change
 the contract.
+
+``structured_outputs`` is vLLM's own request field. A server that does not
+implement it can accept the request and drop the field without a word --
+Strata does exactly that, and its own `/v1/status` reports
+``constrained_decoding: false`` -- so a constrained call goes only to a
+server that names itself vLLM (`require_constrained_decoding`) and is
+refused everywhere else, never sent unconstrained.
 """
 
 from __future__ import annotations
@@ -133,6 +140,15 @@ class VllmError(Exception):
 
 class VllmAuthError(VllmError):
     """Server rejected the API key (HTTP 401/403)."""
+
+
+class VllmUnconstrainedError(VllmError):
+    """The server would not enforce the schema or grammar the call carries.
+
+    A sibling of `VllmRequestError`, not a subclass, like `VllmAuthError`:
+    it is a property of the server, not of one draw, so the per-draw
+    handlers that absorb a failed call must not absorb this one.
+    """
 
 
 class VllmRequestError(VllmError):
@@ -570,6 +586,39 @@ def _model_context(data: object, model: str) -> int | None:
     return None  # pragma: no cover -- unreachable: the id was in _model_ids
 
 
+CONSTRAINING_OWNER: Final = "vllm"
+"""The `owned_by` vLLM's /models cards carry. It is the positive evidence
+that `structured_outputs` is honoured: no other server is assumed to."""
+
+
+def _constraint_refusal(models: object, status: object, model: str) -> str | None:
+    """Why `model`'s server would not enforce `structured_outputs`; None if it would.
+
+    Only a vLLM card for the served model passes. Everything else is a
+    refusal, and `status` -- the server's own `/v1/status`, or None when
+    it has none -- only names the reason: a server that says it does not
+    constrain is quoted, one that says nothing is still refused.
+    """
+    if model not in _model_ids(models):
+        return f"model {model!r} is not served"
+    for item in models["data"]:  # type: ignore[index]  # _model_ids validated the shape
+        if item["id"] == model and item.get("owned_by") == CONSTRAINING_OWNER:
+            return None
+    said: dict[str, Any] = status if isinstance(status, dict) else {}
+    structured = said.get("structured_output")
+    if isinstance(structured, dict) and structured.get("constrained_decoding") is False:
+        service = said.get("service", "the server")
+        method = structured.get("method", "unstated")
+        return (
+            f"{service} reports constrained_decoding: false (method {method}), so the "
+            "schema or grammar this call carries would not be enforced"
+        )
+    return (
+        "the server does not identify as vLLM (no owned_by 'vllm' model card), so "
+        "nothing shows it enforces structured_outputs"
+    )
+
+
 def _checked_json(response: httpx.Response) -> Any:
     """Map error statuses to errors; parse the JSON body otherwise."""
     if response.status_code in (401, 403):
@@ -636,6 +685,7 @@ class VllmClient:
             msg = "api_key must not be empty"
             raise ValueError(msg)
         self._model = model
+        self._constrains = False
         self._client = httpx.Client(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -664,6 +714,25 @@ class VllmClient:
             raise VllmRequestError(msg) from exc
         return _checked_json(response)
 
+    def require_constrained_decoding(self) -> None:
+        """Raise `VllmUnconstrainedError` unless the server enforces `structured_outputs`.
+
+        Asked once per client; only a pass is remembered. A lookup that
+        fails raises its own error and is never read as a pass.
+        """
+        if self._constrains:
+            return
+        models = self._models()
+        try:
+            status = _checked_json(self._client.get("/status", timeout=PREFLIGHT_TIMEOUT))
+        except (httpx.HTTPError, VllmError):
+            status = None
+        reason = _constraint_refusal(models, status, self._model)
+        if reason is not None:
+            msg = f"refusing a constrained call to {self._client.base_url}: {reason}"
+            raise VllmUnconstrainedError(msg)
+        self._constrains = True
+
     def emit_dag(
         self,
         prompt: str,
@@ -682,6 +751,7 @@ class VllmClient:
             msg = "prompt must not be empty"
             raise ValueError(msg)
         _checked_effort(reasoning_effort)
+        self.require_constrained_decoding()
         payload = _build_payload(
             model=self._model,
             prompt=prompt,
@@ -713,6 +783,7 @@ class VllmClient:
             msg = "prompt must not be empty"
             raise ValueError(msg)
         _checked_effort(reasoning_effort)
+        self.require_constrained_decoding()
         payload = _build_diff_payload(
             model=self._model,
             prompt=prompt,

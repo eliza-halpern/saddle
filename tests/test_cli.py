@@ -88,6 +88,7 @@ from saddle.vllm import (
     VllmAuthError,
     VllmClient,
     VllmRequestError,
+    VllmUnconstrainedError,
 )
 
 TASK = "Fix f to return 2 and add a passing test."
@@ -213,6 +214,19 @@ def _is_diff_request(payload: dict[str, Any]) -> bool:
     return isinstance(outputs, dict) and "grammar" in outputs
 
 
+def _posts(seen: list[httpx.Request]) -> list[httpx.Request]:
+    """The chat calls among `seen`, without the preflight GETs."""
+    return [request for request in seen if request.method == "POST"]
+
+
+def _vllm_preflight(request: httpx.Request) -> httpx.Response:
+    """What vLLM answers to the constrained-call preflight: a /models card
+    it owns, and no /v1/status (that is Strata's)."""
+    if request.url.path.endswith("/models"):
+        return httpx.Response(200, json={"data": [{"id": DEFAULT_MODEL, "owned_by": "vllm"}]})
+    return httpx.Response(404, json={"detail": "Not Found"})
+
+
 def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -> VllmClient:
     """Serve a script that describes *attempts*, not individual calls.
 
@@ -228,6 +242,8 @@ def _scripted_client(script: list[httpx.Response], seen: list[dict[str, Any]]) -
     lock = threading.Lock()
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _vllm_preflight(request)
         payload = json.loads(request.content)
         with lock:
             seen.append(payload)
@@ -272,10 +288,14 @@ def _dag_client(
         if seen is not None:
             seen.append(request)
         if request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": name} for name in models]})
+            cards = [{"id": name, "owned_by": "vllm"} for name in models]
+            return httpx.Response(200, json={"data": cards})
+        if request.method == "GET":
+            return _vllm_preflight(request)
         return _emit_response(dag)
 
-    return VllmClient(api_key="k", transport=httpx.MockTransport(handler))
+    model = models[0] if models else DEFAULT_MODEL
+    return VllmClient(api_key="k", model=model, transport=httpx.MockTransport(handler))
 
 
 def test_main_no_args_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1385,7 +1405,7 @@ def test_run_dag_prints_plan() -> None:
     )
     out = io.StringIO()
     assert run_dag(_dag_options(), client, stdout=out) == 0
-    body = json.loads(seen[1].content)
+    body = json.loads(_posts(seen)[0].content)
     assert body["max_tokens"] == 8192
     assert body["temperature"] == 0.0
     assert body["reasoning_effort"] == "medium"
@@ -1427,6 +1447,32 @@ def test_run_dag_model_mismatch_reports() -> None:
     )
 
 
+def test_run_dag_refuses_a_server_that_would_not_constrain() -> None:
+    """Strata's envelopes as served on 2026-10-05: it lists the model and says
+    in /v1/status that it does not constrain. The plan is never asked for."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"object": "list", "data": [{"id": "m"}]})
+        if request.url.path == "/v1/status":
+            structured = {"method": "prompt_and_validate", "constrained_decoding": False}
+            return httpx.Response(200, json={"service": "strata", "structured_output": structured})
+        return _emit_response({"nodes": [_node_dict("n1", "low")]})  # pragma: no cover
+
+    client = VllmClient(api_key="k", model="m", transport=httpx.MockTransport(handler))
+    out = io.StringIO()
+    assert run_dag(_dag_options(), client, stdout=out) == 1
+    assert out.getvalue() == (
+        "error: preflight failed at http://x/v1: refusing a constrained call to "
+        "http://127.0.0.1:18020/v1/: strata reports constrained_decoding: false "
+        "(method prompt_and_validate), so the schema or grammar this call carries "
+        "would not be enforced\n"
+    )
+    assert _posts(seen) == []
+
+
 def test_run_dag_bad_emission_reports() -> None:
     bad = _node_dict("n1", "low")
     bad["dependencies"] = ["nope"]
@@ -1463,6 +1509,9 @@ class _FakeClient:
 
     def list_models(self) -> list[str]:
         return [self._model]
+
+    def require_constrained_decoding(self) -> None:
+        return None
 
     def max_model_len(self) -> int | None:
         return None
@@ -1503,6 +1552,31 @@ def test_main_run_preflight_failure_uses_explicit_stderr(
     assert err.getvalue() == (
         f"error: preflight failed at {DEFAULT_BASE_URL}: server rejected the API key (HTTP 401)\n"
     )
+
+
+def test_main_run_refuses_a_server_that_would_not_constrain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run` writes only through constrained calls, so a server that would
+    drop the constraint stops it at preflight, before a repo or journal exists."""
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    _FakeClient.calls.clear()
+
+    def unconstrained(self: _FakeClient) -> None:
+        msg = "strata reports constrained_decoding: false"
+        raise VllmUnconstrainedError(msg)
+
+    monkeypatch.setattr("saddle.cli.VllmClient", _FakeClient)
+    monkeypatch.setattr(_FakeClient, "require_constrained_decoding", unconstrained)
+    err = io.StringIO()
+    assert main(["run", "--repo", str(tmp_path), "--yes", TASK], stderr=err) == 1
+    assert err.getvalue() == (
+        f"error: preflight failed at {DEFAULT_BASE_URL}: "
+        "strata reports constrained_decoding: false\n"
+    )
+    assert _FakeClient.calls == []
+    assert not (tmp_path / ".git").exists()
+    assert not (tmp_path / ".saddle").exists()
 
 
 def _no_key_message() -> str:
@@ -2876,7 +2950,7 @@ def test_run_dag_shows_the_planner_the_repo_files(tmp_path: Path) -> None:
     client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]}, seen)
     options = DagOptions(task=TASK, base_url="http://x/v1", model="m", repo=tmp_path)
     assert run_dag(options, client, stdout=io.StringIO()) == 0
-    body = json.loads(seen[1].content)
+    body = json.loads(_posts(seen)[0].content)
     assert body["messages"][0]["content"] == build_emit_prompt(TASK, git_ls_files(tmp_path))
     assert (
         "Repository files (tracked):\nREADME.md\nn.py\ntest_n.py\n"
@@ -2887,7 +2961,7 @@ def test_run_dag_shows_the_planner_the_repo_files(tmp_path: Path) -> None:
     seen.clear()
     client = _dag_client(["m"], {"nodes": [_node_dict("n1", "low", kill_threshold=85.0)]}, seen)
     assert run_dag(empty, client, stdout=io.StringIO()) == 0
-    assert "(no tracked files)" in json.loads(seen[1].content)["messages"][0]["content"]
+    assert "(no tracked files)" in json.loads(_posts(seen)[0].content)["messages"][0]["content"]
 
 
 def _truncated_response() -> httpx.Response:
@@ -2939,6 +3013,8 @@ def test_run_task_no_content_response_is_a_named_failure_with_its_reasoning_kept
     thinking = "3. Third-party imports\n4. Local/fir"
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _vllm_preflight(request)
         payload = json.loads(request.content)
         seen.append(payload)
         if not _is_diff_request(payload):
@@ -2993,6 +3069,8 @@ def test_run_task_truncated_attempt_is_retried_with_a_larger_cap(tmp_path: Path)
     truncate_first = PROPOSAL_SAMPLES + 1  # the k samples and attempt 1's fallback
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _vllm_preflight(request)
         payload = json.loads(request.content)
         seen.append(payload)
         if not _is_diff_request(payload):
@@ -3185,6 +3263,8 @@ def test_run_task_cap_is_sized_from_the_node_baseline_not_a_failed_attempts_tree
     bloat = whole_file("n.py", "def f():", "    return 2", *[f"def g{i}():" for i in range(300)])
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _vllm_preflight(request)
         payload = json.loads(request.content)
         seen.append(payload)
         if not _is_diff_request(payload):
@@ -3480,6 +3560,8 @@ def test_run_task_withholds_a_recovery_plan_that_prescribes_a_deletion(
     truncate_first = PROPOSAL_SAMPLES + 1
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _vllm_preflight(request)
         payload = json.loads(request.content)
         seen.append(payload)
         if not _is_diff_request(payload):

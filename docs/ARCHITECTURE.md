@@ -18,7 +18,7 @@ Hardware figures below are verified against the live stack (vLLM 0.28.0, Qwen3.8
 
 > - **Deterministic Environment Gates:** Code correctness is judged strictly by compilers, AST linters, test runners, and mutation testing thresholds — tiered so the per-node gate stays fast and the expensive mutation gate runs once, budgeted, at merge time (§3, Phase 3).
 > - **Requirement-Bound Acceptance:** Every node declares the requirement IDs it satisfies, and its gate verifies each one with a test that fails pre-change and passes post-change. Passing tests alone never mark work done.
-> - **Guided Decoding:** The DAG is emitted under a JSON-schema `structured_outputs` constraint over the whole completion; the diff is emitted under an EBNF grammar (`vllm.py:206`). No "structural tag snap after `<think>`" is built.
+> - **Guided Decoding:** The DAG is emitted under a JSON-schema `structured_outputs` constraint over the whole completion; the diff is emitted under an EBNF grammar (`DIFF_GRAMMAR`). `structured_outputs` is vLLM's field, and a server without it can drop it silently, so both calls go only to a server whose model card names vLLM and are refused anywhere else (`VllmClient.require_constrained_decoding`). No "structural tag snap after `<think>`" is built.
 > - **Heterogeneous Test-Time Compute:** Dynamic allocation of reasoning budgets (Low vs. xhigh) and tool access per task node.
 > - **KV Cache CPU Offloading:** Using system RAM as a parking lot for heavy orchestrator contexts via PCIe Direct Memory Access (DMA).
 > - **Hash-Chained Proof Journal:** Every verified node emits a content-hashed proof record into an append-only journal. Downstream nodes cannot dispatch until all parent proofs exist — rework on unverified foundations is structurally impossible, not merely discouraged.
@@ -118,7 +118,7 @@ A low-latency, zero-reasoning classification pass using guided decoding to retur
 
 > - **Role:** Operates in a fresh session containing only the approved specification (or the Phase -1 intent record) and a compact repo map.
 > - **Reasoning & Guided Decoding:** The 27B model runs at xhigh reasoning, generating freeform chain-of-thought within <think> tags.
-> - **Guided Decoding:** The DAG is emitted under a JSON-schema `structured_outputs` constraint over the whole completion; the diff is emitted under an EBNF grammar (`vllm.py:206`). No "structural tag snap after `<think>`" is built.
+> - **Guided Decoding:** The DAG is emitted under a JSON-schema `structured_outputs` constraint over the whole completion; the diff is emitted under an EBNF grammar (`DIFF_GRAMMAR`). `structured_outputs` is vLLM's field, and a server without it can drop it silently, so both calls go only to a server whose model card names vLLM and are refused anywhere else (`VllmClient.require_constrained_decoding`). No "structural tag snap after `<think>`" is built.
 >
 > *Status (2026-09-18): structural-tag emission is specified, not built; see D14.*
 
