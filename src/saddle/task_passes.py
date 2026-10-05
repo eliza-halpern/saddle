@@ -333,7 +333,7 @@ def _literal(text: str) -> bool:
 
 
 REFERENCE_DRIVER: Final = r"""
-import json, signal, sys
+import inspect, json, signal, sys
 from decimal import Decimal
 from fractions import Fraction
 job_path, out_path = sys.argv[1], sys.argv[2]
@@ -384,6 +384,12 @@ def run(item):
         except BaseException as exc:
             return {"status": f"raised {type(exc).__name__}"}
         return {"status": "ran", "accepts": yes is True and no is False}
+    try:
+        # A call that cannot bind the input's args never ran: its TypeError is
+        # about the signature, not the behaviour, so it is no outcome.
+        inspect.signature(namespace["ref"]).bind(*args)
+    except TypeError as exc:
+        return {"status": f"could not call: {exc}"}
     try:
         value = timed(namespace["ref"], *args)
     except _Hang:

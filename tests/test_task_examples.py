@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -389,29 +389,48 @@ def _dedup_kwargs() -> dict[str, Any]:
 # -- R12 / R12-t / R12-p: executed references ----------------------------------
 
 
+DISAGREE: Final = "the predictors' executed references do not all agree with them"
+
+
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "note"),
     [
-        Reference("ran", out("value", "[1]")),  # R12: disagrees with its own prediction
-        Reference("timeout"),  # R12-t
-        Reference("ran", form="ok", accepts=False),  # R12-p: accepts everything
-        Reference("refused: import of os is not allowed"),
+        # R12: disagrees with its own prediction
+        (Reference("ran", out("value", "[1]")), DISAGREE),
+        # R12-p: accepts everything
+        (Reference("ran", form="ok", accepts=False), DISAGREE),
+        # R12-t, and the other references that never ran: said nothing, so no disagreement
+        (Reference("timeout"), "not every predictor's reference ran (timeout)"),
+        (
+            Reference("refused: import of os is not allowed"),
+            "not every predictor's reference ran (refused: import of os is not allowed)",
+        ),
+        (
+            Reference("could not call: missing a required argument: 'qty'"),
+            "not every predictor's reference ran "
+            "(could not call: missing a required argument: 'qty')",
+        ),
     ],
 )
-def test_r12_a_reference_that_does_not_agree_leaves_a_question(bad: Reference) -> None:
+def test_r12_a_reference_that_does_not_agree_leaves_a_question(bad: Reference, note: str) -> None:
     good = Reference("ran", out("value", "[1, 1]"))
     e = ex(**_dedup_kwargs(), refs=(good, good, bad))
     assert classify(e, UNITS).route == "decided-unverified"
+    assert classify(e, UNITS).note == note
     check = gate(e, val([1]))
     assert check.verdict == "question"
-    assert "[the predictors' executed references do not all agree with them]" in check.detail
+    assert f"[{note}]" in check.detail
 
 
 def test_a_discriminating_ok_predicate_counts_as_agreement() -> None:
     ok = Reference("ran", form="ok", accepts=True)
     e = ex(**_dedup_kwargs(), refs=(ok, ok, ok))
     assert classify(e, UNITS).route == "executed-reference"
-    assert classify(ex(**_dedup_kwargs(), refs=(ok, ok)), UNITS).route == "decided-unverified"
+    short = classify(ex(**_dedup_kwargs(), refs=(ok, ok)), UNITS)
+    assert (short.route, short.note) == (
+        "decided-unverified",
+        "not every predictor's reference ran (not recorded)",
+    )
 
 
 # -- R13: floats, each row naming its route -----------------------------------

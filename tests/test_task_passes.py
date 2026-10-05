@@ -329,6 +329,29 @@ def test_references_that_raise_or_return_oddities_are_sealed_as_what_they_did(
         assert sealed_as in got["status"]
 
 
+@pytest.mark.parametrize(
+    ("source", "sealed_as"),
+    [
+        # The input gives two args. A signature that cannot take them never ran:
+        # the shape a stateful example produced, `args: []` against `ref(qty, delta)`.
+        ("def ref():\n    return 1\n", "could not call"),
+        ("def ref(qty, delta, extra):\n    return 1\n", "could not call"),
+        ("def ref(xs, *, n):\n    return 1\n", "could not call"),
+        # A TypeError the body raises on args it did take is behaviour, as before.
+        ("def ref(xs, n):\n    return len(n)\n", {"kind": "raises", "text": "TypeError"}),
+        ("def ref(xs, n):\n    raise TypeError(n)\n", {"kind": "raises", "text": "TypeError"}),
+        ("def ref(*args):\n    return len(args)\n", {"kind": "value", "text": "2"}),
+    ],
+)
+def test_a_reference_that_cannot_take_the_args_is_no_outcome(source: str, sealed_as: Any) -> None:
+    got = refs(source)
+    if isinstance(sealed_as, dict):
+        assert got == {"status": "ran", "outcome": sealed_as}
+    else:
+        assert got["status"].startswith(f"{sealed_as}: ")
+        assert "outcome" not in got
+
+
 def test_r12_t_a_reference_that_hangs_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(task_passes, "REFERENCE_CALL_TIMEOUT_S", 0.3)
     assert refs("def ref(xs, n):\n    while True:\n        pass\n")["status"] == "timeout"

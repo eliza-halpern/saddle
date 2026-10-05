@@ -555,7 +555,7 @@ class Reference:
 
     status: str
     """`ran` when it ran; otherwise why not (missing, refused: ..., timeout,
-    raised X, not-canonical, not-discriminating)."""
+    raised X, could not call: ..., not-canonical, not-discriminating)."""
     outcome: Outcome | None = None
     """`ref` form: what it returned or raised."""
     form: Literal["ref", "ok"] = "ref"
@@ -792,12 +792,18 @@ def classify(example: Example, units: Units) -> Class:
         agree = len(example.references) == K_PREDICTORS and all(
             r.agrees(expected) for r in example.references
         )
+        # A reference that never ran said nothing: the note names why rather
+        # than reading it as a disagreement.
+        unrun = [r.status for r in example.references if r.status != "ran"]
+        unrun += ["not recorded"] * (K_PREDICTORS - len(example.references))
         note = (
             f"effective k = {k}: the {K_PREDICTORS} predictions are one sample"
             if k < 2
-            else "the predictors' executed references do not all agree with them"
-            if not agree
             else ""
+            if agree
+            else f"not every predictor's reference ran ({unrun[0]})"
+            if unrun
+            else "the predictors' executed references do not all agree with them"
         )
         base = Class(
             "decided-unverified" if note else "executed-reference",
