@@ -52,9 +52,18 @@ from saddle.task_units import Unit, Units
 
 # -- constants: saddle's, never the model's -----------------------------------
 
-K_PREDICTORS: Final = 3
+K_PREDICTORS: Final = 5
 """Blind predictors in P-b; route (b) needs none of them contrary and at least
-`REFERENCES_NEEDED` of them giving usable evidence."""
+`REFERENCES_NEEDED` of them giving usable evidence. Each gives usable
+evidence about 60% of the time per unit (measured over four seed-set
+replicates), so P(at least two of k) is about 65% at k = 3 and 91% at k = 5."""
+
+LEGACY_PREDICTORS: Final = 3
+"""The k of a file sealed before it recorded its own (`predictors`): such a
+file is judged with the k it was extracted with."""
+
+PREDICTOR_COUNTS: Final = frozenset({LEGACY_PREDICTORS, K_PREDICTORS})
+"""The k a sealed file may say it was extracted with; any other is malformed."""
 
 REFERENCES_NEEDED: Final = 2
 """How many of the k predictors route (b) needs to have given usable evidence
@@ -754,9 +763,12 @@ class Example:
     probes: tuple[Probe, ...] = ()
     args: tuple[str, ...] = ()
     """The input values, as literals, a mini-reference `ref(*args)` takes."""
+    predictors: int = K_PREDICTORS
+    """The k its extraction ran (the sealed file's `predictors`): how many
+    predictions and references it must record."""
 
     @staticmethod
-    def from_dict(data: Mapping[str, Any]) -> Example:
+    def from_dict(data: Mapping[str, Any], *, predictors: int = K_PREDICTORS) -> Example:
         return Example(
             id=str(data["id"]),
             units=tuple(str(u) for u in data["units"]),
@@ -767,6 +779,7 @@ class Example:
             alternatives=tuple(Alternative.from_dict(a) for a in data.get("alternatives", ())),
             probes=tuple(Probe.from_dict(p) for p in data.get("probes", ())),
             args=tuple(str(a) for a in data.get("args", ())),
+            predictors=predictors,
         )
 
 
@@ -963,7 +976,8 @@ def classify(example: Example, units: Units) -> Class:
         if o is not None and not literal_route(example, o, p.decides, cited):
             if not any(x.same(o) for x in literal):
                 literal.append(o)
-    decided = len(written) == K_PREDICTORS == len(example.predictions) and all(
+    n = example.predictors
+    decided = len(written) == n == len(example.predictions) and all(
         o.same(written[0]) for o in written
     )
     if len(literal) == 1:
@@ -977,15 +991,17 @@ def classify(example: Example, units: Units) -> Class:
             effective_k=k,
             disagree_with_text=not (decided and written[0].same(expected)),
         )
-    elif not _written_agree(example.predictions, written):
-        return Class("split", None, tuple(readings), undecided(example.predictions), effective_k=k)
+    elif not _written_agree(example.predictions, written, n):
+        return Class(
+            "split", None, tuple(readings), undecided(example.predictions, n), effective_k=k
+        )
     else:
         expected = written[0]
         note, verified = _references_note(example, expected, k)
         if note and not decided:
             # Fewer than k predictions, not verified: a split, exactly as before.
             return Class(
-                "split", None, tuple(readings), undecided(example.predictions), effective_k=k
+                "split", None, tuple(readings), undecided(example.predictions, n), effective_k=k
             )
         base = Class(
             "decided-unverified" if note else "executed-reference",
@@ -1009,11 +1025,12 @@ def classify(example: Example, units: Units) -> Class:
     return _probed(base, expected, example.probes)
 
 
-def _written_agree(predictions: Sequence[Prediction], written: Sequence[Outcome]) -> bool:
-    """k predictions recorded, at least `REFERENCES_NEEDED` written, and every
-    written one the same: a written contrary prediction always vetoes."""
+def _written_agree(predictions: Sequence[Prediction], written: Sequence[Outcome], n: int) -> bool:
+    """n (the file's k) predictions recorded, at least `REFERENCES_NEEDED`
+    written, and every written one the same: a written contrary prediction
+    always vetoes."""
     return (
-        len(predictions) == K_PREDICTORS
+        len(predictions) == n
         and len(written) >= REFERENCES_NEEDED
         and all(o.same(written[0]) for o in written)
     )
@@ -1062,14 +1079,14 @@ def _references_note(example: Example, expected: Outcome, k: int) -> tuple[str, 
     those must be more than one sample (their raw outputs differ). Every
     predictor that abstained is named in the note, so a reader sees the
     example was decided on fewer than k."""
-    refs = example.references
+    refs, n = example.references, example.predictors
     if k < 2:
-        return f"effective k = {k}: the {K_PREDICTORS} predictions are one sample", ""
-    if len(refs) != K_PREDICTORS:
+        return f"effective k = {k}: the {n} predictions are one sample", ""
+    if len(refs) != n:
         why = (
             "not recorded"
-            if len(refs) < K_PREDICTORS
-            else f"{len(refs)} references recorded where {K_PREDICTORS} are expected"
+            if len(refs) < n
+            else f"{len(refs)} references recorded where {n} are expected"
         )
         return f"not every predictor's reference ran ({why})", ""
     judged = [
@@ -1084,14 +1101,14 @@ def _references_note(example: Example, expected: Outcome, k: int) -> tuple[str, 
     abstained = [why for _, kind, why in judged if kind == "abstains"]
     if len(usable) < REFERENCES_NEEDED:
         return (
-            f"only {len(usable)} of {K_PREDICTORS} predictors gave usable evidence, "
+            f"only {len(usable)} of {n} predictors gave usable evidence, "
             f"{REFERENCES_NEEDED} are needed (abstained: {'; '.join(abstained)})",
             "",
         )
     if len({p.raw_sha256 for p in usable}) < 2:
         return "effective k = 1 among the predictors that gave evidence: they are one sample", ""
     why = f"; {len(abstained)} abstained: {'; '.join(abstained)}" if abstained else ""
-    return "", f"executed-reference ({len(usable)}/{K_PREDICTORS}{why})"
+    return "", f"executed-reference ({len(usable)}/{n}{why})"
 
 
 SPLIT_NOTE: Final = "the predictors read the cited words differently"
@@ -1101,7 +1118,7 @@ EMPTY_SHA256: Final = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7
 """The sha256 of no text: the `raw_sha256` of a prediction whose call returned nothing."""
 
 
-def undecided(predictions: Sequence[Prediction]) -> str:
+def undecided(predictions: Sequence[Prediction], n: int = K_PREDICTORS) -> str:
     """Why `predictions` do not decide their input, in words a question can
     quote: what happened. Predictions that are missing say why
     (`Prediction.missing`); a disagreement is named only where written
@@ -1115,8 +1132,8 @@ def undecided(predictions: Sequence[Prediction]) -> str:
             for p in missing
         )
         said.append(f"{len(missing)} of {len(predictions)} predictions missing ({'; '.join(whys)})")
-    if len(predictions) != K_PREDICTORS:
-        said.append(f"{len(predictions)} predictions recorded where {K_PREDICTORS} are needed")
+    if len(predictions) != n:
+        said.append(f"{len(predictions)} predictions recorded where {n} are needed")
     if any(not o.same(written[0]) for o in written[1:]):
         said.append(SPLIT_NOTE)
     return "; ".join(said)

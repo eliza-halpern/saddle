@@ -8,6 +8,7 @@ interface failures (R4), hangs (R5), and a driver that cannot run (R9-c).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -17,7 +18,16 @@ import pytest
 
 from saddle import gates, task_requirements
 from saddle.evidence import CapturedRun
-from saddle.task_examples import Example, Outcome, Prediction, Probe, Reference, TreeOutcome
+from saddle.task_examples import (
+    K_PREDICTORS,
+    Example,
+    Outcome,
+    Prediction,
+    Probe,
+    Reference,
+    TreeOutcome,
+    classify,
+)
 from saddle.task_requirements import (
     MISMATCH,
     ProbeTree,
@@ -76,9 +86,10 @@ def example(
         "setup": list(setup),
         "call": call,
         "predictions": [
-            {"outcome": o.to_dict(), "decides": "", "raw_sha256": f"r{i}"} for i in range(3)
+            {"outcome": o.to_dict(), "decides": "", "raw_sha256": f"r{i}"}
+            for i in range(K_PREDICTORS)
         ],
-        "references": [{"status": "ran", "outcome": o.to_dict()} for _ in range(3)],
+        "references": [{"status": "ran", "outcome": o.to_dict()} for _ in range(K_PREDICTORS)],
         "probes": [
             {"sha256": f"{i}" * 64, "status": "ran", "outcome": o.to_dict()} for i in range(3)
         ],
@@ -89,7 +100,13 @@ def sealed(tmp_path: Path, *examples: dict[str, Any], **extra: Any) -> Path:
     path = tmp_path / "task-requirements.json"
     shas = dict.fromkeys(p["sha256"] for e in examples for p in e.get("probes", ()))
     probes = [{"sha256": sha, "source": "oracle-pass"} for sha in shas]
-    record = {"task_text": TASK, "examples": list(examples), "probes": probes, **extra}
+    record = {
+        "task_text": TASK,
+        "examples": list(examples),
+        "probes": probes,
+        "predictors": K_PREDICTORS,
+        **extra,
+    }
     path.write_text(json.dumps(seal(record)))
     return path
 
@@ -109,6 +126,37 @@ def test_a_sealed_file_loads_with_its_units_and_examples(tmp_path: Path) -> None
     assert req.examples[0].call == "twice([2, 1])"
     assert (req.not_executable, req.cut) == ((("S-002", "prose-only"),), ("S-002",))
     assert req.sha256 == json.loads(path.read_text())["file_sha256"]
+
+
+def test_a_three_predictor_file_is_judged_with_its_own_k(tmp_path: Path) -> None:
+    """A file sealed before it recorded `predictors` (three predictors, the
+    old k) loads and judges exactly as it did: k = 3, "3/3", and its rules
+    (two of three usable) unchanged. A k P1 never runs is malformed."""
+    legacy = example("E-001", "twice([2, 1])", "[1, 1, 2, 2]")
+    legacy["predictions"] = legacy["predictions"][:3]
+    legacy["references"] = legacy["references"][:3]
+    path = tmp_path / "legacy"
+    path.mkdir()
+    record = json.loads(sealed(path, legacy).read_text())
+    del record["predictors"]
+    _rehash(record)
+    (path / "task-requirements.json").write_text(json.dumps(record))
+    req = load(path / "task-requirements.json", TASK)
+    klass = classify(req.examples[0], req.units)
+    assert req.examples[0].predictors == 3
+    assert (klass.route, klass.note) == (
+        "executed-reference",
+        "executed-reference (3/3), probe (3/3)",
+    )
+    # the same three-prediction example read as a k = 5 file is short, a split
+    as_five = classify(dataclasses.replace(req.examples[0], predictors=K_PREDICTORS), req.units)
+    assert as_five.route == "split"
+    assert f"3 predictions recorded where {K_PREDICTORS} are needed" in as_five.note
+    for bad in (2, 4):
+        odd = tmp_path / f"odd{bad}"
+        odd.mkdir()
+        with pytest.raises(RequirementsError, match=f"{bad} predictors is not a k P1 runs"):
+            load(sealed(odd, example("E-001", "twice([2, 1])", "[1, 1, 2, 2]"), predictors=bad))
 
 
 def _edit(path: Path, change: Any) -> None:
@@ -424,7 +472,7 @@ def test_r17_known_good_half_three_agreeing_probes_let_route_b_refuse(
     monkeypatch.setattr(gates, "P1_REFUSAL_LICENSED", True)
     check = check_tree(bag_bad, "HEAD", path)
     assert check.verdict == "fail"
-    assert "via executed-reference (3/3), probe (3/3)" in check.detail
+    assert f"via executed-reference ({K_PREDICTORS}/{K_PREDICTORS}), probe (3/3)" in check.detail
     assert "expected [1, 1, 2, 2], got [1, 2, 1, 2]" in check.detail
 
 

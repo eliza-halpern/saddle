@@ -19,6 +19,7 @@ import pytest
 from saddle import gates
 from saddle.gates import TaskRequirementsCheck, check_task_requirements
 from saddle.task_examples import (
+    K_PREDICTORS,
     RAISE_NOISE,
     RAISE_ROW,
     Example,
@@ -121,15 +122,15 @@ def example(
     probes: tuple[Probe, ...] | None = None,
     eid: str = "E-001",
 ) -> Example:
-    """A route (b) example: three agreeing predictions and references, and,
+    """A route (b) example: k agreeing predictions and references, and,
     unless `probes` says otherwise, three known-correct probes that agree."""
     return Example(
         id=eid,
         units=units,
         setup=setup,
         call=call,
-        predictions=tuple(Prediction(expected, "", f"h{i}") for i in range(3)),
-        references=tuple(Reference("ran", expected) for _ in range(3)),
+        predictions=tuple(Prediction(expected, "", f"h{i}") for i in range(K_PREDICTORS)),
+        references=tuple(Reference("ran", expected) for _ in range(K_PREDICTORS)),
         probes=tuple(Probe(f"{i}" * 64, "ran", expected) for i in range(3))
         if probes is None
         else probes,

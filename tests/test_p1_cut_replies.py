@@ -25,7 +25,14 @@ from test_task_passes import PROPOSAL, TASK, Scripted, predict_reply
 from saddle import cli
 from saddle.auto import extraction_counts
 from saddle.gates import check_task_requirements
-from saddle.task_examples import EMPTY_SHA256, SPLIT_NOTE, Prediction, classify, undecided
+from saddle.task_examples import (
+    EMPTY_SHA256,
+    K_PREDICTORS,
+    SPLIT_NOTE,
+    Prediction,
+    classify,
+    undecided,
+)
 from saddle.task_passes import (
     PASS_MAX_TOKENS,
     PASS_REASONING_BUDGET,
@@ -38,6 +45,11 @@ from saddle.task_requirements import load
 from saddle.vllm import VllmClient, VllmResponseError
 
 __all__ = ["good"]
+
+ALL_SEEDS_CUT = ", ".join(
+    f"P-b seed {s}" for seed in PREDICT_SEEDS for s in (seed, seed + RETRY_SEED_OFFSET)
+)
+"""Every P-b call, each cut and asked again once, in the order they are sealed."""
 
 
 def always(*seeds: int) -> tuple[int, ...]:
@@ -93,19 +105,19 @@ def test_every_prediction_reply_cut_is_sealed_as_cut_with_its_cap() -> None:
     server = CapServer(Scripted(PROPOSAL), cut=always(*PREDICT_SEEDS))
     record = extract(TASK, server.client())
     predicting = [c for c in record["calls"] if c["pass"] == "P-b"]
-    assert [c["cut_at"] for c in predicting] == [PASS_MAX_TOKENS] * 6
+    assert [c["cut_at"] for c in predicting] == [PASS_MAX_TOKENS] * (2 * K_PREDICTORS)
     assert {c["error"] for c in predicting} == {
         f"VllmResponseError: completion truncated at {PASS_MAX_TOKENS} output tokens "
         "(finish_reason=length)"
     }
-    assert server.caps == [PASS_MAX_TOKENS] * 7
+    assert server.caps == [PASS_MAX_TOKENS] * (2 * K_PREDICTORS + 1)
     said = f"a prediction reply was cut at the {PASS_MAX_TOKENS}-token cap"
     assert [[p["missing"] for p in e["predictions"]] for e in record["examples"]] == [
-        [said] * 3
+        [said] * K_PREDICTORS
     ] * len(record["examples"])
     assert cut_calls(record) == (
-        f"6 of 7 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
-        "(P-b seed 11, P-b seed 1011, P-b seed 23, P-b seed 1023, P-b seed 37, P-b seed 1037)"
+        f"{2 * K_PREDICTORS} of {2 * K_PREDICTORS + 1} model call(s) cut at the "
+        f"{PASS_MAX_TOKENS}-token cap ({ALL_SEEDS_CUT})"
     )
     assert extraction_counts(record).endswith(f", {cut_calls(record)}")
 
@@ -139,11 +151,13 @@ def test_one_prediction_reply_cut_leaves_the_other_two_whole() -> None:
     record = extract(TASK, server.client())
     # The two whole replies agree, so P-c is asked for other readings.
     cuts = [c.get("cut_at") for c in record["calls"]]
-    assert cuts == [None, None, None, PASS_MAX_TOKENS, PASS_MAX_TOKENS, None]
+    others = [None] * (K_PREDICTORS - 1)
+    assert cuts == [None, None, None, PASS_MAX_TOKENS, PASS_MAX_TOKENS, *others[2:], None]
     first = record["examples"][0]["predictions"]
-    assert [p["outcome"] is not None for p in first] == [True, True, False]
-    assert ["missing" in p for p in first] == [False, False, True]
-    assert cut_calls(record).startswith(f"2 of 6 model call(s) cut at the {PASS_MAX_TOKENS}")
+    assert [p["outcome"] is None for p in first] == [i == 2 for i in range(K_PREDICTORS)]
+    assert ["missing" in p for p in first] == [i == 2 for i in range(K_PREDICTORS)]
+    calls = K_PREDICTORS + 3
+    assert cut_calls(record).startswith(f"2 of {calls} model call(s) cut at the {PASS_MAX_TOKENS}")
 
 
 def test_a_reply_cut_once_is_asked_again_and_the_retry_decides() -> None:
@@ -157,10 +171,12 @@ def test_a_reply_cut_once_is_asked_again_and_the_retry_decides() -> None:
         (PREDICT_SEEDS[1], None),
         (PREDICT_SEEDS[2], PASS_MAX_TOKENS),
         (PREDICT_SEEDS[2] + RETRY_SEED_OFFSET, None),
+        *((seed, None) for seed in PREDICT_SEEDS[3:]),
     ]
     assert all(p["outcome"] is not None for p in record["examples"][0]["predictions"])
     assert cut_calls(record) == (
-        f"1 of 6 model call(s) cut at the {PASS_MAX_TOKENS}-token cap (P-b seed 37)"
+        f"1 of {K_PREDICTORS + 3} model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
+        "(P-b seed 37)"
     )
 
 
@@ -206,9 +222,8 @@ def test_the_extract_command_names_the_cut_calls(
         out.getvalue()
         .rstrip()
         .endswith(
-            f"; 6 of 7 model call(s) cut at the {PASS_MAX_TOKENS}-token cap "
-            "(P-b seed 11, P-b seed 1011, P-b seed 23, P-b seed 1023, P-b seed 37, "
-            "P-b seed 1037)"
+            f"; {2 * K_PREDICTORS} of {2 * K_PREDICTORS + 1} model call(s) cut at the "
+            f"{PASS_MAX_TOKENS}-token cap ({ALL_SEEDS_CUT})"
         )
     )
 
@@ -236,8 +251,8 @@ def test_every_reply_cut_asks_why_not_a_disagreement(tmp_path: Path) -> None:
     server = CapServer(Scripted(PROPOSAL), cut=always(*PREDICT_SEEDS))
     asked = questions(extract(TASK, server.client()), tmp_path)
     assert asked == [
-        f"3 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
-        "cap)"
+        f"{K_PREDICTORS} of {K_PREDICTORS} predictions missing (a prediction reply was cut at "
+        f"the {PASS_MAX_TOKENS}-token cap)"
     ] * len(asked)
     assert asked
 
@@ -266,8 +281,8 @@ def test_a_cut_reply_and_two_that_differ_say_both(tmp_path: Path) -> None:
     server = CapServer(Scripted(PROPOSAL, predict=differing), cut=always(PREDICT_SEEDS[2]))
     asked = questions(extract(TASK, server.client()), tmp_path)
     assert asked[0] == (
-        f"1 of 3 predictions missing (a prediction reply was cut at the {PASS_MAX_TOKENS}-token "
-        f"cap); {SPLIT_NOTE}: [1, 1, 2, 2] / [1, 2, 1, 2]"
+        f"1 of {K_PREDICTORS} predictions missing (a prediction reply was cut at the "
+        f"{PASS_MAX_TOKENS}-token cap); {SPLIT_NOTE}: [1, 1, 2, 2] / [1, 2, 1, 2]"
     )
 
 
@@ -277,10 +292,10 @@ def test_a_prediction_sealed_without_a_reason_says_what_its_record_shows() -> No
     empty = Prediction(None, "", EMPTY_SHA256)
     other = Prediction(None, "", "0" * 64)
     assert EMPTY_SHA256 == hashlib.sha256(b"").hexdigest()
-    assert undecided((empty, empty, empty)) == (
+    assert undecided((empty, empty, empty), 3) == (
         "3 of 3 predictions missing (a prediction call returned nothing)"
     )
     assert undecided((other, empty)) == (
         "2 of 2 predictions missing (a predictor gave no outcome for this input; a prediction "
-        "call returned nothing); 2 predictions recorded where 3 are needed"
+        f"call returned nothing); 2 predictions recorded where {K_PREDICTORS} are needed"
     )

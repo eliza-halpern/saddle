@@ -177,8 +177,10 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
         raise RequirementsError(msg)
     try:
         probes = _sealed_probes(data)
+        predictors = int(data.get("predictors", task_examples.LEGACY_PREDICTORS))
         examples = tuple(
-            Example.from_dict(_with_sources(e, dict(probes))) for e in data.get("examples", ())
+            Example.from_dict(_with_sources(e, dict(probes)), predictors=predictors)
+            for e in data.get("examples", ())
         )
         marks = tuple((str(m["unit"]), str(m["reason"])) for m in data.get("not_executable", ()))
         cut = tuple(str(u) for u in data.get("cut", ()))
@@ -189,6 +191,9 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
     except (KeyError, TypeError, ValueError) as exc:
         msg = f"requirements file is malformed: {exc!r}"
         raise RequirementsError(msg) from exc
+    if predictors not in task_examples.PREDICTOR_COUNTS:
+        msg = f"requirements file is malformed: {predictors} predictors is not a k P1 runs"
+        raise RequirementsError(msg)
     bad = [r for _, r in marks if r not in NOT_EXECUTABLE]
     if bad:
         msg = f"requirements file is malformed: not-executable reason {bad[0]!r} is not allowed"

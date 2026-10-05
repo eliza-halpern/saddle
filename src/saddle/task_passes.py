@@ -79,7 +79,9 @@ PROPOSE_TEMPERATURE: Final = 0.6
 PREDICT_TEMPERATURE: Final = 0.8
 """Above zero: k samples at temperature 0.0 are one sample."""
 ALTERNATIVES_TEMPERATURE: Final = 0.6
-PREDICT_SEEDS: Final[tuple[int, ...]] = (11, 23, 37)
+PREDICT_SEEDS: Final[tuple[int, ...]] = (11, 23, 37, 53, 71)
+"""One distinct seed per predictor (`K_PREDICTORS`); none collides with
+another pass's seed or with any seed plus `RETRY_SEED_OFFSET`."""
 PROPOSE_SEED: Final = 5
 ALTERNATIVES_SEED: Final = 7
 PASS_MAX_TOKENS: Final = 16384
@@ -752,6 +754,7 @@ def extract(
             "cut": plan.cut,
             "unanswered": plan.unanswered,
             "raise_conditions": plan.raise_conditions,
+            "predictors": K_PREDICTORS,
             "model": model,
             "calls": [c.to_dict() for c in calls],
             "hidden_docstrings": hidden,

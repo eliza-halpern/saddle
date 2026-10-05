@@ -20,6 +20,7 @@ from saddle import gates
 from saddle.gates import check_task_requirements
 from saddle.task_examples import (
     DELEGATED_NOTE,
+    K_PREDICTORS,
     LITERAL_DISAGREES,
     NO_OUTCOME,
     NO_RAISE_NOTE,
@@ -90,26 +91,31 @@ def ex(
     units: tuple[str, ...] = ("S-002",),
     setup: tuple[str, ...] = (),
     decides: str = "",
-    raws: tuple[str, str, str] = ("h0", "h1", "h2"),
+    raws: tuple[str, ...] | None = None,
     predicted: tuple[Outcome | None, ...] | None = None,
     refs: tuple[Reference, ...] | None = None,
     probes: tuple[Probe, ...] | None = None,
     alts: tuple[Outcome, ...] = (),
+    k: int = K_PREDICTORS,
 ) -> Example:
-    outcomes = predicted if predicted is not None else (expected, expected, expected)
+    """One example extracted with `k` predictors (`K_PREDICTORS`, or 3 for a
+    row written at a legacy file's k), each agreeing unless told otherwise."""
+    outcomes = predicted if predicted is not None else (expected,) * k
+    names = raws if raws is not None else tuple(f"h{i}" for i in range(k))
     return Example(
         id="E-001",
         units=units,
         setup=setup,
         call=call,
         predictions=tuple(
-            Prediction(o, decides, raw) for o, raw in zip(outcomes, raws, strict=False)
+            Prediction(o, decides, raw) for o, raw in zip(outcomes, names, strict=False)
         ),
-        references=tuple(Reference("ran", expected) for _ in range(3)) if refs is None else refs,
+        references=tuple(Reference("ran", expected) for _ in range(k)) if refs is None else refs,
         alternatives=tuple(Alternative(a, "words") for a in alts),
         probes=tuple(Probe(f"{i}" * 64, "ran", expected) for i in range(3))
         if probes is None
         else probes,
+        predictors=k,
     )
 
 
@@ -146,7 +152,8 @@ def test_r1_route_b_refuses_naming_unit_example_route_and_changed_lines() -> Non
     check = gate(DEDUP, val([1], "m.py:3 (OrderedList.__init__)", "m.py:9 (x)"), changed={"m.py:3"})
     assert (check.verdict, check.passed) == ("fail", False)
     assert check.detail == (
-        'S-002 "Duplicates are allowed and preserved." via executed-reference (3/3), '
+        'S-002 "Duplicates are allowed and preserved." via executed-reference '
+        f"({K_PREDICTORS}/{K_PREDICTORS}), "
         "probe (3/3): from m import OrderedList; list(OrderedList([1, 1])) expected [1, 1], "
         "got [1]; ran changed lines m.py:3 (OrderedList.__init__)"
     )
@@ -224,6 +231,7 @@ def test_r2_lit_the_literal_wins_over_disagreeing_predictors() -> None:
         units=("S-004",),
         decides="`half(2)` returns `1.0`",
         predicted=(lit, out("value", "2.0"), out("value", "2.0")),
+        k=3,
         refs=(),
         probes=(),
     )
@@ -317,7 +325,7 @@ def test_r3_x_without_the_alternative_the_same_tree_is_refused() -> None:
 
 def test_m3_a_two_to_one_split_asks_whatever_the_tree_does() -> None:
     a, b = out("value", "[10, 20]"), out("value", "[0, 1]")
-    e = ex(SLICE, a, units=("S-006",), predicted=(a, a, b))
+    e = ex(SLICE, a, units=("S-006",), k=3, predicted=(a, a, b))
     klass = classify(e, UNITS)
     assert (klass.route, klass.expected) == ("split", None)
     check = gate(e, val([30]))
@@ -334,21 +342,25 @@ def test_a_missing_prediction_abstains_only_when_two_others_verify() -> None:
     needed are a split whatever the references say."""
     a = out("value", "[1, 1]")
     missing = Reference("missing")
-    two = classify(ex("g()", a, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, missing)), UNITS)
+    two = classify(
+        ex("g()", a, k=3, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, missing)), UNITS
+    )
     assert (two.route, two.eligible) == ("executed-reference", True)
     assert two.note == (
         f"executed-reference (2/3; 1 abstained: no prediction ({NO_OUTCOME})), probe (3/3)"
     )
-    blocked = ex("g()", a, predicted=(a, a, None), refs=(GOOD_REF, Reference("timeout"), missing))
+    blocked = ex(
+        "g()", a, k=3, predicted=(a, a, None), refs=(GOOD_REF, Reference("timeout"), missing)
+    )
     assert classify(blocked, UNITS).route == "split"
-    alone = ex("g()", a, predicted=(a, None, None), refs=(GOOD_REF, missing, missing))
+    alone = ex("g()", a, k=3, predicted=(a, None, None), refs=(GOOD_REF, missing, missing))
     assert classify(alone, UNITS).route == "split"
     # a reference that agrees is not evidence without its predictor's prediction
-    unpredicted = ex("g()", a, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
+    unpredicted = ex("g()", a, k=3, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
     assert classify(unpredicted, UNITS).note.startswith("executed-reference (2/3; 1 abstained")
-    lone = ex("g()", a, predicted=(a, None, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
+    lone = ex("g()", a, k=3, predicted=(a, None, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
     assert classify(lone, UNITS).route == "split"
-    short = ex("g()", a, predicted=(a, a), raws=("h0", "h1", "h2"))
+    short = ex("g()", a, k=3, predicted=(a, a), raws=("h0", "h1", "h2"))
     assert classify(short, UNITS).route == "split"
 
 
@@ -399,12 +411,12 @@ def test_a_missing_result_an_opaque_or_undecodable_value_never_refuses() -> None
 def test_r8_identical_samples_are_one_sample_and_cannot_refuse() -> None:
     same = ex(**_dedup_kwargs(), raws=("h", "h", "h"))
     distinct = DEDUP
-    assert (effective_k(same.predictions), effective_k(distinct.predictions)) == (1, 3)
+    assert (effective_k(same.predictions), effective_k(distinct.predictions)) == (1, K_PREDICTORS)
     klass = classify(same, UNITS)
     assert klass.route == "decided-unverified"
     assert klass.note == "effective k = 1: the 3 predictions are one sample"
     assert gate(same, val([1])).verdict == "question"
-    assert classify(distinct, UNITS).effective_k == 3
+    assert classify(distinct, UNITS).effective_k == K_PREDICTORS
 
 
 def _dedup_kwargs() -> dict[str, Any]:
@@ -412,6 +424,7 @@ def _dedup_kwargs() -> dict[str, Any]:
         "call": DEDUP.call,
         "expected": out("value", "[1, 1]"),
         "setup": DEDUP.setup,
+        "k": 3,  # the rows below spell out three predictors: a legacy file's k
     }
 
 
@@ -556,7 +569,7 @@ RAISES_OK: Final = Reference("ran", VALUE_ERROR)
 def _raising(refs: tuple[Reference, ...], **kw: Any) -> Example:
     """An example S-007 decides: `make(-1)` raises ValueError (a binding unit
     that names the raise), three probes agreeing."""
-    return ex("make(-1)", VALUE_ERROR, units=("S-007",), refs=refs, **kw)
+    return ex("make(-1)", VALUE_ERROR, units=("S-007",), refs=refs, k=3, **kw)
 
 
 def test_a_reference_that_crashed_abstains() -> None:
@@ -1287,3 +1300,37 @@ def test_a_tree_outcome_reads_back_and_refuses_an_unknown_kind() -> None:
     assert TreeOutcome("hang", detail="x").show() == "hang: x"
     with pytest.raises(ValueError, match="unknown outcome kind"):
         TreeOutcome.from_dict({"kind": "weird"})
+
+
+# -- k = 5: five predictors, at least two usable, all usable agree -------------
+
+
+def test_at_k5_two_usable_that_agree_decide_beside_three_with_no_evidence() -> None:
+    """Two usable predictors that agree, beside three that gave no usable
+    evidence (args that do not bind, args refused, a reference that crashed
+    on a type its source never raises): eligible, and the note counts out of
+    five. The minimum stays two; it does not scale with k."""
+    a = out("value", "[1, 1]")
+    crashed = Reference("ran", out("raises", "TypeError"), crashed=True)
+    refs = (GOOD_REF, Reference(UNBOUND), GOOD_REF, Reference(ARGS_BAD), crashed)
+    klass = classify(ex("g()", a, refs=refs), UNITS)
+    assert K_PREDICTORS == 5
+    assert (klass.route, klass.eligible, klass.effective_k) == ("executed-reference", True, 5)
+    assert klass.note == (
+        f"executed-reference (2/5; 3 abstained: {UNBOUND}; {ARGS_BAD}; "
+        "its reference crashed (raised TypeError)), probe (3/3)"
+    )
+
+
+def test_at_k5_one_contrary_answer_vetoes_four_that_agree() -> None:
+    a = out("value", "[1, 1]")
+    klass = classify(ex("g()", a, refs=(GOOD_REF,) * 4 + (WRONG_REF,)), UNITS)
+    assert (klass.route, klass.eligible) == ("decided-unverified", False)
+    assert DISAGREE in klass.note
+
+
+def test_at_k5_one_usable_beside_four_with_no_evidence_decides_nothing() -> None:
+    a = out("value", "[1, 1]")
+    klass = classify(ex("g()", a, refs=(GOOD_REF,) + (Reference(UNBOUND),) * 4), UNITS)
+    assert klass.eligible is False
+    assert "only 1 of 5 predictors gave usable evidence, 2 are needed" in klass.note

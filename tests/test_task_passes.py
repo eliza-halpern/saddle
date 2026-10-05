@@ -16,7 +16,15 @@ import pytest
 
 from saddle import task_passes
 from saddle.evidence import CapturedRun
-from saddle.task_examples import Example, Outcome, Prediction, Probe, Reference, classify
+from saddle.task_examples import (
+    K_PREDICTORS,
+    Example,
+    Outcome,
+    Prediction,
+    Probe,
+    Reference,
+    classify,
+)
 from saddle.task_passes import (
     EMPTY_BASELINE,
     HIDDEN,
@@ -180,24 +188,28 @@ def test_extraction_seals_every_pass_and_a_file_that_loads(tmp_path: Path) -> No
     assert req.unanswered == ("S-001",)  # an invalid reason is not a reason
     assert record["model"] == "the-model"
     assert record["probes"] == []
-    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b", "P-c"]
+    assert [c["pass"] for c in record["calls"]] == ["P-a", *["P-b"] * K_PREDICTORS, "P-c"]
     # the vacuity rule: P-b above temperature 0, with distinct seeds
     sent = [s for s in client.sent if s[0] == "P-b"]
     assert sorted(s[2] or 0 for s in sent) == sorted(PREDICT_SEEDS)
     assert all(s[3] > 0 for s in sent)
     imul = req.examples[0]
-    assert [r.status for r in imul.references] == ["ran", "ran", "ran"]
+    assert [r.status for r in imul.references] == ["ran"] * K_PREDICTORS
     assert [a.outcome.text for a in imul.alternatives] == ["[1, 2, 1, 2]"]
     klass = classify(imul, req.units)
-    assert (klass.route, klass.effective_k, klass.eligible) == ("executed-reference", 3, False)
+    assert (klass.route, klass.effective_k, klass.eligible) == (
+        "executed-reference",
+        K_PREDICTORS,
+        False,
+    )
     assert klass.note == "no known-correct probe"  # step 1 seals no probes
     first = req.examples[1]
-    assert [r.outcome for r in first.references] == [Outcome("raises", "IndexError")] * 3
+    assert [r.outcome for r in first.references] == [Outcome("raises", "IndexError")] * K_PREDICTORS
     # E-002 proposed no args: each reference ran on the args its predictor named,
     # sealed with it; E-001's own args left nothing to name
     sealed_refs = record["examples"]
-    assert [r.get("args") for r in sealed_refs[1]["references"]] == [["[]"]] * 3
-    assert [r.get("args") for r in sealed_refs[0]["references"]] == [None] * 3
+    assert [r.get("args") for r in sealed_refs[1]["references"]] == [["[]"]] * K_PREDICTORS
+    assert [r.get("args") for r in sealed_refs[0]["references"]] == [None] * K_PREDICTORS
 
 
 def test_an_unparseable_prediction_reply_is_asked_again_on_a_fresh_seed(tmp_path: Path) -> None:
@@ -207,7 +219,7 @@ def test_an_unparseable_prediction_reply_is_asked_again_on_a_fresh_seed(tmp_path
     client = Scripted({"inputs": [IMUL]}, predict=garbled)
     path = sealed(tmp_path, client)
     record = json.loads(path.read_text())
-    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b", "P-b", "P-c"]
+    assert [c["pass"] for c in record["calls"]] == ["P-a", *["P-b"] * (K_PREDICTORS + 1), "P-c"]
     assert record["calls"][1]["raw"] == "the answer is [1, 1, 2, 2]"  # sealed, not dropped
     seeds = sorted(s[2] or 0 for s in client.sent if s[0] == "P-b")
     assert seeds == sorted([*PREDICT_SEEDS, PREDICT_SEEDS[0] + RETRY_SEED_OFFSET])
@@ -275,7 +287,7 @@ def test_a_failed_pass_decides_nothing_and_is_sealed(tmp_path: Path) -> None:
     # for other readings of what they decided)
     klass = classify(req.examples[0], req.units)
     assert (klass.route, klass.note) == ("executed-reference", "no known-correct probe")
-    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b", "P-c"]
+    assert [c["pass"] for c in record["calls"]] == ["P-a", *["P-b"] * K_PREDICTORS, "P-c"]
 
     # both other predictors failing: one left, a split, and no P-c
     def flakier(seed: int) -> Any:
@@ -602,6 +614,7 @@ def test_exhibit_two_references_decide_where_the_third_would_have_disagreed() ->
         predictions=tuple(Prediction(predicted, "", f"h{i}") for i in range(3)),
         references=tuple(Reference.from_dict(r) for r in (good, sealed_wrong, good)),
         probes=tuple(Probe(f"{i}" * 64, "ran", predicted) for i in range(3)),
+        predictors=3,  # the exhibit as it was recorded, at k = 3
     )
     klass = classify(example, task_units(TASK))
     assert (klass.route, klass.eligible) == ("executed-reference", True)
@@ -651,6 +664,7 @@ def test_exhibit_a_reference_that_crashed_on_misread_args_no_longer_vetoes() -> 
             predictions=tuple(Prediction(expected, "", f"h{i}") for i in range(3)),
             references=(ok, third, ok),
             probes=(Probe("a" * 64, "ran", expected, source="user"),),
+            predictors=3,  # the exhibit as it was recorded, at k = 3
         )
         return classify(example, units)
 
@@ -729,5 +743,14 @@ def test_an_unparseable_prediction_decides_nothing(tmp_path: Path) -> None:
         )
 
     req = load(sealed(tmp_path, Scripted({"inputs": [IMUL]}, predict=bad)))
-    assert [p.outcome for p in req.examples[0].predictions] == [None, None, None]
-    assert [r.status for r in req.examples[0].references] == ["missing"] * 3
+    assert [p.outcome for p in req.examples[0].predictions] == [None] * K_PREDICTORS
+    assert [r.status for r in req.examples[0].references] == ["missing"] * K_PREDICTORS
+
+
+def test_p1_asks_k_predictors_on_seeds_no_other_call_shares() -> None:
+    """Five predictors, one seed each; no seed, nor any seed asked again,
+    collides with another pass's seed or another seed asked again."""
+    assert len(PREDICT_SEEDS) == K_PREDICTORS == 5
+    seeds = [*PREDICT_SEEDS, PROPOSE_SEED, task_passes.ALTERNATIVES_SEED]
+    every = [*seeds, *(s + RETRY_SEED_OFFSET for s in seeds)]
+    assert len(set(every)) == len(every)
