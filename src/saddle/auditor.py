@@ -54,7 +54,7 @@ import sys
 import tempfile
 import tomllib
 import uuid
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -108,6 +108,8 @@ from saddle.evidence import (
 )
 from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
+    DOCUMENTED_RAISES,
+    DOCUMENTED_RAISES_HELD,
     NO_TESTS_COLLECTED,
     TEST_ONLY_UNPROVEN,
     TOOL_UNAVAILABLE,
@@ -116,6 +118,7 @@ from saddle.gates import (
     RuffFinding,
     TaskRequirementsCheck,
     Tier1Result,
+    check_documented_raises,
     check_js_coverage,
     check_js_red_phase,
     check_js_tests,
@@ -1519,6 +1522,45 @@ def raise_gaps(
     return [dataclasses.asdict(g) for g in gaps]
 
 
+def documented_raises_finding(copy: Path, baseline: str) -> Finding | None:
+    """The docstring `Raises` question (K2 D4), or None when it asks nothing.
+
+    Read from the tree with `ast` alone (`gates.check_documented_raises`):
+    the changed non-test `.py` files, and every test file git lists. A
+    `question`, so the audit reports it under `needs_you` and never refuses.
+    """
+    changed = {
+        (str(Path(path).relative_to(copy)), line)
+        for path, line in changed_statements(copy, git_diff(copy, baseline))
+    }
+
+    def read(names: Iterable[str]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for rel in names:
+            try:
+                out[rel] = (copy / rel).read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+        return out
+
+    sources = read(sorted({f for f, _ in changed if f.endswith(".py") and not is_test_file(f)}))
+    listed = run_capture(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], copy
+    ).stdout.split("\0")
+    tests = read(sorted(n for n in listed if n.endswith(".py") and is_test_file(n)))
+    check = check_documented_raises(sources, changed, tests)
+    if check.detail == DOCUMENTED_RAISES_HELD:
+        return None
+    return Finding(
+        DOCUMENTED_RAISES,
+        1,
+        "question",
+        "evidence-thin",
+        check.detail,
+        ("saddle.gates.check_documented_raises", check.basis or ""),
+    )
+
+
 def _finding(gate: str, tier: int, verdict: Verdict, detail: str, basis: str | None) -> Finding:
     cites = (REUSES[gate],) if basis is None else (REUSES[gate], basis)
     return Finding(gate, tier, verdict, _reason(gate, verdict, detail), detail, cites)
@@ -2317,6 +2359,8 @@ class Auditor:
             if gate in cites:
                 found = dataclasses.replace(found, cites=(cites[gate], *found.cites[1:]))
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
+        if tier == 1 and (documented := documented_raises_finding(copy, resolved)) is not None:
+            findings.append(documented)
         if unmeasured:
             findings.append(
                 _not_proven(
