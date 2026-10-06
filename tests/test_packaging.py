@@ -19,6 +19,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from uv_offline import run_uv
 
 from saddle.audit import SURFACE_TOOLS
 
@@ -47,11 +48,7 @@ def test_the_sdist_carries_every_tracked_file(tmp_path: Path) -> None:
     """Contract: the sdist holds every file git tracks. A tracked fixture a
     test reads, dropped by an ignore pattern, fails that test from the sdist."""
     tracked = _tracked()
-    subprocess.run(
-        [_uv(), "build", "--sdist", "--offline", "--out-dir", str(tmp_path), str(REPO)],
-        capture_output=True,
-        check=True,
-    )
+    _uv_run([_uv(), "build", "--sdist", "--offline", "--out-dir", str(tmp_path), str(REPO)])
     (sdist,) = tmp_path.glob("*.tar.gz")
     with tarfile.open(sdist) as archive:
         members = {m.name.partition("/")[2] for m in archive.getmembers() if m.isfile()}
@@ -79,7 +76,7 @@ def test_every_gate_tool_is_a_runtime_dependency() -> None:
 # A user who runs `uv tool install saddle-harness` or `pipx install` gets a
 # venv whose bin/ is not on PATH; only the `saddle` script is linked onto it.
 # These tests build that shape from this tree: the wheel alone, its declared
-# dependencies alone (no dev group), offline from the uv cache, and a PATH
+# dependencies alone (no dev group), from the uv cache (`run_uv`), and a PATH
 # made of the system directories alone (`system_path`).
 
 GATE_NAMES = frozenset({"python", "pytest", "coverage", "ruff", "mutmut"})
@@ -106,11 +103,18 @@ def _run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
     return done
 
 
+def _uv_run(argv: list[str]) -> None:
+    """`argv`, a uv command, from uv's cache or online when the cache falls short
+    (`run_uv`); a failure shows uv's own words."""
+    done = run_uv(argv)
+    assert done.returncode == 0, f"{' '.join(argv)}\n{done.stderr}"
+
+
 def _venv(uv: str, where: Path, *requirements: str) -> Path:
     """A fresh venv at `where` with `requirements` installed offline; its bin/."""
-    _run([uv, "venv", "--offline", "--quiet", "--python", sys.executable, str(where)])
+    _uv_run([uv, "venv", "--offline", "--quiet", "--python", sys.executable, str(where)])
     python = where / "bin" / "python"
-    _run([uv, "pip", "install", "--offline", "--quiet", "--python", str(python), *requirements])
+    _uv_run([uv, "pip", "install", "--offline", "--quiet", "--python", str(python), *requirements])
     return where / "bin"
 
 
@@ -119,7 +123,7 @@ def installed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """bin/ of a clean venv holding the wheel built from this tree."""
     uv = _uv()
     out = tmp_path_factory.mktemp("wheel")
-    _run([uv, "build", "--wheel", "--offline", "--out-dir", str(out), str(REPO)])
+    _uv_run([uv, "build", "--wheel", "--offline", "--out-dir", str(out), str(REPO)])
     (wheel,) = out.glob("*.whl")
     return _venv(uv, tmp_path_factory.mktemp("installed") / "venv", str(wheel))
 

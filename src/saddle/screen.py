@@ -63,8 +63,10 @@ class Window:
         return f'{self.id} "{self.title}" {self.width}x{self.height}'
 
 
-def available(env: Mapping[str, str], which: Callable[[str], str | None] = shutil.which) -> bool:
-    """An X display is set and the capture tools are installed."""
+def available(env: Mapping[str, str], which: Callable[[str], str | None] | None = None) -> bool:
+    """An X display is set and the capture tools are installed (`shutil.which`,
+    looked up when asked)."""
+    which = which or shutil.which
     return bool(env.get("DISPLAY")) and all(which(tool) for tool in NEEDED)
 
 
@@ -362,7 +364,7 @@ def _window_argv(window_id: str, out: Path) -> list[str]:
 
 
 def screen_argv(
-    out: Path, env: Mapping[str, str], which: Callable[[str], str | None] = shutil.which
+    out: Path, env: Mapping[str, str], which: Callable[[str], str | None] | None = None
 ) -> list[list[str]]:
     """The commands that capture the whole screen into `out`, scaled to fit.
 
@@ -370,7 +372,7 @@ def screen_argv(
     so the compositor's own capture (`grim`) is used when it is installed and
     ImageMagick scales the result; on plain X11 `import` reads the root."""
     fit = f"{MAX_SIDE}x{MAX_SIDE}>"
-    if env.get("WAYLAND_DISPLAY") and which("grim"):
+    if env.get("WAYLAND_DISPLAY") and (which or shutil.which)("grim"):
         return [["grim", "-t", "png", str(out)], ["convert", str(out), "-resize", fit, str(out)]]
     return [_window_argv("root", out)]
 

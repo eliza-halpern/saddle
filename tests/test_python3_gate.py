@@ -22,15 +22,49 @@ from test_project_env import make_venv
 from saddle import cli, evidence, sandbox
 from saddle.evidence import run_argv
 
-SYSTEM = f"/usr/bin{os.pathsep}/bin"
+SYSTEM_DIRS = ("/usr/bin", "/bin")
 SADDLES_PYTHON = str(Path(sys.executable).parent / "python")
+SYSTEM = ""
+"""The system dirs as a host without `python` has them: set by `_system`."""
 
 
-@pytest.fixture(autouse=True)
-def _no_system_python() -> None:
-    """A host whose system dirs have a `python` cannot show this shape."""
-    if shutil.which("python", path=SYSTEM) is not None:
-        pytest.skip("this host has `python` in /usr/bin or /bin")
+def system_without_python(where: Path, dirs: tuple[str, ...] = SYSTEM_DIRS) -> Path:
+    """One directory linking every entry of `dirs` (first one wins) except
+    `python`, plus `git` from wherever it is: the shape Ubuntu ships without
+    python-is-python3, on any host. A host whose own /usr/bin has a `python`
+    (the CI runner) used to skip this whole module."""
+    where.mkdir()
+    for d in dirs:
+        for entry in sorted(os.listdir(d)) if os.path.isdir(d) else ():
+            link = where / entry
+            if entry != "python" and not link.exists() and not link.is_symlink():
+                link.symlink_to(Path(d) / entry)
+    git = shutil.which("git")
+    assert git is not None
+    if not (where / "git").exists():
+        (where / "git").symlink_to(git)
+    return where
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _system(tmp_path_factory: pytest.TempPathFactory) -> None:
+    global SYSTEM
+    SYSTEM = str(system_without_python(tmp_path_factory.mktemp("sys") / "bin"))
+    assert shutil.which("python", path=SYSTEM) is None
+
+
+def test_the_system_mirror_drops_only_python(tmp_path: Path) -> None:
+    """Known-bad for the mirror: a system dir that has a `python` keeps
+    every other entry and loses that one."""
+    fake = tmp_path / "fake"
+    fake.mkdir()
+    for name in ("python", "python3", "sh"):
+        (fake / name).write_text("#!/bin/sh\n")
+        (fake / name).chmod(0o755)
+    made = system_without_python(tmp_path / "m", (str(fake),))
+    assert shutil.which("python", path=str(made)) is None
+    assert shutil.which("python3", path=str(made)) == str(made / "python3")
+    assert {p.name for p in made.iterdir()} >= {"python3", "sh", "git"}
 
 
 def python3_only(where: Path, **kwargs: object) -> Path:
@@ -137,11 +171,19 @@ def test_saddle_audit_accepts_a_correct_change_on_the_python3_on_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Known-good, end to end. Red before: the tests ran on saddle's own
-    interpreter, `import onlyhere` failed, and the audit refused."""
+    interpreter, `import onlyhere` failed, and the audit refused.
+
+    The real system dirs, not the mirror: the gates run under bwrap, which
+    binds only system dirs and venvs, so a command looked up through the
+    mirror is missing inside. A host with a system `python` cannot show this
+    shape end to end; the shim itself is covered above on every host."""
+    real = os.pathsep.join(SYSTEM_DIRS)
+    if shutil.which("python", path=real) is not None:
+        pytest.skip("this host has `python` in /usr/bin or /bin")
     bin_dir = python3_only(tmp_path / "v")
     git = shutil.which("git")
     assert git is not None
-    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), str(Path(git).parent), SYSTEM]))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), str(Path(git).parent), real]))
     tree = _tree(tmp_path / "tree")
     code = cli.main(["audit", "--repo", str(tree), "--no-cache"])
     out = capsys.readouterr().out

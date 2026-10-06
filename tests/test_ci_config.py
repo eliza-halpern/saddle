@@ -22,6 +22,7 @@ from typing import Any, NoReturn
 import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
+from uv_offline import run_uv
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
@@ -203,8 +204,15 @@ def read_yaml(text: str) -> Any:
 
 ALLOWED_ACTIONS = {"actions/checkout", "astral-sh/setup-uv", "actions/setup-node"}
 # job -> (job keys allowed, regexes the `run` steps must fullmatch, in order)
+# The check job may prepare the runner for the sandbox the gate needs, and only
+# that: bubblewrap, and the user namespaces Ubuntu's AppArmor denies it.
+BWRAP_INSTALL = "sudo apt-get update -q && sudo apt-get install -y -q bubblewrap"
+ALLOW_USERNS = "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
 JOB_POLICY: dict[str, tuple[set[str], list[str]]] = {
-    "check": ({"runs-on", "env", "steps"}, [r"\./check\.sh"]),
+    "check": (
+        {"runs-on", "env", "steps"},
+        [re.escape(BWRAP_INSTALL), re.escape(ALLOW_USERNS), r"\./check\.sh"],
+    ),
     "mutation": (
         {"if", "runs-on", "timeout-minutes", "steps"},
         [r"uv sync --frozen", r'\./ci-mutate\.sh "\$\{\{ [^{}"]+ \}\}"'],
@@ -409,7 +417,7 @@ def test_ci_runs_exactly_the_local_gate() -> None:
         name: [s["run"] for s in job["steps"] if "run" in s]
         for name, job in workflow["jobs"].items()
     }
-    assert runs["check"] == ["./check.sh"]
+    assert runs["check"] == [BWRAP_INSTALL, ALLOW_USERNS, "./check.sh"]
     assert runs["mutation"][0] == "uv sync --frozen"
     assert runs["mutation"][1].startswith("./ci-mutate.sh ")
     assert (ROOT / "ci-mutate.sh").is_file()
@@ -514,6 +522,13 @@ def test_ci_runs_exactly_the_local_gate() -> None:
             "jobs are",
         ),
         (_replace("jobs:\n", "env:\n  A: b\njobs:\n"), "unexpected workflow keys"),
+        (_replace(f"      - run: {BWRAP_INSTALL}\n", ""), "job check runs"),
+        (_replace("-q bubblewrap\n", "-q bubblewrap pytest-skip\n"), "job check runs"),
+        (_replace("userns=0\n", "userns=0; pip install x\n"), "job check runs"),
+        (
+            _replace(f"      - run: {ALLOW_USERNS}\n", ""),
+            "job check runs",
+        ),
     ],
 )
 def test_ci_that_could_diverge_from_the_local_gate_is_refused(
@@ -611,7 +626,8 @@ def test_actionlint_refuses_a_broken_workflow(
 def _uv_lock_check(
     tmp_path: Path, extra_dependency: str | None
 ) -> subprocess.CompletedProcess[str]:
-    """Run check.sh's `uv lock --check` (offline) in a copy of pyproject.toml and uv.lock."""
+    """Run check.sh's `uv lock --check` (offline, or online when uv's cache cannot
+    resolve: `run_uv`) in a copy of pyproject.toml and uv.lock."""
     commands = _check_sh_commands("uv lock")
     assert len(commands) == 1, f"check.sh must run `uv lock` exactly once: {commands}"
     assert commands[0][:2] == ["uv", "lock"]
@@ -632,13 +648,7 @@ def _uv_lock_check(
             project.replace(anchor, anchor + f'    "{extra_dependency}",\n', 1)
         )
     before = (tmp_path / "uv.lock").read_bytes()
-    result = subprocess.run(
-        [uv, *commands[0][1:], "--offline"],
-        capture_output=True,
-        text=True,
-        cwd=tmp_path,
-        check=False,
-    )
+    result = run_uv([uv, *commands[0][1:], "--offline"], cwd=tmp_path)
     # `--check` must never rewrite the lock: a plain `uv lock` would.
     assert (tmp_path / "uv.lock").read_bytes() == before
     return result
