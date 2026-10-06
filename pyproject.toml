@@ -34,6 +34,9 @@ mcp = ["mcp==2.2.0"]
 # SQL checks for `saddle sql-check` (sqlglot parses and resolves against a schema
 # snapshot, sqlfluff lints in the dialect). Optional, pinned.
 sql = ["sqlglot==30.21.0", "sqlfluff==4.4.0"]
+# YAML checks for `saddle yaml-check` (PyYAML parses, jsonschema validates a
+# document against a schema the project names). Optional.
+yaml = ["pyyaml>=6.0.3", "jsonschema>=4.26.0"]
 
 [dependency-groups]
 dev = [

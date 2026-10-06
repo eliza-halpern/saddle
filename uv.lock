@@ -1627,6 +1627,10 @@ sql = [
     { name = "sqlfluff" },
     { name = "sqlglot" },
 ]
+yaml = [
+    { name = "jsonschema" },
+    { name = "pyyaml" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1649,11 +1653,13 @@ dev = [
 requires-dist = [
     { name = "coverage", specifier = ">=7.0" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "jsonschema", marker = "extra == 'yaml'", specifier = ">=4.26.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = "==2.2.0" },
     { name = "mutmut", specifier = ">=3.8" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "python-multipart", specifier = ">=0.0.12" },
+    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=13.9" },
     { name = "ruff", specifier = ">=0.8" },
     { name = "sqlfluff", marker = "extra == 'sql'", specifier = "==4.4.0" },
@@ -1661,7 +1667,7 @@ requires-dist = [
     { name = "starlette", specifier = ">=0.41" },
     { name = "uvicorn", specifier = ">=0.32" },
 ]
-provides-extras = ["mcp", "sql"]
+provides-extras = ["mcp", "sql", "yaml"]
 
 [package.metadata.requires-dev]
 dev = [
