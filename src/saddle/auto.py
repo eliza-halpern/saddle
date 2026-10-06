@@ -44,6 +44,7 @@ from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
 from saddle.capabilities import CapabilityError
 from saddle.capabilities import load as load_switches
+from saddle.dag import MutationSample
 from saddle.engine import (
     DEFAULT_FINISH_REFUSAL_CAP,
     NO_LIMIT,
@@ -65,7 +66,7 @@ from saddle.evidence import (
     suite_workers,
 )
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
-from saddle.gates import DEFAULT_MUTANT_SHORTLIST
+from saddle.gates import DEFAULT_MUTANT_SHORTLIST, MIN_SIGNIFICANT_MUTANTS
 from saddle.installs import Installs, WheelFolder
 from saddle.journal import (
     AUTO_COMMITTED,
@@ -197,11 +198,19 @@ PATH the model's commands get, so the prompt says what is there rather than
 leaving the model to find out. A watched run spent its first hours hand-rolling
 page scripts before it learned a browser was on the box."""
 
+KILL_BAR: Final = MutationSample.model_fields["kill_threshold"].default
+"""The changed-line kill rate an auto run's audit node asks for: `audit.py`'s
+node leaves `mutation_sample.kill_threshold` at this default."""
+
 JS_MUTATION_PROMPT: Final = (
     " The audit measures JavaScript changes by mutation with StrykerJS, which runs "
     "`node --test` over the project's node test files ({files}) and nothing else: "
     "tests that drive a browser from pytest do not count toward it, so a change to "
-    "a page script needs a node test that exercises it."
+    "a page script needs a node test that exercises it. Mutants are made only on the "
+    f"lines you change, and at least {KILL_BAR:g}% of them must be killed by those "
+    f"node tests, or every one when there are fewer than {MIN_SIGNIFICANT_MUTANTS}; "
+    "short of that, or when your change leaves no mutant to make, the audit refuses "
+    "it and names each mutant that survived."
 )
 """Said when the audit's JS mutation check applies (`stryker_entry`, found as the
 auditor finds it). A run's browser-driven tests killed 0 of 13 mutants, all

@@ -18,7 +18,10 @@ from test_run_env import _repo, _system
 
 from saddle import auto as auto_module
 from saddle import sandbox
-from saddle.auto import JS_MUTATION_PROMPT, detected_tools
+from saddle.audit import audit_node
+from saddle.auto import JS_MUTATION_PROMPT, KILL_BAR, detected_tools
+from saddle.evidence import MutationOutcome
+from saddle.gates import MIN_SIGNIFICANT_MUTANTS, check_mutation
 from saddle.jsevidence import STRYKER_PACKAGE
 
 
@@ -123,3 +126,28 @@ def test_a_run_counts_the_tools_its_project_exposes(
     client = Scripted([finish()])
     auto(root, client)
     assert "On your PATH: `faketool`." in _system(client)
+
+
+def test_the_js_mutation_bar_the_prompt_states_is_the_bar_the_audit_applies() -> None:
+    """A watched run read the auditor's source to learn whether a surviving
+    JS mutant refuses. The prompt now says the bar; this shows it is the bar
+    the audit's node applies, on instances either side of it."""
+    assert audit_node().deterministic_gate.mutation_sample.kill_threshold == KILL_BAR
+
+    def passes(killed: int, total: int) -> bool:
+        survivors = tuple(f"m{i}" for i in range(total - killed))
+        outcome = MutationOutcome(killed=killed, total=total, generated=total, survivors=survivors)
+        return check_mutation(outcome, KILL_BAR).passed
+
+    big = 20
+    at_bar = -(-int(KILL_BAR) * big // 100)  # the fewest kills that reach the bar
+    assert passes(at_bar, big)
+    assert not passes(at_bar - 1, big)
+    small = MIN_SIGNIFICANT_MUTANTS - 1
+    assert passes(small, small)
+    assert not passes(small - 1, small)  # a small sample: every mutant must die
+    assert not passes(0, 0)  # no mutant to make is no evidence
+    said = JS_MUTATION_PROMPT.format(files="`t.test.js`")
+    assert f"at least {KILL_BAR:g}% of them" in said
+    assert f"fewer than {MIN_SIGNIFICANT_MUTANTS};" in said
+    assert "leaves no mutant to make" in said
