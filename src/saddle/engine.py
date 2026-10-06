@@ -680,6 +680,24 @@ English prose still fits.
 Erring high costs reply budget in a conversation large enough to be
 compacting anyway. Erring low costs the whole turn: HTTP 400, empty reply."""
 
+CALIBRATION_MARGIN: Final = 1.2
+"""Headroom on a calibrated estimate: the measured ratio is the last
+request's, and the next one may hold text that tokenises worse."""
+
+RATIO_FLOOR: Final = 1.0
+"""The lowest calibration ratio believed. Measured ratios on real servers run
+1.22 (Strata) to 1.5 (vLLM, 2,732 estimated against 4,100); a lower one is a
+fake or a misreported usage, and erring low costs the turn (HTTP 400)."""
+
+COMPACT_TARGET: Final = 0.7
+"""Compaction, once triggered, works down to this fraction of its trigger.
+
+Compacting to just under the trigger made the next turn cross it again: one
+run compacted 163 times, and each pass rewrites the prompt's head, so the
+server re-reads it (time to first token 38 s after a pass, 14 s otherwise).
+The shape is MemGPT's (trigger near 70% of the window, evict to ~50%); with
+the exact trigger at ~73% of a 131,072 window, 0.7 of it is ~51%."""
+
 CHAT_TEMPERATURE: Final = 1.0
 """Sampling temperature for a browser chat turn.
 
@@ -723,6 +741,11 @@ class TurnOptions:
     tools: list[dict[str, Any]] = field(default_factory=lambda: list(TOOLS))
     auto: AutoRun | None = None
     """Set for an autonomous run: no round cap, a budget, `finish`."""
+    prompt_ratio: float | None = None
+    """The server's prompt tokens over `estimate_tokens` plus `tool_tokens`
+    for the last request it reported usage on; `None` until one has. Set by
+    the turn loop. Where the server cannot count (no /tokenize), it turns
+    the estimate into real tokens instead of the blanket `INPUT_SAFETY`."""
     keep_reasoning: bool = False
     """Autonomous runs only: send each round's reasoning back on its
     assistant message (field `reasoning`) for the rest of the turn, as the
@@ -740,9 +763,17 @@ class TurnOptions:
         return len(json.dumps(self.tools)) // CHARS_PER_TOKEN
 
     def input_estimate(self, messages: list[dict[str, Any]]) -> int:
-        """A guess at the prompt size, for when the server cannot be asked."""
+        """A guess at the prompt size, for when the server cannot be asked:
+        calibrated on the server's own count of the last prompt when there is
+        one (`prompt_ratio` x `CALIBRATION_MARGIN`, stricter or looser than
+        `INPUT_SAFETY` as measured), else the blanket factor. Measured on
+        Strata, the ratio was ~1.22: x2.0 had compaction fire at ~57k real
+        tokens of a 131,072 window."""
         raw = estimate_tokens(messages) + self.tool_tokens()
-        return int(raw * INPUT_SAFETY)
+        factor = (
+            INPUT_SAFETY if self.prompt_ratio is None else self.prompt_ratio * CALIBRATION_MARGIN
+        )
+        return int(raw * factor)
 
     def input_tokens(
         self, messages: list[dict[str, Any]], counter: TokenCounter | None = None
@@ -787,6 +818,14 @@ class TurnOptions:
         reply = max(MIN_OUTPUT, min(REPLY_ROOM, self.context_tokens // 4))
         room = self.context_tokens - reply - OUTPUT_MARGIN
         return max(int(room / INPUT_SAFETY) - self.tool_tokens(), MIN_OUTPUT)
+
+    def compaction_limit_calibrated(self) -> int:
+        """`compaction_limit` in real tokens, for an estimate calibrated on
+        the server's count (`prompt_ratio`), which already holds the tool
+        schemas and its own margin, so no `INPUT_SAFETY` divides it. On a
+        131,072 window this is 96,256, the exact path's limit."""
+        reply = max(MIN_OUTPUT, min(REPLY_ROOM, self.context_tokens // 4))
+        return max(self.context_tokens - reply - OUTPUT_MARGIN, MIN_OUTPUT)
 
 
 def _reply_cap(
@@ -1125,6 +1164,11 @@ def run_turn(
             )
             reply, reasoning = "".join(parts), "".join(thoughts)
             thinking.append(reasoning)
+            if usage is not None and usage.prompt_tokens:
+                # The server's count of what was just sent calibrates the next
+                # estimate; `messages` is still exactly that request here.
+                sent_estimate = estimate_tokens(messages) + options.tool_tokens()
+                options.prompt_ratio = max(RATIO_FLOOR, usage.prompt_tokens / max(sent_estimate, 1))
             if auto is not None:
                 cut = CUT_AT_TIME if timed_out else cut
                 cut = _charge(
@@ -1416,11 +1460,17 @@ def _compact(
             counted = count(msgs, tools=options.tools)
             return counted if counted is not None else options.input_estimate(msgs)
 
+    elif options.prompt_ratio is not None:
+        # No server count, but a calibrated one: real-token scale, as above.
+        limit, measure = options.compaction_limit_calibrated(), options.input_estimate
+        before = options.input_estimate(messages)
     if exact is not None and exact <= limit:
         return
+    scale = "tokens" if exact is not None else "calibrated" if measure is not None else "estimate"
     dropped, summary = compact(
         messages,
         limit_tokens=limit,
+        target_tokens=int(limit * COMPACT_TARGET),
         measure=measure,
         pin="first" if auto is not None else "last",
         hint=REREAD if auto is not None else ASK_USER,
@@ -1438,7 +1488,7 @@ def _compact(
             "estimate_before": before,
             "estimate_after": estimate_tokens(messages),
             "limit": limit,
-            "measured": "tokens" if measure is not None else "estimate",
+            "measured": scale,
         }
         append_span(
             options.journal,
