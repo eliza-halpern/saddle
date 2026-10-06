@@ -707,7 +707,8 @@ def _other(path: str, head: str | None) -> ChangedTest:
 # -- the label ----------------------------------------------------------------------
 
 
-_FLIP_LINE: Final = re.compile(r"^\s*flip:\s*(?P<rest>.*)$", re.IGNORECASE)
+# A list bullet may lead the line: a summary written as a markdown list is still labelled.
+_FLIP_LINE: Final = re.compile(r"^\s*(?:[-*+]\s+)?flip:\s*(?P<rest>.*)$", re.IGNORECASE)
 _QUOTES: Final = "\"'`"
 
 

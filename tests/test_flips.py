@@ -441,6 +441,19 @@ def test_the_longer_name_answers_a_line_that_two_names_fit() -> None:
     assert tc.parse_flips("flip: parsesabc -- x\n", {"parses"}) == {}
 
 
+def test_a_flip_line_may_be_an_item_of_a_markdown_list() -> None:
+    message = (
+        "Rewritten pre-existing tests:\n"
+        "- flip: adds -- the old 4 was a typo\n"
+        "* flip: second -- b\n"
+        "  + flip: third -- c\n"
+    )
+    found = tc.parse_flips(message, {"adds", "second", "third"})
+    assert found == {"adds": "the old 4 was a typo", "second": "b", "third": "c"}
+    for unlabelled in ("- see flip: adds -- x\n", "-flip: adds -- x\n", "1. flip: adds -- x\n"):
+        assert tc.parse_flips(unlabelled, {"adds"}) == {}
+
+
 def test_a_flip_line_with_no_evidence_maps_to_empty() -> None:
     assert tc.parse_flips("FLIP: adds\n", {"adds"}) == {"adds": ""}
 
