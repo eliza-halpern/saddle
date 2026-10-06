@@ -173,6 +173,13 @@ def test_emit_missing_reasoning_defaults_to_empty() -> None:
     assert client.emit_dag(PLAN_PROMPT).reasoning == ""
 
 
+def test_emit_reads_reasoning_content_when_the_server_spells_it_so() -> None:
+    body = _ok_body(content=json.dumps({"nodes": []}), reasoning=None)
+    body["choices"][0]["message"]["reasoning_content"] = "planned it"
+    client, _ = _json_client(body)
+    assert client.emit_dag(PLAN_PROMPT).reasoning == "planned it"
+
+
 def test_emit_non_string_reasoning_defaults_to_empty() -> None:
     client, _ = _json_client(_ok_body(content=json.dumps({"nodes": []}), reasoning=42))
     assert client.emit_dag(PLAN_PROMPT).reasoning == ""
@@ -584,6 +591,23 @@ def _chunk(delta: dict[str, Any]) -> str:
 def _sse_client(body: str, *, status: int = 200) -> tuple[VllmClient, list[httpx.Request]]:
     response = httpx.Response(status, text=body, headers={"Content-Type": "text/event-stream"})
     return _client_for(response)
+
+
+def test_stream_chat_reads_reasoning_content_and_never_counts_it_twice() -> None:
+    """A server that spells the think block `reasoning_content` (Strata) is
+    read; one that sends both spellings of the same text yields it once."""
+    body = (
+        _chunk({"reasoning_content": "Let me "})
+        + _chunk({"reasoning": "think.", "reasoning_content": "think."})
+        + _chunk({"reasoning_content": None, "content": "Hi!"})
+        + "data: [DONE]\n\n"
+    )
+    client, _ = _sse_client(body)
+    assert list(client.stream_chat([{"role": "user", "content": "hi"}])) == [
+        StreamToken(stream="reasoning", text="Let me "),
+        StreamToken(stream="reasoning", text="think."),
+        StreamToken(stream="content", text="Hi!"),
+    ]
 
 
 def test_stream_chat_yields_reasoning_and_content_in_order() -> None:
@@ -1035,6 +1059,18 @@ def test_truncation_error_carries_the_partial_reasoning_and_usage() -> None:
         "reasoning_tokens": 4000,
         "total_tokens": 5321,
     }
+
+
+@pytest.mark.parametrize(("content", "finish"), [("diff --git a/x", "length"), (None, "stop")])
+def test_a_failed_reply_keeps_reasoning_content_too(content: str | None, finish: str) -> None:
+    """A truncated or empty reply from a server spelling the think block
+    `reasoning_content` carries it out with the error, as `reasoning` is."""
+    body = _ok_body(content=content, reasoning=None, finish_reason=finish)
+    body["choices"][0]["message"]["reasoning_content"] = "thought so far"
+    client, _ = _json_client(body)
+    with pytest.raises(VllmResponseError) as info:
+        client.propose_diff("Do x.", max_tokens=4321)
+    assert info.value.reasoning == "thought so far"
 
 
 def test_diff_proposal_carries_usage_and_cap_without_changing_equality() -> None:

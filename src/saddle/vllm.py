@@ -444,8 +444,7 @@ def _chunk_delta(data: object) -> dict[str, Any]:
 def _delta_tokens(delta: Mapping[str, Any]) -> list[StreamToken]:
     """Reasoning then content tokens from one validated delta."""
     tokens: list[StreamToken] = []
-    for stream in ("reasoning", "content"):
-        text = delta.get(stream)
+    for stream, text in (("reasoning", _reasoning_of(delta)), ("content", delta.get("content"))):
         if isinstance(text, str) and text:
             tokens.append(StreamToken(stream=stream, text=text))
     return tokens
@@ -453,6 +452,19 @@ def _delta_tokens(delta: Mapping[str, Any]) -> list[StreamToken]:
 
 def _text_or_empty(value: object) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _reasoning_of(part: Mapping[str, Any]) -> str:
+    """The think block of a delta or message: `reasoning` (vLLM 0.28), else
+    `reasoning_content` (the llama.cpp-style servers, Strata among them).
+
+    Read once, never summed: a server that sends both carries the same text
+    under each. Reading `reasoning` alone made every Strata run blind to its
+    own past thinking: nothing reached the ledger, `keep_reasoning` sent
+    nothing back, and the stall check scored empty rounds.
+    """
+    reasoning = _text_or_empty(part.get("reasoning"))
+    return reasoning or _text_or_empty(part.get("reasoning_content"))
 
 
 def _usage(data: Mapping[str, Any]) -> dict[str, int]:
@@ -495,7 +507,7 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
         partial: dict[str, Any] = raw_partial if isinstance(raw_partial, dict) else {}
         raise VllmResponseError(
             msg,
-            reasoning=_text_or_empty(partial.get("reasoning")),
+            reasoning=_reasoning_of(partial),
             content=_text_or_empty(partial.get("content")),
             usage=_usage(data),
             max_tokens=max_tokens,
@@ -511,7 +523,7 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
         # null`, 45k chars of reasoning cut mid-word. The think block ran
         # out and the turn ended with nothing emitted. Name it, and carry
         # the reasoning out so the attempt sidecar shows what happened.
-        reasoning = _text_or_empty(message.get("reasoning"))
+        reasoning = _reasoning_of(message)
         raw_finish = first.get("finish_reason")
         finish = raw_finish if isinstance(raw_finish, str) else ""
         msg = (
@@ -525,10 +537,7 @@ def _parse_message(data: object, *, max_tokens: int | None = None) -> tuple[str,
             max_tokens=max_tokens,
             finish_reason=finish,
         )
-    # vLLM 0.28 surfaces the think block as `reasoning` (not `reasoning_content`).
-    raw_reasoning = message.get("reasoning")
-    reasoning = raw_reasoning if isinstance(raw_reasoning, str) else ""
-    return content, reasoning
+    return content, _reasoning_of(message)
 
 
 def _parse_response(data: object) -> DagEmission:

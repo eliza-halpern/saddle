@@ -71,12 +71,13 @@ def _read_call() -> dict[str, Any]:
     return _delta({"tool_calls": [call]})
 
 
-def _script() -> list[str]:
-    # a tool round, a plain reply (the loop nudges as role=user), then finish
+def _script(key: str = "reasoning") -> list[str]:
+    # a tool round, a plain reply (the loop nudges as role=user), then finish;
+    # `key` is the server's spelling of the think block in its deltas
     return [
-        _sse(_delta({"reasoning": R1}), _read_call()),
-        _sse(_delta({"reasoning": R2}), _delta({"content": "thinking aloud"})),
-        _sse(_delta({"reasoning": "last"}), _finish_call()),
+        _sse(_delta({key: R1}), _read_call()),
+        _sse(_delta({key: R2}), _delta({"content": "thinking aloud"})),
+        _sse(_delta({key: "last"}), _finish_call()),
     ]
 
 
@@ -84,8 +85,8 @@ def _assistants(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [m for m in payload["messages"] if m["role"] == "assistant"]
 
 
-def _run(repo_path: Path, keep: bool) -> tuple[FakeServer, Any]:
-    server = FakeServer(_script())
+def _run(repo_path: Path, keep: bool, key: str = "reasoning") -> tuple[FakeServer, Any]:
+    server = FakeServer(_script(key))
     options = AutoOptions(task="make add add", repo=repo_path, run_id="k1", keep_reasoning=keep)
     return server, run_auto(options, server.client())
 
@@ -99,6 +100,18 @@ def test_with_the_flag_the_next_round_carries_the_reasoning(repo: Path) -> None:
     assert server.payloads[2]["messages"][-1]["role"] == "user"
     evidence, _ = _sealed(result)
     assert evidence["prompt_shape"] == {"keep_reasoning": True}
+
+
+def test_a_server_that_streams_reasoning_content_has_it_carried_too(
+    repo: Path,  # noqa: F811
+) -> None:
+    """Strata streams the think block as `reasoning_content`, not vLLM's
+    `reasoning`. Read under one spelling only, a Strata run kept nothing: 58
+    rounds of a watched run went out with no past reasoning at all, and the
+    model re-decided the same choices every round."""
+    server, _ = _run(repo, keep=True, key="reasoning_content")
+    assert [m.get("reasoning_content") for m in _assistants(server.payloads[1])] == [R1]
+    assert [m.get("reasoning_content") for m in _assistants(server.payloads[2])] == [R1, R2]
 
 
 def test_without_the_flag_no_request_carries_reasoning(repo: Path) -> None:  # noqa: F811
