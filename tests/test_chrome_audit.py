@@ -106,7 +106,10 @@ def test_every_chrome_driver_belongs_to_a_named_test_module() -> None:
 def test_a_skipped_chrome_run_is_not_proven_never_covered(tmp_path: Path) -> None:
     got = verdict(small(tmp_path, SKIPS))
     assert got.verdict == "not-proven"
-    assert got.detail == "not proven: not line-measured: static/p.js (1 Chrome tests skipped)"
+    assert got.detail == (
+        "not proven: not line-measured: static/p.js (1 Chrome tests skipped, and a skip"
+        " leaves every page line unproven: run the `chrome_tests` and make each one run)"
+    )
 
 
 def test_a_chrome_run_that_left_no_coverage_is_not_proven(tmp_path: Path) -> None:
@@ -291,7 +294,7 @@ def fake_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
         ([(SHELL_TIMEOUT, "", "")], "the Chrome tests timed out"),
         ([(1, "1 failed", "")], "the Chrome tests exited 1: 1 failed"),
         ([(1, "", "")], "the Chrome tests exited 1: no output"),
-        ([(0, "2 passed, 3 skipped", "")], "3 Chrome tests skipped"),
+        ([(0, "2 passed, 3 skipped", "")], "3 Chrome tests skipped, and a skip leaves every"),
         ([(0, "", ""), (2, "", "boom")], "c8 report of the Chrome coverage exited 2: boom"),
         ([(0, "", ""), (2, "", "")], "c8 report of the Chrome coverage exited 2: no output"),
         ([(0, "", ""), (0, "", "")], "c8 wrote no lcov report of the Chrome coverage"),

@@ -505,7 +505,12 @@ def measure_chrome_coverage(
             return JsCoverage(problem=f"the Chrome tests exited {ran.exit_code}: {last}")
         skipped = re.search(r"(\d+) skipped", ran.stdout)
         if skipped or not any(raw.glob("coverage-*.json")):
-            why = f"{skipped.group(1)} Chrome tests skipped" if skipped else NO_CHROME
+            why = (
+                f"{skipped.group(1)} Chrome tests skipped, and a skip leaves every page"
+                " line unproven: run the `chrome_tests` and make each one run"
+                if skipped
+                else NO_CHROME
+            )
             return JsCoverage(problem=why)
         report = run_capture(
             [
@@ -761,8 +766,10 @@ def mutation_sample(
             for rel, lines in sorted(by_file.items())
             for first, last in _ranges(lines)
         ]
-        modules = entry.parents[3]
-        seen = [] if modules.is_relative_to(workdir) else [modules]
+        # Shown wherever it lives: the run is confined to the scratch copy, which
+        # never holds the tree, so a tree's own node_modules is as unseen as a
+        # checkout's. Hiding it there crashed StrykerJS before any mutant ran.
+        seen = [entry.parents[3]]
         reach = _reach(scratch, tests, by_file, recorder=recorder, timeout_s=timeout_s, shown=seen)
         # No test file executes a changed line: the suite still runs once (the
         # dry run needs a green command) and every mutant reads "no coverage".

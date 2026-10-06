@@ -120,7 +120,7 @@ def test_every_survivor_is_named_when_n_allows_it() -> None:
     rows = [r for r in check.detail.splitlines() if r.startswith("- ")]
     assert [r.split()[1] for r in rows] == ["m.py:3", "m.py:5", "m.py:7"]
     assert "more)" not in check.detail
-    assert "3 surviving mutant(s)" in check.detail
+    assert "3 mutant(s) on changed lines survive" in check.detail
 
 
 def test_untested_mutants_are_listed_and_counted() -> None:
@@ -559,7 +559,8 @@ def test_a_behaviour_survivor_beside_set_aside_ones_stays_open() -> None:
     assert set_aside_kind(untested) is None
     got = check_mutation_shortlist(_outcome(10, [*_fixture_details(), boundary, untested]), 85.0)
     assert not got.passed
-    assert got.detail.startswith("2 surviving mutant(s)")
+    assert got.detail.startswith("2 mutant(s) on changed lines survive: no test kills them")
+    assert "accepted reason" not in got.detail  # no caller can give one
     assert "mutant m.x_f__mutmut_1 (survived)" in got.detail
 
 

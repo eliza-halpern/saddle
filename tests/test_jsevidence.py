@@ -352,6 +352,26 @@ def test_a_failed_stryker_with_no_output_names_that(
     assert out.survivors == ("stryker run exited 1: no output",)
 
 
+def test_stryker_in_the_trees_own_node_modules_is_shown_to_the_scratch_run(
+    monkeypatch: pytest.MonkeyPatch, project: Path
+) -> None:
+    """StrykerJS runs in a scratch copy, which never holds the tree: a tree's own
+    real `node_modules` must be shown to that run too, or node cannot load it."""
+    (project / js.STRYKER_PACKAGE).parent.mkdir(parents=True)
+    (project / js.STRYKER_PACKAGE).write_text("")
+    shown: list[object] = []
+
+    def capture(*_a: object, **k: object) -> CapturedRun:
+        shown.append(k.get("shown"))
+        return _run(1)
+
+    monkeypatch.setattr(js, "run_capture", capture)
+    js.mutation_sample(project, [(str(project / "static" / "a.js"), 5)])
+    modules = (project / "node_modules").resolve()
+    assert shown
+    assert all(isinstance(s, list) and modules in s for s in shown)
+
+
 # -- which tests a mutant is judged by ---------------------------------------------------
 
 SCOPED_A = (

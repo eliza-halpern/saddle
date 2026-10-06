@@ -3113,8 +3113,8 @@ def check_mutation_shortlist(
     calibrates an 85% bar on changed-line mutants, and correct T5 trees
     scored 63-76% in a measured run. What decides is each survivor -- `no tests` ones
     included, since a mutant no test runs is a missing test --
-    either dying or sitting on a line in `accepted` (a checked reason,
-    `verify_untested_claims`). A survivor whose every change sits in the
+    either dying or sitting on a line in `accepted` (no caller passes any
+    today, so every survivor must die). A survivor whose every change sits in the
     argument of a raised exception or a logging call
     (`evidence.message_only_mutant`, by AST) is excluded and counted, as
     text-only mutants are. The detail names up to `shortlist` of the open
@@ -3159,7 +3159,7 @@ def check_mutation_shortlist(
             passed=True,
             detail=(
                 f"killed {outcome.killed} of {outcome.total} changed-line mutants; "
-                f"no survivor without an accepted reason{note}" + aside_rows
+                f"no surviving mutant left open{note}" + aside_rows
             ),
             basis=basis,
         )
@@ -3176,7 +3176,7 @@ def check_mutation_shortlist(
         name="mutation",
         passed=False,
         detail=(
-            f"{len(open_)} surviving mutant(s) on changed lines have no accepted reason "
+            f"{len(open_)} mutant(s) on changed lines survive: no test kills them "
             f"(killed {outcome.killed} of {outcome.total}){note}; shortlist:\n"
             + "\n".join(rows)
             + more

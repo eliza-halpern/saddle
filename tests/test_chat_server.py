@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import queue
+import subprocess
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -2579,3 +2580,46 @@ def test_serve_fails_closed_even_when_no_token_was_handed_to_it(
     with TestClient(handed["app"]) as client:
         assert client.get("/").status_code == 401
         assert client.get("/", headers={"Authorization": "Bearer t0k3n"}).status_code == 200
+
+
+def test_a_chat_in_a_repository_carries_its_agents_md_and_the_persons_notes(
+    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red before: only `saddle auto` read AGENTS.md, so a chat in the same
+    repository never saw the project's own rules."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Run the tests with -q.\n")
+    for argv in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "init"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+    (repo / ".saddle").mkdir()
+    (repo / ".saddle" / "instructions.md").write_text("Mine, not the project's.\n")
+    seen: list[str] = []
+
+    def capture(
+        _c: Any, messages: list[dict[str, Any]], text: str, options: Any, **_kw: Any
+    ) -> Any:
+        seen.append(options.system_prompt)
+        messages.append({"role": "user", "content": text})
+        return iter(())
+
+    import saddle.web.app as module
+
+    with app_for(store, tmp_path) as (client, app):
+        client.put("/api/personas/pirate", json={"prompt": "Arr."})
+        monkeypatch.setattr(module, "run_turn", capture)
+        # One at a time: creating a session reuses one that has not started.
+        inside = client.post("/api/sessions", json={"persona": "pirate", "workdir": str(repo)})
+        _server_of(app)._run(inside.json()["id"], "hello")
+        outside = client.post(
+            "/api/sessions", json={"persona": "pirate", "workdir": str(tmp_path / "sessions")}
+        )
+        _server_of(app)._run(outside.json()["id"], "hello")
+
+    assert seen[0].startswith("Arr.")
+    assert seen[0].index("Run the tests with -q.") < seen[0].index("Mine, not the project's.")
+    assert seen[1] == "Arr."  # outside a repository, nothing is added

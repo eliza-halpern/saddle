@@ -18,7 +18,10 @@ from test_auto import Scripted, auto, call, finish, git
 from test_project_env import make_venv
 
 from saddle.audit import AUDIT_TEST_COMMAND
+from saddle.auto import EVIDENCE_DIR, keep_evidence, page_coverage
 from saddle.journal import read_spans
+from saddle.jsevidence import COVERAGE_SCOPE
+from saddle.tools import CHECK_SCHEMA, DISPUTE_TOOL
 
 PKG = "VALUE = 7\n"
 FLAT = "def f():\n    return 2\n"
@@ -497,3 +500,93 @@ def test_the_prompt_says_how_to_undo_an_edit_git_cannot_restore(tmp_path: Path) 
     client = Scripted([finish()])
     auto(_repo(tmp_path / "repo", src=False), client)
     assert "copy the file to /tmp first and copy it back afterwards" in _system(client)
+
+
+def test_what_the_model_saves_in_tmp_evidence_outlives_the_run_and_is_listed(
+    tmp_path: Path,
+) -> None:
+    """Red before: everything in the run's /tmp went when the run ended, so a run
+    asked for screenshots had nowhere to leave them."""
+    repo = _repo(tmp_path / "repo", src=False)
+    save = (
+        "mkdir -p /tmp/evidence/shots && printf png > /tmp/evidence/shots/after.png"
+        " && printf x > /tmp/scratch.txt && ln -s /etc/hostname /tmp/evidence/link"
+    )
+    client = Scripted([[call("run_command", "r1", command=save)], finish()])
+    result = auto(repo, client)
+    kept = result.journal.parent / EVIDENCE_DIR
+    assert (kept / "shots" / "after.png").read_text() == "png"
+    assert not (result.journal.parent / "tmp").exists()  # the rest of /tmp still goes
+    message = git(result.worktree, "log", "-1", "--format=%B")
+    where = kept.relative_to(repo).as_posix()
+    assert f"kept in {where}: shots/after.png\n" in message
+    assert "link" not in message.split(where)[1].splitlines()[0]  # a link is not a file
+    assert "after.png" not in git(result.worktree, "show", "--stat", "--format=", "HEAD")
+    assert "is kept beside the run's ledger" in _system(client)
+    # Known good: nothing saved there, nothing kept and nothing said.
+    quiet = auto(_repo(tmp_path / "bare", src=False), Scripted([finish()]))
+    assert not (quiet.journal.parent / EVIDENCE_DIR).exists()
+    assert "Files the model saved" not in git(quiet.worktree, "log", "-1", "--format=%B")
+
+
+def test_evidence_that_is_not_a_folder_keeps_nothing(tmp_path: Path) -> None:
+    run_tmp, run_dir = tmp_path / "tmp", tmp_path / "run"
+    run_tmp.mkdir()
+    run_dir.mkdir()
+    assert keep_evidence(run_tmp, run_dir) == []
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "secret").write_text("s")
+    (run_tmp / EVIDENCE_DIR).symlink_to(tmp_path / "elsewhere")
+    assert keep_evidence(run_tmp, run_dir) == []
+    assert not (run_dir / EVIDENCE_DIR).exists()
+
+
+def test_a_task_partly_done_already_is_finished_in_part_not_disputed(tmp_path: Path) -> None:
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)
+    system = _system(client)
+    assert "call dispute only when no part of the task is left to do" in system
+    dispute = next(t for t in client.asked[0]["tools"] if t["function"]["name"] == DISPUTE_TOOL)
+    assert (
+        "When only some of the task's parts are false or already done, do not dispute"
+        in (dispute["function"]["description"])
+    )
+
+
+def test_read_only_tests_say_what_to_do_when_a_change_needs_one(tmp_path: Path) -> None:
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)
+    assert "call blocked and name the test it needs" in _system(client)
+    editable = Scripted([finish()])
+    auto(_repo(tmp_path / "open", src=False), editable, allow_test_edits=True)
+    assert "name the test it needs" not in _system(editable)
+
+
+def test_page_coverage_rules_are_said_only_where_chrome_tests_measure_pages(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path / "repo", src=False)
+    assert page_coverage(repo) == ""
+    scope = repo / COVERAGE_SCOPE
+    scope.parent.mkdir(parents=True)
+    scope.write_text(
+        json.dumps(
+            {
+                "measured": [],
+                "not_measured": {},
+                "chrome_measured": {"static/p.js": 1},
+                "chrome_tests": ["tests/test_page.py"],
+            }
+        )
+    )
+    said = page_coverage(repo)
+    assert "`static/p.js`" in said
+    assert "`tests/test_page.py`" in said
+    assert "if any skips" in said
+    scope.write_text(json.dumps({"measured": [], "not_measured": {}, "chrome_tests": ["t.py"]}))
+    assert page_coverage(repo) == ""  # Chrome tests, but no page measured by them
+
+
+def test_the_check_tool_says_it_runs_the_projects_own_checks() -> None:
+    said = CHECK_SCHEMA["function"]["description"]
+    assert "the project's own audit checks" in said

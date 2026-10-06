@@ -140,6 +140,14 @@ answer, so the default (keep them read-only) is sealed and the run cannot write 
 test. For a task that asks for a new or changed test, `--allow-test-edits` is the
 normal flag. The chat's Task lane ticks **Allow test edits** by default.
 
+A run and a chat both read the repository's committed `AGENTS.md`, the project's own
+instructions for agents, and then your own notes in `.saddle/instructions.md` in your
+checkout: notes that are yours rather than the project's, never committed (saddle's
+`.saddle/.gitignore` ignores everything there). A run's start record says when notes
+were read. Files a run saves under `/tmp/evidence/` (screenshots a task asks for, say)
+are kept in `.saddle/runs/<run>/evidence/` and listed in the run's commit message; they
+are not committed and are not proof.
+
 To have every Task run from the chat also check the task text's own examples (P1),
 start the chat with `saddle web --extract-requirements`, or put
 `SADDLE_EXTRACT_REQUIREMENTS=1` in the env file once. The examples are extracted

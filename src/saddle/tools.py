@@ -713,8 +713,10 @@ was started with the flag; without it the name is not in the tool list."""
 CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
     CHECK_TOOL,
     "Run the audit's fast checks (syntax, ruff and imports on each changed Python "
-    "file, then the tests, changed-line coverage, dead code, public deletions and "
-    "assertion preservation) on the tree as it is now, and return the findings "
+    "file, then the tests, changed-line coverage, dead code, public deletions, "
+    "assertion preservation, and the project's own audit checks: its type checker "
+    "and any linters it declares, as your instructions list them) on the tree as "
+    "it is now, and return the findings "
     "exactly as a refused finish would show them. finish runs these same checks "
     "plus mutation testing, so a passing check does not guarantee finish passes. "
     "A check on a tree unchanged since the last check is refused.",
@@ -734,7 +736,9 @@ DISPUTE_SCHEMA: Final[dict[str, Any]] = _tool(
     "End the run because the task's premise is false: the bug it describes cannot "
     "happen, or is already fixed. Use it as soon as your probe or your reading shows "
     "the task's claim cannot hold on the current code, even if you could build "
-    "something that satisfies the task's wording. Give the claim the task makes, what "
+    "something that satisfies the task's wording. When only some of the task's "
+    "parts are false or already done, do not dispute: do the rest, and name the "
+    "parts you left in finish. Give the claim the task makes, what "
     "you found, and "
     "one to five shell commands whose output shows it (a script you wrote in /tmp is "
     "fine). Saddle reruns each command and seals its output; a person reviews it. "

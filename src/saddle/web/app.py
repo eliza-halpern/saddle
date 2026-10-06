@@ -47,6 +47,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from saddle import capabilities
+from saddle.agents_md import chat_instructions
 from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET, AutoError, repo_root
 from saddle.engine import TurnOptions, _user_message
 from saddle.engine import run_turn as run_turn  # an injection seam: the tests replace it
@@ -606,7 +607,8 @@ class ChatServer:
                 options = TurnOptions(
                     workdir=workdir,
                     journal=self.store.journal_path(session_id),
-                    system_prompt=session.prompt_text(self.store.personas()),
+                    system_prompt=session.prompt_text(self.store.personas())
+                    + chat_instructions(workdir),
                     reasoning_effort=session.reasoning_effort,
                     temperature=session.temperature,
                     context_tokens=self._context_window(client),

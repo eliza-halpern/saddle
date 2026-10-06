@@ -76,7 +76,7 @@ from saddle.journal import (
     started_before,
     utc_now,
 )
-from saddle.jsevidence import js_test_files, stryker_entry
+from saddle.jsevidence import COVERAGE_SCOPE, js_test_files, read_coverage_scope, stryker_entry
 from saddle.recall import Recall
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources, cut_calls
@@ -132,6 +132,10 @@ SYSTEM_PROMPT: Final = (
     "it. Do not look for another reading of the task that would make it true, and "
     "do not reconstruct how older code behaved to make its claim true: if you catch "
     "yourself doing either, call dispute instead. "
+    "A task with several parts is checked part by part. When some parts are "
+    "already done or cannot hold but others are real, do the real ones, and in "
+    "your finish account name each part you left and the command that shows "
+    "why; call dispute only when no part of the task is left to do. "
     "Otherwise, read the code, make the change with the file tools, and run the "
     "tests with run_command to check it. "
     "{tests} "
@@ -161,6 +165,11 @@ STALL_PROMPT: Final = (
 """Appended to the system prompt with `--stall-check`, so the eject is a stated
 rule the model can satisfy (act, or dispute), not a silent trap."""
 
+EVIDENCE_DIR: Final = "evidence"
+"""The folder under a run's /tmp that outlives the run: `keep_evidence` copies it
+beside the ledger before /tmp goes. A watched run asked for screenshots had
+nowhere to leave them, and spent minutes deciding whether to commit PNGs."""
+
 ENVIRONMENT_PROMPT: Final = (
     " Your working directory is {worktree}, a fresh git worktree of the "
     "repository; your commands run in it inside a sandbox with no network. The "
@@ -172,10 +181,14 @@ ENVIRONMENT_PROMPT: Final = (
     "message. /tmp is private to this run and lasts for all of it, so keep "
     "scratch files there. To try an edit you mean to undo (a mutation, say), copy "
     "the file to /tmp first and copy it back afterwards: git cannot restore it "
-    "here, and the audit judges the worktree as you leave it. {python} {src}The audit runs "
+    "here, and the audit judges the worktree as you leave it. Everything else in "
+    "/tmp is deleted when the run ends, except /tmp/" + EVIDENCE_DIR + "/: what you "
+    "save there (a screenshot a task asks for, say) is kept beside the run's "
+    "ledger for the person and listed in the commit message, never committed and "
+    "never counted as proof. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
-    "first. {stages}{budget}{workers}{coverage}{node}{detected}{js_mutation}{feed}"
+    "first. {stages}{budget}{workers}{coverage}{node}{detected}{js_mutation}{page}{feed}"
 )
 
 DETECTED_TOOLS: Final = ("node", "npm", "google-chrome", "chromium", "uv")
@@ -320,7 +333,47 @@ def environment_prompt(
             if js_tests is not None
             else ""
         ),
+        page=page_coverage(worktree),
         feed=FEED_PROMPT.format(cap=refusal_cap) if feed else "",
+    )
+
+
+PAGE_COVERAGE_PROMPT: Final = (
+    " The audit measures changed lines of {files} with the Chrome-driven tests "
+    "listed under `chrome_tests` in {scope} ({tests}). Every one of them must run: "
+    "if any skips (no browser, or a rendering setup that does not match), none of "
+    "those lines is proven, so run them yourself and make sure none skips."
+)
+"""Said when the coverage scope names Chrome-driven tests, so a skip that voids
+page coverage is a stated rule, not a refusal met only at finish."""
+
+
+def page_coverage(worktree: Path) -> str:
+    """`PAGE_COVERAGE_PROMPT` for `worktree`'s coverage scope; "" when it lists no
+    Chrome-driven test or no page script."""
+    scope = read_coverage_scope(worktree)
+    if not scope.chrome_tests or not scope.chrome_measured:
+        return ""
+    return PAGE_COVERAGE_PROMPT.format(
+        files=", ".join(f"`{f}`" for f in sorted(scope.chrome_measured)),
+        scope=f"`{COVERAGE_SCOPE}`",
+        tests=", ".join(f"`{t}`" for t in scope.chrome_tests),
+    )
+
+
+def keep_evidence(run_tmp: Path, run_dir: Path) -> list[str]:
+    """Copies `run_tmp`'s `EVIDENCE_DIR` to `run_dir` before /tmp goes, and
+    returns the regular files kept, relative and sorted; [] when there is none.
+    Links are kept as links and never listed: a link names a file, it is not one."""
+    source = run_tmp / EVIDENCE_DIR
+    if not source.is_dir() or source.is_symlink():
+        return []
+    target = run_dir / EVIDENCE_DIR
+    shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
+    return sorted(
+        path.relative_to(target).as_posix()
+        for path in target.rglob("*")
+        if path.is_file() and not path.is_symlink()
     )
 
 
@@ -1047,7 +1100,9 @@ def run_auto(
         "You may edit tests."
         if roots is None
         else f"Test files ({', '.join(r + '/' for r in roots)}, test_*.py, conftest.py) "
-        "are read-only: an edit to one is refused."
+        "are read-only: an edit to one is refused. Where the instructions below ask "
+        "for a new or changed test, that does not apply in this run: if your change "
+        "cannot be shown without one, call blocked and name the test it needs."
     )
     run_env = {**COMMAND_ENV, **sandbox.project_command_env(project), **src_layout_env(worktree)}
     mounted = node_modules_mount(repo_root(repo), worktree)
@@ -1168,6 +1223,7 @@ def run_auto(
             if on_event is not None:
                 on_event(event)
     finally:
+        kept = keep_evidence(run_tmp, journal.parent)
         shutil.rmtree(run_tmp, ignore_errors=True)
         if auto.installs is not None:
             auto.installs.remove()
@@ -1179,6 +1235,12 @@ def run_auto(
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
+    if kept:
+        where = (journal.parent / EVIDENCE_DIR).relative_to(root).as_posix()
+        message += (
+            "\n\nFiles the model saved for the person (not proof, not committed), "
+            f"kept in {where}: {', '.join(kept)}"
+        )
     # The anchor: the outcome span's hash, outside the ledger, as the last paragraph.
     ledger = journal.relative_to(root).as_posix()
     message += f"\n\n{anchor_trailers(outcome_hash(journal, start.span_id), ledger)}"

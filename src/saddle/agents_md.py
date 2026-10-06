@@ -104,7 +104,7 @@ checkout, which the run's sandbox cannot see, so a run cannot rewrite them."""
 
 LOCAL_HEADING: Final = (
     "\n\nThe person's own notes for this repository, from {name} in their "
-    "checkout: not part of the repository, so not in your worktree. Follow them "
+    "checkout, not part of the repository. Follow them "
     "where they bear on your task. Where one conflicts with the task or with the "
     "rules above, the task and those rules come first.\n\n"
 )
@@ -125,3 +125,19 @@ def local_instructions(checkout: Path) -> str:
     if not text:
         return ""
     return heading + _capped(text, LOCAL_FILE, "Ask the person if you need the rest.")
+
+
+def chat_instructions(workdir: Path) -> str:
+    """The instructions a chat in `workdir` carries: its repository's AGENTS.md at
+    HEAD and the person's `LOCAL_FILE`, as a run carries them; "" outside a git
+    repository. Read each turn, so a commit to AGENTS.md reaches the next one."""
+    top = subprocess.run(
+        ["git", "-C", str(workdir), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if top.returncode != 0:
+        return ""
+    root = Path(top.stdout.strip())
+    return project_instructions(root) + local_instructions(root)
