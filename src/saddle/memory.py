@@ -312,8 +312,17 @@ def compact(
     hint: str = ASK_USER,
     state: Callable[[], str] | None = None,
     measure: Callable[[list[dict[str, Any]]], int] | None = None,
+    target_tokens: int | None = None,
 ) -> tuple[int, str]:
     """Bring `messages` under `limit_tokens` in place.
+
+    `limit_tokens` is the trigger; once over it, compaction works down to
+    `target_tokens` (default: the limit itself), so the turns after it
+    append to an unchanged prefix instead of compacting again. Each pass
+    rewrites messages near the start, which costs the server its cached
+    prefix: compacting to just under the limit fired 163 times in one run,
+    and a turn right after one waited 38 s for its first token against
+    14 s for one that did not.
 
     Returns (messages dropped, human summary). `(0, "")` means nothing was
     needed, which is the common case and must stay cheap. `state`, when
@@ -323,6 +332,7 @@ def compact(
     size = measure or estimate_tokens
     if size(messages) <= limit_tokens:
         return 0, ""
+    goal = min(limit_tokens, target_tokens) if target_tokens is not None else limit_tokens
 
     keep = pinned_index(messages, pin)
 
@@ -346,7 +356,7 @@ def compact(
 
     old = next((i for i, m in enumerate(messages) if is_note(m)), None)
     block = state() if state is not None else ""
-    if size(messages) <= limit_tokens:
+    if size(messages) <= goal:
         if old is not None and state is not None:
             count, topics = _previous(messages[old])
             messages[old] = _note(count, topics, [], block, hint)
@@ -359,19 +369,37 @@ def compact(
         count, topics = _previous(messages.pop(old))
         at = old
         keep = pinned_index(messages, pin)
-    reserve = len(block) // CHARS_PER_TOKEN
     dropped = 0
     edited: list[str] = []
     fresh: list[str] = []
-    while size(messages) + reserve > limit_tokens:
+
+    def drafted() -> dict[str, Any]:
+        # A chat has no run to rebuild state from: it names the files edited in
+        # what went. An autonomous run's state block lists what is changed now.
+        named = [] if state is not None else edited
+        return _note(count + dropped, (topics + fresh)[:TOPICS_KEPT], named, block, hint)
+
+    def reserve() -> int:
+        # What the note will cost, measured whole: counting only the state
+        # block left 57 passes of one run over the limit having dropped nothing.
+        return size([*messages, drafted()]) - size(messages)
+
+    def droppable() -> tuple[int, int] | None:
         oldest = next((i for i in range(len(messages)) if not protected(i)), None)
         if oldest is None:
-            break  # nothing left that may be dropped; report what we managed
+            return None  # nothing left that may be dropped; report what we managed
         end = oldest + 1
         while end < len(messages) and messages[end].get("role") == "tool":
             end += 1
         if any(protected(i) for i in range(oldest, end)):
-            break  # the call's results are in the protected tail; never split them
+            return None  # the call's results are in the protected tail; never split them
+        return oldest, end
+
+    while size(messages) + reserve() > goal:
+        span = droppable()
+        if span is None:
+            break
+        oldest, end = span
         for message in messages[oldest:end]:
             dropped += 1
             for call in message.get("tool_calls") or []:
@@ -389,7 +417,7 @@ def compact(
 
     # Stage 3: still over (the protected tail itself is too big): shrink tool
     # results in the tail too, all but the latest round's.
-    if size(messages) + reserve > limit_tokens:
+    if size(messages) + reserve() > goal:
         last = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
         for message in messages[:last]:
             content = message.get("content") or ""
@@ -402,11 +430,7 @@ def compact(
     summary = f"{dropped} earlier message(s) compacted"
     if fresh:
         summary += ": " + "; ".join(fresh[:TOPICS_KEPT])
-    # A chat has no run to rebuild state from: it names the files edited in
-    # what went. An autonomous run's state block lists what is changed now.
-    named = [] if state is not None else edited
-    note = _note(count + dropped, (topics + fresh)[:TOPICS_KEPT], named, block, hint)
-    messages.insert(at if at is not None else 0, note)
+    messages.insert(at if at is not None else 0, drafted())
     return dropped, summary
 
 

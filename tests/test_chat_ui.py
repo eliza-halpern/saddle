@@ -108,10 +108,12 @@ def test_compaction_names_a_dropped_text_turn_by_its_first_line() -> None:
         messages.append({"role": "assistant", "content": "a" * 400})
         messages.append({"role": "user", "content": f"question {index} " + "q" * 400})
 
-    dropped, summary = compact(messages, limit_tokens=estimate_tokens(messages) - 250)
+    limit = estimate_tokens(messages) - 250
+    dropped, summary = compact(messages, limit_tokens=limit)
 
-    assert dropped == 3
-    assert summary.startswith("3 earlier message(s) compacted: first question")
+    assert dropped == 4  # three left the note over the limit (#122): the note is reserved now
+    assert estimate_tokens(messages) <= limit
+    assert summary.startswith("4 earlier message(s) compacted: first question")
     assert "Earlier conversation compacted" in str(messages[1]["content"])
 
 

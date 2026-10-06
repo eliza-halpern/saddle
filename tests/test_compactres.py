@@ -18,7 +18,14 @@ from test_keep_reasoning import _render
 from saddle.auto import SYSTEM_PROMPT, AutoOptions, run_auto
 from saddle.engine import AUTO_NUDGE, AutoRun, RunBudget, TurnOptions, run_turn
 from saddle.events import Compaction
-from saddle.memory import CHARS_PER_TOKEN, KEEP_RECENT, REREAD, compact, estimate_tokens
+from saddle.memory import (
+    CHARS_PER_TOKEN,
+    KEEP_RECENT,
+    NOTE_HEAD,
+    REREAD,
+    compact,
+    estimate_tokens,
+)
 from saddle.vllm import VllmClient
 
 TASK = "TASK-7f3a: make add() in calc.py return the sum instead of the difference"
@@ -144,13 +151,13 @@ def test_f0_auto_run_keeps_every_request_under_the_compaction_limit(repo: Path) 
     assert max(sizes) <= limit, f"request sizes {sizes} vs compaction limit {limit}"
 
 
-def test_compaction_can_end_over_its_limit_by_the_unreserved_note() -> None:
-    """Known-bad, on the record (#122): stages 2 and 3 reserve room for
-    the note's run-state block only (`len(block) // CHARS_PER_TOKEN`), not for
-    its header, topics and hint. At a limit equal to what stage 2 cannot drop
-    plus that reserve, stage 2 stops, stage 3 sees room and shrinks nothing,
-    and the note then inserted takes the request over the limit. A fix that
-    reserves the whole note flips this test, and must say so (`flip:`)."""
+def test_compaction_ends_under_its_limit_with_the_whole_note_reserved() -> None:
+    """#122: stages 2 and 3 once reserved room for the note's run-state block
+    only (`len(block) // CHARS_PER_TOKEN`), not its header, topics and hint.
+    At a limit equal to what stage 2 cannot drop plus that reserve, stage 2
+    stopped, stage 3 saw room and shrank nothing, and the note then inserted
+    took the request over the limit. The whole note is reserved now, so
+    stage 3 sees the shortfall and shrinks the tail's tool results."""
     block = "Files changed so far: calc.py\nLast audit: none yet\n" * 3
     read = "\n".join(BIG.splitlines()[:600])
     messages = [{"role": "system", "content": _auto_system()}, {"role": "user", "content": TASK}]
@@ -160,7 +167,98 @@ def test_compaction_can_end_over_its_limit_by_the_unreserved_note() -> None:
     limit = estimate_tokens(kept) + len(block) // CHARS_PER_TOKEN
     compact(messages, limit_tokens=limit, pin="first", state=lambda: block, hint=REREAD)
     assert len(messages) == len(kept) + 1  # harness: stage 2 dropped all it could; note in
-    assert estimate_tokens(messages) > limit
+    assert estimate_tokens(messages) <= limit  # known-good: the note fits
+    assert REREAD in str(messages[2]["content"])  # and it is the note, whole
+
+
+def _noted_history(rounds: int) -> list[dict[str, Any]]:
+    """A run already compacted once: system, task, the old note, then
+    `rounds` small exchanges and the protected tail."""
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": TASK},
+        {
+            "role": "user",
+            "content": f"{NOTE_HEAD}3 earlier message(s) dropped to fit the window.]\n"
+            + "Dropped topics: "
+            + "a" * 300
+            + "\n"
+            + "S" * 2000
+            + "\n"
+            + REREAD,
+        },
+    ]
+    for i in range(rounds):
+        messages += [
+            {"role": "assistant", "content": "y" * 400},
+            {"role": "user", "content": f"n{i}"},
+        ]
+    return messages + [{"role": "user", "content": f"r{i}"} for i in range(KEEP_RECENT)]
+
+
+def test_a_pass_over_its_limit_drops_what_it_may_rather_than_rebuild_the_note_alone() -> None:
+    """The ledger shape (#122): 57 passes of one run dropped 0 messages, rebuilt
+    the note near the head, and left the request over the limit, so the next
+    turn compacted again and the server re-read the whole prompt each time."""
+    messages = _noted_history(9)
+    limit = estimate_tokens(messages) - 1
+    dropped, _ = compact(
+        messages, limit_tokens=limit, pin="first", state=lambda: "S" * 2000, hint=REREAD
+    )
+    assert dropped > 0  # known-bad was 0 with droppable rounds left
+    assert estimate_tokens(messages) <= limit
+
+
+def test_compaction_works_down_to_its_target_so_the_next_turns_append() -> None:
+    messages = _noted_history(30)
+    limit = estimate_tokens(messages) - 1
+    target = int(limit * 0.7)
+    compact(
+        messages,
+        limit_tokens=limit,
+        target_tokens=target,
+        pin="first",
+        state=lambda: "x",
+        hint=REREAD,
+    )
+    assert estimate_tokens(messages) <= target  # known-good: down to the target, not the limit
+    prefix = [dict(m) for m in messages]
+    messages += [{"role": "assistant", "content": "z" * 400}, {"role": "user", "content": "next"}]
+    assert compact(messages, limit_tokens=limit, target_tokens=target, pin="first") == (0, "")
+    assert messages[: len(prefix)] == prefix  # the next turn appends to an unchanged prefix
+
+    untargeted = _noted_history(30)
+    compact(untargeted, limit_tokens=limit, pin="first", state=lambda: "x", hint=REREAD)
+    assert estimate_tokens(untargeted) > target  # known-bad shape: just under the limit
+
+
+def test_shrinking_old_results_stops_only_once_the_target_is_reached() -> None:
+    messages = _noted_history(30)
+    messages[4:4] = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "b",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "b", "content": "B" * 8000},
+    ]
+    shrunk = estimate_tokens(messages) - (8000 - 1700) // CHARS_PER_TOKEN  # after stage 1
+    limit, target = shrunk + 50, shrunk - 400  # stage 1 alone lands between the two
+    compact(
+        messages,
+        limit_tokens=limit,
+        target_tokens=target,
+        pin="first",
+        state=lambda: "S" * 2000,
+        hint=REREAD,
+    )
+    assert estimate_tokens(messages) <= target
 
 
 # -- D1: the task statement survives compaction ---------------------------------
