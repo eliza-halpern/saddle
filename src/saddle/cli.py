@@ -2273,9 +2273,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auto.add_argument(
         "--check-tool",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Offer the model a `check` tool that runs audit tiers 0 and 1 on the current "
-        "tree before finish (arm E+A+F only; off by default).",
+        "tree before finish (on by default in arm E+A+F; --no-check-tool turns it off).",
     )
     p1 = auto.add_mutually_exclusive_group()
     p1.add_argument(

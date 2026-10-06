@@ -338,7 +338,8 @@ auditor imports `gates` and `evidence`; `packet` reads the ledger and imports ne
 the engine nor the auditor (`packet.AUDIT_UNRESOLVED` and `packet.CHECK_SPAN` are spelled
 locally for that reason).
 
-**Not built or unmeasured here.** Feature, Breadth and Long lanes; the `check` tool is
-opt-in (`--check-tool`); the Auditor's tier-0 ruff and import checks run under `saddle
-audit --tiered`, not during a run (the in-run guard is syntax and test paths). Rule D
+**Not built or unmeasured here.** Feature, Breadth and Long lanes. The Auditor's tier-0 ruff and import
+checks run during a run only through the `check` tool (offered by default in arm E+A+F,
+`--no-check-tool` turns it off) and at finish; the in-run guard at each edit is syntax and
+test paths. Rule D
 (question rate on underspecified inputs) is Phase 1/3 and is not described here.

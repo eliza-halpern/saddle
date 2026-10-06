@@ -469,12 +469,18 @@ def pytest_addopts(worktree: Path) -> str:
 
 
 CHECK_PROMPT: Final = (
-    " You may call check to run the audit's fast checks on the tree as it is now; "
-    "finish runs the same checks plus mutation testing, so a passing check does "
-    "not guarantee finish passes."
+    " Call check whenever you want to know where your change stands: it runs the "
+    "audit's fast checks on the tree as it is now (each edited file's syntax, lint "
+    "and imports, the tests your change can reach, coverage of the lines you "
+    "changed, and the project's own gate) and answers as finish would. Use it "
+    "instead of running the whole test suite or the project's gate yourself. "
+    "finish runs the same checks plus the whole suite and mutation testing, so a "
+    "passing check does not guarantee finish passes."
 )
-"""Appended to the system prompt only with `--check-tool`, so a run without
-the flag sends the same prompt bytes as before."""
+"""Appended to the system prompt whenever the run offers `check` (on by default
+in arm E+A+F). A watched dogfood run without the tool ran the whole suite and
+every Chrome module itself, over and over, because nothing else could tell it
+whether its change passed."""
 
 COMMAND_ENV: Final = {"PYTHONDONTWRITEBYTECODE": "1"}
 """No command the run starts writes bytecode. Python trusts a `.pyc` whose
@@ -627,11 +633,12 @@ class AutoOptions:
     mutant_shortlist: int = DEFAULT_MUTANT_SHORTLIST
     """`--mutant-shortlist N`: how many surviving mutants a finish refusal names
     (`--tier2 shortlist` only). Sealed with it."""
-    check_tool: bool = False
-    """`--check-tool` (arm E+A+F only; scope widened): offer the model a
-    `check` tool that runs audit tiers 0 and 1 on demand (`feed.AuditFeed.check`).
-    Off by default; off, the tool list, prompt and sealed records are those
-    of a run without it."""
+    check_tool: bool | None = None
+    """Offer the model a `check` tool that runs audit tiers 0 and 1 on demand
+    (`feed.AuditFeed.check`). None (the default) offers it whenever the arm
+    delivers audits (E+A+F) and not otherwise; `--no-check-tool` (False) turns
+    it off, and True with arm E or E+A is refused. Off, the tool list, prompt
+    and sealed records are those of a run without it."""
     task_requirements: Path | None = None
     """`--task-requirements FILE`: a sealed P1 file for this task text
     (`saddle requirements extract`); tier 1 then runs the task text's
@@ -942,6 +949,7 @@ def run_auto(
     if options.check_tool and options.arm != "E+A+F":
         msg = f"--check-tool needs arm E+A+F (it delivers audit findings); got {options.arm}"
         raise AutoError(msg)
+    check_tool = options.arm == "E+A+F" if options.check_tool is None else options.check_tool
     try:
         switches = load_switches()  # the person's image switch applies to Task runs too
     except CapabilityError as exc:
@@ -993,7 +1001,7 @@ def run_auto(
             f"{name} {'on' if switches.get(name) else 'off'}"
             for name in ("images", "ocr", "imagediff", "embeddings")
         )
-        + ("; check tool offered" if options.check_tool else "")
+        + ("; check tool offered" if check_tool else "")
         + (f"; notes from {LOCAL_FILE}" if notes else "")
         + (
             "; "
@@ -1077,7 +1085,7 @@ def run_auto(
             "sanctioned_test_rewrites": list(options.sanctioned_test_rewrites),
             "prompt_shape": {"keep_reasoning": options.keep_reasoning},
             **({"self_guard": True} if guard is not None else {}),
-            **({"check_tool": True} if options.check_tool else {}),
+            **({"check_tool": True} if check_tool else {}),
             **(
                 {
                     "task_requirements": str(options.task_requirements)
@@ -1100,7 +1108,7 @@ def run_auto(
         },
         audit=audit,
         answer=answer,
-        check_tool=options.check_tool,
+        check_tool=check_tool,
     )
     if on_budget is not None:
         on_budget(auto.budget)
@@ -1147,7 +1155,7 @@ def run_auto(
                 else None
             ),
         )
-        + (CHECK_PROMPT if options.check_tool else "")
+        + (CHECK_PROMPT if check_tool else "")
         + (PREMISE_PROMPT if options.premise_check else "")
         + (STALL_PROMPT if options.stall_check else "")
         + provider_prompt()
@@ -1161,7 +1169,7 @@ def run_auto(
             REFUSE_SCHEMA,
             BLOCKED_SCHEMA,
             *([PREMISE_SCHEMA] if options.premise_check else []),
-            *([CHECK_SCHEMA] if options.check_tool else []),
+            *([CHECK_SCHEMA] if check_tool else []),
             *([INSTALL_SCHEMA] if options.wheels is not None else []),
             *provider_schemas(),
         ],

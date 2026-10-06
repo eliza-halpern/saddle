@@ -653,9 +653,11 @@ Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
   lane keeps it: the chat's Ask and Edit turns (web and `saddle up`, with the same
   off switch) and the web reader each send a round's reasoning back on its assistant
   message. Without it a long tool loop sees what the model did and never why.
-- `--check-tool` (off by default, arm E+A+F only): offers the model a `check` tool that
-  runs audit tiers 0 and 1 on the current tree before `finish`; each call is journaled
-  as an `audit:check` span (`feed.CHECK_SPAN`).
+- `--check-tool` / `--no-check-tool` (on by default in arm E+A+F; off, and refused if
+  asked for, in E and E+A): offers the model a `check` tool that runs audit tiers 0 and 1
+  on the current tree before `finish`, so it need not run the whole suite itself to learn
+  where its change stands; each call is journaled as an `audit:check` span
+  (`feed.CHECK_SPAN`).
 - `--tier2` and `--mutant-shortlist`: section 7a.
 - `--sanctioned-test-rewrite NAME` (repeatable): a test the task orders rewritten; its
   assertion-preservation finding is reported, not held against the run, and the name is

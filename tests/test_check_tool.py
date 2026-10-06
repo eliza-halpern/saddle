@@ -197,9 +197,10 @@ def test_the_flag_needs_the_feedback_arm(repo: Path, arm: str) -> None:
         run(repo, Scripted([]), arm=arm)
 
 
-def test_the_cli_flag_is_off_by_default_and_passes_through(
+def test_the_cli_flag_is_unset_by_default_and_passes_through(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Unset (None) lets the arm decide; `--no-check-tool` is an explicit off."""
     seen: list[AutoOptions] = []
 
     def fake_run(options: AutoOptions, client: Any, **kwargs: Any) -> AutoResult:
@@ -208,12 +209,39 @@ def test_the_cli_flag_is_off_by_default_and_passes_through(
 
     monkeypatch.setattr(cli, "run_auto", fake_run)
     parser = cli.build_parser()
-    for argv in (["auto", "t", "--repo", str(repo)], ["auto", "t", "--check-tool"]):
+    for argv in (
+        ["auto", "t", "--repo", str(repo)],
+        ["auto", "t", "--check-tool"],
+        ["auto", "t", "--no-check-tool"],
+    ):
         out = io.StringIO()
         assert (
             cli.run_auto_command(parser.parse_args(argv), cast(VllmClient, None), stdout=out) == 1
         )
-    assert [o.check_tool for o in seen] == [False, True]
+    assert [o.check_tool for o in seen] == [None, True, False]
+
+
+def test_by_default_the_feedback_arm_offers_check_and_says_to_use_it(repo: Path) -> None:
+    """Red before: the tool was off unless asked for, so a watched dogfood run
+    could only learn whether its change passed by running the whole suite and
+    every Chrome module itself, again and again."""
+    client = Scripted([[edit("e", "a - b", "a + b")]])
+    result, _ = run(repo, client, check_tool=None)
+    assert all(names[-1] == CHECK_TOOL for names in client.tools)
+    assert client.system.endswith(CHECK_PROMPT)
+    assert "instead of running the whole test suite" in CHECK_PROMPT
+    assert outcome(result)["check_tool"] is True
+
+
+@pytest.mark.parametrize("arm", ["E", "E+A"])
+def test_by_default_the_arms_without_feedback_neither_offer_check_nor_refuse(
+    repo: Path, arm: str
+) -> None:
+    client = Scripted([[edit("e", "a - b", "a + b")]])
+    result, _ = run(repo, client, check_tool=None, arm=arm)
+    assert all(CHECK_TOOL not in names for names in client.tools)
+    assert CHECK_PROMPT not in client.system
+    assert "check_tool" not in outcome(result)
 
 
 # -- what a check runs, and what it never runs ------------------------------------
