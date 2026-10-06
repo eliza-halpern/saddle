@@ -19,6 +19,7 @@ that can read the words on it.
 from __future__ import annotations
 
 import base64
+import re
 import struct
 import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -202,8 +203,34 @@ PROBE_QUESTION: Final = (
 _CACHE: dict[object, bool] = {}
 
 
+IMAGE_LIMIT: Final = re.compile(r"At most (\d+) image\(s\) may be provided in one prompt")
+"""vLLM's refusal of a request carrying more images than `--limit-mm-per-prompt`
+allows. The server publishes the limit nowhere else (not on its model card), so
+its own sentence is how saddle learns it."""
+
+_LIMITS: dict[object, int] = {}
+
+
 def reset_cache() -> None:
     _CACHE.clear()
+    _LIMITS.clear()
+
+
+def image_limit(client: object) -> int | None:
+    """The most images this client's server takes in one request, once a refusal
+    has said (`learn_image_limit`); None while none has."""
+    return _LIMITS.get(getattr(client, "server_key", None) or id(client))
+
+
+def learn_image_limit(client: object, error: str) -> int | None:
+    """Remember the limit `error` states for this client's server and return it;
+    None, remembering nothing, when `error` is not that refusal."""
+    found = IMAGE_LIMIT.search(error)
+    if found is None:
+        return None
+    limit = int(found.group(1))
+    _LIMITS[getattr(client, "server_key", None) or id(client)] = limit
+    return limit
 
 
 def _answer(client: _Streamer, png: bytes) -> str:

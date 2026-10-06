@@ -98,8 +98,15 @@ from saddle.tools import (
     preview_for,
     state_image_fact,
 )
-from saddle.vision import images_message, server_accepts_images
-from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError, assistant_message
+from saddle.vision import image_limit, images_message, learn_image_limit, server_accepts_images
+from saddle.vllm import (
+    StreamUsage,
+    ToolCall,
+    VllmClient,
+    VllmError,
+    VllmRequestError,
+    assistant_message,
+)
 
 RECALL_HINT: Final = (
     " The full text of what was dropped or shortened can be searched with `recall`."
@@ -1124,7 +1131,7 @@ def run_turn(
             # one turn, so a compaction before the loop only ever saw
             # [system, task] (pi-blackhole's CHANGELOG #38
             # fixed the same defect, OpenHands condenses at every step).
-            trimmed = trim_screenshots(messages)
+            trimmed = trim_screenshots(messages, limit=image_limit(client))
             if trimmed:
                 yield Compaction(
                     dropped_messages=0,
@@ -1143,34 +1150,51 @@ def run_turn(
             timed_out = False
             sent = perf_counter()
             first: float | None = None
-            with closing(_stream(client, messages, options, cap)) as replies:
-                for stream, item in replies:
-                    if stream == "tick":
+            try:
+                with closing(_stream(client, messages, options, cap)) as replies:
+                    for stream, item in replies:
+                        if stream == "tick":
+                            if stop():
+                                break
+                            if auto is None:
+                                continue
+                            if auto.budget.time_left() <= 0:
+                                timed_out = True
+                                break
+                            # The time question, asked while the reply streams on.
+                            yield from _offer_budget(auto, options.journal, node_id)
+                            yield _progress(auto, sum(map(len, (*thoughts, *parts))))
+                            continue
+                        if first is None:
+                            first = perf_counter()
                         if stop():
                             break
-                        if auto is None:
-                            continue
-                        if auto.budget.time_left() <= 0:
-                            timed_out = True
-                            break
-                        # The time question, asked while the reply streams on.
-                        yield from _offer_budget(auto, options.journal, node_id)
-                        yield _progress(auto, sum(map(len, (*thoughts, *parts))))
-                        continue
-                    if first is None:
-                        first = perf_counter()
-                    if stop():
-                        break
-                    if stream == "call":
-                        calls.append(item)
-                    elif stream == "usage":
-                        usage = item
-                    elif stream == "reasoning":
-                        thoughts.append(item)
-                        yield ReasoningDelta(text=item)
-                    else:
-                        parts.append(item)
-                        yield ContentDelta(text=item)
+                        if stream == "call":
+                            calls.append(item)
+                        elif stream == "usage":
+                            usage = item
+                        elif stream == "reasoning":
+                            thoughts.append(item)
+                            yield ReasoningDelta(text=item)
+                        else:
+                            parts.append(item)
+                            yield ContentDelta(text=item)
+            except VllmRequestError as exc:
+                # A server that takes fewer images than the conversation holds
+                # refuses the whole request; it says how many, once, and the
+                # round goes again with the oldest screenshots elided.
+                limit = learn_image_limit(client, str(exc))
+                if limit is None or parts or thoughts or calls:
+                    raise
+                elided = trim_screenshots(messages, limit=limit)
+                if not elided:
+                    raise
+                yield Compaction(
+                    dropped_messages=0,
+                    kept_messages=len(messages),
+                    summary=f"the server takes {limit} image(s) per request: {elided} older elided",
+                )
+                continue
             done = perf_counter()
             timing = _RoundTiming(
                 model_ms=int((done - sent) * 1000),

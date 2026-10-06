@@ -185,14 +185,19 @@ def is_note(message: dict[str, Any]) -> bool:
     )
 
 
-def trim_screenshots(messages: list[dict[str, Any]]) -> int:
+def trim_screenshots(messages: list[dict[str, Any]], *, limit: int | None = None) -> int:
     """Turn all but the newest SCREENSHOTS_KEPT tool images into IMAGE_ELIDED
     once more than SCREENSHOTS_KEPT + SCREENSHOTS_SLACK are in `messages`, in
     place; the number elided. A picture of the screen is stale once newer ones
     exist (live, 38 of them were ~46k of a ~52k-token context). They go in a
     batch, not one per action: each trim rewrites the prompt from the oldest
     picture on, which the server must then read again instead of reusing its
-    cache. Images the person attached stay."""
+    cache. Images the person attached stay.
+
+    `limit`, the most images the server takes in one request
+    (`vision.image_limit`), also elides the oldest tool images until no more
+    than `limit` images remain in all, the person's counted among them: a
+    server that takes one image refuses the whole request otherwise."""
     shown = [
         m
         for m in messages
@@ -200,12 +205,30 @@ def trim_screenshots(messages: list[dict[str, Any]]) -> int:
         and isinstance(m.get("content"), list)
         and any(p.get("type") != "text" for p in m["content"])
     ]
-    if len(shown) <= SCREENSHOTS_KEPT + SCREENSHOTS_SLACK:
-        return 0
     elided = 0
-    for message in shown[:-SCREENSHOTS_KEPT]:
-        elided += sum(p.get("type") != "text" for p in message["content"])
-        message["content"] = _elide_images(message["content"])
+    if len(shown) > SCREENSHOTS_KEPT + SCREENSHOTS_SLACK:
+        for message in shown[:-SCREENSHOTS_KEPT]:
+            elided += sum(p.get("type") != "text" for p in message["content"])
+            message["content"] = _elide_images(message["content"])
+    if limit is None:
+        return elided
+    total = sum(
+        p.get("type") != "text"
+        for m in messages
+        if m.get("role") == "user" and isinstance(m.get("content"), list)
+        for p in m["content"]
+    )
+    for message in shown:
+        if total <= limit:
+            break
+        content = message["content"]
+        for index, part in enumerate(content):
+            if total <= limit:
+                break
+            if part.get("type") != "text":
+                content[index] = {"type": "text", "text": IMAGE_ELIDED}
+                total -= 1
+                elided += 1
     return elided
 
 

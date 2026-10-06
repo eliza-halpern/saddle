@@ -240,7 +240,7 @@ def _no_image_probe(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPa
     once per server); a scripted client would hand them its next rounds. The suite
     has no model server, so the answer is no unless a test says otherwise (the image
     tests run the real probe against their own scripted server)."""
-    if request.module.__name__ == "test_read_image":
+    if request.module.__name__ in ("test_read_image", "test_image_limit"):
         return
     monkeypatch.setattr("saddle.engine.server_accepts_images", lambda _client: False)
 
