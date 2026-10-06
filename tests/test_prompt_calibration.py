@@ -59,6 +59,7 @@ class Counting:
         self.rounds, self.ratio = list(rounds), ratio
         self.sizes: list[int] = []
         self.caps: list[int] = []
+        self.last: list[dict[str, Any]] | None = None
 
     def __enter__(self) -> Counting:
         return self
@@ -69,6 +70,7 @@ class Counting:
     def stream_chat(self, messages: Any, **kwargs: Any) -> Iterator[Any]:
         raw = estimate_tokens(list(messages)) + TurnOptions().tool_tokens()
         self.sizes.append(raw)
+        self.last = [dict(m) for m in messages]
         self.caps.append(kwargs["max_tokens"])
         yield from self.rounds.pop(0) if self.rounds else finish()
         if self.ratio is not None:

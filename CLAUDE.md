@@ -1,3 +1,3 @@
-@CONTRIBUTING.md
+@AGENTS.md
 
-The contributor rules for this repository live in CONTRIBUTING.md; the line above pulls them in for coding agents that read this file.
+The instructions for coding agents live in AGENTS.md, which imports the contributor rules in CONTRIBUTING.md; the line above pulls them in for agents that read this file.

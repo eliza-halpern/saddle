@@ -38,6 +38,7 @@ from time import monotonic
 from typing import Any, Final
 
 from saddle import prompt_constants, sandbox
+from saddle.agents_md import project_instructions
 from saddle.anchor import COAUTHOR_TRAILER, anchor_trailers, outcome_hash
 from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
@@ -1040,7 +1041,8 @@ def run_auto(
         + (CHECK_PROMPT if options.check_tool else "")
         + (PREMISE_PROMPT if options.premise_check else "")
         + (STALL_PROMPT if options.stall_check else "")
-        + provider_prompt(),
+        + provider_prompt()
+        + project_instructions(worktree, "HEAD"),
         context_tokens=options.context_tokens or server_window(client),
         tools=[
             *TOOLS,
