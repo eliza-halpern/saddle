@@ -643,3 +643,53 @@ def test_the_ci_phase_fails_on_a_survivor_and_passes_when_every_mutant_dies(
     git(ci_project, "commit", "-qam", "fix")
     assert js.main(["HEAD~1"]) == 0
     assert "survived" not in capsys.readouterr().out
+
+
+PAGE_FILES = (
+    "src/saddle/web/static/index.html",
+    *(f"src/saddle/web/static/{name}" for name in ("markdown.js", "tasks.js", "notify.js")),
+    "src/saddle/web/static/runs.js",
+    "src/saddle/web/static/app.js",
+    "tests/classic_scripts.test.js",
+    "tests/fixtures/classic_script.js",
+)
+
+
+@pytest.fixture
+def page_project(tmp_path: Path) -> Path:
+    """The real page scripts and their node test, in a repository of their own."""
+    root = tmp_path / "page"
+    for rel in PAGE_FILES:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / rel, root / rel)
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    return root
+
+
+def _line_of(project: Path, rel: str, text: str) -> int:
+    lines = (project / rel).read_text().splitlines()
+    (number,) = [n for n, line in enumerate(lines, 1) if text in line]
+    return number
+
+
+@needs_stryker
+@pytest.mark.parametrize(
+    ("rel", "text", "pinned"),
+    [
+        # loadClassic: `firstWords`'s ellipsis is asserted in classic_scripts.test.js
+        ("src/saddle/web/static/runs.js", 'words.length > n ? "…" : ""', "StringLiteral"),
+        # loadPage: `setStatus`'s fallback to the kind is asserted there too
+        ("src/saddle/web/static/app.js", "node.textContent = detail || kind;", "LogicalOperator"),
+    ],
+)
+def test_a_page_script_mutant_that_a_sandboxed_node_test_pins_is_killed(
+    page_project: Path, rel: str, text: str, pinned: str
+) -> None:
+    """The page scripts' node tests run them in a `vm` sandbox; StrykerJS
+    switches its mutants on from `process.env`, so a sandbox without `process`
+    ran every mutant switched off and every one survived."""
+    line = _line_of(page_project, rel, text)
+    out = js.mutation_sample(page_project, [(str(page_project / rel), line)], tools=REPO)
+    killed = [name for name, status, _ in out.mutant_detail if status == "Killed"]
+    assert any(pinned in name for name in killed), (out.survivors, out.mutant_detail)

@@ -7,7 +7,10 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadClassic, inScope } = require("./fixtures/classic_script.js");
+const fs = require("node:fs");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+const { loadClassic, inScope, loadPage, PAGE_SCRIPTS, STATIC } = require("./fixtures/classic_script.js");
 
 const inert = { document: { addEventListener() {} }, setInterval() {} };
 
@@ -105,4 +108,37 @@ test("a session is named by its title, or by the product when it has none", () =
   assert.strictEqual(page.sessionName("s1"), "Copy button");
   assert.strictEqual(page.sessionName("unknown"), "saddle");
   assert.strictEqual(page.sessionName(null), "saddle");
+});
+
+/* ---------- app.js, through loadPage ---------- */
+
+test("loadPage loads the page's scripts in index.html's order", () => {
+  const html = fs.readFileSync(path.join(STATIC, "index.html"), "utf8");
+  const listed = [...html.matchAll(/<script src="\/static\/([^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(PAGE_SCRIPTS, listed);
+  assert.ok(listed.includes("app.js"));
+});
+
+test("app.js loads beside its siblings, and a painter's output reads back from the document", () => {
+  const page = loadPage();
+  page.setStatus("working");
+  const status = page.document.querySelector("#status");
+  assert.strictEqual(status.className, "status working");
+  assert.strictEqual(status.textContent, "working");
+  assert.strictEqual(page.document.querySelector("#send").title, "Stop");
+  page.setStatus("idle", "ready");
+  assert.strictEqual(status.className, "status idle");
+  assert.strictEqual(status.textContent, "ready");
+  assert.strictEqual(page.document.querySelector("#send").title, "Send");
+});
+
+test("each page script runs under its file URL, which mutation testing needs to count the test", () => {
+  const page = loadPage();
+  // Known bad: a document with no #status makes app.js's own code throw, and
+  // the frame that throws names the file the script was loaded under.
+  page.document = { querySelector: () => null };
+  assert.throws(
+    () => page.setStatus("working"),
+    (/** @type {Error} */ error) => String(error.stack).includes(`${pathToFileURL(path.join(STATIC, "app.js")).href}:`),
+  );
 });
