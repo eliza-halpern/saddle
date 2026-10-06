@@ -34,6 +34,8 @@ import io
 import json
 import os
 import sys
+import threading
+from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -41,44 +43,49 @@ MAX_INPUTS = 256
 MAX_BODY = 64 * 1024 * 1024
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--port", type=int, default=18031)
-    parser.add_argument("--threads", type=int, default=2)
-    args = parser.parse_args()
-    os.nice(19)
+def load(model_path: str, threads: int) -> tuple[Any, Any]:
+    """The model, on the CPU as its card says, and torch."""
     # torch, sentence-transformers and PIL live in the sidecar's own environment,
     # never saddle's (the docstring's setup), so saddle's type check cannot see them.
     import torch  # type: ignore[import-not-found]
     from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
-    torch.set_num_threads(args.threads)
+    torch.set_num_threads(threads)
     # The model card: float32 on CPUs (bfloat16 only with native support; never
     # float16, which returns NaN or silently degraded vectors), and the audio
     # encoder left unloaded (740M parameters with it, 440M without).
     model = SentenceTransformer(
-        args.model,
+        model_path,
         device="cpu",
         model_kwargs={"dtype": torch.float32},
         config_kwargs={"audio_config": None},
     )
+    return model, torch
+
+
+def prepare(items: list[Any]) -> list[Any]:
+    """The inputs as the model takes them: text as given, an image decoded.
+    Prefixes are for text only (model card): an image alone goes in bare."""
+    from PIL import Image  # type: ignore[import-not-found]
+
+    prepared = []
+    for item in items:
+        if isinstance(item, dict) and "image" in item:
+            image = Image.open(io.BytesIO(base64.b64decode(item["image"]))).convert("RGB")
+            text = item.get("text")
+            prepared.append({"text": text, "image": image} if text else image)
+        else:
+            prepared.append(item)
+    return prepared
+
+
+def server(model: Any, torch: Any, name: str, port: int) -> ThreadingHTTPServer:
+    """The HTTP server for `model` on 127.0.0.1:`port` (0 picks a free one)."""
     dim = model.get_embedding_dimension()
-    name = os.path.basename(os.path.normpath(args.model))
-    lock = __import__("threading").Lock()
+    lock = threading.Lock()
 
     def encode(items: list[Any], dimensions: int | None) -> list[list[float]]:
-        from PIL import Image  # type: ignore[import-not-found]
-
-        prepared = []
-        for item in items:
-            if isinstance(item, dict) and "image" in item:
-                image = Image.open(io.BytesIO(base64.b64decode(item["image"]))).convert("RGB")
-                # Prefixes are for text only (model card): an image alone goes in bare.
-                text = item.get("text")
-                prepared.append({"text": text, "image": image} if text else image)
-            else:
-                prepared.append(item)
+        prepared = prepare(items)
         with lock, torch.inference_mode():
             vectors = model.encode(
                 prepared, normalize_embeddings=True, truncate_dim=dimensions, batch_size=8
@@ -133,10 +140,28 @@ def main() -> None:
                 },
             )
 
-    where = f"127.0.0.1:{args.port}, {args.threads} threads"
-    print(f"embeddings: {name} ({dim}d) on {where}", file=sys.stderr)
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
 
-if __name__ == "__main__":
+def start(argv: Sequence[str] | None = None) -> ThreadingHTTPServer:
+    """Parse `argv`, drop to the lowest CPU priority, load the model, bind."""
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--port", type=int, default=18031)
+    parser.add_argument("--threads", type=int, default=2)
+    args = parser.parse_args(argv)
+    os.nice(19)
+    model, torch = load(args.model, args.threads)
+    name = os.path.basename(os.path.normpath(args.model))
+    bound = server(model, torch, name, args.port)
+    where = f"127.0.0.1:{bound.server_address[1]}, {args.threads} threads"
+    print(f"embeddings: {name} ({model.get_embedding_dimension()}d) on {where}", file=sys.stderr)
+    return bound
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    start(argv).serve_forever()
+
+
+if __name__ == "__main__":  # pragma: no cover
     main()

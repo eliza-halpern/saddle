@@ -255,3 +255,12 @@ def test_the_optional_tools_refuse_arguments_they_do_not_declare(
 ) -> None:
     found = execute_tool(ToolCall("1", name, args), workdir=tmp_path)
     assert found.startswith(f"error: {name} does not take ")
+
+
+def test_files_an_index_leaves_out_are_neither_embedded_nor_counted(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "r", {"a.py": "retry\n", "uv.lock": "retry\n"})
+    cache = tmp_path / "cache"
+    client = FakeEmbed()
+    assert _index(root, cache, client).build() == (1, 1)
+    assert all("uv.lock" not in text for text in client.embedded)
+    assert _index(root, cache, client).search("retry").startswith("Searched 1 of 1 ")

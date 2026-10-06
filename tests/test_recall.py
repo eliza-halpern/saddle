@@ -12,6 +12,7 @@ answering and something archived, and a chat's compaction note names it then.
 from __future__ import annotations
 
 import math
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -221,3 +222,45 @@ def test_a_chat_archives_what_compaction_drops_and_its_note_names_recall(
     list(run_turn(cast(VllmClient, quiet), history[:7], "again?", options, turn=10, context=ctx))
     note = next(m for m in quiet.asked[-1]["messages"] if is_note(m))
     assert "recall" not in note["content"]  # the server is down: the note never offers it
+
+
+def test_a_long_call_is_labelled_with_its_arguments_cut_short() -> None:
+    from saddle.memory import CALL_ARGS_SHOWN, describe_call
+
+    label = describe_call(_call("1", "write_file", "x" * (CALL_ARGS_SHOWN + 5)))
+    assert label == f"write_file({'x' * CALL_ARGS_SHOWN}...)"
+
+
+def test_adding_while_the_worker_runs_starts_no_second_worker() -> None:
+    gate = threading.Event()
+
+    class Slow(FakeEmbed):
+        def embed(self, items: list[Any], dimensions: int | None = None) -> list[list[float]]:
+            gate.wait(5)
+            return super().embed(items, dimensions)
+
+    archive = Recall(Slow)
+    archive.add([{"role": "user", "content": "first"}])
+    worker = archive._worker
+    archive.add([{"role": "user", "content": "second"}])
+    assert archive._worker is worker
+    gate.set()
+    assert worker is not None
+    worker.join(5)
+    assert all(p.vector is not None for p in archive._pieces)
+
+
+def test_the_embeddings_switch_gives_a_chat_one_archive_for_all_its_turns(
+    tmp_path: Path,
+) -> None:
+    from saddle.capabilities import Switches
+    from saddle.tools import attach_mcp
+
+    ctx = ToolContext(workdir=tmp_path)
+    attach_mcp(ctx, tmp_path / "dl", Switches())
+    assert ctx.recall is None
+    attach_mcp(ctx, tmp_path / "dl", Switches(embeddings=True))
+    first = ctx.recall
+    assert isinstance(first, Recall)
+    attach_mcp(ctx, tmp_path / "dl", Switches(embeddings=True))
+    assert ctx.recall is first
