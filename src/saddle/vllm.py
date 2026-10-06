@@ -596,6 +596,22 @@ def _model_context(data: object, model: str) -> int | None:
     return None  # pragma: no cover -- unreachable: the id was in _model_ids
 
 
+def _model_modalities(data: object, model: str) -> tuple[str, ...] | None:
+    """The input modalities the served `model`'s /models card declares
+    (`architecture.input_modalities`, as Strata and OpenRouter spell it); None
+    when the card says nothing, which is not a no."""
+    if model not in _model_ids(data):
+        return None
+    for item in data["data"]:  # type: ignore[index]  # _model_ids validated the shape
+        if item["id"] == model:
+            architecture = item.get("architecture")
+            found = architecture.get("input_modalities") if isinstance(architecture, dict) else None
+            if isinstance(found, list) and all(isinstance(m, str) for m in found):
+                return tuple(found)
+            return None
+    return None  # pragma: no cover -- unreachable: the id was in _model_ids
+
+
 CONSTRAINING_OWNER: Final = "vllm"
 """The `owned_by` vLLM's /models cards carry. It is the positive evidence
 that `structured_outputs` is honoured: no other server is assumed to."""
@@ -957,6 +973,12 @@ class VllmClient:
     def max_model_len(self) -> int | None:
         """The served model's context length as the server reports it, or None."""
         return _model_context(self._models(), self._model)
+
+    def declares_images(self) -> bool | None:
+        """Whether the server's own card for the served model lists image input:
+        True or False when it says, None when it does not (most vLLM cards)."""
+        found = _model_modalities(self._models(), self._model)
+        return None if found is None else "image" in found
 
     def count_tokens(
         self,

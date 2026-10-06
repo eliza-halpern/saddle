@@ -512,6 +512,34 @@ def test_max_model_len_reads_stratas_meta_n_ctx() -> None:
     assert absent.max_model_len() is None
 
 
+def test_declares_images_reads_the_served_models_input_modalities() -> None:
+    """Known-good: Strata's card lists ["text", "image"] for the served model,
+    so it declares images; one listing text only declares none. Known-bad: a
+    card with no `architecture`, a list holding a non-string, or only another
+    model's card is None -- saying nothing is not saying no."""
+    strata = {
+        "data": [
+            {"id": "other", "architecture": {"input_modalities": ["text"]}},
+            {"id": DEFAULT_MODEL, "architecture": {"input_modalities": ["text", "image"]}},
+        ]
+    }
+    client, seen = _json_client(strata)
+    assert client.declares_images() is True
+    assert seen[0].url.path == "/v1/models"
+    text, _ = _json_client(
+        {"data": [{"id": DEFAULT_MODEL, "architecture": {"input_modalities": ["text"]}}]}
+    )
+    assert text.declares_images() is False
+    for card in (
+        {"id": DEFAULT_MODEL},
+        {"id": DEFAULT_MODEL, "architecture": "multimodal"},
+        {"id": DEFAULT_MODEL, "architecture": {"input_modalities": ["text", 1]}},
+        {"id": "other", "architecture": {"input_modalities": ["text", "image"]}},
+    ):
+        silent, _ = _json_client({"data": [card]})
+        assert silent.declares_images() is None, card
+
+
 def test_list_models_auth_and_server_errors() -> None:
     for status in (401, 403):
         client, _ = _client_for(httpx.Response(status, json={"error": "nope"}))

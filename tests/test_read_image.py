@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import struct
 import subprocess
+import zlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -24,21 +25,26 @@ from saddle.engine import TurnOptions, run_turn
 from saddle.events import Event, ToolEnd
 from saddle.tools import ToolContext, execute_tool
 from saddle.vision import (
+    GLYPHS,
     IMAGE_FOLLOWUP,
     PROBE_QUESTION,
+    PROBE_TEXT,
     data_url,
     image_info,
     is_image_followup,
+    known_verdict,
+    reads,
     reset_cache,
     server_accepts_images,
     solid_png,
+    text_png,
 )
 from saddle.vllm import StreamToken, ToolCall, VllmAuthError, VllmClient, VllmRequestError
 from saddle.web.app import history_for_display
 
 RED = solid_png(16, 16, (255, 0, 0))
 BLUE = solid_png(16, 16, (0, 0, 255))
-COLOURS = {data_url("image/png", RED): "Red", data_url("image/png", BLUE): "Blue"}
+PROBE_URL = data_url("image/png", text_png(PROBE_TEXT))
 
 
 @pytest.fixture(autouse=True)
@@ -76,9 +82,13 @@ class Server:
         if isinstance(content, list) and content[0].get("text") == PROBE_QUESTION:
             self.probes += 1
             url = content[1]["image_url"]["url"]
-            answer = COLOURS.get(url, "?") if self.sees else "Green"
-            # reasoning arrives first and is not the answer: "red" in it must not count
-            thought = [StreamToken(stream="reasoning", text="not red, not blue")]
+            answer = (
+                f"The text reads {PROBE_TEXT.lower()}."
+                if self.sees and url == PROBE_URL
+                else "none"
+            )
+            # reasoning arrives first and is not the answer: the text in it must not count
+            thought = [StreamToken(stream="reasoning", text=f"is it {PROBE_TEXT}?")]
             return iter([*thought, *word(answer)])
         self.asked.append([dict(m) for m in messages])
         return iter(self.rounds.pop(0) if self.rounds else word("ok"))
@@ -141,27 +151,112 @@ def test_support_is_asked_once_per_server_and_remembered(tmp_path: Path) -> None
     (tmp_path / "shot.png").write_bytes(RED)
     server = Server([[call("read_file", path="shot.png")], word("ok")] * 2)
     turn(server, tmp_path)
-    assert server.probes == 2  # one red, one blue
+    assert server.probes == 1  # one picture of text
     turn(server, tmp_path)
-    assert server.probes == 2  # not again
+    assert server.probes == 1  # not again
 
 
-def test_the_probe_needs_both_colours_right() -> None:
-    class Always:
-        server_key = "k"
+def _pixels(png: bytes) -> list[bytes]:
+    """The RGB rows of a PNG `text_png` drew (filter byte 0 on every row)."""
+    width, height = struct.unpack(">II", png[16:24])
+    start = png.index(b"IDAT") + 4
+    length = struct.unpack(">I", png[start - 8 : start - 4])[0]
+    raw = zlib.decompress(png[start : start + length])
+    stride = 1 + 3 * width
+    return [raw[y * stride + 1 : (y + 1) * stride] for y in range(height)]
+
+
+def test_the_probe_picture_draws_each_letter_of_its_text() -> None:
+    """Known-good: every cell of each glyph is black where its bitmap is inked
+    and white where not, at its place in the line. Known-bad: drawing another
+    text gives another picture, so the answer depends on what was drawn."""
+    scale = 2
+    rows = _pixels(text_png(PROBE_TEXT, scale))
+    for index, letter in enumerate(PROBE_TEXT):
+        for cy, line in enumerate(GLYPHS[letter]):
+            for col, mark in enumerate(line):
+                x = (2 + index * 6 + col) * scale
+                y = (2 + cy) * scale
+                assert rows[y][3 * x : 3 * x + 3] == (b"\0\0\0" if mark == "X" else b"\xff\xff\xff")
+    margin = rows[0]
+    assert set(margin) == {255}  # two blank cells above the text
+    assert text_png("K7", scale) != text_png("7K", scale)
+    info = image_info(text_png(PROBE_TEXT))
+    assert info is not None
+    assert (info.width, info.height) == ((6 * 6 + 3) * 8, 11 * 8)
+
+
+def test_reading_back_means_the_text_once_case_and_punctuation_aside() -> None:
+    assert reads("K7PM3X")
+    assert reads("The text says: k7pm-3x.")
+    assert not reads("none")
+    assert not reads("K7PM3K")  # one letter misread
+    assert not reads("K7PM")
+    assert not reads("K7PM3X, or maybe K7PM3X")  # said twice: not one reading
+
+
+def test_the_probe_needs_the_text_read_back() -> None:
+    class Colours:
+        """Sees the picture's colour, cannot read it: the old probe's yes."""
+
+        server_key = "c"
 
         def stream_chat(self, messages: Any, **_: Any) -> Any:
-            return iter(word("red"))
+            return iter(word("black and white"))
 
-    assert server_accepts_images(Always()) is False  # answers red to blue too
+    assert server_accepts_images(Colours()) is False
 
-    class Hedges:
-        server_key = "h"
+    class Reads:
+        server_key = "r"
+        shown: Any = None
 
         def stream_chat(self, messages: Any, **_: Any) -> Any:
-            return iter(word("red or blue"))  # names both, so it has told us nothing
+            self.shown = messages[0]["content"][1]["image_url"]["url"]
+            return iter(word(PROBE_TEXT))
 
-    assert server_accepts_images(Hedges()) is False
+    reader = Reads()
+    assert known_verdict(reader) is None
+    assert server_accepts_images(reader) is True
+    assert reader.shown == PROBE_URL
+    assert known_verdict(reader) is True
+
+
+def test_a_card_that_declares_no_images_is_a_no_without_a_request() -> None:
+    class TextOnly:
+        server_key = "t"
+        asked = 0
+
+        def declares_images(self) -> bool | None:
+            return False
+
+        def stream_chat(self, messages: Any, **_: Any) -> Any:
+            self.asked += 1
+            return iter(word(PROBE_TEXT))
+
+    text_only = TextOnly()
+    assert server_accepts_images(text_only) is False
+    assert text_only.asked == 0
+
+    class Silent(TextOnly):
+        server_key = "s"
+
+        def declares_images(self) -> bool | None:
+            return None  # the card says nothing: ask the model
+
+    silent = Silent()
+    assert server_accepts_images(silent) is True
+    assert silent.asked == 1
+
+    class NoCard(TextOnly):
+        server_key = "n"
+
+        def declares_images(self) -> bool | None:
+            msg = "server returned HTTP 404"
+            raise VllmRequestError(msg)
+
+    no_card = NoCard()
+    assert server_accepts_images(no_card) is True  # a card it cannot read decides nothing
+    assert no_card.asked == 1
 
 
 def test_a_refusing_server_is_a_remembered_no_but_a_failure_is_not() -> None:

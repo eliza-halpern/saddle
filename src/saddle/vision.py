@@ -8,9 +8,12 @@ standard OpenAI tool message carries text only and templates differ in what
 they do with other parts, so the image rides in an ordinary user message,
 which the server's own image path has to handle.
 
-Whether the server accepts images is asked once per server with two tiny
-pictures of known colours (`server_accepts_images`), and cached: a model that
-names both colours right sees images, one that errors or guesses does not.
+Whether the server accepts images is asked once per server and cached
+(`server_accepts_images`): a server whose own model card says it takes no
+images is a no without a request; otherwise the model is shown a picture of a
+short made-up string (`PROBE_TEXT`) and must read it back. Naming a colour
+proved only that it sees colour; a screenshot is worth showing only to a model
+that can read the words on it.
 """
 
 from __future__ import annotations
@@ -18,11 +21,11 @@ from __future__ import annotations
 import base64
 import struct
 import zlib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
-from saddle.vllm import StreamToken, VllmRequestError
+from saddle.vllm import StreamToken, VllmError, VllmRequestError
 
 IMAGE_MAX_BYTES: Final = 4_194_304
 """The largest image file `read_file` will send: 4 MiB. A screenshot is
@@ -89,9 +92,11 @@ def data_url(mime: str, data: bytes) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
-def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
-    """A plain one-colour PNG, built here so a probe needs no file."""
-    row = b"\x00" + bytes(rgb) * width
+def _png(width: int, height: int, pixel: Callable[[int, int], tuple[int, int, int]]) -> bytes:
+    """An RGB PNG whose pixel at (x, y) is `pixel(x, y)`."""
+    rows = b"".join(
+        b"\x00" + b"".join(bytes(pixel(x, y)) for x in range(width)) for y in range(height)
+    )
 
     def chunk(kind: bytes, body: bytes) -> bytes:
         return (
@@ -101,9 +106,56 @@ def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
     return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(row * height))
+        + chunk(b"IDAT", zlib.compress(rows))
         + chunk(b"IEND", b"")
     )
+
+
+def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """A plain one-colour PNG, built here so a probe needs no file."""
+    return _png(width, height, lambda _x, _y: rgb)
+
+
+GLYPHS: Final[Mapping[str, tuple[str, ...]]] = {
+    "K": ("X...X", "X..X.", "X.X..", "XX...", "X.X..", "X..X.", "X...X"),
+    "7": ("XXXXX", "....X", "...X.", "..X..", ".X...", ".X...", ".X..."),
+    "P": ("XXXX.", "X...X", "X...X", "XXXX.", "X....", "X....", "X...."),
+    "M": ("X...X", "XX.XX", "X.X.X", "X.X.X", "X...X", "X...X", "X...X"),
+    "3": ("XXXX.", "....X", "....X", ".XXX.", "....X", "....X", "XXXX."),
+    "X": ("X...X", "X...X", ".X.X.", "..X..", ".X.X.", "X...X", "X...X"),
+}
+"""A 5x7 bitmap of each character `PROBE_TEXT` uses: a picture of text built
+here, with no font, no imaging library and no file."""
+
+PROBE_TEXT: Final = "K7PM3X"
+"""What the probe picture says: made up, so it cannot be answered from the
+words of the question, and free of the pairs a reader confuses (O/0, I/1, S/5)."""
+
+GLYPH_SCALE: Final = 8
+"""Each bitmap cell is this many pixels square: 40x56-pixel letters, far from
+the small-text case, since the probe asks whether the model reads at all."""
+
+
+def text_png(text: str, scale: int = GLYPH_SCALE) -> bytes:
+    """`text` in black capitals on white, one cell of space between letters and
+    two around them. Only the characters in `GLYPHS` can be drawn."""
+    rows, cols = 7, 5
+    width = (len(text) * (cols + 1) + 3) * scale
+    height = (rows + 4) * scale
+
+    def pixel(x: int, y: int) -> tuple[int, int, int]:
+        cx, cy = x // scale - 2, y // scale - 2
+        index, col = divmod(cx, cols + 1)
+        inked = (
+            0 <= cy < rows
+            and cx >= 0
+            and index < len(text)
+            and col < cols
+            and GLYPHS[text[index]][cy][col] == "X"
+        )
+        return (0, 0, 0) if inked else (255, 255, 255)
+
+    return _png(width, height, pixel)
 
 
 IMAGE_FOLLOWUP: Final = "Image from read_file call "
@@ -143,8 +195,9 @@ class _Streamer(Protocol):
     ) -> Iterator[Any]: ...
 
 
-PROBES: Final = (("red", (255, 0, 0)), ("blue", (0, 0, 255)))
-PROBE_QUESTION: Final = "What is the solid colour of this image? Answer with one word."
+PROBE_QUESTION: Final = (
+    "What text is written in this image? Answer with that text only, or 'none' if there is none."
+)
 
 _CACHE: dict[object, bool] = {}
 
@@ -153,11 +206,8 @@ def reset_cache() -> None:
     _CACHE.clear()
 
 
-def _answer(client: _Streamer, rgb: tuple[int, int, int]) -> str:
-    image = {
-        "type": "image_url",
-        "image_url": {"url": data_url("image/png", solid_png(16, 16, rgb))},
-    }
+def _answer(client: _Streamer, png: bytes) -> str:
+    image = {"type": "image_url", "image_url": {"url": data_url("image/png", png)}}
     messages = [{"role": "user", "content": [{"type": "text", "text": PROBE_QUESTION}, image]}]
     text = ""
     for item in client.stream_chat(
@@ -165,30 +215,49 @@ def _answer(client: _Streamer, rgb: tuple[int, int, int]) -> str:
     ):
         if isinstance(item, StreamToken) and item.stream == "content":
             text += item.text
-    return text.lower()
+    return text
+
+
+def reads(answer: str, text: str = PROBE_TEXT) -> bool:
+    """Whether `answer` reads back `text`: its letters and digits, case,
+    spaces and punctuation aside, hold `text` exactly once."""
+    kept = "".join(c for c in answer.upper() if c.isalnum())
+    return kept.count(text) == 1
 
 
 def server_accepts_images(client: _Streamer) -> bool:
     """Whether this server's model reads images, asked once and remembered.
 
-    True only when the model names a red picture red and a blue one blue, so
-    a server that ignores the image part (and answers from the words) is not
-    mistaken for one that sees it. A server that refuses the request (HTTP
-    4xx) is a definite no. Any other failure raises: a transient error must
-    not be remembered as "cannot see".
+    A server whose own card says it takes no images (`declares_images`) is a
+    no without a request. Otherwise the model is shown `PROBE_TEXT` drawn by
+    `text_png` and must read it back (`reads`), so a server that ignores the
+    image part, or a model that sees colour but cannot read, is not mistaken
+    for one that can read a screenshot. A server that refuses the request
+    (HTTP 4xx) is a definite no. Any other failure raises: a transient error
+    must not be remembered as "cannot see".
     """
     key = getattr(client, "server_key", None) or id(client)
     if key in _CACHE:
         return _CACHE[key]
+    declared = getattr(client, "declares_images", None)
     try:
-        verdict = all(
-            name in (answer := _answer(client, rgb))
-            and not any(other in answer for other, _ in PROBES if other != name)
-            for name, rgb in PROBES
-        )
+        says = declared() if declared is not None else None
+    except VllmError:
+        says = None  # a card that could not be read says nothing: the model is asked
+    if says is False:
+        _CACHE[key] = False
+        return False
+    try:
+        verdict = reads(_answer(client, text_png(PROBE_TEXT)))
     except VllmRequestError as exc:
         if not str(exc).startswith("server returned HTTP 4"):
             raise
         verdict = False
     _CACHE[key] = verdict
     return verdict
+
+
+def known_verdict(client: object) -> bool | None:
+    """What `server_accepts_images` found for this client's server, without
+    asking: None when it has not been asked yet."""
+    return _CACHE.get(getattr(client, "server_key", None) or id(client))
