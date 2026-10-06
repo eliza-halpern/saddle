@@ -66,7 +66,7 @@ from saddle.procs import ProcessLedger
 from saddle.sandbox import Sandbox, isolation_problem
 from saddle.searx import DEFAULT_SEARCH_URL, SearxLimiter, on_topic, reachable, shared_limiter
 from saddle.vision import is_image_followup
-from saddle.vllm import StreamToken, ToolCall, VllmError
+from saddle.vllm import StreamToken, ToolCall, VllmError, assistant_message
 
 RESEARCH_TOOL: Final = "research"
 REPORT_TOOL: Final = "report"
@@ -850,6 +850,7 @@ class Researcher:
             read_before = len(gate.visited)
             calls: list[ToolCall] = []
             said: list[str] = []
+            thought: list[str] = []
             try:
                 for event in self.client.stream_chat(
                     messages,
@@ -862,21 +863,30 @@ class Researcher:
                         calls.append(event)
                     elif isinstance(event, StreamToken) and event.stream == "content":
                         said.append(event.text)
+                    elif isinstance(event, StreamToken) and event.stream == "reasoning":
+                        thought.append(event.text)
             except VllmError as exc:
                 return f"the reader's model call failed: {exc}"
+            # Every lane keeps its reasoning: the reader's next round sees why it
+            # read what it read, not only the calls.
+            reasoning = "".join(thought)
             messages.append(
-                {
-                    "role": "assistant",
-                    "content": "".join(said),
-                    "tool_calls": [
-                        {
-                            "id": c.id,
-                            "type": "function",
-                            "function": {"name": c.name, "arguments": _resendable(c)},
-                        }
-                        for c in calls
-                    ],
-                }
+                assistant_message(
+                    {
+                        "role": "assistant",
+                        "content": "".join(said),
+                        "tool_calls": [
+                            {
+                                "id": c.id,
+                                "type": "function",
+                                "function": {"name": c.name, "arguments": _resendable(c)},
+                            }
+                            for c in calls
+                        ],
+                    },
+                    reasoning,
+                    bool(reasoning),
+                )
             )
             if not calls:
                 if nudged:

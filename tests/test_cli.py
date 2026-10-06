@@ -2520,6 +2520,7 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "                 [--max-tokens MAX_TOKENS] [--temperature TEMPERATURE]\n"
         "                 [--reasoning-effort {none,low,medium,xhigh}]\n"
         "                 [--mode {ask,edit}] [--full-access]\n"
+        "                 [--keep-reasoning | --no-keep-reasoning]\n"
         "\n"
         "options:\n"
         "  -h, --help            show this help message and exit\n"
@@ -2539,6 +2540,9 @@ def test_up_help_pins_every_option(capsys: pytest.CaptureFixture[str]) -> None:
         "  --full-access         With --mode edit: commands run as you, outside the\n"
         "                        sandbox. Asks you to confirm first; anything but y or\n"
         "                        yes starts nothing.\n"
+        "  --keep-reasoning, --no-keep-reasoning\n"
+        "                        Send each round's reasoning back to the model (on by\n"
+        "                        default; --no-keep-reasoning drops it).\n"
     )
 
 
@@ -2558,6 +2562,7 @@ def test_up_parser_defaults_and_overrides() -> None:
         "reasoning_effort": "medium",
         "mode": "ask",
         "full_access": False,
+        "keep_reasoning": True,
     }
     full = parser.parse_args(
         [
@@ -2579,6 +2584,7 @@ def test_up_parser_defaults_and_overrides() -> None:
             "--mode",
             "edit",
             "--full-access",
+            "--no-keep-reasoning",
         ]
     )
     assert vars(full) == {
@@ -2592,6 +2598,7 @@ def test_up_parser_defaults_and_overrides() -> None:
         "reasoning_effort": "low",
         "mode": "edit",
         "full_access": True,
+        "keep_reasoning": False,
     }
 
 

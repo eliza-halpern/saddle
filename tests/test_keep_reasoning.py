@@ -3,7 +3,8 @@
 Both halves on the wire (an httpx fake speaking vLLM's SSE): with the flag,
 round N+1's request carries round N's reasoning on its assistant message,
 in the `reasoning` field; without it, no request carries it at all, and the
-sealed outcome says which shape ran. Interactive chat never keeps it.
+sealed outcome says which shape ran. Interactive chat keeps it too (every
+mode does), unless a person turns it off.
 """
 
 from __future__ import annotations
@@ -259,15 +260,52 @@ def test_saddle_chat_has_the_same_default_and_off_switch(
     assert inspect.signature(web_app.serve).parameters["keep_reasoning"].default is True
 
 
-def test_interactive_chat_never_keeps_reasoning(tmp_path: Path) -> None:
+@pytest.mark.parametrize("keep", [True, False])
+def test_interactive_chat_keeps_reasoning_unless_turned_off(tmp_path: Path, keep: bool) -> None:
+    """Flipped from "interactive chat never keeps it": that pinned the scope
+    limit of the commit that added the flag, not a contract. The served
+    template renders past assistant reasoning within a tool loop, and an Edit
+    turn of dozens of rounds otherwise saw what it did and never why."""
     server = FakeServer(
         [_sse(_delta({"reasoning": R1}), _read_call()), _sse(_delta({"content": "ok"}))]
     )
     (tmp_path / "calc.py").write_text("x = 1\n")
-    options = TurnOptions(workdir=tmp_path, journal=tmp_path / "j.jsonl", keep_reasoning=True)
+    options = TurnOptions(workdir=tmp_path, journal=tmp_path / "j.jsonl", keep_reasoning=keep)
     list(run_turn(server.client(), [], "look", options, turn=1))
     assert len(server.payloads) == 2
-    assert R1 not in json.dumps(server.payloads[1])
+    assert [m.get("reasoning_content") for m in _assistants(server.payloads[1])] == [
+        R1 if keep else None
+    ]
+
+
+def test_turn_options_keep_reasoning_by_default() -> None:
+    assert TurnOptions(workdir=Path("."), journal=Path("j.jsonl")).keep_reasoning is True
+
+
+def test_the_chat_server_passes_its_setting_to_each_chat_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import saddle.web.app as module
+
+    got: list[bool] = []
+
+    def capture(
+        _c: Any, messages: list[dict[str, Any]], text: str, options: Any, **_kw: Any
+    ) -> Any:
+        got.append(options.keep_reasoning)
+        messages.append({"role": "user", "content": text})
+        return iter(())
+
+    monkeypatch.setattr(module, "run_turn", capture)
+    for keep in (True, False):
+        for mode in ("ask", "edit"):  # every lane, Ask included
+            store = SessionStore(tmp_path / f"s{keep}{mode}")
+            sid = store.create(workdir=str(tmp_path)).id
+            store.update(sid, mode=mode)
+            app = build_app(store, NoModel, default_workdir=tmp_path, keep_reasoning=keep)
+            with TestClient(app):
+                _server_of(app)._run(sid, "hello")
+    assert got == [True, True, False, False]
 
 
 def _raise(message: str) -> None:

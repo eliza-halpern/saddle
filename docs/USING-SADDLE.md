@@ -649,8 +649,10 @@ Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
   the requests sent are byte-identical to before the flag existed. An A/B on T5 (6 runs
   each way) finished faster with it on (median wall 735 s against 1121 s) and was
   correct at least as often (6/6 against 5/6), which is why it is the default. Runs
-  started from `saddle chat` use the same default and the same off switch. The
-  interactive chat turn itself never keeps reasoning.
+  started from `saddle chat` use the same default and the same off switch. Every
+  lane keeps it: the chat's Ask and Edit turns (web and `saddle up`, with the same
+  off switch) and the web reader each send a round's reasoning back on its assistant
+  message. Without it a long tool loop sees what the model did and never why.
 - `--check-tool` (off by default, arm E+A+F only): offers the model a `check` tool that
   runs audit tiers 0 and 1 on the current tree before `finish`; each call is journaled
   as an `audit:check` span (`feed.CHECK_SPAN`).

@@ -18,7 +18,7 @@ from saddle.procs import ProcessLedger
 from saddle.sideeffects import SideEffects
 from saddle.timeline import Timeline
 from saddle.tools import ToolContext, attach_mcp, execute_tool, scope_turn
-from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
+from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError, assistant_message
 
 MAX_TOOL_ROUNDS: Final = 10
 
@@ -39,6 +39,9 @@ class ChatOptions:
     full_access: bool = False
     """`saddle up --full-access`, confirmed at the prompt: Edit-lane commands
     run outside the sandbox, as in the web chat's `Session.full_access`."""
+    keep_reasoning: bool = True
+    """`saddle up --keep-reasoning` (on by default): each round's reasoning
+    goes back on its assistant message, as in the web chat."""
 
 
 def _stream_response(
@@ -135,8 +138,11 @@ def _run_turn(
             client, messages, options, display=display, tools=offered
         )
         thinking.append(reasoning)
+        keep = options.keep_reasoning and bool(reasoning)
         if not calls:
-            messages.append({"role": "assistant", "content": reply})
+            messages.append(
+                assistant_message({"role": "assistant", "content": reply}, reasoning, keep)
+            )
             rounds.append({"reply": reply, "tools": []})
             if not reply.strip():  # F35, as in the web chat's `run_turn`
                 empty_replies += 1
@@ -154,18 +160,22 @@ def _run_turn(
                 parent=parent,
             )
         messages.append(
-            {
-                "role": "assistant",
-                "content": reply,
-                "tool_calls": [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {"name": call.name, "arguments": call.arguments},
-                    }
-                    for call in calls
-                ],
-            }
+            assistant_message(
+                {
+                    "role": "assistant",
+                    "content": reply,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {"name": call.name, "arguments": call.arguments},
+                        }
+                        for call in calls
+                    ],
+                },
+                reasoning,
+                keep,
+            )
         )
         tools: list[dict[str, Any]] = []
         for call in calls:

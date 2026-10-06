@@ -54,7 +54,7 @@ from saddle.research import (
 )
 from saddle.sandbox import isolation_problem
 from saddle.searx import search_url_from_env
-from saddle.vllm import StreamToken, ToolCall, VllmError
+from saddle.vllm import StreamToken, StreamUsage, ToolCall, VllmError
 
 FIXTURE = Path(__file__).with_name("mcp_fixture_web.py")
 BWRAP = isolation_problem() is None
@@ -1106,6 +1106,26 @@ def test_the_third_identical_call_moves_the_reader_to_a_report_only_round(rig: R
         "role": "user",
         "content": "Report now with what you have found so far; cite the pages you read.",
     }
+
+
+@needs_bwrap
+def test_the_reader_keeps_each_rounds_reasoning(rig: Rig) -> None:
+    """Every lane keeps its reasoning: the reader's next round carries why it
+    fetched the page, under both spellings. Red before: only the calls went
+    back, so a long reading lost its own plan every round."""
+    thinking = StreamToken(stream="reasoning", text="the install page names it")
+    fetch = tool(W + "fetch", url=INSTALL)
+    # the server's usage count, streamed last, is neither said nor thought
+    usage = StreamUsage(prompt_tokens=9, completion_tokens=3)
+    _, model = rig.run([[thinking, fetch, usage], [GOOD]], person=INSTALL)
+    sent = [m for m in model.asked[1]["messages"] if m["role"] == "assistant"]
+    assert [(m.get("reasoning_content"), m.get("reasoning")) for m in sent] == [
+        ("the install page names it", "the install page names it")
+    ]
+    # a round with no reasoning goes back exactly as before
+    _, plain = rig.run([[fetch], [GOOD]], person=INSTALL)
+    (bare,) = [m for m in plain.asked[1]["messages"] if m["role"] == "assistant"]
+    assert "reasoning_content" not in bare
 
 
 @needs_bwrap

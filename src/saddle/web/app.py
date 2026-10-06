@@ -450,7 +450,8 @@ class ChatServer:
         self.allow_test_edits = allow_test_edits
         """The confirm strip's default for "Allow test edits"; each run may override it."""
         self.keep_reasoning = keep_reasoning
-        """Whether a chat-started run keeps its reasoning (`AutoOptions.keep_reasoning`)."""
+        """Whether chat turns and chat-started runs keep their reasoning
+        (`TurnOptions.keep_reasoning`, `AutoOptions.keep_reasoning`)."""
         self.wheels = wheels
         """`saddle web --allow-installs`: the wheel folder every chat-started run
         may install from, with the user's approval (`AutoOptions.wheels`)."""
@@ -613,6 +614,7 @@ class ChatServer:
                     temperature=session.temperature,
                     context_tokens=self._context_window(client),
                     tools=tools,
+                    keep_reasoning=self.keep_reasoning,
                 )
                 for event in run_turn(
                     client,

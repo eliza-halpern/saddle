@@ -454,6 +454,21 @@ def _text_or_empty(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def assistant_message(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str, Any]:
+    """The assistant message as sent back, with its reasoning when `keep`.
+
+    Sent under both keys: `reasoning_content`, the only one the served
+    Qwen3.8 template reads, and `reasoning`, what the server streams and
+    the untouched agent (pi) sends back. Relying on the server to map one
+    to the other would leave the flag inert if it does not. Appended last,
+    so with `keep` off the message is exactly as before.
+    """
+    if keep:
+        message["reasoning_content"] = reasoning
+        message["reasoning"] = reasoning
+    return message
+
+
 def _reasoning_of(part: Mapping[str, Any]) -> str:
     """The think block of a delta or message: `reasoning` (vLLM 0.28), else
     `reasoning_content` (the llama.cpp-style servers, Strata among them).

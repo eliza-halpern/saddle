@@ -2098,8 +2098,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-reasoning",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Chat-started task runs send each round's reasoning back to the model, "
-        "as `saddle auto` does (on by default; --no-keep-reasoning drops it).",
+        help="Chat turns and chat-started task runs send each round's reasoning back "
+        "to the model, as `saddle auto` does (on by default; --no-keep-reasoning "
+        "drops it).",
     )
     _add_install_flags(web)
     web.add_argument(
@@ -2139,6 +2140,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --mode edit: commands run as you, outside the sandbox. "
         "Asks you to confirm first; anything but y or yes starts nothing.",
+    )
+    up.add_argument(
+        "--keep-reasoning",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Send each round's reasoning back to the model (on by default; "
+        "--no-keep-reasoning drops it).",
     )
     mcp_cmd = sub.add_parser(
         "mcp", help="List the MCP allowlist, or approve a server's tools after reading them."
@@ -2659,6 +2667,7 @@ def main(
                 reasoning_effort=args.reasoning_effort,
                 mode=args.mode,
                 full_access=args.full_access,
+                keep_reasoning=args.keep_reasoning,
             )
             return run_chat(
                 chat_options,

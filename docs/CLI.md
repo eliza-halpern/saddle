@@ -410,7 +410,7 @@ of the covered commit, there are no commits after it, or `--baseline` is given.
 | `--sessions` | `~/.saddle/sessions` |
 | `--base-url`, `--model` | as for `auto` |
 | `--no-open` | do not open a browser |
-| `--keep-reasoning` / `--no-keep-reasoning` | on: task runs the chat starts keep each round's reasoning, as `auto` does |
+| `--keep-reasoning` / `--no-keep-reasoning` | on: chat turns (Ask and Edit) and the task runs the chat starts keep each round's reasoning, as `auto` does |
 | `--allow-installs`, `--wheel-dir DIR` | off, as for `auto`: with it, task runs the chat starts may install from the wheel folder, each request approved on the task card |
 | `--extract-requirements` / `--no-extract-requirements` | `$SADDLE_EXTRACT_REQUIREMENTS` (or that line in the env file; `1`/`0`, `on`/`off`, `true`/`false`, `yes`/`no`), else off: task runs the chat starts check the task text's own examples (P1) as `auto --extract-requirements` does, at question strength. A run whose finish audit asks ends "needs you" with the question on the card. Any other value stops the command with exit 2. `auto` does not read the variable |
 
@@ -429,6 +429,7 @@ The terminal chat. Same lanes and tool lists as the web chat's Ask and Edit
 | `--max-tokens N` | `8192` | reply max tokens |
 | `--temperature T` | `0.0` | sampling temperature |
 | `--reasoning-effort` | `medium` | one of `none`, `low`, `medium`, `xhigh` |
+| `--keep-reasoning` / `--no-keep-reasoning` | on | send each round's reasoning back to the model, in either mode |
 | `--base-url`, `--model` | as for `auto` | |
 
 ## Opt-in capabilities: `saddle capabilities`

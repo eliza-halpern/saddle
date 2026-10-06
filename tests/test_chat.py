@@ -235,6 +235,58 @@ def test_seal_turn_chains_proofs_with_hashed_turns(tmp_path: Path) -> None:
     assert verify_journal(journal) == []
 
 
+@pytest.mark.parametrize("keep", [True, False])
+def test_terminal_chat_keeps_each_rounds_reasoning_unless_turned_off(
+    tmp_path: Path, keep: bool
+) -> None:
+    """Every mode keeps reasoning: the terminal chat's next round carries the
+    last one's think block (Strata's spelling), and `--no-keep-reasoning`
+    drops it. Red before: the terminal loop never sent it back."""
+    (tmp_path / "calc.py").write_text("x = 1\n")
+    call = {"index": 0, "id": "r1", "type": "function"}
+    call["function"] = {"name": "read_file", "arguments": json.dumps({"path": "calc.py"})}
+    seen: list[httpx.Request] = []
+    client = _scripted_client(
+        [
+            _chunk({"reasoning_content": "read calc.py first"})
+            + _chunk({"tool_calls": [call]})
+            + "data: [DONE]\n\n",
+            _chunk({"content": "done"}) + "data: [DONE]\n\n",
+        ],
+        seen,
+    )
+    display = _display(io.StringIO())
+    with display.live_turn():
+        _run_turn(
+            client,
+            [],
+            "look",
+            ChatOptions(workdir=tmp_path, journal=tmp_path / "c.jsonl", keep_reasoning=keep),
+            turn=1,
+            parent=None,
+            display=display,
+        )
+    (sent,) = [m for m in json.loads(seen[1].content)["messages"] if m["role"] == "assistant"]
+    assert sent.get("reasoning_content") == ("read calc.py first" if keep else None)
+
+
+def test_saddle_up_passes_its_keep_reasoning_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    got: list[bool] = []
+    monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    monkeypatch.setattr(cli, "check_server", lambda *_a, **_k: None)
+
+    def fake_chat(options: ChatOptions, *_a: Any, **_k: Any) -> int:
+        got.append(options.keep_reasoning)
+        return 0
+
+    monkeypatch.setattr(cli, "run_chat", fake_chat)
+    for extra in ([], ["--no-keep-reasoning"]):
+        cli.main(["up", "--journal", str(tmp_path / "j.jsonl"), *extra])
+    assert got == [True, False]
+
+
 def test_run_turn_appends_plain_reply(tmp_path: Path) -> None:
     journal = tmp_path / "chat.jsonl"
     messages: list[dict[str, Any]] = []
@@ -338,9 +390,12 @@ def test_run_turn_executes_tool_calls_then_answers(
                     },
                 }
             ],
+            # every mode keeps each round's reasoning, under both spellings
+            "reasoning_content": "R1. ",
+            "reasoning": "R1. ",
         },
         {"role": "tool", "tool_call_id": "c1", "content": "hello\n"},
-        {"role": "assistant", "content": "Seen."},
+        {"role": "assistant", "content": "Seen.", "reasoning_content": "R2. ", "reasoning": "R2. "},
     ]
     assert len(seen) == 2
     assert json.loads(seen[1].content)["messages"] == messages[:3]

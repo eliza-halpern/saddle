@@ -99,7 +99,7 @@ from saddle.tools import (
     state_image_fact,
 )
 from saddle.vision import images_message, server_accepts_images
-from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
+from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError, assistant_message
 
 RECALL_HINT: Final = (
     " The full text of what was dropped or shortened can be searched with `recall`."
@@ -754,12 +754,13 @@ class TurnOptions:
     for the last request it reported usage on; `None` until one has. Set by
     the turn loop. Where the server cannot count (no /tokenize), it turns
     the estimate into real tokens instead of the blanket `INPUT_SAFETY`."""
-    keep_reasoning: bool = False
-    """Autonomous runs only: send each round's reasoning back on its
-    assistant message (field `reasoning`) for the rest of the turn, as the
-    untouched agent does (SPEED F-a). `auto.run_auto` always sets it from
-    `AutoOptions.keep_reasoning`, which is on by default; ignored in
-    interactive chat."""
+    keep_reasoning: bool = True
+    """Send each round's reasoning back on its assistant message, in every
+    mode: autonomous runs (`AutoOptions.keep_reasoning`) and interactive chat
+    alike, as the untouched agent does (SPEED F-a). The served template
+    renders a past assistant turn's reasoning, so without it a long tool loop
+    sees what the model did and never why. Off only where a person turns it
+    off (`--no-keep-reasoning`)."""
 
     def tool_tokens(self) -> int:
         """What the tool schemas cost, which they do on every single request.
@@ -1216,10 +1217,10 @@ def run_turn(
                         yield ErrorEvent(message=f"stopped: {auto.reason}")
                         break
 
-            keep = options.keep_reasoning and auto is not None and bool(reasoning)
+            keep = options.keep_reasoning and bool(reasoning)
             if not calls:
                 messages.append(
-                    _assistant({"role": "assistant", "content": reply}, reasoning, keep)
+                    assistant_message({"role": "assistant", "content": reply}, reasoning, keep)
                 )
                 rounds.append({"reply": reply, "tools": []})
                 if auto is not None and not stop():
@@ -1269,7 +1270,7 @@ def run_turn(
             if auto is not None:
                 auto.empty_rounds = 0
             messages.append(
-                _assistant(
+                assistant_message(
                     {
                         "role": "assistant",
                         "content": reply,
@@ -1547,21 +1548,6 @@ def _note_round(auto: AutoRun, call: ToolCall, result: str) -> None:
     command = json.loads(call.arguments).get("command")
     if isinstance(command, str) and is_test_command(command):
         auto.last_test = (command, result)
-
-
-def _assistant(message: dict[str, Any], reasoning: str, keep: bool) -> dict[str, Any]:
-    """The assistant message as sent back, with its reasoning when `keep`.
-
-    Sent under both keys: `reasoning_content`, the only one the served
-    Qwen3.8 template reads, and `reasoning`, what the server streams and
-    the untouched agent (pi) sends back. Relying on the server to map one
-    to the other would leave the flag inert if it does not. Appended last,
-    so with `keep` off the message is exactly as before.
-    """
-    if keep:
-        message["reasoning_content"] = reasoning
-        message["reasoning"] = reasoning
-    return message
 
 
 def _progress(auto: AutoRun, streamed_chars: int | None = None) -> RunProgress:
