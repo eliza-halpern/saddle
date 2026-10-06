@@ -559,8 +559,26 @@ def test_exit_codes_and_timeouts_live_where_contributing_says() -> None:
     assert "SHELL_TIMEOUT" not in module_constants(evidence_src)
 
 
-def test_claude_md_imports_a_file_that_exists() -> None:
-    files = tracked()
-    imports = re.findall(r"^@(\S+)$", _doc("CLAUDE.md"), re.MULTILINE)
-    assert imports == ["CONTRIBUTING.md"]
-    assert set(imports) <= set(files)
+def _import_chain(start: str, files: set[str]) -> list[str]:
+    """The files `start`'s `@path` lines reach, in order, each one tracked
+    (a missing one fails here, by name)."""
+    reached: list[str] = []
+    todo = [start]
+    while todo:
+        name = todo.pop(0)
+        for found in re.findall(r"^@(\S+)$", _doc(name), re.MULTILINE):
+            assert found in files, f"{name} imports {found}, which is not tracked"
+            assert found not in reached, f"{name} imports {found} a second time"
+            reached.append(found)
+            todo.append(found)
+    return reached
+
+
+def test_claude_md_reaches_the_contributor_rules_through_files_that_exist() -> None:
+    assert _import_chain("CLAUDE.md", set(tracked())) == ["AGENTS.md", "CONTRIBUTING.md"]
+
+
+def test_an_import_of_a_file_that_is_not_tracked_is_named() -> None:
+    missing = r"CLAUDE\.md imports AGENTS\.md, which is not tracked"
+    with pytest.raises(AssertionError, match=missing):
+        _import_chain("CLAUDE.md", {"CONTRIBUTING.md"})
