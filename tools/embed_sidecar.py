@@ -48,8 +48,10 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=2)
     args = parser.parse_args()
     os.nice(19)
-    import torch
-    from sentence_transformers import SentenceTransformer
+    # torch, sentence-transformers and PIL live in the sidecar's own environment,
+    # never saddle's (the docstring's setup), so saddle's type check cannot see them.
+    import torch  # type: ignore[import-not-found]
+    from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
     torch.set_num_threads(args.threads)
     # The model card: float32 on CPUs (bfloat16 only with native support; never
@@ -66,7 +68,7 @@ def main() -> None:
     lock = __import__("threading").Lock()
 
     def encode(items: list[Any], dimensions: int | None) -> list[list[float]]:
-        from PIL import Image
+        from PIL import Image  # type: ignore[import-not-found]
 
         prepared = []
         for item in items:
