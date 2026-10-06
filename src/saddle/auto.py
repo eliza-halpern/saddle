@@ -75,6 +75,7 @@ from saddle.journal import (
     utc_now,
 )
 from saddle.jsevidence import js_test_files, stryker_entry
+from saddle.recall import Recall
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
@@ -1094,6 +1095,7 @@ def run_auto(
         ocr=switches.ocr,
         imagediff=switches.imagediff,
         embeddings=switches.embeddings,
+        recall=Recall() if switches.embeddings else None,
     )
     if options.wheels is not None:
         assert project is not None  # checked before the run started

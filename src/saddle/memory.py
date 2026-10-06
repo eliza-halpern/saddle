@@ -46,6 +46,8 @@ from typing import Any, Final, Literal
 from saddle.vision import is_image_followup
 
 CHARS_PER_TOKEN: Final = 4
+CALL_ARGS_SHOWN: Final = 300
+"""How much of a call's arguments labels its result in an archive."""
 """Deliberately crude. An exact tokeniser would tie compaction to one model,
 and the decision this feeds is "is there room", not "how many exactly"."""
 
@@ -162,6 +164,15 @@ def _content_text(content: Any) -> str:
     if isinstance(content, list):
         return next((p.get("text", "") for p in content if p.get("type") == "text"), "")
     return str(content or "")
+
+
+def describe_call(call: dict[str, Any]) -> str:
+    """`name(arguments)` for an assistant's tool call, its arguments cut short."""
+    function = call.get("function") or {}
+    args = str(function.get("arguments") or "")
+    if len(args) > CALL_ARGS_SHOWN:
+        args = args[:CALL_ARGS_SHOWN] + "..."
+    return f"{function.get('name', '?')}({args})"
 
 
 def is_note(message: dict[str, Any]) -> bool:
@@ -313,6 +324,7 @@ def compact(
     state: Callable[[], str] | None = None,
     measure: Callable[[list[dict[str, Any]]], int] | None = None,
     target_tokens: int | None = None,
+    archive: Callable[[list[dict[str, Any]]], object] | None = None,
 ) -> tuple[int, str]:
     """Bring `messages` under `limit_tokens` in place.
 
@@ -328,6 +340,11 @@ def compact(
     needed, which is the common case and must stay cheap. `state`, when
     given (an autonomous run), is called once per compaction and its text
     goes in the note, which is rebuilt, not appended to, each time.
+
+    `archive`, when given, is handed what compaction takes, before it goes:
+    the full text of each tool result it shortens and each message it drops,
+    every tool result carrying its call as `call` (`recall`). A result already
+    shortened is not handed over again: its full text went the first time.
     """
     size = measure or estimate_tokens
     if size(messages) <= limit_tokens:
@@ -341,6 +358,25 @@ def compact(
             return True
         return index >= len(messages) - KEEP_RECENT
 
+    calls = {
+        call.get("id"): describe_call(call)
+        for message in messages
+        for call in message.get("tool_calls") or []
+    }
+
+    def keep_whole(lost: list[dict[str, Any]]) -> None:
+        if archive is None:
+            return
+        whole = [
+            {**m, "call": calls.get(m.get("tool_call_id"), "a tool call")}
+            if m.get("role") == "tool"
+            else dict(m)
+            for m in lost
+            if not (m.get("role") == "tool" and ELIDED in str(m.get("content") or ""))
+        ]
+        if whole:
+            archive(whole)
+
     # Stage 1: shrink old tool results, and turn old images into a line.
     pictures = False
     for index, message in enumerate(messages):
@@ -351,6 +387,7 @@ def compact(
             message["content"] = _elide_images(content)
             pictures = True
         elif message.get("role") == "tool" and len(content) > RESULT_HEAD + RESULT_TAIL:
+            keep_whole([message])
             message["content"] = _truncate_result(content)
     elided = "older screenshots elided" if pictures else "large tool results elided"
 
@@ -400,6 +437,7 @@ def compact(
         if span is None:
             break
         oldest, end = span
+        keep_whole(messages[oldest:end])
         for message in messages[oldest:end]:
             dropped += 1
             for call in message.get("tool_calls") or []:
@@ -422,6 +460,7 @@ def compact(
         for message in messages[:last]:
             content = message.get("content") or ""
             if message.get("role") == "tool" and len(content) > RESULT_HEAD + RESULT_TAIL:
+                keep_whole([message])
                 message["content"] = _truncate_result(content)
 
     if not dropped and old is None:

@@ -41,6 +41,7 @@ from saddle.embed import EmbedClient, EmbedError
 from saddle.gates import is_test_code
 from saddle.mcpclient import Approvals, McpError, McpHost, load_config
 from saddle.procs import Entry, ProcessLedger
+from saddle.recall import Recall
 from saddle.research import (
     NOBODY_WATCHING,
     RESEARCH_SCHEMA,
@@ -251,6 +252,19 @@ CODE_SEARCH_SCHEMA: Final[dict[str, Any]] = _tool(
 server answers (`offer_code_search`). It searches what `saddle index` already
 embedded: embedding the repository takes minutes, never a tool call's time."""
 
+RECALL_TOOL: Final = "recall"
+RECALL_SCHEMA: Final[dict[str, Any]] = _tool(
+    RECALL_TOOL,
+    "Get back text that compaction removed from this conversation: the full output of "
+    "a tool result it shortened, or the messages it dropped. Ask by meaning ('the "
+    "failing test's traceback', 'what the user said about the config'); it returns "
+    "the three nearest pieces in full, each with the call or speaker it came from.",
+    {"query": {"type": "string"}},
+    ["query"],
+)
+"""Offered beside `code_search` once compaction has archived something in this
+session (`offer_code_search`)."""
+
 SCREENSHOT_TOOL: Final = "screenshot"
 SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     SCREENSHOT_TOOL,
@@ -344,6 +358,7 @@ _ARGUMENTS: Final[dict[str, frozenset[str]]] = {
         READ_TEXT_SCHEMA,
         COMPARE_IMAGES_SCHEMA,
         CODE_SEARCH_SCHEMA,
+        RECALL_SCHEMA,
     ]
 }
 """Each tool's declared arguments. Anything else is refused by name, not
@@ -588,19 +603,25 @@ def offer_code_search(
     healthy: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """`tools` with `code_search` added when the person's `embeddings` switch is
-    on and the embeddings server answers, in any lane: it only reads. Allowed by
-    name in a lane that lists its tools."""
-    names = {t["function"]["name"] for t in tools}
-    if not context.embeddings or CODE_SEARCH_TOOL in names:
+    on and the embeddings server answers, and `recall` too once compaction has
+    archived something (`context.recall`), in any lane: both only read. Allowed
+    by name in a lane that lists its tools."""
+    if not context.embeddings:
         return tools
-    if not (healthy or _embeddings_answer)():
+    names = {t["function"]["name"] for t in tools}
+    wanted = [CODE_SEARCH_SCHEMA]
+    if context.recall is not None and len(context.recall):
+        wanted.append(RECALL_SCHEMA)
+    added = [s for s in wanted if s["function"]["name"] not in names]
+    if not added or not (healthy or embeddings_answer)():
         return tools
     if context.allowed is not None:
-        context.allowed = (*context.allowed, CODE_SEARCH_TOOL)
-    return [*tools, CODE_SEARCH_SCHEMA]
+        context.allowed = (*context.allowed, *(s["function"]["name"] for s in added))
+    return [*tools, *added]
 
 
-def _embeddings_answer() -> bool:
+def embeddings_answer() -> bool:
+    """Whether the embeddings server answers its health check."""
     try:
         EmbedClient().health()
     except EmbedError:
@@ -879,6 +900,9 @@ class ToolContext:
     embeddings: bool = False
     """The person's `embeddings` switch: `code_search` is offered
     (`offer_code_search`)."""
+    recall: Recall | None = None
+    """What compaction took from this session, for `recall`: set with the
+    `embeddings` switch, and kept across turns as the context is."""
     last_window: str | None = None
     """The window the latest screenshot or computer action named, for a
     computer call that names none."""
@@ -1936,6 +1960,13 @@ def _code_search(ctx: ToolContext, args: Mapping[str, Any]) -> str:
         return f"error: code_search could not search: {exc}. Use `search` for exact text."
 
 
+def _recall(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    question = _text(args, "query", RECALL_TOOL)
+    if ctx.recall is None:
+        return "error: recall needs the embeddings capability, which is off."
+    return ctx.recall.search(question)
+
+
 # Naming the handler signature is what makes `handler(ctx, args)` a str
 # rather than Any at the dispatch site below.
 type _Handler = Callable[[ToolContext, Mapping[str, Any]], str]
@@ -1955,6 +1986,7 @@ _HANDLERS: Final[dict[str, _Handler]] = {
     READ_TEXT_TOOL: _read_text,
     COMPARE_IMAGES_TOOL: _compare_images,
     CODE_SEARCH_TOOL: _code_search,
+    RECALL_TOOL: _recall,
 }
 
 
@@ -1971,6 +2003,8 @@ def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = No
     on = switches if switches is not None else load_switches()
     ctx.images, ctx.ocr, ctx.imagediff = on.images, on.ocr, on.imagediff
     ctx.embeddings = on.embeddings
+    if on.embeddings and ctx.recall is None:
+        ctx.recall = Recall()
     config = load_config() if (on.mcp or on.research) else {}
     readers = any(spec.access == "reader" for spec in config.values())
 

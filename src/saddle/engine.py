@@ -76,6 +76,7 @@ from saddle.memory import (
     run_state,
     trim_screenshots,
 )
+from saddle.recall import Recall
 from saddle.sandbox import Terminal
 from saddle.tools import (
     BLOCKED_TOOL,
@@ -88,6 +89,7 @@ from saddle.tools import (
     REFUSED,
     TOOLS,
     ToolContext,
+    embeddings_answer,
     execute_tool,
     offer_code_search,
     offer_computer,
@@ -98,6 +100,10 @@ from saddle.tools import (
 )
 from saddle.vision import images_message, server_accepts_images
 from saddle.vllm import StreamUsage, ToolCall, VllmClient, VllmError
+
+RECALL_HINT: Final = (
+    " The full text of what was dropped or shortened can be searched with `recall`."
+)
 
 type TokenCounter = Callable[..., int | None]
 """`VllmClient.count_tokens`: the server's own tokeniser, or None if it has
@@ -1124,7 +1130,10 @@ def run_turn(
                     kept_messages=len(messages),
                     summary=f"{trimmed} older screenshots elided",
                 )
-            yield from _compact(messages, options, node_id, once)
+            yield from _compact(messages, options, node_id, once, ctx.recall)
+            # A compaction may have archived the first pieces: offer `recall` from
+            # this request on, not the next turn (an autonomous run is one turn).
+            options = replace(options, tools=offer_code_search(options.tools, ctx))
             parts: list[str] = []
             thoughts: list[str] = []
             calls: list[ToolCall] = []
@@ -1444,8 +1453,11 @@ def _compact(
     options: TurnOptions,
     node_id: str,
     counter: TokenCounter | None = None,
+    recall: Recall | None = None,
 ) -> Iterator[Event]:
     """Compact before one request; announce it, and seal it in a run's ledger.
+    With `recall` (the `embeddings` switch), what goes is archived there, and
+    the note names the `recall` tool when the embeddings server answers.
 
     With the server's tokenizer at hand the limit and every measurement are
     real tokens (`compaction_limit_exact`); without it, the old estimate. A
@@ -1477,8 +1489,10 @@ def _compact(
         target_tokens=int(limit * COMPACT_TARGET),
         measure=measure,
         pin="first" if auto is not None else "last",
-        hint=REREAD if auto is not None else ASK_USER,
+        hint=(REREAD if auto is not None else ASK_USER)
+        + (RECALL_HINT if recall is not None and embeddings_answer() else ""),
         state=(lambda: _run_state(auto)) if auto is not None else None,
+        archive=recall.add if recall is not None else None,
     )
     if not summary:
         return
