@@ -54,7 +54,7 @@ import sys
 import tempfile
 import tomllib
 import uuid
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -108,6 +108,8 @@ from saddle.evidence import (
 )
 from saddle.gates import (
     DEFAULT_MUTANT_SHORTLIST,
+    DOCUMENTED_RAISES,
+    DOCUMENTED_RAISES_HELD,
     NO_TESTS_COLLECTED,
     TEST_ONLY_UNPROVEN,
     TOOL_UNAVAILABLE,
@@ -116,6 +118,7 @@ from saddle.gates import (
     RuffFinding,
     TaskRequirementsCheck,
     Tier1Result,
+    check_documented_raises,
     check_js_coverage,
     check_js_red_phase,
     check_js_tests,
@@ -338,6 +341,7 @@ def p1_tally(check: TaskRequirementsCheck) -> dict[str, Any]:
         "unjudged": list(check.unjudged),
         "units": {"total": total, "judged": judged, "asked": asked, "unjudged": unjudged},
         "examples": {"total": examples, "pass": passed, "code-wrong": wrong, "question": questions},
+        "code-wrong-by-type": check.by_type,
         "strength": "full" if (check.basis or "").startswith("full strength") else "question",
     }
 
@@ -1484,6 +1488,79 @@ def coverage_evidence(
     }
 
 
+def raise_gaps(
+    copy: Path,
+    baseline: str,
+    detail: str,
+    basis: str,
+    entered: Sequence[tuple[str, int]] | None = None,
+) -> list[dict[str, Any]]:
+    """Each changed `raise` the coverage record says no test enters (K2 §3.3).
+
+    Read from the finding the gate already made: the lines its detail names
+    and the definitions its `basis` spared, placed in the audited tree by
+    `coverage_text.unreached_raises`. No test is run and no verdict changes;
+    the rows are sealed beside the coverage finding for the packet's Not
+    proven section. `entered` is what a P1 raise example ran, if any.
+    """
+    uncovered = coverage_text.uncovered_lines(detail)
+    spared = spared_definitions(basis)
+    files = {f for f, _ in uncovered} | {n.rpartition(":")[0] for n in spared}
+    if not files:
+        return []
+    sources: dict[str, str] = {}
+    for rel in sorted(files):
+        try:
+            sources[rel] = (copy / rel).read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+    changed = {
+        (str(Path(path).relative_to(copy)), line)
+        for path, line in changed_statements(copy, git_diff(copy, baseline))
+    }
+    gaps = coverage_text.unreached_raises(sources, changed, uncovered, spared, entered)
+    return [dataclasses.asdict(g) for g in gaps]
+
+
+def documented_raises_finding(copy: Path, baseline: str) -> Finding | None:
+    """The docstring `Raises` question (K2 D4), or None when it asks nothing.
+
+    Read from the tree with `ast` alone (`gates.check_documented_raises`):
+    the changed non-test `.py` files, and every test file git lists. A
+    `question`, so the audit reports it under `needs_you` and never refuses.
+    """
+    changed = {
+        (str(Path(path).relative_to(copy)), line)
+        for path, line in changed_statements(copy, git_diff(copy, baseline))
+    }
+
+    def read(names: Iterable[str]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for rel in names:
+            try:
+                out[rel] = (copy / rel).read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+        return out
+
+    sources = read(sorted({f for f, _ in changed if f.endswith(".py") and not is_test_file(f)}))
+    listed = run_capture(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], copy
+    ).stdout.split("\0")
+    tests = read(sorted(n for n in listed if n.endswith(".py") and is_test_file(n)))
+    check = check_documented_raises(sources, changed, tests)
+    if check.detail == DOCUMENTED_RAISES_HELD:
+        return None
+    return Finding(
+        DOCUMENTED_RAISES,
+        1,
+        "question",
+        "evidence-thin",
+        check.detail,
+        ("saddle.gates.check_documented_raises", check.basis or ""),
+    )
+
+
 def _finding(gate: str, tier: int, verdict: Verdict, detail: str, basis: str | None) -> Finding:
     cites = (REUSES[gate],) if basis is None else (REUSES[gate], basis)
     return Finding(gate, tier, verdict, _reason(gate, verdict, detail), detail, cites)
@@ -2224,6 +2301,7 @@ class Auditor:
                     f"{rewrote[1]}{REWRITE_QUESTION}",
                     rewrote[2],
                 )
+        checked = p1.result() if p1 is not None else None
         if tier == 1:
             status, detail, basis = statuses["coverage"]
             # A not-proven coverage finding names the same lines;
@@ -2238,12 +2316,17 @@ class Auditor:
             spared = spared_definitions(basis or "")
             if spared:
                 sealed = {**(sealed or {}), "spared": spared}
+            # Each changed raise no test enters, read from the same record
+            # whatever the verdict: a report beside the finding, never a verdict.
+            entered = checked.raise_ran if checked is not None else None
+            raises = raise_gaps(copy, resolved, detail, basis or "", entered)
+            if raises:
+                sealed = {**(sealed or {}), "raises": raises}
             if sealed is not None:
                 sidecars["coverage"] = sealed
-        if p1 is not None:
-            check = p1.result()
-            statuses[TASK_REQUIREMENTS] = (check.verdict, check.detail, check.basis)
-            sidecars[TASK_REQUIREMENTS] = p1_tally(check)
+        if checked is not None:
+            statuses[TASK_REQUIREMENTS] = (checked.verdict, checked.detail, checked.basis)
+            sidecars[TASK_REQUIREMENTS] = p1_tally(checked)
         if static is not None:
             ran = static.result()
             statuses[STATIC_CHECK] = ("pass" if ran.passed else "fail", ran.detail, None)
@@ -2276,6 +2359,8 @@ class Auditor:
             if gate in cites:
                 found = dataclasses.replace(found, cites=(cites[gate], *found.cites[1:]))
             findings.append(sanction(found, self.config.sanctioned_test_rewrites))
+        if tier == 1 and (documented := documented_raises_finding(copy, resolved)) is not None:
+            findings.append(documented)
         if unmeasured:
             findings.append(
                 _not_proven(

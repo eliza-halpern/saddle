@@ -16,13 +16,22 @@ readings and known-correct probe outcomes sealed beside it at extraction
 - `classify` decides, mechanically, what an example may do: refuse by
   route (a) (`literal`: the input and the outcome appear in a cited binding
   unit, with no negation between them) or route (b) (`executed-reference`:
-  k of k predictions and their executed references agree, k is effectively
+  the predictions and their executed references agree, at least two
+  predictors giving usable evidence and one that gave none abstaining (no
+  prediction, its args at fault, or a reference that crashed), k is effectively
   more than one, and every known-correct probe returns the outcome, from
   at least `PROBES_NEEDED` probes of one source), or only ask. The model
   can mark nothing eligible.
 - `judge` turns one tree outcome into one row: pass, code-wrong, question,
   not-proven (could not call, or a value it cannot compare), unknown (HANG)
   or not-judged.
+- A `raises` outcome names a type (K2 R-2). `Exception` and
+  `BaseException` (`UNTYPED`) type nothing: they match almost any crash, so
+  such an example is at most a question. Any other name is resolved on the
+  tree by the driver (`task_requirements.DRIVER`: a builtin, else the
+  callee's module, else a class defined in exactly one module of the tree)
+  and matched by `isinstance`; a name that does not resolve is a question,
+  never `code-wrong`.
 
 Layering: pure, beside `gates`; imports only `task_units`.
 """
@@ -43,8 +52,31 @@ from saddle.task_units import Unit, Units
 
 # -- constants: saddle's, never the model's -----------------------------------
 
-K_PREDICTORS: Final = 3
-"""Blind predictors in P-b; route (b) needs all of them to agree."""
+K_PREDICTORS: Final = 5
+"""Blind predictors in P-b; route (b) needs none of them contrary and at least
+`REFERENCES_NEEDED` of them giving usable evidence. Each gives usable
+evidence about 60% of the time per unit (measured over four seed-set
+replicates), so P(at least two of k) is about 65% at k = 3 and 91% at k = 5."""
+
+LEGACY_PREDICTORS: Final = 3
+"""The k of a file sealed before it recorded its own (`predictors`): such a
+file is judged with the k it was extracted with."""
+
+PREDICTOR_COUNTS: Final = frozenset({LEGACY_PREDICTORS, K_PREDICTORS})
+"""The k a sealed file may say it was extracted with; any other is malformed."""
+
+REFERENCES_NEEDED: Final = 2
+"""How many of the k predictors route (b) needs to have given usable evidence
+(a prediction and an executed reference that agrees with it), all agreeing,
+when the others abstained (`_evidence`): saddle's, never the model's."""
+
+ARGS_REFUSED: Final = "refused: its args: "
+"""A reference's status when its predictor's args hold a value the input does
+not (`args_problem`, `task_passes.run_references`)."""
+NOT_BOUND: Final = "could not call: "
+"""A reference's status when the args do not bind to its own signature. The
+driver checks `inspect.signature(ref).bind(*args)` before the call, so a
+TypeError the body raises at run time is an outcome (`ran`), never this."""
 
 MAX_INPUTS_PER_UNIT: Final = 3
 MAX_EXAMPLES: Final = 150
@@ -77,6 +109,10 @@ NOT_EXECUTABLE: Final[tuple[str, ...]] = (
     "needs-external-resource",
 )
 """The closed reasons a unit may be marked not executable; each is a named row."""
+
+UNTYPED: Final[tuple[str, ...]] = ("Exception", "BaseException")
+"""Raise type names that type nothing: under the subclass rule they match
+almost any crash, a fall-through after a deleted validation included."""
 
 RAISE_TOKENS: Final[tuple[str, ...]] = ("raise", "error", "exception")
 """A `raises` example may refuse only if a cited unit contains one of these,
@@ -440,15 +476,27 @@ def _dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
 
+READABLE_DUNDERS: Final = frozenset({"__name__"})
+"""The dunder attributes a reference may read (never assign): `type(x).__name__`
+yields a str for an error message and opens no way out of the whitelist."""
+
+
 def _common_problem(
-    tree: ast.AST, allowed: tuple[type[ast.AST], ...], stdlib: frozenset[str]
+    tree: ast.AST,
+    allowed: tuple[type[ast.AST], ...],
+    stdlib: frozenset[str],
+    readable: frozenset[str] = frozenset(),
 ) -> str | None:
     for node in ast.walk(tree):
         if not isinstance(node, allowed):
             return f"{type(node).__name__} is not allowed"
         if isinstance(node, ast.Name) and (node.id in FORBIDDEN_NAMES or _dunder(node.id)):
             return f"name {node.id!r} is not allowed"
-        if isinstance(node, ast.Attribute) and _dunder(node.attr):
+        if (
+            isinstance(node, ast.Attribute)
+            and _dunder(node.attr)
+            and not (node.attr in readable and isinstance(node.ctx, ast.Load))
+        ):
             return f"attribute {node.attr!r} is not allowed"
         if isinstance(node, ast.Import):
             bad = [a.name for a in node.names if a.name not in REFERENCE_MODULES]
@@ -491,11 +539,13 @@ def snippet_problem(setup: Sequence[str], call: str, stdlib: frozenset[str]) -> 
 def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
     """Why a mini-reference may not run, or None: the reference whitelist.
 
-    One top-level `def ref(...)` (or `def ok(inp, out)`), optionally after
-    imports from `REFERENCE_MODULES`; inside, the snippet language plus
-    control flow, comprehensions, lambdas and `raise`. Never `open`, `exec`,
-    `eval`, `compile`, `__import__`, `global`, `nonlocal`, a dunder, or an
-    import from the repo or any other module.
+    One top-level `def ref(...)` (or `def ref_<anything>(...)`, run as `ref`;
+    see `reference_def`) or `def ok(inp, out)`, optionally after imports from
+    `REFERENCE_MODULES`; inside, the snippet language plus control flow,
+    comprehensions, lambdas and `raise`. Never `open`, `exec`, `eval`,
+    `compile`, `__import__`, `global`, `nonlocal`, a dunder (reading
+    `x.__name__` aside: `READABLE_DUNDERS`), or an import from the repo or
+    any other module.
     """
     try:
         tree = ast.parse(source)
@@ -505,8 +555,8 @@ def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
     rest = [
         n for n in tree.body if not isinstance(n, ast.FunctionDef | ast.Import | ast.ImportFrom)
     ]
-    if rest or len(defs) != 1 or defs[0].name not in ("ref", "ok"):
-        return "must be imports and exactly one top-level def named ref or ok"
+    if rest or len(defs) != 1 or _form(defs[0].name) is None:
+        return "must be imports and exactly one top-level def named ref, ref_*, or ok"
     if defs[0].decorator_list:
         return "decorators are not allowed"
     for node in ast.walk(tree):
@@ -514,7 +564,68 @@ def reference_problem(source: str, stdlib: frozenset[str]) -> str | None:
             REFERENCE_MODULES
         ):
             return f"import from {node.module} is not allowed"
-    return _common_problem(tree, (*_SNIPPET_NODES, *_REFERENCE_EXTRA), stdlib)
+    return _common_problem(
+        tree, (*_SNIPPET_NODES, *_REFERENCE_EXTRA), stdlib, READABLE_DUNDERS
+    ) or (_restates(defs[0]) if _form(defs[0].name) == "ref" else None)
+
+
+def _form(name: str) -> Literal["ref", "ok"] | None:
+    if name == "ok":
+        return "ok"
+    return "ref" if name == "ref" or name.startswith("ref_") else None
+
+
+def reference_def(source: str) -> tuple[Literal["ref", "ok"], str]:
+    """An admitted reference's form and the name of the def the driver calls:
+    `ref_balance` is called by its own name (so a recursive call inside it
+    still resolves) in the `ref` form. Only for a source `reference_problem`
+    admitted."""
+    name = next(n.name for n in ast.parse(source).body if isinstance(n, ast.FunctionDef))
+    return ("ok" if name == "ok" else "ref"), name
+
+
+def _restates(ref: ast.FunctionDef) -> str | None:
+    """Why `ref` cannot check a prediction, or None: one that never reads its
+    input, or hands an argument back unchanged, returns what it was given and
+    derives nothing."""
+    a = ref.args
+    params = {p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if p}
+    body = [
+        n
+        for n in ref.body
+        if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))  # a docstring
+    ]
+    if (
+        len(body) == 1
+        and isinstance(body[0], ast.Return)
+        and isinstance(body[0].value, ast.Name)
+        and body[0].value.id in params
+    ):
+        return "returns its input unchanged, so it derives nothing"
+    if not any(isinstance(n, ast.Name) and n.id in params for b in body for n in ast.walk(b)):
+        return "never reads its input, so it only restates the prediction"
+    return None
+
+
+def raises_explicitly(source: str, name: str) -> bool:
+    """A `raise` statement in `source` names the exception type `name` (as
+    `raise name`, `raise name(...)` or `raise mod.name(...)`), or a bare
+    `raise` re-raises something (it could be anything, so it counts for every
+    type). False for a source that does not parse."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise):
+            continue
+        exc = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+        if exc is None:
+            return True
+        named = exc.id if isinstance(exc, ast.Name) else getattr(exc, "attr", None)
+        if named == name:
+            return True
+    return False
 
 
 # -- the sealed example -------------------------------------------------------
@@ -555,12 +666,24 @@ class Reference:
 
     status: str
     """`ran` when it ran; otherwise why not (missing, refused: ..., timeout,
-    raised X, not-canonical, not-discriminating)."""
+    raised X, could not call: ..., not-canonical, not-discriminating)."""
     outcome: Outcome | None = None
     """`ref` form: what it returned or raised."""
     form: Literal["ref", "ok"] = "ref"
     accepts: bool = False
     """`ok` form: it returned True on the prediction and False on another outcome."""
+    crashed: bool = False
+    """`ref` form, a raise outcome: no `raise` in its own source names the type
+    it raised (`raises_explicitly`), so the raise is a bug in the reference
+    (a NameError, a TypeError from args it misread), not its answer."""
+
+    def abstains(self) -> bool:
+        """It never ran only because the args it was handed are not the input's
+        (`ARGS_REFUSED`) or do not bind to its signature (`NOT_BOUND`): a fault
+        of the args, so it says nothing about the behaviour either way. Every
+        other reason it did not run (refused source, timeout, crash, missing)
+        still blocks route (b)."""
+        return self.status.startswith((ARGS_REFUSED, NOT_BOUND))
 
     def agrees(self, prediction: Outcome) -> bool:
         if self.status != "ran":
@@ -577,6 +700,7 @@ class Reference:
             outcome=Outcome.from_dict(raw) if isinstance(raw, Mapping) else None,
             form="ok" if data.get("form") == "ok" else "ref",
             accepts=data.get("accepts") is True,
+            crashed=data.get("crashed") is True,
         )
 
 
@@ -639,9 +763,12 @@ class Example:
     probes: tuple[Probe, ...] = ()
     args: tuple[str, ...] = ()
     """The input values, as literals, a mini-reference `ref(*args)` takes."""
+    predictors: int = K_PREDICTORS
+    """The k its extraction ran (the sealed file's `predictors`): how many
+    predictions and references it must record."""
 
     @staticmethod
-    def from_dict(data: Mapping[str, Any]) -> Example:
+    def from_dict(data: Mapping[str, Any], *, predictors: int = K_PREDICTORS) -> Example:
         return Example(
             id=str(data["id"]),
             units=tuple(str(u) for u in data["units"]),
@@ -652,6 +779,7 @@ class Example:
             alternatives=tuple(Alternative.from_dict(a) for a in data.get("alternatives", ())),
             probes=tuple(Probe.from_dict(p) for p in data.get("probes", ())),
             args=tuple(str(a) for a in data.get("args", ())),
+            predictors=predictors,
         )
 
 
@@ -699,6 +827,45 @@ def input_literals(setup: Sequence[str], call: str) -> list[str]:
     return found
 
 
+def args_problem(args: Sequence[str], setup: Sequence[str], call: str) -> str | None:
+    """Why `args` a predictor chose for its reference are not the input's, or
+    None. Every number, string and constant inside them must be written in
+    the input: they may regroup the input's values, never add one (such as
+    the expected outcome) that the input does not hold."""
+    held: dict[tuple[str, object], object] = {}
+    for text in input_literals(setup, call):
+        try:
+            held |= _leaves(parse_value(text))
+        except ValueError:
+            continue
+    for arg in args:
+        try:
+            leaves = _leaves(parse_value(arg))
+        except ValueError:
+            return f"{arg} is not a literal"
+        extra = sorted(repr(v) for k, v in leaves.items() if k not in held)
+        if extra:
+            return f"{arg} holds {', '.join(extra)}, which the input does not"
+    return None
+
+
+def _leaves(value: object) -> dict[tuple[str, object], object]:
+    """The scalars inside `value`, keyed so that numbers compare by value
+    (`1 == 1.0`) and a bool is never a number."""
+    if isinstance(value, dict):
+        return {k: v for kv in value.items() for x in kv for k, v in _leaves(x).items()}
+    if isinstance(value, list | tuple | set | frozenset):
+        return {k: v for x in value for k, v in _leaves(x).items()}
+    if isinstance(value, bool) or value is None:
+        return {("const", value): value}
+    if isinstance(value, int | float | Decimal | Fraction):
+        try:
+            return {("num", Fraction(value)): value}
+        except (ValueError, OverflowError):  # nan and infinity compare by spelling
+            return {("num", repr(value)): value}
+    return {(type(value).__name__, value): value}
+
+
 def _literal_segments(node: ast.AST, source: str) -> list[str]:
     if isinstance(node, ast.expr) and not isinstance(node, ast.Name):
         try:
@@ -744,6 +911,43 @@ def raise_named(cited: Sequence[Unit]) -> bool:
     return any(t in u.text.lower() for u in cited for t in RAISE_TOKENS)
 
 
+def raise_names(example: Example) -> list[str]:
+    """Every raise type name the example's predictions and alternative
+    readings write, once each, in order: what the driver resolves on a tree."""
+    outcomes = [
+        *(p.outcome for p in example.predictions),
+        *(a.outcome for a in example.alternatives),
+    ]
+    names = [o.text for o in outcomes if o is not None and o.kind == "raises"]
+    return list(dict.fromkeys(names))
+
+
+RAISE_ROW: Final = "not-judged: raise-named, no raising example"
+"""The named row of a binding raise-named unit no decided example raises for."""
+RAISE_NOISE: Final = "token matches include non-raise uses of `error`/`exception`"
+
+
+def raise_obligation(units: Units, examples: Sequence[Example]) -> list[tuple[str, int]]:
+    """Every binding unit that names a raise (`raise_named`, P1's own token
+    guard), with how many decided examples citing it expect a raise (K2 R-1).
+
+    A count the model cannot lower: zero is a named row (`RAISE_ROW`), never a
+    pass by silence and never a refusal; the extractor's gap, not the tree's.
+    The guard matches tokens, so a unit that says "error" without describing
+    a raise is counted too (`RAISE_NOISE`)."""
+    raising: dict[str, int] = {}
+    for e in examples:
+        expected = classify(e, units).expected
+        if expected is not None and expected.kind == "raises":
+            for u in e.units:
+                raising[u] = raising.get(u, 0) + 1
+    return [
+        (u.id, raising.get(u.id, 0))
+        for u in units.units
+        if u.modality == "binding" and raise_named([u])
+    ]
+
+
 def effective_k(predictions: Sequence[Prediction]) -> int:
     """How many distinct samples the predictions are: byte-identical raw outputs count once."""
     return len({p.raw_sha256 for p in predictions})
@@ -753,9 +957,10 @@ def classify(example: Example, units: Units) -> Class:
     """What `example` may do, from the sealed record alone (spec §2.2, §2.3, §4.5).
 
     Route (a) first: a literal the text states wins over the predictors. Else
-    the k predictions must agree (a split input only asks); then route (b)
-    needs effective k > 1, all k executed references agreeing, and every
-    known-correct probe returning the outcome. A unit that is not `binding`,
+    the written predictions must agree (a split input only asks); then route
+    (b) needs effective k > 1, no predictor contrary or blocked, at least
+    `REFERENCES_NEEDED` giving usable evidence (one that gave none abstains:
+    `_evidence`), and every known-correct probe returning the outcome. A unit that is not `binding`,
     or a `raises` outcome no cited unit names, can only ask.
     """
     cited = [u for u in (units.by_id(i) for i in example.units) if u is not None]
@@ -771,7 +976,8 @@ def classify(example: Example, units: Units) -> Class:
         if o is not None and not literal_route(example, o, p.decides, cited):
             if not any(x.same(o) for x in literal):
                 literal.append(o)
-    decided = len(written) == K_PREDICTORS == len(example.predictions) and all(
+    n = example.predictors
+    decided = len(written) == n == len(example.predictions) and all(
         o.same(written[0]) for o in written
     )
     if len(literal) == 1:
@@ -785,25 +991,23 @@ def classify(example: Example, units: Units) -> Class:
             effective_k=k,
             disagree_with_text=not (decided and written[0].same(expected)),
         )
-    elif not decided:
-        return Class("split", None, tuple(readings), undecided(example.predictions), effective_k=k)
+    elif not _written_agree(example.predictions, written, n):
+        return Class(
+            "split", None, tuple(readings), undecided(example.predictions, n), effective_k=k
+        )
     else:
         expected = written[0]
-        agree = len(example.references) == K_PREDICTORS and all(
-            r.agrees(expected) for r in example.references
-        )
-        note = (
-            f"effective k = {k}: the {K_PREDICTORS} predictions are one sample"
-            if k < 2
-            else "the predictors' executed references do not all agree with them"
-            if not agree
-            else ""
-        )
+        note, verified = _references_note(example, expected, k)
+        if note and not decided:
+            # Fewer than k predictions, not verified: a split, exactly as before.
+            return Class(
+                "split", None, tuple(readings), undecided(example.predictions, n), effective_k=k
+            )
         base = Class(
             "decided-unverified" if note else "executed-reference",
             expected,
             tuple(r for r in readings if not r.same(expected)),
-            note or f"executed-reference ({K_PREDICTORS}/{K_PREDICTORS})",
+            note or verified,
             effective_k=k,
         )
     modes = {u.modality for u in cited}
@@ -812,11 +1016,99 @@ def classify(example: Example, units: Units) -> Class:
         return _with(base, route="question-only", note=why)
     if expected.kind == "raises" and not raise_named(cited):
         return _with(base, note=NO_RAISE_NOTE)
+    if expected.kind == "raises" and expected.text in UNTYPED:
+        return _with(base, note=NO_TYPE_NOTE)
     if base.route == "literal":
         return _with(base, eligible=True)
     if base.route == "decided-unverified":
         return base
     return _probed(base, expected, example.probes)
+
+
+def _written_agree(predictions: Sequence[Prediction], written: Sequence[Outcome], n: int) -> bool:
+    """n (the file's k) predictions recorded, at least `REFERENCES_NEEDED`
+    written, and every written one the same: a written contrary prediction
+    always vetoes."""
+    return (
+        len(predictions) == n
+        and len(written) >= REFERENCES_NEEDED
+        and all(o.same(written[0]) for o in written)
+    )
+
+
+Evidence = Literal["usable", "abstains", "contrary", "blocked"]
+
+
+def _evidence(p: Prediction, r: Reference, expected: Outcome) -> tuple[Evidence, str]:
+    """What predictor i (its prediction `p`, its reference `r`) gives for one
+    input, with why it abstains.
+
+    `usable`: a prediction and a reference that ran and agrees. `contrary`
+    (vetoes): a reference that ran and gave another well-formed answer, a
+    value or a raise its own source names. `abstains` (no usable evidence):
+    no prediction (and its reference agreed, or never came for that reason:
+    `missing`, `not-discriminating`); its args refused or unbound
+    (`Reference.abstains`); or a reference that crashed, raising a type no
+    `raise` in its source names. `blocked`: every other reason a reference
+    did not run (refused source, timeout, driver crash, raised while being
+    defined, not canonical), as before."""
+    if r.agrees(expected):
+        return ("usable", "") if p.outcome is not None else ("abstains", _no_prediction(p))
+    if r.status == "ran":
+        if r.form == "ref" and r.crashed and r.outcome is not None:
+            return "abstains", f"its reference crashed (raised {r.outcome.text})"
+        return "contrary", ""
+    if r.abstains():
+        return "abstains", r.status
+    if p.outcome is None and r.status in ("missing", "not-discriminating"):
+        return "abstains", _no_prediction(p)
+    return "blocked", r.status
+
+
+def _no_prediction(p: Prediction) -> str:
+    return f"no prediction ({p.missing or NO_OUTCOME})"
+
+
+def _references_note(example: Example, expected: Outcome, k: int) -> tuple[str, str]:
+    """Why an example whose written predictions agree on `expected` is not
+    verified by its predictors ("" when it is), and the route note when it is.
+
+    Predictor i's evidence is its prediction and its reference
+    (`_evidence`; reference i is predictor i's). No predictor may be blocked
+    or contrary; at least `REFERENCES_NEEDED` must give usable evidence, and
+    those must be more than one sample (their raw outputs differ). Every
+    predictor that abstained is named in the note, so a reader sees the
+    example was decided on fewer than k."""
+    refs, n = example.references, example.predictors
+    if k < 2:
+        return f"effective k = {k}: the {n} predictions are one sample", ""
+    if len(refs) != n:
+        why = (
+            "not recorded"
+            if len(refs) < n
+            else f"{len(refs)} references recorded where {n} are expected"
+        )
+        return f"not every predictor's reference ran ({why})", ""
+    judged = [
+        (p, *_evidence(p, r, expected)) for p, r in zip(example.predictions, refs, strict=True)
+    ]
+    blocked = [why for _, kind, why in judged if kind == "blocked"]
+    if blocked:
+        return f"not every predictor's reference ran ({blocked[0]})", ""
+    if any(kind == "contrary" for _, kind, _ in judged):
+        return "the predictors' executed references do not all agree with them", ""
+    usable = [p for p, kind, _ in judged if kind == "usable"]
+    abstained = [why for _, kind, why in judged if kind == "abstains"]
+    if len(usable) < REFERENCES_NEEDED:
+        return (
+            f"only {len(usable)} of {n} predictors gave usable evidence, "
+            f"{REFERENCES_NEEDED} are needed (abstained: {'; '.join(abstained)})",
+            "",
+        )
+    if len({p.raw_sha256 for p in usable}) < 2:
+        return "effective k = 1 among the predictors that gave evidence: they are one sample", ""
+    why = f"; {len(abstained)} abstained: {'; '.join(abstained)}" if abstained else ""
+    return "", f"executed-reference ({len(usable)}/{n}{why})"
 
 
 SPLIT_NOTE: Final = "the predictors read the cited words differently"
@@ -826,7 +1118,7 @@ EMPTY_SHA256: Final = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7
 """The sha256 of no text: the `raw_sha256` of a prediction whose call returned nothing."""
 
 
-def undecided(predictions: Sequence[Prediction]) -> str:
+def undecided(predictions: Sequence[Prediction], n: int = K_PREDICTORS) -> str:
     """Why `predictions` do not decide their input, in words a question can
     quote: what happened. Predictions that are missing say why
     (`Prediction.missing`); a disagreement is named only where written
@@ -840,8 +1132,8 @@ def undecided(predictions: Sequence[Prediction]) -> str:
             for p in missing
         )
         said.append(f"{len(missing)} of {len(predictions)} predictions missing ({'; '.join(whys)})")
-    if len(predictions) != K_PREDICTORS:
-        said.append(f"{len(predictions)} predictions recorded where {K_PREDICTORS} are needed")
+    if len(predictions) != n:
+        said.append(f"{len(predictions)} predictions recorded where {n} are needed")
     if any(not o.same(written[0]) for o in written[1:]):
         said.append(SPLIT_NOTE)
     return "; ".join(said)
@@ -851,6 +1143,8 @@ LITERAL_DISAGREES: Final = "literal (the predictors disagree with the text; the 
 UNCERTAIN_NOTE: Final = "the rule could not tell who the permission is for"
 DELEGATED_NOTE: Final = "the task leaves this to the implementer"
 NO_RAISE_NOTE: Final = "the task does not say this raises"
+NO_TYPE_NOTE: Final = "no named type"
+"""An example expecting `Exception` or `BaseException` (`UNTYPED`)."""
 
 
 def _with(base: Class, **changes: Any) -> Class:
@@ -902,6 +1196,14 @@ class TreeOutcome:
     detail: str = ""
     ran: tuple[str, ...] = ()
     """`path:line (qualname)` for every tree line the example executed."""
+    types: tuple[tuple[str, str], ...] = ()
+    """Each raise type name the example writes, resolved on the tree by the
+    driver: `match` (the outcome is an instance of it), `differ` (it is not,
+    or no exception was raised), or why the name did not resolve."""
+
+    def type_status(self, name: str) -> str:
+        """`match`, `differ`, or why `name` did not resolve on the tree."""
+        return dict(self.types).get(name, "not resolved by the driver")
 
     def show(self) -> str:
         if self.kind == "value":
@@ -914,7 +1216,14 @@ class TreeOutcome:
         return f"{self.kind}: {self.detail}"
 
     def matches(self, outcome: Outcome, abs_tol: float) -> Closeness:
+        """`equal`, `near-miss` or `differ`. A raise matches by `isinstance`
+        against its resolved type; a name that did not resolve (only a
+        recorded reading can reach here with one) falls back to the class
+        names of the raised exception, which can only add a question."""
         if outcome.kind == "raises":
+            status = self.type_status(outcome.text)
+            if status in ("match", "differ"):
+                return "equal" if status == "match" else "differ"
             return "equal" if self.kind == "raises" and outcome.text in self.raises else "differ"
         if self.kind != "value":
             return "differ"
@@ -932,6 +1241,7 @@ class TreeOutcome:
             raises=tuple(str(r) for r in data.get("raises", ())),
             detail=str(data.get("detail", "")),
             ran=tuple(str(r) for r in data.get("ran", ())),
+            types=tuple((str(k), str(v)) for k, v in dict(data.get("types", {})).items()),
         )
 
 
@@ -945,6 +1255,10 @@ class Row:
     klass: Class
     got: str = ""
     ran_changed: tuple[str, ...] = field(default=())
+    by_type: bool = False
+    """`code-wrong` because the tree raised another resolvable exception type
+    than the one named: the admitted cost of a named type (K2-5), reported on
+    its own."""
 
 
 def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: bool) -> Row:
@@ -960,7 +1274,12 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
         )
     if klass.probe_rejected:
         return Row(example, "not-judged", f"probe-rejected: {klass.probe_rejected}", klass, shown)
-    if got.kind == "opaque":
+    # A tree that returned where every reading raises has differed, whatever it
+    # returned: only a value reading needs the value itself to compare.
+    returned_where_raise = klass.expected is not None and all(
+        o.kind == "raises" for o in (klass.expected, *klass.readings)
+    )
+    if got.kind == "opaque" and not returned_where_raise:
         return Row(
             example,
             "not-proven",
@@ -968,7 +1287,7 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
             klass,
             shown,
         )
-    if got.kind == "value":
+    if got.kind == "value" and not returned_where_raise:
         try:
             decode_value(got.value)
         except (ValueError, KeyError, TypeError) as exc:
@@ -977,7 +1296,13 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
         # A split input: the readings are recorded, and a person decides.
         why = f"{klass.note}: {_readings(klass.readings)}" if klass.readings else klass.note
         return Row(example, "question", why, klass, shown)
-    closeness = got.matches(klass.expected, klass.abs_tol)
+    expected = klass.expected
+    if expected.kind == "raises" and expected.text in UNTYPED:
+        return _untyped(example, klass, got, shown)
+    status = got.type_status(expected.text) if expected.kind == "raises" else "match"
+    if status not in ("match", "differ"):
+        return Row(example, "question", f"named type {expected.text} {status}", klass, shown)
+    closeness = got.matches(expected, klass.abs_tol)
     if closeness == "equal":
         return Row(example, "pass", "matches", klass, shown)
     if klass.route == "question-only":
@@ -998,7 +1323,27 @@ def judge(example: Example, klass: Class, got: TreeOutcome | None, *, licensed: 
         return Row(example, "question", klass.note, klass, shown)
     if not licensed:
         return Row(example, "question", WOULD_REFUSE, klass, shown)
-    return Row(example, "code-wrong", "differs from the expected outcome", klass, shown)
+    by_type = expected.kind == "raises" and got.kind == "raises"
+    return Row(
+        example, "code-wrong", "differs from the expected outcome", klass, shown, by_type=by_type
+    )
+
+
+def _untyped(example: Example, klass: Class, got: TreeOutcome, shown: str) -> Row:
+    """An `Exception`/`BaseException` example: never a refusal. A raise passes
+    only when it is the very type every known-correct probe raised; anything
+    else, a fall-through crash included, is a question."""
+    probe_types = {p.outcome.text for p in example.probes if p.outcome is not None}
+    if (
+        got.kind == "raises"
+        and got.raises
+        and probe_types == {got.raises[0]}
+        and all(p.outcome is not None and p.outcome.kind == "raises" for p in example.probes)
+    ):
+        return Row(example, "pass", "the type every known-correct probe raised", klass, shown)
+    if klass.route == "question-only" and klass.note == DELEGATED_NOTE:
+        return Row(example, "not-judged", f"recorded: {klass.note}", klass, shown)
+    return Row(example, "question", NO_TYPE_NOTE, klass, shown)
 
 
 def _readings(readings: Sequence[Outcome]) -> str:

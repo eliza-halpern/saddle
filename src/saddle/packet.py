@@ -1320,6 +1320,12 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "which the change may not delete and no test reaches."
             )
             gap_cites.append(cov.record_hash)
+        # Each changed raise no test enters (K2 §3.3), sealed beside the
+        # same finding: reporting only, whatever the finding's verdict.
+        sealed_raises = _sealed(journal, span_by_hash.get(cov.record_hash), "raises")
+        for gap in sealed_raises["raises"] if sealed_raises is not None else []:
+            gaps.append(coverage_text.raise_row(coverage_text.RaiseGap(**gap)) + ".")
+            gap_cites.append(cov.record_hash)
     # What the task-text check (P1) did not judge, named one by one.
     for p1 in [a for a in audits if a.name == "audit:task-requirements"][-1:]:
         sealed_p1 = _sealed(journal, span_by_hash.get(p1.record_hash), "unjudged")

@@ -8,10 +8,11 @@ probes accept the example, and refusal is licensed for the test (spec §5.1).
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from decimal import Decimal
 from fractions import Fraction
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -19,9 +20,12 @@ from saddle import gates
 from saddle.gates import check_task_requirements
 from saddle.task_examples import (
     DELEGATED_NOTE,
+    K_PREDICTORS,
     LITERAL_DISAGREES,
+    NO_OUTCOME,
     NO_RAISE_NOTE,
     UNCERTAIN_NOTE,
+    WOULD_REFUSE,
     Alternative,
     Example,
     Outcome,
@@ -29,6 +33,7 @@ from saddle.task_examples import (
     Probe,
     Reference,
     TreeOutcome,
+    args_problem,
     classify,
     compare,
     decode_value,
@@ -39,6 +44,8 @@ from saddle.task_examples import (
     literal_route,
     literal_text,
     parse_value,
+    raises_explicitly,
+    reference_def,
     reference_problem,
     snippet_problem,
 )
@@ -84,31 +91,41 @@ def ex(
     units: tuple[str, ...] = ("S-002",),
     setup: tuple[str, ...] = (),
     decides: str = "",
-    raws: tuple[str, str, str] = ("h0", "h1", "h2"),
+    raws: tuple[str, ...] | None = None,
     predicted: tuple[Outcome | None, ...] | None = None,
     refs: tuple[Reference, ...] | None = None,
     probes: tuple[Probe, ...] | None = None,
     alts: tuple[Outcome, ...] = (),
+    k: int = K_PREDICTORS,
 ) -> Example:
-    outcomes = predicted if predicted is not None else (expected, expected, expected)
+    """One example extracted with `k` predictors (`K_PREDICTORS`, or 3 for a
+    row written at a legacy file's k), each agreeing unless told otherwise."""
+    outcomes = predicted if predicted is not None else (expected,) * k
+    names = raws if raws is not None else tuple(f"h{i}" for i in range(k))
     return Example(
         id="E-001",
         units=units,
         setup=setup,
         call=call,
         predictions=tuple(
-            Prediction(o, decides, raw) for o, raw in zip(outcomes, raws, strict=False)
+            Prediction(o, decides, raw) for o, raw in zip(outcomes, names, strict=False)
         ),
-        references=tuple(Reference("ran", expected) for _ in range(3)) if refs is None else refs,
+        references=tuple(Reference("ran", expected) for _ in range(k)) if refs is None else refs,
         alternatives=tuple(Alternative(a, "words") for a in alts),
         probes=tuple(Probe(f"{i}" * 64, "ran", expected) for i in range(3))
         if probes is None
         else probes,
+        predictors=k,
     )
 
 
 def val(v: object, *ran: str) -> TreeOutcome:
     return TreeOutcome("value", encode_value(v), ran=ran or ("m.py:3 (f)",))
+
+
+def typed(got: TreeOutcome, **types: str) -> TreeOutcome:
+    """`got` with the raise type names resolved, as the driver resolves them."""
+    return dataclasses.replace(got, types=tuple(types.items()))
 
 
 def gate(
@@ -135,7 +152,8 @@ def test_r1_route_b_refuses_naming_unit_example_route_and_changed_lines() -> Non
     check = gate(DEDUP, val([1], "m.py:3 (OrderedList.__init__)", "m.py:9 (x)"), changed={"m.py:3"})
     assert (check.verdict, check.passed) == ("fail", False)
     assert check.detail == (
-        'S-002 "Duplicates are allowed and preserved." via executed-reference (3/3), '
+        'S-002 "Duplicates are allowed and preserved." via executed-reference '
+        f"({K_PREDICTORS}/{K_PREDICTORS}), "
         "probe (3/3): from m import OrderedList; list(OrderedList([1, 1])) expected [1, 1], "
         "got [1]; ran changed lines m.py:3 (OrderedList.__init__)"
     )
@@ -213,6 +231,7 @@ def test_r2_lit_the_literal_wins_over_disagreeing_predictors() -> None:
         units=("S-004",),
         decides="`half(2)` returns `1.0`",
         predicted=(lit, out("value", "2.0"), out("value", "2.0")),
+        k=3,
         refs=(),
         probes=(),
     )
@@ -306,7 +325,7 @@ def test_r3_x_without_the_alternative_the_same_tree_is_refused() -> None:
 
 def test_m3_a_two_to_one_split_asks_whatever_the_tree_does() -> None:
     a, b = out("value", "[10, 20]"), out("value", "[0, 1]")
-    e = ex(SLICE, a, units=("S-006",), predicted=(a, a, b))
+    e = ex(SLICE, a, units=("S-006",), k=3, predicted=(a, a, b))
     klass = classify(e, UNITS)
     assert (klass.route, klass.expected) == ("split", None)
     check = gate(e, val([30]))
@@ -315,12 +334,34 @@ def test_m3_a_two_to_one_split_asks_whatever_the_tree_does() -> None:
     assert "expected (split)" in check.detail
 
 
-def test_an_unparsed_prediction_or_a_missing_one_is_a_split() -> None:
+def test_a_missing_prediction_abstains_only_when_two_others_verify() -> None:
+    """flip: (a, a, None) with two agreeing references was a split; the
+    missing predictor now abstains and two verified predictors decide. Not
+    verified (the third reference blocks, or one predictor is left), it is a
+    split exactly as before; two predictions recorded where three are
+    needed are a split whatever the references say."""
     a = out("value", "[1, 1]")
-    assert classify(ex("g()", a, predicted=(a, a, None)), UNITS).route == "split"
-    assert classify(ex("g()", a, predicted=(a, a), raws=("h0", "h1", "h2")), UNITS).route == (
-        "split"
+    missing = Reference("missing")
+    two = classify(
+        ex("g()", a, k=3, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, missing)), UNITS
     )
+    assert (two.route, two.eligible) == ("executed-reference", True)
+    assert two.note == (
+        f"executed-reference (2/3; 1 abstained: no prediction ({NO_OUTCOME})), probe (3/3)"
+    )
+    blocked = ex(
+        "g()", a, k=3, predicted=(a, a, None), refs=(GOOD_REF, Reference("timeout"), missing)
+    )
+    assert classify(blocked, UNITS).route == "split"
+    alone = ex("g()", a, k=3, predicted=(a, None, None), refs=(GOOD_REF, missing, missing))
+    assert classify(alone, UNITS).route == "split"
+    # a reference that agrees is not evidence without its predictor's prediction
+    unpredicted = ex("g()", a, k=3, predicted=(a, a, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
+    assert classify(unpredicted, UNITS).note.startswith("executed-reference (2/3; 1 abstained")
+    lone = ex("g()", a, k=3, predicted=(a, None, None), refs=(GOOD_REF, GOOD_REF, GOOD_REF))
+    assert classify(lone, UNITS).route == "split"
+    short = ex("g()", a, k=3, predicted=(a, a), raws=("h0", "h1", "h2"))
+    assert classify(short, UNITS).route == "split"
 
 
 # -- R4 / R5: could not call, HANG -------------------------------------------
@@ -370,12 +411,12 @@ def test_a_missing_result_an_opaque_or_undecodable_value_never_refuses() -> None
 def test_r8_identical_samples_are_one_sample_and_cannot_refuse() -> None:
     same = ex(**_dedup_kwargs(), raws=("h", "h", "h"))
     distinct = DEDUP
-    assert (effective_k(same.predictions), effective_k(distinct.predictions)) == (1, 3)
+    assert (effective_k(same.predictions), effective_k(distinct.predictions)) == (1, K_PREDICTORS)
     klass = classify(same, UNITS)
     assert klass.route == "decided-unverified"
     assert klass.note == "effective k = 1: the 3 predictions are one sample"
     assert gate(same, val([1])).verdict == "question"
-    assert classify(distinct, UNITS).effective_k == 3
+    assert classify(distinct, UNITS).effective_k == K_PREDICTORS
 
 
 def _dedup_kwargs() -> dict[str, Any]:
@@ -383,35 +424,274 @@ def _dedup_kwargs() -> dict[str, Any]:
         "call": DEDUP.call,
         "expected": out("value", "[1, 1]"),
         "setup": DEDUP.setup,
+        "k": 3,  # the rows below spell out three predictors: a legacy file's k
     }
 
 
 # -- R12 / R12-t / R12-p: executed references ----------------------------------
 
 
+DISAGREE: Final = "the predictors' executed references do not all agree with them"
+
+
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "note"),
     [
-        Reference("ran", out("value", "[1]")),  # R12: disagrees with its own prediction
-        Reference("timeout"),  # R12-t
-        Reference("ran", form="ok", accepts=False),  # R12-p: accepts everything
-        Reference("refused: import of os is not allowed"),
+        # R12: disagrees with its own prediction
+        (Reference("ran", out("value", "[1]")), DISAGREE),
+        # R12-p: accepts everything
+        (Reference("ran", form="ok", accepts=False), DISAGREE),
+        # R12-t, and the other references that never ran: said nothing, so no disagreement
+        (Reference("timeout"), "not every predictor's reference ran (timeout)"),
+        (
+            Reference("refused: import of os is not allowed"),
+            "not every predictor's reference ran (refused: import of os is not allowed)",
+        ),
+        # a run-time crash of the driver is not an args fault: it still blocks
+        (
+            Reference("crashed (exit 1)"),
+            "not every predictor's reference ran (crashed (exit 1))",
+        ),
+        (
+            Reference("raised NameError while defining it"),
+            "not every predictor's reference ran (raised NameError while defining it)",
+        ),
     ],
 )
-def test_r12_a_reference_that_does_not_agree_leaves_a_question(bad: Reference) -> None:
+def test_r12_a_reference_that_does_not_agree_leaves_a_question(bad: Reference, note: str) -> None:
     good = Reference("ran", out("value", "[1, 1]"))
     e = ex(**_dedup_kwargs(), refs=(good, good, bad))
     assert classify(e, UNITS).route == "decided-unverified"
+    assert classify(e, UNITS).note == note
     check = gate(e, val([1]))
     assert check.verdict == "question"
-    assert "[the predictors' executed references do not all agree with them]" in check.detail
+    assert f"[{note}]" in check.detail
 
 
 def test_a_discriminating_ok_predicate_counts_as_agreement() -> None:
     ok = Reference("ran", form="ok", accepts=True)
     e = ex(**_dedup_kwargs(), refs=(ok, ok, ok))
     assert classify(e, UNITS).route == "executed-reference"
-    assert classify(ex(**_dedup_kwargs(), refs=(ok, ok)), UNITS).route == "decided-unverified"
+    short = classify(ex(**_dedup_kwargs(), refs=(ok, ok)), UNITS)
+    assert (short.route, short.note) == (
+        "decided-unverified",
+        "not every predictor's reference ran (not recorded)",
+    )
+
+
+# -- an args-faulted reference abstains (route (b) on two of three) ------------
+
+UNBOUND: Final = "could not call: missing a required argument: 'delta'"
+ARGS_BAD: Final = "refused: its args: -1 holds -1, which the input does not"
+GOOD_REF: Final = Reference("ran", out("value", "[1, 1]"))
+WRONG_REF: Final = Reference("ran", out("value", "[1]"))
+
+
+@pytest.mark.parametrize("why", [UNBOUND, ARGS_BAD])
+def test_a_reference_whose_args_were_at_fault_abstains(why: str) -> None:
+    """Known-good: two references ran and agree, the third never ran only
+    because its predictor's args were refused or did not bind; the example
+    is decided on two, says so, and refuses a tree that differs."""
+    e = ex(**_dedup_kwargs(), refs=(GOOD_REF, Reference(why), GOOD_REF))
+    klass = classify(e, UNITS)
+    assert (klass.route, klass.eligible) == ("executed-reference", True)
+    assert klass.note == f"executed-reference (2/3; 1 abstained: {why}), probe (3/3)"
+    check = gate(e, val([1]))
+    assert check.verdict == "fail"
+    assert f"via executed-reference (2/3; 1 abstained: {why})" in check.detail
+    assert gate(e, val([1, 1])).verdict == "pass"
+
+
+@pytest.mark.parametrize(
+    ("refs", "note"),
+    [
+        # two ran but disagree with each other (one disagrees with its prediction)
+        ((GOOD_REF, Reference(UNBOUND), WRONG_REF), DISAGREE),
+        # two ran and agree, the third ran and disagrees
+        ((GOOD_REF, GOOD_REF, WRONG_REF), DISAGREE),
+        # one ran, two abstained: one reference is not enough
+        (
+            (GOOD_REF, Reference(UNBOUND), Reference(ARGS_BAD)),
+            "only 1 of 3 predictors gave usable evidence, 2 are needed "
+            f"(abstained: {UNBOUND}; {ARGS_BAD})",
+        ),
+        # the source was refused (whitelist / restates): not an args fault
+        (
+            (GOOD_REF, GOOD_REF, Reference("refused: import of os is not allowed")),
+            "not every predictor's reference ran (refused: import of os is not allowed)",
+        ),
+        (
+            (
+                GOOD_REF,
+                GOOD_REF,
+                Reference("refused: returns its input unchanged, so it derives nothing"),
+            ),
+            "not every predictor's reference ran "
+            "(refused: returns its input unchanged, so it derives nothing)",
+        ),
+        # a run-time failure: not an args fault
+        (
+            (GOOD_REF, GOOD_REF, Reference("timeout")),
+            "not every predictor's reference ran (timeout)",
+        ),
+        (
+            (GOOD_REF, GOOD_REF, Reference("crashed (exit 1)")),
+            "not every predictor's reference ran (crashed (exit 1))",
+        ),
+        # no reference for the unit at all
+        (
+            (GOOD_REF, GOOD_REF, Reference("missing")),
+            "not every predictor's reference ran (missing)",
+        ),
+        # one abstained and one was never recorded
+        ((GOOD_REF, Reference(UNBOUND)), "not every predictor's reference ran (not recorded)"),
+        # more references than predictors: a malformed record never verifies
+        (
+            (GOOD_REF, GOOD_REF, Reference(UNBOUND), GOOD_REF),
+            "not every predictor's reference ran (4 references recorded where 3 are expected)",
+        ),
+    ],
+)
+def test_every_other_reason_a_reference_did_not_agree_still_blocks(
+    refs: tuple[Reference, ...], note: str
+) -> None:
+    """Known-bad: each stays a question, whatever the tree does."""
+    e = ex(**_dedup_kwargs(), refs=refs)
+    klass = classify(e, UNITS)
+    assert (klass.route, klass.eligible, klass.note) == ("decided-unverified", False, note)
+    assert gate(e, val([1])).verdict == "question"
+
+
+VALUE_ERROR: Final = out("raises", "ValueError")
+RAISES_OK: Final = Reference("ran", VALUE_ERROR)
+
+
+def _raising(refs: tuple[Reference, ...], **kw: Any) -> Example:
+    """An example S-007 decides: `make(-1)` raises ValueError (a binding unit
+    that names the raise), three probes agreeing."""
+    return ex("make(-1)", VALUE_ERROR, units=("S-007",), refs=refs, k=3, **kw)
+
+
+def test_a_reference_that_crashed_abstains() -> None:
+    """Known-good: a reference that raised a type no `raise` of its source
+    names (sealed `crashed`) gave no evidence; two others verify."""
+    crashed = Reference("ran", out("raises", "NameError"), crashed=True)
+    klass = classify(_raising((RAISES_OK, crashed, RAISES_OK)), UNITS)
+    assert (klass.route, klass.eligible) == ("executed-reference", True)
+    assert klass.note == (
+        "executed-reference (2/3; 1 abstained: its reference crashed (raised NameError)), "
+        "probe (3/3)"
+    )
+    returned = TreeOutcome("value", encode_value(None), types=(("ValueError", "differ"),))
+    assert gate(_raising((RAISES_OK, crashed, RAISES_OK)), returned).verdict == "fail"
+
+
+def test_an_explicit_contrary_raise_still_vetoes() -> None:
+    """Known-bad: the third reference raises TypeError itself (`raise
+    TypeError` in its source: not crashed), where the others predict
+    ValueError. A well-formed contrary answer: a question."""
+    contrary = Reference("ran", out("raises", "TypeError"))
+    klass = classify(_raising((RAISES_OK, RAISES_OK, contrary)), UNITS)
+    assert (klass.route, klass.eligible, klass.note) == ("decided-unverified", False, DISAGREE)
+
+
+def test_a_crash_that_happens_to_agree_still_counts() -> None:
+    """A crashed raise of the expected type agrees, as before: it is counted,
+    not dropped (abstaining it would block examples that verified before)."""
+    lucky = Reference("ran", VALUE_ERROR, crashed=True)
+    klass = classify(_raising((lucky, lucky, lucky), raws=("h0", "h1", "h2")), UNITS)
+    assert klass.note == "executed-reference (3/3), probe (3/3)"
+
+
+def test_a_crashed_reference_with_a_contrary_prediction_is_a_split() -> None:
+    """Abstaining drops a predictor's reference, never its written prediction:
+    a contrary prediction splits the example."""
+    crashed = Reference("ran", out("raises", "NameError"), crashed=True)
+    e = _raising(
+        (RAISES_OK, crashed, RAISES_OK),
+        predicted=(VALUE_ERROR, out("value", "None"), VALUE_ERROR),
+    )
+    assert classify(e, UNITS).route == "split"
+
+
+def test_two_crashed_leave_one_and_one_is_not_enough() -> None:
+    crashed = Reference("ran", out("raises", "TypeError"), crashed=True)
+    klass = classify(_raising((RAISES_OK, crashed, crashed)), UNITS)
+    assert (klass.route, klass.eligible) == ("decided-unverified", False)
+    assert klass.note.startswith("only 1 of 3 predictors gave usable evidence")
+
+
+@pytest.mark.parametrize(
+    ("source", "name", "explicit"),
+    [
+        ("def ref(x):\n    raise ValueError\n", "ValueError", True),
+        (
+            "def ref(x):\n    if x < 0:\n        raise ValueError(x)\n    return x\n",
+            "ValueError",
+            True,
+        ),
+        (
+            "import decimal\n\ndef ref(x):\n    raise decimal.InvalidOperation(x)\n",
+            "InvalidOperation",
+            True,
+        ),
+        (
+            "def ref(x):\n    try:\n        return int(x)\n"
+            "    except KeyError as e:\n        raise ValueError(x) from e\n",
+            "ValueError",
+            True,
+        ),
+        (
+            "def ref(x):\n    try:\n        return x[0]\n    except IndexError:\n        raise\n",
+            "TypeError",
+            True,
+        ),
+        ("def ref(x):\n    raise ValueError(x)\n", "TypeError", False),
+        ("def ref(x):\n    return x + 1\n", "TypeError", False),
+        ("def ref(x):\n    err = ValueError\n    raise err(x)\n", "ValueError", False),
+        ("def ref(x:\n", "ValueError", False),
+    ],
+)
+def test_raises_explicitly_instances(source: str, name: str, explicit: bool) -> None:
+    assert raises_explicitly(source, name) is explicit
+
+
+def test_a_reference_that_did_not_run_never_agrees() -> None:
+    expected = out("value", "[1, 1]")
+    assert Reference("ran", expected).agrees(expected)
+    assert not Reference("timeout", expected).agrees(expected)
+    assert not Reference(UNBOUND, form="ok", accepts=True).agrees(expected)
+
+
+def test_the_two_references_that_ran_must_be_two_samples() -> None:
+    """Predictors 1 and 2 wrote byte-identical replies, so their references are
+    one computation; predictor 3's abstained. Effective k over all three is 2,
+    yet the example rests on one sample: it asks."""
+    e = ex(**_dedup_kwargs(), raws=("h", "h", "h3"), refs=(GOOD_REF, GOOD_REF, Reference(UNBOUND)))
+    klass = classify(e, UNITS)
+    assert klass.effective_k == 2
+    assert (klass.route, klass.eligible) == ("decided-unverified", False)
+    assert klass.note == (
+        "effective k = 1 among the predictors that gave evidence: they are one sample"
+    )
+    # the same draw with the abstaining slot elsewhere decides on two samples
+    other = ex(
+        **_dedup_kwargs(), raws=("h", "h", "h3"), refs=(GOOD_REF, Reference(UNBOUND), GOOD_REF)
+    )
+    assert classify(other, UNITS).eligible is True
+
+
+def test_a_split_prediction_still_splits_when_its_reference_abstains() -> None:
+    """The abstaining predictor's own written prediction disagreeing with the
+    other two is a split, as before: abstaining drops a reference, never a
+    prediction."""
+    e = ex(
+        **_dedup_kwargs(),
+        predicted=(out("value", "[1, 1]"), out("value", "[1]"), out("value", "[1, 1]")),
+        refs=(GOOD_REF, Reference(UNBOUND), GOOD_REF),
+    )
+    assert classify(e, UNITS).route == "split"
+    assert gate(e, val([1])).verdict == "question"
 
 
 # -- R13: floats, each row naming its route -----------------------------------
@@ -466,19 +746,39 @@ def test_r13_route_b_floats(written: str, got: object, verdict: str) -> None:
 
 def test_r16_i_a_unit_that_names_the_raise_may_refuse() -> None:
     e = ex("make(-1)", out("raises", "ValueError"), units=("S-007",))
-    assert gate(e, val([])).verdict == "fail"
+    assert gate(e, typed(val([]), ValueError="differ")).verdict == "fail"
     # a subclass of the expected exception matches
-    sub = TreeOutcome("raises", raises=("SizeError", "ValueError", "Exception"))
+    sub = typed(
+        TreeOutcome("raises", raises=("SizeError", "ValueError", "Exception")), ValueError="match"
+    )
     assert gate(e, sub).verdict == "pass"
     assert sub.show() == "raises SizeError"
 
 
+def test_a_tree_that_returns_where_every_reading_raises_differs() -> None:
+    e = ex("make(-1)", out("raises", "ValueError"), units=("S-007",))
+    opaque = typed(TreeOutcome("opaque", detail="Line (TypeError)"), ValueError="differ")
+    row = gate(e, opaque).rows[0]
+    assert (row.status, row.got) == ("code-wrong", "opaque: Line (TypeError)")
+    assert gate(e, typed(TreeOutcome("value", {"t": "nope"}), ValueError="differ")).verdict == (
+        "fail"
+    )
+    assert gate(e, opaque, licensed=False).rows[0].why == WOULD_REFUSE
+    # a value reading needs the value itself: an opaque one stays not proven
+    either = ex(
+        "make(-1)", out("raises", "ValueError"), units=("S-007",), alts=(out("value", "[]"),)
+    )
+    assert gate(either, opaque).rows[0].status == "not-proven"
+    assert gate(DEDUP, opaque).rows[0].status == "not-proven"
+
+
 def test_r16_ii_a_raise_the_task_never_names_is_a_question() -> None:
     e = ex("grow(-1)", out("raises", "ValueError"), units=("S-008",))
-    check = gate(e, val([]))
+    check = gate(e, typed(val([]), ValueError="differ"))
     assert check.verdict == "question"
     assert check.detail.endswith(f"[{NO_RAISE_NOTE}]")
-    assert gate(e, TreeOutcome("raises", raises=("ValueError",))).verdict == "pass"
+    raised = typed(TreeOutcome("raises", raises=("ValueError",)), ValueError="match")
+    assert gate(e, raised).verdict == "pass"
 
 
 def test_a_value_expected_where_the_tree_raises_differs() -> None:
@@ -635,15 +935,15 @@ def test_r6_ref_good_references_are_admitted(source: str) -> None:
         ("def ref():\n    global y\n    return 1\n", "Global is not allowed"),
         (
             "def ref():\n    return 1\n\ndef ok():\n    return 1\n",
-            "must be imports and exactly one top-level def named ref or ok",
+            "must be imports and exactly one top-level def named ref, ref_*, or ok",
         ),
         (
             "x = 1\n\ndef ref():\n    return x\n",
-            "must be imports and exactly one top-level def named ref or ok",
+            "must be imports and exactly one top-level def named ref, ref_*, or ok",
         ),
         (
             "def other():\n    return 1\n",
-            "must be imports and exactly one top-level def named ref or ok",
+            "must be imports and exactly one top-level def named ref, ref_*, or ok",
         ),
         ("@cache\ndef ref():\n    return 1\n", "decorators are not allowed"),
         ("def ref(:\n", "does not parse: invalid syntax"),
@@ -651,6 +951,184 @@ def test_r6_ref_good_references_are_admitted(source: str) -> None:
 )
 def test_r6_ref_bad_references_are_refused_before_any_run(source: str, why: str) -> None:
     assert reference_problem(source, STDLIB) == why
+
+
+# The census exhibits (150 references from six sealed extractions on the served
+# model): each was a legitimate reference the old rule refused.
+NAME_EXHIBIT: Final = (
+    "import decimal\n\n"
+    "def ref(amount):\n"
+    "    if isinstance(amount, decimal.Decimal):\n"
+    "        return amount\n"
+    '    raise TypeError(f"Cannot convert {type(amount).__name__} to Decimal")\n'
+)
+BALANCE_EXHIBIT: Final = (
+    "import decimal\n\n"
+    "def ref_balance(constructor_balance, deposits):\n"
+    "    return decimal.Decimal(constructor_balance) + sum(deposits)\n"
+)
+SUMMARY_EXHIBIT: Final = (
+    "import decimal\n\n"
+    "def ref_summary(txns, target='USD'):\n"
+    "    def total(xs):\n"
+    "        return sum(decimal.Decimal(x['amount']) for x in xs)\n"
+    "    return {'currency': target, 'total': total(txns)}\n"
+)
+VERSION_EXHIBIT: Final = (
+    "import json\n\ndef ref_load_version(data):\n    return json.loads(data)['version']\n"
+)
+SHAPE: Final = "must be imports and exactly one top-level def named ref, ref_*, or ok"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        NAME_EXHIBIT,
+        BALANCE_EXHIBIT,
+        SUMMARY_EXHIBIT,
+        # What the loosenings now also let through, on the record: reading any
+        # value's `__name__` (a function argument's, here), and the bare prefix.
+        "def ref(f):\n    return f.__name__\n",
+        "def ref_(x):\n    return x + 1\n",
+    ],
+)
+def test_a_reference_may_read_name_and_be_named_ref_something(source: str) -> None:
+    assert reference_problem(source, STDLIB) is None
+
+
+@pytest.mark.parametrize(
+    ("source", "why"),
+    [
+        ("def ref(x):\n    return x.__class__\n", "attribute '__class__' is not allowed"),
+        ("def ref(x):\n    return x.__dict__\n", "attribute '__dict__' is not allowed"),
+        (
+            "def ref(x):\n    return type(x).__qualname__\n",
+            "attribute '__qualname__' is not allowed",
+        ),
+        ("def ref(x):\n    return __name__ + x\n", "name '__name__' is not allowed"),
+        ("def ref(x):\n    x.__name__ = 1\n    return x\n", "attribute '__name__' is not allowed"),
+        (
+            "def ref(x):\n    x.__name__ += 'a'\n    return x\n",
+            "attribute '__name__' is not allowed",
+        ),
+        ("def ref(x):\n    del x.__name__\n    return x\n", "Delete is not allowed"),
+        ("def ref_a(x):\n    return x + 1\n\ndef ref_b(x):\n    return x\n", SHAPE),
+        ("def ref_a(x):\n    return x + 1\n\ndef ref(x):\n    return x + 2\n", SHAPE),
+        (
+            "FEES = {'a': 1}\n\n"
+            "def ref_apply_fee(x):\n    return x + ref_fee_for(x)\n\n"
+            "def ref_fee_for(x):\n    return FEES[x]\n",
+            SHAPE,
+        ),
+        ("FEES = {'a': 1}\n\ndef ref_fee(x):\n    return FEES[x]\n", SHAPE),
+        ("def helper(x):\n    return x + 1\n", SHAPE),
+        ("def reference(x):\n    return x + 1\n", SHAPE),
+        ("def refx(x):\n    return x + 1\n", SHAPE),
+        ("def ok_x(inp, out):\n    return out == 1\n", SHAPE),
+        # the `_restates` guards apply to a `ref_*` def as to `ref`
+        (
+            "def ref_balance(constructor_balance, deposits):\n    return deposits\n",
+            "returns its input unchanged, so it derives nothing",
+        ),
+        (
+            "def ref_balance(constructor_balance, deposits):\n    return 5\n",
+            "never reads its input, so it only restates the prediction",
+        ),
+    ],
+)
+def test_other_dunders_and_other_shapes_stay_refused(source: str, why: str) -> None:
+    assert reference_problem(source, STDLIB) == why
+
+
+def test_the_json_exhibit_is_refused_for_its_import_not_its_shape() -> None:
+    # `json` is not a reference module: this exhibit's shape is admitted now,
+    # and it stays refused for the import (out of this change's scope).
+    assert reference_problem(VERSION_EXHIBIT, STDLIB) == "import of json is not allowed"
+
+
+def test_a_snippet_still_may_not_read_name() -> None:
+    assert snippet_problem((), "type(x).__name__", STDLIB) == "attribute '__name__' is not allowed"
+    assert (
+        snippet_problem(("y = x.__name__",), "y", STDLIB) == "attribute '__name__' is not allowed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (BALANCE_EXHIBIT, ("ref", "ref_balance")),
+        ("def ref(x):\n    return x + 1\n", ("ref", "ref")),
+        ("import math\n\ndef ok(inp, out):\n    return math.isclose(out, 1.0)\n", ("ok", "ok")),
+    ],
+)
+def test_reference_def_names_the_form_and_the_def_the_driver_calls(
+    source: str, expected: tuple[str, str]
+) -> None:
+    assert reference_def(source) == expected
+
+
+RESTATES: Final = "never reads its input, so it only restates the prediction"
+UNCHANGED: Final = "returns its input unchanged, so it derives nothing"
+
+
+@pytest.mark.parametrize(
+    ("source", "why"),
+    [
+        ("def ref():\n    return 3\n", RESTATES),
+        ("def ref(xs, n):\n    return [2, 2, 1, 1]\n", RESTATES),
+        ("def ref(level, step):\n    raise ValueError('below zero')\n", RESTATES),
+        ("def ref(result):\n    return result\n", UNCHANGED),
+        ("def ref(*got):\n    'The answer.'\n    return got\n", UNCHANGED),
+        ("def ref(xs, n):\n    return xs\n", UNCHANGED),
+        # one that derives from its input is admitted
+        ("def ref(xs, n):\n    return xs[:n]\n", None),
+        ("def ref(*, n):\n    return n + 1\n", None),
+        ("def ref(level, step):\n    if level + step < 0:\n        raise ValueError(step)\n", None),
+        # an `ok` that ignores its input is caught by its discrimination check instead
+        ("def ok(inp, out):\n    return True\n", None),
+    ],
+)
+def test_a_reference_that_derives_nothing_is_refused(source: str, why: str | None) -> None:
+    assert reference_problem(source, STDLIB) == why
+
+
+GAUGE_SETUP: Final = ("from m import Gauge", "g = Gauge([2, 1], 3)")
+GAUGE_CALL: Final = "g.move(-4, label='a')"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["[2, 1]", "3", "-4"],
+        ["{'a': 3}", "(1, 2)"],  # regrouped, never added to
+        ["3.0"],  # a number is its value, not its spelling
+        ["[]"],
+        [],
+    ],
+)
+def test_args_drawn_from_the_input_are_admitted(args: list[str]) -> None:
+    assert args_problem(args, GAUGE_SETUP, GAUGE_CALL) is None
+
+
+def test_an_input_literal_outside_the_value_language_holds_nothing() -> None:
+    assert args_problem(["3"], ("z = 1+2j", "g = Gauge(3)"), "g.f()") is None
+    assert args_problem(["1"], ("z = 1+2j",), "g.f()") == "1 holds 1, which the input does not"
+
+
+@pytest.mark.parametrize(
+    ("args", "why"),
+    [
+        (["3", "-1"], "-1 holds -1, which the input does not"),  # the outcome of 3 + -4
+        (["[2, 1, 99]"], "[2, 1, 99] holds 99, which the input does not"),
+        (["4"], "4 holds 4, which the input does not"),  # the sign is part of the value
+        (["True"], "True holds True, which the input does not"),
+        (["'b'"], "'b' holds 'b', which the input does not"),
+        (["f(x)"], "f(x) is not a literal"),
+        (['float("nan")'], 'float("nan") holds nan, which the input does not'),
+    ],
+)
+def test_args_holding_a_value_the_input_does_not_are_refused(args: list[str], why: str) -> None:
+    assert args_problem(args, GAUGE_SETUP, GAUGE_CALL) == why
 
 
 # -- values and comparison -----------------------------------------------------
@@ -822,3 +1300,37 @@ def test_a_tree_outcome_reads_back_and_refuses_an_unknown_kind() -> None:
     assert TreeOutcome("hang", detail="x").show() == "hang: x"
     with pytest.raises(ValueError, match="unknown outcome kind"):
         TreeOutcome.from_dict({"kind": "weird"})
+
+
+# -- k = 5: five predictors, at least two usable, all usable agree -------------
+
+
+def test_at_k5_two_usable_that_agree_decide_beside_three_with_no_evidence() -> None:
+    """Two usable predictors that agree, beside three that gave no usable
+    evidence (args that do not bind, args refused, a reference that crashed
+    on a type its source never raises): eligible, and the note counts out of
+    five. The minimum stays two; it does not scale with k."""
+    a = out("value", "[1, 1]")
+    crashed = Reference("ran", out("raises", "TypeError"), crashed=True)
+    refs = (GOOD_REF, Reference(UNBOUND), GOOD_REF, Reference(ARGS_BAD), crashed)
+    klass = classify(ex("g()", a, refs=refs), UNITS)
+    assert K_PREDICTORS == 5
+    assert (klass.route, klass.eligible, klass.effective_k) == ("executed-reference", True, 5)
+    assert klass.note == (
+        f"executed-reference (2/5; 3 abstained: {UNBOUND}; {ARGS_BAD}; "
+        "its reference crashed (raised TypeError)), probe (3/3)"
+    )
+
+
+def test_at_k5_one_contrary_answer_vetoes_four_that_agree() -> None:
+    a = out("value", "[1, 1]")
+    klass = classify(ex("g()", a, refs=(GOOD_REF,) * 4 + (WRONG_REF,)), UNITS)
+    assert (klass.route, klass.eligible) == ("decided-unverified", False)
+    assert DISAGREE in klass.note
+
+
+def test_at_k5_one_usable_beside_four_with_no_evidence_decides_nothing() -> None:
+    a = out("value", "[1, 1]")
+    klass = classify(ex("g()", a, refs=(GOOD_REF,) + (Reference(UNBOUND),) * 4), UNITS)
+    assert klass.eligible is False
+    assert "only 1 of 5 predictors gave usable evidence, 2 are needed" in klass.note

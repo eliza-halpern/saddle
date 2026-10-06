@@ -93,11 +93,12 @@ from saddle.auditor import (
     coverage_evidence,
     finding_body,
     flip_finding,
+    raise_gaps,
     rewritten,
     sanction,
 )
-from saddle.gates import DEFAULT_MUTANT_SHORTLIST
-from saddle.impact import ImpactMemo
+from saddle.gates import DEFAULT_MUTANT_SHORTLIST, untyped_raise_asserts
+from saddle.impact import ImpactMemo, is_test_file
 from saddle.journal import FEED_QUESTION_LINE, append_span, build_span, write_attempt_sidecar
 from saddle.tools import CHECK_TOOL, FINISH_TOOL
 
@@ -169,6 +170,11 @@ class AuditResult:
     (function, its docstring's first line, the lines), read off the audited
     snapshot; what `render` shows the model in place of the bare line list.
     Sealed under `coverage_text` when non-empty."""
+    obligation: str = ""
+    """`--raise-obligation`, checkpoints only: each changed raise no test
+    enters and each type-free raise assertion in a changed test
+    (`raise_obligation`). Feedback: `passed` never reads it. Sealed under
+    `raise_obligation` when non-empty."""
 
     @property
     def passed(self) -> bool:
@@ -198,6 +204,7 @@ class AuditResult:
                 else {}
             ),
             **({"coverage_text": self.coverage} if self.coverage else {}),
+            **({"raise_obligation": self.obligation} if self.obligation else {}),
         }
 
 
@@ -272,6 +279,47 @@ def _coverage_words(tree: Path, baseline: str, findings: Sequence[Finding]) -> s
     return f"{head}\n{tally}\n{rows}"
 
 
+RAISE_OBLIGATION_HEAD: Final = "Raise-entry check (feedback only; it never refuses finish):"
+
+
+def raise_obligation(tree: Path, baseline: str, findings: Sequence[Finding]) -> str:
+    """The in-loop raise-entry obligation (K2 D3) for one checkpoint, or "".
+
+    Names each changed `raise` the coverage finding says no test enters
+    (`auditor.raise_gaps`, the packet's §3.3 rows) and asks for a test that
+    takes the branch and asserts the exception by its type; and names each
+    `pytest.raises(Exception)`-shaped assertion in a changed test file
+    (`gates.untyped_raise_asserts`, B017), which passes on any exception.
+    Feedback only: it is no finding, so no verdict reads it.
+    """
+    coverage = next((f for f in findings if f.gate == "coverage"), None)
+    gaps = (
+        raise_gaps(
+            tree, baseline, coverage.detail, coverage.cites[1] if len(coverage.cites) > 1 else ""
+        )
+        if coverage is not None
+        else []
+    )
+    names = _git(tree, "diff", "--cached", "--name-only", "--diff-filter=AMR", baseline).split()
+    tests = {
+        n: (tree / n).read_text()
+        for n in sorted(names)
+        if n.endswith(".py") and is_test_file(n) and (tree / n).is_file()
+    }
+    rows = [
+        f"- {coverage_text.raise_row(coverage_text.RaiseGap(**g))}. Add a test that takes "
+        "this branch and asserts the exception by the type raised there, "
+        "`pytest.raises(<that type>)`, not `Exception`."
+        for g in gaps
+    ]
+    rows += [
+        f"- {rel}:{line} asserts `{spelled}`: it passes on any exception, a crash "
+        "before the check included. Assert the type the code raises."
+        for rel, line, spelled in untyped_raise_asserts(tests)
+    ]
+    return "\n".join([RAISE_OBLIGATION_HEAD, *rows]) if rows else ""
+
+
 def render(result: AuditResult) -> str:
     """The compact text the model reads: failures in full, passes counted."""
     head = (
@@ -309,6 +357,8 @@ def render(result: AuditResult) -> str:
     passed = len(result.findings) - len(bad) - len(allowed) - len(unproven) - len(asked)
     if passed:
         lines.append(f"({passed} other check(s) passed or not applicable)")
+    if result.obligation:
+        lines.append(result.obligation)
     return "\n".join(lines)
 
 
@@ -403,6 +453,10 @@ class AuditFeed:
     which refuses nothing; at `finish` the feed waits for it (`p1_wait`), and
     one that failed or has still not finished is a question: the run ends
     "needs you", never finished on a check that did not run."""
+    raise_obligation: bool = False
+    """`--raise-obligation` (off by default): each checkpoint also names the
+    changed raises no test enters and the type-free raise assertions
+    (`raise_obligation`). Feedback only; it never refuses finish."""
     p1_wait: Callable[[], float] = field(default=lambda: 0.0)
     """Seconds `final` may wait for a pending extraction: the run's remaining time."""
     summary: str = ""
@@ -547,7 +601,14 @@ class AuditFeed:
                 if tier == 1 and pending is not None:
                     found.append(pending)
             words = _coverage_words(scratch / "tree", self.baseline, found)
-            return AuditResult(point, tree, tuple(found), mutant_detail=detail, coverage=words)
+            owed = (
+                raise_obligation(scratch / "tree", self.baseline, found)
+                if self.raise_obligation and point.startswith("checkpoint")
+                else ""
+            )
+            return AuditResult(
+                point, tree, tuple(found), mutant_detail=detail, coverage=words, obligation=owed
+            )
         except AuditError as exc:
             if str(exc).startswith(NOTHING_TO_AUDIT):
                 return AuditResult(point, "", (), note=str(exc))

@@ -15,6 +15,16 @@ run: ..."), never a pass, never `not-proven`, never a refusal.
 namespace, under a per-example timer (`EXAMPLE_TIMEOUT_S`), with the lines
 of the tree it ran traced. `check_tree` is the gate on one tree.
 
+"Could not call" is decided before the call (K2 R-3): every call in an
+example's expression that reaches a callee defined in the tree (after
+`inspect.unwrap`) first binds its arguments to `inspect.signature(callee)`.
+A signature that cannot be read or cannot bind means the example could not
+call the tree; once it binds, every exception the call raises, a
+`TypeError` or `AttributeError` from inside the callee included, is the
+tree's outcome. A wrapper written with `functools.wraps` is bound against
+the inner function; one without it hides the inner signature, and only a
+known-correct probe guards that case.
+
 The known-correct probes (D-9) run through the same driver, once, at
 extraction (`run_probes`): each probe tree is an implementation whose
 correctness comes from outside the model (`task_examples.PROBE_SOURCES`),
@@ -59,6 +69,7 @@ from saddle.task_examples import (
     TreeOutcome,
     decode_value,
     literal_text,
+    raise_names,
     snippet_problem,
 )
 from saddle.task_units import Units
@@ -125,6 +136,8 @@ class Requirements:
     """Units P-a gave neither an input nor a reason for: named, never dropped."""
     probes: tuple[tuple[str, str], ...] = ()
     """The sealed known-correct probes, as (sha256, source)."""
+    raise_conditions: tuple[tuple[str, int], ...] = ()
+    """Unit id -> how many conditions for raising P-a listed for it (K2 R-1)."""
 
 
 MISMATCH: Final = "requirements file does not match the task"
@@ -164,21 +177,29 @@ def load(path: Path, task_text: str | None = None) -> Requirements:
         raise RequirementsError(msg)
     try:
         probes = _sealed_probes(data)
+        predictors = int(data.get("predictors", task_examples.LEGACY_PREDICTORS))
         examples = tuple(
-            Example.from_dict(_with_sources(e, dict(probes))) for e in data.get("examples", ())
+            Example.from_dict(_with_sources(e, dict(probes)), predictors=predictors)
+            for e in data.get("examples", ())
         )
         marks = tuple((str(m["unit"]), str(m["reason"])) for m in data.get("not_executable", ()))
         cut = tuple(str(u) for u in data.get("cut", ()))
         unanswered = tuple(str(u) for u in data.get("unanswered", ()))
+        conditions = tuple(
+            (str(u), len(list(c))) for u, c in dict(data.get("raise_conditions", {})).items()
+        )
     except (KeyError, TypeError, ValueError) as exc:
         msg = f"requirements file is malformed: {exc!r}"
         raise RequirementsError(msg) from exc
+    if predictors not in task_examples.PREDICTOR_COUNTS:
+        msg = f"requirements file is malformed: {predictors} predictors is not a k P1 runs"
+        raise RequirementsError(msg)
     bad = [r for _, r in marks if r not in NOT_EXECUTABLE]
     if bad:
         msg = f"requirements file is malformed: not-executable reason {bad[0]!r} is not allowed"
         raise RequirementsError(msg)
     return Requirements(
-        text, units, examples, marks, cut, str(data["file_sha256"]), unanswered, probes
+        text, units, examples, marks, cut, str(data["file_sha256"]), unanswered, probes, conditions
     )
 
 
@@ -211,7 +232,7 @@ def _with_sources(example: Mapping[str, Any], sources: Mapping[str, str]) -> dic
 
 
 DRIVER_BODY: Final = r"""
-import json, os, signal, sys
+import ast, builtins, inspect, json, os, signal, sys
 job_path, out_path = sys.argv[1], sys.argv[2]
 with open(job_path, encoding="utf-8") as fh:
     job = json.load(fh)
@@ -263,6 +284,60 @@ def _alarm(signum, frame):
 signal.signal(signal.SIGALRM, _alarm)
 
 
+class _NoCall(BaseException):
+    pass
+
+
+# The tree's own outcomes: every exception that left a call into the tree
+# after its arguments bound, by id, with the callee it left (both kept alive,
+# so that no id is reused); and every callee of the tree the call entered.
+from_tree = {}
+entered = []
+
+
+def _in_tree(fn):
+    # `fn`, after `inspect.unwrap`, is defined in a module of the tree.
+    try:
+        target = inspect.unwrap(fn)
+        name = getattr(target, "__module__", None)
+        path = getattr(sys.modules.get(name), "__file__", None) if isinstance(name, str) else None
+    except Exception:
+        return False
+    return isinstance(path, str) and _rel(path) is not None
+
+
+def __p1_call__(fn, /, *args, **kwargs):
+    # "Could not call" is decided here, before the call: a callee of the tree
+    # whose signature cannot be read, or cannot bind these arguments, never
+    # ran. Once bound, whatever the call raises is the tree's outcome.
+    if not _in_tree(fn):
+        return fn(*args, **kwargs)
+    try:
+        signature = inspect.signature(fn)
+    except Exception as exc:
+        raise _NoCall(f"{type(exc).__name__}: no signature to bind the call to ({exc})")
+    try:
+        signature.bind(*args, **kwargs)
+    except TypeError as exc:
+        raise _NoCall(f"TypeError: {exc} (the call does not bind to the callee's signature)")
+    entered.append(fn)
+    try:
+        return fn(*args, **kwargs)
+    except BaseException as exc:
+        from_tree.setdefault(id(exc), (exc, fn))
+        raise
+
+
+DRIVER_FILE = __p1_call__.__code__.co_filename
+
+
+class _Calls(ast.NodeTransformer):
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        hook = ast.Name("__p1_call__", ast.Load())
+        return ast.copy_location(ast.Call(hook, [node.func, *node.args], node.keywords), node)
+
+
 def _innermost(exc):
     tb = exc.__traceback__
     last = None
@@ -272,17 +347,104 @@ def _innermost(exc):
 
 
 def _interface(exc):
-    if isinstance(exc, ImportError):
+    # An exception the example's own expression raised (a name or attribute
+    # that does not resolve, an operation on what the tree returned) outside
+    # any bound call into the tree.
+    if id(exc) in from_tree:
+        return False
+    if isinstance(exc, (ImportError, _NoCall)):
         return True
-    return isinstance(exc, (NameError, AttributeError, TypeError)) and _innermost(exc) == HERE
+    return isinstance(exc, (NameError, AttributeError, TypeError)) and _innermost(exc) in (
+        HERE,
+        DRIVER_FILE,
+    )
+
+
+_classes = None
+
+
+def _tree_classes():
+    # Top-level class names -> the tree files defining one of that name.
+    global _classes
+    if _classes is None:
+        _classes = {}
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".") and d not in ("__pycache__", "site-packages", "venv")
+            )
+            for name in sorted(n for n in filenames if n.endswith(".py")):
+                path = os.path.realpath(os.path.join(dirpath, name))
+                if _rel(path) is None:
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        body = ast.parse(fh.read()).body
+                except (OSError, SyntaxError, ValueError, UnicodeDecodeError):
+                    continue
+                for node in body:
+                    if isinstance(node, ast.ClassDef):
+                        _classes.setdefault(node.name, set()).add(path)
+    return _classes
+
+
+def _exception_class(found):
+    return isinstance(found, type) and issubclass(found, BaseException)
+
+
+def _resolve(name, exc, callee):
+    # A raise outcome's type name, resolved on this tree (K2 R-2): a builtin
+    # of that name; else the name in the module that defines the callee
+    # (after `inspect.unwrap`); else a top-level class of that name defined
+    # in exactly one module of the tree. "match" or "differ" once it resolves
+    # to an exception class (`isinstance`); else why it does not resolve.
+    missing = object()
+    found = getattr(builtins, name, missing)
+    if found is missing and callee is not None:
+        try:
+            module = sys.modules.get(inspect.unwrap(callee).__module__)
+            found = vars(module).get(name, missing) if module is not None else missing
+        except Exception:
+            found = missing
+    if found is missing:
+        files = _tree_classes().get(name, set())
+        if not files:
+            return "not found in the tree"
+        if len(files) > 1:
+            return f"ambiguous: defined in {len(files)} modules of the tree"
+        (path,) = files
+        # Only a loaded module can hold the class of an exception raised here.
+        loaded = [
+            vars(m)[name]
+            for m in list(sys.modules.values())
+            if isinstance(getattr(m, "__file__", None), str)
+            and os.path.realpath(m.__file__) == path
+            and name in vars(m)
+        ]
+        if any(not _exception_class(c) for c in loaded):
+            return "not an exception class"
+        return "match" if exc is not None and isinstance(exc, tuple(loaded)) else "differ"
+    if not _exception_class(found):
+        return "not an exception class"
+    return "match" if exc is not None and isinstance(exc, found) else "differ"
+
+
+def _typed(got, example, exc):
+    if got["kind"] in ("value", "raises", "opaque") and example.get("names"):
+        callee = from_tree[id(exc)][1] if exc is not None and id(exc) in from_tree else (
+            entered[-1] if entered else None
+        )
+        got["types"] = {n: _resolve(n, exc, callee) for n in example["names"]}
+    return got
 
 
 def run(example):
-    namespace = {"__name__": "__p1_example__"}
+    namespace = {"__name__": "__p1_example__", "__p1_call__": __p1_call__}
     stage = "setup"
     try:
         setup = compile("\n".join(example["setup"]), HERE, "exec")
-        call = compile(example["call"], HERE, "eval")
+        hooked = _Calls().visit(ast.parse(example["call"], mode="eval"))
+        call = compile(ast.fix_missing_locations(hooked), HERE, "eval")
         signal.setitimer(signal.ITIMER_REAL, job["timeout"])
         sys.settrace(_global)
         try:
@@ -295,21 +457,26 @@ def run(example):
     except _Hang:
         return {"kind": "hang", "detail": f"no outcome within {job['timeout']} s"}
     except BaseException as exc:
-        said = f"{type(exc).__name__}: {str(exc)[:200]}"
+        said = str(exc)[:300] if isinstance(exc, _NoCall) else (
+            f"{type(exc).__name__}: {str(exc)[:200]}"
+        )
         if stage == "setup" or _interface(exc):
             return {"kind": "could-not-call", "detail": f"{stage}: {said}"}
         names = [c.__name__ for c in type(exc).__mro__]
-        return {"kind": "raises", "raises": names, "detail": said}
+        return _typed({"kind": "raises", "raises": names, "detail": said}, example, exc)
     try:
-        return {"kind": "value", "value": encode_value(value)}
+        got = {"kind": "value", "value": encode_value(value)}
     except BaseException as exc:
-        return {"kind": "opaque", "detail": f"{type(value).__name__} ({type(exc).__name__})"}
+        got = {"kind": "opaque", "detail": f"{type(value).__name__} ({type(exc).__name__})"}
+    return _typed(got, example, None)
 
 
 results = {}
 for example in job["examples"]:
     del ran[:]
     seen.clear()
+    from_tree.clear()
+    del entered[:]
     got = run(example)
     got["ran"] = list(ran)
     results[example["id"]] = got
@@ -340,7 +507,9 @@ def run_examples(
     for e in examples:
         problem = snippet_problem(e.setup, e.call, stdlib)
         if problem is None:
-            send.append({"id": e.id, "setup": list(e.setup), "call": e.call})
+            send.append(
+                {"id": e.id, "setup": list(e.setup), "call": e.call, "names": raise_names(e)}
+            )
         else:
             results[e.id] = TreeOutcome("could-not-call", detail=f"snippet refused: {problem}")
     if not send:
@@ -500,4 +669,5 @@ def check_tree(
         not_executable=req.not_executable,
         cut=req.cut,
         unanswered=req.unanswered,
+        raise_conditions=dict(req.raise_conditions),
     )

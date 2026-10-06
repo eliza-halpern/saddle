@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import inspect
 import re
 import tomllib
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -22,7 +23,16 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from saddle.dag import Node
 from saddle.mutant_text import PHRASES, classify, function_of, parse_show
-from saddle.task_examples import Example, Row, TreeOutcome, judge
+from saddle.task_examples import (
+    RAISE_NOISE,
+    RAISE_ROW,
+    Example,
+    Row,
+    TreeOutcome,
+    judge,
+    raise_names,
+    raise_obligation,
+)
 from saddle.task_examples import classify as classify_example
 from saddle.task_units import Units
 
@@ -3390,6 +3400,26 @@ class TaskRequirementsCheck(GateCheck):
     `question` example; unjudged = the rest. Each unit is counted once."""
     examples: tuple[int, int, int, int] = (0, 0, 0, 0)
     """Examples as (total, pass, code-wrong, question)."""
+    by_type: int = 0
+    """How many of the code-wrong examples raised another resolvable exception
+    type than the one named (`Row.by_type`): a named type's admitted cost,
+    reported on its own so a known-good measurement can list it."""
+    raise_ran: tuple[tuple[str, int], ...] | None = None
+    """Every tree line (`file`, `line`) an example expecting a raise ran, so the
+    packet's unreached-raise row can say whether one entered the function
+    (K2 §3.3); None when no example expects a raise."""
+
+
+def _raise_count(obligation: Sequence[tuple[str, int]], conditions: Mapping[str, int]) -> list[str]:
+    """The raise obligation's two lines: how many raise-named units have a
+    raising example, and per unit the conditions P-a listed beside the
+    raising examples decided (the check can count examples, not conditions)."""
+    have = sum(n > 0 for _, n in obligation)
+    per_unit = ", ".join(f"{u} {conditions.get(u, 0)}/{n}" for u, n in obligation)
+    return [
+        f"{have} of {len(obligation)} raise-named unit(s) have a raising example; {RAISE_NOISE}",
+        f"raise conditions listed / raising examples decided: {per_unit}",
+    ]
 
 
 def _p1_example(row: Row) -> str:
@@ -3425,6 +3455,7 @@ def check_task_requirements(
     unanswered: Sequence[str] = (),
     cannot_run: str | None = None,
     licensed: bool | None = None,
+    raise_conditions: Mapping[str, int] | None = None,
 ) -> TaskRequirementsCheck:
     """The `task-requirements` gate over one tree's example outcomes.
 
@@ -3440,7 +3471,11 @@ def check_task_requirements(
       value the gate cannot compare;
     - `pass`: every judged example matched.
 
-    Every example, unit and cut is accounted for in `basis`.
+    Every example, unit and cut is accounted for in `basis`. Every binding
+    unit that names a raise is counted with its raising examples
+    (`task_examples.raise_obligation`, K2 R-1); one with none is a named
+    `RAISE_ROW` among the unjudged, never a refusal. `raise_conditions` is
+    how many conditions for raising P-a listed per unit, printed beside it.
     """
     allowed = P1_REFUSAL_LICENSED if licensed is None else licensed
     strength = "full strength" if allowed else "question strength: dev-probe floor unmet"
@@ -3463,6 +3498,7 @@ def check_task_requirements(
         got = results.get(example.id)
         hits = [r for r in (got.ran if got else ()) if r.split(" ")[0] in changed]
         rows.append(dataclasses.replace(row, ran_changed=tuple(hits[:P1_NAMED_LINES])))
+    obligation = raise_obligation(units, examples)
     judged = [r for r in rows if r.status in ("pass", "code-wrong", "question")]
     judged_units = {u for r in judged for u in r.example.units}
     counts = {s: sum(r.status == s for r in rows) for s in ("pass", "code-wrong", "question")}
@@ -3470,17 +3506,40 @@ def check_task_requirements(
         *(f"not executable {u}: {why}" for u, why in not_executable),
         *(f"cut by the example cap: {u}" for u in cut),
         *(f"no example and no reason given: {u}" for u in unanswered),
+        *(f"{RAISE_ROW}: {u}" for u, n in obligation if n == 0),
         *(
             f"{r.status} {r.example.id} ({', '.join(r.example.units)}): {r.why}"
             for r in rows
             if r.status in ("not-proven", "unknown", "not-judged")
         ),
     )
+    by_type = sum(r.by_type for r in rows)
+    raising = [results.get(e.id) for e in examples if raise_names(e)]
+    raise_ran = (
+        tuple(
+            sorted(
+                {
+                    (path, int(line))
+                    for got in raising
+                    if got is not None
+                    for path, _, line in (r.rpartition(" (")[0].rpartition(":") for r in got.ran)
+                }
+            )
+        )
+        if raising
+        else None
+    )
     basis = [
         strength,
         f"{len(judged_units)} of {len(units.units)} candidate unit(s) judged; "
         f"{len(judged)} of {len(rows)} example(s) judged: {counts['pass']} pass, "
         f"{counts['code-wrong']} code-wrong, {counts['question']} question",
+        *(
+            [f"{by_type} code-wrong by exception type: the tree raised another type than named"]
+            if by_type
+            else []
+        ),
+        *(_raise_count(obligation, raise_conditions or {}) if obligation else []),
         *unjudged,
     ]
     failing = [r for r in rows if r.status == "code-wrong"]
@@ -3528,4 +3587,241 @@ def check_task_requirements(
             len(ids) - len(settled_units) - len(asked_units),
         ),
         examples=(len(rows), counts["pass"], counts["code-wrong"], counts["question"]),
+        by_type=by_type,
+        raise_ran=raise_ran,
     )
+
+
+DOCUMENTED_RAISES: Final = "documented-raises"
+"""The docstring `Raises:` check (K2 D4): a question, never a refusal."""
+
+DOCUMENTED_RAISES_HELD: Final = "every documented raise is raised and asserted"
+"""`check_documented_raises`'s detail when it asks nothing."""
+
+_GOOGLE_RAISES = re.compile(r"(\s*)Raises:\s*")
+_NUMPY_RAISES = re.compile(r"(\s*)Raises\s*")
+_NUMPY_RULE = re.compile(r"\s*-{3,}\s*")
+_GOOGLE_ENTRY = re.compile(r"\s*([A-Za-z_][\w.]*)\s*(?::.*)?")
+_NUMPY_ENTRY = re.compile(r"\s*([A-Za-z_][\w.]*)\s*")
+_RAISES_ASSERTS: Final = frozenset({"raises", "assertRaises", "assertRaisesRegex"})
+
+
+def _depth(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def documented_raises(doc: str) -> list[str]:
+    """The exception types a docstring's `Raises` section names, once each.
+
+    Google style (a `Raises:` line, then one `Type: text` entry per line one
+    level deeper) and NumPy style (a `Raises` line over a dashed rule, then
+    each type alone at the section's own depth, its text deeper). A dotted
+    name is reduced to its last part. An entry that is not a bare name (a
+    prose line) names nothing.
+    """
+    lines = inspect.cleandoc(doc).splitlines()
+    names: list[str] = []
+    for i, line in enumerate(lines):
+        if google := _GOOGLE_RAISES.fullmatch(line):
+            entry = None
+            for item in lines[i + 1 :]:
+                if not item.strip():
+                    continue
+                if _depth(item) <= len(google[1]):
+                    break
+                entry = _depth(item) if entry is None else entry
+                if _depth(item) == entry and (m := _GOOGLE_ENTRY.fullmatch(item)):
+                    names.append(m[1])
+        elif (numpy := _NUMPY_RAISES.fullmatch(line)) and _NUMPY_RULE.fullmatch(
+            lines[i + 1] if i + 1 < len(lines) else ""
+        ):
+            rest = lines[i + 2 :]
+            for j, item in enumerate(rest):
+                if not item.strip() or _depth(item) > len(numpy[1]):
+                    continue
+                following = rest[j + 1] if j + 1 < len(rest) else ""
+                if _depth(item) < len(numpy[1]) or _NUMPY_RULE.fullmatch(following):
+                    break
+                if m := _NUMPY_ENTRY.fullmatch(item):
+                    names.append(m[1])
+    return list(dict.fromkeys(n.rpartition(".")[2] for n in names))
+
+
+def _type_names(node: ast.expr | None) -> set[str]:
+    """The class names an exception expression spells: `E`, `m.E`, `E(...)`, `(E, F)`."""
+    if isinstance(node, ast.Name):
+        return {node.id}
+    if isinstance(node, ast.Attribute):
+        return {node.attr}
+    if isinstance(node, ast.Call):
+        return _type_names(node.func)
+    if isinstance(node, ast.Tuple):
+        return {n for e in node.elts for n in _type_names(e)}
+    return set()
+
+
+def _raised(node: ast.AST, handled: frozenset[str] = frozenset()) -> set[str]:
+    """Every type a function body raises by name, nested definitions excluded.
+
+    A bare `raise` re-raises what its `except` clause caught, so it raises
+    the handler's types.
+    """
+    out: set[str] = set()
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda):
+            continue
+        if isinstance(child, ast.ExceptHandler):
+            out |= _raised(child, frozenset(_type_names(child.type)))
+            continue
+        if isinstance(child, ast.Raise):
+            out |= set(handled) if child.exc is None else _type_names(child.exc)
+        out |= _raised(child, handled)
+    return out
+
+
+def _tail(func: ast.expr) -> str:
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else ""
+
+
+def _asserted(tests: Mapping[str, str]) -> set[tuple[str, str]]:
+    """(type, callee) for every test assertion that a call raises a named type.
+
+    `with pytest.raises(T):` / `with self.assertRaises(T):` around a call of
+    `callee`, and the call forms `pytest.raises(T, callee, ...)` and
+    `self.assertRaises(T, callee, ...)`. A tuple of types asserts each.
+    """
+    out: set[tuple[str, str]] = set()
+    for text in tests.values():
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.With | ast.AsyncWith):
+                types = {
+                    t
+                    for item in node.items
+                    if isinstance(item.context_expr, ast.Call)
+                    and _tail(item.context_expr.func) in _RAISES_ASSERTS
+                    and item.context_expr.args
+                    for t in _type_names(item.context_expr.args[0])
+                }
+                called = {
+                    _tail(c.func)
+                    for statement in node.body
+                    for c in ast.walk(statement)
+                    if isinstance(c, ast.Call)
+                }
+                out |= {(t, c) for t in types for c in called}
+            elif (
+                isinstance(node, ast.Call)
+                and _tail(node.func) in _RAISES_ASSERTS
+                and len(node.args) >= 2
+            ):
+                out |= {(t, _tail(node.args[1])) for t in _type_names(node.args[0])}
+    return out
+
+
+def _documented_functions(
+    source: str,
+) -> list[tuple[str, int, int, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """(qualname, first line, last line, node) for every function, nested ones too."""
+    out: list[tuple[str, int, int, ast.FunctionDef | ast.AsyncFunctionDef]] = []
+
+    def visit(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                name = f"{prefix}{child.name}"
+                if not isinstance(child, ast.ClassDef):
+                    first = min([child.lineno, *(d.lineno for d in child.decorator_list)])
+                    out.append((name, first, child.end_lineno or child.lineno, child))
+                visit(child, f"{name}.")
+
+    visit(ast.parse(source), "")
+    return out
+
+
+def check_documented_raises(
+    sources: Mapping[str, str],
+    changed: Collection[tuple[str, int]],
+    tests: Mapping[str, str],
+) -> GateCheck:
+    """Ask about each type a changed function's docstring says it raises (K2 D4).
+
+    For every function of `sources` (the changed non-test files, by relative
+    path) holding a `changed` line, whose docstring's `Raises` section names a
+    type T (`documented_raises`): ask when the body raises no T by name (the
+    DOC502 shape), and when no test of `tests` asserts T around a call of the
+    function (`_asserted`). `passed` is always True: the docstring and the
+    code share an author, so a difference says one of them is wrong without
+    saying which, and is a question for a person, never a refusal. A source
+    that does not parse is the syntax gate's, and asks nothing here.
+    """
+    asserted = _asserted(tests)
+    edited = set(changed)
+    asks: list[str] = []
+    documented = 0
+    for rel in sorted(sources):
+        try:
+            functions = _documented_functions(sources[rel])
+        except SyntaxError:
+            continue
+        for qualname, first, last, node in functions:
+            if not any((rel, n) in edited for n in range(first, last + 1)):
+                continue
+            types = documented_raises(ast.get_docstring(node) or "")
+            documented += len(types)
+            raised = _raised(node)
+            parts = qualname.split(".")
+            callee = parts[-2] if parts[-1] == "__init__" and len(parts) > 1 else parts[-1]
+            where = f"`{qualname}` ({rel}:{node.lineno})"
+            for t in types:
+                if t not in raised:
+                    asks.append(
+                        f"{where} documents raising {t}, but its body raises no {t}: "
+                        f"should it raise {t}, or should the docstring not name it?"
+                    )
+                if (t, callee) not in asserted:
+                    asks.append(
+                        f"{where} documents raising {t}, but no test asserts it: add a test "
+                        f"that calls {callee} inside `pytest.raises({t})`"
+                    )
+    return GateCheck(
+        name=DOCUMENTED_RAISES,
+        passed=True,
+        detail="; ".join(asks) if asks else DOCUMENTED_RAISES_HELD,
+        basis=f"documented-types={documented} asked={len(asks)}",
+    )
+
+
+UNTYPED_ASSERT_TYPES: Final = frozenset({"Exception", "BaseException"})
+
+
+def untyped_raise_asserts(tests: Mapping[str, str]) -> list[tuple[str, int, str]]:
+    """(file, line, spelling) for each test assertion that a call raises
+    `Exception` or `BaseException` (flake8-bugbear B017's shape).
+
+    Such a test passes on any exception, a crash before the check included,
+    so it stays green when the raise it was written for is deleted. A tuple
+    of types, or a narrower type, is not named. A file that does not parse
+    names nothing.
+    """
+    out: list[tuple[str, int, str]] = []
+    for rel in sorted(tests):
+        try:
+            tree = ast.parse(tests[rel])
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and _tail(node.func) in _RAISES_ASSERTS
+                and node.args
+                and isinstance(node.args[0], ast.Name | ast.Attribute)
+                and _type_names(node.args[0]) & UNTYPED_ASSERT_TYPES
+            ):
+                spelled = f"{ast.unparse(node.func)}({ast.unparse(node.args[0])})"
+                out.append((rel, node.lineno, spelled))
+    return sorted(out)

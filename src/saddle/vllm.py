@@ -363,6 +363,7 @@ def _build_text_payload(
     temperature: float,
     reasoning_effort: str,
     seed: int | None = None,
+    reasoning_budget_tokens: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -375,6 +376,11 @@ def _build_text_payload(
     # As `_build_diff_payload`: a call without a seed leaves the key out.
     if seed is not None:
         payload["seed"] = seed
+    # Strata closes the thinking at this many tokens and the model goes on to
+    # answer; vLLM ignores the unknown field. Left out when None, so every
+    # caller that does not ask sends the payload it always sent.
+    if reasoning_budget_tokens is not None:
+        payload["reasoning_budget_tokens"] = reasoning_budget_tokens
     return payload
 
 
@@ -825,11 +831,16 @@ class VllmClient:
         temperature: float = DEFAULT_TEMPERATURE,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
         seed: int | None = None,
+        reasoning_budget_tokens: int | None = None,
     ) -> str:
         """One free-text completion for *prompt* (recovery planning, P1's passes).
 
         `seed` tells concurrent draws of one prompt apart (P1's blind
         predictors); None leaves it to the server, as before.
+
+        `reasoning_budget_tokens` asks the server to close the thinking at
+        that many tokens so the rest of `max_tokens` is left for the answer
+        (Strata honours it; vLLM ignores it). None sends no such field.
 
         No guided schema: the plan is prose, so there is nothing to
         mis-parse — only envelope, truncation, and blank-content errors.
@@ -845,6 +856,7 @@ class VllmClient:
             temperature=temperature,
             reasoning_effort=reasoning_effort,
             seed=seed,
+            reasoning_budget_tokens=reasoning_budget_tokens,
         )
         return _parse_text_response(self._post(payload), max_tokens=max_tokens)
 

@@ -23,6 +23,10 @@ docstring's first line quoted when it has one; no other prose is written
 about the code. Where
 `mutant_text` recorded a surviving behaviour mutant in the same file and
 function, the line says so; nothing else links the two rows.
+
+`unreached_raises` reads the same record for one statement kind: each
+changed `raise` the finding names, or that sits in a definition the gate
+spared, is a Not proven row of its own (K2 §3.3). It changes no verdict.
 """
 
 from __future__ import annotations
@@ -130,6 +134,78 @@ def phrase(function: str, doc: str | None) -> str:
 def _same_file(recorded: str, named: str) -> bool:
     """`changed` spells paths `str(workdir / rel)`; the detail spells them `rel`."""
     return recorded == named or recorded.endswith("/" + named)
+
+
+@dataclass(frozen=True)
+class RaiseGap:
+    """One changed `raise` statement no test enters (K2 §3.3): a report, no verdict."""
+
+    file: str
+    line: int
+    function: str
+    spared: bool
+    """The raise is in a baseline definition coverage did not judge
+    (`gates.compelled_definitions`): no test reaches that body, and no
+    finding said so before this row."""
+    p1: bool | None = None
+    """Whether a task-text (P1) raise example ran a line of `function`;
+    None when P1 had no raise example, or the raise is at module level."""
+
+
+def unreached_raises(
+    sources: Mapping[str, str],
+    changed: Collection[tuple[str, int]],
+    uncovered: Collection[tuple[str, int]],
+    spared: Sequence[str] = (),
+    entered: Collection[tuple[str, int]] | None = None,
+) -> list[RaiseGap]:
+    """Every `raise` on a changed line that the coverage record says no test runs.
+
+    A raise is unreached when its line is one the finding names (`uncovered`)
+    or lies in a definition the gate spared (`spared`, `<file>:<qualname>` as
+    `gates.spared_definitions` reads them, whose body no test reaches). Paths
+    are spelled relative to the tree, as the detail spells them. `entered` is
+    every `(file, line)` a P1 raise example ran, or None when it had none.
+    A file that does not parse yields no row. Ordered by file and line.
+    """
+    named = set(uncovered)
+    edited = set(changed)
+    gaps: list[RaiseGap] = []
+    for rel in sorted(sources):
+        try:
+            tree = ast.parse(sources[rel])
+        except SyntaxError:
+            continue
+        scopes = _scopes(sources[rel])
+        held = {n.rpartition(":")[2] for n in spared if n.rpartition(":")[0] == rel}
+        spans = [(s.first, s.last) for s in scopes if s.qualname in held]
+        lines = sorted({n.lineno for n in ast.walk(tree) if isinstance(n, ast.Raise)})
+        for line in lines:
+            if (rel, line) not in edited:
+                continue
+            in_spared = any(first <= line <= last for first, last in spans)
+            if (rel, line) not in named and not in_spared:
+                continue
+            scope = function_at(scopes, line)
+            p1 = (
+                None
+                if entered is None or scope is None
+                else any(f == rel and scope.first <= n <= scope.last for f, n in entered)
+            )
+            name = scope.qualname if scope is not None else MODULE_LEVEL
+            gaps.append(RaiseGap(rel, line, name, in_spared, p1))
+    return gaps
+
+
+def raise_row(g: RaiseGap) -> str:
+    """The packet's Not proven row for one unreached raise."""
+    row = f"raise in `{g.function}` (`{g.file}:{g.line}`): no test enters this branch"
+    if g.spared:
+        row += "; spared, not judged"
+    if g.p1 is not None:
+        said = "a" if g.p1 else "no"
+        row += f"; {said} task-text raise example entered `{g.function}`"
+    return row
 
 
 @dataclass(frozen=True)

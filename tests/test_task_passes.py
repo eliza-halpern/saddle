@@ -10,17 +10,29 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
 from saddle import task_passes
 from saddle.evidence import CapturedRun
-from saddle.task_examples import Outcome, classify
+from saddle.task_examples import (
+    K_PREDICTORS,
+    Example,
+    Outcome,
+    Prediction,
+    Probe,
+    Reference,
+    classify,
+)
 from saddle.task_passes import (
     EMPTY_BASELINE,
     HIDDEN,
+    PASS_MAX_TOKENS,
+    PASS_REASONING_BUDGET,
     PREDICT_SEEDS,
+    PROPOSE_SEED,
+    RETRY_SEED_OFFSET,
     baseline_listing,
     baseline_sources,
     extract,
@@ -31,6 +43,7 @@ from saddle.task_passes import (
 )
 from saddle.task_requirements import load
 from saddle.task_units import task_units
+from saddle.vllm import VllmResponseError
 
 TASK = """# Box
 
@@ -70,12 +83,13 @@ def predict_reply(seed: int, *, ref: str = REF, same: bool = False) -> str:
                 {
                     "input": "E-002",
                     "outcome": {"kind": "raises", "text": "IndexError"},
+                    "args": ["[]"],
                     "decides": "raises `IndexError` when it is empty",
                 },
             ],
             "references": [
                 {"unit": "S-002", "source": ref},
-                {"unit": "S-003", "source": "def ref():\n    raise IndexError(0)\n"},
+                {"unit": "S-003", "source": "def ref(xs):\n    return xs[0]\n"},
             ],
         }
     )
@@ -94,6 +108,7 @@ class Scripted:
         self.predict = predict
         self.alternatives = json.dumps(alternatives or {"alternatives": []})
         self.sent: list[tuple[str, str, int | None, float]] = []
+        self.budgets: list[int | None] = []
         self.lock = threading.Lock()
 
     def complete(
@@ -104,6 +119,7 @@ class Scripted:
         temperature: float = 0.0,
         reasoning_effort: str = "",
         seed: int | None = None,
+        reasoning_budget_tokens: int | None = None,
     ) -> str:
         name = (
             "P-a"
@@ -114,6 +130,7 @@ class Scripted:
         )
         with self.lock:
             self.sent.append((name, prompt, seed, temperature))
+            self.budgets.append(reasoning_budget_tokens)
         if name == "P-a":
             return self.propose
         if name == "P-b":
@@ -171,19 +188,81 @@ def test_extraction_seals_every_pass_and_a_file_that_loads(tmp_path: Path) -> No
     assert req.unanswered == ("S-001",)  # an invalid reason is not a reason
     assert record["model"] == "the-model"
     assert record["probes"] == []
-    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b", "P-c"]
+    assert [c["pass"] for c in record["calls"]] == ["P-a", *["P-b"] * K_PREDICTORS, "P-c"]
     # the vacuity rule: P-b above temperature 0, with distinct seeds
     sent = [s for s in client.sent if s[0] == "P-b"]
     assert sorted(s[2] or 0 for s in sent) == sorted(PREDICT_SEEDS)
     assert all(s[3] > 0 for s in sent)
     imul = req.examples[0]
-    assert [r.status for r in imul.references] == ["ran", "ran", "ran"]
+    assert [r.status for r in imul.references] == ["ran"] * K_PREDICTORS
     assert [a.outcome.text for a in imul.alternatives] == ["[1, 2, 1, 2]"]
     klass = classify(imul, req.units)
-    assert (klass.route, klass.effective_k, klass.eligible) == ("executed-reference", 3, False)
+    assert (klass.route, klass.effective_k, klass.eligible) == (
+        "executed-reference",
+        K_PREDICTORS,
+        False,
+    )
     assert klass.note == "no known-correct probe"  # step 1 seals no probes
     first = req.examples[1]
-    assert [r.outcome for r in first.references] == [Outcome("raises", "IndexError")] * 3
+    assert [r.outcome for r in first.references] == [Outcome("raises", "IndexError")] * K_PREDICTORS
+    # E-002 proposed no args: each reference ran on the args its predictor named,
+    # sealed with it; E-001's own args left nothing to name
+    sealed_refs = record["examples"]
+    assert [r.get("args") for r in sealed_refs[1]["references"]] == [["[]"]] * K_PREDICTORS
+    assert [r.get("args") for r in sealed_refs[0]["references"]] == [None] * K_PREDICTORS
+
+
+def test_an_unparseable_prediction_reply_is_asked_again_on_a_fresh_seed(tmp_path: Path) -> None:
+    def garbled(seed: int) -> str:
+        return "the answer is [1, 1, 2, 2]" if seed == PREDICT_SEEDS[0] else predict_reply(seed)
+
+    client = Scripted({"inputs": [IMUL]}, predict=garbled)
+    path = sealed(tmp_path, client)
+    record = json.loads(path.read_text())
+    assert [c["pass"] for c in record["calls"]] == ["P-a", *["P-b"] * (K_PREDICTORS + 1), "P-c"]
+    assert record["calls"][1]["raw"] == "the answer is [1, 1, 2, 2]"  # sealed, not dropped
+    seeds = sorted(s[2] or 0 for s in client.sent if s[0] == "P-b")
+    assert seeds == sorted([*PREDICT_SEEDS, PREDICT_SEEDS[0] + RETRY_SEED_OFFSET])
+    req = load(path, TASK)
+    assert all(p.outcome is not None for p in req.examples[0].predictions)
+
+
+STATEFUL: Final = {
+    "id": "E-001",
+    "units": ["S-002"],
+    "setup": ["g = Gauge(3)"],
+    "call": "g.move(-4)",
+    "args": [],
+}
+LEVEL: Final = (
+    "def ref(level, step):\n    if level + step < 0:\n        raise ValueError(step)\n"
+    "    return level + step\n"
+)
+
+
+def test_an_input_with_no_args_runs_on_the_args_its_predictor_names() -> None:
+    def run(chosen: dict[str, list[str]]) -> dict[str, Any]:
+        return run_references({"S-002": LEVEL}, [STATEFUL], {"E-001": None}, chosen=chosen)["E-001"]
+
+    assert run({"E-001": ["3", "-4"]}) == {
+        "status": "ran",
+        "outcome": {"kind": "raises", "text": "ValueError"},
+        "args": ["3", "-4"],
+    }
+    # args holding a value the input does not, such as an outcome, never reach it
+    assert run({"E-001": ["3", "-1"]}) == {
+        "status": "refused: its args: -1 holds -1, which the input does not"
+    }
+    assert run({})["status"].startswith("could not call: ")  # none named: as before
+    # a proposal that gave only the call's args (the T8 shape) does not override
+    # the predictor's, which bind to its own `ref`; without them, it is used
+    partial = {**STATEFUL, "args": ["-4"]}
+    got = run_references(
+        {"S-002": LEVEL}, [partial], {"E-001": None}, chosen={"E-001": ["3", "-4"]}
+    )
+    assert got["E-001"]["outcome"] == {"kind": "raises", "text": "ValueError"}
+    alone = run_references({"S-002": LEVEL}, [partial], {"E-001": None})["E-001"]
+    assert alone["status"] == "could not call: missing a required argument: 'step'"
 
 
 def test_r8_identical_draws_are_one_sample(tmp_path: Path) -> None:
@@ -203,12 +282,79 @@ def test_a_failed_pass_decides_nothing_and_is_sealed(tmp_path: Path) -> None:
     record = json.loads(path.read_text())
     assert record["calls"][2]["error"] == "RuntimeError: server down"
     req = load(path)
+    # flip: the failed predictor decides nothing and abstains; the two that
+    # answered, with references that ran and agree, decide (and P-c is asked
+    # for other readings of what they decided)
+    klass = classify(req.examples[0], req.units)
+    assert (klass.route, klass.note) == ("executed-reference", "no known-correct probe")
+    assert [c["pass"] for c in record["calls"]] == ["P-a", *["P-b"] * K_PREDICTORS, "P-c"]
+
+    # both other predictors failing: one left, a split, and no P-c
+    def flakier(seed: int) -> Any:
+        return predict_reply(seed) if seed == PREDICT_SEEDS[0] else RuntimeError("server down")
+
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    req = load(sealed(lone, Scripted({"inputs": [IMUL]}, predict=flakier)))
     assert classify(req.examples[0], req.units).route == "split"
-    assert [c["pass"] for c in record["calls"]] == ["P-a", "P-b", "P-b", "P-b"]  # no P-c
     empty = Scripted("not json at all")
     nothing = load(sealed(tmp_path, empty))
     assert nothing.examples == ()
-    assert [s[0] for s in empty.sent] == ["P-a"]
+    # A whole reply with no JSON is asked once more, on a fresh seed.
+    assert [s[0] for s in empty.sent] == ["P-a", "P-a"]
+    assert [s[2] for s in empty.sent] == [PROPOSE_SEED, PROPOSE_SEED + RETRY_SEED_OFFSET]
+
+
+def test_a_cut_call_is_sealed_with_what_arrived(tmp_path: Path) -> None:
+    """Known-good: a P-b call cut at its cap carries its partial reasoning,
+    content and usage out of the client; the sealed call holds them whole,
+    and `raw` stays "" (no reply returned). Known-bad: the same call sealed
+    with the error string alone, as every cut call was before."""
+    reasoning = "the thinking ran on " * 400
+    usage = {"prompt_tokens": 900, "completion_tokens": PASS_MAX_TOKENS}
+
+    def cut(seed: int) -> Any:
+        if seed != PREDICT_SEEDS[1]:
+            return predict_reply(seed)
+        return VllmResponseError(
+            "completion truncated (finish_reason=length)",
+            reasoning=reasoning,
+            content='{"predictions": [{"inp',
+            usage=usage,
+            finish_reason="length",
+        )
+
+    record = json.loads(sealed(tmp_path, Scripted({"inputs": [IMUL]}, predict=cut)).read_text())
+    calls = [c for c in record["calls"] if c["seed"] in (PREDICT_SEEDS[1], PREDICT_SEEDS[0])]
+    whole, cut_call = calls[0], calls[1]
+    assert (cut_call["cut_at"], cut_call["raw"]) == (PASS_MAX_TOKENS, "")
+    assert cut_call["reasoning"] == reasoning
+    assert cut_call["content"] == '{"predictions": [{"inp'
+    assert cut_call["usage"] == usage
+    assert not {"reasoning", "content", "usage"} & set(whole)  # a whole reply: shape unchanged
+
+
+def test_a_failed_call_seals_only_the_text_that_arrived(tmp_path: Path) -> None:
+    """A blank-content reply (finish `stop`) keeps its reasoning but is not
+    cut; a failure carrying nothing seals no empty text fields."""
+    blank = VllmResponseError("message has no text content", reasoning="r", finish_reason="stop")
+
+    def failing(seed: int) -> Any:
+        return blank if seed == PREDICT_SEEDS[0] else RuntimeError("server down")
+
+    record = json.loads(sealed(tmp_path, Scripted({"inputs": [IMUL]}, predict=failing)).read_text())
+    by_seed = {c["seed"]: c for c in record["calls"] if c["pass"] == "P-b"}
+    assert by_seed[PREDICT_SEEDS[0]]["reasoning"] == "r"
+    assert not {"cut_at", "content", "usage"} & set(by_seed[PREDICT_SEEDS[0]])
+    assert not {"cut_at", "reasoning", "content", "usage"} & set(by_seed[PREDICT_SEEDS[1]])
+
+
+def test_every_pass_call_asks_for_the_reasoning_budget() -> None:
+    client = Scripted(PROPOSAL)
+    record = extract(TASK, client)
+    assert len(client.budgets) == len(record["calls"]) > 1
+    assert set(client.budgets) == {PASS_REASONING_BUDGET}
+    assert PASS_MAX_TOKENS - PASS_REASONING_BUDGET == 4096  # room left for the answer
 
 
 def test_the_caps_cut_and_name_what_they_cut() -> None:
@@ -313,10 +459,13 @@ def test_r6_ref_a_good_reference_runs_and_a_bad_one_never_does() -> None:
     ("source", "sealed_as"),
     [
         ("def ref(xs, n):\n    raise KeyError(n)\n", {"kind": "raises", "text": "KeyError"}),
-        ("import itertools\n\ndef ref(xs, n):\n    return itertools.count()\n", "not-canonical"),
+        ("import itertools\n\ndef ref(xs, n):\n    return itertools.count(n)\n", "not-canonical"),
         ("def ref(xs, n):\n    return 1\n\nref = ref(1)\n", "must be imports"),
-        ("def ref(xs, n, extra=[][0]):\n    return 1\n", "raised IndexError while defining it"),
-        ("def ref(xs, n):\n    return float('nan')\n", {"kind": "value", "text": 'float("nan")'}),
+        ("def ref(xs, n, extra=[][0]):\n    return n + 1\n", "raised IndexError while defining it"),
+        (
+            "def ref(xs, n):\n    return n * float('nan')\n",
+            {"kind": "value", "text": 'float("nan")'},
+        ),
     ],
 )
 def test_references_that_raise_or_return_oddities_are_sealed_as_what_they_did(
@@ -329,10 +478,67 @@ def test_references_that_raise_or_return_oddities_are_sealed_as_what_they_did(
         assert sealed_as in got["status"]
 
 
+@pytest.mark.parametrize(
+    ("source", "outcome"),
+    [
+        # A census exhibit's shape: a lone `ref_balance` def, run as `ref`.
+        ("def ref_balance(xs, n):\n    return sum(xs) + n\n", {"kind": "value", "text": "5"}),
+        # Called by its own name, so a recursive call inside it still resolves.
+        (
+            "def ref_count(xs, n):\n    if not xs:\n        return n\n"
+            "    return ref_count(xs[1:], n + 1)\n",
+            {"kind": "value", "text": "4"},
+        ),
+        ("def ref_kind(xs, n):\n    return type(n).__name__\n", {"kind": "value", "text": "'int'"}),
+        (
+            "def ref(xs, n):\n    raise TypeError(f'no {type(n).__name__}')\n",
+            {"kind": "raises", "text": "TypeError"},
+        ),
+    ],
+)
+def test_a_ref_something_reference_runs_and_its_result_is_sealed(
+    source: str, outcome: dict[str, str]
+) -> None:
+    assert refs(source) == {"status": "ran", "outcome": outcome}
+    # the one that ran is the result route (b) reads, beside a plain `ref`
+    both = run_references(
+        {"S-002": source, "S-003": REF},
+        [EXAMPLE, {"id": "E-002", "units": ["S-003"], "args": ["[2, 1]", "2"]}],
+        {},
+    )
+    assert both["E-001"] == {"status": "ran", "outcome": outcome}
+    assert both["E-002"]["status"] == "ran"
+
+
+@pytest.mark.parametrize(
+    ("source", "sealed_as"),
+    [
+        # The input gives two args. A signature that cannot take them never ran:
+        # the shape a stateful example produced, `args: []` against `ref(qty, delta)`.
+        ("def ref(qty, delta, extra):\n    return qty + delta + extra\n", "could not call"),
+        ("def ref(xs, *, n):\n    return len(xs) + n\n", "could not call"),
+        # A TypeError the body raises on args it did take ran: an outcome. One
+        # no `raise` of its source names is sealed `crashed` (route (b) reads
+        # it as no evidence); one it raises itself is its answer.
+        ("def ref(xs, n):\n    return len(n)\n", {"kind": "raises", "text": "TypeError"}),
+        ("def ref(xs, n):\n    raise TypeError(n)\n", {"kind": "raises", "text": "TypeError"}),
+        ("def ref(*args):\n    return len(args)\n", {"kind": "value", "text": "2"}),
+    ],
+)
+def test_a_reference_that_cannot_take_the_args_is_no_outcome(source: str, sealed_as: Any) -> None:
+    got = refs(source)
+    if isinstance(sealed_as, dict):
+        crashed = {"crashed": True} if "len(n)" in source else {}
+        assert got == {"status": "ran", "outcome": sealed_as, **crashed}
+    else:
+        assert got["status"].startswith(f"{sealed_as}: ")
+        assert "outcome" not in got
+
+
 def test_r12_t_a_reference_that_hangs_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(task_passes, "REFERENCE_CALL_TIMEOUT_S", 0.3)
-    assert refs("def ref(xs, n):\n    while True:\n        pass\n")["status"] == "timeout"
-    at_definition = "def ref(xs, n, _=max(x for x in iter(int, 1))):\n    return 1\n"
+    assert refs("def ref(xs, n):\n    while xs:\n        pass\n")["status"] == "timeout"
+    at_definition = "def ref(xs, n, _=max(x for x in iter(int, 1))):\n    return n + 1\n"
     assert refs(at_definition)["status"] == "timeout"
     ok = "def ok(inp, out):\n    while True:\n        pass\n"
     assert refs(ok, Outcome.of("value", "[1]"))["status"] == "timeout"
@@ -351,6 +557,122 @@ def test_r12_p_an_ok_predicate_must_discriminate() -> None:
         "form": "ok",
     }
     assert refs(always, None)["status"] == "not-discriminating"
+
+
+def test_the_statuses_the_driver_seals_abstain_only_for_an_args_fault() -> None:
+    """Each status `run_references` really produces, read back as a `Reference`:
+    only a refused-args or a bind failure abstains; a TypeError the body
+    raises at run time ran (an outcome), and a refused source does not abstain."""
+
+    def status(source: str, chosen: list[str] | None = None) -> Reference:
+        mine = {"E-001": chosen} if chosen is not None else None
+        stateful = {**STATEFUL, "args": ["3", "-4"]}
+        got = run_references({"S-002": source}, [stateful], {"E-001": None}, chosen=mine)
+        return Reference.from_dict(got["E-001"])
+
+    unbound = status(LEVEL, ["-4"])
+    assert unbound.status == "could not call: missing a required argument: 'step'"
+    args_bad = status(LEVEL, ["3", "-1"])
+    assert args_bad.status.startswith("refused: its args: ")
+    body_type_error = status("def ref(level, step):\n    return len(step)\n")
+    refused_source = status("import os\n\ndef ref(level, step):\n    return level\n")
+    ran = status(LEVEL)
+    assert (body_type_error.status, ran.status) == ("ran", "ran")
+    assert refused_source.status.startswith("refused: import of os")
+    assert [r.abstains() for r in (unbound, args_bad, body_type_error, refused_source, ran)] == [
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+
+
+def test_exhibit_two_references_decide_where_the_third_would_have_disagreed() -> None:
+    """What the abstain rule admits (loosened). Predictor 2's reference is
+    wrong: called with args that bind, it returns [2, 1], not [1, 1, 2, 2].
+    Its predictor named args that do not bind, so it never ran and abstained,
+    and the example is decided, refusal-eligible, on predictors 1 and 3's
+    references alone. Before, it was a question."""
+    wrong = "def ref(xs):\n    return list(xs)\n"
+    predicted = Outcome.of("value", "[1, 1, 2, 2]")
+    imul = {"id": "E-001", **IMUL}
+    sealed_wrong = run_references(
+        {"S-002": wrong}, [imul], {"E-001": predicted}, chosen={"E-001": ["[2, 1]", "2"]}
+    )["E-001"]
+    assert sealed_wrong["status"] == "could not call: too many positional arguments"
+    would_be = run_references(
+        {"S-002": wrong}, [imul], {"E-001": predicted}, chosen={"E-001": ["[2, 1]"]}
+    )["E-001"]
+    assert would_be["outcome"] == {"kind": "value", "text": "[2, 1]"}  # it would disagree
+    good = run_references({"S-002": REF}, [imul], {"E-001": predicted})["E-001"]
+    example = Example(
+        id="E-001",
+        units=("S-002",),
+        setup=tuple(IMUL["setup"]),
+        call=str(IMUL["call"]),
+        predictions=tuple(Prediction(predicted, "", f"h{i}") for i in range(3)),
+        references=tuple(Reference.from_dict(r) for r in (good, sealed_wrong, good)),
+        probes=tuple(Probe(f"{i}" * 64, "ran", predicted) for i in range(3)),
+        predictors=3,  # the exhibit as it was recorded, at k = 3
+    )
+    klass = classify(example, task_units(TASK))
+    assert (klass.route, klass.eligible) == ("executed-reference", True)
+    assert "2/3; 1 abstained: could not call: too many positional arguments" in klass.note
+
+
+def test_exhibit_a_reference_that_crashed_on_misread_args_no_longer_vetoes() -> None:
+    """What the crash rule admits (loosened): predictor 2 named the args in
+    the call's order, `["'A'", "-5"]`, for its own `def ref(delta, qty)`. They
+    bind, and the body raises TypeError (`-5 + 'A'`) that no `raise` in its
+    source names: sealed `crashed`, no evidence. The example is decided on
+    predictors 1 and 3, whose references raise ValueError. Before, the
+    TypeError read as a contrary answer and the example asked. A reference
+    that raises TypeError itself still vetoes."""
+    text = "# Stock\n\n- `take(sku, n)` raises `ValueError` when it would leave less than zero.\n"
+    units = task_units(text)
+    inp = {
+        "id": "E-001",
+        "units": ["S-001"],
+        "setup": ["s = Stock({'A': 5})"],
+        "call": "s.take('A', -6)",
+        "args": [],
+    }
+    body = "    if qty + delta < 0:\n        raise ValueError(delta)\n    return qty + delta\n"
+    good = "def ref(qty, delta):\n" + body
+    misread = "def ref(delta, qty):\n" + body
+    itself = "def ref(qty, delta):\n    raise TypeError(delta)\n"
+    expected = Outcome.of("raises", "ValueError")
+
+    def sealed_ref(source: str, args: list[str]) -> Reference:
+        got = run_references({"S-001": source}, [inp], {"E-001": expected}, chosen={"E-001": args})
+        return Reference.from_dict(got["E-001"])
+
+    ok = sealed_ref(good, ["5", "-6"])
+    crashed = sealed_ref(misread, ["'A'", "-6"])
+    contrary = sealed_ref(itself, ["5", "-6"])
+    assert (crashed.outcome, crashed.crashed) == (Outcome.of("raises", "TypeError"), True)
+    assert (contrary.outcome, contrary.crashed) == (Outcome.of("raises", "TypeError"), False)
+    assert (ok.outcome, ok.crashed) == (expected, False)
+
+    def klass(third: Reference) -> Any:
+        example = Example(
+            id="E-001",
+            units=("S-001",),
+            setup=tuple(inp["setup"]),
+            call=str(inp["call"]),
+            predictions=tuple(Prediction(expected, "", f"h{i}") for i in range(3)),
+            references=(ok, third, ok),
+            probes=(Probe("a" * 64, "ran", expected, source="user"),),
+            predictors=3,  # the exhibit as it was recorded, at k = 3
+        )
+        return classify(example, units)
+
+    admitted = klass(crashed)
+    assert (admitted.route, admitted.eligible) == ("executed-reference", True)
+    assert "2/3; 1 abstained: its reference crashed (raised TypeError)" in admitted.note
+    vetoed = klass(contrary)
+    assert (vetoed.route, vetoed.eligible) == ("decided-unverified", False)
 
 
 def test_a_reference_driver_that_dies_is_sealed_as_such() -> None:
@@ -421,5 +743,14 @@ def test_an_unparseable_prediction_decides_nothing(tmp_path: Path) -> None:
         )
 
     req = load(sealed(tmp_path, Scripted({"inputs": [IMUL]}, predict=bad)))
-    assert [p.outcome for p in req.examples[0].predictions] == [None, None, None]
-    assert [r.status for r in req.examples[0].references] == ["missing"] * 3
+    assert [p.outcome for p in req.examples[0].predictions] == [None] * K_PREDICTORS
+    assert [r.status for r in req.examples[0].references] == ["missing"] * K_PREDICTORS
+
+
+def test_p1_asks_k_predictors_on_seeds_no_other_call_shares() -> None:
+    """Five predictors, one seed each; no seed, nor any seed asked again,
+    collides with another pass's seed or another seed asked again."""
+    assert len(PREDICT_SEEDS) == K_PREDICTORS == 5
+    seeds = [*PREDICT_SEEDS, PROPOSE_SEED, task_passes.ALTERNATIVES_SEED]
+    every = [*seeds, *(s + RETRY_SEED_OFFSET for s in seeds)]
+    assert len(set(every)) == len(every)

@@ -44,12 +44,13 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Protocol
 
 from saddle.evidence import run_capture, tree_memory_limit
 from saddle.task_examples import (
+    ARGS_REFUSED,
     K_PREDICTORS,
     MAX_EXAMPLES,
     MAX_INPUTS_PER_UNIT,
@@ -57,12 +58,16 @@ from saddle.task_examples import (
     REFERENCE_CALL_TIMEOUT_S,
     REFERENCE_MODULES,
     REFERENCE_TOTAL_TIMEOUT_S,
+    REFERENCES_NEEDED,
     Example,
     Outcome,
+    args_problem,
     decode_value,
     encode_value,
     literal_text,
     parse_value,
+    raises_explicitly,
+    reference_def,
     reference_problem,
 )
 from saddle.task_prompts import ALTERNATIVES, PREDICT, PROPOSE, SNIPPET_RULES
@@ -74,11 +79,24 @@ PROPOSE_TEMPERATURE: Final = 0.6
 PREDICT_TEMPERATURE: Final = 0.8
 """Above zero: k samples at temperature 0.0 are one sample."""
 ALTERNATIVES_TEMPERATURE: Final = 0.6
-PREDICT_SEEDS: Final[tuple[int, ...]] = (11, 23, 37)
+PREDICT_SEEDS: Final[tuple[int, ...]] = (11, 23, 37, 53, 71)
+"""One distinct seed per predictor (`K_PREDICTORS`); none collides with
+another pass's seed or with any seed plus `RETRY_SEED_OFFSET`."""
 PROPOSE_SEED: Final = 5
 ALTERNATIVES_SEED: Final = 7
 PASS_MAX_TOKENS: Final = 16384
+PASS_REASONING_BUDGET: Final = 12288
+"""The thinking each pass call asks the server to close at, leaving
+`PASS_MAX_TOKENS - PASS_REASONING_BUDGET` (4096) for the answer. Prediction
+replies that finished on the served model used about 8k tokens of reasoning
+and 3k of answer at most; one that ran on to the cap twice spent the whole
+cap, both times, without an answer. Strata honours the field
+(`reasoning_budget_tokens`) and the model goes on to answer; vLLM ignores it,
+so there the cap alone still bounds the call."""
 PASS_EFFORT: Final = "low"
+RETRY_SEED_OFFSET: Final = 1000
+"""A reply holding no JSON object, whole or cut, is asked again once, at its seed plus this:
+the same seed would reproduce the same bytes."""
 
 HIDDEN: Final = "(docstring hidden: the task text refers to this name)"
 """What replaces the docstring of a baseline name the task text mentions (D-2)."""
@@ -100,6 +118,7 @@ class Completer(Protocol):
         temperature: float = ...,
         reasoning_effort: str = ...,
         seed: int | None = ...,
+        reasoning_budget_tokens: int | None = ...,
     ) -> str: ...
 
 
@@ -223,6 +242,14 @@ class Call:
     """The token cap the reply was cut at (`finish_reason=length`): the
     `max_tokens` the call was sent. None when it ended by itself, or failed
     some other way."""
+    reasoning: str = ""
+    """The reasoning that arrived before a failed call ended (a cut one: up
+    to the cap), sealed whole so a runaway can be read afterwards. `raw`
+    stays "": a failed call returned no reply."""
+    content: str = ""
+    """The content that arrived before a failed call ended."""
+    usage: Mapping[str, int] = field(default_factory=dict, hash=False)
+    """The usage the server reported for a failed call, as it sent it."""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -233,6 +260,9 @@ class Call:
             "raw": self.raw,
             **({"error": self.error} if self.error else {}),
             **({"cut_at": self.cut_at} if self.cut_at is not None else {}),
+            **({"reasoning": self.reasoning} if self.reasoning else {}),
+            **({"content": self.content} if self.content else {}),
+            **({"usage": dict(self.usage)} if self.usage else {}),
         }
 
 
@@ -244,12 +274,28 @@ def _call(client: Completer, name: str, prompt: str, seed: int, temperature: flo
             temperature=temperature,
             reasoning_effort=PASS_EFFORT,
             seed=seed,
+            reasoning_budget_tokens=PASS_REASONING_BUDGET,
         )
-    except Exception as exc:  # a failed call decides nothing; it is sealed as such
-        cut = isinstance(exc, VllmResponseError) and exc.finish_reason == "length"
+    except VllmResponseError as exc:  # what arrived is sealed with the failure
+        cut = PASS_MAX_TOKENS if exc.finish_reason == "length" else None
         error = f"{type(exc).__name__}: {exc}"
-        return Call(name, seed, temperature, "", error, PASS_MAX_TOKENS if cut else None)
+        return Call(name, seed, temperature, "", error, cut, exc.reasoning, exc.content, exc.usage)
+    except Exception as exc:  # a failed call decides nothing; it is sealed as such
+        return Call(name, seed, temperature, "", f"{type(exc).__name__}: {exc}")
     return Call(name, seed, temperature, raw)
+
+
+def _call_parsed(
+    client: Completer, name: str, prompt: str, seed: int, temperature: float
+) -> list[Call]:
+    """`_call`, asked once more on a fresh seed when its reply holds no JSON
+    object, whole or cut at the token cap; every call made, in order. The
+    last one is the pass's reply. A call that failed otherwise (the server)
+    is sealed as what it was, not asked again."""
+    first = _call(client, name, prompt, seed, temperature)
+    if (first.error and first.cut_at is None) or reply_json(first.raw) is not None:
+        return [first]
+    return [first, _call(client, name, prompt, seed + RETRY_SEED_OFFSET, temperature)]
 
 
 def cut_calls(record: Mapping[str, Any]) -> str:
@@ -274,6 +320,10 @@ class Proposed:
     not_executable: list[dict[str, str]]
     cut: list[str]
     unanswered: list[str]
+    raise_conditions: dict[str, list[str]] = field(default_factory=dict)
+    """Unit id -> the conditions for raising P-a listed for it (K2 R-1): what
+    the report sets beside the raising examples decided. A count only; it
+    decides nothing."""
 
 
 def proposed(reply: dict[str, Any] | None, units: Units) -> Proposed:
@@ -318,7 +368,12 @@ def proposed(reply: dict[str, Any] | None, units: Units) -> Proposed:
     marked = {m["unit"] for m in marks}
     covered = {u for i in inputs for u in i["units"]} | marked | set(cut)
     unanswered = [u.id for u in units.units if u.id not in covered]
-    return Proposed(inputs, marks, sorted(set(cut)), unanswered)
+    conditions: dict[str, list[str]] = {}
+    for raw in reply.get("raise_conditions", []) if reply else []:
+        if isinstance(raw, dict) and raw.get("unit") in known:
+            listed = [str(c) for c in raw.get("conditions", []) if isinstance(c, str)]
+            conditions.setdefault(str(raw["unit"]), []).extend(listed)
+    return Proposed(inputs, marks, sorted(set(cut)), unanswered, conditions)
 
 
 def _literal(text: str) -> bool:
@@ -333,7 +388,7 @@ def _literal(text: str) -> bool:
 
 
 REFERENCE_DRIVER: Final = r"""
-import json, signal, sys
+import inspect, json, signal, sys
 from decimal import Decimal
 from fractions import Fraction
 job_path, out_path = sys.argv[1], sys.argv[2]
@@ -385,7 +440,13 @@ def run(item):
             return {"status": f"raised {type(exc).__name__}"}
         return {"status": "ran", "accepts": yes is True and no is False}
     try:
-        value = timed(namespace["ref"], *args)
+        # A call that cannot bind the input's args never ran: its TypeError is
+        # about the signature, not the behaviour, so it is no outcome.
+        inspect.signature(namespace[item["name"]]).bind(*args)
+    except TypeError as exc:
+        return {"status": f"could not call: {exc}"}
+    try:
+        value = timed(namespace[item["name"]], *args)
     except _Hang:
         return {"status": "timeout"}
     except BaseException as exc:
@@ -425,24 +486,25 @@ def perturbed(outcome: Outcome) -> str | None:
     return None
 
 
-def _reference_form(source: str) -> str:
-    tree = ast.parse(source)
-    return next(n.name for n in tree.body if isinstance(n, ast.FunctionDef))
-
-
 def run_references(
     sources: Mapping[str, str],
     examples: Sequence[Mapping[str, Any]],
     predictions: Mapping[str, Outcome | None],
     *,
+    chosen: Mapping[str, list[str]] | None = None,
     runner: Runner = run_capture,
 ) -> dict[str, dict[str, Any]]:
     """One predictor's executed references: example id -> sealed `Reference` record.
 
     `sources` maps a unit id to that predictor's reference; an example uses
-    the first of its units that has one. Every call runs in one subprocess
+    the first of its units that has one. It is called with the args the
+    predictor `chosen` for it, which bind to its own `ref`, when every value
+    in them is written in the input (`args_problem`); those are sealed with
+    the result. Without them, the proposal's `args` are used. Every call runs in one subprocess
     in an empty directory (`python -I -S`: no repo, no site-packages),
     whitelisted first. What cannot run is recorded as why, never as a result.
+    A raise no `raise` in the reference's own source names is sealed
+    `crashed` (`task_examples.raises_explicitly`).
     """
     stdlib = frozenset(sys.stdlib_module_names)
     out: dict[str, dict[str, Any]] = {}
@@ -457,8 +519,21 @@ def run_references(
         if problem is not None:
             out[e["id"]] = {"status": f"refused: {problem}"}
             continue
-        form = _reference_form(source)
-        item = {"id": e["id"], "source": source, "form": form, "args": e["args"]}
+        form, name = reference_def(source)
+        own = (chosen or {}).get(e["id"])
+        if own is not None:
+            problem = args_problem(own, e["setup"], e["call"])
+            if problem is not None:
+                out[e["id"]] = {"status": f"{ARGS_REFUSED}{problem}"}
+                continue
+        item = {
+            "id": e["id"],
+            "source": source,
+            "form": form,
+            "name": name,
+            "args": e["args"] if own is None else own,
+            "chosen": own is not None,
+        }
         if form == "ok":
             other = perturbed(predicted) if predicted is not None else None
             if predicted is None or other is None:
@@ -483,7 +558,11 @@ def run_references(
             why = "timeout" if run.timed_out else f"crashed (exit {run.exit_code})"
             return out | {i["id"]: {"status": why} for i in items}
     for item in items:
-        out[item["id"]] = _sealed_reference(got.get(item["id"]), item["form"])
+        sealed = _sealed_reference(got.get(item["id"]), item["form"])
+        raised = sealed.get("outcome", {})
+        if raised.get("kind") == "raises" and not raises_explicitly(item["source"], raised["text"]):
+            sealed["crashed"] = True
+        out[item["id"]] = sealed | ({"args": item["args"]} if item["chosen"] else {})
     return out
 
 
@@ -521,6 +600,8 @@ class Predictor:
     call: Call
     predictions: dict[str, dict[str, Any]]
     references: dict[str, str]
+    args: dict[str, list[str]]
+    """Input id -> the args it named for its reference (`run_references`)."""
 
 
 def _missing(p: Predictor, listed: bool) -> str:
@@ -550,7 +631,12 @@ def predictor(call: Call) -> Predictor:
         for r in reply.get("references", [])
         if isinstance(r, dict) and isinstance(r.get("source"), str)
     }
-    return Predictor(call, predictions, references)
+    args = {
+        i: [str(a) for a in p["args"]]
+        for i, p in predictions.items()
+        if isinstance(p.get("args"), list) and all(isinstance(a, str) for a in p["args"])
+    }
+    return Predictor(call, predictions, references, args)
 
 
 # -- the whole extraction ---------------------------------------------------------
@@ -576,7 +662,7 @@ def extract(
     units = task_units(task_text)
     listing, hidden = baseline_listing(sources or {}, task_text)
     shown = {"task": task_text, "units": _units_text(units), "baseline": listing}
-    propose = _call(
+    *tried, propose = _call_parsed(
         client,
         "P-a",
         PROPOSE.format(
@@ -589,7 +675,7 @@ def extract(
         PROPOSE_TEMPERATURE,
     )
     plan = proposed(reply_json(propose.raw), units)
-    calls = [propose]
+    calls = [*tried, propose]
     predictors: list[Predictor] = []
     if plan.inputs:
         prompt = PREDICT.format(
@@ -600,12 +686,12 @@ def extract(
         with ThreadPoolExecutor(max_workers=K_PREDICTORS) as pool:
             done = list(
                 pool.map(
-                    lambda seed: _call(client, "P-b", prompt, seed, PREDICT_TEMPERATURE),
+                    lambda seed: _call_parsed(client, "P-b", prompt, seed, PREDICT_TEMPERATURE),
                     PREDICT_SEEDS,
                 )
             )
-        predictors = [predictor(c) for c in done]
-        calls += done
+        predictors = [predictor(c[-1]) for c in done]
+        calls += [c for made in done for c in made]
     examples = []
     for inp in plan.inputs:
         preds = []
@@ -629,32 +715,32 @@ def extract(
         predicted = {
             e["id"]: _outcome(p.predictions.get(e["id"], {}).get("outcome")) for e in examples
         }
-        return run_references(p.references, plan.inputs, predicted, runner=runner)
+        return run_references(p.references, plan.inputs, predicted, chosen=p.args, runner=runner)
 
     if predictors:
         with ThreadPoolExecutor(max_workers=K_PREDICTORS) as pool:
             for refs in pool.map(run_one, predictors):
                 for eid, ref in refs.items():
                     by_id[eid]["references"].append(ref)
-    decided = [e for e in examples if _agreed(e)]
+    decided = [(e, agreed) for e in examples if (agreed := _agreed(e)) is not None]
     if decided:
         text = "\n".join(
             json.dumps(
                 {
                     **{k: e[k] for k in ("id", "units", "setup", "call")},
-                    "outcome": e["predictions"][0]["outcome"],
+                    "outcome": agreed.to_dict(),
                 }
             )
-            for e in decided
+            for e, agreed in decided
         )
-        alt = _call(
+        *tried, alt = _call_parsed(
             client,
             "P-c",
             ALTERNATIVES.format(task=task_text, units=_units_text(units), decided=text),
             ALTERNATIVES_SEED,
             ALTERNATIVES_TEMPERATURE,
         )
-        calls.append(alt)
+        calls += [*tried, alt]
         for a in (reply_json(alt.raw) or {}).get("alternatives", []):
             _add_alternative(a, by_id, units)
     outcomes = run_probes(probes, listed, [Example.from_dict(e) for e in examples], runner=runner)
@@ -667,6 +753,8 @@ def extract(
             "not_executable": plan.not_executable,
             "cut": plan.cut,
             "unanswered": plan.unanswered,
+            "raise_conditions": plan.raise_conditions,
+            "predictors": K_PREDICTORS,
             "model": model,
             "calls": [c.to_dict() for c in calls],
             "hidden_docstrings": hidden,
@@ -675,14 +763,16 @@ def extract(
     )
 
 
-def _agreed(example: Mapping[str, Any]) -> bool:
+def _agreed(example: Mapping[str, Any]) -> Outcome | None:
+    """The outcome an example's written predictions agree on, when k were
+    recorded and at least `REFERENCES_NEEDED` written (route (b) may decide
+    on that many, `task_examples.classify`), so P-c is asked for its other
+    readings; None when they are split or too few came."""
     outs = [_outcome(p["outcome"]) for p in example["predictions"]]
-    first = outs[0] if outs else None
-    return (
-        len(outs) == K_PREDICTORS
-        and first is not None
-        and all(o is not None and o.same(first) for o in outs)
-    )
+    written = [o for o in outs if o is not None]
+    if len(outs) != K_PREDICTORS or len(written) < REFERENCES_NEEDED:
+        return None
+    return written[0] if all(o.same(written[0]) for o in written) else None
 
 
 def _add_alternative(raw: Any, by_id: Mapping[str, dict[str, Any]], units: Units) -> None:
@@ -692,7 +782,7 @@ def _add_alternative(raw: Any, by_id: Mapping[str, dict[str, Any]], units: Units
         return
     example = by_id[str(raw["input"])]
     outcome = _outcome(raw.get("outcome"))
-    decided = _outcome(example["predictions"][0]["outcome"])
+    decided = _agreed(example)
     words = str(raw.get("words", ""))
     texts = [u.text for u in units.units if u.id in example["units"]]
     if outcome is None or decided is None or outcome.same(decided):

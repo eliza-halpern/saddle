@@ -407,6 +407,19 @@ def test_complete_sends_a_seed_only_when_given_one() -> None:
     assert "seed" not in json.loads(seen[1].content)
 
 
+def test_complete_sends_a_reasoning_budget_only_when_given_one() -> None:
+    """Known-good: a budget given (0 included: "no thinking" is a budget) is
+    sent as given. Known-bad: a call without one carrying the field, which
+    would change every other caller's payload."""
+    client, seen = _json_client(_ok_body(content="a plan"))
+    client.complete("Do x.", reasoning_budget_tokens=12288)
+    client.complete("Do x.", reasoning_budget_tokens=0)
+    client.complete("Do x.")
+    sent = [json.loads(r.content) for r in seen]
+    assert [b.get("reasoning_budget_tokens") for b in sent[:2]] == [12288, 0]
+    assert "reasoning_budget_tokens" not in sent[2]
+
+
 def test_complete_rejects_bad_input() -> None:
     client, _ = _json_client(_ok_body(content="a plan"))
     with pytest.raises(ValueError, match="must not be empty") as prompt_info:

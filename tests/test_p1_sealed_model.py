@@ -66,7 +66,7 @@ def test_saddle_auto_seals_the_model_its_passes_asked(repo: Path) -> None:
     )
     result = run_auto(options, server.client())
     passes = [model for stream, model in server.models if not stream]
-    assert passes == [SERVED]  # P-a; its prose names no input, so no P-b
+    assert passes == [SERVED, SERVED]  # P-a, asked again; its prose names no input, so no P-b
     assert sealed_model(result.journal.parent / P1_FILE) == SERVED
 
 
@@ -89,7 +89,7 @@ def test_a_chat_task_run_seals_the_model_its_passes_asked(
         extract_requirements=True,
     )
     assert run.journal is not None
-    assert [model for stream, model in server.models if not stream] == [SERVED]
+    assert [model for stream, model in server.models if not stream] == [SERVED, SERVED]
     assert sealed_model(run.journal.parent / P1_FILE) == SERVED
 
 
