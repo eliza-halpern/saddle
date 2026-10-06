@@ -298,7 +298,25 @@ def test_a_search_stops_at_its_cap_and_says_there_are_more(tmp_path: Path) -> No
 def test_a_search_with_no_matches_says_so_rather_than_returning_nothing(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / "a.txt").write_text("something else\n")
     assert run("search", tmp_path, query="zzz-absent") == "no matches for 'zzz-absent'"
+
+
+def test_a_glob_ending_in_double_star_searches_the_files_under_it(tmp_path: Path) -> None:
+    (tmp_path / "web" / "static").mkdir(parents=True)
+    (tmp_path / "web" / "static" / "app.js").write_text("const status = 1;\n")
+    out = run("search", tmp_path, query="status", glob="web/**")
+    assert out == "web/static/app.js:1: const status = 1;"
+
+
+def test_a_glob_that_matches_no_files_is_an_error_not_no_matches(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("status\n")
+    out = run("search", tmp_path, query="status", glob="nowhere/*.py")
+    assert out == (
+        "error: glob 'nowhere/*.py' matched no files, so nothing was searched. "
+        "Name files, as in src/**/*.py or src/**/*."
+    )
+    assert run("search", tmp_path, query="absent", glob="*.py") == "no matches for 'absent'"
 
 
 def test_a_binary_file_is_skipped_by_search_rather_than_ending_it(

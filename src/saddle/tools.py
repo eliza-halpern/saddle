@@ -1701,11 +1701,18 @@ def _search(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     pattern = str(args.get("glob") or "**/*")
     if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
         return f"error: glob {pattern!r} must stay inside the working directory"
+    asked = pattern
+    if Path(pattern).parts[-1:] == ("**",):
+        # A trailing ** matches folders only: `web/**` searched no file at all and
+        # read "no matches", and the model concluded the tool cannot recurse.
+        pattern = f"{pattern}/*"
     root = ctx.workdir.resolve()
     hits: list[str] = []
+    files = 0
     for candidate in root.glob(pattern):
         if not candidate.is_file() or len(hits) >= MAX_MATCHES:
             continue
+        files += 1
         try:  # a symlink out of the tree is refused here as read_file refuses it
             resolve_within(root, candidate)
         except OutsideRootError:
@@ -1719,6 +1726,11 @@ def _search(ctx: ToolContext, args: Mapping[str, Any]) -> str:
                 hits.append(f"{candidate.relative_to(root)}:{number}: {line.strip()[:160]}")
                 if len(hits) >= MAX_MATCHES:
                     break
+    if not files:
+        return (
+            f"error: glob {asked!r} matched no files, so nothing was searched. "
+            "Name files, as in src/**/*.py or src/**/*."
+        )
     if not hits:
         return f"no matches for {query!r}"
     more = "\n[... more matches not shown ...]" if len(hits) >= MAX_MATCHES else ""
