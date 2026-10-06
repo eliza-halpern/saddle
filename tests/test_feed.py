@@ -273,7 +273,9 @@ def test_an_unknown_arm_is_refused_before_anything_runs(repo: Path) -> None:
     assert not (repo / ".saddle").exists()
 
 
-def test_the_cli_flags_select_the_arm(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_cli_flags_select_the_arm(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, landed: threading.Event
+) -> None:
     arms = []
     real = run_auto  # the object cli.run_auto names (saddle.auto's)
 
@@ -290,7 +292,13 @@ def test_the_cli_flags_select_the_arm(repo: Path, monkeypatch: pytest.MonkeyPatc
     for flags in ([], ["--no-feedback"], ["--no-audit"]):
         args = cli.build_parser().parse_args(["auto", "t", "--repo", str(repo), *flags])
         out = io.StringIO()
-        client = Reactive([[EDIT_COMMENT], [CHECK], [FINISH]])
+        client = Reactive([[EDIT_COMMENT], [CHECK], [call("read_file", "r2", path="calc.py")]])
+        if flags != ["--no-audit"]:
+            # `collect` never waits for a pending audit, so on a slow runner the
+            # checkpoint could land after CHECK's result: round 3 waits for it,
+            # and the read after it is the tool result that carries it.
+            landed.clear()
+            client.hooks[3] = lambda: landed.wait(10) or pytest.fail("no checkpoint landed")
         cli.run_auto_command(args, cast(VllmClient, client), stdout=out)
         text = out.getvalue()
         arm = re.search(r"\(arm ([^)]+)\)", text)
