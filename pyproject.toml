@@ -31,6 +31,9 @@ dependencies = [
 # MCP servers for the Edit lane and the web reader (`saddle.mcpsdk`). Optional:
 # without it saddle imports, runs and reports MCP as unavailable. Pinned.
 mcp = ["mcp==2.2.0"]
+# SQL checks for `saddle sql-check` (sqlglot parses and resolves against a schema
+# snapshot, sqlfluff lints in the dialect). Optional, pinned.
+sql = ["sqlglot==30.21.0", "sqlfluff==4.4.0"]
 
 [dependency-groups]
 dev = [
@@ -43,6 +46,8 @@ dev = [
     "pytest-cov>=6.0",
     "pytest-xdist>=3.8",
     "pyyaml>=6.0.3",
+    "sqlfluff==4.4.0",
+    "sqlglot==30.21.0",
     "shellcheck-py>=0.11.0.1",
     "taplo>=0.9.3",
 ]
