@@ -994,7 +994,10 @@ def js_coverage_finding(
         detail = check.detail
         page_gaps = [f for f in chrome if f in judged and 0 in (hits[f].get(n) for n in changed[f])]
         if page_gaps and scope.chrome_helper:
-            detail += f" (page code runs in a Chrome-driven test: see {scope.chrome_helper})"
+            detail += (
+                f" (page code runs in a Chrome-driven test: see {scope.chrome_helper}; a test"
+                f" counts only once it is listed under `chrome_tests` in {COVERAGE_SCOPE})"
+            )
         if unmeasured:
             detail += f"; also {NOT_LINE_MEASURED}: {named}"
         return Finding(JS_COVERAGE_GATE, 2, "fail", REASONS["coverage"], detail, (cite,)), sidecar

@@ -74,17 +74,54 @@ def _expand(worktree: Path, rev: str, path: str, depth: int, seen: tuple[str, ..
     return "\n".join(lines)
 
 
+def _capped(text: str, name: str, where: str) -> str:
+    tokens = len(text) // CHARS_PER_TOKEN
+    if tokens <= MAX_TOKENS:
+        return text
+    return (
+        text[: MAX_TOKENS * CHARS_PER_TOKEN].rstrip()
+        + f"\n\n[{name} cut here: {MAX_TOKENS:,} of about {tokens:,} tokens"
+        f" kept. {where}]"
+    )
+
+
 def project_instructions(worktree: Path, rev: str = "HEAD") -> str:
     """The system-prompt section for `worktree`'s AGENTS.md at `rev`, imports
     expanded and cut to `MAX_TOKENS`; "" when there is no AGENTS.md."""
     if _show(worktree, rev, AGENTS_FILE) is None:
         return ""
     text = _expand(worktree, rev, AGENTS_FILE, 1, (AGENTS_FILE,)).strip()
-    tokens = len(text) // CHARS_PER_TOKEN
-    if tokens > MAX_TOKENS:
-        text = (
-            text[: MAX_TOKENS * CHARS_PER_TOKEN].rstrip()
-            + f"\n\n[{AGENTS_FILE} cut here: {MAX_TOKENS:,} of about {tokens:,} tokens"
-            f" kept. The rest is in the file; read it if you need it.]"
-        )
-    return HEADING.format(name=AGENTS_FILE) + text
+    where = "The rest is in the file; read it if you need it."
+    return HEADING.format(name=AGENTS_FILE) + _capped(text, AGENTS_FILE, where)
+
+
+LOCAL_FILE: Final = ".saddle/instructions.md"
+"""The person's own notes for a repository, kept in their checkout and never
+committed (saddle's `.saddle/.gitignore` holds `*`): what is theirs rather than
+the project's, such as how they run saddle on it, which every contributor
+reading AGENTS.md need not see. Read once at the run's start from the
+checkout, which the run's sandbox cannot see, so a run cannot rewrite them."""
+
+LOCAL_HEADING: Final = (
+    "\n\nThe person's own notes for this repository, from {name} in their "
+    "checkout: not part of the repository, so not in your worktree. Follow them "
+    "where they bear on your task. Where one conflicts with the task or with the "
+    "rules above, the task and those rules come first.\n\n"
+)
+
+
+def local_instructions(checkout: Path) -> str:
+    """The system-prompt section for `checkout`'s `LOCAL_FILE`, cut to
+    `MAX_TOKENS`; "" when there is none or it is empty. A file that exists but
+    cannot be read says so, never reads as no notes."""
+    path = checkout / LOCAL_FILE
+    heading = LOCAL_HEADING.format(name=LOCAL_FILE)
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeDecodeError) as error:
+        return heading + f"[{LOCAL_FILE} exists but could not be read: {error}]"
+    if not text:
+        return ""
+    return heading + _capped(text, LOCAL_FILE, "Ask the person if you need the rest.")

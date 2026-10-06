@@ -444,3 +444,56 @@ def test_the_finish_audit_of_a_run_finds_the_checkouts_packages(tmp_path: Path) 
     edit = call("write_file", "w1", path="notes.txt", content="node tools reach the audit\n")
     result = auto(repo, Scripted([[edit], finish()]), arm="E+A+F")
     assert result.outcome == "finished", result
+
+
+def _with_pyproject(root: Path, saddle_table: str) -> Path:
+    (root / "pyproject.toml").write_text(f"[tool.saddle]\n{saddle_table}\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "pyproject")
+    return root
+
+
+def test_the_projects_own_audit_checks_are_named_before_they_can_refuse(tmp_path: Path) -> None:
+    """Red before: the static check and gate stages reached the model only as
+    refusals, one finish spent per stage it had not been told of."""
+    root = _with_pyproject(
+        _repo(tmp_path / "repo", src=False),
+        'static-check = ["mypy", "--strict", "n.py"]\ngate-checks = [["eslint", "."]]',
+    )
+    client = Scripted([finish()])
+    auto(root, client)
+    system = _system(client)
+    assert "the finish audit runs the project's own checks" in system
+    assert "`mypy --strict n.py`; `eslint .`" in system
+    # Known good: a project that configures none is told of none.
+    quiet = Scripted([finish()])
+    auto(_repo(tmp_path / "plain", src=False), quiet)
+    assert "the project's own checks" not in _system(quiet)
+
+
+def test_audit_settings_that_cannot_be_read_are_said_not_left_out(tmp_path: Path) -> None:
+    from saddle.auto import audit_stages
+
+    root = _with_pyproject(_repo(tmp_path / "repo", src=False), 'static-check = "mypy"')
+    said = audit_stages(root)
+    assert said.startswith("The project's audit settings could not be read")
+    assert "static-check = 'mypy'" in said
+
+
+def test_the_feed_prompt_states_the_flip_form_and_the_runs_own_refusal_cap(
+    tmp_path: Path,
+) -> None:
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client, arm="E+A+F", finish_refusal_cap=5)
+    system = _system(client)
+    assert "`flip: <exact test name> -- <evidence>`" in system
+    assert "If finish is refused 5 times in a row with the same findings" in system
+    off = Scripted([finish()])
+    auto(_repo(tmp_path / "off", src=False), off, arm="E")
+    assert "refused 5 times" not in _system(off)
+
+
+def test_the_prompt_says_how_to_undo_an_edit_git_cannot_restore(tmp_path: Path) -> None:
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)
+    assert "copy the file to /tmp first and copy it back afterwards" in _system(client)

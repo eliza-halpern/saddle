@@ -9,7 +9,16 @@ from test_auto import Scripted, auto, finish, git
 from test_prompt_calibration import Counting, _talks
 from test_run_env import _repo, _system
 
-from saddle.agents_md import AGENTS_FILE, HEADING, MAX_DEPTH, MAX_TOKENS, project_instructions
+from saddle.agents_md import (
+    AGENTS_FILE,
+    HEADING,
+    LOCAL_FILE,
+    LOCAL_HEADING,
+    MAX_DEPTH,
+    MAX_TOKENS,
+    local_instructions,
+    project_instructions,
+)
 from saddle.auto import AutoOptions, run_auto
 from saddle.journal import COMPACTION_SPAN, read_spans
 from saddle.memory import CHARS_PER_TOKEN
@@ -121,3 +130,55 @@ def test_the_instructions_survive_compaction(tmp_path: Path) -> None:
     assert [s for s in read_spans(result.journal) if s.name == COMPACTION_SPAN]  # harness
     assert client.last is not None
     assert RULE in client.last[0]["content"]
+
+
+NOTE = "NOTE-7b1f: put the mutant record in the finish summary"
+
+
+def _start_detail(result: object) -> str:
+    spans = read_spans(result.journal)  # type: ignore[attr-defined]
+    return next(s.detail for s in spans if s.detail.startswith("arm "))
+
+
+def test_the_persons_own_notes_reach_the_prompt_after_agents_md_and_are_named(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path / "repo", src=False)
+    _commit(root, {AGENTS_FILE: RULE})
+    (root / ".saddle").mkdir()
+    (root / LOCAL_FILE).write_text(f"{NOTE}\n")
+    client = Scripted([finish()])
+    result = auto(root, client)
+    system = _system(client)
+    assert system.endswith(LOCAL_HEADING.format(name=LOCAL_FILE) + NOTE)
+    assert system.index(RULE) < system.index(NOTE)  # the project's rules, then the person's
+    assert f"notes from {LOCAL_FILE}" in _start_detail(result)
+    # Known good: no notes file, nothing said and nothing named.
+    bare = _repo(tmp_path / "bare", src=False)
+    quiet = Scripted([finish()])
+    plain = auto(bare, quiet)
+    assert "own notes" not in _system(quiet)
+    assert "notes from" not in _start_detail(plain)
+
+
+def test_empty_notes_add_nothing_and_unreadable_ones_say_so(tmp_path: Path) -> None:
+    (tmp_path / ".saddle").mkdir()
+    assert local_instructions(tmp_path) == ""
+    (tmp_path / LOCAL_FILE).write_text("  \n")
+    assert local_instructions(tmp_path) == ""
+    (tmp_path / LOCAL_FILE).unlink()
+    (tmp_path / LOCAL_FILE).mkdir()  # there, but not a file that can be read
+    said = local_instructions(tmp_path)
+    assert f"[{LOCAL_FILE} exists but could not be read:" in said
+    (tmp_path / LOCAL_FILE).rmdir()
+    (tmp_path / LOCAL_FILE).write_bytes(b"\xff\xfe not utf-8")
+    assert "could not be read" in local_instructions(tmp_path)
+
+
+def test_long_notes_are_cut_where_they_say_so(tmp_path: Path) -> None:
+    (tmp_path / ".saddle").mkdir()
+    (tmp_path / LOCAL_FILE).write_text(NOTE + "\n" + "y" * ((MAX_TOKENS + 10) * CHARS_PER_TOKEN))
+    said = local_instructions(tmp_path)
+    assert NOTE in said
+    assert f"{LOCAL_FILE} cut here: {MAX_TOKENS:,} of about" in said
+    assert "Ask the person if you need the rest." in said

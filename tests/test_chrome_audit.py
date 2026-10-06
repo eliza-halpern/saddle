@@ -189,7 +189,9 @@ def test_a_page_script_gap_names_the_projects_chrome_test_helper(
     assert (got.verdict, got.detail) == (
         "fail",
         "no test runs static/p.js:2"
-        " (page code runs in a Chrome-driven test: see tests/chrome_page.py)",
+        " (page code runs in a Chrome-driven test: see tests/chrome_page.py; a test"
+        " counts only once it is listed under `chrome_tests` in"
+        " tests/fixtures/js_coverage_scope.json)",
     )
     # A gap only in node-measured code is closed by a node test: no Chrome hint.
     root = with_helper(small(tmp_path / "b", SILENT), ["static/a.js"])
@@ -375,5 +377,7 @@ def test_a_changed_runs_line_in_an_unreached_branch_fails_naming_it(tmp_path: Pa
     assert (got[0].verdict, got[0].detail) == (
         "fail",
         f"no test runs {RUNS_JS}:64"
-        " (page code runs in a Chrome-driven test: see tests/chrome_page.py)",
+        " (page code runs in a Chrome-driven test: see tests/chrome_page.py; a test"
+        " counts only once it is listed under `chrome_tests` in"
+        " tests/fixtures/js_coverage_scope.json)",
     )

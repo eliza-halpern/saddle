@@ -38,7 +38,7 @@ from time import monotonic
 from typing import Any, Final
 
 from saddle import prompt_constants, sandbox
-from saddle.agents_md import project_instructions
+from saddle.agents_md import LOCAL_FILE, local_instructions, project_instructions
 from saddle.anchor import COAUTHOR_TRAILER, anchor_trailers, outcome_hash
 from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
@@ -56,10 +56,12 @@ from saddle.events import Event, Question
 from saddle.evidence import (
     SuiteLimitError,
     format_overrides,
+    gate_checks,
     ruff_argv,
     run_capture,
     sandbox_expose,
     src_layout_env,
+    static_check,
     suite_workers,
 )
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
@@ -168,10 +170,12 @@ ENVIRONMENT_PROMPT: Final = (
     "commands that write (commit, checkout, stash, reset) fail. saddle commits "
     "the worktree when the run ends, with your finish summary in the commit "
     "message. /tmp is private to this run and lasts for all of it, so keep "
-    "scratch files there. {python} {src}The audit runs "
+    "scratch files there. To try an edit you mean to undo (a mutation, say), copy "
+    "the file to /tmp first and copy it back afterwards: git cannot restore it "
+    "here, and the audit judges the worktree as you leave it. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
-    "first. {budget}{workers}{coverage}{node}{detected}{js_mutation}{feed}"
+    "first. {stages}{budget}{workers}{coverage}{node}{detected}{js_mutation}{feed}"
 )
 
 DETECTED_TOOLS: Final = ("node", "npm", "google-chrome", "chromium", "uv")
@@ -228,7 +232,10 @@ FEED_PROMPT: Final = (
     "asked to change, keep the rewrite: each rewritten test must fail on the "
     "original code (one that passes there asserts nothing new and is refused), "
     "and the audit asks a person to approve it when the run ends, so name each "
-    "such test and why in your finish summary."
+    "such test in your finish summary on its own line as `flip: <exact test name> "
+    "-- <evidence>`. If finish is refused {cap} times in a row with the same "
+    "findings, the run stops unresolved, so change something between attempts, or "
+    "call blocked."
 )
 """Said only when the run delivers audits to the model (arm E+A+F). A watched
 dogfood run met its first checkpoint note inside its own script's output and
@@ -252,6 +259,7 @@ def environment_prompt(
     node_tools: bool = False,
     js_tests: Sequence[str] | None = None,
     exposed: Sequence[str] = (),
+    refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP,
 ) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
@@ -301,6 +309,7 @@ def environment_prompt(
         python=python,
         src=src,
         test_command=AUDIT_TEST_COMMAND,
+        stages=audit_stages(worktree),
         budget=budget_sentence(time_budget_s, token_budget),
         coverage=coverage,
         workers=workers,
@@ -311,7 +320,29 @@ def environment_prompt(
             if js_tests is not None
             else ""
         ),
-        feed=FEED_PROMPT if feed else "",
+        feed=FEED_PROMPT.format(cap=refusal_cap) if feed else "",
+    )
+
+
+def audit_stages(worktree: Path) -> str:
+    """The project's own audit commands (`[tool.saddle]` `static-check` and
+    `gate-checks`, read as the audit reads them), said up front: each can refuse
+    finish, and a run that learned of them only from a refusal spent a finish
+    on each. Settings the audit cannot read are said too, never left out."""
+    try:
+        commands = [
+            c for c in (static_check(worktree, "HEAD"), *gate_checks(worktree, "HEAD")) if c
+        ]
+    except SuiteLimitError as error:
+        return (
+            f"The project's audit settings could not be read, so the audit will refuse: {error}. "
+        )
+    if not commands:
+        return ""
+    shown = "; ".join(f"`{' '.join(command)}`" for command in commands)
+    return (
+        "Besides the tests, the finish audit runs the project's own checks, each of "
+        f"which can refuse finish: {shown}. Run the ones your change touches first. "
     )
 
 
@@ -882,6 +913,7 @@ def run_auto(
         _git(worktree, "apply", str(options.resume_patch.resolve()))
     root = worktree.parent.parent.parent
     journal = ledger_path(root, run_id)
+    notes = local_instructions(repo_root(repo))
     start = build_span(
         node_id="chat#1",
         argv=["auto:start", options.task],
@@ -900,6 +932,7 @@ def run_auto(
             for name in ("images", "ocr", "imagediff", "embeddings")
         )
         + ("; check tool offered" if options.check_tool else "")
+        + (f"; notes from {LOCAL_FILE}" if notes else "")
         + (
             "; "
             + f"installs from {options.wheels.path} ({options.wheels.source})".replace(";", "%3B")
@@ -1041,6 +1074,7 @@ def run_auto(
             options.time_budget_s,
             options.token_budget,
             feed=options.arm == "E+A+F",
+            refusal_cap=options.finish_refusal_cap,
             node_tools=bool(mounted),
             exposed=named,
             js_tests=(
@@ -1053,7 +1087,8 @@ def run_auto(
         + (PREMISE_PROMPT if options.premise_check else "")
         + (STALL_PROMPT if options.stall_check else "")
         + provider_prompt()
-        + project_instructions(worktree, "HEAD"),
+        + project_instructions(worktree, "HEAD")
+        + notes,
         context_tokens=options.context_tokens or server_window(client),
         tools=[
             *TOOLS,
