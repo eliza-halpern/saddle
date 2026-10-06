@@ -583,6 +583,25 @@ def user_site(interpreter: Path) -> Path | None:
     return site if site.is_dir() else None
 
 
+def reachable(names: Sequence[str], env: Mapping[str, str]) -> list[str]:
+    """Which of `names` a confined command with `env` can run by bare name: found
+    on its PATH, at a spelling and a file that are under `SYSTEM_DIRS` or shown
+    by `default_expose` (so `also_exposing` counts). A host-side `which` alone
+    said `uv` for a run whose commands could not start it: `~/.local/bin` is
+    hidden."""
+    shown = [dest for _, dest in default_expose(env)]
+
+    def visible(path: Path) -> bool:
+        return _is_system(path) or any(d == path or d in path.parents for d in shown)
+
+    found = []
+    for name in names:
+        hit = shutil.which(name, path=env.get("PATH", ""))
+        if hit is not None and visible(Path(hit).absolute()) and visible(Path(hit).resolve()):
+            found.append(name)
+    return found
+
+
 def _is_system(path: Path) -> bool:
     """Already visible: under one of `SYSTEM_DIRS`."""
     return any(path == Path(d) or Path(d) in path.parents for d in SYSTEM_DIRS)

@@ -71,6 +71,7 @@ from saddle.journal import (
     started_before,
     utc_now,
 )
+from saddle.jsevidence import js_test_files, stryker_entry
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
@@ -166,8 +167,24 @@ ENVIRONMENT_PROMPT: Final = (
     "scratch files there. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
-    "first. {budget}{workers}{coverage}{node}{feed}"
+    "first. {budget}{workers}{coverage}{node}{detected}{js_mutation}{feed}"
 )
+
+DETECTED_TOOLS: Final = ("node", "npm", "google-chrome", "chromium", "uv")
+"""Tools a task may lean on that the box may or may not have, looked up on the
+PATH the model's commands get, so the prompt says what is there rather than
+leaving the model to find out. A watched run spent its first hours hand-rolling
+page scripts before it learned a browser was on the box."""
+
+JS_MUTATION_PROMPT: Final = (
+    " The audit measures JavaScript changes by mutation with StrykerJS, which runs "
+    "`node --test` over the project's node test files ({files}) and nothing else: "
+    "tests that drive a browser from pytest do not count toward it, so a change to "
+    "a page script needs a node test that exercises it."
+)
+"""Said when the audit's JS mutation check applies (`stryker_entry`, found as the
+auditor finds it). A run's browser-driven tests killed 0 of 13 mutants, all
+untested, and it learned why only by reading `jsevidence` after the refusal."""
 
 NODE_TOOLS_PROMPT: Final = (
     " The project's installed JavaScript packages are in `node_modules`, read-only. "
@@ -229,6 +246,8 @@ def environment_prompt(
     token_budget: int,
     feed: bool = False,
     node_tools: bool = False,
+    js_tests: Sequence[str] | None = None,
+    exposed: Sequence[str] = (),
 ) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
@@ -282,8 +301,27 @@ def environment_prompt(
         coverage=coverage,
         workers=workers,
         node=NODE_TOOLS_PROMPT if node_tools else "",
+        detected=detected_tools(env, exposed),
+        js_mutation=(
+            JS_MUTATION_PROMPT.format(files=", ".join(f"`{f}`" for f in js_tests) or "none yet")
+            if js_tests is not None
+            else ""
+        ),
         feed=FEED_PROMPT if feed else "",
     )
+
+
+def detected_tools(env: dict[str, str], exposed: Sequence[str] = ()) -> str:
+    """Which of `DETECTED_TOOLS` the model's commands can run, and which not:
+    `sandbox.reachable` under the run's own exposure (`exposed`)."""
+    with sandbox.also_exposing(exposed):
+        found = sandbox.reachable(DETECTED_TOOLS, sandbox.command_env(env))
+    missing = [name for name in DETECTED_TOOLS if name not in found]
+    said = " On your PATH: " + (", ".join(f"`{n}`" for n in found) if found else "none of")
+    said += "." if found else " " + ", ".join(f"`{n}`" for n in missing) + "."
+    if found and missing:
+        said += " Not on it: " + ", ".join(f"`{n}`" for n in missing) + "."
+    return said
 
 
 def budget_sentence(time_budget_s: float, token_budget: int) -> str:
@@ -968,6 +1006,16 @@ def run_auto(
     )
     run_env = {**COMMAND_ENV, **sandbox.project_command_env(project), **src_layout_env(worktree)}
     mounted = node_modules_mount(repo_root(repo), worktree)
+    # The commands the project names for its gates' sandbox (`[tool.saddle]
+    # sandbox-expose`, read at the run's start) are shown to the model's too: a
+    # watched run's commands had no `node`, so its node tests failed and the
+    # project's node_modules/.bin tools (`#!/usr/bin/env node`) could not start.
+    # The prompt's detected tools are read under the same exposure.
+    try:
+        named = sandbox_expose(worktree, "HEAD")
+    except (SuiteLimitError, tomllib.TOMLDecodeError):
+        # A setting the audit cannot read either: it names the file when it runs.
+        named = ()
     turn_options = TurnOptions(
         workdir=worktree,
         journal=journal,
@@ -982,6 +1030,12 @@ def run_auto(
             options.token_budget,
             feed=options.arm == "E+A+F",
             node_tools=bool(mounted),
+            exposed=named,
+            js_tests=(
+                js_test_files(worktree)
+                if stryker_entry(worktree, repo_root(repo)) is not None
+                else None
+            ),
         )
         + (CHECK_PROMPT if options.check_tool else "")
         + (PREMISE_PROMPT if options.premise_check else "")
@@ -1009,15 +1063,6 @@ def run_auto(
     if options.resume_tmp is not None:
         # symlinks kept as links: pytest leaves dangling `pytest-current` ones
         shutil.copytree(options.resume_tmp, run_tmp, dirs_exist_ok=True, symlinks=True)
-    # The commands the project names for its gates' sandbox (`[tool.saddle]
-    # sandbox-expose`, read at the run's start) are shown to the model's too: a
-    # watched run's commands had no `node`, so its node tests failed and the
-    # project's node_modules/.bin tools (`#!/usr/bin/env node`) could not start.
-    try:
-        named = sandbox_expose(worktree, "HEAD")
-    except (SuiteLimitError, tomllib.TOMLDecodeError):
-        # A setting the audit cannot read either: it names the file when it runs.
-        named = ()
     with sandbox.also_exposing(named):
         command_sandbox = Sandbox.for_workdir(
             worktree,
