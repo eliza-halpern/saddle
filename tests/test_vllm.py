@@ -491,6 +491,27 @@ def test_max_model_len_reads_the_served_models_context_length() -> None:
     assert absent.max_model_len() is None
 
 
+def test_max_model_len_reads_stratas_meta_n_ctx() -> None:
+    """Known-good: Strata's /models entry has no `max_model_len` but carries
+    `meta.n_ctx`; the client returns it. Known-bad: a non-integer `n_ctx`, a
+    `meta` that is not an object, or another model's `n_ctx` gives None."""
+    strata = {
+        "data": [
+            {"id": "other", "meta": {"n_ctx": 4096}},
+            {"id": DEFAULT_MODEL, "meta": {"n_ctx": 131072}, "status": {"value": "loaded"}},
+        ],
+        "object": "list",
+    }
+    client, _ = _json_client(strata)
+    assert client.max_model_len() == 131072
+    odd, _ = _json_client({"data": [{"id": DEFAULT_MODEL, "meta": {"n_ctx": "131072"}}]})
+    assert odd.max_model_len() is None
+    flat, _ = _json_client({"data": [{"id": DEFAULT_MODEL, "meta": 131072}]})
+    assert flat.max_model_len() is None
+    absent, _ = _json_client({"data": [{"id": "other", "meta": {"n_ctx": 4096}}]})
+    assert absent.max_model_len() is None
+
+
 def test_list_models_auth_and_server_errors() -> None:
     for status in (401, 403):
         client, _ = _client_for(httpx.Response(status, json={"error": "nope"}))

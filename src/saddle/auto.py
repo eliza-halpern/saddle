@@ -81,7 +81,7 @@ from saddle.tools import (
     provider_prompt,
     provider_schemas,
 )
-from saddle.vllm import VllmClient
+from saddle.vllm import VllmClient, VllmError
 
 DEFAULT_TIME_BUDGET_S: Final = 0
 """No time limit (engine.NO_LIMIT). The wall-clock cap existed to break the
@@ -428,7 +428,10 @@ class AutoOptions:
     """`TASK_TEMPERATURE`: the model's own recommended sampling. A measurement
     that wants greedy decoding pins `--temperature 0.0` explicitly."""
     reasoning_effort: str = "medium"
-    context_tokens: int = 175_000
+    context_tokens: int | None = None
+    """The model's context window in tokens. None asks the server
+    (`server_window`): a fixed 175,000 asked Strata's 131,072 window for a
+    168,034-token reply on the first round, which it refuses outright."""
     run_id: str = ""
     clock: Callable[[], float] = monotonic
     arm: Arm = "E+A+F"
@@ -714,6 +717,20 @@ def _requirements(
     return pool.submit(extract), pool
 
 
+DEFAULT_CONTEXT_TOKENS: Final = 175_000
+"""The window assumed when the server reports none."""
+
+
+def server_window(client: VllmClient) -> int:
+    """The context window the server reports, else `DEFAULT_CONTEXT_TOKENS`."""
+    lookup = getattr(client, "max_model_len", None)
+    try:
+        reported = lookup() if lookup is not None else None
+    except VllmError:
+        reported = None
+    return reported or DEFAULT_CONTEXT_TOKENS
+
+
 def run_auto(
     options: AutoOptions,
     client: VllmClient,
@@ -941,7 +958,7 @@ def run_auto(
         + (PREMISE_PROMPT if options.premise_check else "")
         + (STALL_PROMPT if options.stall_check else "")
         + provider_prompt(),
-        context_tokens=options.context_tokens,
+        context_tokens=options.context_tokens or server_window(client),
         tools=[
             *TOOLS,
             FINISH_SCHEMA,

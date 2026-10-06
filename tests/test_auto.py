@@ -429,6 +429,37 @@ def test_token_budget_exhausted_ends_stopped_not_finished(repo: Path) -> None:
     assert client.asked[-1]["max_tokens"] <= 300
 
 
+class Windowed(Scripted):
+    """A model whose server reports a context window (Strata: 131,072)."""
+
+    def __init__(self, rounds: list[list[Any] | BaseException], window: int | None) -> None:
+        super().__init__(rounds)
+        self.window = window
+
+    def max_model_len(self) -> int | None:
+        if self.window is None:
+            msg = "request failed: refused"
+            raise VllmRequestError(msg)
+        return self.window
+
+
+def test_an_uncapped_run_asks_no_more_than_the_servers_window_leaves(repo: Path) -> None:
+    """Known-bad (the Phase 3 smoke): with no token budget the reply was sized
+    from a fixed 175,000-token window, so Strata's 131,072 window got a
+    168,034-token request and refused it. Known-good: the server's own window
+    sizes the reply, and a failed lookup falls back to the default."""
+    client = Windowed([finish()], window=131_072)
+    auto(repo, client)
+    asked = client.asked[0]["max_tokens"]
+    assert 100_000 < asked < 131_072
+    fallback = Windowed([finish()], window=None)
+    run_auto(
+        AutoOptions(task="make add add", repo=repo, run_id="r2", arm="E"),
+        cast(VllmClient, fallback),
+    )
+    assert fallback.asked[0]["max_tokens"] > 131_072
+
+
 class Clock:
     def __init__(self, step: float) -> None:
         self.now, self.step = 0.0, step

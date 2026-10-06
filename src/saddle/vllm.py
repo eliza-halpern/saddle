@@ -582,12 +582,16 @@ def _model_ids(data: object) -> list[str]:
 
 
 def _model_context(data: object, model: str) -> int | None:
-    """`max_model_len` of the served `model` from a /models envelope; None if unreported."""
+    """The served `model`'s context length from a /models envelope; None if unreported.
+
+    vLLM reports it as `max_model_len`; Strata as `meta.n_ctx`. A server that
+    reports neither gets None, never a guess."""
     if model not in _model_ids(data):
         return None
     for item in data["data"]:  # type: ignore[index]  # _model_ids validated the shape
         if item["id"] == model:
-            value = item.get("max_model_len")
+            meta = item.get("meta")
+            value = item.get("max_model_len", meta.get("n_ctx") if isinstance(meta, dict) else None)
             return value if isinstance(value, int) and not isinstance(value, bool) else None
     return None  # pragma: no cover -- unreachable: the id was in _model_ids
 
@@ -951,7 +955,7 @@ class VllmClient:
         return version if isinstance(version, str) and version else None
 
     def max_model_len(self) -> int | None:
-        """The served model's context length as vLLM reports it, or None."""
+        """The served model's context length as the server reports it, or None."""
         return _model_context(self._models(), self._model)
 
     def count_tokens(
