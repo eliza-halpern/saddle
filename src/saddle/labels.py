@@ -30,6 +30,7 @@ _TENSES: Final[dict[str, tuple[str, str]]] = {
     "processes": ("Checking", "Checked"),
     "read_text": ("Reading the text in", "Read the text in"),
     "compare_images": ("Comparing", "Compared"),
+    "code_search": ("Searching the code for", "Searched the code for"),
 }
 
 MAX_OBJECT: Final = 72

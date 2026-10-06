@@ -30,13 +30,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from saddle import computer, imagetools, screen
+from saddle import codesearch, computer, imagetools, screen
 from saddle.answers import BraveAnswers
 from saddle.askpass import Askpass
 from saddle.brave import BraveKeyError, BraveSearch
 from saddle.capabilities import Switches, missing_programs
 from saddle.capabilities import load as load_switches
 from saddle.edits import first_divergence, loose_spans
+from saddle.embed import EmbedClient, EmbedError
 from saddle.gates import is_test_code
 from saddle.mcpclient import Approvals, McpError, McpHost, load_config
 from saddle.procs import Entry, ProcessLedger
@@ -235,6 +236,21 @@ COMPARE_IMAGES_SCHEMA: Final[dict[str, Any]] = _tool(
 """Offered when the person's `imagediff` switch is on and ImageMagick's compare
 is installed (`offer_image_tools`)."""
 
+CODE_SEARCH_TOOL: Final = "code_search"
+CODE_SEARCH_SCHEMA: Final[dict[str, Any]] = _tool(
+    CODE_SEARCH_TOOL,
+    "Find the code that answers a question about this repository by meaning, not by "
+    "matching words: 'where are retries limited' finds the code that limits retries "
+    "whatever it is named. It returns the nearest windows of 40 lines (path:start-end, "
+    "a similarity, their first lines) and says how many tracked files it searched. Use "
+    "`search` for exact text, and read_file to read what it finds.",
+    {"query": {"type": "string"}},
+    ["query"],
+)
+"""Offered when the person's `embeddings` switch is on and the embeddings
+server answers (`offer_code_search`). It searches what `saddle index` already
+embedded: embedding the repository takes minutes, never a tool call's time."""
+
 SCREENSHOT_TOOL: Final = "screenshot"
 SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
     SCREENSHOT_TOOL,
@@ -321,7 +337,14 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
 
 _ARGUMENTS: Final[dict[str, frozenset[str]]] = {
     tool["function"]["name"]: frozenset(tool["function"]["parameters"]["properties"])
-    for tool in [*TOOLS, PROCESSES_SCHEMA, COMPUTER_SCHEMA]
+    for tool in [
+        *TOOLS,
+        PROCESSES_SCHEMA,
+        COMPUTER_SCHEMA,
+        READ_TEXT_SCHEMA,
+        COMPARE_IMAGES_SCHEMA,
+        CODE_SEARCH_SCHEMA,
+    ]
 }
 """Each tool's declared arguments. Anything else is refused by name, not
 dropped: `read_file` once ignored an `offset` and `limit` its schema did not
@@ -557,6 +580,32 @@ def offer_image_tools(
     if context.allowed is not None:
         context.allowed = (*context.allowed, *(s["function"]["name"] for s in added))
     return [*tools, *added]
+
+
+def offer_code_search(
+    tools: list[dict[str, Any]],
+    context: ToolContext,
+    healthy: Callable[[], bool] | None = None,
+) -> list[dict[str, Any]]:
+    """`tools` with `code_search` added when the person's `embeddings` switch is
+    on and the embeddings server answers, in any lane: it only reads. Allowed by
+    name in a lane that lists its tools."""
+    names = {t["function"]["name"] for t in tools}
+    if not context.embeddings or CODE_SEARCH_TOOL in names:
+        return tools
+    if not (healthy or _embeddings_answer)():
+        return tools
+    if context.allowed is not None:
+        context.allowed = (*context.allowed, CODE_SEARCH_TOOL)
+    return [*tools, CODE_SEARCH_SCHEMA]
+
+
+def _embeddings_answer() -> bool:
+    try:
+        EmbedClient().health()
+    except EmbedError:
+        return False
+    return True
 
 
 def offer_computer(tools: list[dict[str, Any]], context: ToolContext) -> list[dict[str, Any]]:
@@ -827,6 +876,9 @@ class ToolContext:
     """The person's `ocr` switch: `read_text` is offered (`offer_image_tools`)."""
     imagediff: bool = False
     """The person's `imagediff` switch: `compare_images` is offered."""
+    embeddings: bool = False
+    """The person's `embeddings` switch: `code_search` is offered
+    (`offer_code_search`)."""
     last_window: str | None = None
     """The window the latest screenshot or computer action named, for a
     computer call that names none."""
@@ -1876,6 +1928,14 @@ def _compare_images(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     return imagetools.compare_images(ctx.locate(first), first, ctx.locate(second), second)
 
 
+def _code_search(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    question = _text(args, "query", CODE_SEARCH_TOOL)
+    try:
+        return codesearch.Index(ctx.workdir, EmbedClient()).search(question)
+    except (EmbedError, codesearch.CodeSearchError) as exc:
+        return f"error: code_search could not search: {exc}. Use `search` for exact text."
+
+
 # Naming the handler signature is what makes `handler(ctx, args)` a str
 # rather than Any at the dispatch site below.
 type _Handler = Callable[[ToolContext, Mapping[str, Any]], str]
@@ -1894,21 +1954,23 @@ _HANDLERS: Final[dict[str, _Handler]] = {
     COMPUTER_TOOL: _computer,
     READ_TEXT_TOOL: _read_text,
     COMPARE_IMAGES_TOOL: _compare_images,
+    CODE_SEARCH_TOOL: _code_search,
 }
 
 
 def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = None) -> None:
     """Give a chat session the capabilities the person switched on
     (`capabilities`; all are off by default), and take away those switched off:
-    the image tools (`images`, `ocr`, `imagediff`), MCP servers for the Edit lane, run in the
-    session's own box, and the web reader (its servers in a sandbox over
-    `downloads`, never the project). Called
+    the image tools (`images`, `ocr`, `imagediff`), code search (`embeddings`),
+    MCP servers for the Edit lane, run in the session's own box, and the web
+    reader (its servers in a sandbox over `downloads`, never the project). Called
     every turn, so a switch the person flips applies from the next turn; a switch
     that is off, or no allowlist, leaves the session without. A broken allowlist
     raises `McpConfigError` naming the fault, and a broken switch file
     `CapabilityError`, only when a switch needs them."""
     on = switches if switches is not None else load_switches()
     ctx.images, ctx.ocr, ctx.imagediff = on.images, on.ocr, on.imagediff
+    ctx.embeddings = on.embeddings
     config = load_config() if (on.mcp or on.research) else {}
     readers = any(spec.access == "reader" for spec in config.values())
 

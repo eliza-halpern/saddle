@@ -896,7 +896,7 @@ def run_auto(
         f"environment {environment}; "
         + "; ".join(
             f"{name} {'on' if switches.get(name) else 'off'}"
-            for name in ("images", "ocr", "imagediff")
+            for name in ("images", "ocr", "imagediff", "embeddings")
         )
         + ("; check tool offered" if options.check_tool else "")
         + (
@@ -1093,6 +1093,7 @@ def run_auto(
         images=switches.images,
         ocr=switches.ocr,
         imagediff=switches.imagediff,
+        embeddings=switches.embeddings,
     )
     if options.wheels is not None:
         assert project is not None  # checked before the run started

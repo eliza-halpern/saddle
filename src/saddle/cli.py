@@ -47,6 +47,7 @@ from saddle.auto import (
 )
 from saddle.capabilities import run as run_capabilities
 from saddle.chat import ChatOptions, run_chat
+from saddle.codesearch import run_index
 from saddle.covers import (
     SHORT,
     AttachError,
@@ -2154,6 +2155,13 @@ def build_parser() -> argparse.ArgumentParser:
     caps_cmd.add_argument(
         "capability", nargs="?", help="mcp, research, search, browser or answers."
     )
+    index_cmd = sub.add_parser(
+        "index",
+        help="Embed a repository's tracked files for code_search (the embeddings capability).",
+    )
+    index_cmd.add_argument(
+        "repo", nargs="?", default=".", help="The repository to index (default: here)."
+    )
     search_cmd = sub.add_parser(
         "search", help="Set up or check the local SearXNG the web reader searches with."
     )
@@ -2501,6 +2509,7 @@ def main(
         "search",
         "answers",
         "capabilities",
+        "index",
     ):
         return 0
     if args.command == "capabilities":
@@ -2509,6 +2518,10 @@ def main(
             args.capability,
             stdout=stdout or sys.stdout,
             stderr=stderr or sys.stderr,
+        )
+    if args.command == "index":
+        return run_index(
+            Path(args.repo).resolve(), stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
         )
     if args.command == "answers":
         return run_answers(
