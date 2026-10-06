@@ -723,3 +723,62 @@ def test_a_finished_packet_with_a_not_proven_finding_does_not_say_every_finding_
         "The executor called finish. No audit finding failed; 1 finding could not be "
         "proven (they do not refuse finish)."
     )
+
+
+# -- the cache key covers the classifier that decides the shortlist ------------
+
+
+def test_an_edited_survivor_classifier_misses_the_cached_shortlist_verdict(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#94 known-bad: `--tier2 shortlist` decided which survivors to set aside with
+    `mutant_text.classify`, so that module's bytes must join the key a tier-2 verdict
+    is cached under.
+
+    Red while `mutant_text` sat outside `audit.SURFACE_MODULES`: the verdict key did
+    not move when the classifier did, so the second audit was served the verdict the
+    old classifier had decided -- a hit skips the gates, so nothing re-read the tree.
+    """
+    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    config = AuditorConfig(tier2="shortlist", cache_dir=tmp_path / "cache")
+    first = Auditor(tree, config=config).tier2()
+    assert not first.cached
+    # The classifier unchanged, the tree unchanged: the verdict is reused.
+    assert Auditor(tree, config=config).tier2().cached
+
+    import inspect
+
+    from saddle import mutant_text
+
+    edited = tmp_path / "mutant_text.py"
+    # A classifier edit -- one that would set nothing aside, were this the module
+    # that ran. The cache reads only bytes, and these differ from the module's.
+    reclassified = (
+        "\ndef classify(status: str, function: str, before: str, after: str) -> str:\n"
+        '    return "behaviour"\n'
+    )
+    original = Path(inspect.getabsfile(mutant_text)).read_bytes()
+    edited.write_bytes(original + reclassified.encode())
+    monkeypatch.setattr(mutant_text, "__file__", str(edited))
+    after = Auditor(tree, config=config).tier2()
+    assert not after.cached
+    assert after.key != first.key
+
+
+def test_an_edit_to_a_module_that_only_reports_a_finding_still_hits_the_cache(
+    tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#94 known-good: the surface is the modules that *decide* a verdict, not every
+    module a finding passes through. `packet` renders the shortlist's English from the
+    sealed record and changes no gate, so editing it must not cost a re-audit."""
+    _stub(tmp_path, monkeypatch, "  k1: killed\n  s1: survived", SHOW3)
+    config = AuditorConfig(tier2="shortlist", cache_dir=tmp_path / "cache")
+    assert not Auditor(tree, config=config).tier2().cached
+    import inspect
+
+    from saddle import packet
+
+    rendered = tmp_path / "packet.py"
+    rendered.write_bytes(Path(inspect.getabsfile(packet)).read_bytes() + b"\n# reworded\n")
+    monkeypatch.setattr(packet, "__file__", str(rendered))
+    assert Auditor(tree, config=config).tier2().cached
