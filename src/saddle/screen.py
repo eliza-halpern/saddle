@@ -133,6 +133,10 @@ def run_x(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
 OCR_SCALE: Final = 3
 """How much a picture is enlarged before text recognition: window pictures
 carry menu text about 12 px tall, small for tesseract."""
+OCR_PREP: Final = ("-colorspace", "Gray", "-threshold", "60%", "-resize", f"{OCR_SCALE * 100}%")
+"""What a picture goes through before tesseract: greyscale and a threshold,
+then `OCR_SCALE`. Measured on Wings' light menus, plain pictures gave 2 of 11
+known labels, thresholded ones 10 of 11."""
 NO_OCR: Final = (
     "error: text recognition is not available here (tesseract is not installed); "
     "read the position off the picture's rulers instead"
@@ -164,10 +168,7 @@ def find_text(
     if not words:
         return "error: find needs the text to look for"
     big = png.with_name(png.stem + "-ocr.png")
-    # Greyscale and a threshold first: measured on Wings' light menus, plain
-    # pictures gave 2 of 11 known labels, thresholded ones 10 of 11.
-    prep = ["-colorspace", "Gray", "-threshold", "60%", "-resize", f"{OCR_SCALE * 100}%"]
-    if run(["convert", str(png), *prep, str(big)], env)[0] != 0:
+    if run(["convert", str(png), *OCR_PREP, str(big)], env)[0] != 0:
         return "error: text recognition could not prepare the picture"
     try:
         code, out = run(["tesseract", str(big), "-", "--psm", "11", "tsv"], env)

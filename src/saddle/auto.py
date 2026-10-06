@@ -893,7 +893,11 @@ def run_auto(
         f"budgets {options.time_budget_s:.0f}s, "
         f"{options.token_budget} generated tokens; test edits "
         f"{'allowed' if options.allow_test_edits else 'refused'}; "
-        f"environment {environment}; images {'on' if switches.images else 'off'}"
+        f"environment {environment}; "
+        + "; ".join(
+            f"{name} {'on' if switches.get(name) else 'off'}"
+            for name in ("images", "ocr", "imagediff")
+        )
         + ("; check tool offered" if options.check_tool else "")
         + (
             "; "
@@ -1087,6 +1091,8 @@ def run_auto(
         syntax_guard=True,
         time_left=lambda: auto.budget.time_left(),
         images=switches.images,
+        ocr=switches.ocr,
+        imagediff=switches.imagediff,
     )
     if options.wheels is not None:
         assert project is not None  # checked before the run started

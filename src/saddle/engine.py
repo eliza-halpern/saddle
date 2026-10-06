@@ -90,6 +90,7 @@ from saddle.tools import (
     ToolContext,
     execute_tool,
     offer_computer,
+    offer_image_tools,
     offer_screenshot,
     preview_for,
     state_image_fact,
@@ -1061,6 +1062,8 @@ def run_turn(
         messages.insert(0, {"role": "system", "content": prompt})
     if text is not None:
         messages.append(_user_message(text, images))
+    # The person's ocr and imagediff switches, read every turn (`attach_mcp`).
+    options = replace(options, tools=offer_image_tools(options.tools, ctx))
     if ctx.images:
         # This turn's client: a session's context outlives each turn's client.
         ctx.accepts_images = lambda: server_accepts_images(client)

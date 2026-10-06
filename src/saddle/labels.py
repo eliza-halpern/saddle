@@ -28,6 +28,8 @@ _TENSES: Final[dict[str, tuple[str, str]]] = {
     "read_terminal": ("Reading", "Read"),
     "wait_for_terminal": ("Waiting for", "Waited for"),
     "processes": ("Checking", "Checked"),
+    "read_text": ("Reading the text in", "Read the text in"),
+    "compare_images": ("Comparing", "Compared"),
 }
 
 MAX_OBJECT: Final = 72
@@ -39,6 +41,8 @@ def _object_of(name: str, args: dict[str, Any]) -> str:
         return "this folder"  # "Listed" alone reads as a sentence fragment
     if name == "processes":
         return "session processes"
+    if name == "compare_images" and isinstance(args.get("first"), str):
+        return f"{args['first']} with {args.get('second', '?')}"
     if name in ("read_terminal", "wait_for_terminal") and args.get("id"):
         return f"terminal {args['id']}"
     for key in ("path", "file", "dir", "directory"):

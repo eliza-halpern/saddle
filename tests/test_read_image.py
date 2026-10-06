@@ -406,6 +406,19 @@ def test_a_task_run_with_the_images_switch_on_shows_the_image_and_records_it(
     assert "; images on" in _started(repo, "r1")
 
 
+def test_a_task_run_offers_the_image_tools_its_switches_turn_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "ocr,imagediff")
+    monkeypatch.setattr("saddle.tools.missing_programs", lambda _name, _which=None: ())
+    repo = _task_repo(tmp_path)
+    server = Server([[call("finish", "c1", summary="d")]])
+    run_auto(AutoOptions(task="t", repo=repo, run_id="r1", arm="E"), cast(VllmClient, server))
+    offered = [t["function"]["name"] for t in server.offered]
+    assert offered[-2:] == ["read_text", "compare_images"]
+    assert "; images off; ocr on; imagediff on" in _started(repo, "r1")
+
+
 def test_a_broken_switch_file_refuses_a_task_run_before_it_starts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -30,11 +30,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
-from saddle import computer, screen
+from saddle import computer, imagetools, screen
 from saddle.answers import BraveAnswers
 from saddle.askpass import Askpass
 from saddle.brave import BraveKeyError, BraveSearch
-from saddle.capabilities import Switches
+from saddle.capabilities import Switches, missing_programs
 from saddle.capabilities import load as load_switches
 from saddle.edits import first_divergence, loose_spans
 from saddle.gates import is_test_code
@@ -208,6 +208,32 @@ PROCESSES_SCHEMA: Final[dict[str, Any]] = _tool(
 )
 """The Edit lane's process tool (#136). It is not in `TOOLS`, which a task run
 is given whole: a task run's tool list, prompt and sandbox are unchanged."""
+
+READ_TEXT_TOOL: Final = "read_text"
+READ_TEXT_SCHEMA: Final[dict[str, Any]] = _tool(
+    READ_TEXT_TOOL,
+    "Read the text in an image file (PNG, JPEG, WebP or GIF) under the working "
+    "directory with tesseract's character recognition: a check on what an image says, "
+    "line by line. It misreads look-alike characters (I and l, Z and 2, O and 0), so "
+    "treat its text as evidence, not the truth.",
+    {"path": {"type": "string"}},
+    ["path"],
+)
+"""Offered when the person's `ocr` switch is on and tesseract and ImageMagick's
+convert are installed (`offer_image_tools`)."""
+
+COMPARE_IMAGES_TOOL: Final = "compare_images"
+COMPARE_IMAGES_SCHEMA: Final[dict[str, Any]] = _tool(
+    COMPARE_IMAGES_TOOL,
+    "Compare two image files of the same size under the working directory, pixel by "
+    "pixel: how many pixels differ and the box (left, top, width, height) that holds "
+    "every difference, or that they are identical. It says that something changed and "
+    "where, never whether the change is right.",
+    {"first": {"type": "string"}, "second": {"type": "string"}},
+    ["first", "second"],
+)
+"""Offered when the person's `imagediff` switch is on and ImageMagick's compare
+is installed (`offer_image_tools`)."""
 
 SCREENSHOT_TOOL: Final = "screenshot"
 SCREENSHOT_SCHEMA: Final[dict[str, Any]] = _tool(
@@ -509,6 +535,30 @@ def offer_screenshot(
     return [*seeing, SCREENSHOT_SCHEMA]
 
 
+def offer_image_tools(
+    tools: list[dict[str, Any]],
+    context: ToolContext,
+    which: Callable[[str], str | None] | None = None,
+) -> list[dict[str, Any]]:
+    """`tools` with `read_text` and `compare_images` added when the person's
+    `ocr` and `imagediff` switches are on and their programs are installed
+    (`capabilities.missing_programs`), in any lane: each only reads image files
+    under the working directory. Allowed by name in a lane that lists its tools."""
+    added = [
+        schema
+        for on, switch, schema in (
+            (context.ocr, "ocr", READ_TEXT_SCHEMA),
+            (context.imagediff, "imagediff", COMPARE_IMAGES_SCHEMA),
+        )
+        if on and not missing_programs(switch, which)
+    ]
+    names = {t["function"]["name"] for t in tools}
+    added = [schema for schema in added if schema["function"]["name"] not in names]
+    if context.allowed is not None:
+        context.allowed = (*context.allowed, *(s["function"]["name"] for s in added))
+    return [*tools, *added]
+
+
 def offer_computer(tools: list[dict[str, Any]], context: ToolContext) -> list[dict[str, Any]]:
     """`tools` with `computer` added when it can work and is allowed: the Edit
     lane's run_command and `screenshot` are offered (the model can see what it
@@ -773,6 +823,10 @@ class ToolContext:
     """Whether `read_file` on an image sends the image to the model: the
     person's `images` switch (`capabilities`), in every lane. Off by default,
     so with the switch off `read_file` is exactly what it was."""
+    ocr: bool = False
+    """The person's `ocr` switch: `read_text` is offered (`offer_image_tools`)."""
+    imagediff: bool = False
+    """The person's `imagediff` switch: `compare_images` is offered."""
     last_window: str | None = None
     """The window the latest screenshot or computer action named, for a
     computer call that names none."""
@@ -1811,6 +1865,17 @@ def _wait_for_terminal(ctx: ToolContext, args: Mapping[str, Any]) -> str:
     return _marked(ctx, f"exit {terminal.exit_code}\n{_fit_output(ctx, terminal.output())}")
 
 
+def _read_text(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    name = _text(args, "path", READ_TEXT_TOOL)
+    return imagetools.read_text(ctx.locate(name), name)
+
+
+def _compare_images(ctx: ToolContext, args: Mapping[str, Any]) -> str:
+    first = _text(args, "first", COMPARE_IMAGES_TOOL)
+    second = _text(args, "second", COMPARE_IMAGES_TOOL)
+    return imagetools.compare_images(ctx.locate(first), first, ctx.locate(second), second)
+
+
 # Naming the handler signature is what makes `handler(ctx, args)` a str
 # rather than Any at the dispatch site below.
 type _Handler = Callable[[ToolContext, Mapping[str, Any]], str]
@@ -1827,13 +1892,15 @@ _HANDLERS: Final[dict[str, _Handler]] = {
     PROCESSES_TOOL: _processes,
     SCREENSHOT_TOOL: _screenshot,
     COMPUTER_TOOL: _computer,
+    READ_TEXT_TOOL: _read_text,
+    COMPARE_IMAGES_TOOL: _compare_images,
 }
 
 
 def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = None) -> None:
     """Give a chat session the capabilities the person switched on
     (`capabilities`; all are off by default), and take away those switched off:
-    image viewing (`images`), MCP servers for the Edit lane, run in the
+    the image tools (`images`, `ocr`, `imagediff`), MCP servers for the Edit lane, run in the
     session's own box, and the web reader (its servers in a sandbox over
     `downloads`, never the project). Called
     every turn, so a switch the person flips applies from the next turn; a switch
@@ -1841,7 +1908,7 @@ def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = No
     raises `McpConfigError` naming the fault, and a broken switch file
     `CapabilityError`, only when a switch needs them."""
     on = switches if switches is not None else load_switches()
-    ctx.images = on.images
+    ctx.images, ctx.ocr, ctx.imagediff = on.images, on.ocr, on.imagediff
     config = load_config() if (on.mcp or on.research) else {}
     readers = any(spec.access == "reader" for spec in config.values())
 
