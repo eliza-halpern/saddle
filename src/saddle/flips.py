@@ -822,14 +822,17 @@ def judge(changes: list[ChangedTest], message: str) -> Judgement | None:
             f"{len(names)} pre-existing test(s) changed, "
             f"{len(unlabelled) + len(refused)} without a usable flip label. {FLIP_RULE}"
         ]
-        for change in changes:
+        # The tests still owed a line come first, each marked before its detail, so a
+        # reader who sees only the start of this text (the feed caps it) sees them.
+        owed = [c for c in changes if c.name in refused or c.name in unlabelled]
+        for change in owed + [c for c in changes if c not in owed]:
             note = ""
             if change.name in refused:
                 note = f" [flip line refused: {refused[change.name]}]"
             elif change.name in unlabelled:
                 note = " [no flip line]"
             lines.append(
-                f"- {change.path}: {change.name!r} -- {change.kind}: {change.detail}{note}"
+                f"- {change.path}: {change.name!r}{note} -- {change.kind}: {change.detail}"
             )
         return Judgement("fail", "\n".join(lines))
     shown = ", ".join(sorted(names))

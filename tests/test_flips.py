@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from saddle import feed
 from saddle import flips as tc
 from saddle.flips import ChangedTest, detect, judge, language
 
@@ -529,6 +530,18 @@ def test_one_unlabelled_test_among_labelled_ones_fails_the_whole() -> None:
     assert got.verdict == "fail"
     assert got.detail.count("[no flip line]") == 1
     assert "'subtracts'" in got.detail.split("[no flip line]")[0].splitlines()[-1]
+
+
+def test_the_tests_still_owed_a_line_lead_the_refusal_before_any_long_detail() -> None:
+    long = ChangedTest(JS, "adds", tc.BODY_CHANGED, "was `" + "x" * 900 + "`, now `5`")
+    labelled = "flip: adds -- 2 + 3 is 5 and the old assertion said 4"
+    got = judge([long, OTHER], labelled)
+    assert got is not None
+    entries = [line for line in got.detail.splitlines() if line.startswith("- ")]
+    assert entries[0].startswith(f"- {JS}: 'subtracts' [no flip line] -- ")
+    assert entries[1].startswith(f"- {JS}: 'adds' -- ")
+    seen = got.detail[: feed.DETAIL_CHARS]
+    assert "'subtracts' [no flip line]" in seen
 
 
 def test_a_good_flip_line_is_accepted_as_not_proven_never_as_a_pass() -> None:
