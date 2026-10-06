@@ -346,6 +346,22 @@ def test_the_cli_routes_capabilities_and_needs_no_model_key(
 # -- the endpoint the page will read -------------------------------------------------
 
 
+def test_the_endpoint_reports_images_from_what_is_known_without_asking_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from starlette.testclient import TestClient
+    from test_chat_server import FakeClient
+
+    from saddle.sessions import SessionStore
+    from saddle.web.app import build_app
+
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "images")
+    app = build_app(SessionStore(tmp_path / "s"), FakeClient, default_workdir=tmp_path)
+    with TestClient(app) as client:
+        rows = client.get("/api/capabilities").json()["capabilities"]
+    assert {"name": "images", "state": "on", "reason": READS_UNKNOWN} in rows
+
+
 def test_one_get_endpoint_reports_the_status_and_names_a_broken_file(tmp_path: Path) -> None:
     from starlette.testclient import TestClient
     from test_chat_server import FakeClient
