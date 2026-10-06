@@ -26,11 +26,15 @@ from mcp_support import one_server, write_config
 from saddle import research as research_module
 from saddle.capabilities import (
     NAMES,
+    READS_NO,
+    READS_UNKNOWN,
+    READS_YES,
     CapabilityError,
     Status,
     Switches,
     file_path,
     load,
+    missing_programs,
     run,
     save,
     status,
@@ -89,7 +93,7 @@ person's real ~/.config/saddle/capabilities.json, so a machine with a switch on 
 
 def test_every_capability_is_off_by_default() -> None:
     assert load(NO_FILE) == Switches()
-    assert [Switches().get(name) for name in NAMES] == [False] * 5
+    assert [Switches().get(name) for name in NAMES] == [False] * 8
     assert states(status(Switches())) == dict.fromkeys(NAMES, "off")
     assert states(status()) == dict.fromkeys(NAMES, "off")  # the suite's file does not exist
 
@@ -176,6 +180,9 @@ def test_mcp_on_without_the_sdk_is_unavailable_and_says_which_extra(
         "search": "off",
         "browser": "unavailable",
         "answers": "off",
+        "images": "off",
+        "ocr": "off",
+        "imagediff": "off",
     }
     for name in ("mcp", "research", "browser"):
         assert "saddle-harness[mcp]" in reason(rows, name)
@@ -245,6 +252,9 @@ def test_the_browser_needs_a_reader_server_that_offers_browser_tools(
         "search": "off",
         "browser": "unavailable",
         "answers": "off",
+        "images": "off",
+        "ocr": "off",
+        "imagediff": "off",
     }
     assert reason(rows, "browser") == "no reader server offers a browser tool"
 
@@ -351,3 +361,51 @@ def test_one_get_endpoint_reports_the_status_and_names_a_broken_file(tmp_path: P
         broken = client.get("/api/capabilities")
         assert broken.status_code == 500
         assert "not valid JSON" in broken.json()["error"]
+
+
+# -- image tools ---------------------------------------------------------------------
+
+
+def test_the_images_row_says_what_is_known_of_the_models_reading_and_never_asks() -> None:
+    """Known-good: a model that read the probe back is on and says so; one not
+    yet asked is on with when it will be. Known-bad: a model that did not read
+    it back is unavailable, with the reason."""
+    on = Switches(images=True)
+    asked: list[str] = []
+
+    def known(verdict: bool | None) -> Any:
+        def reads() -> bool | None:
+            asked.append("looked")
+            return verdict
+
+        return reads
+
+    rows = status(on, reads=known(True))
+    assert (states(rows)["images"], reason(rows, "images")) == ("on", READS_YES)
+    rows = status(on, reads=known(None))
+    assert (states(rows)["images"], reason(rows, "images")) == ("on", READS_UNKNOWN)
+    assert (states(status(on))["images"], reason(status(on), "images")) == ("on", READS_UNKNOWN)
+    rows = status(on, reads=known(False))
+    assert (states(rows)["images"], reason(rows, "images")) == ("unavailable", READS_NO)
+    assert asked == ["looked"] * 3
+    assert states(status(Switches(), reads=known(True)))["images"] == "off"
+
+
+def test_an_image_tool_is_unavailable_until_its_programs_are_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    present = {"tesseract", "convert", "compare"}
+    monkeypatch.setattr(
+        "saddle.capabilities.shutil.which", lambda p: f"/usr/bin/{p}" if p in present else None
+    )
+    on = Switches(ocr=True, imagediff=True)
+    assert states(status(on))["ocr"] == "on"
+    assert states(status(on))["imagediff"] == "on"
+    present.discard("tesseract")
+    present.discard("compare")
+    rows = status(on)
+    assert (states(rows)["ocr"], reason(rows, "ocr")) == ("unavailable", "not installed: tesseract")
+    assert reason(rows, "imagediff") == "not installed: compare"
+    present.discard("convert")
+    assert missing_programs("ocr") == ["tesseract", "convert"]
+    assert missing_programs("ocr", which=lambda p: p) == []

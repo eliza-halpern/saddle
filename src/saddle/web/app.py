@@ -84,7 +84,7 @@ from saddle.sideeffects import SideEffects
 from saddle.titles import title_for, words_title
 from saddle.tools import PREVIEWABLE, ToolContext, attach_mcp, preview_for, scope_turn
 from saddle.undo import UndoLog
-from saddle.vision import is_image_followup
+from saddle.vision import is_image_followup, known_verdict
 from saddle.vllm import VllmClient
 from saddle.web import branch_actions, tasks
 from saddle.web.tasks import SMALL_LANE_TEST_EDITS, TaskRun
@@ -594,7 +594,6 @@ class ChatServer:
                     approve=live.ask_approval,
                     watched=live.watched,
                     processes=self.ledger(session_id),
-                    images=True,
                 )
             # Every turn, so a capability the person switched on or off applies now.
             attach_mcp(live.context, self.store.downloads_dir(session_id))
@@ -1024,8 +1023,14 @@ def build_app(
     async def capabilities_status(_: Request) -> JSONResponse:
         """Which opt-in capabilities are on and working: the page's later panel
         reads this. Asks the search backend, so it runs off the event loop."""
+
+        def reads() -> bool | None:
+            # What a session already found; building a client sends nothing.
+            with server.client_factory() as client:
+                return known_verdict(client)
+
         try:
-            rows = await run_in_threadpool(capabilities.status)
+            rows = await run_in_threadpool(capabilities.status, None, None, reads)
         except capabilities.CapabilityError as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
         return JSONResponse({"capabilities": [row.as_json() for row in rows]})

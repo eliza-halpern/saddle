@@ -770,9 +770,9 @@ class ToolContext:
     can still emit a call to a tool it was not offered. None allows all."""
 
     images: bool = False
-    """Whether `read_file` on an image sends the image to the model (the Ask
-    and Edit lanes). Off by default, so a Task run's `read_file` is exactly
-    what it was."""
+    """Whether `read_file` on an image sends the image to the model: the
+    person's `images` switch (`capabilities`), in every lane. Off by default,
+    so with the switch off `read_file` is exactly what it was."""
     last_window: str | None = None
     """The window the latest screenshot or computer action named, for a
     computer call that names none."""
@@ -1833,13 +1833,15 @@ _HANDLERS: Final[dict[str, _Handler]] = {
 def attach_mcp(ctx: ToolContext, downloads: Path, switches: Switches | None = None) -> None:
     """Give a chat session the capabilities the person switched on
     (`capabilities`; all are off by default), and take away those switched off:
-    MCP servers for the Edit lane, run in the session's own box, and the web
-    reader (its servers in a sandbox over `downloads`, never the project). Called
+    image viewing (`images`), MCP servers for the Edit lane, run in the
+    session's own box, and the web reader (its servers in a sandbox over
+    `downloads`, never the project). Called
     every turn, so a switch the person flips applies from the next turn; a switch
     that is off, or no allowlist, leaves the session without. A broken allowlist
     raises `McpConfigError` naming the fault, and a broken switch file
     `CapabilityError`, only when a switch needs them."""
     on = switches if switches is not None else load_switches()
+    ctx.images = on.images
     config = load_config() if (on.mcp or on.research) else {}
     readers = any(spec.access == "reader" for spec in config.values())
 

@@ -1,7 +1,7 @@
 """Opt-in capabilities: what the person turned on, and whether it works (#139, #93).
 
-Web research and MCP servers are not part of installing or running saddle. Each
-of four capabilities is a switch that is **off** until the person turns it on,
+Web research, MCP servers and image tools are not part of installing or running
+saddle. Each capability is a switch that is **off** until the person turns it on,
 and the model is offered a tool only when its switch is on **and** the thing it
 needs is actually there:
 
@@ -15,6 +15,13 @@ needs is actually there:
   and says search is unavailable.
 - `browser`: the reader's `browser_*` tools (a Playwright server) for pages that
   need clicks. Needs a reader server that offers them.
+- `images`: `read_file` on an image shows it to the model, in every lane, Task
+  runs included. Needs a served model that reads (`vision.server_accepts_images`:
+  its card does not deny images and it reads back a known string).
+- `ocr`: the `read_text` tool, tesseract's reading of an image's text, as a check
+  on what the model sees. Needs tesseract and ImageMagick's `convert`.
+- `imagediff`: the `compare_images` tool, the pixels that differ between two
+  images and where. Needs ImageMagick's `compare`.
 
 The switches live in `capabilities.json` beside the MCP allowlist
 (`$SADDLE_CAPABILITIES_FILE` overrides the path); `$SADDLE_CAPABILITIES` overrides
@@ -27,7 +34,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+import shutil
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Final, Literal
@@ -40,7 +48,7 @@ from saddle.mcpclient import McpConfigError, ServerSpec, load_config, sdk_proble
 from saddle.research import reader_problem
 from saddle.searx import reachable, search_url_from_env
 
-NAMES: Final = ("mcp", "research", "search", "browser", "answers")
+NAMES: Final = ("mcp", "research", "search", "browser", "answers", "images", "ocr", "imagediff")
 FILE_ENV: Final = "SADDLE_CAPABILITIES_FILE"
 OVERRIDE_ENV: Final = "SADDLE_CAPABILITIES"
 DEFAULT_FILE: Final = Path("~/.config/saddle/capabilities.json")
@@ -62,6 +70,9 @@ class Switches:
     search: bool = False
     browser: bool = False
     answers: bool = False
+    images: bool = False
+    ocr: bool = False
+    imagediff: bool = False
 
     def get(self, name: str) -> bool:
         return bool(getattr(self, name))
@@ -152,16 +163,48 @@ def _servers(access: str) -> tuple[dict[str, ServerSpec], str | None]:
     return {n: s for n, s in config.items() if s.access == access}, None
 
 
-def status(switches: Switches | None = None, http: httpx.Client | None = None) -> list[Status]:
+IMAGE_TOOLS: Final[Mapping[str, tuple[str, ...]]] = {
+    "ocr": ("tesseract", "convert"),
+    "imagediff": ("compare",),
+}
+"""The programs each image tool runs: it is offered only when all are on PATH."""
+
+READS_UNKNOWN: Final = "the served model's reading is checked when a session or run starts"
+READS_NO: Final = (
+    "the served model did not read back the probe's text (or its card lists no image input)"
+)
+READS_YES: Final = "the served model read back the probe's text"
+
+
+def missing_programs(name: str, which: Callable[[str], str | None] | None = None) -> list[str]:
+    """The programs `name`'s image tool needs that are not on PATH."""
+    find = which or shutil.which
+    return [program for program in IMAGE_TOOLS[name] if find(program) is None]
+
+
+def status(
+    switches: Switches | None = None,
+    http: httpx.Client | None = None,
+    reads: Callable[[], bool | None] | None = None,
+) -> list[Status]:
     """Each capability: on, off, or unavailable with the reason. Reads the
     allowlist and asks the search backend; starts no server. A search or browser
     switch that is on while research is off is `on` with a note: only research
-    uses them."""
+    uses them. `reads` is what is already known of the served model's reading
+    (`vision.known_verdict`); it never asks the model, which would cost the
+    server its cached conversation."""
     on = switches if switches is not None else load()
     found: list[Status] = []
     for name in NAMES:
         if not on.get(name):
             found.append(Status(name, "off"))
+            continue
+        if name == "images":
+            verdict = reads() if reads is not None else None
+            if verdict is False:
+                found.append(Status(name, "unavailable", READS_NO))
+            else:
+                found.append(Status(name, "on", READS_YES if verdict else READS_UNKNOWN))
             continue
         problem = _problem(name, on, http)
         if problem is not None:
@@ -196,6 +239,9 @@ def _provider(name: str) -> str:
 
 def _problem(name: str, on: Switches, http: httpx.Client | None) -> str | None:
     """Why `name`, which is switched on, cannot work now; None when it can."""
+    if name in IMAGE_TOOLS:
+        missing = missing_programs(name)
+        return f"not installed: {', '.join(missing)}" if missing else None
     if name == "answers":
         try:
             if BraveAnswers.from_env() is not None:
@@ -244,5 +290,5 @@ def run(
         print(f"error: {exc}", file=stderr)
         return 1
     for row in rows:
-        print(f"{row.name:<9} {row.state:<12} {row.reason}".rstrip(), file=stdout)
+        print(f"{row.name:<10} {row.state:<12} {row.reason}".rstrip(), file=stdout)
     return 0

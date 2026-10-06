@@ -43,8 +43,12 @@ def offered(
     display: bool = True,
     images_ok: bool | Exception = True,
     processes: bool = True,
+    images_on: bool = True,
 ) -> dict[str, str]:
-    """The tool descriptions the model is sent on a web chat's first request."""
+    """The tool descriptions the model is sent on a web chat's first request,
+    with the person's `images` switch on unless `images_on` is False."""
+    if images_on:
+        monkeypatch.setenv("SADDLE_CAPABILITIES", "images")
     if display:
         monkeypatch.setenv("DISPLAY", ":0")
     else:
@@ -115,6 +119,12 @@ def test_an_image_is_shown_when_images_are_on_and_the_server_accepts_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     assert IMAGE in offered(tmp_path, monkeypatch)["read_file"]
+
+
+def test_with_the_images_switch_off_a_web_chat_promises_no_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert IMAGE not in offered(tmp_path, monkeypatch, images_on=False)["read_file"]
 
 
 def test_an_image_the_server_cannot_see_is_not_promised(

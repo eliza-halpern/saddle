@@ -42,6 +42,8 @@ from saddle.agents_md import project_instructions
 from saddle.anchor import COAUTHOR_TRAILER, anchor_trailers, outcome_hash
 from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
+from saddle.capabilities import CapabilityError
+from saddle.capabilities import load as load_switches
 from saddle.engine import (
     DEFAULT_FINISH_REFUSAL_CAP,
     NO_LIMIT,
@@ -846,6 +848,10 @@ def run_auto(
     if options.check_tool and options.arm != "E+A+F":
         msg = f"--check-tool needs arm E+A+F (it delivers audit findings); got {options.arm}"
         raise AutoError(msg)
+    try:
+        switches = load_switches()  # the person's image switch applies to Task runs too
+    except CapabilityError as exc:
+        raise AutoError(str(exc)) from exc
     repo = options.repo.resolve()
     project = sandbox.project_env(repo_root(repo))
     problem = sandbox.project_env_problem(project) if project is not None else None
@@ -887,7 +893,7 @@ def run_auto(
         f"budgets {options.time_budget_s:.0f}s, "
         f"{options.token_budget} generated tokens; test edits "
         f"{'allowed' if options.allow_test_edits else 'refused'}; "
-        f"environment {environment}"
+        f"environment {environment}; images {'on' if switches.images else 'off'}"
         + ("; check tool offered" if options.check_tool else "")
         + (
             "; "
@@ -1080,6 +1086,7 @@ def run_auto(
         protected_tests=roots,
         syntax_guard=True,
         time_left=lambda: auto.budget.time_left(),
+        images=switches.images,
     )
     if options.wheels is not None:
         assert project is not None  # checked before the run started

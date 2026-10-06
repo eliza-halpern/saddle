@@ -20,7 +20,7 @@ from typing import Any, cast
 import pytest
 
 import saddle.tools as tools_module
-from saddle.auto import AutoOptions, run_auto
+from saddle.auto import AutoError, AutoOptions, run_auto
 from saddle.engine import TurnOptions, run_turn
 from saddle.events import Event, ToolEnd
 from saddle.tools import ToolContext, execute_tool
@@ -366,6 +366,58 @@ def test_without_images_on_read_file_is_what_it_was(tmp_path: Path) -> None:
     assert ctx.attachments == []
 
 
+def _task_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "shot.png").write_bytes(RED)
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    return repo
+
+
+def _started(repo: Path, run_id: str) -> str:
+    """The run's `auto:start` span detail, where its settings are recorded."""
+    journal = next((repo / ".saddle" / "runs" / run_id).glob("proofs.jsonl"))
+    for line in journal.read_text().splitlines():
+        record = json.loads(line)
+        if record.get("argv", [""])[0] == "auto:start":
+            return str(record["detail"])
+    msg = "no auto:start span"
+    raise AssertionError(msg)
+
+
+def test_a_task_run_with_the_images_switch_on_shows_the_image_and_records_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "images")
+    repo = _task_repo(tmp_path)
+    server = Server(
+        [[call("read_file", "c1", path="shot.png")], [call("finish", "c2", summary="d")]]
+    )
+    run_auto(AutoOptions(task="t", repo=repo, run_id="r1", arm="E"), cast(VllmClient, server))
+    assert server.probes == 1
+    followup = server.asked[1][-1]
+    assert is_image_followup(followup)
+    assert followup["content"][1]["image_url"]["url"] == data_url("image/png", RED)
+    assert "; images on" in _started(repo, "r1")
+
+
+def test_a_broken_switch_file_refuses_a_task_run_before_it_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SADDLE_CAPABILITIES", "imagez")
+    repo = _task_repo(tmp_path)
+    with pytest.raises(AutoError, match="not a capability name"):
+        run_auto(
+            AutoOptions(task="t", repo=repo, run_id="r1", arm="E"), cast(VllmClient, Server([]))
+        )
+    assert not (repo / ".saddle" / "runs" / "r1").exists()
+
+
 def test_a_task_run_does_not_turn_images_on(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -388,6 +440,7 @@ def test_a_task_run_does_not_turn_images_on(tmp_path: Path) -> None:
     # nothing about images was added to what the Task model is offered or told
     assert "image" not in json.dumps(server.offered).lower()
     assert "image" not in str(server.system).lower()
+    assert "; images off" in _started(repo, "r1")
 
 
 def test_the_page_does_not_show_the_image_message_as_the_persons(tmp_path: Path) -> None:
