@@ -44,11 +44,22 @@ import httpx
 
 from saddle.answers import BraveAnswers
 from saddle.brave import BraveKeyError, BraveSearch, key_file
+from saddle.embed import EmbedClient, EmbedError
 from saddle.mcpclient import McpConfigError, ServerSpec, load_config, sdk_problem
 from saddle.research import reader_problem
 from saddle.searx import reachable, search_url_from_env
 
-NAMES: Final = ("mcp", "research", "search", "browser", "answers", "images", "ocr", "imagediff")
+NAMES: Final = (
+    "mcp",
+    "research",
+    "search",
+    "browser",
+    "answers",
+    "images",
+    "ocr",
+    "imagediff",
+    "embeddings",
+)
 FILE_ENV: Final = "SADDLE_CAPABILITIES_FILE"
 OVERRIDE_ENV: Final = "SADDLE_CAPABILITIES"
 DEFAULT_FILE: Final = Path("~/.config/saddle/capabilities.json")
@@ -73,6 +84,7 @@ class Switches:
     images: bool = False
     ocr: bool = False
     imagediff: bool = False
+    embeddings: bool = False
 
     def get(self, name: str) -> bool:
         return bool(getattr(self, name))
@@ -206,6 +218,9 @@ def status(
             else:
                 found.append(Status(name, "on", READS_YES if verdict else READS_UNKNOWN))
             continue
+        if name == "embeddings":
+            found.append(_embeddings(http))
+            continue
         problem = _problem(name, on, http)
         if problem is not None:
             found.append(Status(name, "unavailable", problem))
@@ -215,6 +230,17 @@ def status(
         else:
             found.append(Status(name, "on", _provider(name)))
     return found
+
+
+def _embeddings(http: httpx.Client | None) -> Status:
+    """The embeddings row: the server's model and dimension, or why there is none.
+    Asks the embeddings server only, never the model server."""
+    try:
+        found = EmbedClient(http=http).health()
+    except EmbedError as exc:
+        return Status("embeddings", "unavailable", f"{exc}; start tools/embed_sidecar.py")
+    images = "text and images" if found.get("images") else "text only"
+    return Status("embeddings", "on", f"{found.get('model', '?')}, {found['dim']}d, {images}")
 
 
 def _brave() -> tuple[BraveSearch | None, str]:

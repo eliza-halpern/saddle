@@ -93,7 +93,7 @@ person's real ~/.config/saddle/capabilities.json, so a machine with a switch on 
 
 def test_every_capability_is_off_by_default() -> None:
     assert load(NO_FILE) == Switches()
-    assert [Switches().get(name) for name in NAMES] == [False] * 8
+    assert [Switches().get(name) for name in NAMES] == [False] * 9
     assert states(status(Switches())) == dict.fromkeys(NAMES, "off")
     assert states(status()) == dict.fromkeys(NAMES, "off")  # the suite's file does not exist
 
@@ -183,6 +183,7 @@ def test_mcp_on_without_the_sdk_is_unavailable_and_says_which_extra(
         "images": "off",
         "ocr": "off",
         "imagediff": "off",
+        "embeddings": "off",
     }
     for name in ("mcp", "research", "browser"):
         assert "saddle-harness[mcp]" in reason(rows, name)
@@ -255,6 +256,7 @@ def test_the_browser_needs_a_reader_server_that_offers_browser_tools(
         "images": "off",
         "ocr": "off",
         "imagediff": "off",
+        "embeddings": "off",
     }
     assert reason(rows, "browser") == "no reader server offers a browser tool"
 
