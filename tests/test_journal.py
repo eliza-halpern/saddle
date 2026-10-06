@@ -631,8 +631,15 @@ def test_kill_minus_9_mid_run_rebuilds_state(tmp_path: Path) -> None:
         env=env,
         cwd=Path(__file__).parent.parent,
     )
+    # Kill once records are landing, not after a fixed time: on a slow CI
+    # runner the driver had not finished importing saddle 0.5 s in, so it was
+    # killed before writing anything and "mid run" was never tested.
     try:
-        time.sleep(0.5)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and (
+            not path.exists() or path.read_bytes().count(b"\n") < 5
+        ):
+            time.sleep(0.01)
     finally:
         proc.kill()
     proc.wait(timeout=10)

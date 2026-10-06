@@ -110,6 +110,22 @@ def test_the_tool_needs_a_display_and_both_capture_tools() -> None:
     assert not available({"DISPLAY": ":1"}, has("xwininfo"))
 
 
+def test_the_capture_tools_are_looked_up_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A default bound when the module loads read the host's tools whatever a
+    test patched, so the screenshot tests passed only on a machine with grim
+    and ImageMagick (the first CI run). Known-bad: the host's answer wins."""
+    out = tmp_path / "s.png"
+    wayland = {"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":1"}
+    monkeypatch.setattr("saddle.screen.shutil.which", lambda name: None)
+    assert not available({"DISPLAY": ":1"})
+    assert screen.screen_argv(out, wayland)[0][0] == "import"
+    monkeypatch.setattr("saddle.screen.shutil.which", lambda name: f"/usr/bin/{name}")
+    assert available({"DISPLAY": ":1"})
+    assert screen.screen_argv(out, wayland)[0][0] == "grim"
+
+
 # -- capture -------------------------------------------------------------------------
 
 

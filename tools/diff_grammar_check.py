@@ -178,8 +178,9 @@ def _repo_grammar() -> str:
 def build_cases(commits: int = 40, *, max_bytes: int = 1_500_000) -> dict[str, Any]:
     """The corpus plus the grammar it is checked against.
 
-    The admit half is every distinct blob this repo wrote in its last
-    *commits* commits, each rendered as a write section. Real content is
+    The admit half is every distinct text blob this repo wrote in its last
+    *commits* commits, each rendered as a write section. Binary blobs are
+    skipped: a shallow checkout's one commit lists every file, images too. Real content is
     the point: `vllm.py` carries the grammar's own backslashes, `slice.py`
     carries regexes, and the docs carry unicode. If the envelope can spell
     those it can spell what a worker emits.
@@ -203,13 +204,19 @@ def build_cases(commits: int = 40, *, max_bytes: int = 1_500_000) -> dict[str, A
             if blob.returncode != 0 or blob.stdout.strip() in seen:
                 continue
             seen.add(blob.stdout.strip())
-            shown = git(["git", "show", f"{sha}:{name}"])
-            if shown.returncode != 0 or not shown.stdout:
+            shown = subprocess.run(
+                ["git", "show", f"{sha}:{name}"], cwd=REPO, capture_output=True, check=False
+            )
+            try:
+                text = shown.stdout.decode()
+            except UnicodeDecodeError:  # an image: a worker never writes one as text
                 continue
-            if total + len(shown.stdout) > max_bytes:
+            if shown.returncode != 0 or not text:
                 continue
-            total += len(shown.stdout)
-            cases[f"{sha[:8]}:{name}"] = write_section(name, shown.stdout)
+            if total + len(text) > max_bytes:
+                continue
+            total += len(text)
+            cases[f"{sha[:8]}:{name}"] = write_section(name, text)
     return {
         "grammar": _repo_grammar(),
         "admit": cases,

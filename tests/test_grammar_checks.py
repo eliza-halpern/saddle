@@ -19,7 +19,7 @@ import runpy
 import subprocess
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -238,15 +238,18 @@ BOTH = pytest.mark.parametrize(
 )
 
 
-def _commit_files(tmp_path: Path, files: dict[str, str]) -> tuple[Path, str]:
+def _commit_files(tmp_path: Path, files: Mapping[str, str | bytes]) -> tuple[Path, str]:
     """A repository of one commit holding `files`; returns it and the commit's sha."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "test")
-    for name, text in files.items():
-        (repo / name).write_text(text)
+    for name, content in files.items():
+        if isinstance(content, bytes):
+            (repo / name).write_bytes(content)
+        else:
+            (repo / name).write_text(content)
     _git(repo, "add", "--all")
     _git(repo, "commit", "--no-verify", "-m", "one")
     return repo, _git(repo, "rev-parse", "HEAD")
@@ -286,6 +289,22 @@ def test_the_budget_counts_what_is_admitted_and_admits_up_to_it_inclusive(
     cases = tool.build_cases(commits=5, max_bytes=20)
 
     assert _admitted(tool, cases) == [f"{sha[:8]}:a.py", f"{sha[:8]}:b.py"]
+
+
+@BOTH
+def test_a_binary_file_is_skipped_and_does_not_stop_the_walk(
+    tool: Module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shallow CI checkout's one commit lists every file, so the corpus met a
+    PNG and raised UnicodeDecodeError. Known-good: `b.py`, named after the
+    image, is a case; known-bad: the image is not."""
+    png = b"\x89PNG\r\n\x1a\n\x00\xff"
+    repo, sha = _commit_files(tmp_path, {"a_shot.png": png, "b.py": "x = 1\n"})
+    monkeypatch.setattr(tool, "REPO", repo)
+
+    cases = tool.build_cases(commits=5)
+
+    assert _admitted(tool, cases) == [f"{sha[:8]}:b.py"]
 
 
 @BOTH
