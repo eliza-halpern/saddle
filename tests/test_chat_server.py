@@ -1939,7 +1939,14 @@ def test_a_retry_puts_back_the_file_the_first_attempt_wrote(
         ScriptedClient.rounds = _writes("out.txt", "second attempt")
         done = client.post(f"/api/sessions/{sid}/rewind", json={"index": asked}).json()
         assert done["reverted"] == [str(target)]
-        _settle(lambda: target.read_text() == "second attempt")
+        # The file is written mid-turn and the messages saved at its end:
+        # wait for both, or a slow runner reads the store before the save.
+        _settle(
+            lambda: (
+                target.read_text() == "second attempt"
+                and [m["role"] for m in store.load_messages(sid)].count("user") == 1
+            )
+        )
 
     # Not both attempts layered, and not the first left behind.
     assert target.read_text() == "second attempt"
