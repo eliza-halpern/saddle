@@ -419,6 +419,7 @@ def test_a_change_runs_only_the_test_files_that_reach_it_and_unreached_mutants_s
     assert unreached
     assert all(int(n.split(":")[1]) in (9, 10) for n in unreached)
     assert out.untested == len(unreached)
+    assert "node --test files only, here tests/a.test.js;" in out.untested_note
     assert set(out.survivors) >= set(unreached)  # still counted against the kill rate
     assert out.total == len(out.mutant_detail)
 
@@ -522,6 +523,33 @@ def test_only_decided_mutants_on_changed_lines_are_counted(tmp_path: Path) -> No
     assert js._outcome(
         report, tmp_path, {"a.js": {2}}, {"a.js": "/a"}, _run(SHELL_TIMEOUT)
     ).budget_spent
+
+
+def test_unreached_mutants_name_the_node_tests_that_ran_and_that_browsers_never_count(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "a.js").write_text("let a = 1;\nif (true) {}\n")
+    unreached = {"files": {"a.js": {"mutants": [_mutant("NoCoverage", 2), _mutant("Killed", 2)]}}}
+    tests = [f"tests/t{i}.test.js" for i in range(7)]
+    out = js._outcome(unreached, tmp_path, {"a.js": {2}}, {"a.js": "/a"}, _run(0), None, tests)
+    assert out.untested == 1
+    assert "node --test files only, here tests/t0.test.js, " in out.untested_note
+    assert "tests/t4.test.js and 2 more;" in out.untested_note
+    assert "tests/t5.test.js" not in out.untested_note
+    assert "through a browser never counts" in out.untested_note
+    # every mutant reached: nothing to explain
+    reached = {"files": {"a.js": {"mutants": [_mutant("Survived", 2)]}}}
+    out = js._outcome(reached, tmp_path, {"a.js": {2}}, {"a.js": "/a"}, _run(0), None, tests)
+    assert out.untested_note == ""
+
+
+def test_a_merged_outcome_keeps_the_javascript_reason() -> None:
+    python = MutationOutcome(killed=1, total=2, generated=2, survivors=("p",), untested=1)
+    script = MutationOutcome(
+        killed=0, total=1, generated=1, survivors=("j",), untested=1, untested_note=" (why)"
+    )
+    assert js.merge_outcomes(python, script).untested_note == " (why)"
+    assert js.merge_outcomes(script, python).untested_note == " (why)"
 
 
 def test_a_multi_line_mutant_is_shown_as_the_lines_it_replaces(tmp_path: Path) -> None:

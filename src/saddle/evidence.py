@@ -1763,6 +1763,11 @@ class MutationOutcome:
     # so a repair round can target them; this is only the count for the
     # gate's own detail string.
     untested: int = 0
+    untested_note: str = field(default="", compare=False)
+    """Why the `untested` mutants had no test, when the engine can say: the
+    JavaScript sampler names the `node --test` files it ran, since a test that
+    drives the code through a browser never reaches StrykerJS. Appended to the
+    gate's detail after the count; "" says nothing more."""
     # Every scored mutant's status string, counted after the
     # text-only exclusion and the `not checked` drop, so the counts
     # always sum to `total`. Nothing in `gates` reads this; it is

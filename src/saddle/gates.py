@@ -2989,6 +2989,7 @@ def check_mutation(outcome: MutationOutcome, threshold: float) -> GateCheck:
         # `untested == 0` renders byte-identical to before this task.
         untested = (
             f"; {outcome.untested} untested (no test runs the mutated function)"
+            f"{outcome.untested_note}"
             if outcome.untested
             else ""
         )

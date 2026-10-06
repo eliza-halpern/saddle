@@ -785,7 +785,27 @@ def mutation_sample(
                 survivors=(_tool_failure(ran),),
                 budget_spent=ran.exit_code == SHELL_TIMEOUT,
             )
-        return _outcome(json.loads(report.read_text()), scratch, by_file, spelled, ran, reach)
+        return _outcome(
+            json.loads(report.read_text()), scratch, by_file, spelled, ran, reach, chosen
+        )
+
+
+UNTESTED_SHOWN: Final = 5
+"""How many of the node test files `untested_note` names before "and N more"."""
+
+
+def untested_note(tests: Sequence[str]) -> str:
+    """What the mutation detail adds after its untested count: the test files
+    StrykerJS ran, and that only `node --test` files count. A watched run took
+    "no test runs the mutated function" to mean its browser-driven tests were
+    unseen by accident, and went reading the harness to find out why."""
+    shown = ", ".join(tests[:UNTESTED_SHOWN])
+    more = f" and {len(tests) - UNTESTED_SHOWN} more" if len(tests) > UNTESTED_SHOWN else ""
+    return (
+        f" (JavaScript mutants are run against node --test files only, here {shown}{more};"
+        " a test that drives the code through a browser never counts, so call the changed"
+        " code from a node test file)"
+    )
 
 
 def _tool_failure(ran: CapturedRun) -> str:
@@ -801,6 +821,7 @@ def _outcome(
     spelled: dict[str, str],
     ran: CapturedRun,
     reach: Reach | None = None,
+    ran_tests: Sequence[str] = (),
 ) -> MutationOutcome:
     files = report["files"]
     scored: list[tuple[str, str, str, int, str]] = []  # name, status, rel, line, show
@@ -825,6 +846,7 @@ def _outcome(
             name = f"{rel}:{line}:{mutant['location']['start']['column']} {mutant['mutatorName']}"
             scored.append((name, status, rel, line, _shown(rel, source, mutant)))
     survivors = [s for s in scored if s[1] not in _KILLED]
+    untested = sum(1 for s in scored if s[1] == "NoCoverage")
     tally: dict[str, int] = {}
     for _, status, _, _, _ in scored:
         tally[status] = tally.get(status, 0) + 1
@@ -834,7 +856,8 @@ def _outcome(
         generated=len(scored) + undecided,
         survivors=tuple(name for name, _, _, _, _ in survivors),
         survivor_lines=tuple(sorted({(spelled[rel], line) for _, _, rel, line, _ in survivors})),
-        untested=sum(1 for s in scored if s[1] == "NoCoverage"),
+        untested=untested,
+        untested_note=untested_note(ran_tests) if untested else "",
         statuses=tuple(sorted(tally.items())),
         survivor_details=tuple(
             (name, status, spelled[rel], line, mutation_text(show), False)
@@ -866,6 +889,7 @@ def merge_outcomes(first: MutationOutcome, second: MutationOutcome) -> MutationO
         text_only=first.text_only + second.text_only,
         survivor_lines=(*first.survivor_lines, *second.survivor_lines),
         untested=first.untested + second.untested,
+        untested_note=first.untested_note or second.untested_note,
         statuses=tuple(sorted(tally.items())),
         survivor_details=(*first.survivor_details, *second.survivor_details),
         mutant_detail=(*first.mutant_detail, *second.mutant_detail),

@@ -1986,6 +1986,22 @@ def test_mutation_detail_names_the_untested_mutants_only_on_a_fail() -> None:
     assert "untested" not in check_mutation(passing_but_untested, 85.0).detail
 
 
+def test_mutation_detail_says_why_the_untested_mutants_had_no_test() -> None:
+    """The engine's reason follows the untested count on a fail; a pass says
+    neither."""
+    note = " (JavaScript mutants are run against node --test files only, here t.test.js; ...)"
+    failing = MutationOutcome(
+        killed=1, total=3, generated=3, survivors=("s1", "s2"), untested=2, untested_note=note
+    )
+    assert check_mutation(failing, 85.0).detail.endswith(
+        "; 2 untested (no test runs the mutated function)" + note
+    )
+    passing = MutationOutcome(
+        killed=9, total=10, generated=10, survivors=("s1",), untested=1, untested_note=note
+    )
+    assert "node --test" not in check_mutation(passing, 85.0).detail
+
+
 # --- the verdict carries the gap it found ---------------------------------
 
 
