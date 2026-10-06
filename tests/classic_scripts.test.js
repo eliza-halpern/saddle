@@ -132,6 +132,52 @@ test("app.js loads beside its siblings, and a painter's output reads back from t
   assert.strictEqual(page.document.querySelector("#send").title, "Send");
 });
 
+/* ---------- accessible names: the status pill and the cite chips (#86) ---------- */
+
+test("the status pill's name is the plain state, whatever the pill shows", () => {
+  const page = loadPage();
+  const status = page.document.querySelector("#status");
+  const seen = [];
+  for (const [kind, detail] of [
+    ["idle", undefined],
+    ["working", undefined],
+    ["needs", undefined],
+    ["error", undefined],
+    ["working", "stopping…"], // the detail covers the word, so the name carries the state alone
+    ["idle", "ready"],
+  ]) {
+    page.setStatus(kind, detail);
+    seen.push([status.getAttribute("aria-label"), status.textContent, status.className]);
+  }
+  assert.deepStrictEqual(seen, [
+    ["idle", "idle", "status idle"],
+    ["working", "working", "status working"],
+    ["needs", "needs", "status needs"],
+    ["error", "error", "status error"],
+    ["working", "stopping…", "status working"],
+    ["idle", "ready", "status idle"],
+  ]);
+});
+
+test("a cite chip names the record it opens, and keeps the hash it shows inside that name", () => {
+  const page = loadPage();
+  const host = page.document.createElement("div");
+  const rows = [
+    ["packet row", page.citeButton("1a2b3c4d5e6f7a8b9c0d", { hash: "1a2b3c4d5e6f7a8b9c0d" }, host)],
+    ["session line", page.sessionCite({ lines: host }, "ff00ff00ff00ff00ff00")],
+  ];
+  const read = rows.map(([kind, chip]) => [kind, chip.getAttribute("aria-label"), chip.textContent]);
+  assert.deepStrictEqual(read, [
+    ["packet row", "Open the sealed ledger record 1a2b3c4d", "1a2b3c4d"],
+    ["session line", "Open the sealed ledger record ff00ff00", "ff00ff00"],
+  ]);
+  // Known bad: a name that dropped the eight digits the chip shows would leave
+  // the name and the label saying different things (WCAG 2.5.3, Label in Name).
+  for (const [kind, label, shown] of read) {
+    assert.ok(label.includes(shown), `${kind}: the name ${label} drops the hash ${shown} the chip shows`);
+  }
+});
+
 test("each page script runs under its file URL, which mutation testing needs to count the test", () => {
   const page = loadPage();
   // Known bad: a document with no #status makes app.js's own code throw, and

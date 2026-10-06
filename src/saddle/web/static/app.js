@@ -761,6 +761,11 @@ function setStatus(kind, detail) {
   const node = $("#status");
   node.className = `status ${kind === "idle" ? "idle" : kind}`;
   node.textContent = detail || kind;
+  // The pill's face is a kaomoji the stylesheet puts in front of the word, and a
+  // screen reader reads it as punctuation. The name says the state, in words, in
+  // every state -- including the ones where a detail ("stopping…") replaces the
+  // word the class already spells.
+  node.setAttribute("aria-label", kind);
   // While a turn runs the send button stops it: one control, two jobs, so
   // the thing you reach for is always under the cursor you just used.
   const sendButton = $("#send");

@@ -665,6 +665,9 @@ function citeButton(hash, record, host) {
   const button = el("button", "cite", hash.slice(0, 8));
   button.type = "button";
   button.title = "Open the ledger record this row is drawn from";
+  // The chip's visible text is eight hex digits, which names nothing a listener
+  // can act on: the name says what the chip is and which record it opens.
+  button.setAttribute("aria-label", `Open the sealed ledger record ${hash.slice(0, 8)}`);
   button.onclick = (event) => {
     event.preventDefault();
     const open = host.querySelector(`.record[data-hash="${hash}"]`);
@@ -688,6 +691,7 @@ function sessionCite(card, hash) {
   const button = el("button", "cite tl-cite", hash.slice(0, 8));
   button.type = "button";
   button.title = "Open this sealed ledger record";
+  button.setAttribute("aria-label", `Open the sealed ledger record ${hash.slice(0, 8)}`);
   button.onclick = async (event) => {
     event.preventDefault();
     const host = card.lines;
