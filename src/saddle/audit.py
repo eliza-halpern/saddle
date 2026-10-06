@@ -69,12 +69,20 @@ AUDIT_TEST_COMMAND: Final = "python -m pytest -q"
 DEFAULT_AUDIT_CACHE: Final = Path("~/.cache/saddle/audit")
 
 # The modules whose bytes decide a verdict, and the tools the gates shell out
-# to, in the order `gate_surface()` hashes them.
+# to, in the order `gate_surface()` hashes them. A module is on this list when
+# a verdict's *outcome* turns on its code, not when a finding merely passes
+# through it: `mutant_text` is here because `gates.set_aside_kind` asks its
+# `classify` which survivors the `--tier2 shortlist` verdict sets aside, so an
+# edit to that classifier changes which survivors are open, and a shortlist
+# verdict cached under the old one must not be served (#94). A module that only
+# renders a finding it did not decide (`packet`, `coverage_text`'s English) is
+# not on it: editing it re-audits nothing, so it must not cost one a re-run.
 SURFACE_MODULES: Final[tuple[str, ...]] = (
     "saddle.audit",
     "saddle.auditor",
     "saddle.runner",
     "saddle.gates",
+    "saddle.mutant_text",
     "saddle.evidence",
     "saddle.dag",
     "saddle.task_units",

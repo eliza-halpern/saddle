@@ -102,8 +102,10 @@ Each verdict is cached under a sha256 of these inputs:
 - the tree id (`git write-tree` over the tree, untracked files staged);
 - the resolved baseline (which also fixes the test time limit, read from it);
 - the test command and the plan node;
-- `audit.gate_surface()`: the gate modules' bytes, the tool versions and the Python
-  version;
+- `audit.gate_surface()`: the bytes of every module a verdict turns on
+  (`audit.SURFACE_MODULES`: the gate modules, and `mutant_text`, whose `classify`
+  decides which survivors the `--tier2 shortlist` verdict sets aside), the tool
+  versions and the Python version;
 - the sanctioned test list, when there is one.
 
 Tier 0 is keyed by the file's path and a hash of its bytes instead of a tree.
