@@ -122,6 +122,27 @@ def test_a_budget_under_a_minute_still_reads_as_one_minute(tmp_path: Path) -> No
     assert "This run has 1 minute and " in _system(client)
 
 
+def test_a_run_with_no_limits_is_told_it_has_none(tmp_path: Path) -> None:
+    client = Scripted([finish()])
+    auto(_repo(tmp_path / "repo", src=False), client)  # the defaults: NO_LIMIT both
+    system = _system(client)
+    assert "This run has no time or token limit; it ends when you call finish." in system
+    assert "1 minute" not in system  # known-bad: the deadline every default run was told
+    assert "0 generated tokens" not in system
+    assert "leave room to call finish" not in system
+
+
+def test_one_limit_is_named_and_the_other_said_to_be_absent(tmp_path: Path) -> None:
+    timed = Scripted([finish()])
+    auto(_repo(tmp_path / "a", src=False), timed, time_budget_s=600.0)
+    counted = Scripted([finish()])
+    auto(_repo(tmp_path / "b", src=False), counted, token_budget=5_000)
+    assert "This run has 10 minutes and no token limit; it stops there" in _system(timed)
+    assert "This run has 5,000 generated tokens and no time limit; it stops there" in (
+        _system(counted)
+    )
+
+
 def test_the_prompt_warns_about_coverage_in_addopts_only_when_it_is_there(
     tmp_path: Path,
 ) -> None:

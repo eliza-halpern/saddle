@@ -41,7 +41,14 @@ from saddle import prompt_constants, sandbox
 from saddle.anchor import COAUTHOR_TRAILER, anchor_trailers, outcome_hash
 from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode, _test_side
-from saddle.engine import DEFAULT_FINISH_REFUSAL_CAP, AutoRun, RunBudget, TurnOptions, run_turn
+from saddle.engine import (
+    DEFAULT_FINISH_REFUSAL_CAP,
+    NO_LIMIT,
+    AutoRun,
+    RunBudget,
+    TurnOptions,
+    run_turn,
+)
 from saddle.events import Event, Question
 from saddle.evidence import (
     SuiteLimitError,
@@ -159,8 +166,7 @@ ENVIRONMENT_PROMPT: Final = (
     "scratch files there. {python} {src}The audit runs "
     "the tests with `{test_command}` in this worktree. The whole suite can take "
     "many minutes in some projects, so run the test files that cover your change "
-    "first. This run has {minutes} and {tokens} generated tokens; it stops at "
-    "either limit, so leave room to call finish.{workers}{coverage}{node}{feed}"
+    "first. {budget}{workers}{coverage}{node}{feed}"
 )
 
 NODE_TOOLS_PROMPT: Final = (
@@ -256,7 +262,6 @@ def environment_prompt(
         if "--cov" in pytest_addopts(worktree)
         else ""
     )
-    minutes = max(1, math.ceil(time_budget_s / 60))
     try:
         count = suite_workers(worktree, "HEAD").count
     except SuiteLimitError:
@@ -273,12 +278,36 @@ def environment_prompt(
         python=python,
         src=src,
         test_command=AUDIT_TEST_COMMAND,
-        minutes=f"{minutes} minute{'s' if minutes != 1 else ''}",
-        tokens=f"{token_budget:,}",
+        budget=budget_sentence(time_budget_s, token_budget),
         coverage=coverage,
         workers=workers,
         node=NODE_TOOLS_PROMPT if node_tools else "",
         feed=FEED_PROMPT if feed else "",
+    )
+
+
+def budget_sentence(time_budget_s: float, token_budget: int) -> str:
+    """What the run's limits are, as the model is told them. A limit of 0 or
+    less is none (engine.NO_LIMIT), and is said as none: every default run
+    from ecc8dae on was told it had "1 minute and 0 generated tokens" and
+    should "leave room to call finish", a deadline that did not exist."""
+    limits = []
+    if time_budget_s > NO_LIMIT:
+        minutes = max(1, math.ceil(time_budget_s / 60))
+        limits.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    if token_budget > NO_LIMIT:
+        limits.append(f"{token_budget:,} generated tokens")
+    if not limits:
+        return "This run has no time or token limit; it ends when you call finish."
+    if len(limits) == 2:
+        return (
+            f"This run has {limits[0]} and {limits[1]}; it stops at either limit, "
+            "so leave room to call finish."
+        )
+    other = "token" if time_budget_s > NO_LIMIT else "time"
+    return (
+        f"This run has {limits[0]} and no {other} limit; it stops there, "
+        "so leave room to call finish."
     )
 
 
