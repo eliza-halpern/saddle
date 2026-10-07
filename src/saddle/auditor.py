@@ -130,6 +130,7 @@ from saddle.gates import (
     check_syntax,
     gate_stage_name,
     introduced_findings,
+    is_test_code,
     set_aside_kind,
     shortlist_order,
     spared_definitions,
@@ -617,13 +618,14 @@ exists for, a module mutmut cannot reach passing an infinite loop."""
 def data_only_change(copy: Path, baseline: str) -> list[str]:
     """The changed source files, when every changed line in them sits in a
     module-level assignment of a literal value; else []. Test files are not
-    source. No changed source line at all is [] too: there is no data to name."""
+    source, nor is any other test code (`is_test_code`). No changed source line
+    at all is [] too: there is no data to name."""
     changed = changed_statements(copy, git_diff(copy, baseline))
     by_file: dict[str, set[int]] = {}
     root = f"{copy}{os.sep}"
     for spelled, line in changed:
         rel = spelled.removeprefix(root)
-        if not is_test_file(rel):
+        if not is_test_code(rel):
             by_file.setdefault(rel, set()).add(line)
     for rel, lines in by_file.items():
         # `changed_statements` lists only files that exist and parse.
@@ -703,6 +705,14 @@ RED_PHASE_NOT_MEASURABLE: Final = (
 )
 """The red-phase finding in the same case (`RED_PHASE_NO_MUTANTS`)."""
 
+MUTATION_TESTS_ONLY: Final = (
+    "not proven: every changed Python line is test code, so mutation had no source "
+    "line to mutate; the tests' strength is not measured here. No edit can clear this, "
+    "and code added only to give mutation something to mutate is a defect."
+)
+"""The mutation finding when mutmut generated nothing and every changed Python
+line is test code (`is_test_code`): not proven, never a refusal (#181)."""
+
 RED_PHASE_NO_MUTANTS: Final = "tests unchanged and no mutants decided"
 
 RED_PHASE_TESTS_UNCHANGED: Final = "tests unchanged and"
@@ -771,11 +781,12 @@ def not_measurable_detail(files: Sequence[str], measurable: Mapping[str, str] | 
 
 
 def source_lines_changed(copy: Path, baseline: str) -> bool:
-    """Whether any changed line is in a Python file that is not a test file:
-    the lines mutation could mutate."""
+    """Whether any changed line is in a Python file that is not test code
+    (`is_test_code`, a helper under `tests/` included): the lines mutation could
+    mutate."""
     root = f"{copy}{os.sep}"
     return any(
-        not is_test_file(spelled.removeprefix(root))
+        not is_test_code(spelled.removeprefix(root))
         for spelled, _ in changed_statements(copy, git_diff(copy, baseline))
     )
 
@@ -2275,6 +2286,18 @@ class Auditor:
             red = statuses.get("red-phase", ("", "", None))
             if red[0] == "fail" and red[1].startswith(RED_PHASE_NO_MUTANTS):
                 statuses["red-phase"] = ("not-proven", RED_PHASE_NOT_MEASURABLE, red[2])
+        elif (
+            tier == 2
+            and spent is not None
+            and spent.generated == 0
+            and spent.total == 0
+            and not spent.survivors
+            and statuses.get("mutation", ("",))[0] == "fail"
+            and not source_lines_changed(copy, resolved)
+        ):
+            # Only test code changed: mutation measures source lines, and there are
+            # none, so it has no evidence either way (#181).
+            statuses["mutation"] = ("not-proven", MUTATION_TESTS_ONLY, statuses["mutation"][2])
         elif unmeasured and statuses.get("mutation", ("",))[0] in ("pass", "fail"):
             # Python lines were measured, other files were not: the verdict must not
             # read as covering the whole change.

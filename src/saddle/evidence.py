@@ -35,7 +35,7 @@ from xml.etree import ElementTree
 import coverage
 
 from saddle import memcap, sandbox
-from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding
+from saddle.gates import SHELL_TIMEOUT, TOOL_UNAVAILABLE, RuffFinding, is_test_code
 from saddle.journal import SpanRecorder
 from saddle.languages import LANGUAGE_NAMES
 
@@ -2947,10 +2947,12 @@ def mutation_sample(
         # asked to generate and run the whole tree (on saddle's own repo that
         # never finished: one module alone took 431 s to generate).
         # The rest are copied beside them unmutated (mutmut's work area holds
-        # only what it is told about, and the tests import them).
+        # only what it is told about, and the tests import them). Test code is
+        # never mutated, a helper under `tests/` pytest does not collect included
+        # (#181): the tests import it by a name mutmut does not key it under.
         touched = {Path(key).as_posix() for key in by_line}
         every = [name for name in copied if name not in tests]
-        production = [path for path in every if path in touched]
+        production = [path for path in every if path in touched and not is_test_code(path)]
         if not production:
             return MutationOutcome(killed=0, total=0, generated=0, survivors=())
         lines_by_file = {Path(key).as_posix(): lines for key, lines in by_line.items()}
