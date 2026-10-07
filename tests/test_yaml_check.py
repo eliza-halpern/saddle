@@ -58,6 +58,21 @@ Contract mutants, and the test that kills each:
     given: killed by `test_the_path_is_printed_as_it_was_given_on_the_command_line`
     and by the relative path `test_the_yaml_check_command_refuses_a_bad_file`
     hands to `main`, both of which read the report line back as the shell named it.
+14. Let `check_paths` read the exit code off the last file it was given instead of
+    off every file it was given (resetting the failure per file): killed by
+    `test_a_failure_in_an_earlier_file_still_fails_the_run_when_later_files_pass`,
+    which puts the failing file first and a passing file after it. Every other
+    multi-file test names its failing file last, so it passes on that mutant.
+15. Read what a `<<` names in mapping position as a merge and nothing more, so a
+    mapping written inline after it is never checked: killed by
+    `test_a_duplicate_key_inside_a_mapping_a_merge_names_inline_is_refused`.
+16. Read the mappings inside a merge list the same way: killed by
+    `test_a_duplicate_key_inside_a_mapping_in_a_merge_list_is_refused`.
+17. Order a file's problems by column before line, or by what they say instead of
+    where they are: killed by
+    `test_problems_are_printed_by_line_and_only_then_by_column`, whose problems are
+    at 2:12 and 3:4, then at 1:5 and 1:23, where the message order is the reverse
+    of the column order.
 """
 
 from __future__ import annotations
@@ -211,6 +226,26 @@ def test_every_file_named_is_checked_and_each_problem_is_reported_under_its_own_
     assert not any(line.startswith(f"{good}:") for line in lines), raw
     assert sum(1 for line in lines if line.startswith(f"{bad_one}:")) == 1, raw
     assert sum(1 for line in lines if line.startswith(f"{bad_two}:")) == 1, raw
+
+
+def test_a_failure_in_an_earlier_file_still_fails_the_run_when_later_files_pass(
+    tmp_path: Path,
+) -> None:
+    """A run fails when any file it was given fails, not only when the last one
+    does. Every other multi-file test here puts its failing file last, so a check
+    that let a passing file overwrite the failure of one before it passes them."""
+    bad = _file(tmp_path, "bad", BAD["duplicate-at-the-top-level"][0])
+    good_one = _file(tmp_path, "good-one", GOOD["workflow"])
+    good_two = _file(tmp_path, "good-two", GOOD["anchors-and-aliases"])
+    code, lines, raw = _report([bad, good_one, good_two])
+    assert code == 1, raw
+    assert len(lines) == 1, raw
+    assert lines[0].startswith(f"{bad}:3:1: duplicate key 'name'"), raw
+    assert not any(line.startswith(f"{good_one}:") for line in lines), raw
+    assert not any(line.startswith(f"{good_two}:") for line in lines), raw
+    # The same failure read from the middle of the list: a good file on either
+    # side of the bad one does not hide it.
+    assert _report([good_one, bad, good_two])[0] == 1
 
 
 def test_one_file_can_carry_more_than_one_problem(tmp_path: Path) -> None:
@@ -390,6 +425,40 @@ def test_a_merge_of_a_scalar_is_refused_at_the_merge(tmp_path: Path) -> None:
     ], in_list
 
 
+def test_a_duplicate_key_inside_a_mapping_a_merge_names_inline_is_refused(
+    tmp_path: Path,
+) -> None:
+    """`<<: {a: 1, a: 2}` writes no key of its own, but the mapping it names is
+    written here and writes `a` twice, so the second writing is refused where it
+    is written. PyYAML's `flatten_mapping` never checks a mapping it merges in, so
+    `safe_load` builds this file and this refusal is the duplicate rule alone."""
+    problems = check_file(
+        _file(tmp_path, "inline", BAD["duplicate-inside-a-mapping-a-merge-names-inline"][0])
+    )
+    assert [(p.line, p.column, p.message) for p in problems] == [
+        (
+            2,
+            14,
+            "duplicate key 'a': it is written twice in this mapping, the first at line 2",
+        )
+    ], problems
+
+
+def test_a_duplicate_key_inside_a_mapping_in_a_merge_list_is_refused(tmp_path: Path) -> None:
+    """The same mapping written inside the list a merge merges in: each mapping in
+    that list is checked, the same one way a mapping named on its own is."""
+    problems = check_file(
+        _file(tmp_path, "list", BAD["duplicate-inside-a-mapping-in-a-merge-list"][0])
+    )
+    assert [(p.line, p.column, p.message) for p in problems] == [
+        (
+            2,
+            15,
+            "duplicate key 'a': it is written twice in this mapping, the first at line 2",
+        )
+    ], problems
+
+
 def test_a_document_that_builds_a_value_pointing_into_itself_is_taken(tmp_path: Path) -> None:
     assert check_file(_file(tmp_path, "loop", GOOD["value-that-points-into-itself"])) == []
 
@@ -465,3 +534,26 @@ def test_problems_are_printed_in_the_order_the_file_writes_them(tmp_path: Path) 
     path = _file(tmp_path, "order", text)
     _, lines, raw = _report([path])
     assert _where(lines, path) == [(2, 1), (4, 1), (5, 1)], raw
+
+
+def test_problems_are_printed_by_line_and_only_then_by_column(tmp_path: Path) -> None:
+    """Line first, then column, which is the order a person reading the file top
+    to bottom meets them in. A later line whose problem starts in an earlier column
+    still comes after an earlier line's: 2:12 before 3:4, not 3:4 before 2:12.
+    Every other multi-problem file here has all its problems at column 1, so none
+    of them can tell the two readings apart."""
+    text = BAD["problems-on-different-lines-in-line-then-column-order"][0]
+    path = _file(tmp_path, "two-lines", text)
+    code, lines, raw = _report([path])
+    assert code == 1, raw
+    assert _where(lines, path) == [(2, 12), (3, 4)], raw
+    assert "duplicate key 'b'" in lines[0], raw
+    assert "unsafe tag '!Ref'" in lines[1], raw
+    # On one line the column is what orders them, and here the column order is the
+    # reverse of what the two messages would sort to.
+    same_line = BAD["problems-on-one-line-in-column-order"][0]
+    path = _file(tmp_path, "one-line", same_line)
+    _, lines, raw = _report([path])
+    assert _where(lines, path) == [(1, 5), (1, 23)], raw
+    assert "unsafe tag '!Ref'" in lines[0], raw
+    assert "duplicate key 'b'" in lines[1], raw
