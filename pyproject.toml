@@ -174,9 +174,11 @@ gate-checks = [
 # one of them (a config file touches every language). A stage not named always runs.
 gate-stage-languages = { ruff = ["python"], mypy = ["python"], shellcheck = ["shell"], eslint = ["javascript"], tsc = ["javascript"], prettier = ["javascript", "css", "html", "markdown"], c8 = ["javascript"], html-validate = ["html"], stylelint = ["css"], markdownlint-cli2 = ["markdown"] }
 # The browser tests drive Chrome with node; the audit's sandbox hides HOME, where
-# node may live, so name both here (docs/CLI.md, "Commands the sandbox shows").
-# Read like test-timeout, from the starting commit.
-sandbox-expose = ["node", "google-chrome"]
+# node may live, so name both here (docs/CLI.md, "Commands the sandbox shows"). uv
+# too: gate-checks runs `uv lock --check`, which needs neither the network nor a
+# cache, and with uv hidden that stage could never start (#167). Read like
+# test-timeout, from the starting commit.
+sandbox-expose = ["node", "google-chrome", "uv"]
 
 [tool.mutmut]
 # Tier-2 sampled self-mutation (ARCHITECTURE.md §3): scoped to src, time-boxed in CI.
