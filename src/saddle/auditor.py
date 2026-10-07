@@ -57,7 +57,6 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Literal
 
@@ -879,7 +878,7 @@ def prompt_effect(
     of the run), and `prompt_changes.judge` reads both against the bars read at
     the baseline."""
     files = [
-        f for f in git_changed_files(copy, resolved) if f.endswith(".py") and not _test_side(f)
+        f for f in git_changed_files(copy, resolved) if f.endswith(".py") and not is_test_code(f)
     ]
     heads = {
         f: (copy / f).read_text(errors="replace") if (copy / f).is_file() else None for f in files
@@ -1282,18 +1281,9 @@ def sanction(finding: Finding, sanctioned: Sequence[str]) -> Finding:
     )
 
 
-_TEST_NAMES: Final = ("test_*.py", "*_test.py", "conftest.py")
-_TEST_DIRS: Final = frozenset({"tests", "test"})
 _BASELINE_IGNORE: Final = shutil.ignore_patterns(
     ".git", "__pycache__", ".pytest_cache", ".coverage*", "mutants", ".saddle"
 )
-
-
-def _test_side(path: str) -> bool:
-    """A file the test suite owns: a test module, a conftest, or anything
-    under a `tests`/`test` directory. Everything else is a source."""
-    parts = PurePosixPath(path).parts
-    return any(fnmatch(parts[-1], p) for p in _TEST_NAMES) or bool(_TEST_DIRS & set(parts[:-1]))
 
 
 NO_TESTS_GATES: Final = ("tests", "coverage", "mutation", "red-phase")
@@ -1302,10 +1292,10 @@ NO_TESTS_GATES: Final = ("tests", "coverage", "mutation", "red-phase")
 
 def baseline_has_tests(copy: Path, resolved: str) -> bool:
     """Whether the baseline tracks any test file, Python or JavaScript, by name
-    (`_test_side`, `is_js_test_file`). A test file that collects nothing still
+    (`is_test_code`, `is_js_test_file`). A test file that collects nothing still
     counts: a change cannot be judged against tests it may have emptied."""
     names = run_capture(["git", "ls-tree", "-r", "--name-only", resolved], copy).stdout
-    return any(_test_side(n) or is_js_test_file(n) for n in names.splitlines())
+    return any(is_test_code(n) or is_js_test_file(n) for n in names.splitlines())
 
 
 def green_on_baseline(
@@ -1337,7 +1327,7 @@ def green_on_baseline(
         shutil.copytree(copy, base, ignore=_BASELINE_IGNORE)
         for line in changed:
             status, _, path = line.partition("\t")
-            if not path or _test_side(path):
+            if not path or is_test_code(path):
                 continue
             if status == "A":
                 (base / path).unlink(missing_ok=True)
@@ -1577,7 +1567,9 @@ def documented_raises_finding(copy: Path, baseline: str) -> Finding | None:
                 continue
         return out
 
-    sources = read(sorted({f for f, _ in changed if f.endswith(".py") and not is_test_file(f)}))
+    # Test code is not source (`is_test_code`, a helper under `tests/` included);
+    # the tests are what pytest collects (`is_test_file`), where a raise is tested.
+    sources = read(sorted({f for f, _ in changed if f.endswith(".py") and not is_test_code(f)}))
     listed = run_capture(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], copy
     ).stdout.split("\0")

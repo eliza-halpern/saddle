@@ -49,6 +49,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Final, Protocol
 
 from saddle.evidence import run_capture, tree_memory_limit
+from saddle.gates import is_test_code
 from saddle.task_examples import (
     ARGS_REFUSED,
     K_PREDICTORS,
@@ -103,9 +104,6 @@ HIDDEN: Final = "(docstring hidden: the task text refers to this name)"
 
 EMPTY_BASELINE: Final = "(none: the repository has no Python source before the task)"
 
-_TEST_NAMES: Final = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$|(^|/)conftest\.py$")
-_TEST_DIRS: Final = frozenset({"tests", "test"})
-
 
 class Completer(Protocol):
     """The one client call P1 makes (`VllmClient.complete`)."""
@@ -123,11 +121,6 @@ class Completer(Protocol):
 
 
 # -- D-2: what the passes see of the baseline ---------------------------------
-
-
-def _is_test(path: str) -> bool:
-    parts = PurePosixPath(path).parts
-    return bool(_TEST_NAMES.search(path)) or bool(_TEST_DIRS & set(parts[:-1]))
 
 
 def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> str:
@@ -150,7 +143,7 @@ def baseline_listing(sources: Mapping[str, str], task_text: str) -> tuple[str, l
     """
     lines: list[str] = []
     hidden: list[str] = []
-    for path in sorted(p for p in sources if p.endswith(".py") and not _is_test(p)):
+    for path in sorted(p for p in sources if p.endswith(".py") and not is_test_code(p)):
         try:
             tree = ast.parse(sources[path])
         except SyntaxError:

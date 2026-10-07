@@ -16,8 +16,8 @@ from typing import Any, cast
 
 import pytest
 
-from saddle.auditor import _test_side
 from saddle.auto import AutoOptions, AutoResult, run_auto
+from saddle.gates import is_test_code
 from saddle.journal import attempt_sidecar_path, read_spans
 from saddle.packet import compile_packet
 from saddle.prompt_constants import UNTESTED, check, items, named, superseded, tree_sources
@@ -77,7 +77,7 @@ def test_tree_sources_skips_tests_and_tool_directories(tmp_path: Path) -> None:
         (tmp_path / rel).write_text("X = 1\n")
     (tmp_path / "notes.txt").write_text("ROUND_HALF_UP\n")
     (tmp_path / "bad.py").write_bytes(b"\xff\xfe")
-    assert sorted(tree_sources(tmp_path, _test_side)) == ["money.py", "pkg/fees.py"]
+    assert sorted(tree_sources(tmp_path, is_test_code)) == ["money.py", "pkg/fees.py"]
 
 
 # -- the wiring: sealed at the end of a run, rendered as one packet row ---------

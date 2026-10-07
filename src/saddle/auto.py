@@ -41,7 +41,7 @@ from saddle import prompt_constants, sandbox
 from saddle.agents_md import LOCAL_FILE, local_instructions, project_instructions
 from saddle.anchor import COAUTHOR_TRAILER, anchor_trailers, outcome_hash
 from saddle.audit import AUDIT_TEST_COMMAND
-from saddle.auditor import Tier2Mode, _test_side
+from saddle.auditor import Tier2Mode
 from saddle.capabilities import CapabilityError
 from saddle.capabilities import load as load_switches
 from saddle.dag import MutationSample
@@ -67,7 +67,7 @@ from saddle.evidence import (
     suite_workers,
 )
 from saddle.feed import ARMS, Arm, AuditFeed, AuditorFactory, default_auditor
-from saddle.gates import DEFAULT_MUTANT_SHORTLIST, MIN_SIGNIFICANT_MUTANTS
+from saddle.gates import DEFAULT_MUTANT_SHORTLIST, MIN_SIGNIFICANT_MUTANTS, is_test_code
 from saddle.installs import Installs, WheelFolder
 from saddle.journal import (
     AUTO_COMMITTED,
@@ -1084,7 +1084,7 @@ def run_auto(
         prompt_check=(
             (
                 lambda: prompt_constants.check(
-                    options.task, prompt_constants.tree_sources(worktree, _test_side)
+                    options.task, prompt_constants.tree_sources(worktree, is_test_code)
                 )
             )
             if prompt_constants.named(options.task)

@@ -106,10 +106,10 @@ def test_a_rewrite_that_cannot_even_collect_on_the_baseline_is_red(tmp_path: Pat
 
 @pytest.mark.parametrize("path", ["tests/helpers.py", "test_x.py", "pkg/x_test.py", "conftest.py"])
 def test_the_test_side_is_kept_and_everything_else_goes_back(path: str) -> None:
-    from saddle.auditor import _test_side
+    from saddle.gates import is_test_code
 
-    assert _test_side(path)
-    assert not _test_side("src/pkg/fees.py")
+    assert is_test_code(path)
+    assert not is_test_code("src/pkg/fees.py")
 
 
 def _asked(root: Path) -> Finding:

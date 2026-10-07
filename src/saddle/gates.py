@@ -1221,9 +1221,10 @@ def plan_prescribes_deletion(plan: str, baseline_sources: Mapping[str, str]) -> 
     """
     public: set[str] = set()
     for rel, text in baseline_sources.items():
-        if _is_test_file(rel):
-            # A test's own helpers are not the API later nodes expect, and
-            # a test node may legitimately be told to drop a test it wrote.
+        if is_test_code(rel):
+            # Test code, a helper under `tests/` included, is not the API later
+            # nodes expect, and a test node may legitimately be told to drop a
+            # test it wrote (#184).
             continue
         names = _public_definitions(text)
         if names is None:

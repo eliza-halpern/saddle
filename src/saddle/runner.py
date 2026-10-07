@@ -409,10 +409,10 @@ def run_node_gate(
         # defined, and after those loops `dest` also holds stubs of modules
         # the node created and the node's own new test files -- neither of
         # which the baseline had.
+        # Test code is not the API later nodes expect: a helper under `tests/` or a
+        # `conftest.py` is the tests' own, which they may rename or drop (#184).
         baseline_modules = {
-            rel: text
-            for rel, text in read_sources(dest, "*.py").items()
-            if rel not in baseline_tests
+            rel: text for rel, text in read_sources(dest, "*.py").items() if not is_test_code(rel)
         }
         tests_changed = _test_signatures(baseline_tests) != _test_signatures(test_sources)
         # Red-phase means the node's own tests against pre-change sources.
