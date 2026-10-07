@@ -56,6 +56,7 @@ from saddle.gates import (
     Tier1Result,
     failing_tests,
     introduced_findings,
+    is_test_code,
     run_tier1,
 )
 from saddle.journal import SpanRecorder
@@ -190,6 +191,24 @@ fails alone is never named here, so a test the change broke still reads as the
 change's."""
 
 
+def carry_test_code(workdir: Path, dest: Path, touched: Collection[str]) -> None:
+    """Put the change's test code into the pre-change tree `dest` as the change
+    left it: every file of `touched` that `is_test_code` says is test code, a
+    helper under `tests/`, a `conftest.py` or a file the tests read, is copied
+    from `workdir`, and one the change deleted is removed. Source stays at the
+    baseline. Without this a new test failed pre-change on a helper entry it
+    could not find, and red-phase read that as the change's red (#183)."""
+    for rel in touched:
+        if not is_test_code(rel):
+            continue
+        target = dest / rel
+        if (workdir / rel).is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(workdir / rel, target)
+        elif target.is_file():
+            target.unlink()
+
+
 def _passed_alone(
     mode: SuiteRun,
     node: Node,
@@ -322,6 +341,11 @@ def run_node_gate(
         else None
     )
     changed_files = sorted({path for path, _ in changed})
+    # A changed Python line outside test code (`is_test_code`), which is what
+    # red-phase's differential needs: a change to test code alone has none (#183).
+    source_changed = any(
+        not is_test_code(Path(path).relative_to(workdir).as_posix()) for path in changed_files
+    )
     added = git_added_files(workdir, baseline, recorder=recorder)
     # Every file the diff names (git decides, so deletions and non-Python
     # files count, and a staged new file is already among them -- tracked-
@@ -402,7 +426,7 @@ def run_node_gate(
         # code fails for a real reason and a tautological one passes
         # pre-change and is rejected.
         for rel, source in sources.items():
-            if rel in test_sources or (dest / rel).exists():
+            if rel in test_sources or is_test_code(rel) or (dest / rel).exists():
                 continue
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -411,6 +435,7 @@ def run_node_gate(
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(source)
+        carry_test_code(workdir, dest, touched)
         # Sampled, not observed once: red-phase is the only gate that
         # reasons over two runs, so a flaky pre-change leg yields "fail
         # before, pass after" with no causal relation to the diff. Caches
@@ -426,7 +451,11 @@ def run_node_gate(
         # on coverage and mutation and never reads a sample, and on saddle
         # that one unread sample was six minutes of every source-only audit.
         unread = node.kind == "test" or (node.kind == "refactor" and not tests_changed)
-        samples = 0 if unread or not tier2 else (RED_PHASE_SAMPLES if tests_changed else 1)
+        # Nor does a change to test code alone: the pre-change code is the code its
+        # tests run against, so `check_red_phase` judges it without a sample.
+        tests_only = tests_changed and not source_changed
+        skip = unread or not tier2 or tests_only
+        samples = 0 if skip else (RED_PHASE_SAMPLES if tests_changed else 1)
         baseline_exits: list[int] = []
         baseline_output = ""
         baseline_mode = (
@@ -599,6 +628,7 @@ def run_node_gate(
         baseline_output=baseline_output,
         baseline_tests=baseline_tests,
         tests_changed=tests_changed,
+        source_changed=source_changed,
         current_runner=lambda: current_exit,
         flipped_tests=test_sources,
         mutation=mutation,

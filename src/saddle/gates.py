@@ -2010,6 +2010,15 @@ def _check_behaviour_preserved(coverage: GateCheck, mutation: MutationOutcome) -
 RED_PHASE_NOT_SAMPLED: Final = "not measured: no baseline sample at tier 1"
 """`check_red_phase`'s detail for a run that took no baseline sample."""
 
+RED_PHASE_TESTS_ONLY: Final = (
+    "tests changed and no Python source line did: the pre-change code is the "
+    "code they test, so there is no difference for them to fail on"
+)
+"""`check_red_phase`'s detail when only test code changed (#183). No baseline
+sample is run: a test that pins behaviour the code already has passes there, and
+before the change's test code was carried into the pre-change tree such a test
+"failed" only on a helper entry it could not find."""
+
 
 def check_red_phase(
     baseline_exits: Sequence[int],
@@ -2022,6 +2031,7 @@ def check_red_phase(
     coverage: GateCheck,
     mutation: MutationOutcome,
     red_spec: GateCheck | None = None,
+    source_changed: bool = True,
 ) -> GateCheck:
     """New tests must fail pre-change for a reason the change explains.
 
@@ -2069,6 +2079,11 @@ def check_red_phase(
     # evidence is how T4 passed while fixing the wrong module.
     if not tests_changed and kind == "refactor":
         return _check_behaviour_preserved(coverage, mutation)
+    if tests_changed and not source_changed:
+        # Tests changed and nothing they run against did (`source_changed`: a
+        # changed Python line outside test code): no differential to judge, a
+        # refusal the audit reads as not applicable.
+        return GateCheck(name="red-phase", passed=False, detail=RED_PHASE_TESTS_ONLY)
     if not baseline_exits:
         # Tier 1 samples no baseline (`runner.run_node_gate(tier2=False)`):
         # red-phase is a tier-2 finding, and this placeholder is never read.
@@ -2909,6 +2924,9 @@ class Tier1Inputs:
     # The JavaScript half of that question (`check_js_test_only_additions`): the reach
     # analysis of the `.js` files the change added to, or None when it has none.
     js_dead: JsDeadReport | None = None
+    # Whether a changed Python line is outside test code (`is_test_code`): False
+    # when only test code changed, which red-phase cannot judge (#183).
+    source_changed: bool = True
 
 
 @dataclass(frozen=True)
@@ -3340,6 +3358,7 @@ def run_tier1(node: Node, inputs: Tier1Inputs) -> Tier1Result:
             coverage=coverage,
             mutation=inputs.mutation,
             red_spec=tests,
+            source_changed=inputs.source_changed,
         ),
         check_node_scope(
             node.kind,

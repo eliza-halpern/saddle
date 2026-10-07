@@ -26,6 +26,7 @@ from saddle import auditor as auditor_mod
 from saddle import runner
 from saddle.auditor import (
     NOT_MEASURABLE_GATE,
+    RED_PHASE_ONLY_TESTS,
     Auditor,
     AuditorConfig,
     Findings,
@@ -299,17 +300,23 @@ def test_the_model_reads_that_padding_the_check_is_a_defect(
     assert "code added only to give those checks something to measure is a defect" in line
 
 
-def test_a_new_python_test_that_passes_before_the_change_still_fails_red_phase(
+def test_a_new_python_test_beside_a_change_with_no_python_source_is_not_judged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Only the "tests unchanged and no mutants decided" refusal is lifted: a test
-    # that proves nothing about the change is still refused.
+    # flip (#183): this pinned a refusal ("tests pass pre-change; prove nothing").
+    # A test beside a change with no Python source line has no pre-change
+    # difference to fail on, so red-phase cannot tell this tautology from a test
+    # pinning behaviour the code already has, which the same refusal rejected
+    # (test_red_phase_test_code). The refusal punished adding a test, not the
+    # change: the same change without it passes. The cost, on the record: a test
+    # that proves nothing, added beside such a change, is no longer refused.
     sampled(NOTHING, monkeypatch)
     root = tree(tmp_path)
+    assert Auditor(root).tier2().passed  # the change alone
     (root / "test_new.py").write_text("def test_new():\n    assert 1 + 1 == 2\n")
     found = Auditor(root).tier2()
     got = verdicts(found)
     assert got["mutation"] == "not-proven"
-    assert got["red-phase"] == "fail"
-    assert detail(found, "red-phase") == "tests pass pre-change; prove nothing"
-    assert not found.passed
+    assert got["red-phase"] == "not-applicable"
+    assert detail(found, "red-phase") == RED_PHASE_ONLY_TESTS
+    assert found.passed

@@ -112,6 +112,7 @@ from saddle.gates import (
     DOCUMENTED_RAISES,
     DOCUMENTED_RAISES_HELD,
     NO_TESTS_COLLECTED,
+    RED_PHASE_TESTS_ONLY,
     TEST_ONLY_UNPROVEN,
     TOOL_UNAVAILABLE,
     GateCheck,
@@ -727,6 +728,11 @@ RED_PHASE_NO_PYTHON: Final = (
 refactor rule would otherwise refuse on another language's mutation score."""
 """How `gates._check_behaviour_preserved` begins its detail when mutation decided
 nothing; the one red-phase refusal `MUTATION_NOT_MEASURABLE` also lifts."""
+
+RED_PHASE_ONLY_TESTS: Final = f"not applicable: {RED_PHASE_TESTS_ONLY}"
+"""The red-phase finding of a change to test code alone (`gates.RED_PHASE_TESTS_ONLY`):
+a regression test for code that already works can never fail on it, so this is
+never a refusal; the tests check and mutation judge such a change (#183)."""
 
 
 def measurable_here(copy: Path, tools: Path | None) -> Mapping[str, str]:
@@ -2320,6 +2326,8 @@ class Auditor:
             # proof) read a change with no Python source line in it: the mutants it
             # scored were another language's, whose own checks judge them.
             statuses["red-phase"] = ("not-applicable", RED_PHASE_NO_PYTHON, red[2])
+        elif tier == 2 and red[0] == "fail" and red[1] == RED_PHASE_TESTS_ONLY:
+            statuses["red-phase"] = ("not-applicable", RED_PHASE_ONLY_TESTS, red[2])
         sidecars: dict[str, Mapping[str, Any]] = {}
         if gated.mutation is not None:
             # The shortlist records `mutant_detail` as (name, status, show)
