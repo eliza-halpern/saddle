@@ -415,7 +415,9 @@ def test_a_burst_that_ends_mid_audit_never_waits_and_is_audited_next(
         time.sleep(0.01)
     f.close()
     # scope narrowed: the newest tree is audited; the one it superseded never is
-    assert fake.calls == [(1, BUGGY), (1, fixed)]
+    # Checkpoint 1 audited the tree with nothing changed, so its tier 0 (#99) had
+    # no file to check; checkpoint 2 checked calc.py, then ran its tests.
+    assert fake.calls == [(1, BUGGY), (0, "calc.py"), (1, fixed)]
 
 
 # -- async delivery ------------------------------------------------------------
@@ -1081,7 +1083,7 @@ def test_feedback_and_the_finish_gate_are_the_same_with_test_edits_allowed(repo:
     result, _ = run(repo, client, "E+A+F", auditor=fake, allow_test_edits=True)
     assert result.outcome == "finished"
     assert client.reacted >= 1  # the test edit made a burst; its checkpoint was delivered
-    assert [c[0] for c in fake.calls][:1] == [1]
+    assert [c[0] for c in fake.calls][:2] == [0, 1]  # the checkpoint's: tier 0 (#99), tier 1
     record = sidecar(result)
     assert record["allow_test_edits"] is True
     assert record["audit"]["passed"] is True

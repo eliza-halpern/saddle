@@ -12,8 +12,10 @@ about auditing (the engine imports no auditor):
   more successful edits. `run_command`, `read_file`, `finish`, anything:
   the model has stopped editing and started checking, reading or ending, so
   that tree is the checkpoint. The tree is snapshotted synchronously (a copy,
-  so later edits cannot race the audit) and `Auditor.tier1` runs on it in a
-  background thread, off the model's critical path. One checkpoint runs at a
+  so later edits cannot race the audit) and tier 0 (`Auditor.tier0` on each
+  changed Python file) then `Auditor.tier1` run on it in a background thread, off
+  the model's critical path. Tier 0 is there so a ruff finding reaches the model
+  after the edit that made it, not first at finish (#99). One checkpoint runs at a
   time, and a tool call never waits for it: a burst that ends while one is
   running is audited by the next checkpoint, which the first call after the
   running one completes starts on the tree as it is then. On a project whose
@@ -34,8 +36,8 @@ about auditing (the engine imports no auditor):
   finished with a passing in-run audit and were refused post hoc for
   `ruff format --check` and B904/F401, because only tiers 1 and 2 ran
   here. The contract now: a tree `finish` accepts is a tree the post-hoc
-  tier 0 accepts, on the changed files. Tier 0 runs at finish and on
-  `check`, never per edit (the edit guard stays syntax-only).
+  tier 0 accepts, on the changed files. Tier 0 runs at checkpoints, at finish
+  and on `check`, never per edit (the edit guard stays syntax-only).
 - `check()` -- the model's **pull** (`--check-tool`, arm E+A+F only): tier 0
   (`Auditor.tier0` on every changed Python file) and tier 1 of the same
   auditor, synchronously, on the tree as it is now, rendered by the same
@@ -794,7 +796,7 @@ class AuditFeed:
         return whole(tree)
 
     def _checkpoint(self, point: str, scratch: Path) -> AuditResult:
-        result = self._audit(point, (1,), scratch / "frozen", scratch)
+        result = self._audit(point, (0, 1), scratch / "frozen", scratch)
         assert result is not None
         with self._lock:
             self._ready.append(result)
