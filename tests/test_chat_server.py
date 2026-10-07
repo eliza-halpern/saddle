@@ -2596,7 +2596,7 @@ def test_serve_fails_closed_even_when_no_token_was_handed_to_it(
 
 
 def test_a_chat_in_a_repository_carries_its_agents_md_and_the_persons_notes(
-    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    store: SessionStore, tmp_path: Path
 ) -> None:
     """Red before: only `saddle auto` read AGENTS.md, so a chat in the same
     repository never saw the project's own rules."""
@@ -2624,7 +2624,10 @@ def test_a_chat_in_a_repository_carries_its_agents_md_and_the_persons_notes(
 
     with app_for(store, tmp_path) as (client, app):
         client.put("/api/personas/pirate", json={"prompt": "Arr."})
-        monkeypatch.setattr(module, "run_turn", capture)
+        # Assigned, not monkeypatched: `app_for` puts the real turn back when it
+        # exits, and a monkeypatch undone after that put `app_for`'s fake back
+        # for every later test in the process (#174).
+        module.run_turn = capture  # type: ignore[assignment]
         # One at a time: creating a session reuses one that has not started.
         inside = client.post("/api/sessions", json={"persona": "pirate", "workdir": str(repo)})
         _server_of(app)._run(inside.json()["id"], "hello")

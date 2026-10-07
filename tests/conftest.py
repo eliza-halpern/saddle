@@ -288,3 +288,38 @@ def no_real_compositor_pointer(monkeypatch: pytest.MonkeyPatch) -> None:
     finding the compositor's socket, so that is what is closed off; a test that
     wants the compositor path serves a fake one or injects a fake pointer."""
     monkeypatch.setattr("saddle.wlpointer.socket_path", lambda env: None)
+
+
+def leaked_turn() -> str | None:
+    """What the chat server's turn was left as, when it is not the engine's.
+
+    Tests replace `saddle.web.app.run_turn` with scripted turns (`app_for` in
+    test_chat_server, and by hand inside it). One put back in the wrong order
+    leaves its fake for every later test in the process: their turns echo the
+    question and never run a tool, so they fail far from the test that leaked
+    it, and only when the scheduler puts them after it on the same worker. Six
+    process-list tests failed that way and were read as load (#174)."""
+    app = sys.modules.get("saddle.web.app")
+    if app is None:
+        return None
+    from saddle import engine
+
+    turn = app.run_turn
+    if turn is engine.run_turn:
+        return None
+    return str(getattr(turn, "__qualname__", turn))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
+    """After every fixture of `item` is torn down, its monkeypatches undone
+    included: a test that left the chat server's turn patched fails here, by
+    name, and the engine's turn is put back, so no later test inherits it."""
+    yield
+    left = leaked_turn()
+    if left is not None:
+        import saddle.web.app as app
+        from saddle import engine
+
+        app.run_turn = engine.run_turn
+        pytest.fail(f"{item.nodeid} left saddle.web.app.run_turn as {left}", pytrace=False)
