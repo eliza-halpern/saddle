@@ -335,6 +335,22 @@ function notice(text, kind) {
   ($("#transcript").lastElementChild || $("#transcript")).appendChild(node);
 }
 
+/**
+ * The line a compaction leaves in the transcript where it dropped older
+ * messages: the system accounting for what it removed. The store keeps it under
+ * the user role, so drawn as a message it would be a question of the person's,
+ * with a turn of its own and buttons that rewind to it.
+ * @param {unknown} content
+ * @returns {HTMLElement}
+ */
+function compactionNote(content) {
+  const line = el("div", "compaction");
+  line.setAttribute("role", "note");
+  line.appendChild(el("b", null, "Context compacted"));
+  line.appendChild(el("span", "compaction-words", String(content || "")));
+  return line;
+}
+
 /* ---------- event stream ---------- */
 
 /** @param {ServerEvent} event */
@@ -517,6 +533,14 @@ function renderHistory(info) {
   }
   for (const message of shown) {
     while (changes.length && changes[0].at <= message.index) t.appendChild(conditionsLine(changes.shift()));
+    if (message.role === "user" && message.note) {
+      // The system speaking, in the place of the questions it dropped. It
+      // rode in under the user role the store keeps notes in, so drawn as a
+      // message it would be a question of the person's, with buttons that
+      // rewind to a message nobody asked.
+      t.appendChild(compactionNote(message.content));
+      continue;
+    }
     const turn = el("div", "turn");
     if (message.role === "user" && recapCard(turn, message.content)) {
       t.appendChild(turn);
@@ -623,6 +647,107 @@ function pastToolRows(turn, calls) {
 
 /* ---------- retry and edit ---------- */
 
+/**
+ * Say which stored question this turn holds: name it on the turn, and give it
+ * retry buttons if it has none.
+ * @param {HTMLElement} turn
+ * @param {number} index
+ */
+function numberTurn(turn, index) {
+  turn.dataset.index = String(index);
+  // A task's bubble stands for a run, not a question: no retry on it.
+  if (!turn.querySelector(".turn-tools") && !isTaskAsk(turn)) {
+    turn.insertBefore(turnTools(index), turn.firstChild);
+  }
+}
+
+/**
+ * What a stored message says, in the words the person used: its text parts
+ * joined, or the whole content where the message has no parts.
+ * @param {ServerEvent} message
+ * @returns {string}
+ */
+function askWords(message) {
+  if (!Array.isArray(message.content)) return String(message.content || "");
+  return message.content.map((part) => (part.type === "text" ? part.text || "" : "")).join("");
+}
+
+/**
+ * Whether a bubble holds the question this stored row is. A task's bubble
+ * stands for a run, so it answers to the recap message that run left behind.
+ * @param {{said: string, task: boolean}} bubble
+ * @param {ServerEvent} message
+ * @returns {boolean}
+ */
+function asksTheSame(bubble, message) {
+  const typed = bubble.said.trim();
+  const said = askWords(message);
+  if (bubble.task) return RECAP.test(said);
+  // The bubble holds what was typed. The row can say more than that -- the
+  // line naming files attached to the message -- so it is this bubble's
+  // question when it matches it, or continues it on a new line. A row that
+  // only contains it is a different question: "fix the tests later" is not
+  // "fix the tests", and buttons on it would rewind to the wrong message on
+  // disk.
+  return said.trim() === typed || said.startsWith(`${typed}\n`);
+}
+
+/**
+ * Which stored question each question bubble holds, oldest first: the store's
+ * index for each, -1 where the store no longer holds that question, and null
+ * when the two lists do not line up at all.
+ *
+ * They are matched from the newest bubble backwards, because that is the end a
+ * compaction leaves intact: it takes the *oldest* questions out of the store
+ * while their bubbles stay on screen until the page reloads. Matching the two
+ * lists by counting them worked only while they were the same length, so a
+ * turn that compacted the context left the question that just finished without
+ * retry buttons, and the buttons on the older bubbles named messages the
+ * compaction had already moved out from under them.
+ *
+ * @param {{said: string, task: boolean}[]} bubbles
+ * @param {ServerEvent[]} stored
+ * @returns {number[] | null}
+ */
+function askedIndices(bubbles, stored) {
+  const asked = stored.filter((message) => message.role === "user" && !message.note);
+  const index = bubbles.map(() => -1);
+  let at = bubbles.length - 1;
+  let ask = asked.length - 1;
+  while (at >= 0 && ask >= 0) {
+    // A bubble that does not match the row the same distance from the end is
+    // not the same list: the answer is not stored yet, or a message joined the
+    // turn from the input. Naming turns from a list that does not agree puts
+    // buttons on the wrong question, so none are named until it does.
+    if (!asksTheSame(bubbles[at], asked[ask])) return null;
+    index[at] = asked[ask].index;
+    at -= 1;
+    ask -= 1;
+  }
+  return index;
+}
+
+/**
+ * A question bubble as the pairing needs it: what it says, and whether it is a
+ * run's recap rather than words the person typed.
+ * @param {HTMLElement} turn
+ * @returns {{said: string, task: boolean}}
+ */
+function bubbleQuestion(turn) {
+  const asked = /** @type {HTMLElement} */ (turn.querySelector(".user"));
+  return { said: (asked.textContent || "").trim(), task: isTaskAsk(turn) };
+}
+
+/**
+ * Whether this turn's question is a Task's rather than something the person
+ * typed: a run is not a question you answer again in chat.
+ * @param {HTMLElement} turn
+ * @returns {boolean}
+ */
+function isTaskAsk(turn) {
+  return Boolean(turn.querySelector(".task-ask-bubble"));
+}
+
 async function restampTurns() {
   // A live turn does not know its own index -- that only exists once the
   // message is stored -- so after a turn settles the transcript is matched
@@ -635,20 +760,27 @@ async function restampTurns() {
   } catch {
     return; // the buttons are a convenience, not the turn
   }
-  const asked = stored.map((message, index) => (message.role === "user" ? index : -1)).filter((index) => index >= 0);
-  // Only the turns that carry a question: an assistant reply gets its own
-  // .turn node, so counting all of them never matched and the restamp
-  // silently never ran for a live turn.
-  const turns = /** @type {HTMLElement[]} */ ([...$("#transcript").querySelectorAll(".turn")]).filter((turn) =>
-    turn.querySelector(".user"),
+  const turns = /** @type {HTMLElement[]} */ ([...$("#transcript").querySelectorAll(".turn")]).filter(
+    (turn) => turn.querySelector(".user"), // only the turns that carry a question
   );
-  if (turns.length !== asked.length) return; // mid-stream; try again next idle
-  turns.forEach((turn, position) => {
-    turn.dataset.index = String(asked[position]);
-    // A task's bubble stands for a run, not a question: no retry on it.
-    if (!turn.querySelector(".turn-tools") && !turn.querySelector(".task-ask-bubble")) {
-      turn.insertBefore(turnTools(asked[position]), turn.firstChild);
+  // A compaction can leave a question on screen that the store no longer
+  // holds, so being on screen is not enough: askedIndices says which of these
+  // the store still answers to, and at which index.
+  const bubbles = turns.map(bubbleQuestion);
+  const asked = askedIndices(bubbles, stored);
+  if (!asked) return; // mid-stream; try again next idle
+  bubbles.forEach((bubble, position) => {
+    if (asked[position] < 0) {
+      // A compaction took this question out of the store while its bubble
+      // stayed on screen. Its buttons named a message that is no longer there,
+      // and rewinding to that index would cut the chat at whatever moved into
+      // its place, so they go with the question they belong to.
+      const stale = turns[position].querySelector(".turn-tools");
+      if (stale) stale.remove();
+      delete turns[position].dataset.index;
+      return;
     }
+    numberTurn(turns[position], asked[position]);
   });
 }
 

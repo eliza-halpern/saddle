@@ -28,6 +28,7 @@ const provides = {
     "openRunConfirm",
     "closeRunConfirm",
     "paintTestPolicy",
+    "RECAP",
   ],
   "notify.js": ["runState", "noteSessions", "runSelected"],
   "runs.js": ["deleteSession", "loadRuns"],

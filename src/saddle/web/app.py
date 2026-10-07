@@ -72,7 +72,7 @@ from saddle.feed import AuditorFactory as FeedAuditorFactory
 from saddle.installs import WheelFolder
 from saddle.journal import ProofRecord, SpanRecord, append_span, build_span, read_entries
 from saddle.labels import label_for
-from saddle.memory import estimate_tokens
+from saddle.memory import estimate_tokens, is_note
 from saddle.packet import Packet, compile_packet, display_record, render_packet_text
 from saddle.procs import ProcessLedger
 from saddle.sandbox import OutsideRootError, resolve_within
@@ -246,6 +246,27 @@ class TokenGate:
         await self.app(scope, receive, send)
 
 
+def asked_rows(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The store's user-role rows, each with the index it now sits at and a
+    `note` flag saying whether the system wrote it.
+
+    The page matches the question bubbles on screen against this after a turn
+    ends, to put the retry buttons on the question that just finished. So it
+    is the rows as the page drew them: what an image `read_file` queued is not
+    a question and is dropped, as `history_for_display` drops it, and a
+    compaction note -- kept under the user role because the served template
+    refuses a system message after index 0 -- stays but is marked, so the page
+    can tell the system speaking from the person asking. Building the full
+    display rows instead would label and preview every tool call of the
+    session on a request the page makes after every turn.
+    """
+    return [
+        {"index": index, **message, "note": is_note(message)}
+        for index, message in enumerate(messages)
+        if message.get("role") == "user" and not is_image_followup(message)
+    ]
+
+
 def history_for_display(
     messages: list[dict[str, Any]], workdir: Path, undo_root: Path | None = None
 ) -> list[dict[str, Any]]:
@@ -274,6 +295,13 @@ def history_for_display(
         if is_image_followup(message):
             continue  # what read_file showed the model, not something the person said
         message = {**message, "index": index}
+        if is_note(message):
+            # A compaction note is stored under the user role -- the served
+            # template refuses a system message after index 0 -- so the row
+            # alone cannot tell the page it is the system speaking. Without
+            # this the note drew as a question of the person's, with rewind
+            # buttons on a message nobody asked.
+            message["note"] = True
         calls = message.get("tool_calls")
         if not calls:
             shown.append(message)
@@ -1168,7 +1196,11 @@ def build_app(
         return JSONResponse(store.restore(request.path_params["sid"]).__dict__)
 
     async def get_messages(request: Request) -> JSONResponse:
-        return JSONResponse(store.load_messages(request.path_params["sid"]))
+        sid = request.path_params["sid"]
+        # The page asks after every turn, to name the question that just
+        # finished, so these rows are the questions only -- no tool labels or
+        # previews, which is what `history_for_display` costs to build.
+        return JSONResponse(asked_rows(store.load_messages(sid)))
 
     async def list_personas(_: Request) -> JSONResponse:
         # The editor needs to know which names it may delete, so the builtin
@@ -1568,6 +1600,12 @@ def build_app(
         """
         messages = store.load_messages(sid)
         if not 0 <= index < len(messages) or messages[index].get("role") != "user":
+            return None
+        if is_note(messages[index]):
+            # A compaction note rides in under the user role, and nobody asked
+            # it. Rewinding to it would cut the chat at the system's own line:
+            # the question the note was written for, and every question the
+            # compaction kept after it.
             return None
         content = messages[index].get("content")
         if isinstance(content, list):

@@ -207,6 +207,15 @@ details.tool:hover > summary > .code-copy, details.diff-file:hover > summary > .
 .notice.error { color: var(--bad); border-color: var(--bad); }
 .notice.error::before { content: "(；╹⌓╹) "; }
 
+/* A compaction's own line, where it dropped the older messages: the system
+   accounting for what it removed. It gets none of a turn's shape -- no bubble,
+   no buttons -- and reads like the other notices, with the reason it exists set
+   out from the text it replaced. */
+#transcript .compaction { color: var(--ink-faint); font-size: 12.5px; border-left: 2px solid var(--line);
+                          padding-left: 11px; margin: 0 0 12px; }
+#transcript .compaction b { color: var(--ink); }
+#transcript .compaction .compaction-words { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* ---- composer ---- */
 #composer { border-top: 1px solid var(--line); padding: 13px 24px 17px; }
 .composer-row { max-width: 820px; margin: 0 auto; display: flex; align-items: flex-end; gap: 9px;
