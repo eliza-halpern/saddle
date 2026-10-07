@@ -2065,6 +2065,36 @@ def test_mutation_sample_failed_run_names_the_tool(
     )
 
 
+def test_a_failed_engine_keeps_the_end_of_its_output_and_no_more(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#169: a mutmut crash kept only its last line (`KeyError: 10062`), so no
+    record said where it crashed. The outcome keeps the engine's last
+    MUTATION_TOOL_OUTPUT_LINES lines, frames included, and the one-line cause
+    is unchanged; a longer log is cut from the top, never the end."""
+    workdir = _mutation_workdir(tmp_path)
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    lines = evidence_module.MUTATION_TOOL_OUTPUT_LINES + 50
+    _stub_mutmut(
+        stub_dir,
+        "",
+        {},
+        run_body=(
+            f'i=0; while [ $i -lt {lines} ]; do echo "  frame $i" >&2; i=$((i+1)); done; '
+            'echo "KeyError: 10062" >&2; exit 1'
+        ),
+    )
+    monkeypatch.setenv("PATH", f"{stub_dir}{os.pathsep}{os.environ['PATH']}")
+    outcome = mutation_sample(workdir, {(str(workdir / "a.py"), 1)}, 10, test_files=set())
+    assert outcome.survivors == ("mutmut run exited 1: KeyError: 10062",)
+    kept = outcome.tool_output
+    assert len(kept) == evidence_module.MUTATION_TOOL_OUTPUT_LINES
+    assert kept[-1] == "KeyError: 10062"
+    assert kept[-2] == f"  frame {lines - 1}"
+    assert "  frame 0" not in kept
+
+
 def test_ruff_findings_parse_the_engine_and_render_human_lines(tmp_path: Path) -> None:
     """The ruff gate against the real engine: the JSON run yields findings keyed by
     source line and a captured run whose stdout is one human line each;

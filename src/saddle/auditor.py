@@ -586,6 +586,19 @@ decided: not proven, never a refusal. A watched run's correct tree was sent
 back with "no mutants decided" because mutmut spent the whole budget running
 the 408 tests that covered its changed lines before its first mutant."""
 
+MUTATION_TOOL_FAILED_PREFIX: Final = "mutation tool failed"
+"""How `gates.check_mutation` begins the detail of an engine that failed."""
+
+MUTATION_TOOL_CRASHED: Final = (
+    "{detail}. This is the mutation tool failing, not a finding against the change, "
+    "and no edit can clear it: call finish again to end the run. The tool's own output "
+    "is sealed with this finding for a person to read."
+)
+"""The mutation finding when the engine itself failed (not a red suite): not
+proven, never a refusal, and never a pass. A dogfood run's correct tree (9 of 9
+on its sealed oracle) was refused on `mutmut run exited 1: KeyError: 10062`, and
+the worker spent 40 minutes reading mutmut's source with nothing it could change."""
+
 
 MUTATION_DATA_ONLY: Final = (
     "not proven: the source this change touches is module-level constants only ({files}); "
@@ -2222,6 +2235,17 @@ class Auditor:
         ):
             # No evidence either way, and nothing the change could do about it.
             detail = MUTATION_UNMEASURED.format(generated=spent.generated)
+            statuses["mutation"] = ("not-proven", detail, statuses["mutation"][2])
+        elif (
+            tier == 2
+            and spent is not None
+            and spent.total == 0
+            and statuses.get("mutation", ("",))[0] == "fail"
+            and statuses["mutation"][1].startswith(MUTATION_TOOL_FAILED_PREFIX)
+        ):
+            # The engine crashed (a red suite reads "mutation not measured" and
+            # keeps its refusal): no evidence either way, and no edit clears it.
+            detail = MUTATION_TOOL_CRASHED.format(detail=statuses["mutation"][1])
             statuses["mutation"] = ("not-proven", detail, statuses["mutation"][2])
         elif (
             tier == 2

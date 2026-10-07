@@ -69,6 +69,11 @@ so this bounds non-termination without failing them. A suite that is
 slow and sound -- saddle's own takes about twenty minutes -- sets its
 own limit instead: `[tool.saddle] test-timeout` in its `pyproject.toml`."""
 
+MUTATION_TOOL_OUTPUT_LINES: Final = 200
+"""How many of a failed mutation engine's last output lines are kept
+(`MutationOutcome.tool_output`): a Python traceback through mutmut and the
+suite it runs fits, and a runaway log cannot fill the record."""
+
 RUFF_TIMEOUT_S: Final = 120.0
 """Wall-clock ceiling for one ruff run saddle starts (check or format).
 ruff lints a changed file in well under a second, so this bounds only a
@@ -1800,6 +1805,13 @@ class MutationOutcome:
     """The run hit `mutation_sample`'s time budget, so `total` counts only the
     mutants decided before it; with `total == 0` nothing was decided at all
     (the auditor then reports the mutation check not proven)."""
+    tool_output: tuple[str, ...] = field(default=(), compare=False)
+    """When the engine failed, the last `MUTATION_TOOL_OUTPUT_LINES` lines of
+    what it printed, one string per line; empty when it ran. The cause in
+    `survivors` keeps only the last line, and a dogfood run's mutmut crash
+    (`KeyError: 10062`) could not be diagnosed from any record. Sealed with
+    the mutation finding's sidecar, which keeps a list whole; recording only,
+    no verdict reads it, and not in `saddle audit --json`."""
 
 
 def mutation_text(show_output: str) -> str:
@@ -3019,6 +3031,7 @@ def mutation_sample(
                 total=0,
                 generated=0,
                 survivors=(cause if suite_passed else f"suite is red: {cause}",),
+                tool_output=tuple(output[-MUTATION_TOOL_OUTPUT_LINES:]),
             )
         results = run_capture(["mutmut", "results", "--all", "True"], scratch, recorder=recorder)
         verdicts = _parse_mutant_verdicts(results.stdout)

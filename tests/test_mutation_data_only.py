@@ -75,14 +75,17 @@ def test_module_level_code_that_is_not_a_literal_still_fails(
     assert not passed
 
 
-def test_an_engine_that_failed_still_fails_on_a_data_only_change(
+def test_an_engine_that_failed_is_named_not_read_as_data_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A failed engine is never relabelled as the data-only case: the detail
+    names the tool, and the verdict is not-proven (#169), never a pass."""
     broken = MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut run exited 2",))
     sampled(broken, monkeypatch)
     verdict, detail, _ = mutation(tree(tmp_path, "NAMES = ('a', 'b')"))
-    assert verdict == "fail"
+    assert verdict == "not-proven"
     assert detail.startswith("mutation tool failed")
+    assert "module-level" not in detail
 
 
 def test_data_only_change_reads_every_changed_source_line(tmp_path: Path) -> None:

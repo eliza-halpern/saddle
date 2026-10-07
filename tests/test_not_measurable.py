@@ -14,6 +14,7 @@ engine that failed on a browser-only change.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from saddle import runner
 from saddle.auditor import (
     NOT_MEASURABLE_GATE,
     Auditor,
+    AuditorConfig,
     Findings,
     finding_body,
     not_measurable_detail,
@@ -136,7 +138,6 @@ def test_the_whole_list_is_sealed_and_the_display_is_capped(
     root = tree(tmp_path)
     for index in range(9):
         (root / "static" / f"extra{index}.html").write_text("<p></p>\n")
-    from saddle.auditor import AuditorConfig
     from saddle.journal import read_spans
 
     journal = tmp_path / "ledger" / "proofs.jsonl"
@@ -150,15 +151,67 @@ def test_the_whole_list_is_sealed_and_the_display_is_capped(
     assert "extra8.html" in sidecar
 
 
-def test_an_engine_that_failed_still_fails_on_a_browser_only_change(
+def test_an_engine_that_failed_on_a_browser_only_change_is_never_a_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A Python engine that crashed on a change with no Python in it measured
+    none of the change's lines: under #169 it is not proven, which
+    `languages.visible` shows only where Python changed, so it is not listed;
+    it never reads as a mutation pass, and not-measurable still says what is
+    unproven. Before #169 the crash refused the tree."""
     broken = MutationOutcome(killed=0, total=0, generated=0, survivors=("mutmut run exited 2",))
     sampled(broken, monkeypatch)
     found = Auditor(tree(tmp_path)).tier2()
+    got = verdicts(found)
+    assert "mutation" not in got
+    assert got[NOT_MEASURABLE_GATE] == "not-proven"
+    assert "fail" not in got.values()
+
+
+def test_a_crashed_engine_is_not_proven_and_seals_its_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#169: a correct tree (9 of 9 on its sealed oracle) was refused on a
+    mutmut crash no edit could clear. A crashed engine is not proven, never a
+    refusal and never a pass; the detail names the crash and says it is not
+    the change's; the engine's output is sealed with the finding."""
+    from saddle.journal import read_spans
+
+    crash = MutationOutcome(
+        killed=0,
+        total=0,
+        generated=0,
+        survivors=("mutmut run exited 1: KeyError: 10062",),
+        tool_output=("Traceback (most recent call last):", '  File "m.py", line 3', "KeyError"),
+    )
+    sampled(crash, monkeypatch)
+    root = tree(tmp_path, python=True, browser=False)
+    journal = tmp_path / "ledger" / "proofs.jsonl"
+    found = Auditor(root, "HEAD", AuditorConfig(journal=journal)).tier2()
+    assert verdicts(found)["mutation"] == "not-proven"
+    shown = detail(found, "mutation")
+    assert shown.startswith("mutation tool failed: mutmut run exited 1: KeyError: 10062")
+    assert "not a finding against the change" in shown
+    (span,) = [s for s in read_spans(journal) if s.name == "audit-tier2:mutation"]
+    sealed = json.loads(next((journal.parent / "attempts").glob(f"{span.span_id}*")).read_text())
+    assert sealed["tool_output"] == list(crash.tool_output)
+
+
+def test_a_red_suite_under_the_engine_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The known-bad case #169 must not admit: mutmut failing because the
+    suite is red is the change's to fix, so it stays a refusal."""
+    red = MutationOutcome(
+        killed=0,
+        total=0,
+        generated=0,
+        survivors=("suite is red: mutmut run exited 1: failed to collect stats",),
+    )
+    sampled(red, monkeypatch)
+    found = Auditor(tree(tmp_path, python=True, browser=False)).tier2()
     assert verdicts(found)["mutation"] == "fail"
-    assert detail(found, "mutation").startswith("mutation tool failed")
-    assert not found.passed
+    assert detail(found, "mutation").startswith("mutation not measured: suite is red")
 
 
 # -- a change that mixes Python and other files ----------------------------------
