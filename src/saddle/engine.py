@@ -74,6 +74,7 @@ from saddle.memory import (
     estimate_tokens,
     is_test_command,
     run_state,
+    stale_copy,
     trim_screenshots,
 )
 from saddle.recall import Recall
@@ -88,6 +89,7 @@ from saddle.tools import (
     PREMISE_TOOL,
     REFUSE_TOOL,
     REFUSED,
+    SNIPPET_MISSING,
     TOOLS,
     ToolContext,
     embeddings_answer,
@@ -1371,6 +1373,8 @@ def run_turn(
                     result = CUT_CALL.format(name=call.name, why=broken)
                 else:
                     result = execute_tool(call, workdir=options.workdir, context=ctx)
+                    if result.startswith(SNIPPET_MISSING):
+                        result += stale_copy(call.arguments, messages)
                 duration_ms = int((perf_counter() - start) * 1000)
                 ok = not result.startswith("error: ")
                 refused = result.startswith(REFUSED)

@@ -362,7 +362,7 @@ def test_a_near_miss_edit_names_the_line_that_diverged_and_the_files_nearest(
         new="def add(a, b):\n    return a + b\n",
     )
     assert out.startswith("error: that snippet does not appear in 'calc.py'.")
-    assert "Its line 2 reads '    return a - c'" in out  # the snippet's role
+    assert "The snippet's line 2, '    return a - c', is not in the file" in out
     assert "the file's closest line is '    return a - b'" in out  # the file's role
     assert (tmp_path / "calc.py").read_text() == source
 
@@ -375,7 +375,7 @@ def test_a_snippet_with_nothing_close_says_so_and_names_no_nearest_line(tmp_path
     out = run(
         "edit_file", tmp_path, path="calc.py", old="zzqq_unrelated_words_here\n", new="x = 1\n"
     )
-    assert "Its line 1 reads 'zzqq_unrelated_words_here'" in out
+    assert "The snippet's line 1, 'zzqq_unrelated_words_here', is not in the file" in out
     assert "no line of the file is close to it" in out
     assert "closest line" not in out
     assert (tmp_path / "calc.py").read_text() == source

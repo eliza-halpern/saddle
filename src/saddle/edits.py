@@ -206,8 +206,14 @@ def first_divergence(source: str, search: str) -> str:
             continue
         near = difflib.get_close_matches(stripped, sorted(have), n=1, cutoff=0.6)
         if near:
-            return f" Its line {index} reads {line!r}; the file's closest line is {near[0]!r}"
-        return f" Its line {index} reads {line!r}, and no line of the file is close to it"
+            return (
+                f" The snippet's line {index}, {line!r}, is not in the file; "
+                f"the file's closest line is {near[0]!r}"
+            )
+        return (
+            f" The snippet's line {index}, {line!r}, is not in the file, "
+            "and no line of the file is close to it"
+        )
     return " Every line of it is in the file, but not consecutively in this order"
 
 

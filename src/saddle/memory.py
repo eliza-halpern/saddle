@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Sequence
+from pathlib import PurePosixPath
 from typing import Any, Final, Literal
 
 from saddle.vision import is_image_followup
@@ -389,6 +390,37 @@ def _file_bodies(messages: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
 
 def _entry_path(entry: str) -> str:
     return entry.split(" (", 1)[0]
+
+
+STALE_COPY: Final = (
+    "\nThe last compaction dropped this file's contents from your context (the note "
+    "lists {path}), so this edit was written from memory. Read {path} again with "
+    "read_file, then edit what it says now."
+)
+"""What an edit refusal adds when its file is one of `stale_files` (#189): the
+refusal alone read as a puzzle ("line 1 reads the same text... Odd") to a worker
+that had edited from its memory of a file the note said to read again."""
+
+
+def stale_files(messages: list[dict[str, Any]]) -> set[str]:
+    """The files the compaction note in `messages` says are no longer in context,
+    less those an intact `read_file` result or a `write_file` call has brought
+    back since (`_file_bodies`, the rule the note itself is written by)."""
+    note = next((m for m in messages if is_note(m)), None)
+    if note is None:
+        return set()
+    _, held = _file_bodies(messages)
+    gone = {PurePosixPath(_entry_path(e)).as_posix() for e in _previous_unread(note)}
+    return gone - {PurePosixPath(path).as_posix() for path in held}
+
+
+def stale_copy(arguments: str, messages: list[dict[str, Any]]) -> str:
+    """`STALE_COPY` for the file an edit call's `arguments` name, when it is one of
+    `stale_files`; "" otherwise."""
+    path = _edited_path({"function": {"name": "edit_file", "arguments": arguments}})
+    if path is None or PurePosixPath(path).as_posix() not in stale_files(messages):
+        return ""
+    return STALE_COPY.format(path=path)
 
 
 def _previous(note: dict[str, Any]) -> tuple[int, list[str]]:

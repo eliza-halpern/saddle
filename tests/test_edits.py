@@ -428,7 +428,7 @@ def test_a_refused_search_block_names_the_line_that_diverged(tmp_path: Path) -> 
             'edit m.py\n-a = 1\n-data = {"k": [{"x": "1"}}\n=======\n+z = 9\n>>>>>>>\n',
         )
     message = str(exc.value)
-    assert "Its line 2" in message
+    assert "The snippet's line 2" in message
     assert 'data = {"k": [{"x": "1"}]}' in message
     assert (tmp_path / "m.py").read_text() == 'a = 1\ndata = {"k": [{"x": "1"}]}\nb = 2\n'
 

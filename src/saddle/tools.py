@@ -1726,7 +1726,7 @@ def _edit_file(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             # the same words the worker's refusal uses): "does not appear" alone
             # gives a person or model nothing to fix on a long block.
             where = first_divergence(before, old_text)
-            return f"error: that snippet does not appear in {name!r}.{where}"
+            return f"{SNIPPET_MISSING}{name!r}.{where}"
         start, end = spans[0]
         lines = before.split("\n")
         after = "\n".join(lines[:start] + new_text.splitlines() + lines[end:])
@@ -1824,6 +1824,10 @@ UNSANDBOXED: Final = (
 """The first line of every command result while a session has full access
 (`ToolContext.full_access`): the model reads it, the page shows it on each
 command, and the journal keeps it in the call's span."""
+
+SNIPPET_MISSING: Final = "error: that snippet does not appear in "
+"""How `edit_file` begins a refusal of a snippet the file does not hold. The engine
+adds `memory.stale_copy` to one whose file a compaction dropped (#189)."""
 
 NO_ISOLATION: Final = (
     "error: nothing ran: {problem}. Commands here run only inside the sandbox; the "
