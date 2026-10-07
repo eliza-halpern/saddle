@@ -2176,6 +2176,12 @@ def build_parser() -> argparse.ArgumentParser:
         "search", help="Set up or check the local SearXNG the web reader searches with."
     )
     search_cmd.add_argument("search_action", choices=["setup", "status", "stop"])
+    yaml_cmd = sub.add_parser(
+        "yaml-check",
+        help="Parse every YAML file you name: a file that does not parse, that writes one "
+        "key twice, or that carries a tag the safe loader cannot build is refused.",
+    )
+    yaml_cmd.add_argument("paths", nargs="+", help="The YAML files to check.")
     answers_cmd = sub.add_parser("answers", help="Show this month's Brave Answers spend.")
     answers_cmd.add_argument("answers_action", choices=["status"])
     auto = sub.add_parser(
@@ -2540,6 +2546,7 @@ def main(
         "answers",
         "capabilities",
         "index",
+        "yaml-check",
     ):
         return 0
     if args.command == "capabilities":
@@ -2553,6 +2560,17 @@ def main(
         return run_index(
             Path(args.repo).resolve(), stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
         )
+    if args.command == "yaml-check":
+        try:
+            from saddle.yamlcheck import check_paths
+        except ImportError as exc:
+            print(
+                "error: saddle yaml-check needs PyYAML, which the `yaml` extra installs: "
+                f"pip install 'saddle[yaml]' ({exc})",
+                file=stderr or sys.stderr,
+            )
+            return 2
+        return check_paths(args.paths, stdout=stdout or sys.stdout)
     if args.command == "answers":
         return run_answers(
             args.answers_action, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
