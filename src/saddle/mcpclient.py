@@ -55,7 +55,13 @@ from types import ModuleType
 from typing import Any, Final, Literal, TextIO
 
 from saddle.procs import Tracked
-from saddle.sandbox import Sandbox, also_exposing, command_env, default_expose
+from saddle.sandbox import (
+    IsolationUnavailableError,
+    Sandbox,
+    also_exposing,
+    command_env,
+    default_expose,
+)
 
 CONFIG_ENV: Final = "SADDLE_MCP_CONFIG"
 """Overrides where the allowlist is read from."""
@@ -503,7 +509,11 @@ class McpHost:
                 return conn
             self._conns.pop(spec.name, None)
         sdk = load_sdk()
-        box = self._shown(spec, self.box())
+        try:
+            box = self._shown(spec, self.box())
+        except IsolationUnavailableError as exc:  # a server is a command too (#123)
+            msg = f"MCP server {spec.name!r} cannot start: {exc}"
+            raise McpError(msg) from exc
         errlog = tempfile.TemporaryFile("w+", encoding="utf-8")
         ready: Future[_Conn] = Future()
 

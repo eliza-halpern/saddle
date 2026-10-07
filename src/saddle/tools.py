@@ -52,6 +52,7 @@ from saddle.research import (
 )
 from saddle.sandbox import (
     DEFAULT_TIMEOUT,
+    IsolationUnavailableError,
     OutsideRootError,
     Sandbox,
     Terminal,
@@ -1117,7 +1118,12 @@ class ToolContext:
 
     def box(self) -> Sandbox:
         """The chat lanes' sandbox on the user's folder, with the folder's own
-        virtualenv first on PATH when it has one (`sandbox.project_env`)."""
+        virtualenv first on PATH when it has one (`sandbox.project_env`).
+
+        Without full access it is isolated or it is not built: where bwrap
+        cannot start this raises `IsolationUnavailableError`, nothing is kept,
+        and the next call asks again (#123). A command never runs unconfined
+        unless the person turned full access on."""
         if self.sandbox is None:
             env = project_command_env(project_env(self.workdir))
             if self.full_access:
@@ -1130,6 +1136,7 @@ class ToolContext:
                 on_output=self.on_output,
                 env=env,
                 unsandboxed=self.full_access,
+                require_isolation=not self.full_access,
                 ledger=self.processes,
             )
         return self.sandbox
@@ -1818,6 +1825,14 @@ UNSANDBOXED: Final = (
 (`ToolContext.full_access`): the model reads it, the page shows it on each
 command, and the journal keeps it in the call's span."""
 
+NO_ISOLATION: Final = (
+    "error: nothing ran: {problem}. Commands here run only inside the sandbox; the "
+    "file tools still work. The person can make bwrap start (README, Requirements) "
+    "or turn on full access to run commands as themselves."
+)
+"""A command, terminal or MCP server refused because bwrap cannot start and the
+session has no full access (#123). The next call asks again."""
+
 
 def _fit_output(ctx: ToolContext, text: str) -> str:
     """A command's output as the model gets it: whole when it fits READ_TOKENS
@@ -2228,6 +2243,8 @@ def execute_tool(call: ToolCall, *, workdir: Path, context: ToolContext | None =
         return handler(ctx, args)
     except (OutsideRootError, _BadArgumentError) as exc:
         return f"error: {exc}"
+    except IsolationUnavailableError as exc:
+        return NO_ISOLATION.format(problem=exc)
     except KeyError as exc:
         return f"error: missing argument {exc}"
     except (OSError, ValueError) as exc:

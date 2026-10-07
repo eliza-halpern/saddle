@@ -177,7 +177,8 @@ To work on saddle itself, see [CONTRIBUTING.md](CONTRIBUTING.md#start-here).
 - Self-operated vLLM ≥ 0.28 server with guided decoding (XGrammar) + KV offloading —
   the proven setup is [qwen38-27b-rtx3090](https://github.com/syv-ai/qwen38-27b-rtx3090)
 - pytest, coverage.py, ruff, mutmut: installed with saddle since 0.1.1; a copy on your PATH wins
-- Linux with `bwrap` (bubblewrap) that can start: Task runs refuse to run without it.
+- Linux with `bwrap` (bubblewrap) that can start: Task runs refuse to run without it,
+  and the chat runs no command without it unless the session has full access.
   On Ubuntu 24.04 unprivileged user namespaces are restricted by AppArmor, so `bwrap`
   needs the upstream `bwrap-userns-restrict` profile or an equivalent.
 - A user systemd manager (`systemd-run --user --scope` works) for the per-command memory
@@ -217,6 +218,11 @@ server. Point `--base-url` (or `SADDLE_BASE_URL`) somewhere else and they go the
 - **A Task run (`saddle auto`) requires isolation and has no network.** It refuses to
   start when `bwrap` is missing or cannot start (`require_isolation=True`,
   `IsolationUnavailableError`), and its commands see loopback only (`network="none"`).
+- **The chat never runs a command unconfined by accident.** In Ask and Edit, where
+  `bwrap` cannot start, a command or an MCP server is refused with the reason and
+  nothing runs (`ToolContext.box`, `tools.NO_ISOLATION`); the next command asks again,
+  and a probe of `bwrap` that timed out is never remembered as its answer
+  (`sandbox.bwrap_works`). Only full access, the person's own switch, runs commands as you.
 - **Every command the model runs has a memory cap** (`memcap.cap`): a systemd user scope with
   `MemoryMax`, no swap and at most 4096 tasks, or a per-process `prlimit --as` ceiling
   where no user systemd manager is reachable. The cap also covers the audited tree's
@@ -236,11 +242,11 @@ server. Point `--base-url` (or `SADDLE_BASE_URL`) somewhere else and they go the
   a Task command, with no network (`sandbox.confine`, #104). Where it cannot, they run
   as you, with your read access and your network, under the memory cap and the
   allowlisted environment only.
-- **Ask and Edit in the chat without a working `bwrap`.** Those lanes use `bwrap` when it
-  starts; otherwise commands run as you and the sandbox reports `isolation: none`
-  (`Sandbox.isolation`). They keep the host network either way. Ask offers the model
-  read-only tools only (`tools.tools_for_mode`); Edit writes your folder directly,
-  unaudited.
+- **The chat with full access, and its network.** With full access on (Edit only,
+  confirmed by the person), commands run as you, outside the sandbox, and each result
+  says so (`tools.UNSANDBOXED`). Ask and Edit keep the host network either way. Ask
+  offers the model read-only tools only (`tools.tools_for_mode`); Edit writes your
+  folder directly, unaudited.
 - **`git`, `ruff` and `coverage` bookkeeping calls** have no memory cap.
 
 ## Reading the comments

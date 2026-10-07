@@ -337,11 +337,11 @@ on the lane:
 
 | | Task (`saddle auto`) | Ask and Edit (chat) |
 |---|---|---|
-| Isolation | `bwrap`, required: if it is missing or cannot start, the run refuses to begin | `bwrap` when it starts; otherwise the command runs as you, and the sandbox says `isolation: none` rather than pretending |
+| Isolation | `bwrap`, required: if it is missing or cannot start, the run refuses to begin | `bwrap`, required unless the session has full access: where it cannot start, the command is refused with the reason and nothing runs, and the next command asks again; with full access, commands run as you and each result says so |
 | Filesystem | system directories, the interpreter and the project's virtualenv, read-only; an empty HOME (except a system `python3`'s user site-packages, read-only) and /tmp; the worktree is the one writable place, and its `.git` is read-only | the same, under `bwrap` |
 | Network | none (loopback only): saddle talks to the model itself, so no command needs it; an approved install (`--allow-installs`) has none either | the host network |
 | Environment | an allowlist, not your shell's variables | the same allowlist |
-| Git | `.git` is read-only to commands, so a command cannot commit or plant a hook; saddle commits the run itself, with hooks and `core.fsmonitor` switched off | read-only under `bwrap`; without it, only saddle's own git calls are guarded |
+| Git | `.git` is read-only to commands, so a command cannot commit or plant a hook; saddle commits the run itself, with hooks and `core.fsmonitor` switched off | read-only under `bwrap`; with full access, only saddle's own git calls are guarded |
 
 **Memory cap.** Every command, and every test command the auditor's gates run, gets a
 memory ceiling of its own: a systemd user scope with `MemoryMax` and no swap, or
