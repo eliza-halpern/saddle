@@ -284,8 +284,11 @@ def test_a_failure_inside_the_check_is_a_problem_and_not_a_traceback(
 
     failure = "the walk broke"
 
-    def broken(path: str, text: str) -> list[YamlProblem]:
-        del path, text
+    def broken(path: str, text: str, validator: object) -> list[YamlProblem]:
+        """A stand-in for the check has to take what the real `check_text` takes,
+        and `check_file` hands it the shape validator it holds: `None` here, which
+        is what a run with no `--schema` holds."""
+        del path, text, validator
         raise ValueError(failure)
 
     monkeypatch.setattr(yamlcheck, "check_text", broken)

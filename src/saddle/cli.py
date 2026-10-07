@@ -2179,9 +2179,16 @@ def build_parser() -> argparse.ArgumentParser:
     yaml_cmd = sub.add_parser(
         "yaml-check",
         help="Parse every YAML file you name: a file that does not parse, that writes one "
-        "key twice, or that carries a tag the safe loader cannot build is refused.",
+        "key twice, or that carries a tag the safe loader cannot build is refused. "
+        "With --schema, so is a document that does not match the shape it must have.",
     )
     yaml_cmd.add_argument("paths", nargs="+", help="The YAML files to check.")
+    yaml_cmd.add_argument(
+        "--schema",
+        metavar="SCHEMA.json",
+        help="A JSON Schema file every document must match: a violation is refused at the "
+        "line and column the node it lands on starts, and names that node's document path.",
+    )
     answers_cmd = sub.add_parser("answers", help="Show this month's Brave Answers spend.")
     answers_cmd.add_argument("answers_action", choices=["status"])
     auto = sub.add_parser(
@@ -2565,12 +2572,13 @@ def main(
             from saddle.yamlcheck import check_paths
         except ImportError as exc:
             print(
-                "error: saddle yaml-check needs PyYAML, which the `yaml` extra installs: "
-                f"pip install 'saddle[yaml]' ({exc})",
+                "error: saddle yaml-check needs PyYAML and jsonschema, which the `yaml` "
+                "extra installs: pip install 'saddle[yaml]' "
+                f"({exc})",
                 file=stderr or sys.stderr,
             )
             return 2
-        return check_paths(args.paths, stdout=stdout or sys.stdout)
+        return check_paths(args.paths, stdout=stdout or sys.stdout, schema=args.schema)
     if args.command == "answers":
         return run_answers(
             args.answers_action, stdout=stdout or sys.stdout, stderr=stderr or sys.stderr
