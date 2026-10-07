@@ -35,6 +35,7 @@ from saddle.tools import (
     COMPUTER_TOOL,
     FACT_ASK_THEM_ACTING,
     FACT_ASK_THEM_SEEING,
+    MOVE_HINT,
     SCREENSHOT_TOOL,
     ToolContext,
     execute_tool,
@@ -1669,3 +1670,31 @@ def test_a_move_is_not_sent_unless_the_window_is_active(
     said = act(_ctx(tmp_path, monkeypatch), window="video", action="move", dx=1, dy=1, click=True)
     assert said == computer.NOT_ACTIVE.format(window='0x1200005 "Video Configuration" 400x300')
     assert [c for c in stuck.actions if c[1] == "mousemove_relative"] == []
+
+
+def test_the_second_click_in_a_row_on_a_window_points_to_move_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live, a game that drew its own cursor took clicks at x, y as "done" and did
+    nothing, and the model never tried move. Known-bad: no word of move after
+    repeated clicks, or the word on every click."""
+    monkeypatch.setattr(screen, "run_x", FakeDesktop())
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = [act(ctx, window="video", action="click", x=10, y=20) for _ in range(3)]
+    assert [MOVE_HINT in s for s in said] == [False, True, False]
+    assert said[1].endswith(MOVE_HINT)
+
+
+def test_clicks_not_in_a_row_on_one_window_carry_no_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(screen, "run_x", FakeDesktop())
+    ctx = _ctx(tmp_path, monkeypatch)
+    said = [
+        act(ctx, window="video", action="click", x=10, y=20),
+        act(ctx, window="video", action="key", keys="Tab"),
+        act(ctx, window="video", action="click", x=10, y=20),
+        act(ctx, window="game", action="click", x=10, y=20),
+        act(ctx, window="video", action="click", x=10, y=20),
+    ]
+    assert not [s for s in said if MOVE_HINT in s]

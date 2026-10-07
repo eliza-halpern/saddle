@@ -356,6 +356,20 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
 (`offer_computer`), never in a task run."""
 
 
+MOVE_HINT: Final = (
+    "If the window did not respond to your clicks and it draws its own cursor (a game, "
+    "for one), clicks at x, y may not reach it: use action=move with dx, dy, the "
+    "distance from its cursor to the target in your latest picture, then move again "
+    "with click=true once its cursor is on the target."
+)
+"""Said with the second click in a row on one window, once per window. Live, a
+game that drew its own cursor took every click at x, y as "done" and did nothing;
+the model reworked its coordinates for minutes and never tried `move`, though
+the tool's description named the case. Whether a window draws its own cursor
+could not be read reliably (its X cursor was blank in one state, not in
+another), so the hint follows the clicks rather than a reading of the window."""
+
+
 _ARGUMENTS: Final[dict[str, frozenset[str]]] = {
     tool["function"]["name"]: frozenset(tool["function"]["parameters"]["properties"])
     for tool in [
@@ -923,6 +937,10 @@ class ToolContext:
     view: screen.Zoom | None = None
     """Where the window's latest picture starts when a menu over it widened it,
     for `computer` points read on it (space=window)."""
+    clicked: str | None = None
+    """The window the latest `computer` action clicked, when it was a click."""
+    move_hinted: set[str] = field(default_factory=set)
+    """Windows whose clicks already carried `MOVE_HINT`: it is said once each."""
     last_look: str | None = None
     """What the latest screenshot showed: "screen" or "window". A `computer`
     point given without `space` is read on it."""
@@ -1349,7 +1367,12 @@ def _computer(ctx: ToolContext, args: Mapping[str, Any]) -> str:
             f" A new window opened: {named}. The picture above is of {window.id} only; "
             "take a screenshot with that window to see it."
         )
-    return f"done: {action.describe()} on {window.describe()}{read}. {after}"
+    hint = ""
+    if action.kind == "click" and ctx.clicked == window.id and window.id not in ctx.move_hinted:
+        ctx.move_hinted.add(window.id)
+        hint = " " + MOVE_HINT
+    ctx.clicked = window.id if action.kind == "click" else None
+    return f"done: {action.describe()} on {window.describe()}{read}. {after}{hint}"
 
 
 def _shown_windows(env: Mapping[str, str]) -> list[screen.Window]:
