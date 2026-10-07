@@ -1,6 +1,7 @@
-"""`saddle yaml-check`: parse, duplicate-key and unsafe-tag checks for YAML files.
+"""`saddle yaml-check`: parse, duplicate-key, unsafe-tag and shape checks for YAML
+files.
 
-Contract, in three sentences:
+Contract, in four sentences:
 
 1. `check_text` names a problem for every way a file fails, at the 1-based line
    and column where that problem starts in the whole file, and names none for a
@@ -16,6 +17,16 @@ Contract, in three sentences:
    tags, in key, value or document position; a tag it has a constructor for but
    cannot build from the text written (`!!int abc`, `!!bool yesno`) is refused the
    same way.
+4. `--schema SCHEMA.json` adds a fourth rule, the shape each document must have.
+   A document is held against the schema as the safe loader builds it, so a `<<`
+   merge is inlined before the schema looks at it. Every violation is a problem
+   with the file, at the 1-based line and column where the node its own document
+   path lands on starts, and the message carries that path: keys joined by dots,
+   sequence items by index, so `resources.jobs.nightly.tasks[0]`, with a path of
+   none at the document itself. A key the schema does not allow is named in the
+   problem. Every violation in every document of a multi-document file is named.
+   Without `--schema` nothing here matches a shape; with it, rules 1 to 3 still
+   refuse everything they refuse on their own.
 
 Known-good: a workflow that parses, a multi-document file, anchors and aliases, a
 merge that overrides an anchored key, a `=` key, a value that points into itself,
@@ -28,17 +39,20 @@ a key, an undefined alias, and a file with a key written twice inside a mapping
 its tag already refuses. A file that is not there to read, and one that is not
 text, are problems too, which no file text can hold and a test names directly.
 
-Contract mutants, each one killed by a test in tests/test_yaml_check.py as
-listed in that module's docstring.
+Contract mutants, each one killed by a test in tests/test_yaml_check.py or, for
+the schema rule, in tests/test_yaml_schema.py as listed in those modules'
+docstrings.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Hashable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, Final
 
+from jsonschema.validators import validator_for  # type: ignore[import-untyped]
 from yaml.constructor import SafeConstructor  # type: ignore[import-untyped]
 from yaml.error import YAMLError  # type: ignore[import-untyped]
 from yaml.loader import SafeLoader  # type: ignore[import-untyped]
@@ -272,12 +286,91 @@ def node_as(node: Any, tag: str) -> Any:
     return ScalarNode(tag, node.value, node.start_mark, node.end_mark, node.style)
 
 
-def check_text(path: str, text: str) -> list[YamlProblem]:
+def load_schema(path: str) -> tuple[Any, YamlProblem | None]:
+    """The validator `--schema` asks for, or the problem with the file it names.
+
+    The schema is compiled the way `jsonschema` reads a schema: the validator for
+    the draft the file names in `$schema`, or for the latest draft when it names
+    none, and `check_schema` runs first, so a file that is not a schema is named
+    here instead of standing as a rule every document passes. The validator
+    itself is `Any`, like every PyYAML and `jsonschema` value in this module:
+    neither package is typed.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, YamlProblem(path, f"is not a JSON Schema I can read: {_reason(exc)}")
+    try:
+        schema = json.loads(text)
+        draft = validator_for(schema)
+        draft.check_schema(schema)
+        return draft(schema), None
+    except Exception as exc:
+        return None, YamlProblem(path, f"is not a JSON Schema: {_reason(exc)}")
+
+
+def _reason(exc: BaseException) -> str:
+    """What an exception says, on one line: the report is one line per problem."""
+    return (getattr(exc, "problem", None) or str(exc)).splitlines()[0]
+
+
+def _locate(loader: Any, document: Any, parts: Sequence[Any]) -> tuple[Any, str]:
+    """Where a violation's own document path lands in the nodes, and how it reads.
+
+    The paths are followed through the nodes the loader built the document from,
+    so a position is a position in the file: a merge is where it asks for it, and
+    a key stands for the value the built document holds for it, which is the last
+    of its entries that wrote it.
+    """
+    node: Any = document
+    where = ""
+    for part in parts:
+        if isinstance(node, SequenceNode):
+            node = node.value[part]
+            where = f"{where}[{part}]"
+            continue
+        written: dict[Any, Any] = {}
+        for key_node, value_node in node.value:
+            written[loader.construct_object(key_node)] = value_node
+        node = written[part]
+        where = f"{where}.{part}" if where else str(part)
+    return node, where
+
+
+def _schema_problems(loader: Any, path: str, document: Any, validator: Any) -> list[YamlProblem]:
+    """Every way one document fails the schema, each at the node it is about.
+
+    The document is built first, by the safe loader itself, because that is the
+    document a bundle schema is written for: merges inlined, and an anchor naming
+    the value it names. A document the loader cannot build is not held against a
+    schema at all: `_Document` named the way it fails to build, and that is what
+    the file needs, not a second opinion about a document that does not exist.
+    """
+    try:
+        value = loader.construct_document(document)
+    except Exception:
+        return []  # `_Document` named the way this document cannot be built
+    problems: list[YamlProblem] = []
+    for error in validator.iter_errors(value):
+        node, where = _locate(loader, document, error.absolute_path)
+        problems.append(
+            YamlProblem(
+                path,
+                f"{where}: {error.message}" if where else error.message,
+                node.start_mark.line + 1,
+                node.start_mark.column + 1,
+            )
+        )
+    return problems
+
+
+def check_text(path: str, text: str, validator: Any = None) -> list[YamlProblem]:
     """Every problem with one file's text, as it was read from `path`.
 
     A file is one YAML stream, so every document in it is checked. A stream that
     does not scan or parse stops at that problem: the loader cannot reach what
-    follows the point it could not read.
+    follows the point it could not read. With a `validator`, every document is
+    also held against the schema it holds.
     """
     try:
         loader: Any = SafeLoader(text)
@@ -287,15 +380,18 @@ def check_text(path: str, text: str) -> list[YamlProblem]:
     problems: list[YamlProblem] = []
     for document in documents:
         problems.extend(_Document(loader, path).problems_of(document))
+        if validator is not None:
+            problems.extend(_schema_problems(loader, path, document, validator))
     return sorted(set(problems), key=YamlProblem.order)
 
 
-def check_file(path: str) -> list[YamlProblem]:
+def check_file(path: str, validator: Any = None) -> list[YamlProblem]:
     """Every problem with one file: read it, then check the text that is there.
 
     A file that is not there, is not text, or breaks the check in a way no YAML
     error covers is named as a problem, so a file never ends the command in a
-    traceback and never ends it in a pass either.
+    traceback and never ends it in a pass either. With a `validator`, the text is
+    also held against the schema it holds.
     """
     try:
         text = Path(path).read_text(encoding="utf-8-sig")
@@ -304,7 +400,7 @@ def check_file(path: str) -> list[YamlProblem]:
     except UnicodeDecodeError as exc:
         return [YamlProblem(path, f"is not UTF-8 text: {exc.reason}")]
     try:
-        return check_text(path, text)
+        return check_text(path, text, validator)
     except Exception as exc:
         return [YamlProblem(path, f"cannot be checked: {type(exc).__name__}: {exc}")]
 
@@ -335,15 +431,25 @@ def problem_of(path: str, exc: BaseException, text: str) -> YamlProblem:
     return YamlProblem(path, message, line, column)
 
 
-def check_paths(paths: Sequence[str], *, stdout: IO[str]) -> int:
-    """`saddle yaml-check PATH...`: print every problem with every file, and 1 if any.
+def check_paths(paths: Sequence[str], *, stdout: IO[str], schema: str | None = None) -> int:
+    """`saddle yaml-check PATH... [--schema FILE]`: print every problem, and 1 if any.
 
     The path in each line is the path as it was given on the command line, so the
-    line a person can paste into their shell is the line the problem is in.
+    line a person can paste into their shell is the line the problem is in. With
+    `--schema`, every document of every file is held against it too. A schema
+    file that cannot be read, or is not a schema, is named before any file is
+    checked: a run that cannot hold its files against the shape it was asked for
+    is not a run that found nothing wrong.
     """
+    validator: Any = None
+    if schema is not None:
+        validator, problem = load_schema(schema)
+        if problem is not None:
+            print(problem, file=stdout)
+            return 1
     failed = False
     for path in paths:
-        problems = check_file(path)
+        problems = check_file(path, validator)
         if problems:
             failed = True
             for problem in problems:
