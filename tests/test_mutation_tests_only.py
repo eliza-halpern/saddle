@@ -78,6 +78,27 @@ def test_a_source_function_changed_beside_the_tests_still_fails_with_nothing_mut
     assert source_lines_changed(root, "HEAD")
 
 
+def test_a_data_only_source_change_beside_a_helper_edit_is_still_data_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A helper's function body under `tests/` is test code, not source that is
+    not data: the source change beside it is still read as data only."""
+    root = tmp_path / "tree"
+    (root / "tests").mkdir(parents=True)
+    source = "NAMES = ('a',)\n\n\n" + SOURCE
+    _init(root, {"n.py": source, "tests/helper.py": HELPER, "tests/test_n.py": TEST})
+    (root / "n.py").write_text(source.replace("('a',)", "('a', 'b')"))
+    (root / "tests" / "helper.py").write_text(HELPER.replace("return 1", "return 0 + 1"))
+    (root / "tests" / "test_n.py").write_text(
+        TEST.replace("from n import f", "from n import NAMES, f") + "    assert 'b' in NAMES\n"
+    )
+    sampled(NOTHING, monkeypatch)
+    assert data_only_change(root, "HEAD") == ["n.py"]
+    verdict, detail = mutation(root)
+    assert verdict == "not-proven"
+    assert detail.startswith("not proven: the source this change touches is module-level")
+
+
 def test_mutation_sample_never_mutates_a_helper_module_under_tests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
