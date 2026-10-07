@@ -6,13 +6,13 @@ import ast
 import os
 import stat
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
 from saddle import runner as runner_module
 from saddle.dag import Node
-from saddle.evidence import CapturedRun, run_argv
+from saddle.evidence import CapturedRun, run_argv, run_capture
 from saddle.gates import FORMAT_NOT_CONFIGURED, RED_PHASE_SAMPLES, GateCheck
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import (
@@ -123,12 +123,12 @@ def test_the_node_gates_ruff_format_check_carries_the_timeout(
     forever, so the format call must pass RUFF_TIMEOUT_S like every other."""
     from saddle.evidence import RUFF_TIMEOUT_S
 
-    real = runner_module.run_capture
+    real = run_capture
     format_timeouts: list[float | None] = []
 
-    def spy(argv: list[str], workdir: Path, **kw: object) -> object:
+    def spy(argv: list[str], workdir: Path, **kw: Any) -> CapturedRun:
         if "format" in argv and "--check" in argv:
-            format_timeouts.append(kw.get("timeout"))  # type: ignore[arg-type]
+            format_timeouts.append(kw.get("timeout"))
         return real(argv, workdir, **kw)
 
     monkeypatch.setattr(runner_module, "run_capture", spy)
