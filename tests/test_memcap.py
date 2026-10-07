@@ -676,3 +676,54 @@ def test_a_capped_gate_run_that_times_out_leaves_no_empty_scope(
     assert run.timed_out
     (unit,) = made_units
     assert _scope(unit) != ("active", [])
+
+
+@pytest.fixture
+def released(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """The unit of every `Cap.release` call during the test, in order."""
+    from saddle import memcap as live
+
+    calls: list[str | None] = []
+    real = live.Cap.release
+
+    def spy(self: live.Cap) -> None:
+        calls.append(self.unit)
+        real(self)
+
+    monkeypatch.setattr(live.Cap, "release", spy)
+    return calls
+
+
+def test_a_capped_command_killed_at_its_timeout_releases_its_scope(
+    tmp_path: Path, released: list[str | None], made_units: list[str]
+) -> None:
+    """#172's timeout path: `run_capture` returns before `oom_killed`, so
+    this release is the only one a timed-out command's scope gets."""
+    from saddle.evidence import run_capture
+
+    run = run_capture(["sleep", "30"], tmp_path, timeout=0.5, memory_limit=1 << 30)
+    assert run.timed_out
+    assert len(released) == 1
+    assert released == made_units[:1] or made_units == []  # rlimit: no unit to name
+
+
+def test_an_mcp_server_that_cannot_start_releases_its_scope(
+    tmp_path: Path, released: list[str | None]
+) -> None:
+    """#172's MCP path: `_serve`'s finally releases the server's scope
+    however the server ends, a failed start included."""
+    from mcp_support import server_entry
+    from test_mcp_client import Session
+
+    from saddle.tools import scope_turn
+
+    entry = server_entry(tmp_path, tools=["echo"])
+    entry["command"] = ["/nonexistent/server-binary", "--pin", "1.0.0"]
+    session = Session(tmp_path, {"fx": entry}, full=True, approve=False)
+    try:
+        scope_turn(session.ctx, "edit")
+        assert session.ctx.mcp is not None
+        assert "could not start" in session.ctx.mcp.problems["fx"]
+    finally:
+        session.close()
+    assert len(released) == 1
