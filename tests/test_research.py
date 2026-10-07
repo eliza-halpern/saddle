@@ -48,6 +48,7 @@ from saddle.research import (
     counts_against_host,
     domains_from_env,
     normalize,
+    page_failure,
     person_texts,
     urls_in,
     validate_report,
@@ -1826,3 +1827,191 @@ def test_after_enough_pages_the_reader_is_asked_once_whether_it_can_answer(rig: 
     ]
     assert len(said) == 1
     assert all(len(ask["tools"]) > 1 for ask in model.asked)
+
+
+# -- #159: a page that did not load, and a report that cites one ---------------
+
+LIVE_BOT_CHECK = (
+    "### Ran Playwright code\n```js\nawait page.goto('https://wiki.example/Game');\n```\n"
+    "### Page\n- Page URL: https://wiki.example/Game\n- Page Title: Just a moment...\n"
+    "- HTTP status: 403\n- Console: 3 errors, 1 warnings\n### Snapshot\n"
+    '- heading "Performing security verification" [level=2] [ref=e6]\n'
+    "- paragraph [ref=e7]: This page is displayed while the website verifies you are not a bot."
+)
+
+
+@pytest.mark.parametrize(
+    ("result", "why"),
+    [
+        (LIVE_BOT_CHECK, "HTTP 403, a bot-check page"),
+        (
+            "- Page URL: https://docs.example/gone\n- HTTP status: 404\n### Snapshot\nGone",
+            "HTTP 404",
+        ),
+        (
+            "error: MCP tool 'mcp__fetch__fetch' reported an error: Failed to fetch "
+            "https://wiki.example/Game - status code 403",
+            "HTTP 403",
+        ),
+        ("- Page URL: https://docs.example/a\n- HTTP status: 200\n### Snapshot\nhi", None),
+        ("- Page URL: https://docs.example/a\n- HTTP status: 302\n### Snapshot\nhi", None),
+        # A page's own text cannot make it fail: only the server's header counts.
+        ("- Page URL: https://docs.example/a\n### Snapshot\n- HTTP status: 403\nnot a bot", None),
+        ("Install guide. The latest release is 4.2.0.", None),
+        ("error: MCP tool 'mcp__web__fetch' reported an error: timed out", None),
+    ],
+)
+def test_a_page_that_did_not_load_is_named_by_its_status_and_a_bot_check_as_one(
+    result: str, why: str | None
+) -> None:
+    assert page_failure(result) == why
+
+
+def test_a_page_that_did_not_load_counts_against_the_page_it_names_or_the_one_open() -> None:
+    gate = ReaderGate()
+    gate.failed_page({}, "- HTTP status: 403", "HTTP 403")
+    assert (gate.failed, gate.blocked) == ({}, {})
+    gate.page = "https://open.example/a"
+    gate.failed_page({}, "- HTTP status: 403", "HTTP 403")
+    gate.failed_page({"url": "https://asked.example/b"}, "- HTTP status: 404", "HTTP 404")
+    gate.failed_page({}, "- Page URL: https://landed.example/c\n- HTTP status: 403", "HTTP 403")
+    assert gate.blocked == {
+        "open.example": "HTTP 403",
+        "asked.example": "HTTP 404",
+        "landed.example": "HTTP 403",
+    }
+
+
+def _live_gate() -> ReaderGate:
+    """Run 14's reader at its report: one page read, one search-only page, one
+    site behind a bot check."""
+    gate = ReaderGate()
+    gate.allow(
+        "https://lutris.example/game https://mods.example/dx11 https://wiki.example/Game",
+        "a search result",
+    )
+    gate.note("fetch", {"url": "https://lutris.example/game"}, "Wine CD + dgVoodoo2 installer")
+    gate.failed_fetch("https://wiki.example/Game", "HTTP 403, a bot-check page")
+    return gate
+
+
+def test_a_report_citing_unread_sources_keeps_its_findings_and_marks_each_unread_one() -> None:
+    """#159, the live shape: the report named the bot check and what it confirmed
+    from a page it read, and was refused whole for citing a search-only page; the
+    retry was `none: blocked` and every finding was lost. Loosened, so the cost is
+    exhibited: a claim cited only to a search snippet now crosses, marked as not
+    read (not as a page read, and never brought back as one)."""
+    args = {
+        "kind": "summary",
+        "summary": "Lutris ships a dgVoodoo2 installer [1]. A DX11 renderer mod exists [2]. "
+        "The wiki was behind a bot check [3].",
+        "sources": [
+            "https://lutris.example/game",
+            "https://mods.example/dx11",
+            "https://wiki.example/Game",
+        ],
+    }
+    result = validate_report(args, _live_gate(), None)
+    assert isinstance(result, Report)
+    assert result.sources == tuple(args["sources"])
+    assert result.unread == (
+        ("https://mods.example/dx11", "known only from a search result"),
+        ("https://wiki.example/Game", "its site did not load: HTTP 403, a bot-check page"),
+    )
+    only_unread = validate_report({**args, "sources": args["sources"][1:]}, _live_gate(), None)
+    assert only_unread == (
+        "refused: you did not read https://mods.example/dx11; cite only pages you read: "
+        "https://lutris.example/game"
+    )
+
+
+def test_a_cited_page_never_seen_anywhere_is_marked_never_opened() -> None:
+    gate = _live_gate()
+    args = {
+        "kind": "summary",
+        "summary": "It works [1], mostly [2].",
+        "sources": ["https://lutris.example/game", "https://nowhere.example/x"],
+    }
+    result = validate_report(args, gate, None)
+    assert isinstance(result, Report)
+    assert result.unread == (("https://nowhere.example/x", "never opened"),)
+
+
+def test_a_citation_fault_fallback_keeps_the_unread_marks() -> None:
+    args = {
+        "kind": "summary",
+        "summary": "No markers here.",
+        "sources": ["https://lutris.example/game", "https://mods.example/dx11"],
+    }
+    refusal = validate_report(args, _live_gate(), None)
+    assert isinstance(refusal, CitationRefusal)
+    assert refusal.fallback.unread == (
+        ("https://mods.example/dx11", "known only from a search result"),
+    )
+
+
+@needs_bwrap
+def test_a_bot_check_page_is_not_read_and_the_acting_model_is_told_the_site_was_blocked(
+    rig: Rig,
+) -> None:
+    """#159 end to end: the browser lands on a bot-check wall (HTTP 403 in its
+    header). The reader is told the page did not load; citing it marks it; the
+    acting model gets the findings, the mark and the blocked site by name."""
+    report_call = [
+        tool(
+            "report",
+            kind="summary",
+            summary="Version 4.2.0 is current [1]. The wiki would not load [2].",
+            sources=["https://docs.example/install", "https://botcheck.example/wiki"],
+        )
+    ]
+    result, model = rig.run(
+        [
+            [tool(W + "browser_navigate", url="https://botcheck.example/wiki")],
+            [tool(W + "fetch", url="https://docs.example/install")],
+            report_call,
+        ],
+        want="summary",
+        person="https://botcheck.example/wiki https://docs.example/install",
+    )
+    told = model.asked[1]["messages"][-1]["content"]
+    assert told.startswith(
+        "this page did not load (HTTP 403, a bot-check page): it is not a page you read"
+    )
+    assert "summary: Version 4.2.0 is current [1]. The wiki would not load [2]." in result
+    assert "[1] https://docs.example/install" in result
+    assert (
+        "[2] not read by the reader (its site did not load: HTTP 403, a bot-check page): "
+        "https://botcheck.example/wiki"
+    ) in result
+    assert "could not read botcheck.example: HTTP 403, a bot-check page" in result
+    assert [b.what for b in rig.researcher.brought] == ["https://docs.example/install"]
+
+
+@needs_bwrap
+def test_nothing_found_still_names_the_site_that_blocked_the_reader(rig: Rig) -> None:
+    """The live end of run 14's research: `none: blocked` reached the acting model
+    as two bare words. Now the blocked site and how it blocked come with them."""
+    result, _ = rig.run(
+        [
+            [tool(W + "browser_navigate", url="https://botcheck.example/wiki")],
+            [tool("report", kind="none", reason="blocked")],
+        ],
+        want="summary",
+        person="https://botcheck.example/wiki",
+    )
+    assert (
+        "nothing found: blocked\ncould not read botcheck.example: HTTP 403, a bot-check page"
+        in result
+    )
+
+
+@needs_bwrap
+def test_a_failed_research_names_the_blocked_site_too(rig: Rig) -> None:
+    result, _ = rig.run(
+        [[tool(W + "fetch", url="https://blocked.example/0")], [], []],
+        want="summary",
+        person="https://blocked.example/0",
+    )
+    assert result.startswith("error: the reader")
+    assert result.endswith("\ncould not read blocked.example: HTTP 403")

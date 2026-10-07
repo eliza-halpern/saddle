@@ -7,7 +7,9 @@ the real servers use (`fetch`; `browser_navigate`, `browser_snapshot`,
 saves a small file into the server's working directory and, like Playwright's
 server, says `Downloaded file NAME to "./NAME"`; "Download big" saves a larger
 one. A fetch of `https://blocked.example/...` fails as a 403 does on the real
-fetch server: the tool reports an error. A fetch whose `raw` is not a boolean
+fetch server: the tool reports an error. A navigation to
+`https://botcheck.example/...` lands on a bot-check page with HTTP status 403,
+in the browser server's words. A fetch whose `raw` is not a boolean
 fails as the real fetch server's input validation does, before any site is
 asked, and is logged as `rejected fetch URL`. Every call is appended to `--log` so a
 test can tell a call that reached the server from one the reader's gate refused.
@@ -76,10 +78,21 @@ def fetch(url: str, raw: object = False) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=text)])
 
 
+# The browser server's own shape for a site's bot-check wall (seen live: the
+# page loads, with its status in the header, and is not the page asked for).
+BOT_CHECK = (
+    "### Page\n- Page URL: {url}\n- Page Title: Just a moment...\n- HTTP status: 403\n"
+    '### Snapshot\n```yaml\n- heading "Performing security verification" [level=2]\n'
+    "- paragraph: This page is displayed while the website verifies you are not a bot.\n```"
+)
+
+
 @server.tool(name="browser_navigate", description="Navigate to a URL.")
 def browser_navigate(url: str) -> str:
     record(f"navigate {url}")
     state["page"] = url
+    if url.startswith("https://botcheck.example/"):
+        return BOT_CHECK.format(url=url)
     return snapshot()
 
 

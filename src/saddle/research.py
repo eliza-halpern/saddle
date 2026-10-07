@@ -217,6 +217,27 @@ _LINK: Final = re.compile(
 )
 _PAGE: Final = re.compile(r"- Page URL: (\S+)")
 _DOWNLOADED: Final = re.compile(r'Downloaded file (.+?) to "([^"]+)"')
+_HTTP_STATUS: Final = re.compile(r"^- HTTP status: (\d{3})\b", re.MULTILINE)
+_FETCH_STATUS: Final = re.compile(r"\bstatus code (\d{3})\b")
+_BOT_CHECK: Final = re.compile(
+    r"Just a moment\.\.\.|security verification|not a bot|verify you are human", re.IGNORECASE
+)
+
+
+def page_failure(result: str) -> str | None:
+    """Why a page did not load, in fixed words, never page text: "HTTP 403", or
+    "HTTP 403, a bot-check page"; None for a page that loaded. The browser
+    server reports a failed page as an ordinary result with its status in the
+    header (#159: a bot-check wall counted as a page read), the fetch server as
+    an error naming the status code."""
+    if result.startswith("error: "):
+        match = _FETCH_STATUS.search(result)
+    else:
+        match = _HTTP_STATUS.search(result.split("### Snapshot", 1)[0])
+    if match is None or int(match.group(1)) < 400:
+        return None
+    why = f"HTTP {match.group(1)}"
+    return f"{why}, a bot-check page" if _BOT_CHECK.search(result) else why
 
 
 def _resendable(call: ToolCall) -> str:
@@ -272,6 +293,8 @@ class ReaderGate:
     """Every tool result the reader read, for the verbatim-copy check."""
     failed: dict[str, int] = field(default_factory=dict)
     """Host -> fetches of it that failed."""
+    blocked: dict[str, str] = field(default_factory=dict)
+    """Host -> why its last page did not load (`page_failure`'s words)."""
     searched: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     """SearXNG query (case and whitespace ignored) -> the rows it answered, this
     session: a repeated query is answered from here without a request."""
@@ -313,9 +336,31 @@ class ReaderGate:
             return f"refused: this session has used its {self.fetch_cap} page fetches"
         return None
 
-    def failed_fetch(self, url: str) -> None:
+    def failed_fetch(self, url: str, why: str | None = None) -> None:
         host = urlsplit(normalize(url)).hostname or ""
         self.failed[host] = self.failed.get(host, 0) + 1
+        if why is not None:
+            self.blocked[host] = why
+
+    def failed_page(self, args: Mapping[str, Any], result: str, why: str) -> None:
+        """Count a page that did not load against its host: the page the result
+        names, else the call's address, else the page the browser was on."""
+        landed = _PAGE.search(result)
+        url = landed.group(1) if landed is not None else args.get("url", self.page)
+        if isinstance(url, str):
+            self.failed_fetch(url, why)
+
+    def unread_because(self, url: str) -> str:
+        """Why a cited page is not one the reader read, in fixed words."""
+        why = self.blocked.get(urlsplit(url).hostname or "")
+        if why is not None:
+            return f"its site did not load: {why}"
+        origin = self.seen.get(url)
+        return f"known only from {origin}" if origin is not None else "never opened"
+
+    def blocked_lines(self) -> list[str]:
+        """One line per site that did not load, for the acting session."""
+        return [f"could not read {host}: {why}" for host, why in self.blocked.items()]
 
     def note(self, tool: str, args: Mapping[str, Any], result: str) -> None:
         """Record what a call read: its page, its links, its text."""
@@ -359,6 +404,9 @@ class Report:
     reason: str | None = None
     citations_matched: bool = True
     shortened: bool = False
+    unread: tuple[tuple[str, str], ...] = ()
+    """Cited sources the reader did not read, each with why: they cross marked,
+    never as pages read (#159: one such source used to refuse the whole report)."""
 
 
 UNMATCHED_LABEL: Final = "[citations not matched to sources]"
@@ -510,7 +558,7 @@ def validate_report(
             return "refused: a summary needs its sources, the pages you read"
         cited = [normalize(str(s)) for s in sources]
         unread = [s for s in cited if s not in gate.visited]
-        if unread:
+        if len(unread) == len(cited):
             read = ", ".join(gate.visited) or "you have read none yet"
             return f"refused: you did not read {unread[0]}; cite only pages you read: {read}"
         size = _measured(summary, count)
@@ -534,6 +582,7 @@ def validate_report(
             )
         numbers = {int(n) for n in re.findall(r"\[(\d+)\]", summary)}
         fault = _citation_fault(numbers, cited)
+        marked = tuple((s, gate.unread_because(s)) for s in dict.fromkeys(unread))
         if fault is not None:
             return CitationRefusal(
                 fault,
@@ -542,9 +591,10 @@ def validate_report(
                     summary=summary.strip(),
                     sources=tuple(cited),
                     citations_matched=False,
+                    unread=marked,
                 ),
             )
-        return Report("summary", summary=summary.strip(), sources=tuple(cited))
+        return Report("summary", summary=summary.strip(), sources=tuple(cited), unread=marked)
     return "refused: kind must be value, summary or none"
 
 
@@ -812,8 +862,10 @@ class Researcher:
         outcome = self._loop(question, want, offered, gate, downloads)
         self.fetches = gate.fetches
         if isinstance(outcome, str):
-            return f"error: {outcome}"
-        return self._render(question, outcome, downloads, note)
+            return "\n".join([f"error: {outcome}", *gate.blocked_lines()])
+        return self._render(
+            question, outcome, downloads, "\n".join([*gate.blocked_lines(), note]).strip()
+        )
 
     def _budget_text(self, tools: list[dict[str, Any]]) -> str:
         """The fixed search guidance (no numbers), when the reader is offered Brave search."""
@@ -1037,8 +1089,15 @@ class Researcher:
         if result.startswith("error: "):
             # A page that failed was not read: it is never a citable source.
             if isinstance(args.get("url"), str) and counts_against_host(result):
-                gate.failed_fetch(args["url"])
+                gate.failed_fetch(args["url"], page_failure(result))
             return result
+        why = page_failure(result)
+        if why is not None:
+            gate.failed_page(args, result, why)
+            return (
+                f"this page did not load ({why}): it is not a page you read and cannot be cited\n"
+                + result
+            )
         gate.note(found[1], args, result)
         downloads += self._downloaded(result, gate)
         return result
@@ -1209,9 +1268,17 @@ class Researcher:
             if report.shortened:
                 label = f"{SHORTENED_LABEL} {label}"
             lines.append(f"summary: {label}{report.summary}")
-            lines += [f"[{i}] {source}" for i, source in enumerate(report.sources, 1)]
+            unread = dict(report.unread)
+            lines += [
+                f"[{i}] not read by the reader ({unread[source]}): {source}"
+                if source in unread
+                else f"[{i}] {source}"
+                for i, source in enumerate(report.sources, 1)
+            ]
             self.brought += [
-                Brought(source, "cited by the web reader") for source in report.sources
+                Brought(source, "cited by the web reader")
+                for source in report.sources
+                if source not in unread
             ]
         else:
             lines.append(f"nothing found: {report.reason}")
