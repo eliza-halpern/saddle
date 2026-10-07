@@ -10,11 +10,17 @@ from typing import Final
 
 import pytest
 
+from saddle import runner as runner_module
 from saddle.dag import Node
 from saddle.evidence import CapturedRun, run_argv
 from saddle.gates import FORMAT_NOT_CONFIGURED, RED_PHASE_SAMPLES, GateCheck
 from saddle.journal import SpanRecorder, read_spans
-from saddle.runner import _stub_module, read_sources, red_phase_command, run_node_gate
+from saddle.runner import (
+    _stub_module,
+    read_sources,
+    red_phase_command,
+    run_node_gate,
+)
 
 # Every tool name the global allowlist carries. A node listing all
 # four behaves exactly as it did before each name was bound to a harness
@@ -107,6 +113,31 @@ def test_read_sources_maps_relative_paths(tmp_path: Path) -> None:
     (sub / "m.py").write_text("y = 2\n")
     (sub / "note.txt").write_text("ignored\n")
     assert read_sources(tmp_path, "*.py") == {"n.py": "x = 1\n", "pkg/m.py": "y = 2\n"}
+
+
+def test_the_node_gates_ruff_format_check_carries_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#168: the node gate's `ruff format --check` is one of the ruff runs the
+    timeout contract covers. Without a ceiling a hung formatter hangs the gate
+    forever, so the format call must pass RUFF_TIMEOUT_S like every other."""
+    from saddle.evidence import RUFF_TIMEOUT_S
+
+    real = runner_module.run_capture
+    format_timeouts: list[float | None] = []
+
+    def spy(argv: list[str], workdir: Path, **kw: object) -> object:
+        if "format" in argv and "--check" in argv:
+            format_timeouts.append(kw.get("timeout"))  # type: ignore[arg-type]
+        return real(argv, workdir, **kw)
+
+    monkeypatch.setattr(runner_module, "run_capture", spy)
+    test_body = (
+        "from n import f\n\n\ndef test_f_returns_fixed_value():  # REQ-001\n    assert f() == 2\n"
+    )
+    _worktree(tmp_path, test_body, baseline_test=test_body, ruff_config=True)
+    run_node_gate(_node(), tmp_path)
+    assert format_timeouts == [RUFF_TIMEOUT_S]
 
 
 def test_run_node_gate_end_to_end_pass(tmp_path: Path) -> None:

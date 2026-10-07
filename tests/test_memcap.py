@@ -329,6 +329,27 @@ def test_a_failed_word_in_a_scope_command_line_is_not_a_failed_scope() -> None:
     assert _failed_units(running) == []
 
 
+def test_the_leak_check_reads_systemctl_with_plain_so_a_failed_row_is_caught(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#170: systemctl marks a failed unit with a leading bullet in its
+    default output, which shifts the columns; `--plain` drops it. Without
+    `--plain` the leak check reads the failed scope's state as `loaded` and
+    goes blind, so the flag is load-bearing, not cosmetic."""
+    captured: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        captured.append(argv)
+        bullet = "" if "--plain" in argv else "\u25cf "
+        out = f"{bullet}saddle-cmd-2.scope loaded failed failed bash -lc false\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(AssertionError):
+        _no_failed_scope_left()
+    assert "--plain" in captured[0]
+
+
 def test_a_scope_whose_state_is_failed_is_found() -> None:
     listing = (
         "saddle-cmd-1.scope loaded active running bash -lc true\n"

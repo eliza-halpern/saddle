@@ -171,6 +171,26 @@ def test_result_is_portable(clean_tree: Path) -> None:
     assert [c["name"] for c in payload["checks"]] == list(CHECK_ORDER)
 
 
+def test_a_crashed_engines_output_is_not_in_the_json_dict(clean_tree: Path) -> None:
+    """#169: a crashed engine's `tool_output` is sealed for a person, never
+    part of `saddle audit --json`. A dict with the output still carries the
+    kept counts, so the exclusion is of that field only."""
+    from saddle.audit import _mutation_dict
+    from saddle.evidence import MutationOutcome
+
+    crashed = MutationOutcome(
+        killed=0,
+        total=0,
+        generated=0,
+        survivors=("mutmut run exited 1: KeyError: 10062",),
+        tool_output=("Traceback (most recent call last):", "KeyError: 10062"),
+    )
+    data = _mutation_dict(crashed)
+    assert "tool_output" not in data
+    assert data["total"] == 0
+    assert data["survivors"] == ("mutmut run exited 1: KeyError: 10062",)
+
+
 def test_nothing_to_audit_result_serialises(tmp_path: Path) -> None:
     _init(tmp_path / "tree", {"n.py": BASE_CODE})
     payload = json.loads(json.dumps(audit_tree(tmp_path / "tree").to_dict()))
