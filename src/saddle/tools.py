@@ -309,7 +309,11 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
     "key presses one key or combination in xdotool syntax (Return, alt+Return, ctrl+s); "
     "type types text; scroll turns the wheel up or down by amount, at x, y or the "
     "window's middle; drag presses at x, y, moves to to_x, to_y and lets go (to move "
-    "a window, drag its title bar). Give x, y as your latest picture of the window "
+    "a window, drag its title bar); move moves the pointer by dx, dy pixels from where "
+    "it is and, with click=true, left-clicks there: for a game or other program that "
+    "draws its own cursor and ignores clicks at x, y, move by the distance between its "
+    "cursor and the target in your latest picture, check the picture that comes back, "
+    "then move again with click. Give x, y as your latest picture of the window "
     "shows them (saddle converts them when a menu widened that picture); after a "
     "whole-screen screenshot, as that shows them. Every picture carries magenta rulers "
     "in the pixels to give, so x, y read off the rulers need no space, a zoom's "
@@ -341,6 +345,9 @@ COMPUTER_SCHEMA: Final[dict[str, Any]] = _tool(
         "amount": {"type": "integer"},
         "to_x": {"type": "integer"},
         "to_y": {"type": "integer"},
+        "dx": {"type": "integer"},
+        "dy": {"type": "integer"},
+        "click": {"type": "boolean"},
         "space": {"type": "string", "enum": list(computer.SPACES)},
     },
     ["action", "window"],

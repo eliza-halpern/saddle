@@ -1608,3 +1608,64 @@ def test_a_tooltip_that_appears_is_not_named_as_a_new_window(
     monkeypatch.setattr("saddle.tools.time.sleep", lambda s: None)
     said = act(_ctx(tmp_path, monkeypatch), window="video", action="key", keys="ctrl+shift+s")
     assert "A new window opened" not in said
+
+
+# -- relative motion, for a program that draws its own cursor -----------------------
+
+
+def test_a_move_reaches_a_window_that_captured_the_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live, a game's menu drew its own cursor and moved it only by relative motion:
+    every click at x, y was refused as the X pointer never stayed where it was aimed,
+    and the keyboard did not drive the menu. Known-bad: a move refused the same way,
+    or sent as an absolute jump. Known-good: relative motion, then the click."""
+    captured = FakeDesktop(pointer_moves=False)
+    monkeypatch.setattr(screen, "run_x", captured)
+    said = act(
+        _ctx(tmp_path, monkeypatch), window="video", action="move", dx=-40, dy=25, click=True
+    )
+    assert said.startswith("done: move the pointer by (-40, 25) and left click there")
+    assert captured.actions[-1] == [
+        "xdotool", "mousemove_relative", "--sync", "--", "-40", "25",
+        "sleep", computer.SETTLE_S, "click", "1",
+    ]  # fmt: skip
+    assert not [c for c in captured.calls if c[1] in ("mousemove", "getmouselocation")]
+
+
+def test_a_move_without_click_presses_nothing() -> None:
+    action = computer.parse({"action": "move", "dx": 3, "dy": "-7"})
+    assert action == Action("move", dx=3, dy=-7)
+    assert computer.steps(action) == ["xdotool", "mousemove_relative", "--sync", "--", "3", "-7"]
+    assert action.describe() == "move the pointer by (3, -7)"
+    assert computer.parse({"action": "move", "dx": 0, "dy": 0, "click": "true"}) == Action(
+        "move", dx=0, dy=0, click=True
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "move", "dx": 5},
+        {"action": "move", "dy": 5},
+        {"action": "move", "dx": 1.5, "dy": 2},
+        {"action": "move", "dx": 1, "dy": 2, "click": "twice"},
+    ],
+)
+def test_a_move_needs_both_distances_and_a_true_or_false_click(
+    arguments: dict[str, Any],
+) -> None:
+    said = computer.parse(arguments)
+    assert isinstance(said, str)
+    assert said.startswith("error:")
+
+
+def test_a_move_is_not_sent_unless_the_window_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Known-bad: relative motion and a click sent while the person's mail is active."""
+    stuck = FakeDesktop(focus_sticks=False)
+    monkeypatch.setattr(screen, "run_x", stuck)
+    said = act(_ctx(tmp_path, monkeypatch), window="video", action="move", dx=1, dy=1, click=True)
+    assert said == computer.NOT_ACTIVE.format(window='0x1200005 "Video Configuration" 400x300')
+    assert [c for c in stuck.actions if c[1] == "mousemove_relative"] == []

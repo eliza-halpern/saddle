@@ -30,7 +30,7 @@ from saddle.wlpointer import WaylandError, WaylandPointer
 NEEDED: Final = ("xdotool",)
 """The X tool the actions run; without it the tool is not offered."""
 
-ACTIONS: Final = ("focus", "click", "key", "type", "scroll", "drag")
+ACTIONS: Final = ("focus", "click", "key", "type", "scroll", "drag", "move")
 BUTTONS: Final = {"left": "1", "right": "3"}
 WHEEL: Final = {"up": "4", "down": "5"}
 MAX_SCROLL: Final = 20
@@ -64,6 +64,10 @@ class Action:
     amount: int = DEFAULT_SCROLL
     to_x: int | None = None
     to_y: int | None = None
+    dx: int | None = None
+    dy: int | None = None
+    click: bool = False
+    """For a move: press the left button where the pointer ends up."""
 
     def describe(self) -> str:
         held = f" holding {self.hold}" if self.hold else ""
@@ -78,6 +82,9 @@ class Action:
             return f"scroll {self.direction} {self.amount}{held}"
         if self.kind == "drag":
             return f"drag from ({self.x}, {self.y}) to ({self.to_x}, {self.to_y}){held}"
+        if self.kind == "move":
+            then = " and left click there" if self.click else ""
+            return f"move the pointer by ({self.dx}, {self.dy}){then}"
         return "raise and focus it"
 
 
@@ -186,6 +193,15 @@ def _parse_kind(args: Mapping[str, Any]) -> Action | str:
         if not isinstance(text, str) or not text:
             return "error: type needs a non-empty string text"
         return Action("type", text=text)
+    if kind == "move":
+        dx, dy = _whole(args, "dx"), _whole(args, "dy")
+        click = _flag(args.get("click", False))
+        if dx is None or dy is None or not isinstance(click, bool):
+            return (
+                "error: move needs dx and dy, the pixels to move the pointer by from where "
+                "it is (right and down are positive), and click true or false"
+            )
+        return Action("move", dx=dx, dy=dy, click=click)
     x, y = _whole(args, "x"), _whole(args, "y")
     if kind == "scroll":
         direction = args.get("direction", "down")
@@ -263,6 +279,12 @@ def steps(action: Action) -> list[str]:
         return ["xdotool", "key", "--clearmodifiers", *action.keys.split()]
     if action.kind == "type":
         return ["xdotool", "type", "--clearmodifiers", "--", action.text]
+    if action.kind == "move":
+        # Relative motion, as a game that has captured the mouse reads it: such a
+        # game draws its own cursor and moves it only by the motion it is sent,
+        # so an absolute jump lands nowhere it can see.
+        moved = ["xdotool", "mousemove_relative", "--sync", "--", str(action.dx), str(action.dy)]
+        return [*moved, "sleep", SETTLE_S, "click", "1"] if action.click else moved
     settle = ["xdotool", "sleep", SETTLE_S]
     mods = action.hold.split("+") if action.hold else []
     if mods:  # pressed after the settle, let go after the press, in one call
@@ -303,7 +325,12 @@ NOT_FOCUSED: Final = (
 NO_POINTER: Final = (
     "error: nothing was clicked: this desktop did not let saddle move the pointer onto "
     "{window} (it stayed at {where}), and a click now would land wherever the pointer is. "
-    "Use the keyboard instead: action=key with Tab, space, Return or the arrow keys"
+    "Use the keyboard instead: action=key with Tab, space, Return or the arrow keys, "
+    "or, in a program that draws its own cursor, action=move"
+)
+NOT_ACTIVE: Final = (
+    "error: nothing was moved: {window} could not be made the active window (another "
+    "window kept it), and pointer motion or a click now would reach that window instead"
 )
 POINTER_SLACK: Final = 2
 """Pixels the pointer may be off the aimed point and still count as on it."""
@@ -390,10 +417,13 @@ def perform(
         failed = max(codes)
         return f"error: {action.describe()} on {window.describe()} failed (xdotool exited {failed})"
     run(["xdotool", "windowactivate", xid], env)
-    if action.kind in ("key", "type"):
+    if action.kind in ("key", "type", "move"):
+        # A move is not read back: a program that captured the mouse keeps the X
+        # pointer where it likes, so the check a click gets would refuse every move.
         code, active = run(["xdotool", "getactivewindow"], env)
         if code != 0 or active.strip() != xid:
-            return NOT_FOCUSED.format(window=window.describe())
+            refusal = NOT_ACTIVE if action.kind == "move" else NOT_FOCUSED
+            return refusal.format(window=window.describe())
         for argv in typing(action) if action.kind == "type" else [steps(action)]:
             code = run(argv, env)[0]
             if code != 0:
