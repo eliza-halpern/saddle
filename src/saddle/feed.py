@@ -122,6 +122,10 @@ not counted among the run's guard refusals, and not a finish refusal."""
 
 NOTHING_TO_AUDIT: Final = "nothing to audit"
 
+WHOLE_SUITE_UNSUPPORTED: Final = "this run's auditor cannot run the whole suite in a check"
+"""Why a `check` with `whole_suite` decided nothing: blocked, never a narrowed
+run that the model would read as the whole suite's answer."""
+
 EDIT_CHECKS_FIRST: Final = (
     "tiers 1 and 2 were not run: an edit check below failed. Fix it (seconds) and "
     "the tests, coverage and mutation run on the next audit."
@@ -478,7 +482,7 @@ class AuditFeed:
     surfaced_tree: str | None = None
     """The tree of the accepted finish whose not-proven findings were
     delivered (`final`); None until one is."""
-    _checked_tree: str | None = None
+    _checked_tree: tuple[str, bool] | None = None
     _dirty: bool = False
     _pending: Future[AuditResult | None] | None = None
     _map_job: Future[AuditResult | None] | None = None
@@ -543,11 +547,14 @@ class AuditFeed:
         scratch: Path,
         *,
         check: bool = False,
+        whole_suite: bool = False,
     ) -> AuditResult | None:
         """The audit of `files` at `tiers`. For a `check`, None (nothing run)
-        when the tree is the one the last check audited."""
+        when the tree and the mode are the ones the last check audited."""
         with sandbox.using_project_env(self.project_env):
-            return self._audit_on(point, tiers, files, scratch, check=check)
+            return self._audit_on(
+                point, tiers, files, scratch, check=check, whole_suite=whole_suite
+            )
 
     def _audit_on(
         self,
@@ -557,15 +564,16 @@ class AuditFeed:
         scratch: Path,
         *,
         check: bool,
+        whole_suite: bool = False,
     ) -> AuditResult | None:
         """`_audit`'s body, run with the project environment in place."""
         assert self.auditor is not None
         try:
             tree = snapshot(self.worktree, files, scratch / "tree")
             if check:
-                if tree == self._checked_tree:
+                if (tree, whole_suite) == self._checked_tree:
                     return None
-                self._checked_tree = tree
+                self._checked_tree = (tree, whole_suite)
             pending = self._p1_state(final=point == "finish") if 1 in tiers else None
             found: list[Finding] = []
             detail: tuple[tuple[str, str, str], ...] = ()
@@ -593,7 +601,7 @@ class AuditFeed:
                 # loop below then reads tiers 1 and 2 from the cache.
                 prime(scratch / "tree")
             for tier in (t for t in tiers if t != 0):
-                got = self._tier(tier, scratch / "tree")
+                got = self._tier(tier, scratch / "tree", whole_suite=whole_suite)
                 found.extend(sanction(f, self.sanctioned_test_rewrites) for f in got.findings)
                 detail = detail or got.mutant_detail
                 if tier == 1 and flips is not None:
@@ -618,7 +626,7 @@ class AuditFeed:
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
-    def _tier(self, tier: int, tree: Path) -> Findings:
+    def _tier(self, tier: int, tree: Path, *, whole_suite: bool = False) -> Findings:
         assert self.auditor is not None
         if tier == 0:
             # The changed set is the post-hoc one (`Auditor.audit`): every
@@ -634,7 +642,14 @@ class AuditFeed:
                 for f in self.auditor.tier0(name, (tree / name).read_text()).findings
             ]
             return Findings(tier=0, key="", findings=tuple(found))
-        return self.auditor.tier1(tree) if tier == 1 else self.auditor.tier2(tree)
+        if tier == 2:
+            return self.auditor.tier2(tree)
+        if not whole_suite:
+            return self.auditor.tier1(tree)
+        whole: Callable[[Path], Findings] | None = getattr(self.auditor, "tier1_whole_suite", None)
+        if whole is None:
+            raise AuditError(WHOLE_SUITE_UNSUPPORTED)
+        return whole(tree)
 
     def _checkpoint(self, point: str, scratch: Path) -> AuditResult:
         result = self._audit(point, (1,), scratch / "frozen", scratch)
@@ -731,8 +746,12 @@ class AuditFeed:
         text = self._record(self._take(), delivered=self.feedback)
         return text if self.feedback else ""
 
-    def check(self) -> str:
+    def check(self, *, whole_suite: bool = False) -> str:
         """The model's pull: tiers 0 and 1 on the tree as it is now.
+
+        `whole_suite` runs every test file at tier 1, not only those the change
+        can reach (#171): the run's way to ask about a test far from its change
+        without starting the suite by hand.
 
         Rendered exactly as a finish refusal renders its audit (`render`), so
         a finding reads the same whichever way it arrives. Tier 2 is never
@@ -743,7 +762,12 @@ class AuditFeed:
         self._await()  # the auditor is not shared with a pending checkpoint
         scratch = Path(tempfile.mkdtemp(prefix="saddle-check-"))
         result = self._audit(
-            f"check {len(self.checks) + 1}", (0, 1), self.worktree, scratch, check=True
+            f"check {len(self.checks) + 1}",
+            (0, 1),
+            self.worktree,
+            scratch,
+            check=True,
+            whole_suite=whole_suite,
         )
         if result is None:
             return (
@@ -759,7 +783,12 @@ class AuditFeed:
             self.journal,
             build_span(
                 node_id="chat#1",
-                argv=["check", result.point, result.tree],
+                argv=[
+                    "check",
+                    result.point,
+                    result.tree,
+                    *(["whole-suite"] if whole_suite else []),
+                ],
                 duration_ms=0,
                 exit_code=0 if result.passed else 1,
                 detail=text,

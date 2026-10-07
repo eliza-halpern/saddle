@@ -740,8 +740,18 @@ CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
     "it is now, and return the findings "
     "exactly as a refused finish would show them. finish runs these same checks "
     "plus mutation testing, so a passing check does not guarantee finish passes. "
-    "A check on a tree unchanged since the last check is refused.",
-    {},
+    "A check on a tree unchanged since the last check of the same kind is refused.",
+    {
+        "whole_suite": {
+            "type": "boolean",
+            "description": (
+                "true runs every test file on the audit's workers, not only the tests "
+                "your change can reach: ask for it when your change could break a test "
+                "far from it (shared state, a fixture, test order, parallel workers). "
+                "Default false."
+            ),
+        }
+    },
     [],
 )
 

@@ -423,7 +423,7 @@ class AuditHooks(Protocol):
     def after_tool(self, name: str, ok: bool) -> None: ...
     def collect(self) -> str: ...
     def final(self) -> tuple[bool, str]: ...
-    def check(self) -> str: ...
+    def check(self, *, whole_suite: bool = False) -> str: ...
     @property
     def checks(self) -> Sequence[object]: ...
     def unresolved(self) -> list[dict[str, object]]: ...
@@ -1337,7 +1337,7 @@ def run_turn(
                     and auto.feed is not None
                     and call.name == CHECK_TOOL
                 ):
-                    result = auto.feed.check()
+                    result = _check(auto.feed, call.arguments)
                 elif auto is not None and call.name == DISPUTE_TOOL:
                     result = _dispute(auto, call.arguments, options.workdir, ctx)
                 elif auto is not None and call.name == REFUSE_TOOL:
@@ -1902,6 +1902,23 @@ def _hold_guarded(auto: AutoRun) -> None:
     if held:
         auto.outcome, auto.reason = "stopped", GUARDED_STOP.format(paths=", ".join(held))
         auto.sealed["guarded_paths"] = held
+
+
+CHECK_WHOLE_SUITE_NOT_BOOL: Final = "error: check's whole_suite must be true or false"
+"""A `whole_suite` that is not a JSON boolean runs nothing: read as false, a
+narrowed check would answer a question the model asked about the whole suite."""
+
+
+def _check(feed: AuditHooks, arguments: str) -> str:
+    """Run the model's `check`; `whole_suite: true` runs every test file (#171)."""
+    try:
+        args = json.loads(arguments) if arguments.strip() else {}
+    except ValueError:
+        args = {}
+    whole = args.get("whole_suite", False) if isinstance(args, dict) else False
+    if not isinstance(whole, bool):
+        return CHECK_WHOLE_SUITE_NOT_BOOL
+    return feed.check(whole_suite=whole)
 
 
 def _finish(auto: AutoRun, arguments: str) -> str:

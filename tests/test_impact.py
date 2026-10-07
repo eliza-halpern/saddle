@@ -547,3 +547,23 @@ def test_a_cached_map_of_another_tree_or_unreadable_is_drawn_again(
     else:
         entry.write_text("{not json")
     assert _auditor(root, ImpactMemo(cache=cache)).draw_map().startswith("map drawn")
+
+
+def test_a_whole_suite_tier1_runs_every_file_and_never_shares_a_cached_result(
+    tmp_path: Path,
+) -> None:
+    """#171: under a drawn map a check's tier 1 runs only the files the change
+    reaches; `tier1_whole_suite` on the same tree runs all of them, and neither
+    mode is handed the other's cached result."""
+    root = _project(tmp_path / "p")
+    auditor = _auditor(root, ImpactMemo())
+    assert auditor.draw_map() == "map drawn over 4 files"
+    calc = root / "src/pkg/calc.py"
+    calc.write_text(calc.read_text().replace("return a + b", "return b + a"))
+    narrowed = _tests(auditor.tier1())
+    assert "impact: 1 of 2 test files ran" in narrowed.detail
+    whole = _tests(auditor.tier1_whole_suite())
+    assert whole.verdict == "pass", whole.detail
+    assert "impact:" not in whole.detail
+    again = _tests(auditor.tier1())
+    assert "impact: 1 of 2 test files ran" in again.detail

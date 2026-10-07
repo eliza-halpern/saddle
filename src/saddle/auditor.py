@@ -1963,12 +1963,13 @@ class Auditor:
 
     # -- tiers 1 and 2 -------------------------------------------------------
 
-    def _gate(self, tier: int, tree: Path | None) -> Findings:
+    def _gate(self, tier: int, tree: Path | None, *, whole_suite: bool = False) -> Findings:
+        mode = ("whole-suite",) if whole_suite else ()
         with staged_copy(tree or self.repo, self.baseline_rev) as (copy, staged, resolved):
             if staged == baseline_tree(copy, resolved):
                 msg = f"nothing to audit: the tree equals baseline {resolved[:12]}"
                 raise AuditError(msg)
-            key = self._key(tier, staged, resolved)
+            key = self._key(tier, staged, resolved, *mode)
             hit = self._cached(key)
             if hit is not None:
                 return hit
@@ -1976,7 +1977,7 @@ class Auditor:
             # same code, so the suite and mutation are not asked again.
             shape = syntax_key(copy)
             same1 = self._key(1, "syntax", shape, resolved)
-            same = self._key(tier, "syntax", shape, resolved)
+            same = self._key(tier, "syntax", shape, resolved, *mode)
             reused = self._reuse(same, key)
             if reused is not None:
                 return reused
@@ -2046,7 +2047,7 @@ class Auditor:
                         self.config.task_requirements,
                     )
                 memo = self.config.impact
-                selection = _selection(memo, copy, resolved)
+                selection = None if whole_suite else _selection(memo, copy, resolved)
                 try:
                     gated = runner.run_node_gate(
                         self.node,
@@ -2499,6 +2500,12 @@ class Auditor:
     def tier1(self, tree: Path | None = None) -> Findings:
         """The checkpoint tier over `tree` (default: the repo's working tree)."""
         return self._gate(1, tree)
+
+    def tier1_whole_suite(self, tree: Path | None = None) -> Findings:
+        """Tier 1 with every test file, never the impact map's selection, under
+        its own cache keys: a narrowed result is never handed back for it, nor it
+        for a narrowed one. A `check` with `whole_suite` asks for it (#171)."""
+        return self._gate(1, tree, whole_suite=True)
 
     def tier2(self, tree: Path | None = None) -> Findings:
         """The asynchronous tier; `blocked` when tier 1 on the same tree fails."""

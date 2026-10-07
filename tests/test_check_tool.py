@@ -446,3 +446,90 @@ def test_a_real_check_names_an_unused_import_and_clears_when_it_is_removed(
     assert "F401" in first
     assert "PASS]" in second
     assert result.outcome == "finished"
+
+
+# -- #171: no hand-run whole suite; check runs it instead ----------------------------
+
+
+def test_with_check_offered_the_prompt_never_coaches_a_hand_run_whole_suite(
+    repo: Path,
+) -> None:
+    """Red before (#171): with check offered, the prompt said both "use it
+    instead of running the whole test suite" and "when you run the whole
+    suite, pass `-n 8` too"; a dogfood run then ran the whole suite by hand
+    three times. Without check the worker count is still said."""
+    from test_project_env import make_venv
+
+    (repo / "pyproject.toml").write_text("[tool.saddle]\ntest-workers = 8\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "workers")
+    make_venv(repo / ".venv")
+    (next((repo / ".venv").glob("lib/python*/site-packages")) / "xdist").mkdir()
+    said = {}
+    for offered in (True, False):
+        client = Scripted([])
+        run(repo, client, check_tool=offered, run_id=f"r{offered}")
+        said[offered] = "pass `-n 8` too" in client.system
+    assert said == {True: False, False: True}
+    assert "whole_suite set to true" in CHECK_PROMPT
+    assert "do not start the whole suite by hand" in CHECK_PROMPT
+
+
+class WholeSuiteAuditor(FakeAuditor):
+    """A FakeAuditor that also runs tier 1 over the whole suite, recorded apart."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.whole: list[str] = []
+
+    def tier1_whole_suite(self, tree: Path | None = None) -> Findings:
+        assert tree is not None
+        self.whole.append((tree / "calc.py").read_text())
+        return self._findings(1, (tree / "calc.py").read_text())
+
+
+WHOLE = call(CHECK_TOOL, "w", whole_suite=True)
+
+
+def test_a_whole_suite_check_runs_the_whole_suite_and_a_repeat_of_its_mode_is_refused(
+    repo: Path,
+) -> None:
+    """#171: check with whole_suite runs tier 1 over every test file; the
+    unchanged-tree refusal is per mode, so a narrowed check of the same tree
+    still runs, and a second whole-suite check of an unchanged tree does not."""
+    fake = WholeSuiteAuditor()
+    client = Scripted([[edit("e", "a - b", "a + b")], [WHOLE], [WHOLE], [CHECK]])
+    result, _ = run(repo, client, auditor=fake)
+    first, second, third = results(result, CHECK_TOOL)
+    assert len(fake.whole) == 1
+    assert "PASS]" in first
+    assert second.startswith(CHECK_UNCHANGED)
+    assert "PASS]" in third
+    # tier 1: the whole-suite check, the narrowed check, the finish audit
+    assert len([t for t, _ in fake.calls if t == 1]) == 3
+    argvs = [s.argv for s in check_spans(result)]
+    assert argvs[0][-1] == "whole-suite"
+    assert argvs[1][-1] != "whole-suite"
+
+
+def test_a_whole_suite_check_on_an_auditor_without_it_is_blocked_never_narrowed(
+    repo: Path,
+) -> None:
+    fake = FakeAuditor()
+    client = Scripted([[edit("e", "a - b", "a + b")], [WHOLE]])
+    result, _ = run(repo, client, auditor=fake)
+    (said,) = results(result, CHECK_TOOL)
+    assert "cannot run the whole suite in a check" in said
+    assert [t for t, _ in fake.calls if t == 1] == [1]  # only the finish audit's
+
+
+@pytest.mark.parametrize("value", ["true", 1, None])
+def test_a_whole_suite_that_is_not_a_boolean_runs_nothing(repo: Path, value: object) -> None:
+    from saddle.engine import CHECK_WHOLE_SUITE_NOT_BOOL
+
+    fake = WholeSuiteAuditor()
+    client = Scripted([[edit("e", "a - b", "a + b")], [call(CHECK_TOOL, "b", whole_suite=value)]])
+    result, _ = run(repo, client, auditor=fake)
+    assert results(result, CHECK_TOOL) == [CHECK_WHOLE_SUITE_NOT_BOOL]
+    assert fake.whole == []
+    assert check_spans(result) == []

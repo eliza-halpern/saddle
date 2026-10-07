@@ -283,6 +283,7 @@ def environment_prompt(
     js_tests: Sequence[str] | None = None,
     exposed: Sequence[str] = (),
     refusal_cap: int = DEFAULT_FINISH_REFUSAL_CAP,
+    check_tool: bool = False,
 ) -> str:
     """`ENVIRONMENT_PROMPT` filled in: which Python the model's commands get
     (the project venv, else whatever `python` or `python3` their PATH has),
@@ -324,7 +325,7 @@ def environment_prompt(
     workers = (
         f" The audit runs that suite on {count} workers; when you run the whole suite, "
         f"pass `-n {count}` too, or it runs on one core and takes far longer."
-        if count > 1 and xdist
+        if count > 1 and xdist and not check_tool
         else ""
     )
     return ENVIRONMENT_PROMPT.format(
@@ -474,7 +475,10 @@ CHECK_PROMPT: Final = (
     "audit's fast checks on the tree as it is now (each edited file's syntax, lint "
     "and imports, the tests your change can reach, coverage of the lines you "
     "changed, and the project's own gate) and answers as finish would. Use it "
-    "instead of running the whole test suite or the project's gate yourself. "
+    "instead of running the whole test suite or the project's gate yourself: do "
+    "not start the whole suite by hand. When your change could break a test far "
+    "from it, call check with whole_suite set to true, which runs every test file "
+    "on the audit's workers. "
     "finish runs the same checks plus the whole suite and mutation testing, so a "
     "passing check does not guarantee finish passes."
 )
@@ -1152,6 +1156,7 @@ def run_auto(
             options.token_budget,
             feed=options.arm == "E+A+F",
             refusal_cap=options.finish_refusal_cap,
+            check_tool=check_tool,
             node_tools=bool(mounted),
             exposed=named,
             js_tests=(
