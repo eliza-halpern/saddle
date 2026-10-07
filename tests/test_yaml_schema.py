@@ -471,6 +471,35 @@ def test_a_violation_brought_in_by_a_merge_is_at_where_the_merged_value_is_writt
     assert _run([path], schema=_SCHEMA_PATH)[0] == 1
 
 
+def test_a_violation_on_a_key_a_task_writes_again_over_its_merge_is_at_its_own_value(
+    tmp_path: Path,
+) -> None:
+    """The other half of a merge: the task merges a preset's `timeout: 30`, then
+    writes `timeout: -5` itself. The loader builds -5, the value the task wrote, so
+    the violation is at line 12, where -5 is written, and never at the preset's
+    line 4, which holds a valid 30. Known-bad (a review mutant that survived the
+    suite): `_locate` keeping a key's first entry, the merged one, put it at 4:14.
+    """
+    text = (
+        "apiVersion: bundle/v1\n"
+        "presets:\n"
+        "  task-defaults: &task-defaults\n"
+        "    timeout: 30\n"
+        "resources:\n"
+        "  jobs:\n"
+        "    nightly:\n"
+        "      tasks:\n"
+        "        - name: fetch\n"
+        "          run: curl -sf https://example.invalid/nightly\n"
+        "          <<: *task-defaults\n"
+        "          timeout: -5\n"
+    )
+    path = _file(tmp_path, "a-task-that-writes-again-a-key-its-preset-brings", text)
+    assert _lines(path) == [
+        f"{path}:12:20: resources.jobs.nightly.tasks[0].timeout: -5 is less than the minimum of 0"
+    ]
+
+
 def test_a_violation_at_the_document_itself_is_named_at_the_document_that_lacks_the_key(
     tmp_path: Path,
 ) -> None:
