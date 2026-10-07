@@ -179,6 +179,12 @@ class AuditResult:
     enters and each type-free raise assertion in a changed test
     (`raise_obligation`). Feedback: `passed` never reads it. Sealed under
     `raise_obligation` when non-empty."""
+    untracked: tuple[str, ...] = ()
+    """Every file the audited snapshot holds that the worktree does not track
+    (`untracked_in`), sorted: the worker's new files and anything else it
+    left there, a tool's output included. A failing audit names them
+    (`render`), so a test the copy failed is never a guess at what the copy
+    held. Sealed under `untracked` when non-empty."""
 
     @property
     def passed(self) -> bool:
@@ -209,6 +215,7 @@ class AuditResult:
             ),
             **({"coverage_text": self.coverage} if self.coverage else {}),
             **({"raise_obligation": self.obligation} if self.obligation else {}),
+            **({"untracked": list(self.untracked)} if self.untracked else {}),
         }
 
 
@@ -363,7 +370,31 @@ def render(result: AuditResult) -> str:
         lines.append(f"({passed} other check(s) passed or not applicable)")
     if result.obligation:
         lines.append(result.obligation)
+    if result.untracked and not result.passed:
+        lines.append(untracked_line(result.untracked))
     return "\n".join(lines)
+
+
+UNTRACKED_HEAD: Final = "Files the audit copied that git does not track in your worktree:"
+"""How `untracked_line` begins."""
+
+UNTRACKED_SHOWN: Final = 10
+"""How many untracked files `untracked_line` names before counting the rest."""
+
+
+def untracked_line(names: Sequence[str]) -> str:
+    """The line a failing audit ends with: what its copy held beyond the tracked
+    files. The audit judges the worktree as the worker leaves it, and `auto`
+    commits it with `git add -A`, so these files are part of the change: a
+    pytest-cov worker's `.coverage.<host>.pid<n>...` data file, left by a suite
+    still running in the worktree, failed a whole-suite audit's registry test
+    twice in one dogfood run while the finding named nothing (#173)."""
+    shown = ", ".join(names[:UNTRACKED_SHOWN])
+    more = f" and {len(names) - UNTRACKED_SHOWN} more" if len(names) > UNTRACKED_SHOWN else ""
+    return (
+        f"{UNTRACKED_HEAD} {shown}{more}. They are audited as part of your change: "
+        "delete any you did not mean to add (a tool's output, say)."
+    )
 
 
 GIT_IDENTITY: Final = ("-c", "user.name=saddle", "-c", "user.email=saddle@localhost")
@@ -426,6 +457,13 @@ def snapshot(worktree: Path, files: Path, into: Path) -> str:
     _copy_files(files, into)
     _git(into, "add", "-A")
     return _git(into, "write-tree")
+
+
+def untracked_in(snap: Path) -> tuple[str, ...]:
+    """The files of `snapshot`'s repo at `snap` that its HEAD -- the worktree's
+    -- does not have: the worktree's untracked files the copy holds, sorted."""
+    added = _git(snap, "diff", "--cached", "--name-only", "--no-renames", "--diff-filter=A", "HEAD")
+    return tuple(sorted(added.splitlines()))
 
 
 @dataclass
@@ -570,6 +608,7 @@ class AuditFeed:
         assert self.auditor is not None
         try:
             tree = snapshot(self.worktree, files, scratch / "tree")
+            copied = untracked_in(scratch / "tree")
             if check:
                 if (tree, whole_suite) == self._checked_tree:
                     return None
@@ -583,7 +622,9 @@ class AuditFeed:
                 # that must change anyway.
                 found.extend(self._tier(0, scratch / "tree").findings)
                 if 2 in tiers and any(failing(f) for f in found):
-                    return AuditResult(point, tree, tuple(found), note=EDIT_CHECKS_FIRST)
+                    return AuditResult(
+                        point, tree, tuple(found), note=EDIT_CHECKS_FIRST, untracked=copied
+                    )
             flips = (
                 flip_finding(
                     scratch / "tree", self.baseline, self.summary, self.sanctioned_test_rewrites
@@ -594,7 +635,7 @@ class AuditFeed:
             if flips is not None and failing(flips) and 2 in tiers and self.feedback:
                 # Cheap, and the same on a retry of this tree: refused before
                 # the suite runs, as an edit check is.
-                return AuditResult(point, tree, (*found, flips), note=FLIPS_FIRST)
+                return AuditResult(point, tree, (*found, flips), note=FLIPS_FIRST, untracked=copied)
             prime = getattr(self.auditor, "prime", None)
             if 1 in tiers and 2 in tiers and prime is not None:
                 # One run of the battery for both tiers (`Auditor.prime`): the
@@ -615,7 +656,13 @@ class AuditFeed:
                 else ""
             )
             return AuditResult(
-                point, tree, tuple(found), mutant_detail=detail, coverage=words, obligation=owed
+                point,
+                tree,
+                tuple(found),
+                mutant_detail=detail,
+                coverage=words,
+                obligation=owed,
+                untracked=copied,
             )
         except AuditError as exc:
             if str(exc).startswith(NOTHING_TO_AUDIT):
