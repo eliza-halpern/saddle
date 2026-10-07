@@ -69,8 +69,14 @@ def test_a_task_run_is_told_none_of_a_chat_sessions_facts(
     from saddle import tools as tools_module
 
     task_tools, task_prompt = offered_and_prompt(repo, "r-2")
-    for name in dir(tools_module):
-        if name.startswith("FACT_"):
-            sentence = getattr(tools_module, name)
-            assert sentence not in task_tools
-            assert sentence not in task_prompt
+    chat_facts = [
+        getattr(tools_module, name)
+        for name in dir(tools_module)
+        if name.startswith("FACT_") and getattr(tools_module, name) not in tools_module.RUN_FACTS
+    ]
+    assert chat_facts  # the census still reads the chat session's facts
+    for sentence in chat_facts:
+        assert sentence not in task_tools
+        assert sentence not in task_prompt
+    for sentence in tools_module.RUN_FACTS:  # what a task run is told instead (#176)
+        assert json.dumps(sentence)[1:-1] in task_tools

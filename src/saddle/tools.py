@@ -486,11 +486,15 @@ FACT_RUN_TMP: Final = (
 run's /tmp lasts, but a run 477 rounds in was unsure whether /tmp outlived a
 command, so the tool it was calling says so too (#176)."""
 
+RUN_FACTS: Final = (FACT_RUN_TMP,)
+"""The `FACT_` sentences true of an autonomous run and stated to it. Every other
+one is a chat session's (`state_session_facts`) and never reaches a task run."""
+
 
 def run_facts(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add to `run_command`'s description what persists between an autonomous
     run's commands (its sandbox's shared /tmp) and what does not."""
-    return _appended(tools, "run_command", FACT_CD, FACT_RUN_TMP)
+    return _appended(tools, "run_command", *RUN_FACTS)
 
 
 FACT_DISPLAY: Final = (

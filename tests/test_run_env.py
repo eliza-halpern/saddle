@@ -606,5 +606,5 @@ def test_an_autonomous_runs_run_command_says_what_lasts_between_commands(
     (run_command,) = [t for t in offered if t["function"]["name"] == "run_command"]
     described = run_command["function"]["description"]
     assert FACT_RUN_TMP in described
-    assert FACT_CD in described
+    assert FACT_CD not in described  # a chat session's sentence (test_task_freeze)
     assert FACT_RUN_TMP not in str(TOOLS)  # stated for the run, not for every caller
