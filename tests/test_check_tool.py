@@ -536,6 +536,24 @@ def test_a_whole_suite_that_is_not_a_boolean_runs_nothing(repo: Path, value: obj
     assert check_spans(result) == []
 
 
+@pytest.mark.parametrize("arguments", ["{not json", "[]", '"whole_suite"'])
+def test_check_arguments_that_are_not_an_object_run_nothing(repo: Path, arguments: str) -> None:
+    """Unreadable arguments may have asked for the whole suite; read as none,
+    a narrowed check would answer for it. No arguments at all is the default."""
+    from saddle.engine import CHECK_ARGUMENTS_NOT_OBJECT
+
+    fake = WholeSuiteAuditor()
+    broken = ToolCall(id="b", name=CHECK_TOOL, arguments=arguments)
+    bare = ToolCall(id="n", name=CHECK_TOOL, arguments="")
+    client = Scripted([[edit("e", "a - b", "a + b")], [broken], [bare]])
+    result, _ = run(repo, client, auditor=fake)
+    refused, ran = results(result, CHECK_TOOL)
+    assert refused == CHECK_ARGUMENTS_NOT_OBJECT
+    assert "PASS]" in ran
+    assert fake.whole == []
+    assert len(check_spans(result)) == 1
+
+
 # -- #178: with check offered, a hand-run whole suite is refused --------------------
 
 SUITE_BY_HAND = "python -m pytest -q -n 8 > /tmp/suite.log 2>&1"

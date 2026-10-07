@@ -1918,13 +1918,22 @@ CHECK_WHOLE_SUITE_NOT_BOOL: Final = "error: check's whole_suite must be true or 
 narrowed check would answer a question the model asked about the whole suite."""
 
 
+CHECK_ARGUMENTS_NOT_OBJECT: Final = (
+    'error: check\'s arguments must be a JSON object, like {"whole_suite": true}, or none'
+)
+"""Arguments that are not a JSON object run nothing, for the same reason: they
+may have asked for the whole suite. No arguments at all is a narrowed check."""
+
+
 def _check(feed: AuditHooks, arguments: str) -> str:
     """Run the model's `check`; `whole_suite: true` runs every test file (#171)."""
     try:
         args = json.loads(arguments) if arguments.strip() else {}
     except ValueError:
-        args = {}
-    whole = args.get("whole_suite", False) if isinstance(args, dict) else False
+        return CHECK_ARGUMENTS_NOT_OBJECT
+    if not isinstance(args, dict):
+        return CHECK_ARGUMENTS_NOT_OBJECT
+    whole = args.get("whole_suite", False)
     if not isinstance(whole, bool):
         return CHECK_WHOLE_SUITE_NOT_BOOL
     return feed.check(whole_suite=whole)
