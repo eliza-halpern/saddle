@@ -184,6 +184,44 @@ def test_what_a_page_links_is_found_in_text_markdown_and_accessibility_trees() -
     assert urls_in("[m](mailto:x@y.example)", "https://docs.example/") == []
 
 
+def test_an_address_a_search_snippet_html_escaped_is_allowed_as_the_page_it_names() -> None:
+    """Live: a search snippet named a wiki page as `...Philosopher&#x27;s_Stone`;
+    the `#` was read as a fragment, the gate kept `...Philosopher&`, and both
+    spellings the reader then asked for (`'` and `%27`) were refused.
+    Known-good: either spelling of the named page. Known-bad: a cut-down or
+    otherwise different address, and an encoded slash, stay refused."""
+    snippet = (
+        "I managed to run this game thanks to this article: "
+        "https://www.wiki.example/wiki/The_Sorcerer&#x27;s_Stone There is a lot "
+        "Glide &amp; DirectX https://www.wiki.example/w/index.php?a=1&amp;b=2"
+    )
+    gate = ReaderGate()
+    gate.allow(snippet, "a search result")
+    for asked in (
+        "https://www.wiki.example/wiki/The_Sorcerer's_Stone",
+        "https://www.wiki.example/wiki/The_Sorcerer%27s_Stone",
+        "https://www.wiki.example/w/index.php?a=1&b=2",
+    ):
+        assert gate.check("fetch", {"url": asked}) is None, asked
+    for composed in (
+        "https://www.wiki.example/wiki/The_Sorcerer",
+        "https://www.wiki.example/wiki/The_Sorcerer&",
+        "https://www.wiki.example/wiki/The_Sorcerers_Stone",
+        "https://www.wiki.example/wiki%2FThe_Sorcerer's_Stone",
+    ):
+        assert "did not come from a search result" in str(gate.check("fetch", {"url": composed})), (
+            composed
+        )
+
+
+def test_a_quote_around_an_address_is_not_part_of_it() -> None:
+    assert urls_in("see 'https://docs.example/a' and \"https://docs.example/b\"") == [
+        "https://docs.example/a",
+        "https://docs.example/b",
+    ]
+    assert normalize("https://docs.example/it's?q=it%27s") == "https://docs.example/it's?q=it's"
+
+
 def test_a_raw_html_pages_relative_links_are_found_resolved_and_unescaped() -> None:
     """F32: the reader read a page as raw HTML and every `href="/games/..."` on it
     was refused as an address it had not seen. Known-good: double- and

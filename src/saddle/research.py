@@ -208,7 +208,10 @@ READER_PROMPT: Final = (
     "the harness records the download."
 )
 
-_URL: Final = re.compile(r"https?://[^\s<>\"'`)\]}]+", re.IGNORECASE)
+# An apostrophe inside an address (`Philosopher's_Stone`) is part of it; one
+# that closes a quoted address ('https://x') is not.
+_URL: Final = re.compile(r"https?://(?:[^\s<>\"'`)\]}]|'(?=\w))+", re.IGNORECASE)
+_APOSTROPHE: Final = re.compile("%27", re.IGNORECASE)
 _LINK: Final = re.compile(
     r"\]\(([^)\s]+)\)|- /url: (\S+)|\bhref=(?:\"([^\"]+)\"|'([^']+)')", re.IGNORECASE
 )
@@ -228,18 +231,22 @@ def _resendable(call: ToolCall) -> str:
 
 
 def normalize(url: str) -> str:
-    """`url` as the gate compares it: scheme and host lower-cased, no fragment."""
+    """`url` as the gate compares it: scheme and host lower-cased, no fragment,
+    and an apostrophe written as `%27` read as the apostrophe it encodes (sites
+    and models spell the same page both ways)."""
     parts = urlsplit(url.strip().rstrip(".,;:!?"))
-    return urlunsplit(
-        (parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", parts.query, "")
-    )
+    path = _APOSTROPHE.sub("'", parts.path) or "/"
+    query = _APOSTROPHE.sub("'", parts.query)
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
 
 
 def urls_in(text: str, base: str | None = None) -> list[str]:
     """Every address `text` names: written out, or a link (markdown, an
     accessibility-tree `/url:`, or an HTML `href`) resolved against `base` when
-    it is relative."""
-    found = [normalize(u) for u in _URL.findall(text)]
+    it is relative. Written-out addresses are read after HTML unescaping: search
+    snippets carry `&#x27;` and `&amp;`, and the `#` of an entity would otherwise
+    cut the address at a false fragment."""
+    found = [normalize(u) for u in _URL.findall(html.unescape(text))]
     if base is not None:
         for markdown, tree, double, single in _LINK.findall(text):
             link = urljoin(base, html.unescape(markdown or tree or double or single))
