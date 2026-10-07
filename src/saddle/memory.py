@@ -85,6 +85,12 @@ NOTE_HEAD: Final = "[Earlier conversation compacted: "
 _NOTE_COUNT: Final = re.compile(r"\[Earlier conversation compacted: (\d+) earlier message")
 _NOTE_TOPICS: Final = "Dropped topics: "
 TOPICS_KEPT: Final = 5
+_NOTE_UNREAD: Final = "File contents no longer in context: "
+UNREAD_HOW: Final = ". Read each with read_file again before you edit it."
+"""The note's line for files whose contents compaction took (#177): right
+after one, a worker wrote "I don't remember the original body precisely" of
+the file it was editing. A file counts while no intact `read_file` result or
+`write_file` call for it is left; entries are `path` or `path (lines a-b)`."""
 
 ASK_USER: Final = "Ask the user if you need detail that is no longer in context."
 REREAD: Final = (
@@ -323,6 +329,54 @@ def _edited_path(call: dict[str, Any]) -> str | None:
     return path if isinstance(path, str) else None
 
 
+def _read_span(args: dict[str, Any]) -> str:
+    """The lines a `read_file` call asked for, as the note names them."""
+    offset, limit = args.get("offset"), args.get("limit")
+    first = offset if isinstance(offset, int) else 1
+    if isinstance(limit, int):
+        return f" (lines {first}-{first + limit - 1})"
+    return f" (from line {first})" if first > 1 else ""
+
+
+def _file_bodies(messages: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
+    """Every file whose contents `messages` showed, as note entries in order,
+    and the paths whose contents are still there whole: an unshortened
+    `read_file` result, or a `write_file` call, which carries the body."""
+    entries: list[str] = []
+    reads: dict[str, str] = {}
+    held: set[str] = set()
+    for message in messages:
+        for call in message.get("tool_calls") or []:
+            fn = call.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except ValueError:
+                continue
+            path = args.get("path") if isinstance(args, dict) else None
+            if not isinstance(path, str):
+                continue
+            name = fn.get("name")
+            if name == "read_file":
+                entry = path + _read_span(args)
+                reads[str(call.get("id"))] = path
+            elif name == "write_file":
+                entry = path
+                held.add(path)
+            else:  # an edit_file call shows a fragment, never the body
+                continue
+            if entry not in entries:
+                entries.append(entry)
+        path = reads.get(str(message.get("tool_call_id")))
+        if message.get("role") == "tool" and path is not None:
+            if ELIDED not in str(message.get("content") or ""):
+                held.add(path)
+    return entries, held
+
+
+def _entry_path(entry: str) -> str:
+    return entry.split(" (", 1)[0]
+
+
 def _previous(note: dict[str, Any]) -> tuple[int, list[str]]:
     """How many messages an older note said were dropped, and its topics."""
     text = str(note.get("content") or "")
@@ -336,6 +390,14 @@ def _previous(note: dict[str, Any]) -> tuple[int, list[str]]:
         [],
     )
     return (int(match.group(1)) if match else 0), topics
+
+
+def _previous_unread(note: dict[str, Any]) -> list[str]:
+    """The file entries an older note said were no longer in context."""
+    for line in str(note.get("content") or "").splitlines():
+        if line.startswith(_NOTE_UNREAD):
+            return line.removeprefix(_NOTE_UNREAD).removesuffix(UNREAD_HOW).split("; ")
+    return []
 
 
 def compact(
@@ -375,6 +437,7 @@ def compact(
     goal = min(limit_tokens, target_tokens) if target_tokens is not None else limit_tokens
 
     keep = pinned_index(messages, pin)
+    shown, _ = _file_bodies(messages)
 
     def protected(index: int) -> bool:
         if messages[index].get("role") == "system" or index == keep:
@@ -416,10 +479,16 @@ def compact(
 
     old = next((i for i, m in enumerate(messages) if is_note(m)), None)
     block = state() if state is not None else ""
+    prior = _previous_unread(messages[old]) if old is not None else []
+
+    def unread() -> list[str]:
+        _, held = _file_bodies(messages)
+        return [e for e in dict.fromkeys(prior + shown) if _entry_path(e) not in held]
+
     if size(messages) <= goal:
         if old is not None and state is not None:
             count, topics = _previous(messages[old])
-            messages[old] = _note(count, topics, [], block, hint)
+            messages[old] = _note(count, topics, [], unread(), block, hint)
         return 0, elided
 
     # Stage 2: drop the oldest exchanges, a tool call always with its results.
@@ -437,7 +506,8 @@ def compact(
         # A chat has no run to rebuild state from: it names the files edited in
         # what went. An autonomous run's state block lists what is changed now.
         named = [] if state is not None else edited
-        return _note(count + dropped, (topics + fresh)[:TOPICS_KEPT], named, block, hint)
+        topics_kept = (topics + fresh)[:TOPICS_KEPT]
+        return _note(count + dropped, topics_kept, named, unread(), block, hint)
 
     def reserve() -> int:
         # What the note will cost, measured whole: counting only the state
@@ -497,13 +567,15 @@ def compact(
 
 
 def _note(
-    count: int, topics: list[str], edited: list[str], block: str, hint: str
+    count: int, topics: list[str], edited: list[str], unread: list[str], block: str, hint: str
 ) -> dict[str, Any]:
     lines = [f"{NOTE_HEAD}{count} earlier message(s) dropped to fit the window.]"]
     if topics:
         lines.append(_NOTE_TOPICS + "; ".join(topics))
     if edited:
         lines.append("Files edited in the dropped part: " + ", ".join(edited))
+    if unread:
+        lines.append(_NOTE_UNREAD + "; ".join(unread) + UNREAD_HOW)
     if block:
         lines.append(block)
     lines.append(hint)
