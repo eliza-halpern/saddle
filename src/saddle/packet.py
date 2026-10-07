@@ -402,6 +402,24 @@ def _tokens(n: float) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else f"{int(n)}"
 
 
+def _cost(elapsed_s: float, time_budget_s: float, spent: str, token_budget: float) -> str:
+    """The Cost row's time and tokens, each against its budget. A budget of 0 or
+    less is no limit, as the engine reads it (`engine.NO_LIMIT`, every run's
+    default): read as a number, an uncapped run's row said "134m 01s of 0s" and
+    "310.3k measured of 0 generated tokens" (#187, as the run state said "0 left")."""
+    time = (
+        f"{_minutes(elapsed_s)} of {_minutes(time_budget_s)}"
+        if time_budget_s > 0
+        else f"{_minutes(elapsed_s)}, no time limit"
+    )
+    tokens = (
+        f"{spent} of {_tokens(token_budget)} generated tokens"
+        if token_budget > 0
+        else f"{spent} generated tokens, no cap"
+    )
+    return f"{time} · {tokens}"
+
+
 def _n(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
@@ -1429,11 +1447,13 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "cost",
                 "Cost",
                 "cost",
-                f"{_minutes(float(evidence.get('elapsed_s', 0)))} of "
-                f"{_minutes(float(evidence.get('time_budget_s', 0)))} "
-                f"· {spend.text if spend is not None else 'no spend recorded'} of "
-                f"{_tokens(float(evidence.get('token_budget', 0)))} generated tokens "
-                f"· {_n(len(tools), 'tool call')} over "
+                _cost(
+                    float(evidence.get("elapsed_s", 0)),
+                    float(evidence.get("time_budget_s", 0)),
+                    spend.text if spend is not None else "no spend recorded",
+                    float(evidence.get("token_budget", 0)),
+                )
+                + f" · {_n(len(tools), 'tool call')} over "
                 f"{_n(int(evidence.get('rounds', 0)), 'round')}",
                 (outcome.record_hash,),
             )

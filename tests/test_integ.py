@@ -215,7 +215,8 @@ def test_the_cost_row_says_measured_when_the_server_reported_usage(repo: Path) -
     rows = {row.key: row for row in compile_packet(result.journal).rows}
     spent = sidecar(result)
     assert spent["token_source"] == "usage"
-    assert f"{spent['tokens_spent']} measured of " in rows["cost"].text
+    # An uncapped run (the default): the spend is "measured", with no "of 0" (#187).
+    assert f"{spent['tokens_spent']} measured generated tokens, no cap" in rows["cost"].text
     assert "~" not in rows["cost"].text
     assert not any("estimate" in item for item in rows["not-proven"].items)
 
@@ -225,7 +226,8 @@ def test_the_cost_row_says_estimate_when_no_usage_came(repo: Path) -> None:
     rows = {row.key: row for row in compile_packet(result.journal).rows}
     spent = sidecar(result)
     assert spent["token_source"] == "estimate"
-    assert f"~{spent['tokens_spent']} estimated of " in rows["cost"].text
+    # Uncapped (the default): "estimated", with no "of 0" (#187).
+    assert f"~{spent['tokens_spent']} estimated generated tokens, no cap" in rows["cost"].text
     assert any("estimate" in item for item in rows["not-proven"].items)
 
 
