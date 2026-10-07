@@ -25,7 +25,16 @@ from file_checks import REGISTRY, key_for
 from test_feed import BUGGY, TEST, FakeAuditor, git
 
 from saddle import impact
-from saddle.feed import UNTRACKED_HEAD, AuditFeed, AuditResult, render, snapshot
+from saddle.auditor import Finding, Findings
+from saddle.feed import (
+    EDIT_CHECKS_FIRST,
+    FLIPS_FIRST,
+    UNTRACKED_HEAD,
+    AuditFeed,
+    AuditResult,
+    render,
+    snapshot,
+)
 
 WORKER_DATA = ".coverage.host.pid4242.Xabcdefx.abcdefgh"
 """A pytest-cov xdist worker's data file, spelled as pytest-cov 7 names one."""
@@ -137,3 +146,51 @@ def test_a_long_untracked_list_is_cut_and_counted() -> None:
     assert "f09.txt" in line
     assert "f10.txt" not in line
     assert " f09.txt and 5 more. " in line
+
+
+class FailingEditChecks(FakeAuditor):
+    """Fails tier 0 on every file, so the finish audit stops at the edit checks."""
+
+    def tier0(self, path: str, new_text: str) -> Findings:
+        self.calls.append((0, path))
+        found = Finding("ruff", 0, "fail", "code-wrong", f"{path}:1: E999", ("fake",))
+        return Findings(tier=0, key="k0", findings=(found,))
+
+
+def _stopped(worktree: Path, tmp_path: Path, auditor: FakeAuditor) -> tuple[str, AuditResult]:
+    f = AuditFeed(
+        worktree=worktree,
+        baseline=git(worktree, "rev-parse", "HEAD"),
+        journal=tmp_path / "j.jsonl",
+        run_span="s",
+        auditor=auditor,
+    )
+    _, text = f.final()
+    f.close()
+    return text, f.results[-1]
+
+
+def test_an_audit_stopped_at_its_edit_checks_names_the_untracked_files(
+    worktree: Path, tmp_path: Path
+) -> None:
+    """The edit-checks-first refusal is a failing audit too: the contract's
+    every failing audit, not only one that reached the suite."""
+    (worktree / "tests" / "test_more.py").write_text("def test_more():\n    pass\n")
+    (worktree / WORKER_DATA).write_bytes(b"SQLite format 3\0")
+    text, result = _stopped(worktree, tmp_path, FailingEditChecks())
+    assert result.note == EDIT_CHECKS_FIRST
+    assert result.untracked == (WORKER_DATA, "tests/test_more.py")
+    assert any(line.startswith(UNTRACKED_HEAD) for line in text.splitlines())
+
+
+def test_an_audit_stopped_at_a_test_flip_names_the_untracked_files(
+    worktree: Path, tmp_path: Path
+) -> None:
+    """The flips-first refusal, the other early return, likewise."""
+    test = worktree / "tests" / "test_calc.py"
+    test.write_text(test.read_text().replace("== 4", "== 5"))
+    (worktree / WORKER_DATA).write_bytes(b"SQLite format 3\0")
+    text, result = _stopped(worktree, tmp_path, FakeAuditor())
+    assert result.note == FLIPS_FIRST
+    assert result.untracked == (WORKER_DATA,)
+    assert any(line.startswith(UNTRACKED_HEAD) for line in text.splitlines())
