@@ -13,7 +13,12 @@ solve rate at lower cost, with summaries lengthening trajectories). The
 stages remove the bulkiest and least re-derivable material first, and what
 was removed is always announced as a `Compaction` event.
 
-Stage 1  truncate oversized tool results in older turns, keeping a head and
+Stage 0  clear the reasoning of every assistant message but the newest
+         `REASONING_KEPT` (handed to `archive` whole). Old reasoning is the
+         bulk least needed again; files the model is editing are not. When
+         this alone reaches the target, nothing else is touched.
+Stage 1  truncate oversized tool results in older turns, oldest first and only
+         until the target is met, keeping a head and
          a tail plus a marker, and every `FAILED `/`ERROR ` line between
          them (a pytest failure list is what the next step needs)
 Stage 2  drop whole older exchanges, oldest first: an assistant message
@@ -57,6 +62,19 @@ IMAGE_TOKENS: Final = 1200
 
 KEEP_RECENT: Final = 6
 """Messages at the tail that are never touched, whatever the pressure."""
+
+REASONING_KEPT: Final = 4
+"""How many of the newest assistant messages keep their reasoning through a
+compaction (stage 0). Keeping the latest reasoning scores as keeping all of it,
+and dropping all of it costs more rounds and wall time (saddle's keep-reasoning
+A/B; research library, "Reasoning retention in agent context")."""
+
+REASONING_LINE: Final = (
+    "Reasoning from earlier rounds was cleared to fit the window; the newest "
+    f"{REASONING_KEPT} rounds keep theirs. What the earlier rounds established is in "
+    "the files, the tool results and the run state."
+)
+"""The note's line once stage 0 has cleared any reasoning, kept on every later note."""
 
 RESULT_HEAD: Final = 1200
 RESULT_TAIL: Final = 400
@@ -392,6 +410,21 @@ def _entry_path(entry: str) -> str:
     return entry.split(" (", 1)[0]
 
 
+def _clear_reasoning(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Clear the reasoning of every assistant message but the newest
+    `REASONING_KEPT`, in place; each cleared message as it was, for `archive`."""
+    assistants = [m for m in messages if m.get("role") == "assistant"]
+    cleared: list[dict[str, Any]] = []
+    for message in assistants[: max(len(assistants) - REASONING_KEPT, 0)]:
+        if not (message.get("reasoning_content") or message.get("reasoning")):
+            continue
+        cleared.append(dict(message))
+        for key in ("reasoning_content", "reasoning"):
+            if key in message:
+                message[key] = ""
+    return cleared
+
+
 STALE_COPY: Final = (
     "\nThe last compaction dropped this file's contents from your context (the note "
     "lists {path}), so this edit was written from memory. Read {path} again with "
@@ -509,11 +542,39 @@ def compact(
         if whole:
             archive(whole)
 
+    old = next((i for i, m in enumerate(messages) if is_note(m)), None)
+    block = state() if state is not None else ""
+    prior = _previous_unread(messages[old]) if old is not None else []
+    reasoned = old is not None and REASONING_LINE in str(messages[old].get("content"))
+
+    def unread() -> list[str]:
+        _, held = _file_bodies(messages)
+        return [e for e in dict.fromkeys(prior + shown) if _entry_path(e) not in held]
+
+    def renote(summary: str) -> tuple[int, str]:
+        if old is not None and state is not None:
+            count, topics = _previous(messages[old])
+            messages[old] = _note(count, topics, [], unread(), block, hint, reasoned)
+        return 0, summary
+
+    # Stage 0: old reasoning goes first, whole to `archive`, before any tool
+    # result or exchange; a compaction rewrites the prompt anyway, so it costs no
+    # second re-prefill.
+    cleared = _clear_reasoning(messages)
+    if cleared:
+        keep_whole(cleared)
+        reasoned = True
+        said = f"reasoning of {len(cleared)} earlier round(s) cleared"
+        if size(messages) <= goal:
+            return renote(said)
+
     # Stage 1: shrink old tool results, and turn old images into a line.
     pictures = False
     for index, message in enumerate(messages):
         if protected(index):
             continue
+        if size(messages) <= goal:
+            break  # oldest first, and no further than the target needs
         content = message.get("content") or ""
         if is_image_followup(message) and isinstance(content, list):
             message["content"] = _elide_images(content)
@@ -522,23 +583,15 @@ def compact(
             keep_whole([message])
             message["content"] = _truncate_result(content)
     elided = "older screenshots elided" if pictures else "large tool results elided"
-
-    old = next((i for i, m in enumerate(messages) if is_note(m)), None)
-    block = state() if state is not None else ""
-    prior = _previous_unread(messages[old]) if old is not None else []
-
-    def unread() -> list[str]:
-        _, held = _file_bodies(messages)
-        return [e for e in dict.fromkeys(prior + shown) if _entry_path(e) not in held]
+    if cleared:
+        elided = f"{said}; {elided}"
 
     if size(messages) <= goal:
-        if old is not None and state is not None:
-            count, topics = _previous(messages[old])
-            messages[old] = _note(count, topics, [], unread(), block, hint)
-        return 0, elided
+        return renote(elided)
 
     # Stage 2: drop the oldest exchanges, a tool call always with its results.
-    count, topics = 0, []
+    count = 0
+    topics: list[str] = []
     at = None
     if old is not None:
         count, topics = _previous(messages.pop(old))
@@ -553,7 +606,7 @@ def compact(
         # what went. An autonomous run's state block lists what is changed now.
         named = [] if state is not None else edited
         topics_kept = (topics + fresh)[:TOPICS_KEPT]
-        return _note(count + dropped, topics_kept, named, unread(), block, hint)
+        return _note(count + dropped, topics_kept, named, unread(), block, hint, reasoned)
 
     def reserve() -> int:
         # What the note will cost, measured whole: counting only the state
@@ -613,7 +666,13 @@ def compact(
 
 
 def _note(
-    count: int, topics: list[str], edited: list[str], unread: list[str], block: str, hint: str
+    count: int,
+    topics: list[str],
+    edited: list[str],
+    unread: list[str],
+    block: str,
+    hint: str,
+    reasoned: bool = False,
 ) -> dict[str, Any]:
     lines = [f"{NOTE_HEAD}{count} earlier message(s) dropped to fit the window.]"]
     if topics:
@@ -622,6 +681,8 @@ def _note(
         lines.append("Files edited in the dropped part: " + ", ".join(edited))
     if unread:
         lines.append(_NOTE_UNREAD + "; ".join(unread) + UNREAD_HOW)
+    if reasoned:
+        lines.append(REASONING_LINE)
     if block:
         lines.append(block)
     lines.append(hint)
