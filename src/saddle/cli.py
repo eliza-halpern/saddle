@@ -1324,6 +1324,40 @@ def _explain_attempt(journal: Path, span: SpanRecord) -> list[str]:
     return lines
 
 
+def run_reasoning(journal: Path, *, stdout: IO[str]) -> int:
+    """Print each round's whole reasoning, in order, from its `auto:spend` sidecar
+    (#126): every round the run saved reasoning for, under a line naming the round.
+
+    Exit 1 with nothing printed when there is no journal, or when it does not
+    verify (`read_spans` checks every sidecar against the hash its span sealed):
+    a record that cannot be trusted is never shown, and never read as a run with
+    no reasoning. A run that saved none says so and exits 0.
+    """
+    if not journal.is_file():  # `read_spans` reads a missing file as an empty one
+        stdout.write(f"error: no journal at {journal}\n")
+        return 1
+    try:
+        spans = read_spans(journal)
+    except ValueError as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    rounds = [s for s in spans if s.name == "auto:spend"]
+    shown = 0
+    for number, span in enumerate(rounds, 1):
+        if not span.attempt_hash:
+            continue
+        thinking = json.loads(attempt_sidecar_path(journal, span.span_id).read_text()).get(
+            "thinking"
+        )
+        if isinstance(thinking, str) and thinking:
+            stdout.write(f"--- round {number} of {len(rounds)} ({span.started_at or '?'})\n")
+            stdout.write(thinking.rstrip("\n") + "\n")
+            shown += 1
+    if not shown:
+        stdout.write(f"no saved reasoning in {journal} ({len(rounds)} rounds)\n")
+    return 0
+
+
 def run_explain(journal: Path, *, attempt: str | None, stdout: IO[str]) -> int:
     """Explain a run from its journal: times, calls, verdicts, findings.
 
@@ -1894,6 +1928,10 @@ def build_parser() -> argparse.ArgumentParser:
         "on its branch in REPO (default: the checkout the ledger sits in; write the journal "
         "first).",
     )
+    reasoning = sub.add_parser(
+        "reasoning", help="Print each round's whole reasoning, in order, from a run's journal."
+    )
+    reasoning.add_argument("journal", help="Journal path (a run's proofs.jsonl).")
     explain = sub.add_parser("explain", help="Explain a run from its journal.")
     explain.add_argument(
         "journal",
@@ -2270,6 +2308,14 @@ def build_parser() -> argparse.ArgumentParser:
         "prompt_shape.keep_reasoning).",
     )
     auto.add_argument(
+        "--save-reasoning",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep each round's whole reasoning with the run, redacted, beside its "
+        "spend record (on by default; --no-save-reasoning keeps none; `saddle "
+        "reasoning` prints it). Narrative: nothing that judges the run reads it.",
+    )
+    auto.add_argument(
         "--finish-refusal-cap",
         type=int,
         default=DEFAULT_FINISH_REFUSAL_CAP,
@@ -2361,6 +2407,7 @@ def run_auto_command(args: argparse.Namespace, client: VllmClient, *, stdout: IO
         resume_patch=args.resume_patch,
         resume_tmp=args.resume_tmp,
         keep_reasoning=args.keep_reasoning,
+        save_reasoning=args.save_reasoning,
         check_tool=args.check_tool,
         wheels=wheel_folder(args),
         tier2=args.tier2,
@@ -2543,6 +2590,7 @@ def main(
         "tail",
         "up",
         "explain",
+        "reasoning",
         "chat",
         "web",
         "audit",
@@ -2607,6 +2655,8 @@ def main(
         return run_verify(journal, stdout=stdout or sys.stdout, anchor=anchor)
     if args.command == "explain":
         return run_explain(Path(args.journal), attempt=args.attempt, stdout=stdout or sys.stdout)
+    if args.command == "reasoning":
+        return run_reasoning(Path(args.journal), stdout=stdout or sys.stdout)
     if args.command == "tail":
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     if args.command == "audit":

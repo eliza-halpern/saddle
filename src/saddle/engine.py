@@ -656,6 +656,12 @@ class AutoRun:
     as a refusal (`SUMMARY_NAMES_ABSENT`). Feedback, so arm E+A+F only."""
     summary_returned: list[str] | None = None
     """The names that one return named; None until it happens."""
+    save_reasoning: bool = True
+    """Seal each round's whole reasoning in its `auto:spend` sidecar, redacted and
+    uncapped, as narrative (#126). The outcome record keeps only the first
+    `journal.MAX_THINKING_CHARS` of a run's reasoning: one 80-minute run kept 4,025
+    of about 454,566 characters, and why it chose what it chose could be read only
+    from an outside relay. `--no-save-reasoning` turns it off."""
     waivers: list[str] | None = None
     """`feed.waivers` of the last accepted finish audit; None until one is.
     Sealed on a finished run with an auditor."""
@@ -1870,12 +1876,14 @@ def _charge(
         **({"cut": cut} if cut else {}),
     }
     span_id = uuid.uuid4().hex
-    # A cut reply's text is sealed beside its spend: the round's reasoning is
-    # otherwise kept only inside the turn's capped proof record, so a
-    # runaway reply cut at a limit could not be read back.
-    digest = (
-        write_attempt_sidecar(journal, span_id, partial_reply(reply, reasoning, cut)) if cut else ""
-    )
+    # A cut reply's text is sealed beside its spend, so a runaway reply cut at a
+    # limit can be read back; and each round's whole reasoning, as `thinking`,
+    # which the sidecar writer redacts and never caps (#126). Narrative: no gate,
+    # audit or verdict reads it.
+    sealed: dict[str, Any] = partial_reply(reply, reasoning, cut) if cut else {}
+    if auto.save_reasoning and reasoning:
+        sealed["thinking"] = reasoning
+    digest = write_attempt_sidecar(journal, span_id, sealed) if sealed else ""
     append_span(
         journal,
         build_span(

@@ -653,6 +653,12 @@ Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
   lane keeps it: the chat's Ask and Edit turns (web and `saddle up`, with the same
   off switch) and the web reader each send a round's reasoning back on its assistant
   message. Without it a long tool loop sees what the model did and never why.
+- `--save-reasoning` (on by default; `--no-save-reasoning` turns it off): keeps each
+  round's whole reasoning with the run, in the sidecar beside its `auto:spend` record,
+  redacted like every sidecar but never cut. The outcome record keeps only the first
+  4000 characters of a whole run's reasoning, so one 80-minute run kept about 1% of
+  it. `saddle reasoning .saddle/runs/<id>/proofs.jsonl` prints the rounds in order.
+  Narrative: no gate, audit or verdict reads it.
 - `--check-tool` / `--no-check-tool` (on by default in arm E+A+F; off, and refused if
   asked for, in E and E+A): offers the model a `check` tool that runs audit tiers 0 and 1
   on the current tree before `finish`, so it need not run the whole suite itself to learn

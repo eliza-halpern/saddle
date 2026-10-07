@@ -645,6 +645,9 @@ class AutoOptions:
     turns it off (without it the served chat templates put an empty reasoning
     block in every past round). Sealed as `prompt_shape.keep_reasoning` either
     way."""
+    save_reasoning: bool = True
+    """`--save-reasoning` (on): seal each round's whole reasoning beside its spend
+    record (`engine.AutoRun.save_reasoning`, #126); `saddle reasoning` prints it."""
     sanctioned_test_rewrites: tuple[str, ...] = ()
     """Test functions the task orders rewritten (T5 rule 8). A failing
     assertion-preservation finding naming only these is classed `sanctioned`:
@@ -1098,6 +1101,7 @@ def run_auto(
             else None
         ),
         summary_names=lambda text: absent_code_names(text, worktree, base_commit),
+        save_reasoning=options.save_reasoning,
         summary_return=options.arm == "E+A+F",
         feed=feed,
         tell_summary=feed.tell_summary if feed is not None else None,
@@ -1117,6 +1121,7 @@ def run_auto(
             "prompt_shape": {"keep_reasoning": options.keep_reasoning},
             **({"self_guard": True} if guard is not None else {}),
             **({"check_tool": True} if check_tool else {}),
+            **({"save_reasoning": False} if not options.save_reasoning else {}),
             **(
                 {
                     "task_requirements": str(options.task_requirements)

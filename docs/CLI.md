@@ -297,6 +297,7 @@ This command runs one task autonomously in a new worktree. The result is a branc
 | `--tier2 {score,shortlist}` | `score` | tier-2 mutation verdict: `score` is the 85% kill-rate bar; `shortlist` makes an open changed-line survivor `not-proven` (surfaced, not refused) and names it, with coverage as a locator only (USING-SADDLE.md §7a) |
 | `--mutant-shortlist N` | `5` | with `--tier2 shortlist`: how many surviving mutants a refused finish names, one per changed line first |
 | `--keep-reasoning` / `--no-keep-reasoning` | on | send each round's reasoning back to the model for the rest of the run; sealed as `prompt_shape.keep_reasoning`. `saddle chat` takes the same pair for the runs it starts |
+| `--save-reasoning` / `--no-save-reasoning` | on | keep each round's whole reasoning with the run, redacted and uncapped, in the sidecar beside its `auto:spend` record; `saddle reasoning` prints it. Narrative: no gate, audit or verdict reads it. Off is sealed in the outcome as `save_reasoning: false` |
 | `--check-tool` / `--no-check-tool` | on in arm E+A+F, off in E and E+A | offer the model a `check` tool that runs audit tiers 0 and 1 on the current tree before finish, and tier 2 as finish runs it when the call sets `mutation` (refused with E or E+A) |
 | `--allow-installs` | off | offer the model an `install` tool; you approve each request, and an approved one installs from the wheel folder into an overlay of the run's own on the project venv (no network; the project venv is not changed). The run needs a project venv and a wheel folder holding wheels, or it does not start. A terminal run cannot answer, so every request there is refused |
 | `--wheel-dir DIR` | `$SADDLE_WHEEL_DIR`, else `~/.local/share/saddle/wheels` | with `--allow-installs`: the local folder of wheels installs come from |
@@ -388,6 +389,15 @@ file is part of verification: an edited record, a second commit record for one o
 or a follow-up that does not continue the record before it fails with
 `bad-hash`, `attempt-sidecar`, `committed-duplicate` or `followup-chain`. A follow-up
 deleted from the end of the file cannot be seen, since the file is append-only.
+
+## saddle reasoning JOURNAL
+
+Prints each round's whole reasoning, in order, under a `--- round N of M` line: what
+`--save-reasoning` kept beside each `auto:spend` record (redacted, never cut to the
+outcome record's 4000 characters). A round that reasoned nothing is left out; a run
+that saved none says `no saved reasoning in JOURNAL (M rounds)`. Exit 1, with nothing
+printed, when there is no journal or it does not verify (each sidecar must hash to
+the record its span sealed), so a record that cannot be trusted is never shown.
 
 ### Attaching follow-up commits: `saddle audit --attach-to LEDGER [REV]`
 

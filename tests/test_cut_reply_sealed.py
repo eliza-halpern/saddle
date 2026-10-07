@@ -101,7 +101,8 @@ def test_a_reply_cut_at_the_token_cap_leaves_its_partial_text(repo: Path) -> Non
     records = cut_spends(result.journal)
     ended, _ = records[0]
     assert "cut" not in ended
-    assert records[0][1] is None  # a reply that ended by itself leaves no partial text
+    # A reply that ended by itself leaves no partial text, only its reasoning (#126).
+    assert records[0][1] == {"thinking": "x" * 16}
     cut = [(spend, sealed) for spend, sealed in records if "cut" in spend]
     assert cut
     for spend, sealed in cut:
