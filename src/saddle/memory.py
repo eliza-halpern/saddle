@@ -309,12 +309,26 @@ def run_state(
         lines.append("- latest audit delivered to you: none")
     lines.append("- not proven: " + ("" if unproven else "none"))
     lines += [f"  {ln}" for ln in unproven]
-    lines.append(
-        f"- budget: {spent_tokens} of {token_budget} generated tokens used, "
-        f"{max(token_budget - spent_tokens, 0)} left; {elapsed_s:.0f}s of "
-        f"{time_budget_s:.0f}s used, {max(time_budget_s - elapsed_s, 0):.0f}s left"
-    )
+    lines.append(_budget_line(spent_tokens, token_budget, elapsed_s, time_budget_s))
     return "\n".join(lines)
+
+
+def _budget_line(spent_tokens: int, token_budget: int, elapsed_s: float, time_s: float) -> str:
+    """The state block's budget line. A budget of 0 or less is no limit, as the
+    engine reads it (`engine.NO_LIMIT`, every run's default): read as a number,
+    it told every uncapped run it had 0 tokens and 0 s left (#187)."""
+    tokens = (
+        f"{spent_tokens} of {token_budget} generated tokens used, "
+        f"{max(token_budget - spent_tokens, 0)} left"
+        if token_budget > 0
+        else f"{spent_tokens} generated tokens used, no cap"
+    )
+    time = (
+        f"{elapsed_s:.0f}s of {time_s:.0f}s used, {max(time_s - elapsed_s, 0):.0f}s left"
+        if time_s > 0
+        else f"{elapsed_s:.0f}s used, no time limit"
+    )
+    return f"- budget: {tokens}; {time}"
 
 
 def _edited_path(call: dict[str, Any]) -> str | None:
