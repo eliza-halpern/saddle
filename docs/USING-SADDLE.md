@@ -657,7 +657,9 @@ Defaults below are read from `cli.build_parser`; CLI.md lists every flag.
   asked for, in E and E+A): offers the model a `check` tool that runs audit tiers 0 and 1
   on the current tree before `finish`, so it need not run the whole suite itself to learn
   where its change stands; each call is journaled as an `audit:check` span
-  (`feed.CHECK_SPAN`).
+  (`feed.CHECK_SPAN`). `whole_suite: true` runs every test file at tier 1, and
+  `mutation: true` runs tier 2 as `finish` runs it (the same engines, sample and kill
+  bar), so the model learns which mutants survive without writing its own mutation loop.
 - `--tier2` and `--mutant-shortlist`: section 7a.
 - `--sanctioned-test-rewrite NAME` (repeatable): a test the task orders rewritten; its
   assertion-preservation finding is reported, not held against the run, and the name is

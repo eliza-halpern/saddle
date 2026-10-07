@@ -5,7 +5,8 @@ The contract, each half both ways:
 - `check` runs tiers 0 and 1 of the same auditor on the current tree and
   returns its findings rendered as a finish refusal renders them; tier 1's
   finding records equal the finish audit's on the same tree;
-- tier 2 never runs in a check; it still runs at finish;
+- tier 2 runs in a check only when the call sets `mutation`, and then as finish
+  runs it (#180); it still runs at finish;
 - a check never counts as a finish refusal;
 - a check on a tree unchanged since the last check is refused and runs
   nothing; a changed tree always allows one;

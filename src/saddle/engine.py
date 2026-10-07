@@ -426,7 +426,7 @@ class AuditHooks(Protocol):
     def after_tool(self, name: str, ok: bool) -> None: ...
     def collect(self) -> str: ...
     def final(self) -> tuple[bool, str]: ...
-    def check(self, *, whole_suite: bool = False) -> str: ...
+    def check(self, *, whole_suite: bool = False, mutation: bool = False) -> str: ...
     @property
     def checks(self) -> Sequence[object]: ...
     def unresolved(self) -> list[dict[str, object]]: ...
@@ -1921,6 +1921,10 @@ CHECK_WHOLE_SUITE_NOT_BOOL: Final = "error: check's whole_suite must be true or 
 """A `whole_suite` that is not a JSON boolean runs nothing: read as false, a
 narrowed check would answer a question the model asked about the whole suite."""
 
+CHECK_MUTATION_NOT_BOOL: Final = "error: check's mutation must be true or false"
+"""A `mutation` that is not a JSON boolean runs nothing: read as false, a check
+without mutation would answer a question the model asked about it (#180)."""
+
 
 CHECK_ARGUMENTS_NOT_OBJECT: Final = (
     'error: check\'s arguments must be a JSON object, like {"whole_suite": true}, or none'
@@ -1930,7 +1934,8 @@ may have asked for the whole suite. No arguments at all is a narrowed check."""
 
 
 def _check(feed: AuditHooks, arguments: str) -> str:
-    """Run the model's `check`; `whole_suite: true` runs every test file (#171)."""
+    """Run the model's `check`; `whole_suite: true` runs every test file (#171),
+    `mutation: true` runs tier 2 as finish does (#180)."""
     try:
         args = json.loads(arguments) if arguments.strip() else {}
     except ValueError:
@@ -1940,7 +1945,10 @@ def _check(feed: AuditHooks, arguments: str) -> str:
     whole = args.get("whole_suite", False)
     if not isinstance(whole, bool):
         return CHECK_WHOLE_SUITE_NOT_BOOL
-    return feed.check(whole_suite=whole)
+    mutation = args.get("mutation", False)
+    if not isinstance(mutation, bool):
+        return CHECK_MUTATION_NOT_BOOL
+    return feed.check(whole_suite=whole, mutation=mutation)
 
 
 WHOLE_SUITE_BY_CHECK: Final = (

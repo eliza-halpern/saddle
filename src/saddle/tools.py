@@ -759,7 +759,8 @@ CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
     "and any linters it declares, as your instructions list them) on the tree as "
     "it is now, and return the findings "
     "exactly as a refused finish would show them. finish runs these same checks "
-    "plus mutation testing, so a passing check does not guarantee finish passes. "
+    "plus mutation testing, so a passing check does not guarantee finish passes; with "
+    "mutation set to true, check runs finish's mutation testing too. "
     "A check on a tree unchanged since the last check of the same kind is refused.",
     {
         "whole_suite": {
@@ -770,7 +771,16 @@ CHECK_SCHEMA: Final[dict[str, Any]] = _tool(
                 "far from it (shared state, a fixture, test order, parallel workers). "
                 "Default false."
             ),
-        }
+        },
+        "mutation": {
+            "type": "boolean",
+            "description": (
+                "true also runs finish's mutation testing on the lines you changed, with "
+                "finish's sample and kill bar, and names each surviving mutant as finish "
+                "would. Slower than a plain check; ask for it when you want to know "
+                "whether finish's mutation check passes. Default false."
+            ),
+        },
     },
     [],
 )

@@ -71,6 +71,9 @@ CHECK_SPAN: Final = "audit:check"
 """A `check` call's record (`feed.CHECK_SPAN`); spelled here so the packet
 stays a reader of the ledger."""
 
+CHECK_MUTATION: Final = "mutation"
+"""The last argv word of a check that ran tier 2 (`feed.CHECK_MUTATION`)."""
+
 Status = Literal[
     "proven",
     "failed",
@@ -1264,6 +1267,8 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
         # `read_entries` above refuses a ledger whose sidecar does not hash,
         # so a check record that reaches here is the sealed one.
         record = _sidecar(journal, last_check) or {}
+        ran = sum(bool(c.argv) and c.argv[-1] == CHECK_MUTATION for c in checks)
+        mutated = f" ({ran} with mutation)" if ran else ""
         failing = sum(
             f.get("verdict") in ("fail", "blocked") and f.get("reason") != "sanctioned"
             for f in record.get("findings", [])
@@ -1273,9 +1278,9 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                 "check",
                 "Check",
                 "observed",
-                f"The model checked {_n(len(checks), 'time')}; last check: "
-                f"{_n(failing, 'failing finding')}. A check is tiers 0 and 1 only; "
-                "the finish audit is the verdict.",
+                f"The model checked {_n(len(checks), 'time')}{mutated}; last check: "
+                f"{_n(failing, 'failing finding')}. A check is tiers 0 and 1, and tier 2 "
+                "too when it asks for mutation; the finish audit is the verdict.",
                 tuple(c.record_hash for c in checks),
             )
         )

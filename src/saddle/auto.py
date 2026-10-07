@@ -493,7 +493,10 @@ CHECK_PROMPT: Final = (
     "could break a test far from it, call check with whole_suite set to true, "
     "which runs every test file on the audit's workers. "
     "finish runs the same checks plus the whole suite and mutation testing, so a "
-    "passing check does not guarantee finish passes."
+    "passing check does not guarantee finish passes. To see mutation's verdict "
+    "before finish, call check with mutation set to true: it runs finish's own "
+    "mutation on the tree as it is now and names the surviving mutants as finish "
+    "would. Use it instead of writing your own mutation loop."
 )
 """Appended to the system prompt whenever the run offers `check` (on by default
 in arm E+A+F). A watched dogfood run without the tool ran the whole suite and

@@ -421,7 +421,7 @@ class StubFeed:
     def final(self) -> tuple[bool, str]:
         return True, ""
 
-    def check(self, *, whole_suite: bool = False) -> str:
+    def check(self, *, whole_suite: bool = False, mutation: bool = False) -> str:
         return ""
 
     def unresolved(self) -> list[dict[str, object]]:

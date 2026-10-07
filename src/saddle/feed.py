@@ -39,8 +39,9 @@ about auditing (the engine imports no auditor):
 - `check()` -- the model's **pull** (`--check-tool`, arm E+A+F only): tier 0
   (`Auditor.tier0` on every changed Python file) and tier 1 of the same
   auditor, synchronously, on the tree as it is now, rendered by the same
-  `render` a finish refusal uses. Never tier 2, never a finish refusal, and
-  refused (no audit run) while the tree is unchanged since the last check.
+  `render` a finish refusal uses; tier 2 too, as finish runs it, when the
+  check asks for mutation (#180). Never a finish refusal, and refused (no
+  audit run) while the tree is unchanged since the last check of that kind.
   Each check that runs is journaled as a `CHECK_SPAN` span whose sidecar
   holds its findings. The finish audit is unaffected by it.
 - `close()` -- at the end of the run; waits for a pending checkpoint so the
@@ -117,6 +118,9 @@ CHECK_SPAN: Final = "audit:check"
 (`AuditResult.to_dict`) in the span's attempt sidecar. Its `audit:` prefix
 puts it in the outcome's sealed audit list."""
 
+CHECK_MUTATION: Final = "mutation"
+"""The last word of a `CHECK_SPAN`'s argv when the check ran tier 2 (#180)."""
+
 CHECK_UNCHANGED: Final = "error: check refused: the tree is unchanged since check "
 """Prefix of a refused `check`. Not the tier-0 guard's `REFUSED`, so it is
 not counted among the run's guard refusals, and not a finish refusal."""
@@ -128,8 +132,8 @@ UNCHANGED_HOW: Final = (
 )
 """What a refused `check` compared and with which check (#176): a run argued
 "but the tree has changed since check 1" against a refusal that said only the
-number. A check of the other kind (`whole_suite`) of the same files is not
-refused, so the kind is named too."""
+number. A check of another kind (`whole_suite`, `mutation`) of the same files is
+not refused, so the kind is named too."""
 
 FLIP_CLEARED_AT_FINISH: Final = (
     "Only your finish summary can clear this: give each changed test its `flip:` line "
@@ -601,7 +605,7 @@ class AuditFeed:
     surfaced_tree: str | None = None
     """The tree of the accepted finish whose not-proven findings were
     delivered (`final`); None until one is."""
-    _checked_tree: tuple[str, bool] | None = None
+    _checked_tree: tuple[str, bool, bool] | None = None
     _flips_said: dict[str, str] = field(default_factory=dict)
     """Each failing `test-changes` detail the model has read before finish, to
     the point that said it in full (`_shown`)."""
@@ -700,9 +704,10 @@ class AuditFeed:
             tree = snapshot(self.worktree, files, scratch / "tree")
             copied = untracked_in(scratch / "tree")
             if check:
-                if (tree, whole_suite) == self._checked_tree:
+                mode = (tree, whole_suite, 2 in tiers)
+                if mode == self._checked_tree:
                     return None
-                self._checked_tree = (tree, whole_suite)
+                self._checked_tree = mode
             pending = self._p1_state(final=point == "finish") if 1 in tiers else None
             found: list[Finding] = []
             detail: tuple[tuple[str, str, str], ...] = ()
@@ -884,24 +889,31 @@ class AuditFeed:
         text = self._record(self._take(), delivered=self.feedback)
         return text if self.feedback else ""
 
-    def check(self, *, whole_suite: bool = False) -> str:
-        """The model's pull: tiers 0 and 1 on the tree as it is now.
+    def check(self, *, whole_suite: bool = False, mutation: bool = False) -> str:
+        """The model's pull: tiers 0 and 1 on the tree as it is now, and tier 2 too
+        with `mutation`.
 
         `whole_suite` runs every test file at tier 1, not only those the change
         can reach (#171): the run's way to ask about a test far from its change
         without starting the suite by hand.
 
+        `mutation` runs tier 2 as finish runs it, mutation on the changed lines
+        with finish's engines, sample and kill bar, so its survivors are the ones
+        finish would name on this tree (#180): workers wrote their own mutation
+        loops because nothing answered that before finish. Finish still runs tier
+        2 on its own tree.
+
         Rendered exactly as a finish refusal renders its audit (`render`), so
-        a finding reads the same whichever way it arrives. Tier 2 is never
-        run here. On a tree unchanged since the last check nothing runs and
-        the call is refused. A check never touches the finish refusal count
-        and never shortens the finish audit.
+        a finding reads the same whichever way it arrives. Without `mutation`
+        tier 2 is never run here. On a tree unchanged since the last check of
+        the same kind nothing runs and the call is refused. A check never
+        touches the finish refusal count and never shortens the finish audit.
         """
         self._await()  # the auditor is not shared with a pending checkpoint
         scratch = Path(tempfile.mkdtemp(prefix="saddle-check-"))
         result = self._audit(
             f"check {len(self.checks) + 1}",
-            (0, 1),
+            (0, 1, 2) if mutation else (0, 1),
             self.worktree,
             scratch,
             check=True,
@@ -909,6 +921,8 @@ class AuditFeed:
         )
         if result is None:
             kind = "whole-suite check" if whole_suite else "check"
+            if mutation:
+                kind = f"mutation {kind}"
             n = len(self.checks)
             return f"{CHECK_UNCHANGED}{n}{UNCHANGED_HOW.format(kind=kind, n=n)}"
         self._dirty = False  # this tree is audited; no checkpoint of it too
@@ -925,6 +939,7 @@ class AuditFeed:
                     result.point,
                     result.tree,
                     *(["whole-suite"] if whole_suite else []),
+                    *([CHECK_MUTATION] if mutation else []),
                 ],
                 duration_ms=result.duration_ms,
                 exit_code=0 if result.passed else 1,
