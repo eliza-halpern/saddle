@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import re
 import struct
+import weakref
 import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -200,7 +201,44 @@ PROBE_QUESTION: Final = (
     "What text is written in this image? Answer with that text only, or 'none' if there is none."
 )
 
-_CACHE: dict[object, bool] = {}
+
+class _PerServer[T]:
+    """A fact kept per server: under `server_key` when the client has one, else
+    under the client object itself, held weakly, so the fact dies with it. Kept
+    under `id()` instead, a fact outlived its client, and a later client that
+    Python gave the same `id()` (the suite's scripted clients have no
+    `server_key`) started with a stranger's answer (#186). A client that cannot
+    be held weakly is never kept: it is asked each time."""
+
+    def __init__(self) -> None:
+        self._keyed: dict[str, T] = {}
+        self._held: weakref.WeakKeyDictionary[object, T] = weakref.WeakKeyDictionary()
+
+    def get(self, client: object) -> T | None:
+        key = getattr(client, "server_key", None)
+        if key:
+            return self._keyed.get(key)
+        try:
+            return self._held.get(client)
+        except TypeError:  # not weakly referable
+            return None
+
+    def put(self, client: object, value: T) -> None:
+        key = getattr(client, "server_key", None)
+        if key:
+            self._keyed[key] = value
+            return
+        try:
+            self._held[client] = value
+        except TypeError:  # not weakly referable: asked again next time
+            pass
+
+    def clear(self) -> None:
+        self._keyed.clear()
+        self._held.clear()
+
+
+_CACHE: _PerServer[bool] = _PerServer()
 
 
 IMAGE_LIMIT: Final = re.compile(r"At most (\d+) image\(s\) may be provided in one prompt")
@@ -208,7 +246,7 @@ IMAGE_LIMIT: Final = re.compile(r"At most (\d+) image\(s\) may be provided in on
 allows. The server publishes the limit nowhere else (not on its model card), so
 its own sentence is how saddle learns it."""
 
-_LIMITS: dict[object, int] = {}
+_LIMITS: _PerServer[int] = _PerServer()
 
 
 def reset_cache() -> None:
@@ -219,7 +257,7 @@ def reset_cache() -> None:
 def image_limit(client: object) -> int | None:
     """The most images this client's server takes in one request, once a refusal
     has said (`learn_image_limit`); None while none has."""
-    return _LIMITS.get(getattr(client, "server_key", None) or id(client))
+    return _LIMITS.get(client)
 
 
 def learn_image_limit(client: object, error: str) -> int | None:
@@ -229,7 +267,7 @@ def learn_image_limit(client: object, error: str) -> int | None:
     if found is None:
         return None
     limit = int(found.group(1))
-    _LIMITS[getattr(client, "server_key", None) or id(client)] = limit
+    _LIMITS.put(client, limit)
     return limit
 
 
@@ -263,16 +301,16 @@ def server_accepts_images(client: _Streamer) -> bool:
     (HTTP 4xx) is a definite no. Any other failure raises: a transient error
     must not be remembered as "cannot see".
     """
-    key = getattr(client, "server_key", None) or id(client)
-    if key in _CACHE:
-        return _CACHE[key]
+    known = _CACHE.get(client)
+    if known is not None:
+        return known
     declared = getattr(client, "declares_images", None)
     try:
         says = declared() if declared is not None else None
     except VllmError:
         says = None  # a card that could not be read says nothing: the model is asked
     if says is False:
-        _CACHE[key] = False
+        _CACHE.put(client, False)
         return False
     try:
         verdict = reads(_answer(client, text_png(PROBE_TEXT)))
@@ -280,11 +318,11 @@ def server_accepts_images(client: _Streamer) -> bool:
         if not str(exc).startswith("server returned HTTP 4"):
             raise
         verdict = False
-    _CACHE[key] = verdict
+    _CACHE.put(client, verdict)
     return verdict
 
 
 def known_verdict(client: object) -> bool | None:
     """What `server_accepts_images` found for this client's server, without
     asking: None when it has not been asked yet."""
-    return _CACHE.get(getattr(client, "server_key", None) or id(client))
+    return _CACHE.get(client)
