@@ -173,14 +173,21 @@ More than that is a change that broke the suite, not a test that needs quiet."""
 
 LOAD_ONLY: Final = (
     "; {n} of them passed when rerun alone on the same tree, in one serial "
-    "process: {names}. They fail only beside the suite's {workers} workers, so "
-    "look for what they share (a port, a file, a display, a time limit) before "
-    "the logic your change touched; the verdict stands until the suite passes"
+    "process: {names}. They fail only inside the full run, so look at what they "
+    "share with it: a test that ran before them on the same worker and left "
+    "something behind (a patched module, a cache, a file), or what the {workers} "
+    "workers share (a port, a display, a time limit). The change itself may be "
+    "what leaves it; the verdict stands until the suite passes"
 )
-"""What the `tests` finding adds for tests that failed only under load (#174):
-three dogfood runs spent 17 minutes finding out that a failure their change
-did not cause passed in isolation. A test that also fails alone is never
-named here, so a test the change broke still reads as the change's."""
+"""What the `tests` finding adds for tests that fail in the suite and pass
+rerun alone (#174): three dogfood runs spent 17 minutes finding out that a
+failure their change did not cause passed in isolation. A rerun alone cannot
+tell load from a test that leaked state into the next: the six tests this was
+first written for failed because one test left the chat server's turn patched
+for the rest of its worker, not from load. So the line names both, and does not
+steer away from the change, which can be the test that leaks. A test that also
+fails alone is never named here, so a test the change broke still reads as the
+change's."""
 
 
 def _passed_alone(
