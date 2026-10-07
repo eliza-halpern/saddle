@@ -78,6 +78,7 @@ from saddle.memory import (
 )
 from saddle.recall import Recall
 from saddle.sandbox import Terminal
+from saddle.suiterun import starts_whole_suite
 from saddle.tools import (
     BLOCKED_TOOL,
     CHECK_TOOL,
@@ -1338,6 +1339,14 @@ def run_turn(
                     and call.name == CHECK_TOOL
                 ):
                     result = _check(auto.feed, call.arguments)
+                elif (
+                    auto is not None
+                    and auto.check_tool
+                    and auto.feed is not None
+                    and call.name == "run_command"
+                    and _starts_whole_suite(call.arguments)
+                ):
+                    result = WHOLE_SUITE_BY_CHECK
                 elif auto is not None and call.name == DISPUTE_TOOL:
                     result = _dispute(auto, call.arguments, options.workdir, ctx)
                 elif auto is not None and call.name == REFUSE_TOOL:
@@ -1919,6 +1928,25 @@ def _check(feed: AuditHooks, arguments: str) -> str:
     if not isinstance(whole, bool):
         return CHECK_WHOLE_SUITE_NOT_BOOL
     return feed.check(whole_suite=whole)
+
+
+WHOLE_SUITE_BY_CHECK: Final = (
+    "error: refused: with check offered, the whole test suite runs through check. "
+    "Call check with whole_suite set to true; it runs every test file on the audit's "
+    "workers and names the failing tests. Run one test file or one test id with "
+    "run_command to see its output."
+)
+"""A `run_command` that starts the whole suite while `check` is offered (#178):
+the prompt alone did not stop a run starting it by hand five times."""
+
+
+def _starts_whole_suite(arguments: str) -> bool:
+    """Whether a `run_command` call's command starts the whole suite (`suiterun`)."""
+    try:
+        command = json.loads(arguments).get("command")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(command, str) and starts_whole_suite(command)
 
 
 def _finish(auto: AutoRun, arguments: str) -> str:

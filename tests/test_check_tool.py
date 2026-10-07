@@ -472,7 +472,7 @@ def test_with_check_offered_the_prompt_never_coaches_a_hand_run_whole_suite(
         said[offered] = "pass `-n 8` too" in client.system
     assert said == {True: False, False: True}
     assert "whole_suite set to true" in CHECK_PROMPT
-    assert "do not start the whole suite by hand" in CHECK_PROMPT
+    assert "starts the whole suite or the gate is refused" in CHECK_PROMPT
 
 
 class WholeSuiteAuditor(FakeAuditor):
@@ -533,3 +533,49 @@ def test_a_whole_suite_that_is_not_a_boolean_runs_nothing(repo: Path, value: obj
     assert results(result, CHECK_TOOL) == [CHECK_WHOLE_SUITE_NOT_BOOL]
     assert fake.whole == []
     assert check_spans(result) == []
+
+
+# -- #178: with check offered, a hand-run whole suite is refused --------------------
+
+SUITE_BY_HAND = "python -m pytest -q -n 8 > /tmp/suite.log 2>&1"
+ONE_FILE = "python -m pytest tests/test_calc.py -q --no-cov"
+
+
+@pytest.mark.parametrize("offered", [True, False])
+def test_a_hand_run_whole_suite_is_refused_only_while_check_is_offered(
+    repo: Path, offered: bool
+) -> None:
+    """Refused with check offered, pointing at check whole_suite; without check
+    there is no other way to run the suite, so it runs."""
+    from saddle.engine import WHOLE_SUITE_BY_CHECK
+
+    command = call("run_command", "s", command=SUITE_BY_HAND)
+    client = Scripted([[edit("e", "a - b", "a + b")], [command]])
+    result, _ = run(repo, client, check_tool=offered, run_id=f"s{offered}")
+    (said,) = results(result, "run_command")
+    assert (said == WHOLE_SUITE_BY_CHECK) is offered
+    assert "whole_suite set to true" in WHOLE_SUITE_BY_CHECK
+
+
+def test_with_check_offered_one_test_file_still_runs(repo: Path) -> None:
+    from saddle.engine import WHOLE_SUITE_BY_CHECK
+
+    client = Scripted([[edit("e", "a - b", "a + b")], [call("run_command", "o", command=ONE_FILE)]])
+    result, _ = run(repo, client)
+    (said,) = results(result, "run_command")
+    assert said != WHOLE_SUITE_BY_CHECK
+    assert "passed" in said
+
+
+@pytest.mark.parametrize("arguments", ["{not json", "[]", '{"command": 5}'])
+def test_a_run_command_the_guard_cannot_read_is_left_to_the_tool(
+    repo: Path, arguments: str
+) -> None:
+    from saddle.engine import WHOLE_SUITE_BY_CHECK
+
+    broken = ToolCall(id="b", name="run_command", arguments=arguments)
+    client = Scripted([[edit("e", "a - b", "a + b")], [broken]])
+    result, _ = run(repo, client)
+    (said,) = results(result, "run_command")
+    assert said != WHOLE_SUITE_BY_CHECK
+    assert said.startswith("error: ")
