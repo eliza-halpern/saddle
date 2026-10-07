@@ -300,14 +300,41 @@ def test_the_bus_is_lent_only_when_the_command_env_lacks_it(
     assert cap.wrap(["true"], None) == ([*cap.prefix, "true"], None)
 
 
+def _failed_units(listing: str) -> list[str]:
+    """The units whose ACTIVE column reads `failed` in `list-units --plain` rows.
+
+    The DESCRIPTION column is a scope's whole command line, so a word anywhere
+    in it (another test's tmp path, say) is not a unit's state (#170)."""
+    rows = (line.split(maxsplit=4) for line in listing.splitlines())
+    return [row[0] for row in rows if len(row) >= 3 and row[2] == "failed"]
+
+
 def _no_failed_scope_left() -> None:
     left = subprocess.run(
-        ["systemctl", "--user", "list-units", "--all", "--no-legend", "saddle-cmd-*"],
+        ["systemctl", "--user", "list-units", "--all", "--no-legend", "--plain", "saddle-cmd-*"],
         capture_output=True,
         text=True,
         check=False,
     ).stdout
-    assert "failed" not in left, left
+    assert _failed_units(left) == [], left
+
+
+def test_a_failed_word_in_a_scope_command_line_is_not_a_failed_scope() -> None:
+    # The listing that tripped #170: a running scope whose command line held
+    # another test's tmp path, test_mutation_sample_failed_ru0.
+    running = (
+        "saddle-cmd-1.scope loaded active running /usr/bin/env -- bash -lc"
+        " true --chdir /tmp/p/popen-gw3/test_mutation_sample_failed_ru0"
+    )
+    assert _failed_units(running) == []
+
+
+def test_a_scope_whose_state_is_failed_is_found() -> None:
+    listing = (
+        "saddle-cmd-1.scope loaded active running bash -lc true\n"
+        "saddle-cmd-2.scope loaded failed failed bash -lc false\n"
+    )
+    assert _failed_units(listing) == ["saddle-cmd-2.scope"]
 
 
 @needs_cgroup
