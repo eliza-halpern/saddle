@@ -87,6 +87,7 @@ from saddle.jsevidence import (
 )
 from saddle.recall import Recall
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
+from saddle.summary_names import absent as absent_code_names
 from saddle.task_passes import baseline_sources, cut_calls
 from saddle.task_passes import extract as extract_requirements
 from saddle.task_requirements import ProbeTree
@@ -265,7 +266,10 @@ FEED_PROMPT: Final = (
     "original code (one that passes there asserts nothing new and is refused), "
     "and the audit asks a person to approve it when the run ends, so name each "
     "such test in your finish summary on its own line as `flip: <exact test name> "
-    "-- <evidence>`. If finish is refused {cap} times in a row with the same "
+    "-- <evidence>`. Write code in your summary as the files spell it: the first "
+    "finish whose summary names, in backticks, code that no file of the tree or the "
+    "baseline contains is returned to you once, not as a refusal, to correct. "
+    "If finish is refused {cap} times in a row with the same "
     "findings, the run stops unresolved, so change something between attempts, or "
     "call blocked."
 )
@@ -1093,6 +1097,8 @@ def run_auto(
             if prompt_constants.named(options.task)
             else None
         ),
+        summary_names=lambda text: absent_code_names(text, worktree, base_commit),
+        summary_return=options.arm == "E+A+F",
         feed=feed,
         tell_summary=feed.tell_summary if feed is not None else None,
         require_premise=options.premise_check,

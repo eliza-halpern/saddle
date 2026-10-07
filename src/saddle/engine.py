@@ -80,6 +80,7 @@ from saddle.memory import (
 from saddle.recall import Recall
 from saddle.sandbox import Terminal
 from saddle.suiterun import starts_whole_suite
+from saddle.summary_names import SummaryNamesError
 from saddle.tools import (
     BLOCKED_TOOL,
     CHECK_TOOL,
@@ -439,6 +440,17 @@ class AuditHooks(Protocol):
 
 
 FINISH_REFUSED: Final = "error: finish refused: the audit of this tree failed. "
+SUMMARY_NAMES_ABSENT: Final = (
+    "finish returned, not refused: your summary names {names}, which no file in the "
+    "tree or the baseline contains. Read the files you are describing, describe them "
+    "as they are, and call finish again. This is asked once: the next finish is not "
+    "returned for it, whatever its summary names."
+)
+"""`finish`'s result the first time its summary names code no file of the tree or
+the baseline has (#191). One run's summary named four helpers that never existed,
+and they reached its commit message. Asked once, so a name the check cannot read
+(a library's, a word that only looks like code) never traps a run; not a refusal,
+so the cap and `finish_refusals` are untouched, and no audit runs for it."""
 """Prefix of `finish`'s result when the audit refuses it (arm E+A+F)."""
 
 FINISH_SURFACED: Final = (
@@ -635,6 +647,15 @@ class AutoRun:
     """`prompt_constants.check` over the run's tree, called once at the seal
     and sealed as `prompt_constants`; None when the task
     names no constant, and then nothing is sealed."""
+    summary_names: Callable[[str], list[str]] | None = None
+    """`summary_names.absent` over the run's tree and baseline (#191): the code
+    names a summary gives that no file of either has. Sealed as `summary_names`
+    for the run's final narrative; None seals nothing."""
+    summary_return: bool = False
+    """Return the first `finish` whose summary names absent code, once and not
+    as a refusal (`SUMMARY_NAMES_ABSENT`). Feedback, so arm E+A+F only."""
+    summary_returned: list[str] | None = None
+    """The names that one return named; None until it happens."""
     waivers: list[str] | None = None
     """`feed.waivers` of the last accepted finish audit; None until one is.
     Sealed on a finished run with an auditor."""
@@ -1979,6 +2000,14 @@ def _finish(auto: AutoRun, arguments: str) -> str:
     summary = args.get("summary") if isinstance(args, dict) else None
     if not isinstance(summary, str):
         return "error: finish needs a string summary argument"
+    if auto.summary_return and auto.summary_returned is None and auto.summary_names is not None:
+        try:
+            missing = auto.summary_names(summary)
+        except SummaryNamesError:
+            missing = []  # unchecked is not absent: the seal records why
+        if missing:
+            auto.summary_returned = missing
+            return SUMMARY_NAMES_ABSENT.format(names=", ".join(f"`{n}`" for n in missing))
     if auto.tell_summary is not None:
         auto.tell_summary(summary)
     said = auto.before_finish() if auto.before_finish is not None else ""
@@ -2274,6 +2303,16 @@ def _seal_outcome(journal: Path, node_id: str, auto: AutoRun, rounds: list[dict[
     if auto.prompt_check is not None:
         # Reporting only; no verdict reads it.
         evidence["prompt_constants"] = auto.prompt_check()
+    if auto.summary_names is not None and auto.narrative:
+        # Reporting only, for the packet's narrative row (#191).
+        names: dict[str, object] = {}
+        try:
+            names["absent"] = auto.summary_names(auto.narrative)
+        except SummaryNamesError as exc:
+            names["error"] = str(exc)
+        if auto.summary_returned is not None:
+            names["returned"] = auto.summary_returned
+        evidence["summary_names"] = names
     if auto.outcome == "finished" and auto.waivers is not None:
         # Every accepted finish seals what it stood on, [] if
         # nothing; arm E and ended-unaccepted runs seal the keys as before.

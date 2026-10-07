@@ -398,6 +398,33 @@ def _minutes(seconds: float) -> str:
     return f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
 
 
+def _summary_names(record: object) -> tuple[str, tuple[str, ...]]:
+    """What the narrative row adds from the sealed `summary_names` (#191), and the
+    names it lists: the code the final summary names that no file of the tree or
+    the baseline has, a check that could not run, or a return the model answered."""
+    if not isinstance(record, dict):
+        return "", ()
+    absent = tuple(str(n) for n in record.get("absent") or ())
+    returned = tuple(str(n) for n in record.get("returned") or ())
+    if "error" in record:
+        return f" Its code names could not be checked: {record['error']}.", ()
+    if absent:
+        listed = ", ".join(f"`{n}`" for n in absent)
+        return (
+            f" It names {_n(len(absent), 'code name')} that no file of the tree or the "
+            f"baseline contains: {listed}.",
+            absent,
+        )
+    if returned:
+        listed = ", ".join(f"`{n}`" for n in returned)
+        return (
+            f" Its first summary named {listed}, which no file then contained; asked "
+            "once, the model wrote a summary that names no code the tree lacks.",
+            (),
+        )
+    return "", ()
+
+
 def _tokens(n: float) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else f"{int(n)}"
 
@@ -1421,6 +1448,7 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
     narrative_text = str(evidence.get("narrative", "")) if evidence else ""
     sentences = flag_narrative(narrative_text)
     flagged = sum(s.flagged for s in sentences)
+    names_said, absent = _summary_names(evidence.get("summary_names") if evidence else None)
     rows.append(
         Row(
             "narrative",
@@ -1434,9 +1462,12 @@ def compile_packet(journal: Path, *, run_id: str = "", anchor_repo: Path | None 
                     if flagged
                     else "It asserts no check results."
                 )
+                + names_said
             )
             if sentences
             else "The model wrote no narrative (it did not call finish).",
+            (outcome.record_hash,) if names_said and outcome is not None else (),
+            absent,
         )
     )
 
