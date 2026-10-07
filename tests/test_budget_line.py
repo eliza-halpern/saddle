@@ -12,7 +12,10 @@ before, and with one cap and not the other each reads by its own rule.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from saddle.engine import NO_LIMIT, AutoRun, RunBudget, _run_state
+from saddle.journal import read_spans
 from saddle.memory import run_state
 
 
@@ -57,3 +60,23 @@ def test_the_engines_default_run_is_told_it_has_no_limit() -> None:
     (line,) = [ln for ln in _run_state(auto).splitlines() if ln.startswith("- budget:")]
     assert line.startswith("- budget: 0 generated tokens used, no cap; ")
     assert line.endswith("s used, no time limit")
+
+
+def test_each_rounds_spend_record_tells_an_uncapped_run_it_has_no_cap(tmp_path: Path) -> None:
+    """The third place of the same rule: `saddle explain` prints each round's spend
+    record, which read "310312 of 0 spent" for every round of an uncapped run."""
+    from test_reply_budget import Server, auto, git
+
+    details = {}
+    for cap in (NO_LIMIT, 1_000_000):
+        root = tmp_path / f"c{cap}"
+        root.mkdir()
+        (root / "calc.py").write_text("x = 1\n")
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "init")
+        result = auto(root, Server([104, 0]), token_budget=cap)
+        details[cap] = [s.detail for s in read_spans(result.journal) if s.name == "auto:spend"]
+    assert details[NO_LIMIT]
+    assert all(d.endswith(" spent, no cap") and " of 0 " not in d for d in details[NO_LIMIT])
+    assert all(d.endswith(" of 1000000 spent") for d in details[1_000_000])

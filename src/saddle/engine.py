@@ -1892,7 +1892,11 @@ def _charge(
             duration_ms=0,
             exit_code=0,
             detail=f"{tokens} generated tokens ({source}); "
-            f"{auto.budget.spent_tokens} of {auto.budget.tokens} spent"
+            + (
+                f"{auto.budget.spent_tokens} of {auto.budget.tokens} spent"
+                if auto.budget.tokens > NO_LIMIT
+                else f"{auto.budget.spent_tokens} spent, no cap"  # never "of 0" (#187)
+            )
             + (f"; {cut}" if cut else ""),
             kind="agent",
             name="auto:spend",
