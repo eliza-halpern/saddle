@@ -25,7 +25,6 @@ G or T suffix, powers of 1024) and defaults to 6 GiB.
 
 from __future__ import annotations
 
-import functools
 import os
 import re
 import shutil
@@ -81,12 +80,24 @@ def memory_max(default: int = DEFAULT_MEMORY_MAX) -> int:
     return int(match.group(1)) * scale
 
 
-@functools.cache
+CGROUP_SETTLED: Final[dict[str, str | None]] = {}
+"""`cgroup_problem`'s answer for each `systemd-run` it found, once a probe of
+it finished."""
+
+
 def cgroup_problem() -> str | None:
-    """None when this box can give one command a capped scope, else why not."""
+    """None when this box can give one command a capped scope, else why not.
+
+    A probe that finished is the answer for as long as saddle runs. One that
+    did not (a timeout, an `OSError` starting `systemd-run`) answers this call
+    only, and the next call asks again: a user manager slow under load is not a
+    box without one, and remembering it would cap every later command by
+    rlimit and lose sight of what a session started (#182)."""
     exe = shutil.which("systemd-run")
     if exe is None:
         return "systemd-run is not installed"
+    if exe in CGROUP_SETTLED:
+        return CGROUP_SETTLED[exe]
     try:
         done = subprocess.run(
             [exe, "--user", "--scope", "--quiet", "--collect", "-p", "MemoryMax=64M", "--", "true"],
@@ -97,7 +108,9 @@ def cgroup_problem() -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return str(exc)
-    return None if done.returncode == 0 else (done.stderr.strip() or f"exit {done.returncode}")
+    answer = None if done.returncode == 0 else (done.stderr.strip() or f"exit {done.returncode}")
+    CGROUP_SETTLED[exe] = answer
+    return answer
 
 
 @dataclass(frozen=True)

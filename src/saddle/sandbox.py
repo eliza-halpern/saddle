@@ -260,11 +260,18 @@ def _python3_shim(entries: Sequence[str]) -> Path | None:
     return _shim_for(python3) if _runs_gates(python3) else None
 
 
-@functools.cache
+GATES_SETTLED: Final[dict[str, bool]] = {}
+"""`_runs_gates`'s answer for each interpreter, once a probe of it finished."""
+
+
 def _runs_gates(python3: str) -> bool:
     """`python3` imports all of `GATE_MODULES`, run confined as a gate runs
-    (so a package the sandbox hides counts as missing). Asked once per
-    saddle process: install the tools, then restart saddle."""
+    (so a package the sandbox hides counts as missing). A probe that finished
+    is asked once per saddle process: install the tools, then restart saddle.
+    One that timed out answers no for this call only and is asked again: an
+    import slow under load is not a missing package (#182)."""
+    if python3 in GATES_SETTLED:
+        return GATES_SETTLED[python3]
     # Its own directory first, so `default_expose` shows the venv it lives
     # in; then saddle's PATH, where `bwrap` itself is found.
     env = command_env(
@@ -284,7 +291,8 @@ def _runs_gates(python3: str) -> bool:
             )
         except subprocess.TimeoutExpired:
             return False
-    return done.returncode == 0
+    GATES_SETTLED[python3] = answer = done.returncode == 0
+    return answer
 
 
 @functools.cache
@@ -607,13 +615,23 @@ def _is_system(path: Path) -> bool:
     return any(path == Path(d) or Path(d) in path.parents for d in SYSTEM_DIRS)
 
 
-@functools.cache
+BWRAP_SETTLED: Final[dict[str, str | None]] = {}
+"""`bwrap_works`'s answer for each `bwrap`, once a probe of it finished."""
+
+
 def bwrap_works(bwrap: str) -> str | None:
     """None when `bwrap` can build a sandbox here, else its error text.
 
     An installed bwrap is not a working one: where unprivileged user
     namespaces are restricted (Ubuntu 24.04's AppArmor default) it exists and
-    fails on every call, and trusting `which` labels that "bwrap"."""
+    fails on every call, and trusting `which` labels that "bwrap".
+
+    A probe that finished is the answer for as long as saddle runs. One that
+    did not (a timeout, an `OSError` starting it) answers this call only, and
+    the next call asks again: one slow start under load, remembered, left
+    every later sandbox in the process without isolation (#182)."""
+    if bwrap in BWRAP_SETTLED:
+        return BWRAP_SETTLED[bwrap]
     try:
         done = subprocess.run(
             [bwrap, "--ro-bind", "/", "/", "--unshare-all", "true"],
@@ -624,7 +642,9 @@ def bwrap_works(bwrap: str) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return str(exc)
-    return None if done.returncode == 0 else (done.stderr.strip() or f"exit {done.returncode}")
+    answer = None if done.returncode == 0 else (done.stderr.strip() or f"exit {done.returncode}")
+    BWRAP_SETTLED[bwrap] = answer
+    return answer
 
 
 def resolve_within(root: Path, candidate: str | Path) -> Path:

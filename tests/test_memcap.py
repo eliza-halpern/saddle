@@ -254,9 +254,9 @@ def test_the_cap_does_not_hand_a_command_the_session_bus(
 
 @pytest.fixture
 def fresh_probe() -> Iterator[None]:
-    memcap().cgroup_problem.cache_clear()
+    memcap().CGROUP_SETTLED.clear()
     yield
-    memcap().cgroup_problem.cache_clear()
+    memcap().CGROUP_SETTLED.clear()
 
 
 def test_no_systemd_run_means_no_cgroup(monkeypatch: pytest.MonkeyPatch, fresh_probe: None) -> None:
