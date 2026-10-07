@@ -22,7 +22,7 @@ from typing import IO, Final
 from pydantic import ValidationError
 from rich.console import Console
 
-from saddle import __version__, audit
+from saddle import __version__, audit, conditions
 from saddle.anchor import anchor_issues, default_anchor_repo
 from saddle.answer_book import AnswersError
 from saddle.answers import run_answers
@@ -45,6 +45,7 @@ from saddle.auto import (
     AutoOptions,
     run_auto,
 )
+from saddle.capabilities import CapabilityError
 from saddle.capabilities import run as run_capabilities
 from saddle.chat import ChatOptions, run_chat
 from saddle.codesearch import run_index
@@ -122,6 +123,7 @@ from saddle.task_units import task_units
 from saddle.tools import UNSANDBOXED
 from saddle.transcript import is_run_end, render_event, render_journal_transcript, render_plan
 from saddle.ux import ask_confirm
+from saddle.vision import known_verdict
 from saddle.vllm import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -2493,6 +2495,25 @@ def confirm_full_access(stdin: IO[str], stdout: IO[str]) -> bool:
     return False
 
 
+def print_conditions(
+    *,
+    model: str,
+    effort: str,
+    keep: bool,
+    reads: Callable[[], bool | None] | None,
+    stdout: IO[str],
+) -> None:
+    """`saddle up`'s start report (`conditions.startup_lines`). A switch file that
+    cannot be read is an ERROR line here; the chat itself then names it and stops."""
+    try:
+        rows = conditions.capability_rows(reads=reads)
+    except CapabilityError as exc:
+        print(f"ERROR the capability switches cannot be read: {exc}", file=stdout)
+        rows = []
+    for line in conditions.startup_lines(model=model, effort=effort, keep=keep, rows=rows):
+        print(line, file=stdout)
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -2660,6 +2681,13 @@ def main(
             except RunError as exc:
                 print(f"error: {exc}", file=stderr or sys.stderr)
                 return 1
+            print_conditions(
+                model=args.model,
+                effort=args.reasoning_effort,
+                keep=args.keep_reasoning,
+                reads=lambda: known_verdict(client),
+                stdout=stdout or sys.stdout,
+            )
             chat_options = ChatOptions(
                 workdir=Path(args.workdir),
                 journal=Path(args.journal),

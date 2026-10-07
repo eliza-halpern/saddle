@@ -233,7 +233,24 @@ class SessionInfo(Event):
     context_used: int = 0
     context_limit: int = 175_000
     messages: list[dict[str, Any]] = field(default_factory=list)
+    conditions: dict[str, Any] = field(default_factory=dict)
+    """What the session runs with now, what it started with, and each change
+    (`ChatServer.check_conditions`): the strip and the transcript's change lines."""
     kind: str = "session.info"
+
+
+@dataclass(frozen=True)
+class ConditionsChanged(Event):
+    """What the session runs with changed: the effort, reasoning on or off,
+    keeping reasoning, or a capability's state. `changes` lists each item as
+    {item, before, after}; `at` is the number of stored messages when it was seen,
+    so a reload draws the line in the same place; `view` is the strip's new view."""
+
+    changes: list[dict[str, str]]
+    at: int
+    time: float
+    view: dict[str, Any]
+    kind: str = "conditions.changed"
 
 
 # -- an autonomous run, seen from the chat ------------------------------------

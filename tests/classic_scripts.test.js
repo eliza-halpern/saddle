@@ -188,3 +188,127 @@ test("each page script runs under its file URL, which mutation testing needs to 
     (/** @type {Error} */ error) => String(error.stack).includes(`${pathToFileURL(path.join(STATIC, "app.js")).href}:`),
   );
 });
+
+/* ---------- the conditions strip: what the session runs with ---------- */
+
+/** A view as the server's `check_conditions` sends it. */
+function conditionsView() {
+  const capabilities = { images: "on", browser: "off", ocr: "off", mcp: "off" };
+  return {
+    start: { reasoning: "on", effort: "medium", keep_reasoning: "on", capabilities },
+    current: {
+      reasoning: "on",
+      effort: "xhigh",
+      keep_reasoning: "on",
+      capabilities: { ...capabilities, ocr: "unavailable" },
+      rows: [
+        { name: "images", state: "on", reason: "", available: null },
+        { name: "browser", state: "off", reason: "", available: true },
+        { name: "ocr", state: "unavailable", reason: "not installed: tesseract", available: null },
+        { name: "mcp", state: "off", reason: "no server", available: false },
+      ],
+    },
+    changes: [{ at: 2, time: 0, changes: [{ item: "effort", before: "medium", after: "xhigh" }] }],
+    error: "",
+  };
+}
+
+/** @param {unknown} value */
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
+test("each condition is a chip: off-but-available warns, on-but-unavailable errs, a change shows before → after", () => {
+  const page = loadPage();
+  const chips = plain(page.conditionChips(conditionsView())).map((/** @type {any} */ c) => [
+    c.text,
+    c.kind,
+    c.changed,
+    c.label,
+  ]);
+  assert.deepStrictEqual(chips, [
+    ["reasoning on", "", false, "reasoning: on"],
+    ["effort medium → xhigh", "", true, "effort: xhigh, changed from medium"],
+    ["keep reasoning on", "", false, "keep reasoning: on"],
+    ["images on", "", false, "images: on"],
+    // Known bad, each a different row: an off capability that would work is not a plain "off" ...
+    ["⚠ browser off (available)", "warn", false, "browser: off, but available"],
+    // ... one switched on that cannot work is an error, and says so in words ...
+    [
+      "✕ ocr off → unavailable",
+      "error",
+      true,
+      "ocr: switched on but unavailable: not installed: tesseract, changed from off",
+    ],
+    // ... and an off capability that would not work stays quiet.
+    ["mcp off", "", false, "mcp: off"],
+  ]);
+  const titles = plain(page.conditionChips(conditionsView())).map((/** @type {any} */ c) => c.title);
+  assert.strictEqual(titles[4], "off, but it would work: turn it on with saddle capabilities enable browser");
+  assert.strictEqual(titles[6], "off; it would not work now: no server");
+});
+
+test("reasoning off and keep-reasoning off warn; a view with no start compares with itself", () => {
+  const page = loadPage();
+  const view = conditionsView();
+  const current = { ...view.current, reasoning: "off", effort: "none", keep_reasoning: "off", rows: [] };
+  const chips = plain(page.conditionChips({ current, start: null, changes: [], error: "" }));
+  assert.deepStrictEqual(
+    chips.map((/** @type {any} */ c) => [c.text, c.kind, c.changed]),
+    [
+      ["⚠ reasoning off", "warn", false],
+      ["effort none", "", false],
+      ["⚠ keep reasoning off", "warn", false],
+    ],
+  );
+});
+
+test("switches that cannot be read are one error chip naming why", () => {
+  const page = loadPage();
+  const chips = plain(page.conditionChips({ current: null, start: null, changes: [], error: "bad file" }));
+  assert.deepStrictEqual(chips, [
+    {
+      text: "✕ capability switches unreadable: bad file",
+      kind: "error",
+      changed: false,
+      label: "error: capability switches unreadable: bad file",
+      title: "bad file",
+    },
+  ]);
+});
+
+test("the strip paints one named list item per chip, and a change adds a line to the transcript", () => {
+  const page = loadPage();
+  page.paintConditions(conditionsView());
+  const strip = page.document.querySelector("#conditions");
+  const items = strip.children.map((/** @type {any} */ li) => [
+    li.tagName,
+    li.className,
+    li.getAttribute("aria-label"),
+  ]);
+  assert.strictEqual(items.length, 7);
+  assert.deepStrictEqual(items[1], ["LI", "cond cond-changed", "effort: xhigh, changed from medium"]);
+  assert.deepStrictEqual(items[4], ["LI", "cond cond-warn", "browser: off, but available"]);
+  assert.deepStrictEqual(items[5][1], "cond cond-error cond-changed");
+  assert.deepStrictEqual(items[0][1], "cond");
+
+  const row = { at: 3, time: 1_700_000_000, changes: [{ item: "keep_reasoning", before: "on", after: "off" }] };
+  const line = page.conditionsLine(row);
+  assert.strictEqual(line.className, "conditions-change");
+  assert.strictEqual(line.dataset.at, "3");
+  assert.strictEqual(line.getAttribute("role"), "note");
+  assert.match(line.textContent, /^⚑ .+ conditions changed: keep reasoning on → off$/);
+  assert.strictEqual(
+    page.changeText([
+      { item: "effort", before: "low", after: "none" },
+      { item: "images", before: "off", after: "on" },
+    ]),
+    "effort low → none; images off → on",
+  );
+
+  // The live event: the strip is repainted from its view and the line lands in the transcript.
+  const transcript = page.document.querySelector("#transcript");
+  const before = transcript.children.length;
+  page.handle({ kind: "conditions.changed", ...row, view: { ...conditionsView(), start: null } });
+  assert.strictEqual(transcript.children.length, before + 1);
+  assert.match(transcript.children.at(-1).textContent, /keep reasoning on → off$/);
+  assert.strictEqual(strip.children.at(-1).className, "cond");
+});

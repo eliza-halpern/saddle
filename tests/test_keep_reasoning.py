@@ -25,7 +25,7 @@ from test_auto import namespace, repo  # noqa: F401  (fixture)
 from test_ui3_mode import NoModel, _server_of
 from test_usage import FakeServer, _delta, _finish_call, _sealed, _sse
 
-from saddle import cli
+from saddle import cli, conditions
 from saddle.auto import AutoError, AutoOptions, run_auto
 from saddle.engine import TurnOptions, run_turn
 from saddle.sessions import SessionStore
@@ -251,6 +251,8 @@ def test_saddle_chat_has_the_same_default_and_off_switch(
         uvicorn, "run", lambda app, **kw: served.append(_server_of(app).keep_reasoning)
     )
     monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
+    # The start report's look at the capabilities asks nothing here.
+    monkeypatch.setattr(conditions, "capability_rows", lambda *_a, **_k: [])
     for extra in ([], ["--no-keep-reasoning"]):
         argv = ["chat", "--no-open", "--workdir", str(tmp_path), "--sessions", str(tmp_path / "s")]
         assert cli.main([*argv, *extra], stdout=io.StringIO()) == 0

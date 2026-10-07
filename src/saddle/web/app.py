@@ -21,12 +21,13 @@ import os
 import queue
 import secrets
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import IO, Any, Final
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
@@ -46,7 +47,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from saddle import capabilities
+from saddle import capabilities, conditions
 from saddle.agents_md import chat_instructions
 from saddle.auto import DEFAULT_TIME_BUDGET_S, DEFAULT_TOKEN_BUDGET, AutoError, repo_root
 from saddle.engine import TurnOptions, _user_message
@@ -54,6 +55,7 @@ from saddle.engine import run_turn as run_turn  # an injection seam: the tests r
 from saddle.events import (
     ApprovalRequest,
     ApprovalSettled,
+    ConditionsChanged,
     ErrorEvent,
     Event,
     MessageDelivered,
@@ -92,6 +94,11 @@ from saddle.web.tasks import SMALL_LANE_TEST_EDITS, TaskRun
 
 MAX_RUN_ROWS = 20
 """The Runs group lists this many, newest first."""
+
+CONDITIONS_TTL_S: Final = 15.0
+"""How long one look at the capabilities stands while their switches stay as they
+were. A switch turned on or off is seen at the next look, whatever the age."""
+
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -418,6 +425,23 @@ class Live:
             channel.put(event)
 
 
+def _conditions_view(
+    history: list[dict[str, Any]], current: dict[str, Any] | None, error: str
+) -> dict[str, Any]:
+    """The strip's view: `current` (None when the switches could not be read, and
+    `error` says why), `start` (what the session started with), and each later
+    change as {at, time, changes}."""
+    return {
+        "current": current,
+        "start": history[0]["snapshot"] if history else None,
+        "changes": [
+            {"at": row.get("at", 0), "time": row.get("time", 0), "changes": row.get("changes", [])}
+            for row in history[1:]
+        ],
+        "error": error,
+    }
+
+
 class ChatServer:
     def __init__(
         self,
@@ -432,6 +456,7 @@ class ChatServer:
         keep_reasoning: bool = True,
         wheels: WheelFolder | None = None,
         extract_requirements: bool = False,
+        capability_probe: conditions.Probe | None = None,
     ) -> None:
         self.store = store
         self.client_factory = client_factory
@@ -459,12 +484,66 @@ class ChatServer:
         """`saddle web --extract-requirements` (or its setting): every chat-started
         run extracts the task text's examples beside the worker and runs P1 at
         tier 1, at question strength (`AutoOptions.extract_requirements`)."""
+        self.capability_probe: conditions.Probe = capability_probe or (
+            lambda: conditions.capability_rows(availability=False)
+        )
+        """Each capability's row for the strip (`conditions.capability_rows`). The
+        default asks only what the switches turn on; `serve` passes the full look,
+        which also says whether an off capability would work."""
+        self.conditions_lock = threading.Lock()
+        self.looked: tuple[capabilities.Switches, float, list[conditions.Row]] | None = None
+        """The last look at the capabilities: the switches, when, and the rows."""
         self.index_lock = threading.Lock()
         self.indexed: dict[str, str] = {}
         """run id -> the state last written to the run index."""
 
     def _live(self, session_id: str) -> Live:
         return self.live.setdefault(session_id, Live())
+
+    def capability_rows(self) -> list[conditions.Row]:
+        """The capabilities' rows, looked at again when a switch changed or the
+        last look is older than `CONDITIONS_TTL_S`. Raises `CapabilityError` when
+        the switches cannot be read."""
+        switches = capabilities.load()
+        now = time.monotonic()
+        looked = self.looked
+        if looked is not None and looked[0] == switches and now - looked[1] < CONDITIONS_TTL_S:
+            return looked[2]
+        rows = self.capability_probe()
+        self.looked = (switches, now, rows)
+        return rows
+
+    def check_conditions(self, session_id: str) -> dict[str, Any]:
+        """What the session runs with: the current conditions, what it started
+        with, and every change. A change from the last recorded conditions is
+        recorded (`SessionStore.record_conditions`) and published, so the page
+        marks it and draws a line in the transcript where it happened; the first
+        look only records the start."""
+        session = self.store.get(session_id)
+        try:
+            rows = self.capability_rows()
+        except capabilities.CapabilityError as exc:
+            return _conditions_view(self.store.conditions(session_id), None, str(exc))
+        current = conditions.snapshot(rows, session.reasoning_effort, self.keep_reasoning)
+        with self.conditions_lock:
+            history = self.store.conditions(session_id)
+            found = conditions.changes(history[-1]["snapshot"], current) if history else []
+            if not history or found:
+                row = {
+                    "time": time.time(),
+                    "at": len(self.store.load_messages(session_id)),
+                    "snapshot": current,
+                    "changes": found,
+                }
+                self.store.record_conditions(session_id, row)
+                history.append(row)
+        view = _conditions_view(history, {**current, "rows": rows}, "")
+        if found:
+            last = history[-1]
+            self._live(session_id).publish(
+                ConditionsChanged(changes=found, at=last["at"], time=last["time"], view=view)
+            )
+        return view
 
     def end_processes(self, session_id: str, *, revoke: bool) -> list[dict[str, object]]:
         """Stop everything still running from the session; what it stopped, as
@@ -573,6 +652,9 @@ class ChatServer:
         begun = False
         try:
             session = self.store.get(session_id)
+            # Before the turn: a change since the last look is marked where it
+            # takes effect, ahead of the turn it applies to.
+            self.check_conditions(session_id)
             messages = self.store.load_messages(session_id)
             workdir = Path(session.workdir)
             if (
@@ -758,6 +840,7 @@ def build_app(
     keep_reasoning: bool = True,
     wheels: WheelFolder | None = None,
     extract_requirements: bool = False,
+    capability_probe: conditions.Probe | None = None,
 ) -> ASGIApp:
     server = ChatServer(
         store,
@@ -770,6 +853,7 @@ def build_app(
         keep_reasoning=keep_reasoning,
         wheels=wheels,
         extract_requirements=extract_requirements,
+        capability_probe=capability_probe,
     )
 
     async def index(_: Request) -> Response:
@@ -917,6 +1001,10 @@ def build_app(
         sid = request.path_params["sid"]
         before = store.get(sid)
         session = store.update(sid, **body)
+        if "reasoning_effort" in body:
+            # The effort is one of the conditions: a change is marked now, and
+            # the transcript says where it happened.
+            await run_in_threadpool(server.check_conditions, sid)
         stopped: list[dict[str, object]] = []
         if before.mode == "edit" and session.mode != "edit":
             # Leaving Edit ends full access (`SessionStore.update`) and every
@@ -1038,6 +1126,13 @@ def build_app(
         except capabilities.CapabilityError as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
         return JSONResponse({"capabilities": [row.as_json() for row in rows]})
+
+    async def session_conditions(request: Request) -> JSONResponse:
+        """What the session runs with now, what it started with, and each change.
+        The page asks this on a timer, so a capability switched on or off
+        between turns is marked as soon as it is seen."""
+        sid = request.path_params["sid"]
+        return JSONResponse(await run_in_threadpool(server.check_conditions, sid))
 
     async def approval(request: Request) -> JSONResponse:
         """The person's answer to an approval request: {"id", "approve": bool}."""
@@ -1561,6 +1656,7 @@ def build_app(
         sid = request.path_params["sid"]
         live = server._live(sid)
         session = store.get(sid)
+        seen = await run_in_threadpool(server.check_conditions, sid)
         channel = live.subscribe()
 
         async def stream() -> Any:
@@ -1583,6 +1679,7 @@ def build_app(
                         Path(session.workdir),
                         store.undo_dir(sid),
                     ),
+                    conditions=seen,
                 )
                 yield f"data: {json.dumps(info.payload())}\n\n"
                 # A run still going when the page (re)connects gets its card
@@ -1647,6 +1744,7 @@ def build_app(
             Route("/api/sessions/{sid}/password", password, methods=["POST"]),
             Route("/api/sessions/{sid}/approval", approval, methods=["POST"]),
             Route("/api/capabilities", capabilities_status, methods=["GET"]),
+            Route("/api/sessions/{sid}/conditions", session_conditions, methods=["GET"]),
             Route("/api/runs", list_runs),
             Route("/api/sessions/{sid}/messages", get_messages),
             Route("/api/sessions/{sid}/file", workdir_file),
@@ -1696,13 +1794,40 @@ def serve(
     keep_reasoning: bool = True,
     wheels: WheelFolder | None = None,
     extract_requirements: bool = False,
+    report: IO[str] | None = None,
 ) -> None:
+    """Serve the chat. First print what it runs with to `report` (stdout by
+    default): the model, the effort new sessions start at, whether reasoning is
+    kept, and each capability (`conditions.startup_lines`)."""
     import uvicorn
 
     store = SessionStore(sessions_root)
 
     def factory() -> VllmClient:
         return VllmClient(api_key=api_key, base_url=base_url, model=model)
+
+    def reads() -> bool | None:
+        # What a session already found; building a client sends nothing.
+        with factory() as client:
+            return known_verdict(client)
+
+    def probe() -> list[conditions.Row]:
+        return conditions.capability_rows(reads=reads)
+
+    out = report or sys.stdout
+    try:
+        rows = probe()
+    except capabilities.CapabilityError as exc:
+        print(f"ERROR the capability switches cannot be read: {exc}", file=out)
+        rows = []
+    for line in conditions.startup_lines(
+        model=model,
+        effort=store.settings()["reasoning_effort"],
+        effort_note="new sessions start at this; each session has its own",
+        keep=keep_reasoning,
+        rows=rows,
+    ):
+        print(line, file=out)
 
     # Fail closed: a non-loopback host requires a token even when the
     # caller passed none, so a direct call can never open the server by
@@ -1716,5 +1841,6 @@ def serve(
         keep_reasoning=keep_reasoning,
         wheels=wheels,
         extract_requirements=extract_requirements,
+        capability_probe=probe,
     )
     uvicorn.run(app, host=host, port=port, log_level="warning")

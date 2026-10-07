@@ -37,6 +37,7 @@ SETTINGS_FILE: Final = "settings.json"
 PERSONA_FILE: Final = "personas.json"
 DEFAULT_TITLE: Final = "New session"
 RUNS_FILE: Final = "runs.json"
+CONDITIONS_FILE: Final = "conditions.jsonl"
 """A session's run index: one small row per task started in it, beside its
 `session.json`. The ledger is the record of what a run did; this is only
 enough to list it in the sidebar after the server restarts."""
@@ -554,3 +555,33 @@ class SessionStore:
 
     def journal_path(self, session_id: str) -> Path:
         return self._dir(session_id) / "chat.jsonl"
+
+    # -- conditions ------------------------------------------------------------
+
+    def conditions_path(self, session_id: str) -> Path:
+        return self._dir(session_id) / CONDITIONS_FILE
+
+    def conditions(self, session_id: str) -> RunRows:
+        """What the session ran with, in order: the first row is what it started
+        with, each later one a change (`conditions.changes`). Kept beside the
+        transcript, never in it: the model is not sent these rows."""
+        path = self.conditions_path(session_id)
+        if not path.is_file():
+            return []
+        rows: RunRows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue  # a torn tail loses one row, not the record
+            if isinstance(row, dict):
+                rows.append(row)
+        return rows
+
+    def record_conditions(self, session_id: str, row: dict[str, Any]) -> None:
+        """Append one row to the session's conditions record."""
+        path = self.conditions_path(session_id)
+        if not path.parent.is_dir():
+            return  # the session was purged meanwhile
+        with path.open("a", encoding="utf-8") as out:
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")

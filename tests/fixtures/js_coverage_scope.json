@@ -21,6 +21,7 @@
     "tests/test_card_ui.py",
     "tests/test_chip_names_ui.py",
     "tests/test_chrome_page.py",
+    "tests/test_conditions_ui.py",
     "tests/test_copy_button_ui.py",
     "tests/test_full_access_ui.py",
     "tests/test_lanechip.py",

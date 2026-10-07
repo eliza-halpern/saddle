@@ -14,7 +14,7 @@ import httpx
 import pytest
 from rich.console import Console
 
-from saddle import cli, engine
+from saddle import cli, conditions, engine
 from saddle.chat import ChatOptions, _run_turn, _seal_turn, _stream_response, run_chat
 from saddle.journal import read_records, read_spans, verify_journal
 from saddle.timeline import Timeline
@@ -276,6 +276,8 @@ def test_saddle_up_passes_its_keep_reasoning_flag(
     got: list[bool] = []
     monkeypatch.setenv("SADDLE_VLLM_API_KEY", "k")
     monkeypatch.setattr(cli, "check_server", lambda *_a, **_k: None)
+    # The start report's look at the capabilities asks nothing here.
+    monkeypatch.setattr(conditions, "capability_rows", lambda *_a, **_k: [])
 
     def fake_chat(options: ChatOptions, *_a: Any, **_k: Any) -> int:
         got.append(options.keep_reasoning)

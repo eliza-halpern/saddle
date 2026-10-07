@@ -64,10 +64,11 @@ class ChatSite:
 
 
 @contextmanager
-def served_chat(tmp_path: Path, *, title: str = "t") -> Iterator[ChatSite]:
-    """The chat app on a free local port, with one session titled `title`; no model."""
+def served_chat(tmp_path: Path, *, title: str = "t", **app_options: Any) -> Iterator[ChatSite]:
+    """The chat app on a free local port, with one session titled `title`; no model.
+    `app_options` reach `build_app` (a `capability_probe`, say)."""
     store = SessionStore(tmp_path / "sessions")
-    app = build_app(store, NoModel, default_workdir=tmp_path)
+    app = build_app(store, NoModel, default_workdir=tmp_path, **app_options)
     with serving(app) as base:
         sid = store.create(title=title, workdir=str(tmp_path)).id
         yield ChatSite(base, store, sid)

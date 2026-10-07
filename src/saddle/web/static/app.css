@@ -1107,3 +1107,24 @@ dialog button.danger { background: transparent; color: var(--bad); border-color:
   overflow-wrap: anywhere; padding: 8px 10px; background: var(--bg-sunk); border: 1px solid var(--line);
   border-radius: 8px; color: var(--ink); font-size: 12.5px; }
 #approval-dialog .dialog-actions { gap: 9px; }
+
+/* ---------- conditions: what the session runs with ----------
+   Always shown under the topbar. Plain chips are quiet; the two states that
+   need the person stand out, and say so in words too: a capability off that
+   would work (warn, "(available)"), one switched on that cannot work (error,
+   "✕ … unavailable"). A changed item reads "before → after" on a filled chip.
+   The line height is whole pixels so the strip is too: a fractional height
+   moved the transcript below it by part of a pixel and re-rasterised its text. */
+.conditions { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 6px 24px 7px; list-style: none;
+  border-bottom: 1px solid var(--line); font-size: 11.5px; line-height: 16px; }
+.cond { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--ink-dim); white-space: nowrap; }
+.cond-warn { color: var(--peach); border-color: var(--peach); font-weight: 600; }
+.cond-error { color: var(--bg); background: var(--bad); border-color: var(--bad); font-weight: 700; }
+.cond-changed { color: var(--bg); background: var(--lilac); border-color: var(--lilac); font-weight: 700; }
+.cond-changed.cond-error { background: var(--bad); border-color: var(--bad); }
+.conditions-change { margin: 12px 0; padding: 6px 12px; border-left: 3px solid var(--lilac);
+  border-radius: 6px; background: var(--bg-raise); color: var(--ink); font-size: 13px; font-weight: 600; }
+@media (max-width: 760px) {
+  .conditions { padding: 5px 12px; }
+}

@@ -91,6 +91,20 @@ from saddle.vllm import (
     VllmUnconstrainedError,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_real_capability_look(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A chat's start report looks at each capability, an off one included, which
+    asks the search backend and the embeddings server: here every one is off and
+    nothing is asked."""
+    from saddle import capabilities, conditions
+
+    rows = [
+        {"name": n, "state": "off", "reason": "", "available": None} for n in capabilities.NAMES
+    ]
+    monkeypatch.setattr(conditions, "capability_rows", lambda *_a, **_k: [dict(r) for r in rows])
+
+
 TASK = "Fix f to return 2 and add a passing test."
 
 

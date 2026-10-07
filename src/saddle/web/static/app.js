@@ -448,6 +448,10 @@ function handle(event) {
     case "compaction":
       notice(`Context compacted — ${event.summary}`);
       break;
+    case "conditions.changed":
+      paintConditions(event.view);
+      $("#transcript").appendChild(conditionsLine(/** @type {any} */ (event)));
+      break;
     case "error":
       notice(event.message, "error");
       setStatus("error");
@@ -490,6 +494,7 @@ function renderHistory(info) {
   if (info.context_limit) {
     handle({ kind: "context", used: info.context_used || 0, limit: info.context_limit });
   }
+  if (info.conditions && "current" in info.conditions) paintConditions(info.conditions);
   // An EventSource reconnects on its own, and every connect re-sends
   // session.info. Rebuilding on each one deleted the reasoning blocks and
   // tool rows the reader had just watched stream in -- they are not part of
@@ -502,11 +507,16 @@ function renderHistory(info) {
   const shown = (info.messages || []).filter(
     (/** @type {ServerEvent} */ m) => m.role === "user" || m.role === "assistant",
   );
+  // Each change of conditions goes where it was seen: before the first message
+  // stored after it.
+  const changes = [...((info.conditions && info.conditions.changes) || [])];
   if (!shown.length) {
     t.appendChild(el("div", "empty", "nothing here yet — what are we making?"));
+    for (const row of changes) t.appendChild(conditionsLine(row));
     return;
   }
   for (const message of shown) {
+    while (changes.length && changes[0].at <= message.index) t.appendChild(conditionsLine(changes.shift()));
     const turn = el("div", "turn");
     if (message.role === "user" && recapCard(turn, message.content)) {
       t.appendChild(turn);
@@ -544,6 +554,7 @@ function renderHistory(info) {
     }
     t.appendChild(turn);
   }
+  for (const row of changes) t.appendChild(conditionsLine(row));
   followBottom(); // a freshly opened session starts at the end
 }
 
@@ -1064,6 +1075,144 @@ $("#procs-chip").onclick = async () => {
 $("#procs-close").onclick = () => $("#procs-dialog").close();
 $("#procs-stop-all").onclick = () => stopProcesses({ all: true });
 setInterval(refreshProcesses, 3000);
+
+/* ---------- conditions: what the session runs with ----------
+   A run that started with an opt-in capability silently off went unnoticed
+   until it was under way, more than once. So the strip under the header always
+   shows reasoning on or off, the effort, whether past reasoning is sent back,
+   and each capability's state; a capability that is off but would work, and
+   one switched on that cannot work, stand out in words as well as colour. When
+   any of it changes the chip says "before → after" (from what the session
+   started with) and the transcript gets a line at that point, which the server
+   keeps (`SessionStore.record_conditions`), so a reload draws it again. */
+
+/** @type {Record<string, string>} */
+const CONDITION_NAMES = { reasoning: "reasoning", effort: "effort", keep_reasoning: "keep reasoning" };
+const CONDITION_ITEMS = ["reasoning", "effort", "keep_reasoning"];
+
+/** @typedef {{item: string, before: string, after: string}} ConditionChange */
+/** @typedef {{text: string, kind: string, changed: boolean, label: string, title: string}} ConditionChip */
+
+/** @param {string} item */
+function conditionName(item) {
+  return CONDITION_NAMES[item] || item;
+}
+
+/**
+ * One chip of the strip, from what the item is now and what it started as.
+ * `kind` is "error", "warn" or "": the colour, which the text repeats in words.
+ * @param {string} item
+ * @param {string} now
+ * @param {string | undefined} was
+ * @param {string} kind
+ * @param {string} words what the state means, for the name a screen reader reads
+ * @param {string} title
+ * @returns {ConditionChip}
+ */
+function conditionChip(item, now, was, kind, words, title) {
+  const name = conditionName(item);
+  const changed = was !== undefined && was !== now;
+  const mark = kind === "error" ? "✕ " : kind === "warn" ? "⚠ " : "";
+  const shown = changed ? `${was} → ${now}` : now;
+  const suffix = words === "off, but available" ? " (available)" : "";
+  const label = `${name}: ${words}${changed ? `, changed from ${was}` : ""}`;
+  return { text: `${mark}${name} ${shown}${suffix}`, kind, changed, label, title: title || label };
+}
+
+/**
+ * The strip's chips, in order: the reasoning items, then each capability.
+ * @param {ServerEvent} view the server's `check_conditions` view
+ * @returns {ConditionChip[]}
+ */
+function conditionChips(view) {
+  if (!view.current) {
+    const text = `capability switches unreadable: ${view.error}`;
+    return [{ text: `✕ ${text}`, kind: "error", changed: false, label: `error: ${text}`, title: view.error }];
+  }
+  const now = view.current;
+  const start = view.start || now;
+  /** @type {ConditionChip[]} */
+  const chips = [];
+  for (const item of CONDITION_ITEMS) {
+    const value = String(now[item]);
+    // Reasoning off, or not sent back, is a choice -- but one to see at a glance.
+    const off = item !== "effort" && value === "off";
+    chips.push(conditionChip(item, value, start[item], off ? "warn" : "", value, ""));
+  }
+  const started = start.capabilities || {};
+  for (const row of now.rows || []) {
+    let kind = "";
+    let words = row.state;
+    let title = row.reason || "";
+    if (row.state === "unavailable") {
+      kind = "error";
+      words = `switched on but unavailable: ${row.reason}`;
+      title = words;
+    } else if (row.state === "off" && row.available === true) {
+      kind = "warn";
+      words = "off, but available";
+      title = `off, but it would work: turn it on with saddle capabilities enable ${row.name}`;
+    } else if (row.state === "off" && row.reason) {
+      title = `off; it would not work now: ${row.reason}`;
+    }
+    chips.push(conditionChip(row.name, row.state, started[row.name], kind, words, title));
+  }
+  return chips;
+}
+
+/** @param {ServerEvent} view */
+function paintConditions(view) {
+  const strip = $("#conditions");
+  strip.textContent = "";
+  for (const chip of conditionChips(view)) {
+    const classes = ["cond"];
+    if (chip.kind) classes.push(`cond-${chip.kind}`);
+    if (chip.changed) classes.push("cond-changed");
+    const node = el("li", classes.join(" "), chip.text);
+    node.setAttribute("aria-label", chip.label);
+    node.title = chip.title;
+    strip.appendChild(node);
+  }
+}
+
+/**
+ * @param {ConditionChange[]} changes
+ * @returns {string}
+ */
+function changeText(changes) {
+  return changes.map((c) => `${conditionName(c.item)} ${c.before} → ${c.after}`).join("; ");
+}
+
+/**
+ * The transcript's line for one change, at the point it was seen.
+ * @param {{at: number, time: number, changes: ConditionChange[]}} row
+ * @returns {HTMLElement}
+ */
+function conditionsLine(row) {
+  const when = new Date(row.time * 1000);
+  const line = el(
+    "div",
+    "conditions-change",
+    `⚑ ${when.toLocaleTimeString()} conditions changed: ${changeText(row.changes)}`,
+  );
+  line.setAttribute("role", "note");
+  line.dataset.at = String(row.at);
+  line.title = `What this session runs with changed at ${when.toLocaleString()}`;
+  return line;
+}
+
+async function refreshConditions() {
+  const asked = state.sessionId;
+  if (!asked) return;
+  try {
+    const view = await api(`/api/sessions/${asked}/conditions`);
+    if (state.sessionId === asked) paintConditions(view);
+  } catch {
+    // The strip keeps what it last showed; the next look tries again.
+  }
+}
+setInterval(refreshConditions, 5000);
+document.addEventListener("visibilitychange", refreshConditions);
 
 /* ---------- outside changes (#137) ----------
    What a full-access session changed outside its folder: files (each backed
