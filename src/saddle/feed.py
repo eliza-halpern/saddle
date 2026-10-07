@@ -444,6 +444,65 @@ def _git(cwd: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
+def tree_state(worktree: Path) -> dict[str, tuple[int, int]]:
+    """Each file `git status` reports changed or new in `worktree`, with its
+    modification time and size; one the disk no longer has is (-1, -1). Read with
+    `--no-optional-locks`, so it writes nothing in the run's worktree. Two reads
+    that differ mean the tree changed between them, by an edit or by a command
+    (#188). Raises `AuditError` when git cannot say."""
+    # Not `_git`: it strips its output, and the first entry's status can begin
+    # with a space (" M calc.py"), which would shift every path read from it.
+    done = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        msg = f"git status failed: {done.stderr.strip()}"
+        raise AuditError(msg)
+    state: dict[str, tuple[int, int]] = {}
+    for entry in done.stdout.split("\0"):
+        if len(entry) < 4:
+            continue
+        rel = entry[3:]
+        try:
+            stat = (worktree / rel).stat()
+        except OSError:
+            state[rel] = (-1, -1)
+            continue
+        state[rel] = (stat.st_mtime_ns, stat.st_size)
+    return state
+
+
+STALE_CHECKPOINT: Final = (
+    "[This {point} audited the tree as it was before your later changes to {files}: "
+    "its findings are about that tree, not about those files as they are now. `"
+    + CHECK_TOOL
+    + "` audits them as they are now.]"
+)
+"""What follows a checkpoint delivered after the tree changed (#188). A checkpoint
+audits the tree as the burst of edits left it, and arrives later: in one run the
+worker read a `ruff format` failure it had fixed with a command since, and spent a
+minute working out that the checkpoint was of the tree before its fix."""
+
+STALE_UNKNOWN: Final = "[Whether the tree changed since this {point} could not be read: {why}]"
+"""The same place when `git status` could not say: never read as unchanged."""
+
+STALE_NAMED: Final = 5
+"""How many changed files `STALE_CHECKPOINT` names; the rest are counted."""
+
+
 def _copy_files(source: Path, into: Path) -> None:
     """Copy `source` into `into`, less its top-level `.git` and, when `source`
     is a git checkout (it has a `.git`: the run's worktree), every path git
@@ -553,6 +612,8 @@ class AuditFeed:
     _ready: list[AuditResult] = field(default_factory=list)
     _pool: ThreadPoolExecutor | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _states: dict[str, dict[str, tuple[int, int]] | str] = field(default_factory=dict)
+    """`tree_state` when each checkpoint was taken, by point, or why it could not be read."""
     _config: AuditorConfig | None = None
     _p1_ready: bool = False
 
@@ -756,6 +817,7 @@ class AuditFeed:
             self._await()  # collects the finished job's future; never waits
         self.checkpoints += 1
         point = f"checkpoint {self.checkpoints}"
+        self._states[point] = self._tree_state()
         scratch = Path(tempfile.mkdtemp(prefix="saddle-feed-"))
         # The copy is taken now, before the tool runs: it is this burst's tree,
         # whatever the model does while the audit is in flight.
@@ -812,7 +874,7 @@ class AuditFeed:
         return ready
 
     def _record(self, ready: list[AuditResult], *, delivered: bool) -> str:
-        texts = [render(self._shown(result)) for result in ready]
+        texts = [render(self._shown(result)) + self._since(result) for result in ready]
         for result, text in zip(ready, texts, strict=True):
             self._journal(result, text, delivered=delivered)
         return "\n\n".join(texts)
@@ -1003,6 +1065,30 @@ class AuditFeed:
             return []
         keys = {(f.gate, f.reason, f.cites) for f in self.results[-1].findings if failing(f)}
         return [{"gate": g, "reason": r, "cites": list(c)} for g, r, c in sorted(keys)]
+
+    def _tree_state(self) -> dict[str, tuple[int, int]] | str:
+        try:
+            return tree_state(self.worktree)
+        except AuditError as exc:
+            return str(exc)
+
+    def _since(self, result: AuditResult) -> str:
+        """`STALE_CHECKPOINT` for a checkpoint whose tree has changed since it was
+        taken, `STALE_UNKNOWN` when that cannot be read, else "" (#188)."""
+        before = self._states.pop(result.point, None)
+        if before is None:
+            return ""
+        now = self._tree_state()
+        if isinstance(before, str) or isinstance(now, str):
+            why = before if isinstance(before, str) else now
+            return "\n" + STALE_UNKNOWN.format(point=result.point, why=why)
+        changed = sorted(p for p in before.keys() | now.keys() if before.get(p) != now.get(p))
+        if not changed:
+            return ""
+        files = ", ".join(changed[:STALE_NAMED])
+        if len(changed) > STALE_NAMED:
+            files += f" and {len(changed) - STALE_NAMED} more"
+        return "\n" + STALE_CHECKPOINT.format(point=result.point, files=files)
 
     def close(self) -> None:
         """End of run: a pending checkpoint is awaited and journaled, never delivered."""
