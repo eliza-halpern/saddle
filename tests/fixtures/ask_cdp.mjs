@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { coverage } from "./cdp_coverage.mjs";
-import { activePort } from "./cdp_port.mjs";
+import { activePort, chromeEnv } from "./cdp_port.mjs";
 
 const [base, sid, option, tokensK, shots, prefix = "ask"] = process.argv.slice(2);
 const prof = mkdtempSync(join(tmpdir(), "cdp-ask-"));
@@ -24,7 +24,7 @@ const chrome = spawn(
     `--user-data-dir=${prof}`,
     "about:blank",
   ],
-  { stdio: "ignore" },
+  { stdio: "ignore", env: chromeEnv() },
 );
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 const finish = async (/** @type {number} */ code) => {

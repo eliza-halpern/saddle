@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { coverage } from "./cdp_coverage.mjs";
-import { activePort } from "./cdp_port.mjs";
+import { activePort, chromeEnv } from "./cdp_port.mjs";
 
 /** @typedef {((...values: any[]) => unknown) | string} PageCode */
 /**
@@ -96,7 +96,7 @@ export async function withPage(base, body, { width = 1280, scheme = "light", sho
       `--user-data-dir=${prof}`,
       "about:blank",
     ],
-    { stdio: "ignore" },
+    { stdio: "ignore", env: chromeEnv() },
   );
   /** @type {WebSocket | undefined} */
   let ws;

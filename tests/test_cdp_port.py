@@ -51,7 +51,7 @@ def own_port_problems(name: str, text: str) -> list[str]:
         problems.append(f"{name}: does not start Chrome with --remote-debugging-port=0")
     if re.search(r"--remote-debugging-port=\$\{", text):
         problems.append(f"{name}: computes a port of its own")
-    if not re.search(r'import \{ activePort \} from "\./cdp_port\.mjs";', text):
+    if not re.search(r'import \{[^}]*\bactivePort\b[^}]*\} from "\./cdp_port\.mjs";', text):
         problems.append(f"{name}: does not read the port Chrome got (activePort)")
     return problems
 
@@ -111,6 +111,13 @@ def test_a_driver_that_draws_its_own_port_is_named() -> None:
     assert own_port_problems("unread.mjs", unread) == [
         "unread.mjs: does not read the port Chrome got (activePort)"
     ]
+    # the import may name more than activePort; it must still name it
+    reads = 'import { activePort, chromeEnv } from "./cdp_port.mjs";\n' + unread
+    assert own_port_problems("reads.mjs", reads) == []
+    other = 'import { chromeEnv } from "./cdp_port.mjs";\n' + unread
+    assert own_port_problems("other.mjs", other) == [
+        "other.mjs: does not read the port Chrome got (activePort)"
+    ]
 
 
 @needs_checkout
@@ -121,13 +128,13 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activePort } from "./tests/fixtures/cdp_port.mjs";
+import { activePort, chromeEnv } from "./tests/fixtures/cdp_port.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const launch = (title) => {
   const prof = mkdtempSync(join(tmpdir(), "cdp-port-test-"));
   const chrome = spawn("google-chrome", ["--headless=new", "--no-sandbox", "--disable-gpu",
     "--remote-debugging-port=0", `--user-data-dir=${prof}`,
-    `data:text/html,<title>${title}</title>`], { stdio: "ignore" });
+    `data:text/html,<title>${title}</title>`], { stdio: "ignore", env: chromeEnv() });
   return { title, prof, chrome };
 };
 const pages = async (c) => {

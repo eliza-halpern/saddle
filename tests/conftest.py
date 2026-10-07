@@ -12,6 +12,7 @@ import functools
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -98,6 +99,40 @@ def _reap_browsers(request: pytest.FixtureRequest) -> Iterator[None]:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+@functools.cache
+def black_hole_display() -> str:
+    """An X display this process holds that accepts connections and never
+    answers, as `:N`: an abstract socket, so no file is made and no real
+    display is touched. One per test process, kept open for its life."""
+    for number in range(90, 1000):
+        hole = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            hole.bind(f"\0/tmp/.X11-unix/X{number}")
+        except OSError:
+            hole.close()
+            continue
+        hole.listen(64)
+        _HOLES.append(hole)
+        return f":{number}"
+    taken = "no free X display number for the suite's black hole"
+    raise RuntimeError(taken)
+
+
+_HOLES: list[socket.socket] = []
+
+
+@pytest.fixture(autouse=True)
+def _no_real_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite off the person's screen: `DISPLAY` names a display that
+    never answers and `WAYLAND_DISPLAY` is gone. A test that reaches for a
+    display then hangs where it would have touched the desktop, so it fails
+    instead of passing by luck. Test Chrome once inherited `DISPLAY`, and every
+    Chrome test hung the day the desktop's X server stopped accepting. A test
+    about displays sets its own."""
+    monkeypatch.setenv("DISPLAY", black_hole_display())
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
 
 @pytest.fixture(autouse=True)
