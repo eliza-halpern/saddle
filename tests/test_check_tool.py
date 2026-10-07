@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -579,3 +580,45 @@ def test_a_run_command_the_guard_cannot_read_is_left_to_the_tool(
     (said,) = results(result, "run_command")
     assert said != WHOLE_SUITE_BY_CHECK
     assert said.startswith("error: ")
+
+
+# -- #175: check and audit spans carry the audit's measured time --------------------
+
+SLOW_S = 1.0
+
+
+class SlowAuditor(FakeAuditor):
+    """A FakeAuditor whose suite tiers each take SLOW_S, or none with slow=False."""
+
+    def __init__(self, *, slow: bool) -> None:
+        super().__init__()
+        self.slow = slow
+
+    def tier1(self, tree: Path | None = None) -> Findings:
+        if self.slow:
+            time.sleep(SLOW_S)
+        return super().tier1(tree)
+
+    def tier2(self, tree: Path | None = None) -> Findings:
+        if self.slow:
+            time.sleep(SLOW_S)
+        return super().tier2(tree)
+
+
+@pytest.mark.parametrize("slow", [True, False])
+def test_check_and_finish_spans_record_how_long_their_audit_took(repo: Path, slow: bool) -> None:
+    client = Scripted([[edit("e", "a - b", "a + b")], [CHECK]])
+    result, _ = run(repo, client, auditor=SlowAuditor(slow=slow), run_id=f"d{slow}")
+    (checked,) = check_spans(result)
+    (finished,) = [
+        s
+        for s in read_spans(result.journal)
+        if s.name.startswith("audit:") and s.argv[:2] == ["audit", "finish"]
+    ]
+    floor = int(SLOW_S * 1000)
+    if slow:
+        assert floor <= checked.duration_ms < 30_000  # tier 1
+        assert 2 * floor <= finished.duration_ms < 30_000  # tiers 1 and 2
+    else:
+        assert checked.duration_ms < floor
+        assert finished.duration_ms < floor

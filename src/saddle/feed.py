@@ -185,6 +185,10 @@ class AuditResult:
     left there, a tool's output included. A failing audit names them
     (`render`), so a test the copy failed is never a guess at what the copy
     held. Sealed under `untracked` when non-empty."""
+    duration_ms: int = 0
+    """How long the audit took by the clock, snapshot included (`_audit`): the
+    duration of its span. Every audit span recorded 0, so a profile could not
+    tell the audit's share of a run's wall (#175). Not sealed in the sidecar."""
 
     @property
     def passed(self) -> bool:
@@ -589,10 +593,14 @@ class AuditFeed:
     ) -> AuditResult | None:
         """The audit of `files` at `tiers`. For a `check`, None (nothing run)
         when the tree and the mode are the ones the last check audited."""
+        started = time.monotonic()
         with sandbox.using_project_env(self.project_env):
-            return self._audit_on(
+            result = self._audit_on(
                 point, tiers, files, scratch, check=check, whole_suite=whole_suite
             )
+        if result is None:
+            return None
+        return dataclasses.replace(result, duration_ms=int((time.monotonic() - started) * 1000))
 
     def _audit_on(
         self,
@@ -836,7 +844,7 @@ class AuditFeed:
                     result.tree,
                     *(["whole-suite"] if whole_suite else []),
                 ],
-                duration_ms=0,
+                duration_ms=result.duration_ms,
                 exit_code=0 if result.passed else 1,
                 detail=text,
                 name=CHECK_SPAN,
@@ -990,7 +998,7 @@ class AuditFeed:
             build_span(
                 node_id="chat#1",
                 argv=["audit", result.point, result.tree],
-                duration_ms=0,
+                duration_ms=result.duration_ms,
                 exit_code=0 if result.passed else 1,
                 detail=text,
                 name=f"audit:{'delivered' if delivered else 'withheld'}",
