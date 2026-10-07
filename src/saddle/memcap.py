@@ -33,6 +33,7 @@ import subprocess
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal
 
 DEFAULT_MEMORY_MAX: Final = 6 * 1024**3
@@ -54,6 +55,9 @@ still exited 0: what a shell reports for a SIGKILL. Whether the parent of a
 killed child is stopped too depends on systemd stopping the scope before the
 parent finishes, a race a busy user manager loses, so the failure is set
 here rather than left to that timing."""
+
+CGROUP_ROOT: Final = Path("/sys/fs/cgroup")
+"""Where a unit's `ControlGroup` path is rooted."""
 
 MEMORY_MAX_ENV: Final = "SADDLE_MEMORY_MAX"
 _SIZE: Final = re.compile(r"([1-9][0-9]*)([KMGT]?)", re.IGNORECASE)
@@ -128,8 +132,9 @@ class Cap:
         Only a cgroup cap can say: an rlimit shows up as the program's own
         `MemoryError`. systemd keeps a scope that saw an OOM kill, in the
         failed state, until asked (`--collect` would drop the answer with
-        it); this asks, then clears it. Called after every capped command,
-        whatever its exit, so no failed scope is left behind."""
+        it); this asks, then clears it, then `release`s the scope. Called
+        after every capped command, whatever its exit, so no failed or empty
+        scope is left behind."""
         if self.unit is None:
             return False
         scope = f"{self.unit}.scope"
@@ -142,7 +147,36 @@ class Cap:
         subprocess.run(
             ["systemctl", "--user", "reset-failed", scope], capture_output=True, check=False
         )
+        self.release()
         return shown.stdout.strip() == "oom-kill"
+
+    def release(self) -> None:
+        """Stop the command's scope once no process is left in it.
+
+        systemd collects a scope when its cgroup empties. A kill that lands
+        while `systemd-run` is still asking for the scope leaves one that was
+        registered but never held a process, so it never empties and stays
+        `active` for good (#172). A scope that still holds a process (a
+        program the command left running) is kept: it ends when that does."""
+        if self.unit is None:
+            return
+        scope = f"{self.unit}.scope"
+        shown = subprocess.run(
+            ["systemctl", "--user", "show", "--property=ControlGroup", "--value", scope],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        group = shown.stdout.strip()
+        if not group:
+            return  # not loaded: never started, or already collected
+        try:
+            held = (CGROUP_ROOT / group.lstrip("/") / "cgroup.procs").read_text(encoding="utf-8")
+        except OSError:
+            held = ""  # no cgroup directory: nothing can be in it
+        if held.split():
+            return
+        subprocess.run(["systemctl", "--user", "stop", scope], capture_output=True, check=False)
 
     def reason(self) -> str:
         """The line a killed command's record carries."""

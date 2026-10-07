@@ -24,6 +24,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -33,7 +34,7 @@ import pytest
 from saddle import evidence, gates
 from saddle import sandbox as sandbox_module
 from saddle.journal import SpanRecorder, read_spans
-from saddle.sandbox import Sandbox
+from saddle.sandbox import Sandbox, Terminal
 
 PY = shlex.quote(sys.executable)
 MIB = 1024**2
@@ -501,3 +502,177 @@ def test_a_sandbox_built_directly_is_capped_at_the_default(
     assert terminal.exit_code == 0, terminal.output()
     assert "ran" in terminal.output()
     assert limits == [live.DEFAULT_MEMORY_MAX]
+
+
+# -- a scope is stopped once nothing is left in it (#172) ----------------------
+
+
+def _scope(unit: str) -> tuple[str, list[int]]:
+    """(ActiveState, PIDs in its cgroup) of one command's scope."""
+    shown = subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "show",
+            "--property=ActiveState",
+            "--property=ControlGroup",
+            f"{unit}.scope",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    props = dict(line.split("=", 1) for line in shown.splitlines() if "=" in line)
+    group = props.get("ControlGroup", "")
+    try:
+        raw = Path("/sys/fs/cgroup", group.lstrip("/"), "cgroup.procs").read_text()
+    except OSError:
+        raw = ""
+    return props.get("ActiveState", ""), [int(pid) for pid in raw.split()]
+
+
+def _drop_scopes(units: list[str]) -> None:
+    """Stop and forget the scopes this test made, whatever state they are in."""
+    for unit in units:
+        subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], capture_output=True)
+        subprocess.run(
+            ["systemctl", "--user", "reset-failed", f"{unit}.scope"], capture_output=True
+        )
+
+
+@pytest.fixture
+def made_units(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+    """The unit of every cap made during the test; each is stopped afterwards."""
+    from saddle import memcap as live
+
+    units: list[str] = []
+    real = live.cap
+
+    def spy(limit: int) -> live.Cap:
+        made = real(limit)
+        if made.unit is not None:
+            units.append(made.unit)
+        return made
+
+    monkeypatch.setattr(live, "cap", spy)
+    yield units
+    _drop_scopes(units)
+
+
+def _finished(terminal: Terminal, within: float = 10.0) -> None:
+    deadline = time.monotonic() + within
+    while terminal.exit_code is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert terminal.exit_code is not None
+
+
+@needs_cgroup
+def test_a_command_killed_while_its_scope_starts_leaves_no_empty_scope(
+    tmp_path: Path, made_units: list[str]
+) -> None:
+    # A kill that lands while `systemd-run` is still asking for its scope
+    # leaves the scope registered with no process in it. systemd only
+    # collects a scope when its cgroup empties, and one that was never
+    # populated never empties, so it stays `active` forever: the 59 empty
+    # `saddle-cmd-*` scopes of #172. The delays sweep the setup window.
+    box = Sandbox(root=tmp_path)
+    for step in range(30):
+        terminal = box.start("sleep 30")
+        time.sleep(step / 2000)
+        box.kill(terminal.id)
+        _finished(terminal)
+    time.sleep(0.5)
+    left = [unit for unit in made_units if _scope(unit) == ("active", [])]
+    assert left == [], f"{len(left)} of {len(made_units)} scopes left empty and active"
+
+
+@needs_cgroup
+def test_a_scope_that_still_holds_a_process_is_not_stopped_when_its_command_ends(
+    tmp_path: Path, made_units: list[str]
+) -> None:
+    # Known-bad for the fix above: a full-access command that backgrounds a
+    # program ends while the program runs on in its scope. That scope must
+    # stay, or stopping it would kill the program the command left running.
+    box = Sandbox(root=tmp_path, outlive=True)
+    terminal = box.run("setsid sleep 30 >/dev/null 2>&1 < /dev/null &", timeout=30)
+    assert terminal.exit_code == 0, terminal.output()
+    _finished(terminal)
+    time.sleep(0.5)
+    (unit,) = made_units
+    state, pids = _scope(unit)
+    assert state == "active"
+    assert pids, "the backgrounded program was stopped with its command"
+
+
+class _Systemctl:
+    """A stand-in for `subprocess.run` that answers `show` with `group` and
+    records every `stop`."""
+
+    def __init__(self, group: str) -> None:
+        self.group = group
+        self.stopped: list[str] = []
+
+    def __call__(self, argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if "stop" in argv:
+            self.stopped.append(argv[-1])
+        out = self.group if "--property=ControlGroup" in argv else ""
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+
+def _release(
+    monkeypatch: pytest.MonkeyPatch, root: Path, group: str, procs: str | None
+) -> list[str]:
+    """What `Cap.release` stops for a scope at `group` whose cgroup.procs
+    holds `procs` (None: no cgroup directory at all)."""
+    live = memcap()
+    if procs is not None:
+        place = root / group.lstrip("/")
+        place.mkdir(parents=True)
+        (place / "cgroup.procs").write_text(procs)
+    fake = _Systemctl(group)
+    monkeypatch.setattr(live, "CGROUP_ROOT", root)
+    monkeypatch.setattr(live.subprocess, "run", fake)
+    live.Cap(prefix=(), kind="cgroup", limit=1, unit="saddle-cmd-x").release()
+    return fake.stopped
+
+
+def test_an_empty_scope_is_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _release(monkeypatch, tmp_path, "/app.slice/x.scope", "") == ["saddle-cmd-x.scope"]
+
+
+def test_a_scope_holding_a_process_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _release(monkeypatch, tmp_path, "/app.slice/x.scope", "4242\n") == []
+
+
+def test_a_scope_whose_cgroup_is_gone_is_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _release(monkeypatch, tmp_path, "/app.slice/x.scope", None) == ["saddle-cmd-x.scope"]
+
+
+def test_a_unit_systemd_does_not_know_is_not_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _release(monkeypatch, tmp_path, "", None) == []
+
+
+def test_an_rlimit_cap_has_no_scope_to_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    live = memcap()
+
+    def never(*_: object, **__: object) -> None:
+        msg = "an rlimit cap asked systemd"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(live.subprocess, "run", never)
+    live.Cap(prefix=("prlimit",), kind="rlimit", limit=1).release()
+
+
+@needs_cgroup
+def test_a_capped_gate_run_that_times_out_leaves_no_empty_scope(
+    tmp_path: Path, made_units: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sandbox_module, "isolation_problem", lambda: "unconfined in this test")
+    run = evidence.run_capture(["sleep", "30"], tmp_path, timeout=0.5, memory_limit=256 * MIB)
+    assert run.timed_out
+    (unit,) = made_units
+    assert _scope(unit) != ("active", [])

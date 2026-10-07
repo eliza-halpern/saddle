@@ -454,6 +454,7 @@ class McpHost:
                 ready.set_exception(exc)
         finally:
             registrar.cancel()
+            cap.release()  # the server's scope, once nothing is left in it
 
     async def _register(
         self, spec: ServerSpec, box: Sandbox, marker: str, unit: str | None

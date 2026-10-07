@@ -550,6 +550,8 @@ def run_capture(
             launched, lent = cap.wrap(confined, env)
             proc = _run_as_group(launched, cwd, timeout, lent)
     except subprocess.TimeoutExpired as expired:
+        if cap is not None:
+            cap.release()  # the killed command's scope, if nothing is left in it
         _record_timeout(recorder, argv, start, expired)
         return CapturedRun(
             argv=tuple(argv),
