@@ -172,6 +172,19 @@ BAD: Final[dict[str, tuple[str, tuple[Refusal, ...]]]] = {
         _file("=: 1", "'=': 2"),
         (Refusal(2, 1, "duplicate key '='"),),
     ),
+    "duplicate-inside-a-mapping-a-merge-names-inline": (
+        # The merge writes no key of its own, but the mapping it names is written
+        # here, and it writes `a` twice. PyYAML's `flatten_mapping` never checks a
+        # mapping it merges in, so `safe_load` builds this file: the refusal here
+        # is the duplicate rule and nothing else.
+        _file("job:", "  <<: {a: 1, a: 2}"),
+        (Refusal(2, 14, "duplicate key 'a'"),),
+    ),
+    "duplicate-inside-a-mapping-in-a-merge-list": (
+        # The same mapping written inside the list a merge merges in.
+        _file("job:", "  <<: [{a: 1, a: 2}]"),
+        (Refusal(2, 15, "duplicate key 'a'"),),
+    ),
     "duplicate-in-a-mapping-named-by-two-aliases": (
         # `*base` names one mapping, written once, so its duplicate key is one
         # problem and not one per alias that names it.
@@ -287,6 +300,26 @@ BAD: Final[dict[str, tuple[str, tuple[Refusal, ...]]]] = {
         (
             Refusal(1, 7, "a merge needs a mapping, or a list of mappings, found a scalar"),
             Refusal(5, 3, "duplicate key 'name'"),
+        ),
+    ),
+    "problems-on-different-lines-in-line-then-column-order": (
+        # Every other multi-problem file here has its problems all at column 1,
+        # so it cannot tell a line-first order from a column-first one: this one's
+        # second problem sits on a later line but in an earlier column (3:4 before
+        # 2:12 would be the column-first reading).
+        _file("x: 1", "yy: {b: 1, b: 2}", "z: !Ref q"),
+        (
+            Refusal(2, 12, "duplicate key 'b'"),
+            Refusal(3, 4, "unsafe tag '!Ref'"),
+        ),
+    ),
+    "problems-on-one-line-in-column-order": (
+        # Two problems on one line: the column decides the order, and here the
+        # column order is the reverse of what the two messages would sort to.
+        _file("{a: !Ref q, c: {b: 1, b: 2}}"),
+        (
+            Refusal(1, 5, "unsafe tag '!Ref'"),
+            Refusal(1, 23, "duplicate key 'b'"),
         ),
     ),
 }
