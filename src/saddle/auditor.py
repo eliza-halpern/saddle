@@ -75,6 +75,7 @@ from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
     DEPENDENCY_DIRS,
+    RUFF_TIMEOUT_S,
     SKIP_REPORT_NAME,
     CapturedRun,
     MutationOutcome,
@@ -1907,7 +1908,11 @@ class Auditor:
             # what the finding hands a model that has no ruff (`check_ruff`).
             # Not run where the project did not choose ruff (#130).
             fmt = (
-                run_capture(ruff_argv("format", "--diff", *overrides, rel), current)
+                run_capture(
+                    ruff_argv("format", "--diff", *overrides, rel),
+                    current,
+                    timeout=RUFF_TIMEOUT_S,
+                )
                 if configured
                 else None
             )

@@ -21,6 +21,7 @@ from typing import Final
 from saddle.dag import Node
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
+    RUFF_TIMEOUT_S,
     WORKERS_BASIS,
     CapturedRun,
     MutationOutcome,
@@ -412,6 +413,7 @@ def run_node_gate(
                 ruff_argv("format", "--check", *format_overrides(workdir, baseline), *ruff_files),
                 workdir,
                 recorder=recorder,
+                timeout=RUFF_TIMEOUT_S,
             )
             if format_checked
             else None

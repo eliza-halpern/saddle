@@ -38,6 +38,7 @@ from saddle.dag import (
 from saddle.edits import EditError, apply_edits
 from saddle.evidence import (
     DEFAULT_TEST_TIMEOUT_S,
+    RUFF_TIMEOUT_S,
     CapturedRun,
     attempt_ref,
     changed_statements,
@@ -745,11 +746,17 @@ def autofix(workdir: Path, *, baseline: str = "HEAD", recorder: SpanRecorder | N
     # on the mess the fixer just made. Exit codes are deliberately
     # ignored -- `ruff check --fix` reports what it could not fix, and
     # judging that is check_ruff's job.
-    run_argv(ruff_argv("check", "--fix", *targets), workdir, recorder=recorder)
+    run_argv(
+        ruff_argv("check", "--fix", *targets),
+        workdir,
+        recorder=recorder,
+        timeout=RUFF_TIMEOUT_S,
+    )
     run_argv(
         ruff_argv("format", *format_overrides(workdir, "HEAD"), *targets),
         workdir,
         recorder=recorder,
+        timeout=RUFF_TIMEOUT_S,
     )
     run_argv(["git", "add", "--", *targets], workdir, recorder=recorder)
 

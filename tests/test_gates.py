@@ -808,6 +808,41 @@ def test_ruff_missing_tool_names_the_tool() -> None:
     assert "unavailable" in check.detail.lower()
 
 
+@pytest.mark.parametrize(
+    ("lint_exit", "format_exit", "which"),
+    [(SHELL_TIMEOUT, 0, "ruff check"), (0, SHELL_TIMEOUT, "ruff format")],
+)
+def test_a_hung_ruff_is_named_as_the_tool_hanging_not_a_finding(
+    lint_exit: int, format_exit: int, which: str
+) -> None:
+    """A ruff stopped by its timeout says the tool hung, names which run, and
+    tells the worker it is not its code; before #168 a hung check read as
+    "exited 124 with no findings parsed". A clean pair of runs still passes."""
+    check = check_ruff(
+        ["n.py"],
+        introduced=[],
+        inherited=0,
+        lint_exit=lint_exit,
+        format_exit=format_exit,
+        format_diff="",
+    )
+    assert check.passed is False
+    assert check.detail.startswith(f"{which} did not finish in time")
+    assert "not a finding in your code" in check.detail
+    clean = check_ruff(["n.py"], introduced=[], inherited=0, lint_exit=0, format_exit=0)
+    assert clean.passed is True
+
+
+def test_a_finding_from_a_lint_run_outranks_a_format_run_that_hung() -> None:
+    """A real finding is still reported when only the format run hung: the
+    worker can act on it, and the next audit runs format again."""
+    check = check_ruff(
+        ["n.py"], introduced=[_finding()], inherited=0, lint_exit=1, format_exit=SHELL_TIMEOUT
+    )
+    assert check.passed is False
+    assert check.detail.startswith("introduced 1 finding(s)")
+
+
 def test_requirement_binding_rejects_ids_the_node_never_declared() -> None:
     """A REQ ID in a test that no node declares is a hallucinated one.
 

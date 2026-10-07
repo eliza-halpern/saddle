@@ -407,6 +407,19 @@ def check_ruff(
             passed=False,
             detail=f"introduced {len(introduced)} finding(s): {named}{suffix}{inherited_note}",
         )
+    if SHELL_TIMEOUT in (lint_exit, format_exit):
+        # A hung ruff is the tool failing, and the worker must not read it as
+        # something to fix in its code: a deadlocked `ruff check` once held a
+        # run for 31 minutes with nothing said about why.
+        which = "ruff check" if lint_exit == SHELL_TIMEOUT else "ruff format"
+        return GateCheck(
+            name="ruff",
+            passed=False,
+            detail=(
+                f"{which} did not finish in time and was stopped{inherited_note}. "
+                "The tool hung; this is not a finding in your code. Run the check again."
+            ),
+        )
     if lint_exit != 0 and not inherited:
         # Nonzero with nothing parsed is the tool failing, not a verdict.
         return GateCheck(

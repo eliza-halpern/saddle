@@ -69,6 +69,14 @@ so this bounds non-termination without failing them. A suite that is
 slow and sound -- saddle's own takes about twenty minutes -- sets its
 own limit instead: `[tool.saddle] test-timeout` in its `pyproject.toml`."""
 
+RUFF_TIMEOUT_S: Final = 120.0
+"""Wall-clock ceiling for one ruff run saddle starts (check or format).
+ruff lints a changed file in well under a second, so this bounds only a
+hang: a dogfood run once sat 31 minutes on a `ruff check` whose thread
+pool had deadlocked, and since runs have no time cap it would never have
+ended. A run past this reads as `SHELL_TIMEOUT`, which `check_ruff` names
+as the tool hanging, not as a finding."""
+
 SUITE_LIMIT_FILE: Final = "pyproject.toml"
 SUITE_LIMIT_KEY: Final = "test-timeout"
 """The project's own test time limit, in seconds: `test-timeout` in the
@@ -374,7 +382,7 @@ def ruff_findings(
     yields no findings and leaves the exit code to say the tool failed.
     """
     argv = ruff_argv("check", "--output-format", "json", *files)
-    run = run_capture(argv, workdir, recorder=recorder)
+    run = run_capture(argv, workdir, recorder=recorder, timeout=RUFF_TIMEOUT_S)
     findings: list[RuffFinding] = []
     try:
         raw = json.loads(run.stdout) if run.stdout.strip() else []

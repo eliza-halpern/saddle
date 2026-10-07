@@ -55,6 +55,7 @@ from saddle.engine import (
 )
 from saddle.events import Event, Question
 from saddle.evidence import (
+    RUFF_TIMEOUT_S,
     SuiteLimitError,
     format_overrides,
     gate_checks,
@@ -792,7 +793,11 @@ def format_changed(worktree: Path, base: str) -> str:
     if not files:
         return ""
     before = {f: (worktree / f).read_bytes() for f in files}
-    run_capture(ruff_argv("format", *format_overrides(worktree, base), *files), worktree)
+    run_capture(
+        ruff_argv("format", *format_overrides(worktree, base), *files),
+        worktree,
+        timeout=RUFF_TIMEOUT_S,
+    )
     moved = [f for f in files if (worktree / f).read_bytes() != before[f]]
     return FORMATTED_AT_FINISH.format(files=", ".join(moved)) + "check the diff" if moved else ""
 

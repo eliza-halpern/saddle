@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import tomllib
 import warnings
 from collections.abc import Sequence
@@ -2079,6 +2080,26 @@ def test_ruff_findings_parse_the_engine_and_render_human_lines(tmp_path: Path) -
     assert (run.exit_code, findings, run.stdout) == (0, [], "")
 
 
+def test_a_ruff_that_never_exits_is_stopped_at_its_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#168: a deadlocked `ruff check` held a dogfood run for 31 minutes, and
+    runs have no time cap. A ruff that never exits is stopped at
+    RUFF_TIMEOUT_S and reads as SHELL_TIMEOUT with no findings."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "ruff"
+    fake.write_text("#!/bin/sh\nexec sleep 40\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(evidence_module, "RUFF_TIMEOUT_S", 1.0)
+    (tmp_path / "m.py").write_text("x = 1\n")
+    started = time.monotonic()
+    run, findings = ruff_findings(tmp_path, ["m.py"])
+    assert time.monotonic() - started < 30
+    assert (run.exit_code, run.timed_out, findings) == (SHELL_TIMEOUT, True, [])
+
+
 def test_ruff_gate_runs_isolated_on_saddle_rules_not_the_installed_default(tmp_path: Path) -> None:
     """Known-bad from round 3e: `%`-formatting, the idiom the
     task's own baseline uses, failed the ruff gate under ruff 0.16.7's
@@ -2145,7 +2166,9 @@ def test_ruff_findings_tolerates_bad_json_and_unreadable_sources(
     whose file cannot be read carries an empty source line."""
     import saddle.evidence as evidence_module
 
-    def fake_run(argv: list[str], cwd: Path, *, recorder: object = None) -> CapturedRun:
+    def fake_run(
+        argv: list[str], cwd: Path, *, recorder: object = None, timeout: float | None = None
+    ) -> CapturedRun:
         return CapturedRun(argv=tuple(argv), exit_code=2, stdout=fake_run.stdout, stderr="boom")  # type: ignore[attr-defined]
 
     monkeypatch.setattr(evidence_module, "run_capture", fake_run)
