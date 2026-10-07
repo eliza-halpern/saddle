@@ -85,6 +85,7 @@ from saddle import coverage_text, sandbox
 from saddle.audit import AuditError, git_ignored
 from saddle.auditor import (
     TASK_REQUIREMENTS,
+    TEST_CHANGES,
     Auditor,
     AuditorConfig,
     Finding,
@@ -119,6 +120,23 @@ puts it in the outcome's sealed audit list."""
 CHECK_UNCHANGED: Final = "error: check refused: the tree is unchanged since check "
 """Prefix of a refused `check`. Not the tier-0 guard's `REFUSED`, so it is
 not counted among the run's guard refusals, and not a finish refusal."""
+
+UNCHANGED_HOW: Final = (
+    "; that {kind} saw these same files byte for byte (the worktree's new files "
+    "included, gitignored files and anything outside it not), so it would answer the "
+    "same. Edit a file before checking again; check {n}'s findings still stand."
+)
+"""What a refused `check` compared and with which check (#176): a run argued
+"but the tree has changed since check 1" against a refusal that said only the
+number. A check of the other kind (`whole_suite`) of the same files is not
+refused, so the kind is named too."""
+
+FLIP_CLEARED_AT_FINISH: Final = (
+    "Only your finish summary can clear this: give each changed test its `flip:` line "
+    "there, with its evidence. Until finish, checks and checkpoints keep failing on it "
+    "while the test stays changed, and say so in one line."
+)
+FLIP_SAID: Final = "unchanged since {point}, which said it in full: the finish summary clears it"
 
 NOTHING_TO_AUDIT: Final = "nothing to audit"
 
@@ -525,6 +543,9 @@ class AuditFeed:
     """The tree of the accepted finish whose not-proven findings were
     delivered (`final`); None until one is."""
     _checked_tree: tuple[str, bool] | None = None
+    _flips_said: dict[str, str] = field(default_factory=dict)
+    """Each failing `test-changes` detail the model has read before finish, to
+    the point that said it in full (`_shown`)."""
     _dirty: bool = False
     _pending: Future[AuditResult | None] | None = None
     _map_job: Future[AuditResult | None] | None = None
@@ -791,7 +812,7 @@ class AuditFeed:
         return ready
 
     def _record(self, ready: list[AuditResult], *, delivered: bool) -> str:
-        texts = [render(result) for result in ready]
+        texts = [render(self._shown(result)) for result in ready]
         for result, text in zip(ready, texts, strict=True):
             self._journal(result, text, delivered=delivered)
         return "\n\n".join(texts)
@@ -825,13 +846,12 @@ class AuditFeed:
             whole_suite=whole_suite,
         )
         if result is None:
-            return (
-                f"{CHECK_UNCHANGED}{len(self.checks)}; edit a file before checking again. "
-                "That check's findings still stand."
-            )
+            kind = "whole-suite check" if whole_suite else "check"
+            n = len(self.checks)
+            return f"{CHECK_UNCHANGED}{n}{UNCHANGED_HOW.format(kind=kind, n=n)}"
         self._dirty = False  # this tree is audited; no checkpoint of it too
         self.checks.append(result)
-        text = render(result)
+        text = render(self._shown(result))
         span_id = uuid.uuid4().hex
         digest = write_attempt_sidecar(self.journal, span_id, result.to_dict())
         append_span(
@@ -854,6 +874,28 @@ class AuditFeed:
             ),
         )
         return text
+
+    def _shown(self, result: AuditResult) -> AuditResult:
+        """`result` as the model reads it before finish: a failing `test-changes`
+        finding in full the first time, with what clears it, and after that one
+        line naming where it was said (#176). Only finish's summary can clear it,
+        so a run read the same paragraph at every checkpoint from 17 on. The
+        finding keeps its verdict, so a check still answers as finish would, and
+        the journal seals it whole; finish always shows it in full."""
+        if result.point == "finish":
+            return result
+        shown: list[Finding] = []
+        for f in result.findings:
+            if f.gate == TEST_CHANGES and failing(f):
+                first = self._flips_said.setdefault(f.detail, result.point)
+                said = (
+                    f"{f.detail}\n{FLIP_CLEARED_AT_FINISH}"
+                    if first == result.point
+                    else FLIP_SAID.format(point=first)
+                )
+                f = dataclasses.replace(f, detail=said)
+            shown.append(f)
+        return dataclasses.replace(result, findings=tuple(shown))
 
     def tell_summary(self, summary: str) -> None:
         """Record the summary `finish` was called with, before it is audited: a changed

@@ -478,6 +478,21 @@ FACT_CD: Final = (
     "Each command starts a fresh shell in the working directory: `cd` does not carry "
     "over to the next command, so use absolute paths or cd inside the same command."
 )
+FACT_RUN_TMP: Final = (
+    "/tmp is this run's own: what one command leaves there the next one finds, until "
+    "the run ends. Exported variables, like `cd`, do not carry over."
+)
+"""An autonomous run's `run_command` (`run_facts`): its system prompt says the
+run's /tmp lasts, but a run 477 rounds in was unsure whether /tmp outlived a
+command, so the tool it was calling says so too (#176)."""
+
+
+def run_facts(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add to `run_command`'s description what persists between an autonomous
+    run's commands (its sandbox's shared /tmp) and what does not."""
+    return _appended(tools, "run_command", FACT_CD, FACT_RUN_TMP)
+
+
 FACT_DISPLAY: Final = (
     "FULL ACCESS: commands see the person's desktop session, so a GUI program you "
     "start opens its window on their screen."

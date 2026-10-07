@@ -22,7 +22,7 @@ from saddle.audit import audit_node
 from saddle.auto import JS_MUTATION_PROMPT, KILL_BAR, detected_tools
 from saddle.evidence import MutationOutcome
 from saddle.gates import MIN_SIGNIFICANT_MUTANTS, check_mutation
-from saddle.jsevidence import STRYKER_PACKAGE
+from saddle.jsevidence import STRYKER_PACKAGE, stryker_invocation
 
 
 def _tool(home: Path, name: str) -> Path:
@@ -108,7 +108,10 @@ def test_a_run_is_told_what_js_mutation_counts_only_where_it_applies(tmp_path: P
     )
     js = Scripted([finish()])
     auto(root, js)
-    assert JS_MUTATION_PROMPT.format(files="`tests/page.test.js`") in _system(js)
+    said = JS_MUTATION_PROMPT.format(
+        files="`tests/page.test.js`", invocation=stryker_invocation(["tests/page.test.js"])
+    )
+    assert said in _system(js)
 
 
 def test_a_run_counts_the_tools_its_project_exposes(
@@ -147,7 +150,7 @@ def test_the_js_mutation_bar_the_prompt_states_is_the_bar_the_audit_applies() ->
     assert passes(small, small)
     assert not passes(small - 1, small)  # a small sample: every mutant must die
     assert not passes(0, 0)  # no mutant to make is no evidence
-    said = JS_MUTATION_PROMPT.format(files="`t.test.js`")
+    said = JS_MUTATION_PROMPT.format(files="`t.test.js`", invocation="")
     assert f"at least {KILL_BAR:g}% of them" in said
     assert f"fewer than {MIN_SIGNIFICANT_MUTANTS};" in said
     assert "leaves no mutant to make" in said

@@ -578,6 +578,20 @@ def _config(mutate: Sequence[str], tests: Sequence[str]) -> dict[str, object]:
     }
 
 
+def stryker_invocation(tests: Sequence[str]) -> str:
+    """How the audit runs StrykerJS over `tests`, as a sentence a worker can
+    copy: the command and its configuration file (`_config`, so it cannot
+    drift from the audit's own). A run guessed at flags ("unknown option
+    '--config'") and built a sweep of its own, then the audit scored a
+    configuration it was never shown (#176)."""
+    config = json.dumps(_config(["<file>:<first line>-<last line>"], tests))
+    return (
+        f"`node {STRYKER_PACKAGE} run stryker.conf.json`, where stryker.conf.json is "
+        f"{config}; the configuration file is the argument to `run`, there is no "
+        "`--config` option"
+    )
+
+
 _KILLED: Final = frozenset({"Killed", "Timeout"})
 _UNDECIDED: Final = frozenset({"Ignored", "CompileError", "Pending"})
 

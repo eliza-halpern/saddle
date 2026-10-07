@@ -289,6 +289,8 @@ def test_an_unchanged_tree_is_refused_and_a_changed_one_is_checked(repo: Path) -
     first, second, third = results(result, CHECK_TOOL)
     assert "FAIL]" in first
     assert second.startswith(CHECK_UNCHANGED + "1;")
+    assert "; that check saw these same files byte for byte" in second  # #176
+    assert second.endswith("check 1's findings still stand.")
     assert "PASS]" in third
     assert third.startswith("[audit check 2 ")
     assert fake.tiers()[:4] == [0, 1, 0, 1]  # the refused check ran nothing
@@ -505,6 +507,7 @@ def test_a_whole_suite_check_runs_the_whole_suite_and_a_repeat_of_its_mode_is_re
     assert len(fake.whole) == 1
     assert "PASS]" in first
     assert second.startswith(CHECK_UNCHANGED)
+    assert "; that whole-suite check saw these same files" in second  # #176
     assert "PASS]" in third
     # tier 1: the whole-suite check, the narrowed check, the finish audit
     assert len([t for t, _ in fake.calls if t == 1]) == 3

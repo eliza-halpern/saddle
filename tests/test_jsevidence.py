@@ -15,6 +15,7 @@ the tools print.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -713,3 +714,35 @@ def test_a_page_script_mutant_that_a_sandboxed_node_test_pins_is_killed(
     out = js.mutation_sample(page_project, [(str(page_project / rel), line)], tools=REPO)
     killed = [name for name, status, _ in out.mutant_detail if status == "Killed"]
     assert any(pinned in name for name in killed), (out.survivors, out.mutant_detail)
+
+
+def test_the_stryker_run_the_prompt_states_is_the_run_the_audit_starts(
+    monkeypatch: pytest.MonkeyPatch, project: Path, tmp_path: Path
+) -> None:
+    """#176: a run guessed at StrykerJS flags (`--config` is not one) and
+    built a configuration of its own, then the audit scored one it was never
+    shown. `stryker_invocation` is what the worker reads; this records what
+    the audit spawns and the file it writes, and holds the sentence to both."""
+    tools = tmp_path / "tools"
+    (tools / js.STRYKER_PACKAGE).parent.mkdir(parents=True)
+    (tools / js.STRYKER_PACKAGE).write_text("")
+    started: list[tuple[list[str], dict[str, object] | None]] = []
+
+    def run_capture(argv: list[str], cwd: Path, **_k: object) -> CapturedRun:
+        conf = cwd / "stryker.conf.json"
+        started.append((argv, json.loads(conf.read_text()) if conf.is_file() else None))
+        return _run(1)
+
+    monkeypatch.setattr(js, "run_capture", run_capture)
+    js.mutation_sample(project, [(str(project / "static" / "a.js"), 5)], tools=tools)
+    argv, written = started[-1]
+    assert written is not None
+    tests = written["commandRunner"]["command"].removeprefix("node --test ").split()  # type: ignore[index]
+    said = js.stryker_invocation(tests)
+    assert f"`node {js.STRYKER_PACKAGE} {' '.join(argv[2:])}`" in said
+    stated = json.loads(said.split("stryker.conf.json is ", 1)[1].split("; the ", 1)[0])
+    assert {k: v for k, v in stated.items() if k != "mutate"} == {
+        k: v for k, v in written.items() if k != "mutate"
+    }
+    assert written["mutate"] == ["static/a.js:5-5"]
+    assert "--config" not in argv

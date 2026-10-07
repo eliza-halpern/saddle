@@ -21,7 +21,7 @@ from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auto import EVIDENCE_DIR, keep_evidence, page_coverage
 from saddle.journal import read_spans
 from saddle.jsevidence import COVERAGE_SCOPE
-from saddle.tools import CHECK_SCHEMA, DISPUTE_TOOL
+from saddle.tools import CHECK_SCHEMA, DISPUTE_TOOL, FACT_CD, FACT_RUN_TMP, TOOLS
 
 PKG = "VALUE = 7\n"
 FLAT = "def f():\n    return 2\n"
@@ -590,3 +590,21 @@ def test_page_coverage_rules_are_said_only_where_chrome_tests_measure_pages(
 def test_the_check_tool_says_it_runs_the_projects_own_checks() -> None:
     said = CHECK_SCHEMA["function"]["description"]
     assert "the project's own audit checks" in said
+
+
+def test_an_autonomous_runs_run_command_says_what_lasts_between_commands(
+    tmp_path: Path,
+) -> None:
+    """#176: a run 477 rounds in was unsure whether /tmp outlived a command.
+    The run_command it is offered says /tmp lasts and `cd` and exported
+    variables do not (`test_a_run_tmp_lasts_across_commands_and_is_never_the_hosts`
+    holds the sandbox to the first; a fresh shell per command to the rest)."""
+    root = _repo(tmp_path / "repo", src=False)
+    client = Scripted([finish()])
+    auto(root, client)
+    offered = client.asked[0]["tools"]
+    (run_command,) = [t for t in offered if t["function"]["name"] == "run_command"]
+    described = run_command["function"]["description"]
+    assert FACT_RUN_TMP in described
+    assert FACT_CD in described
+    assert FACT_RUN_TMP not in str(TOOLS)  # stated for the run, not for every caller

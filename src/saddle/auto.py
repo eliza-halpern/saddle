@@ -78,7 +78,13 @@ from saddle.journal import (
     started_before,
     utc_now,
 )
-from saddle.jsevidence import COVERAGE_SCOPE, js_test_files, read_coverage_scope, stryker_entry
+from saddle.jsevidence import (
+    COVERAGE_SCOPE,
+    js_test_files,
+    read_coverage_scope,
+    stryker_entry,
+    stryker_invocation,
+)
 from saddle.recall import Recall
 from saddle.sandbox import HOST_GIT_GUARD, Sandbox
 from saddle.task_passes import baseline_sources, cut_calls
@@ -96,6 +102,7 @@ from saddle.tools import (
     ToolContext,
     provider_prompt,
     provider_schemas,
+    run_facts,
 )
 from saddle.vllm import VllmClient, VllmError
 
@@ -211,7 +218,9 @@ JS_MUTATION_PROMPT: Final = (
     f"lines you change, and at least {KILL_BAR:g}% of them must be killed by those "
     f"node tests, or every one when there are fewer than {MIN_SIGNIFICANT_MUTANTS}; "
     "short of that, or when your change leaves no mutant to make, the audit refuses "
-    "it and names each mutant that survived."
+    "it and names each mutant that survived. The audit runs {invocation}. Running "
+    "it yourself leaves stryker.conf.json and stryker-report.json where you run "
+    "it: delete them, or they are committed with your change."
 )
 """Said when the audit's JS mutation check applies (`stryker_entry`, found as the
 auditor finds it). A run's browser-driven tests killed 0 of 13 mutants, all
@@ -340,7 +349,10 @@ def environment_prompt(
         node=NODE_TOOLS_PROMPT if node_tools else "",
         detected=detected_tools(env, exposed),
         js_mutation=(
-            JS_MUTATION_PROMPT.format(files=", ".join(f"`{f}`" for f in js_tests) or "none yet")
+            JS_MUTATION_PROMPT.format(
+                files=", ".join(f"`{f}`" for f in js_tests) or "none yet",
+                invocation=stryker_invocation(js_tests or ["<node test files>"]),
+            )
             if js_tests is not None
             else ""
         ),
@@ -1174,7 +1186,7 @@ def run_auto(
         + notes,
         context_tokens=options.context_tokens or server_window(client),
         tools=[
-            *TOOLS,
+            *run_facts(TOOLS),
             FINISH_SCHEMA,
             DISPUTE_SCHEMA,
             REFUSE_SCHEMA,

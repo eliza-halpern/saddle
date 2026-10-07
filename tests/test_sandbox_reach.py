@@ -240,6 +240,9 @@ def test_a_run_tmp_lasts_across_commands_and_is_never_the_hosts(work: Path, outs
         assert code == 0, out
         assert "kept" in out, out
         assert (run_tmp / "scratch").read_text() == "kept\n"
+        # what FACT_RUN_TMP says does not last: an exported variable (#176)
+        assert sh(shared, "export SADDLE_KEPT=1")[0] == 0
+        assert "unset" in sh(shared, 'echo "${SADDLE_KEPT:-unset}"')[1]
         assert host.name not in sh(shared, "ls -a /tmp")[1]
         fresh = Sandbox.for_workdir(work)
         sh(fresh, "echo lost > /tmp/scratch")
