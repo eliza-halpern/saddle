@@ -39,6 +39,9 @@ WHOLE = [
 NARROWED = [
     "pytest tests/test_a.py -q",
     "pytest tests/test_a.py::test_b",
+    "pytest test_calc.py -q",
+    "pytest src/pkg/test_x.py",
+    "pytest test_calc.py::test_a",
     "python -m pytest tests/test_yaml_check.py -q --no-cov -p no:randomly 2>&1 | tail",
     "pytest -k yaml",
     "pytest -kyaml",
