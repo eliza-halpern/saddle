@@ -319,8 +319,10 @@ def capture(
         steps.append(["convert", str(out), "-resize", f"{MAX_SIDE}x{MAX_SIDE}>", str(out)])
         if area is not None:
             area.append((left - target.x, top - target.y, wide, high))
+    elif target is not None:
+        steps = [_window_argv(target.id, out)]
     else:
-        steps = [_window_argv(target.id, out)] if target is not None else screen_argv(out, env)
+        steps = screen_argv(out, env, which, display_size(run, env))
     for argv in steps:
         code, _ = run(argv, env)
         if code != 0 or not out.is_file():
@@ -364,15 +366,35 @@ def _window_argv(window_id: str, out: Path) -> list[str]:
     return ["import", "-window", window_id, "-resize", fit, f"png:{out}"]
 
 
+def display_size(run: Run, env: Mapping[str, str]) -> tuple[int, int] | None:
+    """The screen's size in the coordinates windows are placed in (what xrandr
+    and xdotool report), or None when it cannot be read."""
+    code, size = run(["xdotool", "getdisplaygeometry"], env)
+    parts = size.split()
+    if code != 0 or len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
 def screen_argv(
-    out: Path, env: Mapping[str, str], which: Callable[[str], str | None] | None = None
+    out: Path,
+    env: Mapping[str, str],
+    which: Callable[[str], str | None] | None = None,
+    size: tuple[int, int] | None = None,
 ) -> list[list[str]]:
     """The commands that capture the whole screen into `out`, scaled to fit.
 
     Under Wayland the X root window is Xwayland's, which `import` cannot read,
     so the compositor's own capture (`grim`) is used when it is installed and
-    ImageMagick scales the result; on plain X11 `import` reads the root."""
+    ImageMagick scales the result; on plain X11 `import` reads the root.
+
+    The compositor captures at the output's scale (2x on a HiDPI screen), so its
+    picture is scaled to the screen's own `size` when that fits: live, a
+    1280x720 screen came back as a 1600x900 picture, and the model, seeing
+    xrandr say 1280x720, decided a game had changed the display mode."""
     fit = f"{MAX_SIDE}x{MAX_SIDE}>"
+    if size is not None and max(size) <= MAX_SIDE:
+        fit = f"{size[0]}x{size[1]}!"
     if env.get("WAYLAND_DISPLAY") and (which or shutil.which)("grim"):
         return [["grim", "-t", "png", str(out)], ["convert", str(out), "-resize", fit, str(out)]]
     return [_window_argv("root", out)]

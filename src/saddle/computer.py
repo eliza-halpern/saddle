@@ -530,11 +530,7 @@ def _ran(code: int, action: Action, window: Window) -> str | None:
 
 def _display(run: Run, env: Mapping[str, str]) -> tuple[int, int] | None:
     """The screen's size in the coordinates windows are placed in, or None."""
-    code, size = run(["xdotool", "getdisplaygeometry"], env)
-    parts = size.split()
-    if code != 0 or len(parts) != 2 or not all(part.isdigit() for part in parts):
-        return None
-    return int(parts[0]), int(parts[1])
+    return screen.display_size(run, env)
 
 
 def _press(

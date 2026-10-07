@@ -155,7 +155,44 @@ def test_the_whole_screen_uses_the_compositors_capture_under_wayland(
     env = {"WAYLAND_DISPLAY": "wayland-0"}
     monkeypatch.setattr("saddle.screen.shutil.which", lambda name: f"/usr/bin/{name}")
     assert capture("", out, env, x) is None
-    assert [c[0] for c in x.calls if c[1:2] != ["-id"]] == ["xwininfo", "grim", "convert"]
+    assert [c[0] for c in x.calls if c[1:2] != ["-id"]] == [
+        "xwininfo",
+        "xdotool",
+        "grim",
+        "convert",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("display", "fit"),
+    [
+        ("1280 720\n", "1280x720!"),  # live: a 2x HiDPI screen, captured at 2560x1440
+        ("1600 900\n", "1600x900!"),
+        ("3840 2160\n", "1600x1600>"),  # too big to show whole: fit, as before
+        ("", "1600x1600>"),  # the size could not be read
+    ],
+)
+def test_the_whole_screen_picture_is_the_screens_own_size_when_it_fits(
+    tmp_path: Path, display: str, fit: str
+) -> None:
+    """Live, a 1280x720 screen came back as a 1600x900 picture while xrandr said
+    1280x720, and the model decided a game had changed the display mode.
+    Known-bad: the compositor's 2x capture shrunk only to fit 1600."""
+    calls: list[list[str]] = []
+    out = tmp_path / "s.png"
+
+    def run(argv: Sequence[str], env: Mapping[str, str]) -> tuple[int, str]:
+        calls.append(list(argv))
+        if argv[:2] == ["xdotool", "getdisplaygeometry"]:
+            return (0, display) if display else (1, "")
+        if argv[0] == "xwininfo":
+            return 0, TREE
+        if argv[0] == "grim":
+            Path(argv[-1]).write_bytes(_png())
+        return 0, ""
+
+    assert capture("", out, WAYLAND, run, which=_grim) is None
+    assert calls[-1] == ["convert", str(out), "-resize", fit, str(out)]
 
 
 def test_no_window_is_the_whole_screen_and_list_is_the_window_list(tmp_path: Path) -> None:
