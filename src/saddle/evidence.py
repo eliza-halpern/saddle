@@ -1095,6 +1095,16 @@ class SuiteRun:
             return test_command
         return shlex.join([*shlex.split(test_command), *extra])
 
+    def alone(self, test_command: str, tests: Sequence[str]) -> str:
+        """The command that reruns `tests` (pytest ids) in one serial process,
+        nothing recorded: `-n 0` over a project's own `-n`, and `--no-cov`
+        when its options start pytest-cov, whose total would decide the exit
+        of a run of five tests (#174)."""
+        extra = ["-n", "0"] if self.parallel else []
+        if self.project_cov:
+            extra.append("--no-cov")
+        return shlex.join([*shlex.split(test_command), *extra, *tests])
+
     def red_sample(self, test_command: str, data_file: str) -> str:
         """The command a red-phase baseline sample runs: `covered`'s, with
         nothing recorded wherever pytest-cov would record it.

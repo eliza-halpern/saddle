@@ -53,7 +53,7 @@ from saddle.evidence import (
     suite_run,
     suite_workers,
 )
-from saddle.gates import RED_PHASE_SAMPLES
+from saddle.gates import RED_PHASE_SAMPLES, SHELL_TIMEOUT
 from saddle.journal import SpanRecorder, read_spans
 from saddle.runner import run_node_gate
 
@@ -1210,3 +1210,104 @@ def test_an_unreadable_data_file_names_no_covering_test(tmp_path: Path) -> None:
     broken = tmp_path / "broken.data"
     broken.write_bytes(b"not a coverage database")
     assert covering_tests(str(broken), {(str(tmp_path / "a.py"), 1)}) == ()
+
+
+# -- #174: a test that fails only on workers is named as such ----------------------
+
+NEEDS_QUIET: Final = (
+    "import os\n\n\n"
+    "def test_needs_quiet():\n"
+    '    assert os.environ.get("PYTEST_XDIST_WORKER") is None\n'
+)
+"""Fails on any xdist worker, passes alone: a test that needs the suite quiet."""
+
+BROKEN: Final = "from pkg.calc import add\n\n\ndef test_broken():\n    assert add(1, 1) == 3\n"
+"""Fails alone too: the change's to fix."""
+
+BROKEN_ID: Final = "tests/test_broken.py::test_broken"
+
+
+def _load_only(root: Path, workers: int, journal: Path | None = None) -> str:
+    _commit(
+        root,
+        {
+            **_files(_pyproject()),
+            "tests/test_quiet.py": NEEDS_QUIET,
+            "tests/test_broken.py": BROKEN,
+        },
+        "baseline",
+    )
+    (root / "src/pkg/calc.py").write_text(CALC_CHANGED)
+    with staged_copy(root, "HEAD") as (copy, _staged, resolved):
+        recorder = SpanRecorder(path=journal, node_id="n") if journal is not None else None
+        gated = run_node_gate(
+            audit_node(), copy, baseline=resolved, recorder=recorder, test_workers=workers
+        )
+    tests = next(c for c in gated.checks if c.name == "tests")
+    assert not tests.passed  # the verdict stands either way
+    return tests.detail
+
+
+def _reruns(journal: Path) -> list[list[str]]:
+    return [list(s.argv) for s in read_spans(journal) if BROKEN_ID in " ".join(s.argv)]
+
+
+def test_a_test_that_passes_alone_is_named_and_one_that_fails_alone_is_not(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "j.jsonl"
+    detail = _load_only(tmp_path / "repo", 2, journal)
+    assert len(_reruns(journal)) == 1  # one serial rerun of the failing tests
+    said = runner_module.LOAD_ONLY.format(
+        n=1, names="tests/test_quiet.py::test_needs_quiet", workers=2
+    )
+    assert said in detail, detail
+    assert "test_broken" in detail.split(said)[0]  # still named among the failing
+
+
+def test_a_serial_run_reruns_nothing(tmp_path: Path) -> None:
+    """Serially `test_needs_quiet` passes, and only `test_broken` fails: no
+    rerun, no line."""
+    journal = tmp_path / "j.jsonl"
+    detail = _load_only(tmp_path / "repo", 1, journal)
+    assert "passed when rerun alone" not in detail
+    assert "test_broken" in detail
+    reruns = _reruns(journal)
+    assert reruns == []  # the serial suite's answer is the answer: nothing reran
+
+
+def test_a_rerun_that_neither_passes_nor_fails_names_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rerun that hangs or cannot start says nothing about load."""
+    real = evidence.run_shell_capture
+
+    def hung(command: str, cwd: Path, **kwargs: Any) -> evidence.CapturedRun:
+        if BROKEN_ID in command:  # the rerun: the suite command names no test
+            return evidence.CapturedRun(
+                argv=(command,), exit_code=SHELL_TIMEOUT, stdout="", stderr=""
+            )
+        return real(command, cwd, **kwargs)
+
+    monkeypatch.setattr(runner_module, "run_shell_capture", hung)
+    detail = _load_only(tmp_path / "repo", 2)
+    assert "passed when rerun alone" not in detail
+    assert "test_needs_quiet" in detail  # still named among the failing
+
+
+@pytest.mark.parametrize(
+    ("run", "expected"),
+    [
+        (SuiteRun(workers=2), [*COMMAND.split(), "-n", "0", "t.py::a"]),
+        (
+            SuiteRun(workers=2, project_cov=True),
+            [*COMMAND.split(), "-n", "0", "--no-cov", "t.py::a"],
+        ),
+        (SuiteRun(), [*COMMAND.split(), "t.py::a"]),
+    ],
+    ids=["workers", "workers-and-project-cov", "serial"],
+)
+def test_a_rerun_alone_is_one_process_with_nothing_recorded(
+    run: SuiteRun, expected: list[str]
+) -> None:
+    assert run.alone(COMMAND, ["t.py::a"]).split() == expected

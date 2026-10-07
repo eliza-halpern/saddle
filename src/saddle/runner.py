@@ -13,7 +13,7 @@ import ast
 import shlex
 import shutil
 import tempfile
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePath
 from typing import Final
@@ -49,10 +49,12 @@ from saddle.evidence import (
     suite_test_seconds,
 )
 from saddle.gates import (
+    PYTEST_TESTS_FAILED,
     RED_PHASE_SAMPLES,
     GateCheck,
     Tier1Inputs,
     Tier1Result,
+    failing_tests,
     introduced_findings,
     run_tier1,
 )
@@ -163,6 +165,55 @@ def _with_suite_run(check: GateCheck, run: SuiteRun) -> GateCheck:
     if run.note:
         return replace(check, detail=f"{check.detail}; {run.note}")
     return check
+
+
+RERUN_ALONE_MAX: Final = 20
+"""The most failing tests a parallel suite run reruns alone (`_passed_alone`).
+More than that is a change that broke the suite, not a test that needs quiet."""
+
+LOAD_ONLY: Final = (
+    "; {n} of them passed when rerun alone on the same tree, in one serial "
+    "process: {names}. They fail only beside the suite's {workers} workers, so "
+    "look for what they share (a port, a file, a display, a time limit) before "
+    "the logic your change touched; the verdict stands until the suite passes"
+)
+"""What the `tests` finding adds for tests that failed only under load (#174):
+three dogfood runs spent 17 minutes finding out that a failure their change
+did not cause passed in isolation. A test that also fails alone is never
+named here, so a test the change broke still reads as the change's."""
+
+
+def _passed_alone(
+    mode: SuiteRun,
+    node: Node,
+    workdir: Path,
+    output: str,
+    *,
+    recorder: SpanRecorder | None,
+    timeout: float | None,
+) -> list[str]:
+    """The failing tests of a parallel suite run that pass rerun alone.
+
+    Nothing when the suite ran serially, the node is a test node (its
+    tests are meant to fail), no test or too many failed, or the rerun
+    ended other than passing or failing tests (a hang, a usage error)."""
+    failing = failing_tests(output)
+    if not mode.parallel or node.kind == "test" or not 0 < len(failing) <= RERUN_ALONE_MAX:
+        return []
+    command = mode.alone(node.deterministic_gate.test_command, failing)
+    rerun = run_shell_capture(command, workdir, recorder=recorder, timeout=timeout)
+    if rerun.exit_code not in (0, PYTEST_TESTS_FAILED):
+        return []
+    still = set(failing_tests(rerun.stdout + rerun.stderr))
+    return [t for t in failing if t not in still]
+
+
+def _with_load_only(check: GateCheck, passed_alone: Sequence[str], run: SuiteRun) -> GateCheck:
+    if not passed_alone:
+        return check
+    names = ", ".join(passed_alone)
+    said = LOAD_ONLY.format(n=len(passed_alone), names=names, workers=run.workers)
+    return replace(check, detail=f"{check.detail}{said}")
 
 
 def run_node_gate(
@@ -292,6 +343,18 @@ def run_node_gate(
     if on_suite is not None:
         on_suite(data_file, suite)
     current_exit = suite.exit_code
+    passed_alone = (
+        _passed_alone(
+            mode,
+            node,
+            workdir,
+            suite.stdout + suite.stderr,
+            recorder=recorder,
+            timeout=test_timeout,
+        )
+        if current_exit != 0
+        else []
+    )
     covered = covered_lines(data_file, changed_files)
     # The tests that ran a changed line are all a changed-line mutant can
     # meet, so mutmut runs those, not the whole scope (tier 2 only).
@@ -558,9 +621,13 @@ def run_node_gate(
     ran = IMPACT_RAN.format(ran=len(test_sources) - len(skipped), of=len(test_sources))
     checks = tuple(
         _with_suite_run(
-            replace(check, detail=f"{check.detail}; {ran}")
-            if command != gate.test_command
-            else check,
+            _with_load_only(
+                replace(check, detail=f"{check.detail}; {ran}")
+                if command != gate.test_command
+                else check,
+                passed_alone,
+                mode,
+            ),
             mode,
         )
         if check.name == "tests"
