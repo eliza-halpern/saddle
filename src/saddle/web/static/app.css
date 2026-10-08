@@ -1036,7 +1036,10 @@ main { position: relative; }
 .run-state-dot.rs-needs_you, .run-state-dot.rs-asked { color: var(--peach); }
 .run-row.rs-needs_you .run-time { color: var(--peach); font-weight: 600; }
 .run-state-dot.rs-finished { color: var(--mint); }
-.run-state-dot.rs-stopped, .run-state-dot.rs-failed { color: var(--bad); }
+/* A stopped or unchanged run ended without failing: its dot wears --ask, as its card and
+   its session's dot do, and only a failed run's dot is --bad (#85 item 6). */
+.run-state-dot.rs-stopped, .run-state-dot.rs-unchanged { color: var(--ask); }
+.run-state-dot.rs-failed { color: var(--bad); }
 .run-state-dot.rs-interrupted { color: var(--ink-faint); }
 .task-card.flash { box-shadow: 0 0 0 2px var(--rose); transition: box-shadow .3s; }
 
