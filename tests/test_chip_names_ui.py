@@ -5,8 +5,9 @@ Two parts of the page say what they are only in shape or in hex:
 * The status pill's face is a kaomoji the stylesheet draws in front of the word
   (`.status.idle::before` and its siblings), which a screen reader reads as
   punctuation. Its accessible name is the plain state -- `idle`, `working`,
-  `needs`, `error` -- however the pill is dressed, including the state where a
-  detail (`setStatus("working", "stopping…")`) covers the word on screen.
+  `needs`, `error`, and the `stopped` and `failed` a task session keeps (#85
+  item 3) -- however the pill is dressed, including the states where a detail
+  (`setStatus("working", "stopping…")`, "no outcome") covers the word on screen.
 * A cite chip's visible text is eight hex digits of a record hash, which names
   nothing a listener can act on. Its accessible name says what the chip does and
   keeps the hash it shows inside that name (WCAG 2.5.3, Label in Name).
@@ -21,7 +22,7 @@ its drawn face or by its detail instead of its state; a chip with no name at all
 dropped the eight digits the chip shows; two kinds of chip named by different
 rules; and a name that replaced the face the page draws instead of naming the
 state beside it. Every behaviour is compared, so one passing run checked all
-four states and both kinds of chip.
+six states and both kinds of chip.
 """
 
 from __future__ import annotations
@@ -66,6 +67,8 @@ EXPECTED_PILL = {
     "working": ("working", "status working", "stopping…"),
     "needs": ("needs", "status needs", "needs"),
     "error": ("error", "status error", "error"),
+    "stopped": ("stopped", "status stopped", "stopped"),
+    "failed": ("failed", "status failed", "no outcome"),
 }
 EXPECTED_CHIPS = {
     "packet": (f"Open the sealed ledger record {PACKET_HASH[:8]}", PACKET_HASH[:8], "cite"),
@@ -96,7 +99,11 @@ def test_the_status_pill_is_named_by_its_state_in_every_state(tmp_path: Path) ->
             const needs = await page.js(read);
             await page.js(() => setStatus("error"));
             const error = await page.js(read);
-            return { idle, working, needs, error };
+            await page.js(() => setStatus("stopped"));
+            const stopped = await page.js(read);
+            await page.js(() => setStatus("failed", "no outcome"));
+            const failed = await page.js(read);
+            return { idle, working, needs, error, stopped, failed };
             """,
             sid=site.sid,
         )

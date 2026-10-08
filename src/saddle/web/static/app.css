@@ -844,6 +844,13 @@ main { position: relative; }
 
 .status.needs { color: var(--bg); border-color: transparent; background: var(--ask); }
 .status.needs::before { content: "? "; }
+/* A run's ending kept in a task session's topbar (#85 item 3) stands in for a card
+   a phone has scrolled away, so it wears that card's tone and glyph (tasks.js
+   TASK_STATES), never the idle pill's faint ink. */
+.status.stopped { color: var(--ask); border-color: var(--ask); }
+.status.stopped::before { content: "■ "; }
+.status.failed { color: var(--halt); border-color: var(--halt); }
+.status.failed::before { content: "! "; }
 
 @media (max-width: 760px) {
   .task-meters { grid-template-columns: 1fr; }

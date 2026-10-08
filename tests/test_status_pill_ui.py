@@ -80,6 +80,9 @@ return await page.js(async (run, lane, states, chat, stopping, thenAsk) => {
       words: node.textContent,
       name: node.getAttribute("aria-label"),
       card: card ? card.textContent : null,
+      colour: getComputedStyle(node).color,
+      glyph: getComputedStyle(node, "::before").content,
+      cardColour: card ? getComputedStyle(card).color : null,
     };
   };
   const seen = [];
@@ -164,6 +167,27 @@ def test_a_task_session_shows_the_pill_for_exactly_the_states_its_card_leaves_un
             continue
         words, name = expected
         _assert_shown(pill, words, name, width)
+
+
+@pytest.mark.parametrize("width", [400, 1100])
+@needs_chrome
+def test_a_kept_ending_wears_its_run_cards_colour_and_glyph(tmp_path: Path, width: int) -> None:
+    """A run's ending, kept in the topbar, looks like the card it stands in for.
+
+    Known-bad, found reviewing the run that made the rule: "stopped" and "no
+    outcome" were kept but drawn as the idle pill is, in faint ink with no face,
+    so on a phone the one place left saying a run had ended looked like nothing
+    had happened. Known-good: each wears its card's colour, and the card's glyph
+    as its face, at a phone's width as well as a wide one.
+    """
+    rows = _page(tmp_path, "task", width, states=["stopped", "failed"], chat=[])
+    for state in ("stopped", "failed"):
+        pill = rows[state]
+        assert pill["hidden"] is False, f"{state} is hidden: {pill}"
+        assert pill["rendered"] is True, f"{state} renders nothing at {width} px: {pill}"
+        glyph = pill["card"].split(" ", 1)[0]  # the card reads "■ stopped", "! no outcome"
+        assert pill["glyph"] == f'"{glyph} "', f"the {state} pill's face is {pill['glyph']}"
+        assert pill["colour"] == pill["cardColour"], f"the {state} pill is not its card's: {pill}"
 
 
 @needs_chrome
