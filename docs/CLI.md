@@ -189,10 +189,11 @@ Saddle's own repository lists every fast stage of `check.sh` except `npm ci`, my
 ### Showing only what the change touches
 
 The audit decides the language of every changed file once (a deleted file counts):
-Python (`.py`, `.pyi`), JavaScript (`.js`, `.mjs`, `.cjs`), Markdown, shell, HTML and
-CSS. A finding about a language the change does not touch is not shown: a Python-only
-change carries no `js-*` findings, a JavaScript-only change carries no Python
-coverage, mutation or dead-code findings, and a change touching both shows both. A
+Python (`.py`, `.pyi`), JavaScript (`.js`, `.mjs`, `.cjs`), Markdown, shell, HTML,
+CSS and SQL (`.sql`). A finding about a language the change does not touch is not
+shown: a Python-only change carries no `js-*` findings, a JavaScript-only change
+carries no Python coverage, mutation or dead-code findings, a change touching both
+shows both, and a change that touches only `.sql` files carries neither. A
 finding that refuses (a failure, a block, a question) is never hidden, so a JavaScript
 change that breaks the Python suite is still refused, and the suite still runs.
 A configuration file (`.toml`, `.json`, `.yaml`, ...) or a file of unknown type can
@@ -206,9 +207,10 @@ gate-stage-languages = { ruff = ["python"], eslint = ["javascript"], shellcheck 
 ```
 
 The key is the stage's name (`ruff format`) or its tool (`ruff`), the value a list of
-`python`, `javascript`, `markdown`, `shell`, `html`, `css` or `config`. A stage runs,
-and appears in the `Gate:` line, only when the change touches one of its languages; a
-stage not named always runs. Like the stages, it is read from the starting commit.
+`python`, `javascript`, `markdown`, `shell`, `html`, `css`, `sql` or `config`. A stage
+runs, and appears in the `Gate:` line, only when the change touches one of its
+languages; a stage not named always runs. Like the stages, it is read from the
+starting commit.
 
 ## Commands the sandbox shows
 

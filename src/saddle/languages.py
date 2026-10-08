@@ -24,6 +24,7 @@ MARKDOWN: Final = "markdown"
 SHELL: Final = "shell"
 HTML: Final = "html"
 CSS: Final = "css"
+SQL: Final = "sql"
 CONFIG: Final = "config"
 OTHER: Final = "other"
 
@@ -38,6 +39,7 @@ SUFFIX_LANGUAGE: Final[Mapping[str, str]] = {
     ".bash": SHELL,
     ".html": HTML,
     ".css": CSS,
+    ".sql": SQL,
     ".toml": CONFIG,
     ".json": CONFIG,
     ".yml": CONFIG,
@@ -49,7 +51,7 @@ SUFFIX_LANGUAGE: Final[Mapping[str, str]] = {
 """The language of a changed file, by its suffix (lower-cased). A suffix not
 listed, or none, is `OTHER`."""
 
-LANGUAGE_NAMES: Final = frozenset({PYTHON, JAVASCRIPT, MARKDOWN, SHELL, HTML, CSS, CONFIG})
+LANGUAGE_NAMES: Final = frozenset({PYTHON, JAVASCRIPT, MARKDOWN, SHELL, HTML, CSS, SQL, CONFIG})
 """The names a project's `gate-stage-languages` may use."""
 
 WILDCARDS: Final = frozenset({CONFIG, OTHER})

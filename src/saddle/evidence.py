@@ -118,8 +118,8 @@ Absent, the only stage is `static-check`, when set."""
 
 GATE_STAGE_LANGUAGES_KEY: Final = "gate-stage-languages"
 """Which languages each gate stage is about, as a table of stage name to a list of
-language names: `gate-stage-languages = {ruff = ["python"], eslint =
-["javascript"]}` in the `[tool.saddle]` table (`gate_stage_languages`). A stage
+language names: `gate-stage-languages = {ruff = ["python"], eslint = ["javascript"],
+sqlfluff = ["sql"]}` in the `[tool.saddle]` table (`gate_stage_languages`). A stage
 runs, and is shown, only when the change touches one of its languages
 (`languages.stage_visible`); a stage not named is language-neutral and always
 runs. The name is the stage's `gates.gate_stage_name` or its tool alone."""
