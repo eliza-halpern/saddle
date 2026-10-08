@@ -862,6 +862,15 @@ class AuditFeed:
             said = f"no map: {type(exc).__name__}: {exc}"
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+        # With a map, its tests' fingerprints are sealed beside its span (#80).
+        held = getattr(self.auditor, "map_fingerprints", None)
+        prints = held() if callable(held) and said.startswith("map ") else None
+        span_id = uuid.uuid4().hex
+        digest = (
+            write_attempt_sidecar(self.journal, span_id, {"test_fingerprints": prints})
+            if prints is not None
+            else ""
+        )
         append_span(
             self.journal,
             build_span(
@@ -872,6 +881,8 @@ class AuditFeed:
                 detail=said,
                 name="audit:impact-map",
                 parent_id=self.run_span,
+                span_id=span_id,
+                attempt_hash=digest,
             ),
         )
 

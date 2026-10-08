@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from test_audit import VENV_TEST, _files_outside_git
@@ -765,12 +765,17 @@ class MapsAuditor(FakeAuditor):
         self.said = said
         self.drawn: list[set[str]] = []
 
+    PRINTS: ClassVar[dict[str, str]] = {"tests/test_calc.py::test_add": "f" * 64}
+
     def draw_map(self, tree: Path | None = None) -> str:
         assert tree is not None
         self.drawn.append(_files_outside_git(tree))
         if isinstance(self.said, Exception):
             raise self.said
         return self.said
+
+    def map_fingerprints(self) -> dict[str, str] | None:
+        return None if isinstance(self.said, Exception) else self.PRINTS
 
 
 @pytest.mark.parametrize(
@@ -802,6 +807,11 @@ def test_the_feed_draws_the_map_at_the_start_and_journals_how(
     assert maps.drawn == [{"calc.py", "tests/test_calc.py"}]
     (span,) = [s for s in read_spans(tmp_path / "j.jsonl") if s.name == "audit:impact-map"]
     assert (span.detail, span.exit_code) == (detail, exit_code)
+    if exit_code == 0:  # with a map, its tests' fingerprints are sealed beside it (#80)
+        sealed = json.loads(attempt_sidecar_path(tmp_path / "j.jsonl", span.span_id).read_text())
+        assert sealed == {"test_fingerprints": MapsAuditor.PRINTS}
+    else:
+        assert span.attempt_hash == ""
 
 
 @pytest.fixture

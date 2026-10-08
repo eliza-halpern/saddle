@@ -38,6 +38,7 @@ is the net for those.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import subprocess
@@ -69,9 +70,11 @@ WHOLE_SUITE: Final = (
 """Basenames whose change can reach every test: pytest's own configuration,
 the environment the suite runs in, or a conftest."""
 
-MAP_VERSION: Final = 1
+MAP_VERSION: Final = 2
 """Part of a cached map's key: bumped whenever `build` changes what a map
-holds, so a map drawn by other code is never read back."""
+holds, so a map drawn by other code is never read back. 2: each map is cached
+with its tests' fingerprints (`fingerprints`, #80), so a map read back always
+has them."""
 
 TEST_FILES: Final = ("test_*.py", "*_test.py")
 """pytest's default test modules, the files the gate's suite run can skip."""
@@ -108,6 +111,9 @@ class ImpactMemo:
     cache: Path | None = None
     """Where drawn maps are kept (`Auditor.draw_map`), one file per tree,
     test command, worker count and environment; None keeps none."""
+    fingerprints: dict[str, str] | None = None
+    """By pytest node id, the fingerprint of what the test covered
+    (`fingerprints`), from the run that drew the map; None until one is."""
 
 
 def dumps(known: ImpactMap) -> str:
@@ -214,6 +220,44 @@ def build(data_file: str, tree: Path) -> ImpactMap | None:
             frozenset(outside),
         )
     return found if seen_test else None
+
+
+def fingerprints(data_file: str, tree: Path) -> dict[str, str] | None:
+    """Each pytest node id the recorded suite ran, to the sha256 of the sorted
+    `[path, line]` pairs it covered in the tree's non-test files, over all its
+    contexts (setup, run, teardown), `path` relative to `tree` (#80). Two tests
+    with one fingerprint ran exactly the same source lines; a test file's own
+    lines are left out, or no two tests could ever match. None when the data
+    holds no test context."""
+    cov = coverage.Coverage(data_file=data_file, config_file=False)
+    try:
+        cov.load()
+    except coverage.CoverageException:
+        return None
+    data = cov.get_data()
+    root = os.path.realpath(tree)
+    covered: dict[str, set[tuple[str, int]]] = {}
+    for measured in data.measured_files():
+        real = os.path.realpath(measured)
+        if not real.startswith(f"{root}{os.sep}"):
+            continue
+        rel = Path(os.path.relpath(real, root)).as_posix()
+        source = not is_test_file(rel)
+        for line, contexts in data.contexts_by_lineno(measured).items():
+            for context in contexts:
+                if "::" not in context:
+                    continue
+                lines = covered.setdefault(context.rsplit("|", 1)[0], set())
+                if source:
+                    lines.add((rel, line))
+    if not covered:
+        return None
+    return {
+        node: hashlib.sha256(
+            json.dumps(sorted([path, line] for path, line in lines), separators=(",", ":")).encode()
+        ).hexdigest()
+        for node, lines in covered.items()
+    }
 
 
 def _module(rel: str) -> tuple[str, str]:

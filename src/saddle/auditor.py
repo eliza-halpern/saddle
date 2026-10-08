@@ -566,6 +566,19 @@ def _selection(memo: ImpactMemo | None, tree: Path, baseline: str) -> tuple[str,
         return None
 
 
+def _read_fingerprints(path: Path) -> dict[str, str] | None:
+    """Fingerprints `Auditor.draw_map` cached; None for a missing or unreadable file."""
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
+    ):
+        return None
+    return raw
+
+
 def _record_impact(memo: ImpactMemo, tree: Path, data_file: str, suite: CapturedRun) -> None:
     """Draw the map from a whole-suite run whose tests ran to the end (exit 0
     or 1): one cut short records only the tests it reached."""
@@ -2489,10 +2502,15 @@ class Auditor:
             payload = [impact.MAP_VERSION, staged, command, workers, sandbox.environment_key()]
             key = hashlib.sha256(json.dumps(payload).encode()).hexdigest()
             cached = memo.cache / f"{key}.json" if memo.cache is not None else None
-            if cached is not None and cached.is_file():
+            printed = cached.with_suffix(".fingerprints.json") if cached is not None else None
+            if cached is not None and printed is not None and cached.is_file():
+                # The map and its tests' fingerprints are one record (#80): a map
+                # whose fingerprints are missing or unreadable is drawn again.
                 memo.tests = impact.loads(cached.read_text())
-                if memo.tests is not None:
+                memo.fingerprints = _read_fingerprints(printed)
+                if memo.tests is not None and memo.fingerprints is not None:
                     return f"map read from {cached.name}"
+                memo.tests = memo.fingerprints = None
             deps = link_dependencies(copy, self.config.dependencies or tree or self.repo)
             with sandbox.also_exposing(exposed), sandbox.also_showing(deps):
                 data_file = str(copy / ".coverage.map")
@@ -2505,12 +2523,26 @@ class Auditor:
                 if memo.tests is None:
                     why = "timed out" if ran.timed_out else f"exit {ran.exit_code}"
                     return f"no map: the suite recorded no test context ({why})"
-                if cached is not None:
+                prints = impact.fingerprints(data_file, copy)
+                assert prints is not None  # `build` found a test context in this data
+                memo.fingerprints = prints
+                if cached is not None and printed is not None:
                     cached.parent.mkdir(parents=True, exist_ok=True)
-                    partial = cached.with_suffix(".partial")
-                    partial.write_text(impact.dumps(memo.tests))
-                    os.replace(partial, cached)
+                    # The fingerprints first: a reader that finds the map finds them.
+                    for path, text in (
+                        (printed, json.dumps(memo.fingerprints, sort_keys=True)),
+                        (cached, impact.dumps(memo.tests)),
+                    ):
+                        partial = path.with_suffix(".partial")
+                        partial.write_text(text)
+                        os.replace(partial, path)
                 return f"map drawn over {len(memo.tests)} files"
+
+    def map_fingerprints(self) -> dict[str, str] | None:
+        """The fingerprints of the map `draw_map` drew or read (#80): by pytest node
+        id, what the test covered (`impact.fingerprints`); None without a map."""
+        memo = self.config.impact
+        return None if memo is None else memo.fingerprints
 
     def prime(self, tree: Path | None = None) -> None:
         """Run tiers 1 and 2 on `tree` as one run of the battery and cache both.

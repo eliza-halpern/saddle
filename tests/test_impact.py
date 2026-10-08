@@ -21,6 +21,8 @@ changed constant only through a name built at run time is not selected.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Final
 
@@ -30,7 +32,7 @@ import pytest
 from saddle import auditor as auditor_module
 from saddle import evidence
 from saddle.auditor import Auditor, AuditorConfig, Finding, Findings
-from saddle.impact import FileImpact, ImpactMap, ImpactMemo, build, select
+from saddle.impact import FileImpact, ImpactMap, ImpactMemo, build, fingerprints, select
 
 CALC: Final = '''"""Arithmetic."""
 
@@ -439,6 +441,98 @@ def test_a_data_file_coverage_cannot_read_draws_no_map(tmp_path: Path) -> None:
     corrupt = tmp_path / ".coverage.ctx"
     corrupt.write_text("not a coverage database\n" * 10)
     assert build(str(corrupt), tmp_path) is None
+    assert fingerprints(str(corrupt), tmp_path) is None
+
+
+# -- fingerprints (#80): what each test covered, to find tests that add nothing ----------
+
+
+def _fp(*lines: int) -> str:
+    rows = sorted(["m.py", n] for n in lines)
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
+
+
+def test_a_fingerprint_is_the_source_lines_a_test_ran_never_its_own_lines(tmp_path: Path) -> None:
+    """Known-bad: with a test file's own lines in it, two tests that run the same
+    code could never share a fingerprint, so no duplicate would ever be found."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    source, test_file = tree / "m.py", tree / "test_m.py"
+    source.write_text("x = 1\n" * 20)
+    test_file.write_text("y = 1\n" * 20)
+    outside = tmp_path / "elsewhere.py"
+    outside.write_text("z = 1\n")
+    data_file = _data(
+        tree,
+        {
+            "": {str(source): [1]},  # import time: no test
+            "test_m.py::test_a|run": {str(source): [6], str(test_file): [3]},
+            "test_m.py::test_b|run": {str(source): [6], str(test_file): [8], str(outside): [1]},
+            "test_m.py::test_p[1-1]|setup": {str(source): [15]},
+            "test_m.py::test_p[1-1]|run": {str(source): [17]},
+            "test_m.py::test_itself|run": {str(test_file): [12]},
+        },
+    )
+    assert fingerprints(data_file, tree) == {
+        "test_m.py::test_a": _fp(6),
+        "test_m.py::test_b": _fp(6),  # the same code as test_a: one fingerprint
+        "test_m.py::test_p[1-1]": _fp(15, 17),  # setup and run are one test
+        "test_m.py::test_itself": _fp(),  # it ran, and ran no source line
+    }
+
+
+def test_a_run_with_no_test_context_has_no_fingerprints(tmp_path: Path) -> None:
+    source = tmp_path / "m.py"
+    source.write_text("x = 1\n")
+    assert fingerprints(_data(tmp_path, {"": {str(source): [1]}}), tmp_path) is None
+
+
+def test_a_cached_map_is_read_back_with_the_fingerprints_it_was_drawn_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _project(tmp_path / "p")
+    cache = tmp_path / "cache"
+    drawn = ImpactMemo(cache=cache)
+    first = _auditor(root, drawn)
+    assert first.draw_map().startswith("map drawn")
+    assert drawn.fingerprints
+    assert first.map_fingerprints() == drawn.fingerprints
+    assert set(drawn.fingerprints) == {"tests/test_add.py::test_add", "tests/test_neg.py::test_neg"}
+
+    def no_suite(*_args: object, **_kwargs: object) -> None:
+        msg = "a cached map ran the suite"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(auditor_module, "run_suite_capture", no_suite)
+    again = ImpactMemo(cache=cache)
+    assert _auditor(root, again).draw_map().startswith("map read from ")
+    assert again.fingerprints == drawn.fingerprints
+
+
+@pytest.mark.parametrize("damage", ["missing", "unreadable", "not-strings"])
+def test_a_cached_map_without_its_fingerprints_is_drawn_again(tmp_path: Path, damage: str) -> None:
+    """Never a map read without them: a person reading the record could not tell
+    a missing fingerprint from a test that covers nothing."""
+    root = _project(tmp_path / "p")
+    cache = tmp_path / "cache"
+    assert _auditor(root, ImpactMemo(cache=cache)).draw_map().startswith("map drawn")
+    (prints,) = cache.glob("*.fingerprints.json")
+    if damage == "missing":
+        prints.unlink()
+    elif damage == "unreadable":
+        prints.write_text("{not json")
+    else:
+        prints.write_text(json.dumps({"tests/test_add.py::test_add": 7}))
+    again = ImpactMemo(cache=cache)
+    assert _auditor(root, again).draw_map().startswith("map drawn")
+    assert again.fingerprints is not None
+    assert all(isinstance(v, str) for v in again.fingerprints.values())
+
+
+def test_an_auditor_with_no_map_has_no_fingerprints(tmp_path: Path) -> None:
+    root = _project(tmp_path / "p")
+    plain = Auditor(root, "HEAD", AuditorConfig(test_command="python -m pytest -q"))
+    assert plain.map_fingerprints() is None
 
 
 # -- the audit: the first run draws the map, later ones run what the change reaches ----
@@ -497,6 +591,11 @@ def _project(root: Path) -> Path:
     return root
 
 
+def _map_files(cache: Path) -> list[Path]:
+    """The cached maps, each beside its fingerprints file (#80)."""
+    return [p for p in cache.iterdir() if not p.name.endswith(".fingerprints.json")]
+
+
 def _auditor(root: Path, memo: ImpactMemo) -> Auditor:
     return Auditor(root, "HEAD", AuditorConfig(test_command="python -m pytest -q", impact=memo))
 
@@ -522,7 +621,7 @@ def test_a_drawn_map_is_read_back_from_the_cache_for_the_same_tree(
     cache = tmp_path / "cache"
     drawn = ImpactMemo(cache=cache)
     assert _auditor(root, drawn).draw_map().startswith("map drawn")
-    (entry,) = cache.iterdir()
+    (entry,) = _map_files(cache)
 
     def no_suite(*_args: object, **_kwargs: object) -> None:
         msg = "a cached map ran the suite"
@@ -541,7 +640,7 @@ def test_a_cached_map_of_another_tree_or_unreadable_is_drawn_again(
     root = _project(tmp_path / "p")
     cache = tmp_path / "cache"
     assert _auditor(root, ImpactMemo(cache=cache)).draw_map().startswith("map drawn")
-    (entry,) = cache.iterdir()
+    (entry,) = _map_files(cache)
     if change == "tree":
         (root / "tests/test_neg.py").write_text(PROJECT["tests/test_neg.py"] + "\n# edited\n")
     else:
