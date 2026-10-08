@@ -44,6 +44,7 @@ from saddle.audit import AUDIT_TEST_COMMAND
 from saddle.auditor import Tier2Mode
 from saddle.capabilities import CapabilityError
 from saddle.capabilities import load as load_switches
+from saddle.conversation import CONVERSATION_LOG, ConversationLog
 from saddle.dag import MutationSample
 from saddle.engine import (
     DEFAULT_FINISH_REFUSAL_CAP,
@@ -1213,6 +1214,7 @@ def run_auto(
             *provider_schemas(),
         ],
         auto=auto,
+        conversation=ConversationLog(journal.parent / CONVERSATION_LOG),
         keep_reasoning=options.keep_reasoning,
     )
     # The run's own /tmp, shared by all its commands and never audited: it
@@ -1291,6 +1293,12 @@ def run_auto(
     message = f"saddle auto {run_id}: {auto.outcome} ({auto.reason})"
     if auto.narrative:
         message += f"\n\nNarrative (model-written, not evidence):\n{auto.narrative}"
+    log = turn_options.conversation
+    if log is not None and log.failed is not None:
+        message += (
+            f"\n\nThe conversation log ({CONVERSATION_LOG}) stopped at {log.failed}; "
+            f"it holds the {log.requests} request(s) before it."
+        )
     if kept:
         where = (journal.parent / EVIDENCE_DIR).relative_to(root).as_posix()
         message += (

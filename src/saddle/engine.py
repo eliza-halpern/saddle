@@ -26,6 +26,7 @@ from pathlib import Path
 from time import monotonic, perf_counter
 from typing import Any, Final, Protocol
 
+from saddle.conversation import ConversationLog
 from saddle.events import (
     Answered,
     AuditFinding,
@@ -791,6 +792,9 @@ class TurnOptions:
     for the last request it reported usage on; `None` until one has. Set by
     the turn loop. Where the server cannot count (no /tokenize), it turns
     the estimate into real tokens instead of the blanket `INPUT_SAFETY`."""
+    conversation: ConversationLog | None = None
+    """Where each request is logged as sent, so any one can be rebuilt (#164):
+    set for an autonomous run, beside its ledger."""
     keep_reasoning: bool = True
     """Send each round's reasoning back on its assistant message, in every
     mode: autonomous runs (`AutoOptions.keep_reasoning`) and interactive chat
@@ -1178,6 +1182,8 @@ def run_turn(
             usage: StreamUsage | None = None
             cap, cut = _reply_cap(client, messages, options, once)
             timed_out = False
+            if options.conversation is not None:
+                options.conversation.record(messages, max_tokens=cap, tools=options.tools)
             sent = perf_counter()
             first: float | None = None
             try:
@@ -1458,6 +1464,9 @@ def run_turn(
         yield ErrorEvent(message=str(exc))
         if auto is not None:
             auto.stop(f"model error: {exc}")
+    if options.conversation is not None:
+        # The last reply and its results, which no request after them carries.
+        options.conversation.end(messages)
     if stop():
         # The turn is still sealed: what it did before being stopped is real
         # work and belongs in the record.
