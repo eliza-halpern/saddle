@@ -7,7 +7,8 @@ to, and a hand-run suite tells the model nothing `check` does not (`check` names
 the failing tests, and running one by its id stays allowed).
 
 What counts, read off each command of a shell line (split at `&&`, `||`, `;`,
-`|`, `&` and newlines, redirections dropped):
+`|`, `&` and newlines, at a subshell's or a command substitution's parentheses and
+at a brace group's braces, redirections dropped):
 
 - `pytest`, `py.test` or `python -m pytest`, also under `uv run`, `coverage run
   -m`, `timeout`, `env`, `nice`, `time`, `exec`, a venv path or a `VAR=value`
@@ -30,6 +31,11 @@ from typing import Final
 from saddle.gates import TEST_DIRECTORIES
 
 _SEPARATORS: Final = frozenset({"&&", "||", ";", "|", "&", ";;", "|&"})
+_PUNCTUATION: Final = frozenset("();<>|&")
+"""The characters shlex reads as shell punctuation (`punctuation_chars`): it joins a
+run of them into one token, so a subshell's `)` arrives with the operator beside
+it, as `);`, `)||` or `;(`."""
+_BRACES: Final = frozenset({"{", "}"})
 _REDIRECTS: Final = frozenset({">", ">>", "<", ">&", "&>", "<&", ">|", "&>>", "<<", "<<<"})
 _ASSIGNMENT: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PYTHON: Final = re.compile(r"^python(\d+(\.\d+)?)?$")
@@ -50,6 +56,17 @@ def _tokens(line: str) -> list[str]:
         return line.split()
 
 
+def _separates(token: str) -> bool:
+    """Whether `token` ends one simple command: a list or pipe operator, a brace
+    group's `{` or `}`, or a run of punctuation holding a parenthesis, the edge of
+    a subshell `( ... )` or a command substitution `$( ... )`. A watched run ran
+    the whole suite as `(python -m pytest -q 2>&1 | tail -25)`, twice, and the
+    refusal never saw it: the subshell's `(` was read as the command's name."""
+    if token in _SEPARATORS or token in _BRACES:
+        return True
+    return set(token) <= _PUNCTUATION and ("(" in token or ")" in token)
+
+
 def _commands(text: str) -> list[list[str]]:
     """The shell text as its simple commands, each a word list, redirections
     and heredoc bodies dropped: a heredoc that writes a file naming pytest
@@ -68,7 +85,7 @@ def _commands(text: str) -> list[list[str]]:
                 skip = False
                 if heredoc:
                     delimiter = token.lstrip("-")
-            elif token in _SEPARATORS:
+            elif _separates(token):
                 commands.append([])
             elif token in _REDIRECTS:
                 skip = True

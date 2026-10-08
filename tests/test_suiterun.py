@@ -34,6 +34,15 @@ WHOLE = [
     "pytest tests/test_a.py tests",
     "python - <<'EOF'\nimport subprocess\nEOF\npytest",
     "ruff check . || pytest",
+    # In a subshell, a command substitution or a brace group (a watched run's two
+    # whole-suite runs were subshells, and the refusal never saw them).
+    "cd /w && rm -f tests/__pycache__/*.pyc && (python -m pytest -q 2>&1 | tail -25) ",
+    'cd /w && (python -m pytest -q > /tmp/suite.txt 2>&1; echo "exit=$?"; tail -2 /tmp/s)',
+    "{ python -m pytest -q; echo done; }",
+    "out=$(pytest -q 2>&1)",
+    "a;(pytest -q)||b",
+    "((pytest -q))",
+    "(cd /w && pytest -q)&",
 ]
 
 NARROWED = [
@@ -57,6 +66,11 @@ NARROWED = [
     "echo 'unbalanced",
     "FOO=1",
     "python -m http.server 8000",
+    "(python -m pytest tests/test_a.py -q 2>&1 | tail -5)",
+    "{ pytest tests/test_a.py::test_b; }",
+    "echo '(pytest -q)'",
+    'echo "$(date)"',
+    "find . -name '*.pyc' -exec rm {} +",
     "",
 ]
 
