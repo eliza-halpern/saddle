@@ -957,9 +957,12 @@ class AuditFeed:
         self._dirty = False  # this tree is audited; no checkpoint of it too
         self.checks.append(result)
         text = render(self._shown(result))
-        if whole_suite:
+        # Neither line when tiers 1 and 2 were skipped (`EDIT_CHECKS_FIRST`,
+        # `FLIPS_FIRST`): the suite did not run, and what it would find is unknown.
+        ran = result.note not in (EDIT_CHECKS_FIRST, FLIPS_FIRST)
+        if whole_suite and ran:
             text += "\n" + WHOLE_SUITE_TOOK.format(took=_took(result.duration_ms))
-        if _only_finish_clears(result):
+        if ran and _only_finish_clears(result):
             text += "\n" + ONLY_FINISH_CLEARS
         span_id = uuid.uuid4().hex
         digest = write_attempt_sidecar(self.journal, span_id, result.to_dict())

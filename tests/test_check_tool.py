@@ -35,6 +35,7 @@ from saddle.engine import AUDIT_UNRESOLVED, FINISH_REFUSED
 from saddle.feed import (
     CHECK_SPAN,
     CHECK_UNCHANGED,
+    EDIT_CHECKS_FIRST,
     ONLY_FINISH_CLEARS,
     WHOLE_SUITE_TOOK,
     _took,
@@ -719,3 +720,18 @@ def test_a_check_with_anything_else_failing_or_nothing_failing_says_nothing_of_i
     assert ONLY_FINISH_CLEARS not in failing_too, failing_too
     assert "PASS]" in passing, passing
     assert ONLY_FINISH_CLEARS not in passing, passing
+
+
+def test_a_check_whose_suite_was_skipped_claims_neither_its_cost_nor_that_nothing_else_fails(
+    repo: Path,
+) -> None:
+    """#80a1 r2: a check whose tiers 1 and 2 were skipped read "This whole-suite check took
+    3 s" and "Nothing else fails", neither of which was so. Here the skip is a failing
+    edit check (`EDIT_CHECKS_FIRST`: the fake's ruff fails while calc.py subtracts)."""
+    whole_mutation = call(CHECK_TOOL, "m", whole_suite=True, mutation=True)
+    client = Reading([[edit("e", "def add(a, b):", "def add(a, b):  # sum")], [whole_mutation]])
+    run(repo, client, auditor=WholeSuiteAuditor())
+    said = client.read["m"]
+    assert EDIT_CHECKS_FIRST in said, said
+    assert "whole-suite check took" not in said, said
+    assert ONLY_FINISH_CLEARS not in said, said
