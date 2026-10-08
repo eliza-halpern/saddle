@@ -12,6 +12,15 @@ The heading is "Not proven by any test", never a failure: under the
 shortlist design coverage is a locator whose verdict reads "not proven"
 (PREREG addendum-EAFS §S3). This module changes no gate.
 
+The heading's record bracket names at most `SPARED_NAMES` of the baseline
+definitions the gate spared, then "and N more" (`_spared_words`): that list
+is the only part of the heading whose length grows with the tree, and the
+heading is the first thing the model reads of a finding the feed caps at
+`feed.DETAIL_CHARS`. Nothing is lost by the cap: every spared definition is
+still named in full in the finding's sealed cites (the gate's `basis`), in
+the coverage sidecar's `spared` list (`auditor`), and one by one in the
+packet's Not proven rows.
+
 A line outside every function is "module level". A row says "nothing
 exercises <function>" only when the finding lists every statement of that
 function's body (`evidence.statement_lines`, the gate's own reading) as
@@ -37,6 +46,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from saddle.evidence import statement_lines
+from saddle.gates import SPARED_DEFS
 from saddle.mutant_text import MutationSummary
 
 MODULE_LEVEL = "module level"
@@ -345,8 +355,53 @@ COMPACT_LINES = 2
 """Uncovered lines' text shown per function in the compact rendering."""
 
 
+SPARED_NAMES = 3
+"""Most spared baseline definitions the heading names, then "and N more".
+
+`check_changed_line_coverage` names every baseline definition whose changed
+lines it did not judge, and the heading quoted that list whole: it is the
+one part of the heading whose length grows with the tree. Benchmark draw
+EAF-t5 s1 shows what that costs -- its checkpoint 2 heading took 236 of the
+`feed.DETAIL_CHARS` the feed gives one finding, 111 of them four definition
+names, and the function rows that say where the lines are unproven were cut
+six of nineteen deep. With enough, longer names the list alone passes the cap
+and the model reads no row at all. Three is this module's house size for a
+list that must fit one line the reader acts on (`COMPACT_CAP`,
+`TALLY_FILES`), and names are in record order, so the three said are the
+first three the record says. The cap bounds what the heading may spend; how
+many rows then reach the model is the feed's own budget, and it stays six of
+nineteen for that checkpoint either way.
+"""
+
+
+def _spared_words(field: str) -> str:
+    """One `basis` field as the heading shows it: the spared list, capped.
+
+    `spared-defs=<file>:<name>,...` keeps its first `SPARED_NAMES` names and
+    counts the rest as "and N more", so the heading's length stops growing
+    once the list passes the cap. A spared list of `SPARED_NAMES` or fewer,
+    and every other field, reads exactly as the record spells it. Nothing
+    the cap drops is lost: the finding's sealed cites, the coverage
+    sidecar's `spared` list and the packet's Not proven rows each carry
+    every name.
+    """
+    if not field.startswith(SPARED_DEFS):
+        return field
+    names = [n for n in field.removeprefix(SPARED_DEFS).split(",") if n]
+    if len(names) <= SPARED_NAMES:
+        return field
+    more = len(names) - SPARED_NAMES
+    return f"{SPARED_DEFS}{','.join(names[:SPARED_NAMES])} and {more} more"
+
+
+def _record_words(cites: Sequence[str]) -> str:
+    """The heading's counts, as the reader sees them: each cite's fields,
+    with the spared-definition list capped (`_spared_words`)."""
+    return " ".join(" ".join(_spared_words(field) for field in cite.split()) for cite in cites)
+
+
 def _headline(s: CoverageSummary) -> str:
-    basis = " ".join(s.cites)
+    basis = _record_words(s.cites)
     return (
         f"{HEADING}: {s.detail_lines} changed lines no test runs "
         f"[record: detail names {s.detail_lines} lines{'; ' + basis if basis else ''}]"
@@ -418,7 +473,10 @@ def render_coverage(summary: CoverageSummary, *, text: bool = True, compact: boo
     With `text` (the default) each function bullet is followed by the text
     of its uncovered lines, read from the same source the function was
     placed in; a file the tree did not hold is "not placed" and has none.
-    `compact` is the recap's rendering (`render_compact`).
+    `compact` is the recap's rendering (`render_compact`). Either way the
+    heading names at most `SPARED_NAMES` spared definitions and counts the
+    rest, in both renderings: the full list is the record's, not the
+    heading's (`_spared_words`).
     """
     if compact:
         return render_compact(summary, text=text)
