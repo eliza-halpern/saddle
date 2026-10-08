@@ -1375,6 +1375,47 @@ def run_reasoning(journal: Path, *, stdout: IO[str]) -> int:
     return 0
 
 
+def run_triage(journal: Path, *, as_json: bool, request_out: Path | None, stdout: IO[str]) -> int:
+    """Say where an autonomous run stopped making progress and whose block it was (#164),
+    from its ledger and the conversation log beside it (`saddle.traps`).
+
+    Exit 1 with nothing judged when there is no journal, when it does not verify, or
+    when it is not an autonomous run's. `request_out` writes the rewind point's request
+    body for `saddle auto --resume-messages`; with no rewind point it writes nothing and
+    exits 1, never an empty request.
+    """
+    from saddle.conversation import CONVERSATION_LOG, ConversationError, request_at
+    from saddle.traps import as_record, report, verdict
+    from saddle.triage import TriageError, timeline
+
+    if not journal.is_file():  # `read_spans` reads a missing file as an empty one
+        stdout.write(f"error: no journal at {journal}\n")
+        return 1
+    try:
+        seen = timeline(journal)
+    except (ValueError, TriageError) as exc:
+        stdout.write(f"error: {exc}\n")
+        return 1
+    found = verdict(seen)
+    run = journal.parent.name
+    if request_out is not None:
+        if found.rewind is None:
+            stdout.write("error: no rewind point: this run has no harness trap to resume from\n")
+            return 1
+        try:
+            asked = request_at(journal.parent / CONVERSATION_LOG, found.rewind.request)
+        except ConversationError as exc:
+            stdout.write(f"error: {exc}\n")
+            return 1
+        body = {"messages": asked.messages, "max_tokens": asked.max_tokens, "tools": asked.tools}
+        request_out.write_text(json.dumps(body), encoding="utf-8")
+    if as_json:
+        stdout.write(json.dumps(as_record(run, seen, found), indent=1) + "\n")
+    else:
+        stdout.write(report(run, seen, found))
+    return 0
+
+
 def run_explain(journal: Path, *, attempt: str | None, stdout: IO[str]) -> int:
     """Explain a run from its journal: times, calls, verdicts, findings.
 
@@ -1953,6 +1994,18 @@ def build_parser() -> argparse.ArgumentParser:
         "reasoning", help="Print each round's whole reasoning, in order, from a run's journal."
     )
     reasoning.add_argument("journal", help="Journal path (a run's proofs.jsonl).")
+    triage = sub.add_parser(
+        "triage",
+        help="Say where an autonomous run stopped making progress, and whose block it was.",
+    )
+    triage.add_argument("journal", help="Journal path (a run's proofs.jsonl).")
+    triage.add_argument("--json", action="store_true", help="Print the verdict as JSON.")
+    triage.add_argument(
+        "--request-out",
+        type=Path,
+        default=None,
+        help="Write the rewind point's request, for saddle auto --resume-messages.",
+    )
     explain = sub.add_parser("explain", help="Explain a run from its journal.")
     explain.add_argument(
         "journal",
@@ -2620,6 +2673,7 @@ def main(
         "up",
         "explain",
         "reasoning",
+        "triage",
         "chat",
         "web",
         "audit",
@@ -2686,6 +2740,13 @@ def main(
         return run_explain(Path(args.journal), attempt=args.attempt, stdout=stdout or sys.stdout)
     if args.command == "reasoning":
         return run_reasoning(Path(args.journal), stdout=stdout or sys.stdout)
+    if args.command == "triage":
+        return run_triage(
+            Path(args.journal),
+            as_json=args.json,
+            request_out=args.request_out,
+            stdout=stdout or sys.stdout,
+        )
     if args.command == "tail":
         return run_tail(Path(args.journal), stdout=stdout or sys.stdout)
     if args.command == "audit":

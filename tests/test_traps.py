@@ -9,20 +9,32 @@ when no signature fired, never a guess.
 
 from __future__ import annotations
 
+import io
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from saddle.conversation import Request
+from saddle import cli
+from saddle.auto import resumed
+from saddle.conversation import CONVERSATION_LOG, ConversationError, ConversationLog, Request
 from saddle.engine import SUMMARY_NAMES_ABSENT
 from saddle.feed import FLIPS_FIRST
-from saddle.journal import AUDIT_QUESTION_STOP, AUTO_START, STALL_STOP, SpanRecord, build_span
+from saddle.journal import (
+    AUDIT_QUESTION_STOP,
+    AUTO_START,
+    STALL_STOP,
+    SpanRecord,
+    append_span,
+    build_span,
+)
 from saddle.traps import (
     environment,
     misreport,
     overflow,
     repeat,
+    report,
     summary_names,
     unsatisfiable,
     verdict,
@@ -363,3 +375,171 @@ def test_a_failing_tests_finding_that_lists_no_test_is_not_the_environment() -> 
     for failing in (collection, empty):
         seen = run(round_(1, spans=audit("aaa", failing)), round_(2, spans=audit("bbb", failing)))
         assert environment(seen) is None
+
+
+# -- saddle triage -----------------------------------------------------------------
+
+
+def trapped_ledger(tmp_path: Path, outcome: str = "stopped: audit unresolved") -> Path:
+    """A run whose two checks, on two trees, answered what only finish could clear."""
+    ledger = tmp_path / "r9" / "proofs.jsonl"
+    ledger.parent.mkdir()
+    log = ConversationLog(ledger.parent / CONVERSATION_LOG)
+    start = build_span(
+        node_id="chat#1", argv=[AUTO_START, "t"], duration_ms=0, exit_code=0, detail=""
+    )
+    append_span(ledger, start)
+    asked: list[dict[str, Any]] = [
+        {"role": "system", "content": "old"},
+        {"role": "user", "content": "go"},
+    ]
+    steps = [
+        ("read_file", "c0", "read c0"),
+        ("check", "c1", check_on("aaa")),
+        ("check", "c2", check_on("bbb")),
+    ]
+    for number, (name, call_id, text) in enumerate(steps, 1):
+        log.record(asked, max_tokens=99, tools=[])
+        append_span(ledger, span("auto:spend", json.dumps({"request": number})))
+        function = {"name": name, "arguments": "{}"}
+        asked = [
+            *asked,
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": call_id, "function": function}],
+            },
+            {"role": "tool", "tool_call_id": call_id, "content": text},
+        ]
+        append_span(ledger, span(name, "{}", detail=text))
+    log.end(asked)
+    name = "auto:finished" if outcome == "finished" else "auto:stopped"
+    append_span(ledger, span(name, detail=outcome))
+    return ledger
+
+
+def triage(*args: str) -> tuple[int, str]:
+    out = io.StringIO()
+    return cli.main(["triage", *args], stdout=out), out.getvalue()
+
+
+def test_saddle_triage_names_the_harness_block_its_trap_and_the_rewind_point(
+    tmp_path: Path,
+) -> None:
+    code, text = triage(str(trapped_ledger(tmp_path)))
+    assert code == 0
+    assert text.startswith("run r9: stopped (stopped: audit unresolved)")
+    assert "block: the harness's" in text
+    assert "unsatisfiable (the harness's), rounds 2, 3:" in text
+    assert "trap: round 2" in text
+    assert "rewind: request 2 (round 2); after it 0 file(s) changed" in text
+    assert "title: run r9 stopped on the harness: unsatisfiable" in text
+
+
+def test_saddle_triage_json_holds_the_same_verdict(tmp_path: Path) -> None:
+    code, text = triage(str(trapped_ledger(tmp_path)), "--json")
+    assert code == 0
+    record = json.loads(text)
+    assert (record["block"], record["trap"], record["ended"]) == ("harness", 2, "stopped")
+    assert record["rewind"] == {"request": 2, "round": 2, "edited_after": [], "commands_after": 0}
+    assert [s["name"] for s in record["signs"]] == ["unsatisfiable"]
+
+
+def test_the_request_written_out_is_one_a_resumed_run_loads(tmp_path: Path) -> None:
+    ledger = trapped_ledger(tmp_path)
+    out = tmp_path / "rewind.json"
+    code, _ = triage(str(ledger), "--request-out", str(out))
+    assert code == 0
+    loaded = resumed(out, tmp_path, "this harness's prompt")
+    assert loaded[0] == {"role": "system", "content": "this harness's prompt"}
+    assert [m["role"] for m in loaded] == ["system", "user", "assistant", "tool"]
+    assert loaded[-1]["content"] == "read c0"  # before the first check's answer reached it
+
+
+def test_a_run_that_ended_with_a_verdict_is_said_so_and_has_no_request_to_write(
+    tmp_path: Path,
+) -> None:
+    ledger = trapped_ledger(tmp_path, outcome="finished")
+    code, text = triage(str(ledger))
+    assert (code, "block: none, the run ended with a verdict" in text) == (0, True)
+    out = tmp_path / "rewind.json"
+    code, text = triage(str(ledger), "--request-out", str(out))
+    assert code == 1
+    assert "no rewind point" in text
+    assert not out.exists()
+
+
+def test_saddle_triage_refuses_what_it_cannot_judge(tmp_path: Path) -> None:
+    assert triage(str(tmp_path / "missing.jsonl")) == (
+        1,
+        f"error: no journal at {tmp_path / 'missing.jsonl'}\n",
+    )
+    plain = tmp_path / "plain.jsonl"
+    append_span(plain, span("read_file", "{}"))
+    code, text = triage(str(plain))
+    assert code == 1
+    assert "not an autonomous run's ledger" in text
+    tampered = trapped_ledger(tmp_path)
+    tampered.write_text(tampered.read_text().replace('"exit_code": 0', '"exit_code": 5', 1))
+    code, text = triage(str(tampered))
+    assert code == 1
+    assert text.startswith("error: ")
+
+
+def test_a_log_cut_inside_a_request_is_reported_and_the_run_still_judged(tmp_path: Path) -> None:
+    ledger = trapped_ledger(tmp_path)
+    log = ledger.parent / CONVERSATION_LOG
+    lines = log.read_text().splitlines(keepends=True)
+    log.write_text("".join(lines[:1]))  # request 1's first line, its messages cut away
+    code, text = triage(str(ledger), "--json")
+    assert json.loads(text)["log"].startswith(f"{log} is cut inside request 1")
+    assert code == 0
+
+
+def test_a_request_the_log_cannot_give_is_an_error_not_an_empty_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The log read for the verdict, then gone or cut before the request is written."""
+    ledger = trapped_ledger(tmp_path)
+
+    def gone(path: Path, number: int) -> Request:
+        msg = f"{path} holds 0 request(s), not request {number}"
+        raise ConversationError(msg)
+
+    monkeypatch.setattr("saddle.conversation.request_at", gone)
+    out = tmp_path / "rewind.json"
+    code, text = triage(str(ledger), "--request-out", str(out))
+    assert code == 1
+    assert "holds 0 request(s), not request 2" in text
+    assert not out.exists()
+
+
+def test_the_report_says_unclassified_and_no_rewind_in_so_many_words() -> None:
+    plain = run(round_(1, edit("a.py")))
+    assert "block: unclassified, no signature fits this stop" in report("r", plain, verdict(plain))
+    ledger_only = run(
+        round_(2, spans=(span("check", "{}", detail=check_on("aaa")),)),
+        round_(5, spans=(span("check", "{}", detail=check_on("bbb")),)),
+    )
+    text = report("r", ledger_only, verdict(ledger_only))
+    assert "rewind: none, the log holds no request before the trap to resume from" in text
+
+
+def test_the_issue_draft_holds_the_harness_signs_and_never_the_models() -> None:
+    named = SUMMARY_NAMES_ABSENT.format(names="`helper`")
+    seen = run(
+        round_(1, call("check", check_on("aaa"))),
+        round_(2, call("check", check_on("bbb"))),
+        round_(3, finish("s", named)),
+    )
+    text = report("r", seen, verdict(seen))
+    draft = text.split("issue draft")[1]
+    assert "unsatisfiable" in draft
+    assert "summary-names" not in draft
+    assert "summary-names (the model's), round 3:" in text.split("issue draft")[0]
+
+
+def test_a_long_list_of_rounds_is_shortened_in_the_report() -> None:
+    same = [round_(n, call("run_command", "exit 1", command="pytest")) for n in range(1, 11)]
+    seen = run(*same)
+    assert "rounds 1, 2, 3, 4, 5, 6, 7, 8, ...:" in report("r", seen, verdict(seen))

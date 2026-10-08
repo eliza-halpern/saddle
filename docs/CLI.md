@@ -420,6 +420,42 @@ that saved none says `no saved reasoning in JOURNAL (M rounds)`. Exit 1, with no
 printed, when there is no journal or it does not verify (each sidecar must hash to
 the record its span sealed), so a record that cannot be trusted is never shown.
 
+## saddle triage JOURNAL [--json] [--request-out FILE]
+
+Says where an autonomous run stopped making progress and whose block it was. It reads
+the run's ledger and the conversation log beside it (`conversation.jsonl`, written by
+every `saddle auto` run). The log holds each request as the model received it, with
+secrets redacted, so the whole result of every call is there, where the ledger keeps
+500 characters.
+
+A run that ended with a verdict (finished, or needing you) has no block, and any signs
+are printed as notes. For a stopped run, each signature that fits is named with the
+rounds it rests on:
+
+| Signature | Whose | What fires it |
+| --- | --- | --- |
+| overflow | harness | the server refused a request as over its window |
+| unsatisfiable | harness | `check` answered, on changed trees, what only a finish summary clears |
+| misreport | harness | finish was told a test had no flip line its summary does have |
+| environment | harness | the same tests failed at audit after audit on changed trees, in files the run never edited |
+| summary-names | model | finish returned the summary for naming code no file holds |
+| repeat | model | the same calls with the same results three rounds running |
+
+A stop no signature fits is `unclassified`; triage never guesses. For a harness block,
+it names the trap (the first round a harness sign rests on) and the rewind point: the
+latest request before the trap's result reached the model that ends on a tool result.
+It also says which files edit calls changed after that point, and how many commands
+ran after it (any of which may have written a file). A resume from the run's branch
+has the right files only when nothing changed after the rewind point.
+`--request-out FILE` writes that request for `saddle auto --resume-messages FILE`.
+With no rewind point it writes nothing and exits 1. `--json` prints the same verdict
+as data. Exit 1 when there is no journal, when it does not verify, or when it is not
+an autonomous run's.
+
+The signatures were built from the runs that were trapped each way. They have not yet
+been measured on runs kept back for the purpose, so read a verdict as a lead to check
+against the records it cites.
+
 ### Attaching follow-up commits: `saddle audit --attach-to LEDGER [REV]`
 
 Commits made on a run's branch after the run (a review fix, say) are outside its

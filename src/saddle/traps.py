@@ -381,3 +381,81 @@ def verdict(seen: Timeline) -> Verdict:
         trap=trap,
         rewind=rewind(seen, trap) if trap is not None else None,
     )
+
+
+def _rounds(numbers: tuple[int, ...]) -> str:
+    shown = ", ".join(str(n) for n in numbers[:8]) + (", ..." if len(numbers) > 8 else "")
+    return f"round {shown}" if len(numbers) == 1 else f"rounds {shown}"
+
+
+def report(run: str, seen: Timeline, found: Verdict) -> str:
+    """The verdict as text, each claim citing the rounds it rests on (`saddle triage`)."""
+    said = seen.outcome.detail if seen.outcome is not None else "no outcome sealed"
+    lines = [
+        f"run {run}: {found.ended} ({said[:160]})",
+        f"{len(seen.rounds)} rounds; conversation log: {seen.log}",
+        "last progress: "
+        + (f"round {found.last_progress}" if found.last_progress is not None else "none")
+        + " (an edit, or audit findings not seen before)",
+    ]
+    if found.block is None:
+        lines.append("block: none, the run ended with a verdict")
+    elif found.block == "unclassified":
+        lines.append("block: unclassified, no signature fits this stop")
+    else:
+        lines.append(f"block: the {found.block}'s")
+    for sign in found.signs:
+        lines.append(f"  {sign.name} (the {sign.block}'s), {_rounds(sign.rounds)}: {sign.why}")
+    if found.trap is not None:
+        lines.append(f"trap: round {found.trap}, the first round a harness sign rests on")
+    rewind = found.rewind
+    if rewind is not None:
+        lines.append(
+            f"rewind: request {rewind.request} (round {rewind.round}); after it "
+            f"{len(rewind.edited_after)} file(s) changed by an edit call"
+            + (f" ({', '.join(rewind.edited_after[:5])})" if rewind.edited_after else "")
+            + f", and {rewind.commands_after} command(s) ran, any of which may have written "
+            "a file"
+        )
+        lines.append(
+            "  --request-out FILE writes that request for saddle auto --resume-messages FILE"
+        )
+    elif found.trap is not None:
+        lines.append("rewind: none, the log holds no request before the trap to resume from")
+    if found.block == "harness":
+        lines.append("issue draft (from the records; nothing in it is model-written):")
+        names = ", ".join(sign.name for sign in found.signs if sign.block == "harness")
+        lines.append(f"  title: run {run} stopped on the harness: {names}")
+        for sign in found.signs:
+            if sign.block == "harness":
+                lines.append(f"  - {sign.name}, {_rounds(sign.rounds)}: {sign.why}")
+    return "\n".join(lines) + "\n"
+
+
+def as_record(run: str, seen: Timeline, found: Verdict) -> dict[str, object]:
+    """The verdict as JSON-ready data (`saddle triage --json`)."""
+    return {
+        "run": run,
+        "ended": found.ended,
+        "outcome": found.outcome,
+        "outcome_detail": seen.outcome.detail if seen.outcome is not None else None,
+        "rounds": len(seen.rounds),
+        "log": seen.log,
+        "last_progress": found.last_progress,
+        "block": found.block,
+        "signs": [
+            {"name": s.name, "block": s.block, "rounds": list(s.rounds), "why": s.why}
+            for s in found.signs
+        ],
+        "trap": found.trap,
+        "rewind": (
+            None
+            if found.rewind is None
+            else {
+                "request": found.rewind.request,
+                "round": found.rewind.round,
+                "edited_after": list(found.rewind.edited_after),
+                "commands_after": found.rewind.commands_after,
+            }
+        ),
+    }
