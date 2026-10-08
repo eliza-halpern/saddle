@@ -114,6 +114,8 @@ function paintRunStatus(reported) {
  * @property {HTMLElement} node
  * @property {HTMLElement} pill
  * @property {HTMLButtonElement} stop
+ * @property {HTMLButtonElement} changes shows the run's changes so far, while it is going
+ * @property {HTMLElement} live where those changes are drawn (#85 item 11)
  * @property {HTMLElement} testsChip
  * @property {Meter} time
  * @property {Meter} tokens
@@ -256,6 +258,13 @@ function taskCard(runId, task, turnNode) {
     event.preventDefault();
     stopTask(runId);
   };
+  // While a run is going its work is uncommitted in its worktree; this draws it, file by
+  // file, against the commit the run started from (#85 item 11). The run keeps going and
+  // Stop stays offered; an ended run's diff is its packet's View diff.
+  const changes = el("button", "task-changes", "Changes so far");
+  changes.type = "button";
+  changes.title = "Show what the run has changed so far, against the commit it started from.";
+  head.appendChild(changes);
   head.appendChild(stop);
   node.appendChild(head);
 
@@ -268,6 +277,11 @@ function taskCard(runId, task, turnNode) {
 
   const now = el("div", "task-now");
   node.appendChild(now);
+
+  const live = el("div", "act-panel task-live");
+  live.hidden = true;
+  node.appendChild(live);
+  changes.onclick = () => showChanges(runId, live);
 
   const log = el("details", "task-log");
   log.open = true;
@@ -296,6 +310,8 @@ function taskCard(runId, task, turnNode) {
     node,
     pill,
     stop,
+    changes,
+    live,
     testsChip,
     time,
     tokens,
@@ -345,6 +361,8 @@ function paintState(card) {
   card.pill.appendChild(el("b", null, look.glyph));
   card.pill.appendChild(document.createTextNode(` ${look.word}`));
   card.stop.hidden = ENDED.has(card.state) || card.state === "loading";
+  card.changes.hidden = card.stop.hidden;
+  if (ENDED.has(card.state)) card.live.hidden = true;
   // The live stream is for a run that is still going; an ended run's story
   // is its packet.
   card.activity.box.hidden = ENDED.has(card.state) || card.state === "loading";
@@ -1101,11 +1119,12 @@ async function postAction(card, action, branch, extra = {}) {
 /**
  * @param {HTMLElement} panel
  * @param {{path: string, patch: string}[]} files
+ * @param {string} [none] what the panel says when no file changed
  */
-function showDiff(panel, files) {
+function showDiff(panel, files, none = "The run's branch changes no file.") {
   panel.textContent = "";
   if (!files.length) {
-    panel.appendChild(el("p", "act-note", "The run's branch changes no file."));
+    panel.appendChild(el("p", "act-note", none));
     return;
   }
   for (const file of files) {
@@ -1121,6 +1140,27 @@ function showDiff(panel, files) {
     // wrote it.
     attachCopy(/** @type {Element} */ (one.firstElementChild), file.patch, file.path);
     panel.appendChild(one);
+  }
+}
+
+/* A live run's changes so far, read from its worktree on each click; a second click
+   folds them away (#85 item 11). */
+/**
+ * @param {string} runId
+ * @param {HTMLElement} live
+ */
+async function showChanges(runId, live) {
+  if (!live.hidden) {
+    live.hidden = true;
+    live.textContent = "";
+    return;
+  }
+  live.hidden = false;
+  try {
+    const got = await api(`/api/sessions/${state.sessionId}/tasks/${runId}/changes`);
+    showDiff(live, got.files, "The run has changed no file yet.");
+  } catch (error) {
+    actionResult(live, false, errorText(error));
   }
 }
 

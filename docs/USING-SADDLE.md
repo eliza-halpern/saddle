@@ -187,7 +187,12 @@ shows the session's folder name and git branch (`web.app.git_branch`).
   from the sealed ledger entries (`web.tasks.phase_for`: a question is *waiting for
   you*, a refusal or a failed audit is *audit refused*, a sealed edit is *waiting for
   audit*) and from tool starts (`web.tasks.tool_phase`: *editing*, *running tests*,
-  *working*). The age counts on the page's own clock.
+  *working*). The age counts on the page's own clock. Beside **Stop**, **Changes so far**
+  shows what the run has changed until now, file by file, against the commit it started
+  from (`GET /api/sessions/<sid>/tasks/<rid>/changes`, `web.branch_actions.live_diff`):
+  its commits, edits and new files, read through a throwaway index so the run's own
+  worktree is never touched. A second click folds it away; an ended run's diff is its
+  packet's **View diff**.
 
 ## 4. The Run strip
 
@@ -479,8 +484,12 @@ The chat card does not show the rows above in table order (`static/tasks.js`,
 1. **Verdict**: Finished, Stopped or No outcome, the task, one sentence, and chips for
    the branch, files changed, test policy and ledger size.
 2. **Action row**: **View diff**, **Merge into \<branch\>**, **Discard branch**,
-   **Ask about this run**, **Download full report**.
+   **Run again** (a stopped run only), **Ask about this run**, **Download full report**.
    - View diff shows the run's changes per file (merge base to the run branch).
+   - Run again, offered on a stopped packet only, starts a new run of the same task in the
+     session with the budgets and the test-edit setting the packet records; the stopped
+     packet stays. The packet does not record the premise or stall checks, so the new run
+     starts with both off, as a new task does.
    - Merge is enabled only for a finished run with no failed row and at least one
      proven Tests, Mutation or Audit row (`web.branch_actions.merge_refusal`), and only
      on a clean checkout that is on a branch. When the Mutation row is not proven, the

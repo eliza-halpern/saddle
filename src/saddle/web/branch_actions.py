@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,6 +126,37 @@ def diff(root: Path, branch: str) -> list[FileDiff]:
     base = base_of(root, branch)
     names = [n for n in _out(root, "diff", "--name-only", f"{base}..{branch}").splitlines() if n]
     return [FileDiff(n, _out(root, "diff", f"{base}..{branch}", "--", n)) for n in names]
+
+
+def live_diff(worktree: Path, base: str) -> list[FileDiff]:
+    """A running run's changes so far, one entry per file: its worktree against `base`,
+    commits, edits and new files alike (#85 item 11).
+
+    Read through a throwaway index (`GIT_INDEX_FILE`), so the index of a worktree the run
+    is still writing to is never touched; a file `.gitignore` names stays out, as it would
+    of a commit.
+    """
+    with tempfile.TemporaryDirectory(prefix="saddle-live-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+
+        def out(*args: str) -> str:
+            done = subprocess.run(
+                ["git", "-C", str(worktree), *HOST_GIT_GUARD, *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+            if done.returncode != 0:
+                raise ActionRefusedError(
+                    (done.stderr or done.stdout).strip() or f"git {args[0]} failed"
+                )
+            return done.stdout.strip()
+
+        out("read-tree", "HEAD")
+        out("add", "-A")
+        names = [n for n in out("diff", "--cached", "--name-only", base).splitlines() if n]
+        return [FileDiff(n, out("diff", "--cached", base, "--", n)) for n in names]
 
 
 def merge(root: Path, packet: Packet, branch: str, confirm: str) -> str:

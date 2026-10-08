@@ -29,6 +29,7 @@
     "tests/test_notify.py",
     "tests/test_packet_ui.py",
     "tests/test_page_dialogs_ui.py",
+    "tests/test_live_changes_ui.py",
     "tests/test_outside_hold_ui.py",
     "tests/test_outside_ui.py",
     "tests/test_process_list_ui.py",

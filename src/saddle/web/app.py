@@ -1551,6 +1551,21 @@ def build_app(
             {"branch": branch, "files": [{"path": f.path, "patch": f.patch} for f in files]}
         )
 
+    async def task_changes(request: Request) -> JSONResponse:
+        """A live run's changes so far: its worktree against its base (#85 item 11)."""
+        run = _task(request)
+        if run is None or run.session_id != request.path_params["sid"]:
+            return JSONResponse({"error": "no such task in this session"}, status_code=404)
+        if run.worktree is None or not run.base:
+            return JSONResponse({"error": "The run has not made its worktree yet."}, 409)
+        try:
+            files = branch_actions.live_diff(run.worktree, run.base)
+        except branch_actions.ActionRefusedError as exc:
+            return _refused(exc)
+        return JSONResponse(
+            {"branch": run.branch, "files": [{"path": f.path, "patch": f.patch} for f in files]}
+        )
+
     def _act(request: Request, action: str, body: dict[str, Any]) -> JSONResponse:
         sid = request.path_params["sid"]
         log = store.journal_path(sid).parent / "actions.log"
@@ -1797,6 +1812,7 @@ def build_app(
             Route("/api/sessions/{sid}/tasks/{rid}/record/{hash}", task_record),
             Route("/api/sessions/{sid}/tasks/{rid}/branch", task_branch),
             Route("/api/sessions/{sid}/tasks/{rid}/diff", task_diff),
+            Route("/api/sessions/{sid}/tasks/{rid}/changes", task_changes),
             Route("/api/sessions/{sid}/tasks/{rid}/merge", task_merge, methods=["POST"]),
             Route("/api/sessions/{sid}/tasks/{rid}/approve", task_approve, methods=["POST"]),
             Route(
