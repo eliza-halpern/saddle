@@ -325,8 +325,11 @@ to:
 - A failed wait names what it waited for, and an exception in the page fails the
   test with the page's message.
 
-A function given to `page.js` or `page.until` runs inside the page, so it can
-read nothing from the test; pass values after it and they arrive as JSON. Add
+The body itself runs in node, in the driver (`tests/fixtures/page_cdp.mjs`), not in
+the page: the page's own names (`setStatus`, `document`, a page script's
+functions) exist only inside a function given to `page.js` or `page.until`.
+Such a function runs inside the page, so it can read nothing from the test; pass
+values after it and they arrive as JSON. Add
 the module to `chrome_tests` in the scope file, or the audit never reads its
 coverage: `tests/test_chrome_page.py` fails naming any module that imports
 `chrome_page` and is not listed.
